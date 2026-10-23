@@ -206,6 +206,7 @@ export interface ReplLive {
  * reader left it on when the next reply arrives.
  */
 export interface ReplSidekickChatRow {
+  readonly origin?: import("./sidekick/history.ts").MessageOrigin;
   /**
    * The saved request this failed attempt could be asked again, or none.
    *
@@ -3250,7 +3251,7 @@ function sidekickComposedRows(
   }
   for (const item of shownChat) {
     if (item.kind === "person") {
-      items.push(text(`sidekick:${item.key}`, `  you: ${item.text}`, styleOf("source")));
+      items.push(text(`sidekick:${item.key}`, `  ${item.origin?.kind === "acp" ? "ACP (" + item.origin.attachment + ")" : "you"}: ${item.text}`, styleOf("source")));
       continue;
     }
     if (item.kind === "preview") {

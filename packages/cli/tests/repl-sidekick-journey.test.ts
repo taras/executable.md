@@ -1,3 +1,4 @@
+import { SidekickOwnerError } from "../src/repl/sidekick/owner.ts";
 /**
  * Tier R5 — a message, a turn, and the reply that runs (#883, J1/J4/J10).
  *
@@ -654,6 +655,8 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
       holdAfter: 1,
     });
 
+    held.fake.script({ reply: "failed follow-up", stopReason: "max_tokens" });
+
     const sent = withResolvers<Result<SidekickTurn>>();
     yield* spawn(function* (): Operation<void> {
       sent.resolve(yield* held.owner.message("prepare"));
@@ -669,10 +672,13 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
 
     held.fake.releaseDeltas();
     const answered = yield* sent.operation;
-    if (!answered.ok) {
-      throw answered.error;
+    expect(answered.ok).toBe(false);
+    if (answered.ok || !(answered.error instanceof SidekickOwnerError)) {
+      throw new Error("Failed follow-up must retain its partial result");
     }
-    expect(answered.value.failure).not.toBe(undefined);
+    const partial = answered.error.partial;
+    if (partial === undefined) { throw new Error("Earlier evaluated response was lost"); }
+    expect(partial.failure).not.toBe(undefined);
     // The candidate is no longer what is being shown: the evaluated reply below
     // is, and two accounts of one response would be two items for one thing.
     expect(held.owner.previewing).toBe(undefined);
@@ -680,9 +686,9 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     expect(held.state().draft).toBe("kept");
     // What Core had rendered when the failure reached it — not a blank, and not
     // the text after it, which never evaluated.
-    expect(answered.value.output).toContain("Before.");
-    expect(answered.value.output).not.toContain("After.");
-    expect(answered.value.hasOutput).toBe(true);
+    expect(partial.output).toContain("Before.");
+    expect(partial.output).not.toContain("After.");
+    expect(partial.hasOutput).toBe(true);
 
     // The same facts in the retained reply, so a reopened chat shows the
     // partial rendering beside its failure rather than an empty reply.

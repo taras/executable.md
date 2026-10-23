@@ -8623,6 +8623,25 @@ every root job and subscription are children of that screen scope, so Exit,
 Control-C, end of input and failure all unwind and join the Sidekick's work
 before the command reports its outcome and the terminal is released.
 
+**One root-owned dispatch spans the whole Sidekick exchange.** UI Send and
+Retry use the same private service and admission policy as an attributed external
+caller. Constructing an operation does nothing; executing it captures lexical
+origin and conversation selection, then reserves before producer work. Message,
+inspection, save and replacement share the existing policy: save and replacement
+may accompany a message, while explicit configuration jobs exclude one another.
+The producer belongs to the live command. Detaching an observer does not cancel
+it or release its reservation. Exact-handle Stop joins producer cleanup before
+release, and an old handle cannot stop a successor. Entry work remains owned by
+ReplSession.
+
+Message records retain an optional opaque ID and UI/attachment origin beside the
+legacy numeric `turn`. The reference is published only after the message append
+is acknowledged. Legacy records are read without rewriting or inventing IDs.
+ACP-origin acknowledgement clears neither composer nor draft takeover. The live
+root indexes established IDs for passive observation; that index supplies no
+restart, resend or provider-acceptance authority. An earlier answer followed by
+a failed turn remains partial evidence in the failed exchange result.
+
 **The owner reports its own changes to the loop, and that report carries no
 authority.** A reply arriving, an automatic follow-up starting, a cycle failing
 and a joined Stop are things no keystroke announces, so the owner owns a signal
@@ -8791,7 +8810,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 | background automation | work designed to proceed without ongoing user or agent attention, with its persistence and recovery guarantees supplied by the workflow host |
 | REPL | the foreground interactive environment for experimenting with and testing components; replay restores recorded execution state, while the user or agent handles differences between that state and the live environment |
 | REPL history | the immutable ordered execution records the REPL reads from the durable journal and projects into `ReplModel`; the History surface presents this read model and is not itself a journal [Reference](#the-private-repl-composition-kernel). |
-| message ID | the number Sidekick retains to identify a saved person message within its conversation; fixed once saved, possibly noncontiguous, and independent of the turn numbers recorded by Core. The conversation and message ID together form its lookup key |
+| legacy message ID | the number Sidekick retains to identify a saved person message within its conversation; fixed once saved, possibly noncontiguous, and independent of the turn numbers recorded by Core. The conversation and message ID together form its lookup key |
 | turn | one request to an agent, together with the response or failure from that request |
 | middleware | applied by the lexical structure, used by runtime execution [Reference](#two-layers). |
 | workflow run | a workflow being carried out with its progress and outcome recorded durably; document executions perform its work, while ongoing effects remain scoped to the document execution in which they run [Reference](#workflow-runs). |

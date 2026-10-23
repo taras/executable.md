@@ -133,6 +133,8 @@ import type {
   PairedReplRepository,
 } from "./sidekick/repository.ts";
 import { useSidekickOwner } from "./sidekick/owner.ts";
+import { createSidekickAdmission, useSidekickDispatch } from "./sidekick/dispatch.ts";
+import type { SidekickDispatch } from "./sidekick/dispatch.ts";
 import type { SidekickLiveTurn, SidekickOwner, SidekickPreview } from "./sidekick/owner.ts";
 import { projectSidekick, retryable, SAVED_WITHOUT_REPLY } from "./sidekick/model.ts";
 import type { SidekickReading, SidekickSavedTurn } from "./sidekick/model.ts";
@@ -834,80 +836,7 @@ function* drive(
       facts: draftFacts,
     };
 
-    /**
-     * The one message cycle this screen has in flight, and what it was asked at.
-     *
-     * Reserved synchronously by the reduction's intent, before anything is
-     * spawned, so a second Send in the same input burst finds it held rather
-     * than starting a second conversation turn. It also carries the revisions
-     * the message was asked at, which is what the acknowledgement below clears
-     * against.
-     */
-    let cycle: Instruction | undefined;
-
-    /**
-     * The one explicit configuration job this screen has in flight.
-     *
-     * Inspection, a preference Apply and an agent replacement are all things a
-     * person explicitly asked for, and the root owns one at a time: a second
-     * refuses rather than queuing, because a queued action is one somebody has
-     * stopped watching. Reserved synchronously by the reduction's intent,
-     * before anything is spawned, so two activations in one input burst cannot
-     * both start.
-     *
-     * This is about explicit operations, not about whether the Sidekick is
-     * busy. A preference save is admitted alongside a running message cycle —
-     * saving is neither inspecting nor stopping — and `owner.busy` alone
-     * reserves nothing: an idle inspection has to be protected from a Send
-     * arriving beside it just as much.
-     */
-    let configuring:
-      | {
-          readonly kind: "inspect" | "save" | "replace";
-          /** The conversation it was asked of, so a late result cannot outlive it. */
-          readonly conversation: string | undefined;
-          /**
-           * The task doing it, once it has been spawned.
-           *
-           * The reservation is taken before the spawn, so there is one moment in
-           * which this job is held and has no task: nothing can run in it, and a
-           * departure that found it would have nothing to join.
-           */
-          task: Task<void> | undefined;
-        }
-      | undefined;
-
-    /**
-     * Why an explicit thing cannot start right now, or nothing.
-     *
-     * One answer for both reservations, because they are one admission: a
-     * person asks the Sidekick for one thing at a time, and an inspection or a
-     * replacement running beside a message is two. A *preference save* is the
-     * one exception the ruling carves out — it is a record in this history
-     * rather than work the conversation does — so it is admitted beside a
-     * running cycle and asks nothing of the agent.
-     */
-    function occupied(kind: "message" | "inspect" | "save" | "replace"): string | undefined {
-      // A replacement is the one explicit job whose whole purpose is to end the
-      // cycle: it stops the Sidekick and joins it before setting another
-      // conversation up, so a running cycle is what it is *for* rather than
-      // something standing in its way. A save coexists with one by design.
-      if (kind !== "save" && kind !== "replace" && cycle !== undefined) {
-        return "the Sidekick is already working on a message.";
-      }
-      if (configuring === undefined) {
-        return undefined;
-      }
-      if (kind === "save" && configuring.kind === "save") {
-        return "the Sidekick is already saving a setting.";
-      }
-      // One explicit configuration job at a time, a save included. What a save
-      // is exempt from is the *message cycle*, not the one job slot: admitting
-      // it beside another job would take that slot from the job already in it,
-      // and the replacement or inspection holding it would finish into a slot
-      // somebody else owned.
-      return "the Sidekick is already doing something you asked for.";
-    }
+    const admissions = createSidekickAdmission();
 
     /** The chat writer as it stands, for a departure that has to join a write. */
     function chatWriter(): SidekickWriter | undefined {
@@ -927,11 +856,11 @@ function* drive(
      * publishes nothing.
      */
     function* releasing(): Operation<void> {
-      const held = configuring;
+      const held = admissions.configuration;
       if (held === undefined) {
         return;
       }
-      configuring = undefined;
+      admissions.releaseConfiguration(held);
       const task = held.task;
       if (task === undefined) {
         return;
@@ -1120,10 +1049,10 @@ function* drive(
           },
         });
       },
-      revision: () => cycle?.message ?? state.revisions.message,
+      revision: () => admissions.message?.instruction?.message ?? state.revisions.message,
       draft: () => state.draft,
       *acknowledge(revision: number): Operation<void> {
-        const held = cycle;
+        const held = admissions.message?.instruction;
         if (held === undefined || held.message !== revision) {
           // Not a cycle this screen started, so there is nothing of this
           // screen's to clear. It answers rather than refusing: the message is
@@ -1135,6 +1064,11 @@ function* drive(
         wakes.send({ kind: "session" });
         yield* answer.operation;
       },
+    });
+
+    const dispatch = yield* useSidekickDispatch({
+      owner: sidekick, admission: admissions, execution: execution.id, workspace,
+      changed: () => wakes.send({ kind: "session" }),
     });
 
     /**
@@ -1384,26 +1318,13 @@ function* drive(
         reopening,
         {
           owner: sidekick,
-          reserve(held: Instruction): string | undefined {
-            // Before anything is written or sent, which is the whole point: a
-            // message refused after its record was retained is a message this
-            // history claims somebody sent.
-            const blocked = occupied("message");
-            if (blocked !== undefined) {
-              return blocked;
-            }
-            cycle = held;
-            return undefined;
-          },
-          release(): void {
-            cycle = undefined;
-          },
+          dispatch,
           refuse(refusal: string): void {
             sidekickReports.push({ kind: "refused", refusal });
           },
           asked: askedBy,
           *admit(kind, conversation, work): Operation<string | undefined> {
-            const busy = occupied(kind);
+            const busy = admissions.occupied(kind);
             if (busy !== undefined) {
               return busy;
             }
@@ -1421,19 +1342,14 @@ function* drive(
             }
             // Reserved before the spawn, so nothing between the check above and
             // the task below can take the job.
-            const job: {
-              readonly kind: "inspect" | "save" | "replace";
-              readonly conversation: string | undefined;
-              task: Task<void> | undefined;
-            } = { kind, conversation, task: undefined };
-            configuring = job;
+            const reserved = admissions.configure(kind, conversation);
+            if (!reserved.ok) { return reserved.error.message; }
+            const job = reserved.value;
             job.task = yield* spawn(function* (): Operation<void> {
               try {
                 yield* work();
               } finally {
-                if (configuring === job) {
-                  configuring = undefined;
-                }
+                admissions.releaseConfiguration(job);
                 wakes.send({ kind: "session" });
               }
             });
@@ -1451,8 +1367,8 @@ function* drive(
           replaced(conversation, revision, answer): void {
             sidekickReports.push({ kind: "replaced", conversation, revision, answer });
           },
-          retrying(conversation, message): Result<string> {
-            const blocked = occupied("message");
+          retrying(conversation, message): Result<{ text: string; held: Instruction }> {
+            const blocked = admissions.occupied("message");
             if (blocked !== undefined) {
               // Refused before the saved text is even resolved: a retry that
               // wrote its record and then failed would leave this history
@@ -1477,8 +1393,7 @@ function* drive(
               // clears no message text, because it never carried any.
               from: "saved",
             };
-            cycle = held;
-            return saved;
+            return Ok({ text: saved.value, held });
           },
         },
       );
@@ -2302,6 +2217,7 @@ export function sidekickChatRows(
         conversation: item.conversation,
         turn: item.turn,
         kind: item.kind,
+        ...(item.kind === "person" && item.origin.kind !== "legacy" ? { origin: item.origin } : {}),
         text: item.text,
         hasOutput: item.kind === "reply" ? item.hasOutput : false,
         // The reply's own retained failure, carried through rather than
@@ -2677,15 +2593,7 @@ function* perform(
    */
   chat: {
     readonly owner: SidekickOwner;
-    /**
-     * Take the one message cycle, or say why it cannot be taken.
-     *
-     * A reason rather than a flag, because a person whose action does nothing
-     * has to be told which of the Sidekick's own jobs is in the way.
-     */
-    reserve(held: Instruction): string | undefined;
-    /** Give it back, however the cycle ended. */
-    release(): void;
+    readonly dispatch: SidekickDispatch;
     /** Say why the Sidekick refused, on the next pass of the loop. */
     refuse(refusal: string): void;
     /**
@@ -2734,7 +2642,7 @@ function* perform(
      * waited would be sending whatever that message id meant by the time it
      * started.
      */
-    retrying(conversation: string, message: number): Result<string>;
+    retrying(conversation: string, message: number): Result<{ text: string; held: Instruction }>;
   },
 ): Operation<Performed> {
   switch (intent.kind) {
@@ -2776,35 +2684,12 @@ function* perform(
       wakes.send({ kind: "session" });
       return {};
     case "send-message": {
-      // Synchronously, before anything is spawned: a second Send arriving in
-      // the same input burst finds the cycle held and asks for nothing. One
-      // conversation takes one turn at a time, and queueing a second would be
-      // sending a message nobody could still see the answer to in order.
-      const blocked = chat.reserve(intent.held);
-      if (blocked !== undefined) {
-        // Said rather than silently dropped, and said *before* anything is
-        // written: a message refused after its record was retained is a message
-        // this history claims somebody sent.
-        return { refusal: blocked };
-      }
-      // On the loop's own task, so the keyboard comes back immediately. A
-      // provider turn, an admission waiting on an entry and a reply's controls
-      // all suspend, and a person must be able to keep typing, press Stop or
-      // walk back through their history while they do.
+      const admitted = yield* chat.dispatch.send(intent.text, intent.held);
+      if (!admitted.ok) { return { refusal: admitted.error.message }; }
       yield* spawn(function* (): Operation<void> {
-        try {
-          const sent = yield* chat.owner.message(intent.text);
-          if (!sent.ok) {
-            // An ordinary refusal — a busy conversation, an unreadable
-            // history, feedback whose acceptance cannot be established — is
-            // said beside the chat rather than raised. The message box keeps
-            // what was typed, because nothing was saved.
-            chat.refuse(sent.error.message);
-          }
-        } finally {
-          chat.release();
-          wakes.send({ kind: "session" });
-        }
+        const sent = yield* admitted.value.completion;
+        if (!sent.ok) { chat.refuse(sent.error.message); }
+        wakes.send({ kind: "session" });
       });
       // The row beside the box is `[stop]` now rather than `[send]`, and the
       // next event in this burst is dispatched against what is mounted.
@@ -2815,8 +2700,9 @@ function* perform(
       // Sidekick had in flight — the generation, the response's controls, the
       // wait for an entry's outcome — and returns only once all of it has come
       // down. A person who pressed it keeps a usable keyboard while it does.
+      const exchange = chat.dispatch.current;
       yield* spawn(function* (): Operation<void> {
-        yield* chat.owner.stop();
+        if (exchange !== undefined) { yield* exchange.cancel(); }
         wakes.send({ kind: "session" });
       });
       return { remounted: true };
@@ -2926,21 +2812,12 @@ function* perform(
       if (!asked.ok) {
         return { refusal: asked.error.message };
       }
+      const admitted = yield* chat.dispatch.send(asked.value.text, asked.value.held);
+      if (!admitted.ok) { return { refusal: admitted.error.message }; }
       yield* spawn(function* (): Operation<void> {
-        try {
-          const sent = yield* chat.owner.message(asked.value);
-          if (!sent.ok) {
-            chat.refuse(sent.error.message);
-          } else if (sent.value.failure !== undefined) {
-            // An answered call is not an answered request: a successful Result
-            // may carry a turn that failed, and saying otherwise would report a
-            // retry that did not happen.
-            chat.refuse(sent.value.failure);
-          }
-        } finally {
-          chat.release();
-          wakes.send({ kind: "session" });
-        }
+        const sent = yield* admitted.value.completion;
+        if (!sent.ok) { chat.refuse(sent.error.message); }
+        wakes.send({ kind: "session" });
       });
       return { remounted: true };
     }

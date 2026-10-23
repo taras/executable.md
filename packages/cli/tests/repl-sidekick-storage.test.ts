@@ -1050,3 +1050,15 @@ describe("Tier R1 — the Sidekick writer's one order, and leaving its queue", (
     expect(written).toEqual(["one", "two"]);
   });
 });
+
+
+describe("message attribution", () => {
+  it("round-trips acknowledged identity/origin and preserves legacy record shape", function* () {
+    const legacy = { kind: "message", conversation: "chat", turn: 1, revision: 4, text: "old" };
+    expect(parseSidekickRecord(JSON.stringify(legacy))).toEqual(legacy);
+    const attributed = { ...legacy, id: "opaque-message", origin: { kind: "acp", attachment: "local" } };
+    expect(parseSidekickRecord(JSON.stringify(attributed))).toEqual(attributed);
+    expect(parseSidekickRecord(JSON.stringify({ ...attributed, origin: { kind: "other" } }))).toBe(undefined);
+    expect(parseSidekickRecord(JSON.stringify({ ...attributed, id: "" }))).toBe(undefined);
+  });
+});
