@@ -56,6 +56,7 @@ export interface ReplProfileSeams {
  */
 export interface ReplProfileFacts extends ReplProfileSeams {
   readonly testingHarness?: (includes: readonly string[]) => Operation<ExecutionInstallation>;
+  readonly observeWorktree?: string;
   readonly includes?: readonly string[];
   /**
    * The name `--sidekick-agent` carried, or none when the line named none.
@@ -213,7 +214,16 @@ export function* assembleReplProfile(
   // and the one place that applies it is the one place it is right.
   const agent = facts.sidekickAgent ?? (yield* contextualAgent());
 
-  const entryInstallation = yield* ReplEntryHost.get();
+  const selectedEntryInstallation = yield* ReplEntryHost.get();
+  const observationPath = facts.observeWorktree;
+  const entryInstallation: ReplEntryInstallation | undefined =
+    selectedEntryInstallation === undefined
+      ? undefined
+      : (owner, placement) =>
+          selectedEntryInstallation(owner, {
+            ...placement,
+            ...(observationPath === undefined ? {} : { observeWorktree: observationPath }),
+          });
   const host = yield* useScope();
   const dependencies = facts.acp ?? hostAcpDependencies(stack);
   const sidekick = sidekickAssembly(agent, {

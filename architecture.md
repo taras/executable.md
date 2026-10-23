@@ -7148,6 +7148,26 @@ exactly once.
 
 ### What one entry retains about the checkout it is standing in
 
+The trusted `--observe-worktree` command configuration permits one existing
+linked checkout for the four local Git reads. The selected entry factory
+receives its detached path from the captured profile; document props, Context
+values and retained data do not supply it. Native validation checks the root,
+linked registration, common directory, object format and captured repository
+identity before live targeting work, including before Dir can ensure a missing
+root. Observation registrations remain separate from mutation/publication and
+retained Files placements.
+
+A closed version 1 `observation-worktree` placement uses the existing placement
+record protocol and normalized request fingerprint. Its acknowledged append
+precedes private read membership. Historical reconstruction is passive; a new
+read validates the current grant and identity and takes an entry-owned
+observation hold keyed by common directory and checkout. This nonblocking hold
+lives outside either checkout, uses the existing joined advisory-lock owner,
+and takes no mutation lease. Native reads and placement appends use the entry's
+existing Git serializer. No managed checkout is adopted and no sidecar is
+manufactured. Unknown records, failed append and uncertain acknowledgement
+retain their ordinary fatal path.
+
 The REPL is foreground experimentation, and what that means for files is one
 sentence: a completed operation answers again, and a new one executes live. An
 entry that read a file, wrote three and stopped at a question is reopened at the

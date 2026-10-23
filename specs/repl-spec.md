@@ -23,7 +23,7 @@ takes, with the same spellings, the same descriptions and the same defaults:
 `--approve-reads` and `--deny-all`. An unstated permission line means
 `--approve-reads`.
 
-It takes one option of its own, because it has a Sidekick and a run has none:
+Its Sidekick selection is separate from the Agent options:
 `--sidekick-agent` names the agent a fresh Sidekick conversation is opened
 under. It is a separate selection rather than a second spelling of
 `--default-agent` — that one is the agent a `<Session>` an entry writes means
@@ -37,6 +37,19 @@ that same selected provider with constraints of their own rather than
 inheriting what an entry runs under: no tools, no MCP servers, every native
 request denied without asking, and no customization of the agent's own system
 prompt. There is no data directory or second provider to select.
+
+Use `--observe-worktree /absolute/linked-checkout` to allow the four local
+Git observations in one existing linked checkout of the captured project
+repository. `--observe-worktree=/absolute/linked-checkout` is equivalent.
+Missing, relative and repeated values refuse before provider work. Omission
+keeps the existing ambient and managed-checkout behavior.
+
+The host validates the exact canonical root, linked registration, common Git
+directory and repository identity before live targeting work, including a Dir
+ensure. A missing or replaced root refuses without creation or repair. The
+option adds no Git mutation, publication or retained Files placement. Ordinary
+Files permission and outside-checkout behavior remain in force. HEAD and branch
+are live ticket-policy facts rather than host pins.
 
 Use `--include` to select existing component directories, as with `xmd run` and
 `xmd test`. Both `--include <directory>` and `--include=<directory>` accept a
@@ -1590,6 +1603,19 @@ predicted.
 
 ### Reading the repository an entry is standing in
 
+An explicitly configured observation worktree joins only the private read
+routes. Its version 1 `observation-worktree` placement records the normalized
+request and credential-free routing facts before any page is served. Completed
+replay parses those facts and pages without native inspection or ownership.
+New native reads require the current explicit grant and identity validation and
+reacquire an entry-owned nonblocking observation hold outside the checkout.
+This hold is separate from the mutation lease and serializes participating
+observation owners; it does not exclude arbitrary external Git. Reads share the
+entry's existing Git sequence turn. Failed or uncertain placement persistence
+fences the entry and yields no successful observation. An incompatible record
+or version refuses before reuse. Hosts that lack this record kind cannot reopen
+histories containing it.
+
 Inside the same checkout, type this:
 
 ```xmd
@@ -2583,7 +2609,8 @@ resolved against the frame that published its coordinates.
   the first time, and the tracker answers with the issue it already filed under
   that mark.
 - `xmd repl` takes one optional location, the five Agent options above and
-  `--sidekick-agent`. It renders no file and takes no document reference.
+  `--sidekick-agent`, plus `--include` and `--observe-worktree` as described
+  above. It renders no file and takes no document reference.
 - `<Session.Launch>` is unavailable. This command has no terminal to give away —
   it is using it — so a document that reaches for a native agent UI refuses
   through the established missing-launcher contract, starts no foreground

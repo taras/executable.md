@@ -76,7 +76,7 @@ import type { GitHostProvider } from "../git-host/api.ts";
  */
 export interface DenoRepositoryOperations {
   ambientCheckout(from: string): Operation<AmbientCheckout | undefined>;
-  ambientRepository(from: string): Operation<AmbientRepository | undefined>;
+  ambientRepository(from: string, linkedTo?: string): Operation<AmbientRepository | undefined>;
 
   selectRepository(
     slot: string,
@@ -162,8 +162,26 @@ export function* repositoryOperationsOver(
     *ambientCheckout(from: string): Operation<AmbientCheckout | undefined> {
       return yield* discoverAmbientCheckout(yield* useGit(), from);
     },
-    *ambientRepository(from: string): Operation<AmbientRepository | undefined> {
-      return yield* discoverAmbientRepository(yield* useGit(), from);
+    *ambientRepository(from: string, linkedTo?: string): Operation<AmbientRepository | undefined> {
+      const git = yield* useGit();
+      const target = yield* discoverAmbientRepository(git, from);
+      if (linkedTo === undefined || target === undefined) {
+        return target;
+      }
+      const owner = yield* discoverAmbientRepository(git, linkedTo);
+      if (
+        owner === undefined ||
+        owner.checkoutRoot === target.checkoutRoot ||
+        owner.commonDirectory !== target.commonDirectory ||
+        owner.objectFormat !== target.objectFormat
+      ) {
+        return undefined;
+      }
+      const listed = yield* git.read(["worktree", "list", "--porcelain", "-z"], owner.checkoutRoot);
+      return listed !== undefined &&
+        listed.split("\0").some((field) => field === "worktree " + target.checkoutRoot)
+        ? target
+        : undefined;
     },
 
     *selectRepository(slot, request): Operation<ManagedRepository> {

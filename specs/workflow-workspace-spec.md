@@ -1021,6 +1021,15 @@ outside a lexical `<Repository>` belongs to the ambient Repository the command
 was run in. Nothing there is retained, replayed or forkable, and none of the
 durability this section states applies to it.
 
+The REPL host can separately allow one existing linked checkout with
+`--observe-worktree`. This trusted command selection admits only the four
+canonical local Git reads after root, linked-registration and repository
+identity validation. It neither adopts a managed slot nor expands mutation,
+publication or Files placement coverage. Its acknowledged observation placement
+is historical routing data; new reads require the current host grant and an
+entry-owned observation hold. See the REPL specification for the retained
+record and replay boundary.
+
 A REPL entry selects through that same ordinary selector, and records the answer
 rather than the checkout (§2.3). The hold lasts for the entry rather than for
 one document execution, so a later `<Dir>` inside the same entry is still

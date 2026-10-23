@@ -546,7 +546,10 @@ export function observationRouteOf(placement: ReplPlacement): ReplObservationChe
     root: placement.checkoutRoot,
     commonDirectory: placement.commonDirectory,
     repositoryName: placement.identity.name,
-    worktreeName: placement.kind === "worktree" ? placement.displayName : null,
+    worktreeName:
+      placement.kind === "worktree" || placement.kind === "observation-worktree"
+        ? placement.displayName
+        : null,
   });
 }
 
@@ -589,6 +592,7 @@ export function selectedByPlacement(
 ): boolean {
   return placements.some(
     (placement) =>
+      placement.kind !== "observation-worktree" &&
       sameRepositoryIdentity(placement.identity, request.repository) &&
       placement.checkoutRoot === request.selectionCheckout &&
       placement.commonDirectory === request.commonDirectory,

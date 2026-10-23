@@ -480,7 +480,7 @@ describe("REPL documentation: what it says is what the code does", () => {
     }
   });
 
-  it("D1: the seven options the spec names are the seven the parser accepts", function* () {
+  it("D1: the documented options use the parser's switch and value forms", function* () {
     const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
     // Every option the specification names, from its own prose.
     const named = [...spec.matchAll(/`(--[a-z-]+)`/g)].map((match) => match[1]);
@@ -491,6 +491,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       "--default-agent",
       "--deny-all",
       "--include",
+      "--observe-worktree",
       "--sidekick-agent",
     ]);
 
@@ -511,7 +512,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       expect(replGrammarError(["repl", option], undefined)).toContain("requires a value");
     }
 
-    // And there is no eighth: an option the specification does not name is
+    // An option the specification does not name is
     // refused by the name it was written as.
     expect(replGrammarError(["repl", "--json"], undefined)).toContain(
       "unrecognized option for xmd repl: --json",
@@ -928,5 +929,41 @@ describe("REPL boundaries: how this command's repository policy reaches Git", ()
       expect(gitSpecifiers(`import { thing } from "${route}";`)).toEqual([route]);
     }
     expect(gitSpecifiers('import { probe } from "../../git/tests/support/github.ts";')).toEqual([]);
+  });
+});
+
+describe("D3 — observation option grammar and trusted forwarding", () => {
+  it("accepts one absolute spaced or equals path and rejects malformed grants", function* () {
+    expect(REPL_VALUES).toContain("--observe-worktree");
+    for (const args of [
+      ["repl", "--observe-worktree", "/tmp/source"],
+      ["repl", "--observe-worktree=/tmp/source"],
+    ]) {
+      expect(replGrammarError(args, undefined)).toBeUndefined();
+      const accepted = yield* invoke(args);
+      expect(accepted.selected).toBe(1);
+      expect(accepted.installed).toBe(1);
+    }
+    for (const args of [
+      ["repl", "--observe-worktree"],
+      ["repl", "--observe-worktree="],
+      ["repl", "--observe-worktree", "relative"],
+      ["repl", "--observe-worktree=relative"],
+      ["repl", "--observe-worktree", "/tmp/one", "--observe-worktree=/tmp/two"],
+    ]) {
+      expect(replGrammarError(args, undefined)).toBeDefined();
+      const refused = yield* invoke(args);
+      expect(refused.selected).toBe(0);
+      expect(refused.installed).toBe(0);
+      expect(refused.status).toBe(1);
+    }
+    expect(replGrammarError(["repl"], undefined)).toBeUndefined();
+    const cli = yield* read(join(CLI, "src/cli.ts"));
+    const profile = yield* read(join(CLI, "src/repl-profile.ts"));
+    const factory = yield* read(join(CLI, "src/deno-repositories.ts"));
+    expect(cli).toContain("observeWorktree: command.config.observeWorktree");
+    expect(profile).toContain("const observationPath = facts.observeWorktree");
+    expect(profile).toContain("observeWorktree: observationPath");
+    expect(factory).toContain("...placement");
   });
 });

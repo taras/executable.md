@@ -116,6 +116,7 @@ export interface ReplLocalRecorder {
    * a path a later `<Dir>` sibling renders at.
    */
   placements(): readonly ReplManagedPlacement[];
+  guard?(target: string): Operation<void>;
 }
 
 /** The middleware that records this entry's authored mutations. */
@@ -203,6 +204,9 @@ function* routed(
   }
 
   const target = yield* targetOf(request);
+  if (recorder.guard !== undefined) {
+    yield* recorder.guard(target);
+  }
   const managed = covering(recorder.placements(), target);
   if (managed !== undefined) {
     // Placement ownership first, and for a read as much as for a write: what it

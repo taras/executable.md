@@ -74,7 +74,7 @@ import { replFileMiddleware } from "./files.ts";
 import type { ReplLocalRecorder, ReplManagedPlacement } from "./files.ts";
 import { replGitMiddleware } from "./git.ts";
 import type { ReplGitCheckout, ReplGitEntry } from "./git.ts";
-import { replObservationMiddleware } from "./observations.ts";
+import { replObservationMiddleware, useObservationWorktrees } from "./observations.ts";
 import type { ReplObservationEntry } from "./observations.ts";
 import { GitQuery } from "@executablemd/git/api";
 import { replPushAdmission, replPushPolicy } from "./push.ts";
@@ -102,6 +102,7 @@ import type { ReplPlacementRegistration, ReplSelectionEntry } from "./selections
 /** What a caller may state about one entry's recording. */
 export interface ReplRecordingOptions {
   readonly projectCwd?: string;
+  readonly observeWorktree?: string;
   readonly workspace?: string;
   /**
    * How this entry performs native repository work.
@@ -185,6 +186,7 @@ export function* replRepositoryInstallation(
   owner: string,
   options: ReplRecordingOptions = {},
 ): Operation<ExecutionInstallation> {
+  const observationPath = options.observeWorktree;
   const held: { entry?: ReplPushEntry } = {};
   let usable = false;
 
@@ -197,7 +199,7 @@ export function* replRepositoryInstallation(
         usable = false;
         delete held.entry;
       });
-      yield* initializeReplRepository(options, (entry) => {
+      yield* initializeReplRepository({ ...options, observeWorktree: observationPath }, (entry) => {
         held.entry = entry;
         usable = true;
       });
@@ -330,7 +332,13 @@ function* initializeReplRepository(
   // coroutine consumes at its own cursor.
   const gitCheckouts: ReplGitCheckout[] = [];
 
+  let observationGuard: ((path: string) => Operation<void>) | undefined;
   const recorder: ReplLocalRecorder = {
+    *guard(path) {
+      if (observationGuard !== undefined) {
+        yield* observationGuard(path);
+      }
+    },
     *selection(): Operation<ReplAmbientCheckout | undefined> {
       const coroutine = yield* currentCoroutine();
       const remembered = selected.get(coroutine);
@@ -558,12 +566,22 @@ function* initializeReplRepository(
   // entry's registry, its registered checkouts, its slot acquisition and its
   // native turn, and take no mutation lease: a read changes nothing, so there
   // is nothing for one to protect.
+  const observations = yield* useObservationWorktrees({
+    path: options.observeWorktree,
+    cwd: directory,
+    operations,
+    ambient: useAmbientRepository,
+    serialize,
+  });
+  observationGuard = observations.guard;
   const observationEntry: ReplObservationEntry = {
+    prepare: observations.prepare,
+    ownObservation: observations.own,
     operations,
     holdSlot,
     serialize,
     selections,
-    checkouts: () => gitCheckouts,
+    checkouts: () => [...gitCheckouts, ...observations.checkouts()],
   };
   yield* GitQuery.around(replObservationMiddleware(observationEntry), { at: "min" });
 
