@@ -57,8 +57,22 @@ import type { AnswerMatcher } from "@executablemd/core/host";
 /** Everything one `<Execution>`'s declarations configured, in declared order. */
 export type ChildConfiguration = TestAgentChildConfiguration | AnswersChildConfiguration;
 
+export interface ScenarioEfforts {
+  readonly selected: string;
+  readonly options: readonly string[];
+}
+export interface ScenarioModel {
+  readonly id: string;
+  readonly efforts?: ScenarioEfforts | null;
+}
+export interface ScenarioModels {
+  readonly selected: string;
+  readonly options: readonly ScenarioModel[];
+}
+
 /** One `<TestAgent.Scenario>` mapping, normalized where it was written. */
 export interface ChildScenario {
+  readonly models?: ScenarioModels | null;
   /** The agent this mapping answers for, with the declaration's default applied. */
   readonly agent: string;
   /** The logical session, or the empty string for the unnamed one. */
@@ -162,6 +176,34 @@ function detachScenario(scenario: ChildScenario): ChildScenario {
     session: scenario.session,
     rootDir: scenario.rootDir,
     document: frozen({ path: scenario.document.path, source: scenario.document.source }),
+    ...(scenario.models === undefined
+      ? {}
+      : {
+          models:
+            scenario.models === null
+              ? null
+              : frozen({
+                  selected: scenario.models.selected,
+                  options: frozen(
+                    scenario.models.options.map((model) =>
+                      frozen({
+                        id: model.id,
+                        ...(model.efforts === undefined
+                          ? {}
+                          : {
+                              efforts:
+                                model.efforts === null
+                                  ? null
+                                  : frozen({
+                                      selected: model.efforts.selected,
+                                      options: frozen([...model.efforts.options]),
+                                    }),
+                            }),
+                      }),
+                    ),
+                  ),
+                }),
+        }),
   });
 }
 

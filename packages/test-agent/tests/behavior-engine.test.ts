@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { Component, DocumentOutput, execute } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { collectTurn, createTurnBridge } from "../src/worker/bridge.ts";
+import type { ConfigurationSnapshot } from "../src/configuration.ts";
 import type { BridgeEvent } from "../src/worker/bridge.ts";
 import type { Captures } from "@executablemd/core";
 import { installWhenPromptComponent } from "../src/worker/when-prompt.ts";
@@ -36,7 +37,7 @@ const REVIEW = [
 
 interface Engine {
   turnEvents: Subscription<BridgeEvent, never>;
-  offer(text: string): Operation<Result<Captures>>;
+  offer(text: string, configuration?: ConfigurationSnapshot): Operation<Result<Captures>>;
 }
 
 function* useEngine(source: string): Operation<Engine> {
@@ -74,7 +75,7 @@ function* useEngine(source: string): Operation<Engine> {
     }
   });
 
-  return { turnEvents, offer: (text: string) => bridge.offer(text) };
+  return { turnEvents, offer: (text, configuration) => bridge.offer(text, configuration) };
 }
 
 /**
@@ -89,6 +90,22 @@ function withEngine<T>(source: string, body: (engine: Engine) => Operation<T>): 
 }
 
 describe("Tier BE — behavior engine", () => {
+  it("matches text and actual configuration as one offer without consuming mismatches", function* () {
+    const engine = yield* useEngine(
+      '<WhenPrompt as="r" template="Review {?subject}" model="B" effort="deep" />\n\n{r.subject}\n\n<WhenPrompt template="done" model={null} effort={null} />\n',
+    );
+    yield* collectTurn(engine.turnEvents);
+    expect((yield* engine.offer("Review core", { model: "A", effort: "deep" })).ok).toBe(false);
+    expect((yield* engine.offer("Review core", { model: "B", effort: "brief" })).ok).toBe(false);
+    expect((yield* engine.offer("Review core")).ok).toBe(false);
+    expect(yield* engine.offer("Review core", { model: "B", effort: "deep" })).toEqual(
+      Ok({ subject: "core" }),
+    );
+    expect((yield* collectTurn(engine.turnEvents)).text).toContain("core");
+    expect((yield* engine.offer("done", { model: "B", effort: null })).ok).toBe(false);
+    expect((yield* engine.offer("done", { model: null, effort: null })).ok).toBe(true);
+    expect((yield* collectTurn(engine.turnEvents)).end).toBe("eof");
+  });
   it("BE1: a matched prompt advances the stage, exposes captures, and reaches the second stage", function* () {
     const engine = yield* useEngine(REVIEW);
 

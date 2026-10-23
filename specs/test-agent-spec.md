@@ -95,6 +95,45 @@ The test runtime does not inject agent, session, cwd, or harness metadata into
 the behavior document. The document sees its own frontmatter and bindings,
 including values captured by prompt matchers.
 
+### Model and effort choices
+
+Declare fictional configuration choices on the scenario that supplies the
+session. The ordinary Session selects from these choices before its prompt:
+
+```md
+<TestAgent agent="reviewer">
+  <TestAgent.Scenario session="review" src="./agents/review.md"
+    models={{selected:"fixture-small",options:[
+      {id:"fixture-small",efforts:{selected:"low",options:["low","high"]}},
+      {id:"fixture-review",efforts:{selected:"brief",options:["brief","deep"]}}
+    ]}} />
+  <Test name="selects a model and effort">
+    <Agent name="reviewer">
+      <Session name="review" model="fixture-review" effort="deep">
+        <Prompt>Review the supplied change.</Prompt>
+      </Session>
+    </Agent>
+  </Test>
+</TestAgent>
+```
+
+Omitted or null `models` makes configuration choices unavailable and preserves
+the response shape of an unconfigured worker. A present catalog contains a
+nonempty ordered `options` array of unique, nonempty exact `id` strings and a
+`selected` member. Each model's optional or null `efforts` makes effort choices
+unavailable for that model; a present effort catalog has unique nonempty string
+options and a selected member. IDs are also their displayed labels. Malformed
+catalogs, empty choices and invalid initial membership refuse before scenario
+provisioning in both declaration forms.
+
+Each scenario remembers its selected model and an effort selection for every
+model offering efforts. Switching models exposes that model's choices and
+remembered effort. Selecting the same model preserves its effort; a rejected
+write changes nothing. These settings share the scenario's existing isolation
+and teardown lifetime. A Session with no configuration props performs no
+configuration read or write. Unknown or unavailable selections retain the
+ordinary Session diagnostics and model-first restoration behavior.
+
 ### Configuring one nested run
 
 Inside the declaration prefix of one canonical test's `<Execution host="run">`,
@@ -217,6 +256,20 @@ same either way; only which layer reports an absent binding differs. Repeated
 uses of one capture name must match the same text. Adjacent capture holes
 without literal text between them are rejected as ambiguous.
 
+`model` and `effort` on `<WhenPrompt>` constrain the acknowledged configuration
+at prompt entry, together with the complete text match:
+
+```md
+<WhenPrompt template="Review the supplied change."
+  model="fixture-review" effort="deep" />
+The requested configuration was consumed.
+```
+
+Omitting a constraint skips it; null asserts that the corresponding choices
+are unavailable. Supplied strings are nonempty exact IDs. These props observe
+provider state and never configure a Session. A configuration mismatch fails
+the turn and owning test while leaving the matcher active and captures intact.
+
 ## Scenarios
 
 A scenario declaration is a blueprint, not a singleton runtime. Each resolved
@@ -317,6 +370,7 @@ interface TestAgentController {
   useScenario(options: {
     document: { path: string; source: string };
     rootDir: string;
+    models?: ScenarioModels | null;
   }): Operation<ScenarioHandle>;
 }
 
@@ -351,8 +405,18 @@ stdin and stdout. It supports the successful ACP lifecycle used by ACPX:
 - initialize;
 - create a session;
 - load or resume a session;
+- set a configuration option and return the complete refreshed selectors;
 - prompt;
 - cancel.
+
+Session creation and loading advertise ordinary ACP `configOptions` when a
+catalog exists: `model` has category `model`, and the selected model's `effort`
+has category `thought_level`. The worker waits for the controller's
+acknowledgement of `session/set_config_option` before returning success and the
+complete refreshed list. Its existing ordered response queue also carries these
+acknowledgements. Reconnection reads the scenario's acknowledged settings rather
+than resetting them. Cancellation restores behavior progress while preserving
+successful configuration changes.
 
 An agent availability check starts a disposable worker, completes ACP
 initialization, and closes it. Starting a session may start a separate worker.
@@ -401,6 +465,11 @@ test scope teardown
 Behavior journals are private to the test-agent controller and separate from the
 document-under-test journal. Each isolated scenario has one journal
 containing the matched prompt, captures, and completed stage transitions.
+Constrained stages also retain their detached actual configuration snapshot and
+distinguish omitted constraints from null in their durable identity. A missing
+required snapshot refuses replay. Rehydration uses the retained observation even
+if current selections have changed. Unconstrained stages retain their previous
+identity, record shape and captures.
 
 Restart recovery covers crashes between completed turns; a crash inside a
 turn's final delivery window is outside the supported guarantee. When a

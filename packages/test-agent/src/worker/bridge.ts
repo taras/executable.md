@@ -10,6 +10,8 @@ import { createChannel, withResolvers } from "effection";
 import type { Channel, Operation, Result, Subscription } from "effection";
 import type { Captures } from "@executablemd/core";
 
+import type { ConfigurationSnapshot } from "../configuration.ts";
+
 export type BridgeEvent =
   | { kind: "output"; text: string }
   | { kind: "suspended"; stage: string }
@@ -18,12 +20,13 @@ export type BridgeEvent =
 
 export interface PromptOffer {
   text: string;
+  configuration?: ConfigurationSnapshot;
   respond(outcome: Result<Captures>): void;
 }
 
 export interface TurnBridge {
   events: Channel<BridgeEvent, never>;
-  offer(text: string): Operation<Result<Captures>>;
+  offer(text: string, configuration?: ConfigurationSnapshot): Operation<Result<Captures>>;
   nextOffer(): Operation<PromptOffer>;
 }
 
@@ -41,9 +44,13 @@ export function createTurnBridge(): TurnBridge {
 
   return {
     events,
-    *offer(text) {
+    *offer(text, configuration) {
       const outcome = withResolvers<Result<Captures>>();
-      const offer: PromptOffer = { text, respond: outcome.resolve };
+      const offer: PromptOffer = {
+        text,
+        ...(configuration === undefined ? {} : { configuration: { ...configuration } }),
+        respond: outcome.resolve,
+      };
       const waiter = waiters.shift();
       if (waiter) {
         waiter(offer);

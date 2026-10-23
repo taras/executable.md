@@ -37,6 +37,8 @@ export interface WorkerAgent {
    */
   startSession(instructions: string | undefined): Operation<string>;
   runTurn(text: string): Operation<TurnResult>;
+  configuration?(): Operation<acp.SessionConfigOption[] | undefined>;
+  setConfiguration?(configId: string, value: string): Operation<acp.SessionConfigOption[]>;
   cancel(): void;
 }
 
@@ -129,7 +131,13 @@ function useAcpConnection(
         handle(function* () {
           yield* worker.ready();
           const nativeSessionId = yield* worker.startSession(systemPromptOf(ctx.params._meta));
-          return { sessionId: randomUUID(), _meta: { agentSessionId: nativeSessionId } };
+          const configOptions =
+            worker.configuration === undefined ? [] : ((yield* worker.configuration()) ?? []);
+          return {
+            sessionId: randomUUID(),
+            _meta: { agentSessionId: nativeSessionId },
+            ...(configOptions.length === 0 ? {} : { configOptions }),
+          };
         }),
       )
       .onRequest("session/load", (ctx) =>
@@ -141,7 +149,22 @@ function useAcpConnection(
           // conversation than the one that was named — which is exactly what
           // attaching by name exists to rule out. The scenario's own identity
           // stands in only when nothing was named.
-          return { _meta: { agentSessionId: ctx.params.sessionId ?? nativeSessionId } };
+          const configOptions =
+            worker.configuration === undefined ? [] : ((yield* worker.configuration()) ?? []);
+          return {
+            _meta: { agentSessionId: ctx.params.sessionId ?? nativeSessionId },
+            ...(configOptions.length === 0 ? {} : { configOptions }),
+          };
+        }),
+      )
+      .onRequest("session/set_config_option", (ctx) =>
+        handle(function* () {
+          if (worker.setConfiguration === undefined || typeof ctx.params.value !== "string") {
+            throw new acp.RequestError(-32602, "Configuration choices are unavailable.");
+          }
+          return {
+            configOptions: yield* worker.setConfiguration(ctx.params.configId, ctx.params.value),
+          };
         }),
       )
       .onRequest("session/close", () => ({}))
