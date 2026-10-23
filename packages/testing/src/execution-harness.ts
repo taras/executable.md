@@ -859,6 +859,9 @@ function* installScan(state: HarnessState, declared: DeclarationState): Operatio
         // ends the projection instead of printing into a discarded buffer — and
         // so an enclosing `<Test>` never sees a failure that did not happen.
         if (state.phase === "scan") {
+          if (declared.inside !== undefined) {
+            declared.collect.refuse(segment.message);
+          }
           throw new ScanBoundary(segment.source ?? "");
         }
         return yield* next(segment);

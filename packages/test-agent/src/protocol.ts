@@ -10,6 +10,9 @@ import type { Result } from "effection";
 import { z } from "zod";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 
+import { modelsSchema } from "./configuration.ts";
+import type { ScenarioModels } from "@executablemd/testing";
+
 const json: z.ZodType<Json> = z.lazy(() =>
   z.union([
     z.null(),
@@ -27,6 +30,7 @@ export type WireDurableEvent = DurableEvent;
 export type WorkerMessage =
   | { t: "attach"; token: string; instance: string }
   | { t: "journal"; seq: number; event: WireDurableEvent }
+  | { t: "configuration"; configId: string; value: string }
   | { t: "read"; path: string }
   | { t: "stat"; path: string }
   | { t: "session"; systemPrompt?: string }
@@ -51,7 +55,9 @@ export type ControllerMessage =
        * already exists rather than minting a replacement for it.
        */
       nativeSessionId: string;
+      models?: ScenarioModels;
     }
+  | { t: "configuration"; models: ScenarioModels }
   | { t: "ack"; seq: number }
   | { t: "recorded" }
   | { t: "read"; path: string; source?: string; missing: boolean }
@@ -92,6 +98,11 @@ const durableEvent: z.ZodType<WireDurableEvent> = z.union([
 const workerMessage: z.ZodType<WorkerMessage> = z.discriminatedUnion("t", [
   z.object({ t: z.literal("attach"), token: z.string(), instance: z.string() }),
   z.object({ t: z.literal("journal"), seq: z.number().int().nonnegative(), event: durableEvent }),
+  z.object({
+    t: z.literal("configuration"),
+    configId: z.string().min(1),
+    value: z.string().min(1),
+  }),
   z.object({ t: z.literal("read"), path: z.string() }),
   z.object({ t: z.literal("stat"), path: z.string() }),
   z.object({ t: z.literal("session"), systemPrompt: z.string().optional() }),
@@ -112,11 +123,13 @@ const configMessage: z.ZodType<ControllerMessage> = z.discriminatedUnion("mode",
     doc: z.object({ path: z.string(), source: z.string() }),
     journal: z.array(durableEvent),
     nativeSessionId: z.string(),
+    models: modelsSchema.optional(),
   }),
 ]);
 
 const controllerMessage: z.ZodType<ControllerMessage> = z.union([
   configMessage,
+  z.object({ t: z.literal("configuration"), models: modelsSchema }),
   z.object({ t: z.literal("ack"), seq: z.number().int().nonnegative() }),
   z.object({ t: z.literal("recorded") }),
   z.object({

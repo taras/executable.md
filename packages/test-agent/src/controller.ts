@@ -24,6 +24,8 @@ import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/run
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { encodeMessage, formatRoute, parseWorkerMessage, PROBE_INSTANCE } from "./protocol.ts";
 import type { ControllerMessage, WorkerMessage } from "./protocol.ts";
+import { normalizeModels, selectConfiguration } from "./configuration.ts";
+import type { ScenarioModels } from "@executablemd/testing";
 import { useLineServer } from "./net.ts";
 import type { LineSocket } from "./net.ts";
 
@@ -41,6 +43,7 @@ export interface TestAgentController {
   useScenario(options: {
     document: { path: string; source: string };
     rootDir: string;
+    models?: ScenarioModels | null;
   }): Operation<ScenarioHandle>;
 }
 
@@ -103,6 +106,7 @@ export interface ScenarioFailure {
  * handle.
  */
 export interface ScenarioRecord extends ScenarioHandle {
+  models?: ScenarioModels;
   id: string;
   /** The real directory Markdown dependencies are served from. */
   rootDir: string;
@@ -132,6 +136,7 @@ export interface TestAgentControllerInternals extends TestAgentController {
   useScenario(options: {
     document: { path: string; source: string };
     rootDir: string;
+    models?: ScenarioModels | null;
   }): Operation<ScenarioRecord>;
   getScenarioRecord(id: string): ScenarioRecord | undefined;
 }
@@ -276,6 +281,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
               doc: scenario.document,
               journal: scenario.journal,
               nativeSessionId: scenario.nativeSessionId,
+              ...(scenario.models === undefined ? {} : { models: scenario.models }),
             });
           }
           yield* each.next();
@@ -305,6 +311,18 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
         return;
       }
       switch (message.t) {
+        case "configuration": {
+          try {
+            attached.models = selectConfiguration(attached.models, message.configId, message.value);
+            send(connection, { t: "configuration", models: attached.models });
+          } catch (error) {
+            send(connection, {
+              t: "error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+          return;
+        }
         case "journal": {
           if (message.seq !== attached.journal.length) {
             send(connection, {
@@ -408,6 +426,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
     function useScenario(options: {
       document: { path: string; source: string };
       rootDir: string;
+      models?: ScenarioModels | null;
     }): Operation<ScenarioRecord> {
       return resource(function* (provide) {
         const id = randomUUID();
@@ -418,6 +437,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
           document: options.document,
           journal: [],
           sessions: [],
+          models: normalizeModels(options.models),
           nativeSessionId: `native-${randomUUID()}`,
         };
         scenarios.set(id, scenario);
@@ -437,6 +457,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
             scenario.sessions.length = 0;
             scenario.failure = undefined;
             scenario.fatal = undefined;
+            scenario.models = undefined;
             canonicalRoots.delete(id);
           }
         });

@@ -30,6 +30,7 @@ import type {
   ChildDeclaration,
   ChildDeclarationChild,
 } from "../src/child-configuration.ts";
+import { detachChildConfiguration } from "../src/child-configuration.ts";
 import { useTesting } from "../src/use-testing.ts";
 import { testHarnessInstallation } from "../src/execution-harness.ts";
 import { ExecutionHost } from "../src/execution-host.ts";
@@ -994,6 +995,65 @@ describe("child configuration declarations", () => {
     }
     return first;
   }
+
+  it("refuses a recognized declaration child's schema error before creating any child", function* () {
+    const run = yield* runDeclaring({
+      "README.md": doc(
+        '<Test name="invalid props">',
+        '<Execution host="run" source="unused">',
+        "<TestAgent>",
+        "<TestAgent.Scenario src={3} />",
+        "</TestAgent>",
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    expect(single(run).status).toBe("fail");
+    expect(single(run).error?.message).toContain("must be string");
+    expect(run.log.requests).toEqual([]);
+  });
+
+  it("deeply detaches and freezes scenario model and effort catalogs", function* () {
+    const effortOptions = ["low", "high"];
+    const efforts = { selected: "low", options: effortOptions };
+    const model = { id: "A", efforts };
+    const options = [model];
+    const models = { selected: "A", options };
+    const detached = detachChildConfiguration([
+      {
+        kind: "test-agent",
+        defaultAgent: "reviewer",
+        scenarios: [
+          {
+            agent: "reviewer",
+            session: "review",
+            rootDir: "/fixture",
+            document: { path: "a.md", source: "hi" },
+            models,
+          },
+        ],
+      },
+    ]);
+    models.selected = "changed";
+    model.id = "changed";
+    efforts.selected = "changed";
+    effortOptions.push("changed");
+    options.push({ id: "changed", efforts });
+    const entry = detached[0];
+    if (entry?.kind !== "test-agent") {
+      throw new Error("missing test-agent configuration");
+    }
+    const captured = entry.scenarios[0].models;
+    expect(captured).toEqual({
+      selected: "A",
+      options: [{ id: "A", efforts: { selected: "low", options: ["low", "high"] } }],
+    });
+    expect(Object.isFrozen(captured)).toBe(true);
+    expect(Object.isFrozen(captured?.options)).toBe(true);
+    expect(Object.isFrozen(captured?.options[0])).toBe(true);
+    expect(Object.isFrozen(captured?.options[0].efforts)).toBe(true);
+    expect(Object.isFrozen(captured?.options[0].efforts?.options)).toBe(true);
+  });
 
   it("carries both declarations to the host as ordered, detached data", function* () {
     const run = yield* runDeclaring({

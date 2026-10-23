@@ -391,6 +391,9 @@ without changing the document it executes:
       <TestAgent.Scenario
         session="review"
         src="./agents/review.md"
+        models={{selected:"fixture-review",options:[
+          {id:"fixture-review",efforts:{selected:"deep",options:["brief","deep"]}}
+        ]}}
       />
     </TestAgent>
 
@@ -410,6 +413,10 @@ In this exact position, `<TestAgent>` and `<Answers>` are declarations rather
 than wrappers around assertion content. Each is a direct child of `<Execution>`
 in its declaration prefix and may appear at most once. The TestAgent declaration
 contains one or more direct `<TestAgent.Scenario>` children and no other content.
+Scenario `models` follows the same nullable catalog validation as the wrapper
+form. Every catalog, model, effort catalog and options array is detached and
+frozen before host middleware receives the request. Only data crosses the
+boundary; configuration state is created inside the child.
 The Answers declaration contains one or more direct `<Answer>` matchers and no
 other content. Their props, scenario documents, matcher templates, declaration
 order and validation keep the contracts in `test-agent-spec.md` and executable

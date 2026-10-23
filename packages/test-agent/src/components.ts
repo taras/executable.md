@@ -38,6 +38,8 @@ import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.
 import { createControlledExecutableObserver } from "./executable-observer.ts";
 import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
+import { normalizeModels, MODELS_PROPS } from "./configuration.ts";
+import type { ScenarioModels } from "@executablemd/testing";
 import { duplicateScenario, missingScenario } from "./child-configuration.ts";
 import { TEST_AGENT_CLIENT_NATIVE, TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
 import type { SessionRouting } from "./provider.ts";
@@ -47,6 +49,7 @@ export const DEFAULT_TEST_AGENT = "test";
 
 /** One `<TestAgent.Scenario>` mapping, before any worker exists. */
 export interface ScenarioDeclaration {
+  models?: ScenarioModels;
   agent: string;
   sessionName: string;
   rootDir: string;
@@ -196,6 +199,7 @@ export function* provisionPartition(options: {
       try {
         scenario = yield* controller.useScenario({
           document: declared.document,
+          models: declared.models,
           rootDir: declared.rootDir,
         });
       } catch (error) {
@@ -414,6 +418,7 @@ export function* Scenario(props: Record<string, Json>): Operation<unknown> {
     return reported.message;
   }
 
+  const models = normalizeModels(props.models);
   const read = yield* readScenarioSource(src);
   if (!read.ok) {
     // The read's own failure, unwrapped: a wrapper's scenario is read while a
@@ -436,6 +441,7 @@ export function* Scenario(props: Record<string, Json>): Operation<unknown> {
     rootDir: read.value.rootDir,
     document: read.value.document,
     duplicate: false,
+    ...(models === undefined ? {} : { models }),
   });
   return "";
 }
@@ -497,6 +503,7 @@ export const SCENARIO_PROPS: PropsSchema = {
   type: "object",
   properties: {
     src: { type: "string" },
+    models: MODELS_PROPS,
     agent: { type: "string" },
     session: { type: "string" },
   },

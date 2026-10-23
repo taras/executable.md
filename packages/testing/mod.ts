@@ -86,6 +86,9 @@ export type {
   ChildDeclaration,
   ChildDeclarationChild,
   ChildScenario,
+  ScenarioModels,
+  ScenarioModel,
+  ScenarioEfforts,
   OpenChildDeclaration,
   TestAgentChildConfiguration,
 } from "./src/child-configuration.ts";
