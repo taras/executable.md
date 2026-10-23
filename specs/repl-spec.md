@@ -2423,6 +2423,30 @@ response goes back with them, so the reply can continue from what already
 happened rather than repeating it, and the results that succeeded stay retained
 and are not sent again.
 
+One shared dispatch service owns a Sidekick message exchange through generation,
+control evaluation, automatic feedback and joined cleanup. UI Send and Retry
+preserve their existing input reduction and acknowledgement revisions. A dispatch
+captures its caller's UI or attachment origin before spawning, reserves under the
+same message/configuration admission policy and refuses busy work before a
+message append, provider turn or entry. The returned handle observes this exact
+exchange. Dropping observation leaves the root-owned producer and reservation
+intact; cancellation through an old completed handle reaches no later exchange.
+
+New saved messages carry an opaque public ID and their origin while retaining
+the existing conversation-scoped numeric `turn`. A public message reference binds
+execution, conversation and the acknowledged saved ID. Old records retain their
+original shape and have no invented follow ID. External-origin messages preserve
+unsent human composer text and held draft ownership; only a UI acknowledgement
+clears its exact UI revision. External attribution appears in the existing chat.
+Passive observation exposes current public state and subsequent changes without
+another prompt or append. Its live terminal index is lost with the owning root;
+retained history alone establishes no joined-cleanup result after process loss.
+
+A failed follow-up makes the whole exchange fail even when an earlier turn
+answered. Its safe error retains that earlier answer as partial evidence. A
+preview, a successful first turn, idle state and a product verdict inside Output
+are distinct from the final exchange result.
+
 Stop ends the asking and nothing else. It cancels the generation in flight, the
 controls of the response being evaluated and the wait for an entry's outcome,
 and it stops any turn that would have followed — and it returns only once all of
