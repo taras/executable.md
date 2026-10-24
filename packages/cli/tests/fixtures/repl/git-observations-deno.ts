@@ -13,20 +13,43 @@ import { ordinaryGeneratedSelection } from "../../../src/evaluation-profile.ts";
 import { ReplHost } from "../../../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../../../src/repl/session.ts";
 import { entryInitialBindings } from "../../../src/repl/model.ts";
-import { createExecutionFile, executionPath, openExecutionFile, readRecords } from "../../../src/repl/journal.ts";
+import {
+  createExecutionFile,
+  executionPath,
+  openExecutionFile,
+  readRecords,
+} from "../../../src/repl/journal.ts";
 import type { ReplEntryInstallation } from "../../../src/repl-entry-installation.ts";
-import { parseReplPlacementRecord, REPL_REPOSITORY_PLACEMENT } from "../../../src/repl/repositories/placement-records.ts";
+import {
+  parseReplPlacementRecord,
+  REPL_REPOSITORY_PLACEMENT,
+} from "../../../src/repl/repositories/placement-records.ts";
 import { REPL_REPOSITORY_LOCAL } from "../../../src/repl/repositories/records.ts";
-import { selectedByPlacement, parseReplObservationRecord } from "../../../src/repl/repositories/observation-records.ts";
+import {
+  selectedByPlacement,
+  parseReplObservationRecord,
+} from "../../../src/repl/repositories/observation-records.ts";
 import { admitReplRepositoryHistory } from "../../../src/repl/repositories/admission.ts";
-import { useObservationLease, useCommonDirectoryLease } from "../../../src/repl/repositories/deno/leases.ts";
-import { useFixture, replInstallations, useNodeReplHost, useWorkingDirectory, opened, READS_AT_ROOT } from "../../support/repl-git-observations.ts";
+import {
+  useObservationLease,
+  useCommonDirectoryLease,
+} from "../../../src/repl/repositories/deno/leases.ts";
+import {
+  useFixture,
+  replInstallations,
+  useNodeReplHost,
+  useWorkingDirectory,
+  opened,
+  READS_AT_ROOT,
+} from "../../support/repl-git-observations.ts";
 import type { Fixture } from "../../support/repl-git-observations.ts";
 
 function* waitForRead(entered: Operation<void>, task: Task<void>): Operation<void> {
   yield* race([
     entered,
-    (function* (): Operation<void> { yield* task; })(),
+    (function* (): Operation<void> {
+      yield* task;
+    })(),
   ]);
 }
 
@@ -297,7 +320,9 @@ describe("D3 — trusted retained observation worktrees", () => {
         }),
       );
       const result = yield* session.join();
-      if (!result.ok) { throw result.error; }
+      if (!result.ok) {
+        throw result.error;
+      }
       throw new Error("The D3 session ended before reaching its read barrier.");
     });
     yield* waitForRead(entered.operation, task);
@@ -321,45 +346,56 @@ describe("D3 — trusted retained observation worktrees", () => {
     const fixture = yield* useFixture();
     const path = yield* d3Prepare(fixture);
     const entered = withResolvers<void>();
-    const calls: D3Calls = { native: 0, reads: 0, *beforeRead() { entered.resolve(); } };
+    const calls: D3Calls = {
+      native: 0,
+      reads: 0,
+      *beforeRead() {
+        entered.resolve();
+      },
+    };
     let joined = false;
     let failed: Error | undefined;
     let injected = false;
-    const task = yield* spawn(function* () {
+    let diagnostic: unknown;
+    yield* scoped(function* () {
+      const task = yield* spawn(function* () {
+        try {
+          yield* ReplHost.around({
+            *appendRecord([file, record], next) {
+              if (record.includes('"kind":"observation-worktree"')) {
+                injected = true;
+                throw new Error("CONTROLLED_D3_STARTUP_FAILURE");
+              }
+              yield* next(file, record);
+            },
+          });
+          const created = yield* createExecutionFile(fixture.journals, "execution-1");
+          const session = opened(
+            yield* submitReplEntry({
+              execution: created,
+              projectCwd: fixture.checkout,
+              entryInstallation: d3Factory(fixture, path, calls),
+              installations: yield* replInstallations(),
+              source: d3Reads(path, fixture),
+              generated: ordinaryGeneratedSelection(),
+            }),
+          );
+          const result = yield* session.join();
+          if (!result.ok) {
+            failed = result.error;
+            throw result.error;
+          }
+          throw new Error("The D3 session unexpectedly completed without a read.");
+        } finally {
+          joined = true;
+        }
+      });
       try {
-        yield* ReplHost.around({
-          *appendRecord([file, record], next) {
-            if (record.includes('"kind":"observation-worktree"')) {
-              injected = true;
-              throw new Error("CONTROLLED_D3_STARTUP_FAILURE");
-            }
-            yield* next(file, record);
-          },
-        });
-        const created = yield* createExecutionFile(fixture.journals, "execution-1");
-        const session = opened(yield* submitReplEntry({
-          execution: created,
-          projectCwd: fixture.checkout,
-          entryInstallation: d3Factory(fixture, path, calls),
-          installations: yield* replInstallations(),
-          source: d3Reads(path, fixture),
-          generated: ordinaryGeneratedSelection(),
-        }));
-        const result = yield* session.join();
-        if (!result.ok) { failed = result.error; throw result.error; }
-        throw new Error("The D3 session unexpectedly completed without a read.");
-      } finally {
-        joined = true;
+        yield* waitForRead(entered.operation, task);
+      } catch (error) {
+        diagnostic = error;
       }
     });
-    let diagnostic: unknown;
-    try {
-      yield* waitForRead(entered.operation, task);
-    } catch (error) {
-      diagnostic = error;
-    } finally {
-      yield* task.halt();
-    }
     expect(injected).toBe(true);
     expect(diagnostic).toBe(failed);
     expect(failed?.message).toBe("Failed to persist durable yield event");

@@ -36,10 +36,22 @@ import { REPL_REPOSITORY_OBSERVATION } from "../src/repl/repositories/observatio
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import { entryInitialBindings } from "../src/repl/model.ts";
-import { createExecutionFile, executionPath, openExecutionFile, readRecords } from "../src/repl/journal.ts";
+import {
+  createExecutionFile,
+  executionPath,
+  openExecutionFile,
+  readRecords,
+} from "../src/repl/journal.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
-import { useFixture, replInstallations, useNodeReplHost, useWorkingDirectory, opened, READS_AT_ROOT } from "./support/repl-git-observations.ts";
+import {
+  useFixture,
+  replInstallations,
+  useNodeReplHost,
+  useWorkingDirectory,
+  opened,
+  READS_AT_ROOT,
+} from "./support/repl-git-observations.ts";
 import type { Fixture } from "./support/repl-git-observations.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -449,13 +461,19 @@ describe("RGO5 — the secret gate still decides what reaches the journal", () =
 
 describe("D3 — trusted retained observation worktrees", () => {
   it("executes every ownership case through the real Deno lock host", function* () {
-    const fixture = fileURLToPath(new URL("./fixtures/repl/git-observations-deno.ts", import.meta.url));
+    const fixture = fileURLToPath(
+      new URL("./fixtures/repl/git-observations-deno.ts", import.meta.url),
+    );
     const child = yield* runShell(
-      ["deno", "test", "--allow-all", "--frozen", fixture].map(shellQuote).join(" "),
+      ["deno", "test", "--allow-all", "--frozen", "--node-modules-dir=manual", fixture]
+        .map(shellQuote)
+        .join(" "),
       { inheritEnv: true },
     ).expect();
     console.log(child.stdout);
-    if (child.stderr.length > 0) { console.error(child.stderr); }
+    if (child.stderr.length > 0) {
+      console.error(child.stderr);
+    }
     expect(child.stdout).toContain("1 passed (6 steps)");
     expect(child.stdout).toContain("0 failed");
   });

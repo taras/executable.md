@@ -144,11 +144,20 @@ function configurationSucceeded(run: {
   results: readonly TestResult[];
 }): void {
   if (!run.result.ok || run.results.some((entry) => entry.status !== "pass")) {
-    throw new Error(JSON.stringify({
-      error: run.result.ok ? undefined : { message: run.result.error.message, stack: run.result.error.stack },
-      output: run.output,
-      results: run.results,
-    }, (_key, value) => value instanceof Error ? { message: value.message, stack: value.stack } : value, 2));
+    throw new Error(
+      JSON.stringify(
+        {
+          error: run.result.ok
+            ? undefined
+            : { message: run.result.error.message, stack: run.result.error.stack },
+          output: run.output,
+          results: run.results,
+        },
+        (_key, value) =>
+          value instanceof Error ? { message: value.message, stack: value.stack } : value,
+        2,
+      ),
+    );
   }
 }
 
@@ -159,7 +168,9 @@ describe(
     it("runs configured Sessions and nested declarations through the source CLI and ACPX worker", function* () {
       const cli = yield* runCli(["test", DOC], RUN).join();
       if (cli.code !== 0) {
-        throw new Error(`SessionConfiguration CLI exited ${cli.code}\nstdout:\n${cli.stdout}\nstderr:\n${cli.stderr}`);
+        throw new Error(
+          `SessionConfiguration CLI exited ${cli.code}\nstdout:\n${cli.stdout}\nstderr:\n${cli.stderr}`,
+        );
       }
       expect(cli.stdout).toContain("review deep");
       expect(cli.stdout).not.toContain("ERROR");

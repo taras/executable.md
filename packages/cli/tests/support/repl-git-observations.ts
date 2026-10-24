@@ -51,7 +51,6 @@ export function useFixture(): Operation<Fixture> {
   });
 }
 
-
 /**
  * What a command contributes to an entry's execution.
  *
@@ -115,7 +114,6 @@ export function opened(result: Result<ReplSession>): ReplSession {
   return result.value;
 }
 
-
 /** The four reads at root, each binding its page. */
 export const READS_AT_ROOT = (fixture: Fixture): string =>
   [
@@ -130,4 +128,3 @@ export const READS_AT_ROOT = (fixture: Fixture): string =>
     "Read {files.paths.length} paths.",
     "",
   ].join("\n");
-
