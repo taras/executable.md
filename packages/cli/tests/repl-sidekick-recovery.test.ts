@@ -257,7 +257,14 @@ describe("Tier R2 — a reading claims nothing a canonical turn does not establi
       // — and that they agree is a coincidence of this history rather than the
       // thing that associated them: the association comes from the canonical
       // turn sitting among that message's own records.
-      { kind: "person", conversation: CHAT, message: 1, turn: 1, text: "greet them" },
+      {
+        kind: "person",
+        origin: { kind: "legacy" },
+        conversation: CHAT,
+        message: 1,
+        turn: 1,
+        text: "greet them",
+      },
       {
         kind: "reply",
         conversation: CHAT,
