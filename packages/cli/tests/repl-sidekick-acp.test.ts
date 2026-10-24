@@ -6,7 +6,7 @@ import { exec } from "@effectionx/process";
 import { Agent, Execution } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
 import { createHash } from "node:crypto";
-import { chmod, lstat, realpath, symlink, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, realpath, rmdir, symlink, unlink } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
@@ -1119,5 +1119,97 @@ if(process.env.CONTROL==='bare')reply({stopReason:'end_turn'});
     }
     yield* refused(until(lstat(endpoint.socket)));
     yield* refused(until(lstat(path)));
+  });
+});
+
+describe("A5: cancels pending endpoint directory acquisition", () => {
+  it("A5: cancels pending endpoint directory acquisition and joins exact cleanup", function* () {
+    const home = yield* until(realpath(yield* useTemporary("xmd-pending-endpoint-")));
+    yield* until(chmod(home, 0o700));
+    const file = join(home, "attachment.json");
+    const created = withResolvers<string>();
+    const release = Promise.withResolvers<void>();
+    const cancelling = withResolvers<void>();
+    let published = false;
+    let joined = false;
+    let directory: string | undefined;
+    let identity: Awaited<ReturnType<typeof lstat>> | undefined;
+    yield* ensure(function* () {
+      if (directory !== undefined && identity !== undefined) {
+        try {
+          const actual = yield* until(lstat(directory));
+          if (actual.dev === identity.dev && actual.ino === identity.ino) {
+            yield* until(rmdir(directory));
+            console.log(JSON.stringify({ kind: "pending-endpoint-fixture-cleanup", directory }));
+          }
+        } catch (error) {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            throw error;
+          }
+        }
+      }
+    });
+    yield* usePosixSidekickTransport(process.platform, (prefix) =>
+      mkdtemp(prefix).then((path) => {
+        created.resolve(path);
+        return release.promise.then(() => path);
+      }),
+    );
+    const host = yield* SidekickTransport.expect();
+    try {
+      const owner = yield* spawn(function* () {
+        yield* host.publish(file, {
+          owner: "pending-owner",
+          execution: "pending-execution",
+          conversation: "pending-conversation",
+          cwd: home,
+        });
+        published = true;
+        yield* suspend();
+      });
+      directory = yield* race([
+        created.operation,
+        (function* (): Operation<string> {
+          yield* owner;
+          throw new Error("Publication ended before directory creation.");
+        })(),
+      ]);
+      identity = yield* until(lstat(directory));
+      const stopping = yield* spawn(function* () {
+        cancelling.resolve();
+        yield* owner.halt();
+        joined = true;
+      });
+      yield* cancelling.operation;
+      expect(joined).toBe(false);
+      expect(published).toBe(false);
+      release.resolve();
+      yield* stopping;
+    } finally {
+      release.resolve();
+    }
+    let exists = true;
+    try {
+      yield* until(lstat(directory));
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+      exists = false;
+    }
+    console.log(
+      JSON.stringify({
+        kind: "pending-endpoint-cleanup-result",
+        directory,
+        exists,
+        joined,
+        published,
+      }),
+    );
+    expect(joined).toBe(true);
+    expect(published).toBe(false);
+    yield* refused(until(lstat(file)));
+    yield* refused(until(lstat(join(directory, "s"))));
+    expect(exists).toBe(false);
   });
 });
