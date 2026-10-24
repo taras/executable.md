@@ -56,6 +56,8 @@ import {
 import type { ScenarioDeclaration } from "./components.ts";
 import { TEST_AGENT_PROVIDER } from "./provider.ts";
 
+import { normalizeModels } from "./configuration.ts";
+
 const TEST_AGENT = "TestAgent";
 const SCENARIO = "TestAgent.Scenario";
 
@@ -107,6 +109,13 @@ function open(collect: {
       refuse(`<${SCENARIO}> requires a "src" prop.`);
       return "";
     }
+    let models;
+    try {
+      models = normalizeModels(props.models);
+    } catch (error) {
+      refuse(`<${SCENARIO}> ${error instanceof Error ? error.message : String(error)}`);
+      return "";
+    }
     const read = yield* readScenarioSource(src);
     if (!read.ok) {
       refuse(`<${SCENARIO}> cannot read the behavior document "${src}": ${read.error.message}`);
@@ -128,6 +137,7 @@ function open(collect: {
       session,
       rootDir: read.value.rootDir,
       document: read.value.document,
+      ...(models === undefined ? {} : { models }),
     });
     return "";
   };
@@ -266,6 +276,7 @@ export function* installChildTestAgent(
       rootDir: scenario.rootDir,
       document: { path: scenario.document.path, source: scenario.document.source },
       duplicate: false,
+      models: normalizeModels(scenario.models),
     });
   }
   const partition = yield* provisionPartition({

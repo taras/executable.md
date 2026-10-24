@@ -97,6 +97,42 @@ the unnamed session, not every named session. Each test and each working
 directory receive independent scenario state, even when they use the same
 mapping. A test may finish with later scenario stages unused.
 
+## Exercise model and effort selection
+
+Declare fictional choices on `TestAgent.Scenario` and keep the workflow's
+ordinary Session configuration:
+
+```md
+<TestAgent agent="reviewer">
+  <TestAgent.Scenario session="review" src="./agents/review.md"
+    models={{selected:"small",options:[
+      {id:"small",efforts:{selected:"low",options:["low","high"]}},
+      {id:"review",efforts:{selected:"brief",options:["brief","deep"]}}
+    ]}} />
+  <Test name="uses review configuration">
+    <Agent name="reviewer"><Session name="review" model="review" effort="deep">
+      <Prompt>Review this change.</Prompt>
+    </Session></Agent>
+  </Test>
+</TestAgent>
+```
+
+In `agents/review.md`, observe what the prompt actually consumed:
+
+```md
+<WhenPrompt template="Review this change." model="review" effort="deep" />
+Reviewed with the requested configuration.
+```
+
+The IDs are exact strings supplied by the test. Each nonempty catalog has a
+selected member and unique options. A model remembers its own effort selection
+when the session switches away and back. Omitted or null catalogs represent
+unavailable choices; ordinary unconfigured Sessions still run. A missing
+WhenPrompt constraint skips that check, while null asserts unavailable choices.
+A mismatch leaves the stage active and fails the test. The same catalog syntax
+works in nested Execution declarations; separate Tests and children start from
+their own defaults. No real provider or credentials are needed.
+
 ## Use a failure to fix the workflow
 
 If the document sends this instead:

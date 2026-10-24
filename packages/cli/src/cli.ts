@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 /**
  * CLI — run an executable markdown document.
  *
@@ -313,13 +314,18 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  * the same ordered include option. The command takes no document reference or
  * props file and exposes no trace or execution deadline.
  *
- * The one option of its own is `--sidekick-agent`, because this command has a
+ * `--observe-worktree` names one existing linked checkout for local Git reads.
+ * `--sidekick-agent` selects the Sidekick, because this command has a
  * Sidekick and a run has none. It is a separate selection from
  * `--default-agent` rather than a second spelling of it: that one is what a
  * `<Session>` an entry writes means by default, and who a person talks to about
  * their entries is not the same choice as who their entries talk to.
  */
 const replConfig = object({
+  observeWorktree: {
+    description: "one existing absolute linked-worktree root allowed for local Git observations",
+    ...field(z.string().optional()),
+  },
   location: {
     description:
       "a location this REPL printed earlier — `xmd://repl/<execution>/<surface>...` — to reopen " +
@@ -669,6 +675,7 @@ export const REPL_VALUES: readonly string[] = [
   "--agent-provider",
   "--default-agent",
   "--sidekick-agent",
+  "--observe-worktree",
 ];
 
 /** The three REPL switches, which carry none. */
@@ -682,6 +689,7 @@ export function replGrammarError(
   // reads its line directly.
   const rest = args.slice(1);
   const positional: string[] = [];
+  let observationPath = false;
   for (let at = 0; at < rest.length; at += 1) {
     const token = rest[at] ?? "";
     if (!token.startsWith("-") || token === "-") {
@@ -698,6 +706,19 @@ export function replGrammarError(
         return `xmd repl: ${name} is a switch and takes no value`;
       }
       continue;
+    }
+    if (name === "--observe-worktree") {
+      if (observationPath) {
+        return "xmd repl: --observe-worktree accepts exactly one path";
+      }
+      observationPath = true;
+      const path = written ?? rest[at + 1];
+      if (path === undefined || path.length === 0 || path.startsWith("-")) {
+        return "xmd repl: --observe-worktree requires a value";
+      }
+      if (!isAbsolute(path)) {
+        return "xmd repl: --observe-worktree requires an absolute path";
+      }
     }
     if (REPL_VALUES.includes(name)) {
       if (written !== undefined) {
@@ -722,7 +743,7 @@ export function replGrammarError(
     return (
       `unrecognized option for xmd repl: ${name} — xmd repl takes one optional location, ` +
       "the agent options --agent-provider, --default-agent, --approve-all, --approve-reads " +
-      "and --deny-all, --include for component directories, and --sidekick-agent for the Sidekick's own conversations"
+      "and --deny-all, --include for component directories, --observe-worktree for one linked checkout, and --sidekick-agent for the Sidekick's own conversations"
     );
   }
   if (positional.length > 1) {
@@ -3016,6 +3037,9 @@ function* dispatch(
           );
         },
         includes: command.config.include,
+        ...(command.config.observeWorktree === undefined
+          ? {}
+          : { observeWorktree: command.config.observeWorktree }),
         ...(command.config.sidekickAgent === undefined
           ? {}
           : { sidekickAgent: command.config.sidekickAgent }),

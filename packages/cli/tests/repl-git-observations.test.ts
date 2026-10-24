@@ -20,26 +20,20 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, until } from "effection";
-import type { Operation, Result } from "effection";
+import { scoped } from "effection";
+import { useHostFiles } from "@executablemd/runtime";
+import type { Operation } from "effection";
 import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { appendFile, mkdtemp, open, realpath, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { API, useHostFiles } from "@executablemd/runtime";
+import { fileURLToPath } from "node:url";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Execution } from "@executablemd/core/api";
-import type { ExecutionInstallation } from "@executablemd/core/host";
 import { useDenoRepositoryOperations } from "@executablemd/git/deno";
-import { runGit } from "./support/fixture-git.ts";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import type { GitObservationRequest } from "@executablemd/git/api";
 import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
-import { gitPlugin } from "@executablemd/git";
-import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
 import { REPL_REPOSITORY_OBSERVATION } from "../src/repl/repositories/observation-records.ts";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
-import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import { entryInitialBindings } from "../src/repl/model.ts";
 import {
@@ -49,50 +43,21 @@ import {
   readRecords,
 } from "../src/repl/journal.ts";
 import type { ReplSession } from "../src/repl/session.ts";
+import { runShell, shellQuote } from "@executablemd/test-support/launch";
+import {
+  useFixture,
+  replInstallations,
+  useNodeReplHost,
+  useWorkingDirectory,
+  opened,
+  READS_AT_ROOT,
+} from "./support/repl-git-observations.ts";
+import type { Fixture } from "./support/repl-git-observations.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 
 /** A synthetic GitHub token, format-realistic and assembled at run time. */
 const CANARY = ["ghp", "_", ALPHABET].join("");
-
-interface Fixture {
-  readonly root: string;
-  readonly checkout: string;
-  readonly journals: string;
-  /** The first commit, which every pinned read names. */
-  readonly first: string;
-  run(...args: string[]): Operation<string>;
-}
-
-/**
- * A committed checkout an entry is opened in.
- *
- * Committed, because a Repository identity is pinned at the commit HEAD named
- * when the entry opened: a checkout with no commit is one no selection can
- * name, which is a different story from this one.
- */
-function useFixture(): Operation<Fixture> {
-  return resource<Fixture>(function* (provide) {
-    const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "repl-git-reads-")))));
-    yield* ensure(() => rm(root, { recursive: true, force: true }));
-    const checkout = join(root, "checkout");
-    yield* runGit(root, ["init", "-b", "main", checkout], { home: root });
-    yield* until(writeFile(join(checkout, "seed.md"), "seed\n"));
-    yield* until(writeFile(join(checkout, "notes.md"), "first notes\n"));
-    yield* runGit(checkout, ["add", "--", "seed.md", "notes.md"], { home: root });
-    yield* runGit(checkout, ["commit", "-m", "first"], { home: root });
-    const head = yield* runGit(checkout, ["rev-parse", "HEAD"], { home: root });
-    yield* provide({
-      root,
-      checkout,
-      journals: join(root, "journals"),
-      first: head,
-      run(...args: string[]): Operation<string> {
-        return runGit(checkout, args, { home: root });
-      },
-    });
-  });
-}
 
 interface Counted {
   /** What each observation this entry performed asked for, in order. */
@@ -134,61 +99,6 @@ function countingOperations(counted: Counted): () => Operation<DenoRepositoryOpe
   };
 }
 
-/**
- * What a command contributes to an entry's execution.
- *
- * Taken from the Git Plugin's own contribution for the `repl` command rather
- * than written out here, because that contribution is the production path: the
- * admission that reads this feature's records travels with the vocabulary.
- */
-function* replInstallations(): Operation<readonly ExecutionInstallation[]> {
-  // The command's own assembly of the bundled Plugin, which is what a profile
-  // carries: the vocabulary and the domain admissions come from Git, and the
-  // admission that reads an entry's own repository history back belongs to this
-  // command, so asking the bundled Plugin alone would declare nothing here.
-  const bundled = replRepositoryPlugin(gitPlugin);
-  const install = bundled.install;
-  if (install === undefined) {
-    throw new Error("the bundled Plugin installs nothing");
-  }
-  const installed = yield* install.call(bundled, { command: "repl", args: [] });
-  if (installed === undefined) {
-    throw new Error("the bundled Plugin declared nothing for the repl command");
-  }
-  return [{ admissions: [...(installed.admissions ?? [])] }];
-}
-
-/** The host half a runtime entrypoint owns, installed here by the suite. */
-function useNodeReplHost(name: string): Operation<void> {
-  return ReplHost.around(
-    {
-      // deno-lint-ignore require-yield
-      *identify(): Operation<string> {
-        return name;
-      },
-      *createExclusive([path]: [string]): Operation<void> {
-        const handle = yield* until(open(path, "wx"));
-        yield* until(handle.close());
-      },
-      *appendRecord([path, record]: [string, string]): Operation<void> {
-        yield* until(appendFile(path, record));
-      },
-    },
-    { at: "min" },
-  );
-}
-
-function useWorkingDirectory(directory: string): Operation<void> {
-  return API.Env.around(
-    {
-      // deno-lint-ignore require-yield
-      *cwd(): Operation<string> {
-        return directory;
-      },
-    },
-    { at: "min" },
-  );
-}
 function useCountedRecording(counted: Counted, root: string): Operation<void> {
   // The same seam the per-entry factory registers on, because what this suite
   // is about is what an entry records rather than which host assembled it.
@@ -198,13 +108,6 @@ function useCountedRecording(counted: Counted, root: string): Operation<void> {
       yield* next();
     },
   });
-}
-
-function opened(result: Result<ReplSession>): ReplSession {
-  if (!result.ok) {
-    throw result.error;
-  }
-  return result.value;
 }
 
 /** Everything a row needs installed around one session. */
@@ -223,21 +126,6 @@ function* waitForQuestion(session: ReplSession): Operation<void> {
   }
   yield* changes.next();
 }
-
-/** The four reads at root, each binding its page. */
-const READS_AT_ROOT = (fixture: Fixture): string =>
-  [
-    '<Git.Files limit={100} as="files" />',
-    "",
-    '<Git.Changes compare="unstaged" as="changes" />',
-    "",
-    '<Git.Diff compare="unstaged" limit={100000} as="diff" />',
-    "",
-    `<Git.File commit="${fixture.first}" path="notes.md" as="source" />`,
-    "",
-    "Read {files.paths.length} paths.",
-    "",
-  ].join("\n");
 
 /** How many observation records this history holds. */
 function observationCount(records: readonly DurableEvent[]): number {
@@ -568,5 +456,25 @@ describe("RGO5 — the secret gate still decides what reaches the journal", () =
     expect(reported).toContain("secret");
     const records = yield* readRecords(executionPath(fixture.journals, "execution-1"));
     expect(observationCount(records)).toBe(0);
+  });
+});
+
+describe("D3 — trusted retained observation worktrees", () => {
+  it("executes every ownership case through the real Deno lock host", function* () {
+    const fixture = fileURLToPath(
+      new URL("./fixtures/repl/git-observations-deno.ts", import.meta.url),
+    );
+    const child = yield* runShell(
+      ["deno", "test", "--allow-all", "--frozen", "--node-modules-dir=manual", fixture]
+        .map(shellQuote)
+        .join(" "),
+      { inheritEnv: true },
+    ).expect();
+    console.log(child.stdout);
+    if (child.stderr.length > 0) {
+      console.error(child.stderr);
+    }
+    expect(child.stdout).toContain("1 passed (6 steps)");
+    expect(child.stdout).toContain("0 failed");
   });
 });

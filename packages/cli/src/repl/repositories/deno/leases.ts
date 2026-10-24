@@ -107,3 +107,14 @@ export function* holdManagedPlacement(acquire: () => Operation<void>): Operation
     throw error;
   }
 }
+
+export function* useObservationLock(commonDirectory: string, checkout: string): Operation<void> {
+  const held = yield* useAdvisoryLock(
+    commonDirectoryLock("observation\0" + commonDirectory + "\0" + checkout),
+  );
+  if (held === undefined) {
+    throw new StaleInputError(
+      "Another entry holds this checkout's observation lane. Nothing was changed.",
+    );
+  }
+}

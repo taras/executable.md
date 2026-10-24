@@ -45,7 +45,11 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
  */
 export type ReplEntryInstallation = (
   owner: string,
-  placement?: { readonly projectCwd?: string; readonly workspace?: string },
+  placement?: {
+    readonly projectCwd?: string;
+    readonly workspace?: string;
+    readonly observeWorktree?: string;
+  },
 ) => Operation<ExecutionInstallation>;
 
 /** The factory this host runs REPL entries with, or absence. */

@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from "node:path";
 /**
  * What one REPL entry's Repository and Worktree selections look like on the
  * wire.
@@ -68,9 +69,18 @@ import { digest, RECORD_PREFIX, REPL_REPOSITORY_VERSION } from "./records.ts";
 export const REPL_REPOSITORY_PLACEMENT = "repl_repository_placement";
 
 /** Which selection a placement record describes. */
-export type ReplPlacementKind = "repository" | "worktree" | "ambient-owner";
+export type ReplPlacementKind =
+  | "repository"
+  | "worktree"
+  | "ambient-owner"
+  | "observation-worktree";
 
-const PLACEMENT_KINDS: readonly ReplPlacementKind[] = ["repository", "worktree", "ambient-owner"];
+const PLACEMENT_KINDS: readonly ReplPlacementKind[] = [
+  "repository",
+  "worktree",
+  "ambient-owner",
+  "observation-worktree",
+];
 
 /**
  * What a `<Repository>` selection asked for.
@@ -114,10 +124,17 @@ export interface ReplAmbientOwnerRequest {
   readonly cwd: string;
 }
 
+export interface ReplObservationWorktreeRequest {
+  readonly kind: "observation-worktree";
+  readonly cwd: string;
+  readonly path: string;
+}
+
 export type ReplPlacementRequest =
   | ReplRepositoryRequest
   | ReplWorktreeRequest
-  | ReplAmbientOwnerRequest;
+  | ReplAmbientOwnerRequest
+  | ReplObservationWorktreeRequest;
 
 /**
  * Where one selected checkout is, and which repository it belongs to.
@@ -314,7 +331,7 @@ export function parseReplPlacementRecord(value: unknown): ReplPlacementRecord | 
   }
   const outcome =
     refused === undefined ? parsePlacement(read["placement"], kind) : parseRefusal(read["refusal"]);
-  if (outcome === undefined) {
+  if (outcome === undefined || (kind === "observation-worktree" && !outcome.ok)) {
     return undefined;
   }
   return Object.freeze({ version: REPL_REPOSITORY_VERSION, kind, fingerprint, request, outcome });
@@ -362,7 +379,9 @@ function requestJson(request: ReplPlacementRequest): Json {
       ownerCheckout: request.ownerCheckout,
     };
   }
-  return { cwd: request.cwd };
+  return request.kind === "observation-worktree"
+    ? { cwd: request.cwd, path: request.path }
+    : { cwd: request.cwd };
 }
 
 function placementJson(placement: ReplPlacement): Json {
@@ -390,6 +409,18 @@ function parseRequest(value: unknown, kind: ReplPlacementKind): ReplPlacementReq
   }
   if (kind === "worktree") {
     return parseWorktreeRequest(value);
+  }
+  if (kind === "observation-worktree") {
+    const read = members(value, ["cwd", "path"]);
+    const cwd = read === undefined ? undefined : text(read["cwd"]);
+    const path = read === undefined ? undefined : text(read["path"]);
+    return cwd === undefined ||
+      path === undefined ||
+      !isAbsolute(cwd) ||
+      !isAbsolute(path) ||
+      resolve(path) !== path
+      ? undefined
+      : { kind, cwd, path };
   }
   const read = members(value, ["cwd"]);
   const cwd = read === undefined ? undefined : text(read["cwd"]);
@@ -488,7 +519,10 @@ function parsePlacement(
     return undefined;
   }
   const managedRoot = stated === null ? undefined : text(stated);
-  if ((kind === "ambient-owner") !== (managedRoot === undefined)) {
+  if (
+    (kind === "ambient-owner" || kind === "observation-worktree") !==
+    (managedRoot === undefined)
+  ) {
     return undefined;
   }
   const checkoutRoot = text(read["checkoutRoot"]);

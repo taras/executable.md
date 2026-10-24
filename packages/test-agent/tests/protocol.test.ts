@@ -14,6 +14,26 @@ import {
 } from "../src/protocol.ts";
 
 describe("Tier TP — controller protocol", () => {
+  it("validates configuration requests and acknowledged catalogs without widening legacy config", function* () {
+    const models = {
+      selected: "A",
+      options: [{ id: "A", efforts: { selected: "low", options: ["low", "high"] } }],
+    };
+    const request = { t: "configuration", configId: "model", value: "A" };
+    expect(parseWorkerMessage(JSON.stringify(request))).toMatchObject({ ok: true, value: request });
+    expect(parseWorkerMessage(JSON.stringify({ ...request, value: "" })).ok).toBe(false);
+    const reply = { t: "configuration", models };
+    expect(parseControllerMessage(JSON.stringify(reply))).toMatchObject({ ok: true, value: reply });
+    for (const malformed of [
+      { selected: "A", options: [] },
+      { selected: "X", options: [{ id: "A" }] },
+      { selected: "A", options: [{ id: "A" }, { id: "A" }] },
+    ]) {
+      expect(
+        parseControllerMessage(JSON.stringify({ t: "configuration", models: malformed })).ok,
+      ).toBe(false);
+    }
+  });
   it("TP1: worker messages round-trip through encode and parse", function* () {
     const line = encodeMessage({ t: "attach", token: "tok", instance: "inst" });
     const result = parseWorkerMessage(line.trimEnd());

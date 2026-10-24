@@ -547,7 +547,7 @@ function classified(
   request: ReplPlacementRequest,
   error: unknown,
 ): ReplPlacementRefusalData | undefined {
-  if (request.kind === "ambient-owner") {
+  if (request.kind === "ambient-owner" || request.kind === "observation-worktree") {
     // Discovery answers with a repository or with nothing, and nothing is the
     // existing actionable refusal rather than an outcome worth writing down.
     return undefined;
@@ -642,7 +642,7 @@ function registered(
   slotOf: (root: string) => string | undefined,
   origin: () => Operation<string | undefined>,
 ): ReplPlacementRegistration {
-  if (placement.kind !== request.kind) {
+  if (request.kind === "observation-worktree" || placement.kind !== request.kind) {
     throw mismatch(request);
   }
   if (request.kind === "ambient-owner") {
@@ -737,14 +737,18 @@ export function placementSubject(placement: ReplPlacement): string {
 function* nothing(): Operation<void> {}
 
 function named(request: ReplPlacementRequest): string {
-  return request.kind === "ambient-owner" ? "" : request.name;
+  return request.kind === "ambient-owner" || request.kind === "observation-worktree"
+    ? ""
+    : request.name;
 }
 
 function describe(request: ReplPlacementRequest): string {
   if (request.kind === "ambient-owner") {
     return "ambient repository for this entry";
   }
-  return `${request.kind} selection ${JSON.stringify(request.name)}`;
+  return request.kind === "observation-worktree"
+    ? "observation worktree"
+    : `${request.kind} selection ${JSON.stringify(request.name)}`;
 }
 
 /**

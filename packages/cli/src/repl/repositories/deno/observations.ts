@@ -40,9 +40,22 @@
  * other's command sequences.
  */
 
-import { Err, Ok, scoped, until } from "effection";
+import { ensure, Err, Ok, scoped, until, useScope } from "effection";
 import type { Operation, Result } from "effection";
 import { realpath } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve } from "node:path";
+import { DurableContext } from "@executablemd/durable-streams";
+import { lazily, locatorFingerprint, type AmbientRepository } from "@executablemd/git/deno";
+import { useObservationLock } from "./leases.ts";
+import { currentCoroutine } from "./local.ts";
+import {
+  parseReplPlacementRecord,
+  replPlacementFingerprint,
+  replPlacementRecordName,
+  replPlacementRecordJson,
+  REPL_REPOSITORY_PLACEMENT,
+  type ReplObservationWorktreeRequest,
+} from "../placement-records.ts";
 import { createDurableOperation, StaleInputError } from "@executablemd/durable-streams";
 import type {
   ActivateDurabilityFailure,
@@ -116,6 +129,8 @@ export class ReplObservationRecordError extends StaleInputError {
 export interface ReplObservationEntry {
   /** The native repository work this entry asks for, credential-free. */
   readonly operations: DenoRepositoryOperations;
+  prepare?(path: string): Operation<void>;
+  ownObservation(target: ReplGitCheckout): Operation<void>;
   /** Hold a managed slot for the entry, single-flight per root and slot. */
   holdSlot(root: string, kind: SlotKind, path: string, subject: string): Operation<void>;
   /** Run live native Git for one shared Git directory in order within this entry. */
@@ -231,6 +246,9 @@ function* recorded(
 ): Operation<GitObservationValue> {
   const element = elementOf(invocation.request.kind);
   const request = place(entry, element, invocation, invocation.request);
+  if (entry.prepare !== undefined) {
+    yield* entry.prepare(invocation.workingDirectory);
+  }
   const fingerprint = yield* replObservationFingerprint(request);
   const name = replObservationRecordName({
     operation: invocation.request.kind,
@@ -421,6 +439,10 @@ function* route(
  */
 function* own(entry: ReplObservationEntry, target: ReplGitCheckout): Operation<void> {
   const registration = target.registration;
+  if (registration.placement.kind === "observation-worktree") {
+    yield* entry.ownObservation(target);
+    return;
+  }
   const slot = registration.slot;
   // The root this placement recorded, not the one configured now: a restored
   // placement's slot belongs to the root it was selected under.
@@ -560,3 +582,229 @@ const observationCoordinator: LiveDurableOperationCoordinator = {
     return result;
   },
 };
+
+/** Validate and register one host-selected checkout for Git reads. */
+export function* useObservationWorktree(options: {
+  readonly path: string | undefined;
+  readonly cwd: string;
+  readonly operations: DenoRepositoryOperations;
+  ambient(): Operation<AmbientRepository | undefined>;
+  serialize<T>(key: string, work: () => Operation<T>): Operation<T>;
+}): Operation<{
+  prepare(path: string): Operation<void>;
+  validateObservationTarget(path: string): Operation<void>;
+  own(target: ReplGitCheckout): Operation<void>;
+  checkouts(): readonly ReplGitCheckout[];
+}> {
+  const owner = yield* useScope();
+  const grant = options.path === undefined ? undefined : resolve(options.path);
+  const routes: ReplGitCheckout[] = [];
+  const remembered = new Set<string>();
+  const requests = new WeakMap<ReplPlacementRegistration, ReplObservationWorktreeRequest>();
+  const holds = new Map<string, () => Operation<void>>();
+  yield* ensure(() => {
+    routes.splice(0);
+    remembered.clear();
+    holds.clear();
+  });
+
+  function hold(common: string, checkout: string): Operation<void> {
+    const key = common + "\0" + checkout;
+    let acquire = holds.get(key);
+    if (acquire === undefined) {
+      acquire = lazily(owner, () => useObservationLock(common, checkout));
+      holds.set(key, acquire);
+    }
+    return acquire();
+  }
+
+  function* inspect(request: ReplObservationWorktreeRequest): Operation<AmbientRepository> {
+    if (grant === undefined || grant !== request.path || request.cwd !== options.cwd) {
+      throw observationPlacementRefusal();
+    }
+    const ambient = yield* options.operations.ambientRepository(options.cwd);
+    const target = yield* options.operations.ambientRepository(grant, options.cwd);
+    let canonical: string;
+    try {
+      canonical = yield* until(realpath(grant));
+    } catch {
+      throw observationPlacementRefusal();
+    }
+    if (
+      ambient === undefined ||
+      target === undefined ||
+      target.checkoutRoot !== canonical ||
+      target.checkoutRoot === ambient.checkoutRoot ||
+      target.commonDirectory !== ambient.commonDirectory ||
+      target.objectFormat !== ambient.objectFormat ||
+      target.originFingerprint !== ambient.originFingerprint
+    ) {
+      throw observationPlacementRefusal();
+    }
+    return target;
+  }
+
+  function* own(target: ReplGitCheckout): Operation<void> {
+    const registration = target.registration;
+    const request = requests.get(registration);
+    if (request === undefined) {
+      throw observationPlacementRefusal();
+    }
+    const actual = yield* inspect(request);
+    const placement = registration.placement;
+    if (
+      actual.checkoutRoot !== placement.checkoutRoot ||
+      actual.commonDirectory !== placement.commonDirectory ||
+      actual.objectFormat !== placement.identity.objectFormat ||
+      (actual.originFingerprint ?? locatorFingerprint(actual.commonDirectory)) !==
+        placement.identity.locatorFingerprint
+    ) {
+      throw observationPlacementRefusal();
+    }
+    yield* hold(actual.commonDirectory, actual.checkoutRoot);
+  }
+
+  function* prepare(path: string): Operation<void> {
+    const coroutine = yield* currentCoroutine();
+    if (remembered.has(coroutine)) {
+      return;
+    }
+    const context = yield* DurableContext.expect();
+    const ahead = context.replayIndex.peekYield(context.coroutineId);
+    const parsed =
+      ahead !== undefined &&
+      ahead.description.type === REPL_REPOSITORY_PLACEMENT &&
+      ahead.result.status === "ok"
+        ? parseReplPlacementRecord(ahead.result.value)
+        : undefined;
+    let request: ReplObservationWorktreeRequest;
+    if (parsed?.request.kind === "observation-worktree") {
+      request = parsed.request;
+    } else {
+      if (grant === undefined || !covers(grant, resolve(path))) {
+        return;
+      }
+      request = { kind: "observation-worktree", cwd: options.cwd, path: grant };
+    }
+    const fingerprint = yield* replPlacementFingerprint(request);
+    const name = replPlacementRecordName({ kind: request.kind, fingerprint });
+    function* once(): Operation<unknown> {
+      return yield createDurableOperation<Json>(
+        { type: REPL_REPOSITORY_PLACEMENT, name },
+        function* () {
+          const ambient = yield* options.ambient();
+          if (ambient === undefined) {
+            throw observationPlacementRefusal();
+          }
+          const actual = yield* inspect(request);
+          yield* hold(actual.commonDirectory, actual.checkoutRoot);
+          const payload = replPlacementRecordJson({
+            fingerprint,
+            request,
+            outcome: Ok({
+              kind: "observation-worktree",
+              managedRoot: undefined,
+              checkoutRoot: actual.checkoutRoot,
+              commonDirectory: actual.commonDirectory,
+              ownerCheckout: ambient.checkoutRoot,
+              displayName: basename(actual.checkoutRoot),
+              identity: {
+                name: ambient.name,
+                locatorFingerprint:
+                  ambient.originFingerprint ?? locatorFingerprint(ambient.commonDirectory),
+                requestedBase: null,
+                creationCommit: ambient.head,
+                primaryBranch: ambient.defaultBranch,
+                objectFormat: ambient.objectFormat,
+              },
+            }),
+          });
+          if (parseReplPlacementRecord(payload) === undefined) {
+            throw new ReplObservationRecordError("The native observation placement is invalid.");
+          }
+          return payload;
+        },
+        { coordinator: observationCoordinator },
+      );
+    }
+    let stored: unknown;
+    if (yield* retainedRecordAhead(REPL_REPOSITORY_PLACEMENT, name)) {
+      stored = yield* once();
+    } else {
+      const ambient = yield* options.ambient();
+      if (ambient === undefined) {
+        throw observationPlacementRefusal();
+      }
+      stored = yield* options.serialize(nativeGitTurn(ambient.commonDirectory), once);
+    }
+    const record = parseReplPlacementRecord(stored);
+    if (
+      record === undefined ||
+      record.request.kind !== "observation-worktree" ||
+      !record.outcome.ok ||
+      record.fingerprint !== fingerprint ||
+      record.request.cwd !== options.cwd ||
+      record.request.path !== request.path
+    ) {
+      throw new ReplObservationRecordError(
+        "The observation placement does not describe this request.",
+      );
+    }
+    const placement = record.outcome.value;
+    const registration: ReplPlacementRegistration = {
+      placement,
+      slot: undefined,
+      *origin() {
+        return undefined;
+      },
+    };
+    const route: ReplGitCheckout = {
+      registration,
+      checkout: {
+        root: placement.checkoutRoot,
+        identity: placement.identity,
+        repositoryName: placement.identity.name,
+        worktreeName: placement.displayName,
+        origin: undefined,
+      },
+    };
+    requests.set(registration, request);
+    const index = routes.findIndex((route) => route.checkout.root === placement.checkoutRoot);
+    if (index < 0) {
+      routes.push(route);
+    } else {
+      routes[index] = route;
+    }
+    remembered.add(coroutine);
+  }
+
+  return {
+    prepare,
+    own,
+    checkouts: () => routes,
+    *validateObservationTarget(path) {
+      yield* prepare(path);
+      const target = routes.find(
+        (route) =>
+          covers(route.checkout.root, resolve(path)) ||
+          (grant !== undefined && covers(grant, resolve(path))),
+      );
+      if (target !== undefined) {
+        yield* options.serialize(nativeGitTurn(target.registration.placement.commonDirectory), () =>
+          own(target),
+        );
+      }
+    },
+  };
+}
+
+function covers(root: string, path: string): boolean {
+  const inside = relative(root, path);
+  return inside === "" || (!inside.startsWith("..") && !isAbsolute(inside));
+}
+
+function observationPlacementRefusal(): StaleInputError {
+  return new StaleInputError(
+    "The configured observation worktree is unavailable or is not a registered linked checkout of the captured repository. Nothing was created or changed.",
+  );
+}

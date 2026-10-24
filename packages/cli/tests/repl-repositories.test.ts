@@ -21,7 +21,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
-import { exists, readTextFile, rm } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -42,7 +42,10 @@ import { Execution } from "@executablemd/core/api";
 import type { Json } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
-import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
+import {
+  replRepositoryInstallation,
+  useReplRepositoryRecording,
+} from "../src/repl/repositories/deno/provider.ts";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { runGit } from "./support/fixture-git.ts";
 import { gitPlugin } from "@executablemd/git";
@@ -93,6 +96,11 @@ function* replInstallations(): Operation<readonly ExecutionInstallation[]> {
 }
 
 /** One entry that settles, for the rows about a history nobody is continuing. */
+import type { ReplEntryInstallation } from "../src/repl-entry-installation.ts";
+import { registerComponents } from "@executablemd/core";
+import { Component } from "@executablemd/core/api";
+import { RepositoryContext, currentRepository } from "@executablemd/git/api";
+
 const SETTLED_ENTRY = '<File path="settled.md">settled</File>';
 
 interface Fixture {
@@ -948,5 +956,143 @@ describe("a root capture a REPL entry commits (#939)", () => {
       entryInitialBindings(projection)["proofCommit"],
     );
     expect(value(outcome?.bindings ?? [], "answer")).toEqual({ decision: "go" });
+  });
+});
+
+function d3SourceFactory(
+  fixture: Fixture,
+  path: string | undefined,
+  read: () => void,
+): ReplEntryInstallation {
+  return function* (owner, placement) {
+    const options = {
+      ...placement,
+      root: managedRoot(fixture),
+      observeWorktree: path,
+      *operations() {
+        const operations = yield* useDenoRepositoryOperations();
+        const counted: DenoRepositoryOperations = {
+          ...operations,
+          *observe(element, request, place) {
+            read();
+            return yield* operations.observe(element, request, place);
+          },
+        };
+        return counted;
+      },
+    };
+    const installed = yield* replRepositoryInstallation(owner, options);
+    options.observeWorktree = join(fixture.root, "not-the-selected-root");
+    return installed;
+  };
+}
+
+function* d3SourceFixture(): Operation<Fixture> {
+  const fixture = yield* useFixture();
+  yield* useHostFiles();
+  yield* useWorkingDirectory(fixture.checkout);
+  yield* useNodeReplHost("execution-1");
+  yield* runGit(fixture.checkout, ["add", "seed.md"], { home: fixture.root });
+  yield* runGit(fixture.checkout, ["commit", "-m", "source base"], { home: fixture.root });
+  return fixture;
+}
+
+describe("D3 — existing-root admission before directory effects", () => {
+  for (const mode of ["missing", "replaced", "unregistered", "cross-repository"]) {
+    it("refuses a " + mode + " root without creating or repairing it", function* () {
+      const fixture = yield* d3SourceFixture();
+      const path = join(fixture.root, "observed");
+      if (mode === "replaced" || mode === "unregistered") {
+        yield* runGit(fixture.checkout, ["worktree", "add", "-b", "observed", path], {
+          home: fixture.root,
+        });
+        const pointer = yield* readTextFile(join(path, ".git"));
+        yield* runGit(fixture.checkout, ["worktree", "remove", path], { home: fixture.root });
+        yield* ensureDir(path);
+        yield* writeTextFile(join(path, "seed.md"), "replacement\n");
+        if (mode === "unregistered") {
+          yield* writeTextFile(join(path, ".git"), pointer);
+        }
+      }
+      if (mode === "cross-repository" || mode === "replaced") {
+        yield* runGit(fixture.root, ["init", "-b", "main", path], { home: fixture.root });
+        yield* writeTextFile(join(path, "other.md"), "other repository\n");
+        yield* runGit(path, ["add", "other.md"], { home: fixture.root });
+        yield* runGit(path, ["commit", "-m", "other"], { home: fixture.root });
+      }
+      const before = yield* exists(path);
+      let reads = 0;
+      const created = yield* createExecutionFile(join(fixture.root, "journals"), "execution-1");
+      const session = opened(
+        yield* submitReplEntry({
+          execution: created,
+          projectCwd: fixture.checkout,
+          entryInstallation: d3SourceFactory(fixture, path, () => {
+            reads += 1;
+          }),
+          installations: yield* replInstallations(),
+          generated: ordinaryGeneratedSelection(),
+          source: "<Dir path=" + JSON.stringify(path) + '><Git.Files as="files" /></Dir>',
+        }),
+      );
+      expect((yield* session.join()).ok).toBe(false);
+      expect(reads).toBe(0);
+      expect(yield* exists(path)).toBe(before);
+      expect(yield* exists(join(path, "created-by-entry"))).toBe(false);
+      expect(yield* readTextFile(join(fixture.checkout, "seed.md"))).toBe("seed\n");
+      expect(
+        yield* runGit(fixture.checkout, ["status", "--porcelain"], { home: fixture.root }),
+      ).toBe("");
+    });
+  }
+
+  it("detaches the configured root and refuses a copied Repository selection", function* () {
+    const fixture = yield* d3SourceFixture();
+    const path = join(fixture.root, "observed");
+    yield* runGit(fixture.checkout, ["worktree", "add", "-b", "observed", path], {
+      home: fixture.root,
+    });
+    yield* registerComponents([
+      {
+        name: "CopiedSelection",
+        origin: "fixture:d3",
+        props: { type: "object", additionalProperties: false },
+        fn: function* () {
+          const current = yield* currentRepository();
+          if (current === undefined) {
+            throw new Error("D3 fixture lacks its ambient repository");
+          }
+          yield* RepositoryContext.around({ current: () => ({ ...current, checkoutPath: path }) });
+          yield* Component.operations.content();
+        },
+      },
+    ]);
+    let reads = 0;
+    const created = yield* createExecutionFile(join(fixture.root, "journals"), "execution-1");
+    const session = opened(
+      yield* submitReplEntry({
+        execution: created,
+        projectCwd: fixture.checkout,
+        entryInstallation: d3SourceFactory(fixture, path, () => {
+          reads += 1;
+        }),
+        installations: yield* replInstallations(),
+        generated: ordinaryGeneratedSelection(),
+        source: "<Dir path=" + JSON.stringify(path) + '><Git.Files as="files" /></Dir>',
+      }),
+    );
+    const result = yield* session.join();
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(reads).toBe(1);
+    const submitted = yield* session.submit(
+      "<CopiedSelection><Dir path=" +
+        JSON.stringify(path) +
+        '><Git.Files as="files" /></Dir></CopiedSelection>',
+    );
+    expect(submitted.ok).toBe(true);
+    expect((yield* session.join()).ok).toBe(false);
+    expect(reads).toBe(1);
   });
 });

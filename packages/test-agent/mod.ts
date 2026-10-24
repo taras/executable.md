@@ -58,3 +58,5 @@ export { runTestAgentWorker } from "./src/worker/run.ts";
 export { installChildTestAgent, testAgentChildDeclaration } from "./src/child-configuration.ts";
 export type { PlanProviderAssembly, PlanProviderPolicy } from "./src/child-configuration.ts";
 export type { ChildTestAgentInstallation } from "./src/child-configuration.ts";
+
+export type { ScenarioModels, ScenarioModel, ScenarioEfforts } from "@executablemd/testing";
