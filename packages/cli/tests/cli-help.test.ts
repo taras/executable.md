@@ -457,3 +457,23 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(withLocation.stderr).toContain("at most one location");
   });
 });
+
+describe("Sidekick attachment help", () => {
+  it("names the POSIX attachment, passive reads and exact cancellation without opening a REPL", function* () {
+    const root = yield* runCli(["--help"]).expect();
+    expect(root.stdout).toContain("sidekick");
+    const repl = yield* runCli(["repl", "--help"]).expect();
+    expect(repl.stdout).toContain("--sidekick-acp");
+    const help = yield* runCli(["sidekick", "--help"]).expect();
+    for (const text of [
+      "POSIX",
+      "--attach",
+      "--follow",
+      "passive",
+      "repository ACP",
+      "question answering",
+    ]) {
+      expect(help.stdout).toContain(text);
+    }
+  });
+});

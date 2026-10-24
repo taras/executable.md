@@ -1,0 +1,1123 @@
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
+import { cliCommand, cliShellCommand, shellQuote } from "@executablemd/test-support/launch";
+import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { exec } from "@effectionx/process";
+import { Agent, Execution } from "@executablemd/core";
+import { API } from "@executablemd/runtime";
+import { createHash } from "node:crypto";
+import { chmod, lstat, realpath, symlink, unlink } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import process from "node:process";
+import { spawn as spawnChild } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { Writable } from "node:stream";
+import {
+  ensure,
+  Ok,
+  race,
+  resource,
+  scoped,
+  spawn,
+  sleep,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
+import type { Operation } from "effection";
+import * as acp from "@agentclientprotocol/sdk";
+import { z } from "zod";
+import { useAcpxProvider } from "../../acp/src/provider.ts";
+import { createAcpRuntime, createRuntimeStore } from "../../acp/src/acpx-runtime.ts";
+import type { AcpRuntimeHandle, AcpRuntimeTurnResult } from "../../acp/src/acpx-runtime.ts";
+import {
+  useHarness,
+  useTemporary,
+  records,
+  AGENT,
+} from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import { rootReads } from "../src/repl/sidekick/requests.ts";
+import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sidekick/dispatch.ts";
+import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
+import { requestAttachment } from "../src/sidekick-acp/client.ts";
+import { usePosixSidekickTransport } from "../src/sidekick-acp/posix.ts";
+import { ReplHost } from "../src/repl/host.ts";
+import { parseEntryRecords } from "../src/repl/sidekick/history.ts";
+import { AGENT_PROMPT } from "@executablemd/core/host";
+import {
+  Descriptor,
+  MAX_FRAME,
+  SidekickTransport,
+  referenceText,
+} from "../src/sidekick-acp/protocol.ts";
+
+const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const attachResult = z.object({ attachment: z.string() }).strict();
+const message = z
+  .object({ execution: z.string(), conversation: z.string(), id: z.string() })
+  .strict();
+const statusSchema = z
+  .object({ busy: z.boolean(), messages: z.array(message), questionPending: z.boolean() })
+  .passthrough();
+const exchangeSchema = z
+  .object({
+    message: message.nullable(),
+    ending: z.object({ joined: z.boolean(), outcome: z.string() }).passthrough().nullable(),
+    output: z.string(),
+  })
+  .passthrough();
+function fills(source: string): string {
+  return [
+    '<Let as="code" select="code">',
+    "```xmd",
+    source,
+    "```",
+    "</Let>",
+    "<REPL.EntryInput>{code}</REPL.EntryInput>",
+  ].join("\n");
+}
+function* world(options: Parameters<typeof useHarness>[1] = {}) {
+  yield* usePosixSidekickTransport(process.platform);
+  const home = yield* until(realpath(yield* useTemporary("xmd-sidekick-client-")));
+  yield* until(chmod(home, 0o700));
+  const held = yield* useHarness(undefined, options);
+  const selected = yield* held.owner.select(AGENT);
+  if (!selected.ok) {
+    throw selected.error;
+  }
+  held.fake.script({ reply: "<Output>Established fixture conversation.</Output>" });
+  const established = yield* held.owner.message("Establish this isolated fixture conversation.");
+  if (!established.ok) {
+    throw established.error;
+  }
+  const baselineTurns = held.fake.prompts.length;
+  const admission = createSidekickAdmission();
+  const dispatch = yield* useSidekickDispatch({
+    owner: held.owner,
+    admission,
+    execution: held.execution.id,
+    workspace: held.workspace,
+    changed() {},
+  });
+  const path = join(home, "attachment.json");
+  const descriptor = yield* useSidekickAttachment(path, {
+    owner: held.owner,
+    dispatch,
+    reads: rootReads(held.session, held.profile),
+    execution: held.execution.id,
+    cwd: held.workspace,
+  });
+  const launch = cliCommand(["sidekick", "acp", "--attach", path]);
+  console.log(
+    JSON.stringify({
+      kind: "attachment-client-inputs",
+      cwd: held.workspace,
+      descriptor,
+      bridge: launch,
+      home,
+      stores: join(home, "embedded-store"),
+    }),
+  );
+  return { held, path, home, descriptor, launch, admission, dispatch, baselineTurns };
+}
+type World = ReturnType<typeof world> extends Operation<infer T> ? T : never;
+function sdk(
+  world: World,
+): Operation<{ connection: acp.ClientConnection; updates: acp.SessionNotification[] }> {
+  return resource(function* (provide) {
+    let child: ChildProcess | undefined;
+    const closed = withResolvers<void>();
+    const onClose = () => closed.resolve();
+    const onError = () => {
+      /* Only close proves that child cleanup has finished. */
+    };
+    yield* ensure(function* () {
+      if (child !== undefined) {
+        try {
+          child.kill();
+          yield* closed.operation;
+        } finally {
+          child.off("close", onClose);
+          child.off("error", onError);
+        }
+      }
+    });
+    child = spawnChild(world.launch.command, world.launch.arguments, {
+      cwd: world.held.workspace,
+      env: { PATH: process.env.PATH, DENO_DIR: process.env.DENO_DIR, HOME: world.home },
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    child.on("close", onClose);
+    child.on("error", onError);
+    if (child.stdin === null || child.stdout === null) {
+      throw new Error("Bridge stdio missing.");
+    }
+    const stdout = child.stdout;
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let ended = false;
+    const input = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+      cancel() {
+        ended = true;
+      },
+    });
+    const data = (bytes: Uint8Array) => {
+      if (!ended) {
+        controller?.enqueue(new Uint8Array(bytes));
+      }
+    };
+    const end = () => {
+      if (!ended) {
+        ended = true;
+        controller?.close();
+      }
+    };
+    const updates: acp.SessionNotification[] = [];
+    const connection = acp
+      .client({ name: "sidekick-protocol-fixture" })
+      .onNotification("session/update", (ctx) => {
+        updates.push(ctx.params);
+      })
+      .connect(acp.ndJsonStream(Writable.toWeb(child.stdin), input));
+    try {
+      stdout.on("data", data);
+      stdout.on("end", end);
+      const initialized = yield* until(
+        connection.agent.request(acp.methods.agent.initialize, {
+          protocolVersion: 1,
+          clientCapabilities: {},
+        }),
+      );
+      expect(initialized.protocolVersion).toBe(1);
+      expect(initialized.agentCapabilities?.loadSession).toBe(true);
+      yield* provide({ connection, updates });
+    } finally {
+      ended = true;
+      stdout.off("data", data);
+      stdout.off("end", end);
+      connection.close();
+    }
+  });
+}
+function* refused(operation: Operation<unknown>): Operation<void> {
+  let error: unknown;
+  try {
+    yield* operation;
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+}
+function* clientIdentity() {
+  const packagePath = yield* until(realpath(join(ROOT, "node_modules/acpx/package.json")));
+  const info = z
+    .object({ version: z.literal("0.12.0") })
+    .passthrough()
+    .parse(JSON.parse(yield* readTextFile(packagePath)));
+  const cli = join(dirname(packagePath), "dist/cli.js");
+  const runtime = join(dirname(packagePath), "dist/runtime.js");
+  const upstream = join(ROOT, "packages/acp/vendor/acpx/upstream/runtime.js");
+  expect(yield* readTextFile(runtime)).toBe(yield* readTextFile(upstream));
+  const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+  console.log(
+    JSON.stringify({
+      kind: "actual-client-provenance",
+      releasedVersion: info.version,
+      releaseCommit: "6a24a546d2349cbe71ed032d52d07cab611e320c",
+      packagePath,
+      cli,
+      cliSha256: digest(yield* readTextFile(cli)),
+      releasedRuntimeSha256: digest(yield* readTextFile(runtime)),
+      embeddedRuntimeSha256: digest(
+        yield* readTextFile(join(ROOT, "packages/acp/vendor/acpx/generated/runtime.js")),
+      ),
+      provenance: digest(yield* readTextFile(join(ROOT, "packages/acp/vendor/acpx/PROVENANCE.md"))),
+    }),
+  );
+  return cli;
+}
+
+describe("minimal live Sidekick ACP attachment", () => {
+  it("A1/A2: released acpx0.12 delegates serially through the real bridge and bounded reads stay passive", function* () {
+    const one = yield* world();
+    const cli = yield* clientIdentity();
+    const target = "98a72388dc63f4b72a0a5e84960a2667d1a1acdb";
+    const code = '<Output><Json value={{outcome:"pass",revision:"' + target + '"}} /></Output>\n';
+    one.held.fake.script({
+      reply: fills(code) + "\n<REPL.Submit />\n<Output>Review entry admitted.</Output>",
+    });
+    one.held.fake.script({ reply: "<Output>Review exchange joined.</Output>" });
+    one.held.fake.script({ reply: "<Output>Second released request.</Output>" });
+    for (const text of [
+      "review exact fixture revision " + target,
+      "second serial released request",
+    ]) {
+      const args = [
+        cli,
+        "--cwd",
+        one.descriptor.cwd,
+        "--format",
+        "json",
+        "--agent",
+        cliShellCommand(["sidekick", "acp", "--attach", one.path]),
+        "exec",
+        text,
+      ];
+      console.log(
+        JSON.stringify({
+          kind: "released-client-argv",
+          command: "node",
+          arguments: args,
+          home: one.home,
+        }),
+      );
+      const result = yield* exec("node", {
+        arguments: args,
+        cwd: one.held.workspace,
+        env: { HOME: one.home, PATH: process.env.PATH ?? "", DENO_DIR: process.env.DENO_DIR ?? "" },
+      }).join();
+      if (result.code !== 0) {
+        throw new Error("Released ACPX failed: " + result.stderr + result.stdout);
+      }
+      expect(result.stdout).toContain(
+        text.startsWith("second") ? "Second released request." : "Review exchange joined.",
+      );
+    }
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 3);
+    const head = one.held.session.reading(undefined);
+    if (!head.ok) {
+      throw head.error;
+    }
+    expect(head.value.model.entries[0]?.source).toBe(code);
+    console.log(
+      JSON.stringify({
+        kind: "controlled-product-output",
+        output: head.value.model.entries[0]?.terminal?.output,
+      }),
+    );
+    expect(
+      JSON.parse(
+        (head.value.model.entries[0]?.terminal?.output ?? "").match(/\{[\s\S]*\}/)?.[0] ?? "null",
+      ),
+    ).toEqual({ outcome: "pass", revision: target });
+    yield* refused(requestAttachment(one.path, { method: "entry", entry: 1, view: "prompt" }));
+    const before = yield* records(one.held.execution);
+    const status = statusSchema.parse(yield* requestAttachment(one.path, { method: "status" }));
+    expect(status.busy).toBe(false);
+    const reference = status.messages.at(-1);
+    if (reference === undefined) {
+      throw new Error("No acknowledged message identity.");
+    }
+    const read = exchangeSchema.parse(
+      yield* requestAttachment(one.path, { method: "message", reference, follow: true }),
+    );
+    expect(read.ending?.joined).toBe(true);
+    const views: ("source" | "output" | "journal" | "prompt")[] = ["source", "output", "journal"];
+    for (const view of views) {
+      const result = yield* requestAttachment(one.path, { method: "entry", entry: 1, view });
+      expect(result).toHaveProperty("entry", 1);
+    }
+    const launch = cliCommand([
+      "sidekick",
+      "read",
+      "--attach",
+      one.path,
+      "message",
+      referenceText(reference),
+      "--follow",
+    ]);
+    const actual = yield* exec(launch.command, {
+      arguments: launch.arguments,
+      cwd: one.held.workspace,
+      env: { HOME: one.home, PATH: process.env.PATH ?? "", DENO_DIR: process.env.DENO_DIR ?? "" },
+    }).join();
+    expect(actual.code).toBe(0);
+    expect(actual.stdout).toContain('"joined":true');
+    expect(yield* records(one.held.execution)).toEqual(before);
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 3);
+  });
+
+  it("A1/A3: the actual embedded provider keeps serial attachment identity and completing RPC metadata", function* () {
+    const one = yield* world();
+    yield* clientIdentity();
+    const review =
+      '<Output><Json value={{outcome:"pass",revision:"98a72388dc63f4b72a0a5e84960a2667d1a1acdb"}} /></Output>\n';
+    one.held.fake.script({ reply: fills(review) + "\n<REPL.Submit/>" });
+    one.held.fake.script({ reply: "<Output>Embedded first.</Output>" });
+    one.held.fake.script({ reply: "<Output>Embedded second.</Output>" });
+    yield* scoped(function* () {
+      yield* API.Env.around({
+        *cwd() {
+          return one.descriptor.cwd;
+        },
+      });
+      const endings: AcpRuntimeTurnResult[] = [];
+      let actual: ReturnType<typeof createAcpRuntime> | undefined;
+      let handle: AcpRuntimeHandle | undefined;
+      const command = cliShellCommand(["sidekick", "acp", "--attach", one.path]);
+      const provider = yield* useAcpxProvider(
+        { defaultAgent: "attached-sidekick", permissionMode: "deny-all" },
+        {
+          agentRegistry: { resolve: () => command, list: () => ["attached-sidekick"] },
+          sessionStore: createRuntimeStore({ stateDir: join(one.home, "embedded-store") }),
+          createRuntime(options) {
+            const runtime = createAcpRuntime({
+              ...options,
+              timeoutMs: 20000,
+              agentProcessEnv: { HOME: one.home, DENO_DIR: process.env.DENO_DIR ?? "" },
+            });
+            actual = runtime;
+            const traced = <T>(name: string, result: Promise<T>) => {
+              console.log("embedded " + name + " start");
+              return result.then(
+                (value) => {
+                  console.log("embedded " + name + " done");
+                  return value;
+                },
+                (error) => {
+                  console.log("embedded " + name + " failed " + String(error));
+                  throw error;
+                },
+              );
+            };
+            return {
+              doctor: () => traced("doctor", runtime.doctor()),
+              ensureSession: (input) =>
+                traced(
+                  "ensure",
+                  runtime.ensureSession(input).then((value) => {
+                    handle = value;
+                    return value;
+                  }),
+                ),
+              runTurn: runtime.runTurn.bind(runtime),
+              cancel: (input) => traced("cancel", runtime.cancel(input)),
+              close: (input) => traced("close", runtime.close(input)),
+              startTurn(request) {
+                console.log("embedded turn start");
+                const turn = runtime.startTurn(request);
+                void turn.result.then((result) => {
+                  console.log("embedded turn result " + result.status);
+                  endings.push(result);
+                });
+                return turn;
+              },
+            };
+          },
+        },
+      );
+      console.log(
+        JSON.stringify({
+          kind: "embedded-client-inputs",
+          command,
+          cwd: one.held.workspace,
+          stateDir: join(one.home, "embedded-store"),
+          runtime: join(ROOT, "packages/acp/vendor/acpx/generated/runtime.js"),
+        }),
+      );
+      yield* Agent.around({
+        *agent([name]) {
+          return yield* provider.agent(name);
+        },
+      });
+      console.log("embedded session resolving");
+      const session = yield* provider.session("one-attachment");
+      console.log("embedded session resolved");
+      for (const text of ["first embedded request", "second embedded request"]) {
+        yield* scoped(function* () {
+          const stream = yield* provider.promptStream(text, { session, timeout: 20000 });
+          let next = yield* stream.next();
+          while (!next.done) {
+            next = yield* stream.next();
+          }
+          expect(next.value).toContain(
+            text.startsWith("first") ? "Embedded first." : "Embedded second.",
+          );
+        });
+        if (text.startsWith("first")) {
+          if (actual === undefined || handle === undefined) {
+            throw new Error("Actual client handle missing.");
+          }
+          const before = yield* records(one.held.execution);
+          const turns = one.held.fake.prompts.length;
+          yield* until(actual.close({ handle, reason: "controlled passive reconnect" }));
+          yield* until(actual.getStatus({ handle }));
+          expect(yield* records(one.held.execution)).toEqual(before);
+          expect(one.held.fake.prompts).toHaveLength(turns);
+        }
+      }
+      const reviewed = one.held.session.reading(undefined);
+      if (!reviewed.ok) {
+        throw reviewed.error;
+      }
+      expect(reviewed.value.model.entries[0]?.source).toBe(review);
+      expect(JSON.parse(reviewed.value.model.entries[0]?.terminal?.output ?? "null")).toEqual({
+        outcome: "pass",
+        revision: "98a72388dc63f4b72a0a5e84960a2667d1a1acdb",
+      });
+      expect(endings).toHaveLength(2);
+      for (const ending of endings) {
+        expect(ending.status).toBe("completed");
+        if (ending.status !== "completed") {
+          throw new Error("Embedded completing response missing.");
+        }
+        expect(ending._meta).toHaveProperty(["executablemd.sidekick-exchange/v1"]);
+      }
+      expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 3);
+      expect(one.held.owner.reading.ok && one.held.owner.reading.value.active).toBe(
+        one.descriptor.conversation,
+      );
+    });
+  });
+
+  it("A3/A5: real socket EOF detaches observation; exact follow/cancel/close join without resend", function* () {
+    const one = yield* world();
+    const attached = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    one.held.fake.script({ reply: "<Output>held producer</Output>", held: true });
+    const observer = yield* spawn(() =>
+      requestAttachment(one.path, {
+        method: "prompt",
+        attachment: attached.attachment,
+        text: "held",
+      }),
+    );
+    yield* one.held.fake.startedTurns(one.baselineTurns + 1);
+    yield* observer.halt();
+    expect(one.held.owner.busy).toBe(true);
+    expect(one.admission.message).not.toBe(undefined);
+    const read = statusSchema.parse(yield* requestAttachment(one.path, { method: "status" }));
+    const reference = read.messages.at(-1);
+    if (reference === undefined) {
+      throw new Error("No saved held-message identity.");
+    }
+    const loaded = yield* requestAttachment(one.path, {
+      method: "load",
+      attachment: attached.attachment,
+      cwd: one.descriptor.cwd,
+    });
+    expect(loaded).toHaveProperty("attachment", attached.attachment);
+    const followed = yield* spawn(() =>
+      requestAttachment(one.path, { method: "message", reference, follow: true }),
+    );
+    yield* requestAttachment(one.path, { method: "cancel", attachment: attached.attachment });
+    expect(exchangeSchema.parse(yield* followed).ending?.joined).toBe(true);
+    expect(one.held.owner.busy).toBe(false);
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 1);
+    yield* requestAttachment(one.path, { method: "close", attachment: attached.attachment });
+    yield* refused(
+      requestAttachment(one.path, {
+        method: "load",
+        attachment: attached.attachment,
+        cwd: one.descriptor.cwd,
+      }),
+    );
+    expect(one.held.owner.reading.ok && one.held.owner.reading.value.active).toBe(
+      one.descriptor.conversation,
+    );
+  });
+
+  it("A4: ACP cannot clear the composer or replace a held human draft", function* () {
+    let acknowledgements = 0;
+    const one = yield* world({
+      state: (initial) =>
+        Object.freeze({
+          ...initial,
+          message: "human unsent",
+          draft: "human held",
+          takenOver: true,
+        }),
+      *acknowledge() {
+        acknowledgements += 1;
+      },
+    });
+    const acknowledgementsBefore = acknowledgements;
+    const attached = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    one.held.fake.script({ reply: fills("replacement") + "\n<REPL.Submit />" });
+    one.held.fake.script({ reply: "<Output>Human ownership retained.</Output>" });
+    yield* requestAttachment(one.path, {
+      method: "prompt",
+      attachment: attached.attachment,
+      text: "try controls",
+    });
+    expect(one.held.state().message).toBe("human unsent");
+    expect(one.held.state().draft).toBe("human held");
+    expect(acknowledgements).toBe(acknowledgementsBefore);
+    expect(one.held.fake.prompts[one.baselineTurns + 1]).toContain("draft");
+  });
+
+  it("A5/A6: SDK load fences fallback-new and advertised close releases only its mapping", function* () {
+    const one = yield* world();
+    const first = yield* scoped(function* () {
+      const { connection } = yield* sdk(one);
+      return yield* until(
+        connection.agent.request(acp.methods.agent.session.new, {
+          cwd: one.descriptor.cwd,
+          mcpServers: [],
+        }),
+      );
+    });
+    const before = yield* records(one.held.execution);
+    yield* scoped(function* () {
+      const { connection } = yield* sdk(one);
+      yield* until(
+        connection.agent.request(acp.methods.agent.session.load, {
+          sessionId: first.sessionId,
+          cwd: one.descriptor.cwd,
+          mcpServers: [],
+        }),
+      );
+      yield* until(
+        connection.agent.request(acp.methods.agent.session.close, { sessionId: first.sessionId }),
+      );
+    });
+    yield* scoped(function* () {
+      const { connection } = yield* sdk(one);
+      yield* refused(
+        until(
+          connection.agent.request(acp.methods.agent.session.load, {
+            sessionId: first.sessionId,
+            cwd: one.descriptor.cwd,
+            mcpServers: [],
+          }),
+        ),
+      );
+      yield* refused(
+        until(
+          connection.agent.request(acp.methods.agent.session.new, {
+            cwd: one.descriptor.cwd,
+            mcpServers: [],
+          }),
+        ),
+      );
+    });
+    expect(yield* records(one.held.execution)).toEqual(before);
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 0);
+  });
+
+  it("A6: descriptors, frames and switched pairs refuse without provider work", function* () {
+    const one = yield* world();
+    const before = yield* records(one.held.execution);
+    yield* refused(
+      useSidekickAttachment(one.path, {
+        owner: one.held.owner,
+        dispatch: one.dispatch,
+        reads: rootReads(one.held.session, one.held.profile),
+        execution: one.descriptor.execution,
+        cwd: one.descriptor.cwd,
+      }),
+    );
+    yield* until(chmod(one.path, 0o644));
+    yield* refused(requestAttachment(one.path, { method: "status" }));
+    yield* until(chmod(one.path, 0o600));
+    const linked = join(one.home, "linked.json");
+    yield* until(symlink(one.path, linked));
+    yield* refused(requestAttachment(linked, { method: "status" }));
+    yield* scoped(function* () {
+      const host = yield* SidekickTransport.expect();
+      const { wire } = yield* host.connect(one.path);
+      yield* wire.send({ id: 0, request: { method: "hello", descriptor: one.descriptor } });
+      yield* wire.receive();
+      yield* wire.send({ id: 1, request: { method: "answer", key: "not-authority", value: {} } });
+      yield* refused(wire.receive());
+    });
+    yield* scoped(function* () {
+      const { wire } = yield* (yield* SidekickTransport.expect()).connect(one.path);
+      yield* refused(wire.send({ text: "x".repeat(MAX_FRAME) }));
+    });
+    yield* refused(requestAttachment(one.path, { method: "attach", cwd: one.home }));
+    expect(yield* records(one.held.execution)).toEqual(before);
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 0);
+  });
+  it("A4: a current question stays pending until its exact existing UI owner answers", function* () {
+    const one = yield* world();
+    const attached = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    const shape = {
+      type: "object",
+      properties: { decision: { type: "string", enum: ["approve", "reject"] } },
+      required: ["decision"],
+      additionalProperties: false,
+    };
+    one.held.fake.script({
+      reply:
+        "<Elicit schema={" +
+        JSON.stringify(shape) +
+        '} as="answer">Approve this fixture?</Elicit>\n<Output><Json value={answer}/></Output>',
+    });
+    one.held.fake.script({ reply: "<Output>Human answer retained.</Output>" });
+    const changes = yield* one.held.owner.questions.changes;
+    const sent = yield* spawn(() =>
+      requestAttachment(one.path, {
+        method: "prompt",
+        attachment: attached.attachment,
+        text: "ask the human",
+      }),
+    );
+    while (one.held.owner.questions.pending === undefined) {
+      yield* changes.next();
+    }
+    const question = one.held.owner.questions.pending;
+    if (question === undefined) {
+      throw new Error("Question not presented.");
+    }
+    const before = yield* records(one.held.execution);
+    expect(
+      statusSchema.parse(yield* requestAttachment(one.path, { method: "status" })).questionPending,
+    ).toBe(true);
+    yield* refused(
+      requestAttachment(
+        one.path,
+        JSON.parse('{"method":"answer","key":"not-authority","value":{"decision":"approve"}}'),
+      ),
+    );
+    expect(yield* records(one.held.execution)).toEqual(before);
+    expect(one.held.owner.questions.pending).toBe(question);
+    expect(question.submit({ decision: "approve" }).kind).toBe("answered");
+    expect(exchangeSchema.parse(yield* sent).ending?.outcome).toBe("completed");
+    expect(question.submit({ decision: "reject" }).kind).not.toBe("answered");
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+  });
+
+  it("A5: cancellation joins control cleanup and stale attachment cancellation cannot stop a successor", function* () {
+    const entered = withResolvers<void>();
+    let cleaned = false;
+    const one = yield* world({
+      *fill() {
+        yield* ensure(() => {
+          cleaned = true;
+        });
+        entered.resolve();
+        yield* suspend();
+        return Ok(undefined);
+      },
+    });
+    const a = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    one.held.fake.script({ reply: fills("blocked") });
+    const first = yield* spawn(() =>
+      requestAttachment(one.path, {
+        method: "prompt",
+        attachment: a.attachment,
+        text: "hold control",
+      }),
+    );
+    yield* entered.operation;
+    const old = one.dispatch.current;
+    if (old === undefined) {
+      throw new Error("No exact exchange.");
+    }
+    yield* requestAttachment(one.path, { method: "cancel", attachment: a.attachment });
+    expect(exchangeSchema.parse(yield* first).ending?.outcome).toBe("cancelled");
+    expect(cleaned).toBe(true);
+    one.held.fake.script({ reply: "<Output>Human successor.</Output>", held: true });
+    const next = yield* one.dispatch.send("human successor");
+    if (!next.ok) {
+      throw next.error;
+    }
+    yield* one.held.fake.startedTurns(one.baselineTurns + 2);
+    yield* old.cancel();
+    yield* requestAttachment(one.path, { method: "cancel", attachment: a.attachment });
+    expect(one.held.owner.busy).toBe(true);
+    one.held.fake.releaseTurn();
+    expect((yield* next.value.completion).ok).toBe(true);
+  });
+
+  it("A5: real ACP close joins an active exchange and owner exit removes only its owned names", function* () {
+    const one = yield* world();
+    const { connection } = yield* sdk(one);
+    const session = yield* until(
+      connection.agent.request(acp.methods.agent.session.new, {
+        cwd: one.descriptor.cwd,
+        mcpServers: [],
+      }),
+    );
+    one.held.fake.script({ reply: "", manual: true });
+    const prompt = yield* spawn(function* () {
+      return yield* until(
+        connection.agent.request(acp.methods.agent.session.prompt, {
+          sessionId: session.sessionId,
+          prompt: [{ type: "text", text: "hold" }],
+        }),
+      );
+    });
+    yield* one.held.fake.startedTurns(one.baselineTurns + 1);
+    yield* until(
+      connection.agent.request(acp.methods.agent.session.close, { sessionId: session.sessionId }),
+    );
+    expect((yield* prompt).stopReason).toBe("cancelled");
+    expect(one.held.owner.busy).toBe(false);
+    let descriptor: z.infer<typeof Descriptor> | undefined;
+    const file = join(one.home, "exit.json");
+    yield* scoped(function* () {
+      descriptor = yield* useSidekickAttachment(file, {
+        owner: one.held.owner,
+        dispatch: one.dispatch,
+        reads: rootReads(one.held.session, one.held.profile),
+        execution: one.descriptor.execution,
+        cwd: one.descriptor.cwd,
+      });
+    });
+    yield* refused(until(lstat(file)));
+    if (descriptor === undefined) {
+      throw new Error("No owned endpoint.");
+    }
+    yield* refused(until(lstat(descriptor.socket)));
+    const replaced = join(one.home, "replaced.json");
+    yield* scoped(function* () {
+      yield* useSidekickAttachment(replaced, {
+        owner: one.held.owner,
+        dispatch: one.dispatch,
+        reads: rootReads(one.held.session, one.held.profile),
+        execution: one.descriptor.execution,
+        cwd: one.descriptor.cwd,
+      });
+      yield* until(unlink(replaced));
+      yield* writeTextFile(replaced, "replacement owner bytes");
+    });
+    expect(yield* readTextFile(replaced)).toBe("replacement owner bytes");
+  });
+
+  it("A6: partial follow-up failure stays failed and an unassociated saved message remains unknown", function* () {
+    const one = yield* world();
+    const before = statusSchema.parse(yield* requestAttachment(one.path, { method: "status" }));
+    const unknown = before.messages[0];
+    if (unknown === undefined) {
+      throw new Error("No bootstrap message.");
+    }
+    yield* refused(
+      requestAttachment(one.path, { method: "message", reference: unknown, follow: true }),
+    );
+    const a = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    one.held.fake.script({ reply: "<Output>Earlier answer.</Output>\n<REPL.Bindings/>" });
+    one.held.fake.script({ reply: "incomplete", stopReason: "max_tokens" });
+    const ended = exchangeSchema.parse(
+      yield* requestAttachment(one.path, {
+        method: "prompt",
+        attachment: a.attachment,
+        text: "fail after partial",
+      }),
+    );
+    expect(ended.ending?.outcome).toBe("failed");
+    expect(ended.output).toContain("Earlier answer.");
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+  });
+
+  it("A2/A6: page continuations bind exact evidence after newer entries and descriptors cannot retarget", function* () {
+    const one = yield* world();
+    const a = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    const source = "<Output>" + "x".repeat(5000) + "</Output>";
+    one.held.fake.script({ reply: fills(source) + "\n<REPL.Submit/>" });
+    one.held.fake.script({ reply: "<Output>first settled</Output>" });
+    yield* requestAttachment(one.path, {
+      method: "prompt",
+      attachment: a.attachment,
+      text: "create long entry",
+    });
+    const page = z
+      .object({ entry: z.number(), text: z.string(), next: z.string().nullable() })
+      .passthrough()
+      .parse(yield* requestAttachment(one.path, { method: "entry", entry: 1, view: "source" }));
+    expect(Array.from(page.text)).toHaveLength(4096);
+    if (page.next === null) {
+      throw new Error("No continuation.");
+    }
+    one.held.fake.script({ reply: fills("<Output>newer entry</Output>") + "\n<REPL.Submit/>" });
+    one.held.fake.script({ reply: "<Output>second settled</Output>" });
+    yield* requestAttachment(one.path, {
+      method: "prompt",
+      attachment: a.attachment,
+      text: "create newer entry",
+    });
+    const tail = z
+      .object({ entry: z.number(), text: z.string() })
+      .passthrough()
+      .parse(
+        yield* requestAttachment(one.path, {
+          method: "entry",
+          entry: 1,
+          view: "source",
+          cursor: page.next,
+        }),
+      );
+    expect(tail.entry).toBe(1);
+    expect(page.text + tail.text).toBe(source);
+    yield* refused(
+      requestAttachment(one.path, { method: "entry", entry: 2, view: "source", cursor: page.next }),
+    );
+    yield* refused(
+      requestAttachment(one.path, { method: "entry", entry: 1, view: "output", cursor: page.next }),
+    );
+    const bytes = yield* readTextFile(one.path);
+    yield* writeTextFile(
+      one.path,
+      JSON.stringify({ ...one.descriptor, conversation: "different" }),
+    );
+    yield* refused(requestAttachment(one.path, { method: "status" }));
+    yield* writeTextFile(one.path, bytes);
+    const root = yield* records(one.held.execution);
+    yield* requestAttachment(one.path, { method: "status" });
+    expect(yield* records(one.held.execution)).toEqual(root);
+  });
+
+  it("A6: unestablished feedback refuses another prompt without guessing or resend", function* () {
+    const one = yield* world();
+    const a = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    let prompts = 0;
+    yield* ReplHost.around({
+      *appendRecord([file, text], next) {
+        const row = z
+          .object({ kind: z.string(), event: z.string().optional() })
+          .passthrough()
+          .parse(JSON.parse(text));
+        if (row.kind === "event" && row.event !== undefined) {
+          const events = parseEntryRecords(row.event);
+          if (
+            events.some(
+              (event) => event.type === "yield" && event.description.type === AGENT_PROMPT,
+            ) &&
+            ++prompts === 2
+          ) {
+            throw new Error("Controlled feedback acknowledgement loss.");
+          }
+        }
+        yield* next(file, text);
+      },
+    });
+    one.held.fake.script({ reply: "<REPL.Bindings/>" });
+    one.held.fake.script({ reply: "<Output>Backend accepted feedback.</Output>" });
+    yield* requestAttachment(one.path, {
+      method: "prompt",
+      attachment: a.attachment,
+      text: "inspect",
+    });
+    const status = z
+      .object({ feedbackUnestablished: z.number() })
+      .passthrough()
+      .parse(yield* requestAttachment(one.path, { method: "status" }));
+    expect(status.feedbackUnestablished).toBeGreaterThan(0);
+    const before = yield* records(one.held.execution);
+    const count = one.held.fake.prompts.length;
+    const result = exchangeSchema.parse(
+      yield* requestAttachment(one.path, {
+        method: "prompt",
+        attachment: a.attachment,
+        text: "do not resend",
+      }),
+    );
+    expect(result.ending?.outcome).toBe("failed");
+    expect(one.held.fake.prompts).toHaveLength(count);
+    expect(yield* records(one.held.execution)).toEqual(before);
+  });
+
+  it("A6: the 64-update observer bound detaches a slow connection while its root producer continues", function* () {
+    const one = yield* world();
+    const host = yield* SidekickTransport.expect();
+    const blocked = withResolvers<void>();
+    yield* SidekickTransport.set({
+      ...host,
+      *publish(path, binding) {
+        const listener = yield* host.publish(path, binding);
+        return {
+          descriptor: listener.descriptor,
+          *accept() {
+            const incoming = yield* listener.accept();
+            return (function* () {
+              const wire = yield* incoming;
+              return {
+                ...wire,
+                *send(frame: unknown) {
+                  if (
+                    z.object({ kind: z.string() }).passthrough().safeParse(frame).data?.kind ===
+                    "update"
+                  ) {
+                    blocked.resolve();
+                    yield* suspend();
+                  }
+                  yield* wire.send(frame);
+                },
+              };
+            })();
+          },
+        };
+      },
+    });
+    const path = join(one.home, "slow.json");
+    yield* useSidekickAttachment(path, {
+      owner: one.held.owner,
+      dispatch: one.dispatch,
+      reads: rootReads(one.held.session, one.held.profile),
+      execution: one.descriptor.execution,
+      cwd: one.descriptor.cwd,
+    });
+    const a = attachResult.parse(
+      yield* requestAttachment(path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    one.held.fake.script({
+      deltas: Array.from({ length: 200 }, () => "<Output>piece</Output>\n"),
+      holdAfter: 200,
+    });
+    const observing = yield* spawn(function* () {
+      yield* refused(
+        requestAttachment(path, {
+          method: "prompt",
+          attachment: a.attachment,
+          text: "large activity",
+        }),
+      );
+    });
+    yield* blocked.operation;
+    yield* race([
+      observing,
+      (function* () {
+        yield* sleep(10000);
+        throw new Error("Observer bound did not detach.");
+      })(),
+    ]);
+    expect(one.held.owner.busy).toBe(true);
+    const exact = one.dispatch.current;
+    if (exact === undefined) {
+      throw new Error("Root producer lost.");
+    }
+    one.held.fake.releaseDeltas();
+    expect((yield* exact.completion).ok).toBe(true);
+  });
+
+  it("A6: real embedded timeout and materialization controls never manufacture joined completion", function* () {
+    const home = yield* useTemporary("xmd-incomplete-attachment-");
+    const agent = join(home, "agent.cjs");
+    const source = `const readline=require('node:readline');
+const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.id===undefined)return;
+const reply=result=>send({jsonrpc:'2.0',id:r.id,result});
+if(r.method==='initialize')reply({protocolVersion:1,agentCapabilities:{loadSession:true}});
+else if(r.method==='session/new')reply({sessionId:'controlled-outer',_meta:{agentSessionId:'controlled-outer'}});
+else if(r.method==='session/load')reply({_meta:{agentSessionId:'controlled-outer'}});
+else if(r.method==='session/prompt'){
+if(process.env.CONTROL==='timeout')send({jsonrpc:'2.0',method:'session/update',params:{sessionId:r.params.sessionId,update:{sessionUpdate:'session_info_update',_meta:{'executablemd.session-materialization/v1':{state:'accepted'}}}}});
+send({jsonrpc:'2.0',method:'session/update',params:{sessionId:r.params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Controlled earlier text.'}}}});
+if(process.env.CONTROL==='bare')reply({stopReason:'end_turn'});
+}else reply({});});`;
+    yield* writeTextFile(agent, source);
+    for (const control of ["bare", "timeout"]) {
+      yield* scoped(function* () {
+        const command = "node " + shellQuote(agent);
+        console.log(
+          JSON.stringify({
+            kind: "controlled-embedded-input",
+            command,
+            home,
+            control,
+            sha256: createHash("sha256").update(source).digest("hex"),
+          }),
+        );
+        const runtime = createAcpRuntime({
+          cwd: home,
+          agentRegistry: { resolve: () => command, list: () => ["controlled"] },
+          sessionStore: createRuntimeStore({ stateDir: join(home, control) }),
+          permissionMode: "deny-all",
+          nonInteractivePermissions: "deny",
+          agentProcessEnv: { HOME: home, CONTROL: control },
+        });
+        const handle = yield* until(
+          runtime.ensureSession({
+            agent: "controlled",
+            sessionKey: control,
+            mode: "persistent",
+            materialization: "first-turn-acceptance",
+          }),
+        );
+        yield* ensure(() =>
+          until(runtime.close({ handle, reason: "controlled fixture teardown" })),
+        );
+        const turn = runtime.startTurn({
+          handle,
+          text: "control",
+          mode: "prompt",
+          requestId: control,
+          timeoutMs: 100,
+        });
+        const accepted = turn.materialized.then(
+          () => true,
+          () => false,
+        );
+        const result = yield* until(turn.result);
+        expect(result.status).toBe("completed");
+        if (result.status !== "completed") {
+          throw new Error("No controlled ending.");
+        }
+        expect(result.stopReason).toBe("end_turn");
+        expect(result._meta?.["executablemd.sidekick-exchange/v1"]).toBe(undefined);
+        expect(yield* until(accepted)).toBe(control === "timeout");
+      });
+    }
+  });
+
+  it("A5: cancelling Submit waiting joins response ownership and leaves admitted entry ownership intact", function* () {
+    const reached = withResolvers<void>();
+    const release = withResolvers<void>();
+    const finished = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    const one = yield* world({
+      entryInstallation: {
+        *install() {
+          yield* Execution.around({
+            *document([request], next) {
+              yield* ensure(() => finished.resolve());
+              reached.resolve();
+              yield* release.operation;
+              yield* next(request);
+            },
+          });
+        },
+      },
+    });
+    const a = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    one.held.fake.script({ reply: fills("<Output>entry</Output>") + "\n<REPL.Submit/>" });
+    const observing = yield* spawn(() =>
+      requestAttachment(one.path, { method: "prompt", attachment: a.attachment, text: "submit" }),
+    );
+    yield* reached.operation;
+    yield* requestAttachment(one.path, { method: "cancel", attachment: a.attachment });
+    yield* finished.operation;
+    expect(exchangeSchema.parse(yield* observing).ending?.outcome).toBe("cancelled");
+    expect(one.held.session.model.entries).toHaveLength(0);
+  });
+
+  it("A5/A6: enclosing owner teardown joins its producer and socket; stale descriptors stay offline", function* () {
+    let endpoint: z.infer<typeof Descriptor> | undefined;
+    let path = "";
+    yield* scoped(function* () {
+      const one = yield* world();
+      endpoint = one.descriptor;
+      path = one.path;
+      one.held.fake.script({ reply: "", manual: true });
+      const sent = yield* one.dispatch.send("in flight at enclosing exit");
+      if (!sent.ok) {
+        throw sent.error;
+      }
+      yield* one.held.fake.startedTurns(one.baselineTurns + 1);
+    });
+    if (endpoint === undefined) {
+      throw new Error("Missing owned endpoint.");
+    }
+    yield* refused(until(lstat(endpoint.socket)));
+    yield* refused(until(lstat(path)));
+  });
+});

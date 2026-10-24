@@ -6401,6 +6401,32 @@ projection detaches every value it retains and freezes it, so nothing below
 holds a `DurableEvent` and nothing above can change one. Route resolution is
 pure and answers with the exact objects that model holds.
 
+### Local Sidekick attachments
+
+The CLI-private `sidekick-acp` composition attaches observers and an ACP stdio
+bridge to the live root's existing Sidekick dispatch. It introduces no evaluator,
+journal writer or conversation controller. The root owns producers and issued
+attachment mappings; each connection owns its bounded public observation and
+request tasks. EOF releases only those observations. Explicit cancellation
+captures an exact exchange before suspension and joins it; enclosing command
+teardown joins both producer and transport resources.
+
+A contextual transport is installed explicitly by each runtime entrypoint. Its
+POSIX adapter owns asynchronous socket/file acquisition, exclusive complete
+descriptor publication and identity-checked cleanup. Shared attachment modules
+use that context and detached acknowledged reads. A descriptor binds its live
+owner/execution/conversation/cwd, and every connection handshakes that exact
+binding. Conversation selection changes invalidate it. Private protocol schemas
+bound both framing and the read surface; an observer that exceeds its mailbox
+cannot block the root producer.
+
+The bridge distinguishes three facts: accepted saved message, joined exchange
+completion and the product verdict inside evaluated Output. Provisional activity
+is marked as such, and no native transcript crosses this boundary. Outer ACP
+identity/materialization describes only the attachment and its message acceptance;
+it does not assert acceptance by the underlying Sidekick provider. Unknown
+feedback keeps its existing refusal and is never resent through attachment.
+
 ### Session workspace placement
 
 A Sidekick response and an entry submitted through its controls start in the

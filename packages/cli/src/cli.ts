@@ -1,3 +1,5 @@
+import { runSidekickCommand, SIDEKICK_HELP } from "./sidekick-acp/command.ts";
+import { SidekickTransport } from "./sidekick-acp/protocol.ts";
 import { isAbsolute } from "node:path";
 /**
  * CLI — run an executable markdown document.
@@ -322,6 +324,10 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  * their entries is not the same choice as who their entries talk to.
  */
 const replConfig = object({
+  sidekickAcp: {
+    description: "absolute private attachment file for this live Sidekick (POSIX only)",
+    ...field(z.string().optional()),
+  },
   observeWorktree: {
     description: "one existing absolute linked-worktree root allowed for local Git observations",
     ...field(z.string().optional()),
@@ -566,6 +572,7 @@ const xmd = program({
       agent: { ...agentConfig, description: AGENT_DESCRIPTION },
       upgrade: { ...upgradeConfig, description: UPGRADE_DESCRIPTION },
       repl: { ...replConfig, description: REPL_DESCRIPTION },
+      sidekick: { description: "Attach to or passively read one live Sidekick.", ...object({}) },
       "test-agent": testAgentConfig,
       workflow: workflowConfig,
     },
@@ -676,6 +683,7 @@ export const REPL_VALUES: readonly string[] = [
   "--default-agent",
   "--sidekick-agent",
   "--observe-worktree",
+  "--sidekick-acp",
 ];
 
 /** The three REPL switches, which carry none. */
@@ -690,6 +698,7 @@ export function replGrammarError(
   const rest = args.slice(1);
   const positional: string[] = [];
   let observationPath = false;
+  let attachmentPath = false;
   for (let at = 0; at < rest.length; at += 1) {
     const token = rest[at] ?? "";
     if (!token.startsWith("-") || token === "-") {
@@ -718,6 +727,19 @@ export function replGrammarError(
       }
       if (!isAbsolute(path)) {
         return "xmd repl: --observe-worktree requires an absolute path";
+      }
+    }
+    if (name === "--sidekick-acp") {
+      if (attachmentPath) {
+        return "xmd repl: --sidekick-acp accepts exactly one path";
+      }
+      attachmentPath = true;
+      const path = written ?? rest[at + 1];
+      if (path === undefined || path.length === 0 || path.startsWith("-")) {
+        return "xmd repl: --sidekick-acp requires a value";
+      }
+      if (!isAbsolute(path)) {
+        return "xmd repl: --sidekick-acp requires an absolute path";
       }
     }
     if (REPL_VALUES.includes(name)) {
@@ -2528,6 +2550,7 @@ const COMMAND_NAMES = [
   "upgrade",
   "agent",
   "repl",
+  "sidekick",
   "test-agent",
   "workflow",
 ];
@@ -2655,7 +2678,7 @@ function renderHelp(phase: PropsPhase): string {
           : command === "agent"
             ? AGENT_OPTIONS_HELP
             : command === "repl"
-              ? REPL_HELP
+              ? REPL_HELP + "\n\n" + SIDEKICK_HELP
               : "";
   const withSource = epilogue === "" ? base : `${base}\n\n${epilogue}`;
 
@@ -2964,6 +2987,14 @@ function* dispatch(
         yield* exit(1);
         break;
       }
+      if (
+        command.config.sidekickAcp !== undefined &&
+        !(yield* SidekickTransport.get())?.supported()
+      ) {
+        console.error("xmd repl: Sidekick ACP requires a same-user POSIX Unix socket.");
+        yield* exit(1);
+        break;
+      }
       // The Agent configuration, settled before a terminal exists: mutual
       // exclusion, an unknown provider and `DEFAULT_AGENT_NAME` precedence are
       // all decided here, so an invocation nobody could run refuses without
@@ -3047,6 +3078,9 @@ function* dispatch(
       yield* replHost.install();
       const ran = yield* runReplProgram({
         profile,
+        ...(command.config.sidekickAcp === undefined
+          ? {}
+          : { sidekickAcp: command.config.sidekickAcp }),
         ...(command.config.location === undefined ? {} : { location: command.config.location }),
       });
       if (!ran.ok) {
@@ -3440,6 +3474,17 @@ export function* runXmd(
   // restore.
   replHost?: ReplHostAssembly,
 ): Operation<void> {
+  if (args[0] === "sidekick") {
+    try {
+      yield* runSidekickCommand(args.slice(1));
+    } catch (error) {
+      console.error(
+        "xmd sidekick: " + (error instanceof Error ? error.message : "attachment refused"),
+      );
+      yield* exit(1);
+    }
+    return;
+  }
   // Before every scanner and before anything reads a path: what a command line
   // selects is read from the argv the caller wrote, and the tokens that
   // selected it are removed from everything downstream.

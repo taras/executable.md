@@ -1,3 +1,4 @@
+import { useSidekickAttachment } from "../sidekick-acp/server.ts";
 import { testForSidekick } from "./sidekick/admission.ts";
 /**
  * The command, as one scope.
@@ -182,6 +183,7 @@ import type { ReplTerminalSize } from "./terminal.ts";
  * run under different rules from the first.
  */
 export interface ReplProgramOptions {
+  readonly sidekickAcp?: string;
   /** The location to reopen, or none to start a fresh execution. */
   readonly location?: string;
   /** The repository root. Defaults to this host's per-user data directory. */
@@ -333,7 +335,7 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
     opened.value,
     state,
     execution,
-    { ...options, profile },
+    { ...options, profile: { ...profile, projectCwd } },
     repository,
     unresolved,
     workspace,
@@ -1066,9 +1068,25 @@ function* drive(
     });
 
     const dispatch = yield* useSidekickDispatch({
-      owner: sidekick, admission: admissions, execution: execution.id, workspace,
+      owner: sidekick,
+      admission: admissions,
+      execution: execution.id,
+      workspace,
       changed: () => wakes.send({ kind: "session" }),
     });
+    if (options.sidekickAcp !== undefined) {
+      try {
+        yield* useSidekickAttachment(options.sidekickAcp, {
+          owner: sidekick,
+          dispatch,
+          reads: sidekickRoot,
+          execution: execution.id,
+          cwd: options.profile.projectCwd ?? workspace,
+        });
+      } catch (error) {
+        return Err(error instanceof Error ? error : new Error("Sidekick attachment refused."));
+      }
+    }
 
     /**
      * This process's own name for each Sidekick question it has seen.
@@ -1342,7 +1360,9 @@ function* drive(
             // Reserved before the spawn, so nothing between the check above and
             // the task below can take the job.
             const reserved = admissions.configure(kind, conversation);
-            if (!reserved.ok) { return reserved.error.message; }
+            if (!reserved.ok) {
+              return reserved.error.message;
+            }
             const job = reserved.value;
             job.task = yield* spawn(function* (): Operation<void> {
               try {
@@ -2684,10 +2704,14 @@ function* perform(
       return {};
     case "send-message": {
       const admitted = yield* chat.dispatch.send(intent.text, intent.held);
-      if (!admitted.ok) { return { refusal: admitted.error.message }; }
+      if (!admitted.ok) {
+        return { refusal: admitted.error.message };
+      }
       yield* spawn(function* (): Operation<void> {
         const sent = yield* admitted.value.completion;
-        if (!sent.ok) { chat.refuse(sent.error.message); }
+        if (!sent.ok) {
+          chat.refuse(sent.error.message);
+        }
         wakes.send({ kind: "session" });
       });
       // The row beside the box is `[stop]` now rather than `[send]`, and the
@@ -2701,7 +2725,9 @@ function* perform(
       // down. A person who pressed it keeps a usable keyboard while it does.
       const exchange = chat.dispatch.current;
       yield* spawn(function* (): Operation<void> {
-        if (exchange !== undefined) { yield* exchange.cancel(); }
+        if (exchange !== undefined) {
+          yield* exchange.cancel();
+        }
         wakes.send({ kind: "session" });
       });
       return { remounted: true };
@@ -2812,10 +2838,14 @@ function* perform(
         return { refusal: asked.error.message };
       }
       const admitted = yield* chat.dispatch.send(asked.value.text, asked.value.held);
-      if (!admitted.ok) { return { refusal: admitted.error.message }; }
+      if (!admitted.ok) {
+        return { refusal: admitted.error.message };
+      }
       yield* spawn(function* (): Operation<void> {
         const sent = yield* admitted.value.completion;
-        if (!sent.ok) { chat.refuse(sent.error.message); }
+        if (!sent.ok) {
+          chat.refuse(sent.error.message);
+        }
         wakes.send({ kind: "session" });
       });
       return { remounted: true };
