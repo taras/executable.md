@@ -1,3 +1,4 @@
+import { usePosixSidekickTransport } from "./sidekick-acp/posix.ts";
 /**
  * Node source and npm-package entrypoint.
  *
@@ -44,6 +45,7 @@ const UPGRADE: UpgradeAssembly = {
 };
 
 await main(function* (args) {
+  yield* usePosixSidekickTransport(process.platform);
   yield* useNodeComponentModuleLoader();
   // The base providers for this host. `at: "min"` puts them beneath ordinary
   // middleware, so middleware installed later can wrap either one.

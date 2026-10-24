@@ -1,3 +1,4 @@
+import { usePosixSidekickTransport } from "./sidekick-acp/posix.ts";
 /**
  * Bun source entrypoint.
  *
@@ -37,6 +38,7 @@ const UPGRADE: UpgradeAssembly = {
 };
 
 await main(function* (args) {
+  yield* usePosixSidekickTransport(process.platform);
   yield* useBunComponentModuleLoader();
   // The base providers for this host. `at: "min"` puts them beneath ordinary
   // middleware, so middleware installed later can wrap either one.

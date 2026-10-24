@@ -1877,6 +1877,77 @@ the position itself. Before the root closes, output this process has produced bu
 not recorded appears as an explicit overlay; once the durable close exists, the
 recorded output replaces it.
 
+## Attaching to the live Sidekick
+
+A POSIX REPL can publish a private attachment for its already established,
+selected Sidekick conversation:
+
+```sh
+xmd repl 'xmd://repl/<execution>/entries' --sidekick-acp /absolute/private/attachment.json
+xmd sidekick acp --attach /absolute/private/attachment.json
+xmd sidekick read --attach /absolute/private/attachment.json status
+```
+
+`--sidekick-acp` occurs once and requires an absolute file name. It is off
+when omitted. Unsupported hosts refuse the option; the ordinary REPL remains
+available. Attachment is specific to this Sidekick, independently of repository
+ACP. It creates no underlying conversation and changes no provider, model,
+effort, includes, permissions or native identity. A conversation switch
+invalidates the attachment.
+
+The descriptor is an exclusively published regular mode-0600 file in an
+owner-controlled parent, pointing to a Unix socket inside a fresh mode-0700
+directory. Symlink, occupied, insecure, stale and mismatched descriptors refuse.
+It binds one live owner, execution, conversation and canonical project cwd;
+it contains no native session identifier or credential. Exit joins command work,
+connections and subscriptions, closes the listener, and removes only names whose
+identities still belong to this owner. Replaced files remain intact.
+
+The stdio command speaks ACP protocol 1 using SDK 1.3. It accepts text and
+advertises load and close, with no filesystem, terminal, MCP, configuration or
+additional-directory authority. An issued ACP session names an attachment to
+this owner, not a new Sidekick. Exact load and cwd validation replay public state
+without a prompt or write. A failed load fences fallback creation on that bridge.
+
+A prompt uses the same root-owned dispatch and admission as UI Send. It stays
+pending through generation, controls, entry submission, automatic feedback,
+questions and joined cleanup. Public activity and provisional previews use tool
+updates; assistant text comes from acknowledged, evaluated Output. An earlier
+answer or bare `end_turn` does not prove joined completion. Acceptance metadata
+marks the actual saved message; completing-RPC metadata separately names the
+joined exchange. Neither resolves uncertain underlying-provider feedback or
+supplies a product verdict.
+
+EOF and bridge loss detach observation while the live producer retains its
+reservation. Explicit ACP cancel captures and joins only that attachment's exact
+current exchange; close does so before releasing its mapping. Neither closes
+the underlying conversation nor cancels an independently admitted entry. ACP
+cannot clear the unsent composer, take over a held draft or answer a question.
+The existing UI remains the question's answer authority.
+
+Closed passive reads are:
+
+```text
+xmd sidekick read --attach FILE status
+xmd sidekick read --attach FILE message MESSAGE_REF [--follow]
+xmd sidekick read --attach FILE entry ENTRY source|prompt|output|journal [--cursor CURSOR]
+```
+
+Prompt pages additionally accept `--prompt POSITIVE` and
+`--field request|reply|error`. References come from acknowledged owner status;
+an unassociated saved message remains unknown. Follow takes a race-free snapshot
+and subsequent updates for that exact message, without dispatching, evaluating
+or appending. Saved entry pages retain the existing 4096-code-point and
+20-record defaults. An opaque continuation restates the resolved entry/prompt
+and binds the execution, conversation and view; a newer entry cannot retarget
+it. Reads accept no file path, source, write operation or limit override.
+
+The private versioned framed protocol bounds text at 64 KiB, descriptors at
+16 KiB and frames at 1 MiB. Each observer has at most 64 pending public updates.
+Malformed or slow observers detach safely; a subsequent exact read/follow
+obtains the owner's current facts. After owner-process loss joined completion
+is unavailable, rather than reconstructed from a saved preview or text.
+
 ## Who owns what
 
 Repository and issue behavior belong to the entry that is executing, and to
@@ -2422,6 +2493,30 @@ wrapper, no status word for something that worked. An ordinary failure of the
 response goes back with them, so the reply can continue from what already
 happened rather than repeating it, and the results that succeeded stay retained
 and are not sent again.
+
+One shared dispatch service owns a Sidekick message exchange through generation,
+control evaluation, automatic feedback and joined cleanup. UI Send and Retry
+preserve their existing input reduction and acknowledgement revisions. A dispatch
+captures its caller's UI or attachment origin before spawning, reserves under the
+same message/configuration admission policy and refuses busy work before a
+message append, provider turn or entry. The returned handle observes this exact
+exchange. Dropping observation leaves the root-owned producer and reservation
+intact; cancellation through an old completed handle reaches no later exchange.
+
+New saved messages carry an opaque public ID and their origin while retaining
+the existing conversation-scoped numeric `turn`. A public message reference binds
+execution, conversation and the acknowledged saved ID. Old records retain their
+original shape and have no invented follow ID. External-origin messages preserve
+unsent human composer text and held draft ownership; only a UI acknowledgement
+clears its exact UI revision. External attribution appears in the existing chat.
+Passive observation exposes current public state and subsequent changes without
+another prompt or append. Its live terminal index is lost with the owning root;
+retained history alone establishes no joined-cleanup result after process loss.
+
+A failed follow-up makes the whole exchange fail even when an earlier turn
+answered. Its safe error retains that earlier answer as partial evidence. A
+preview, a successful first turn, idle state and a product verdict inside Output
+are distinct from the final exchange result.
 
 Stop ends the asking and nothing else. It cancels the generation in flight, the
 controls of the response being evaluated and the wait for an entry's outcome,

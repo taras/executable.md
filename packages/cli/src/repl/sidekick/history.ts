@@ -214,8 +214,12 @@ export interface ReferenceRecord {
   readonly versions: Readonly<Record<string, string>>;
 }
 
+export type MessageOrigin = { readonly kind: "ui" } | { readonly kind: "acp"; readonly attachment: string };
+
 /** Exactly what a person sent, and which chat revision it cleared. */
 export interface MessageRecord {
+  readonly id?: string;
+  readonly origin?: MessageOrigin;
   readonly kind: "message";
   readonly conversation: string;
   /**
@@ -601,7 +605,7 @@ function reference(value: Record<string, unknown>): ReferenceRecord | undefined 
 }
 
 function message(value: Record<string, unknown>): MessageRecord | undefined {
-  if (!exactly(value, ["kind", "conversation", "turn", "revision", "text"])) {
+  if (!exactly(value, ["kind", "conversation", "turn", "revision", "text", ...(value.id === undefined ? [] : ["id"]), ...(value.origin === undefined ? [] : ["origin"])])) {
     return undefined;
   }
   const held = str(value.conversation);
@@ -611,7 +615,10 @@ function message(value: Record<string, unknown>): MessageRecord | undefined {
   if (held === undefined || turn === undefined || revision === undefined || text === undefined) {
     return undefined;
   }
-  return { kind: "message", conversation: held, turn, revision, text };
+  const id = value.id === undefined ? undefined : str(value.id);
+  const origin = value.origin === undefined ? undefined : messageOrigin(value.origin);
+  if (value.id !== undefined && (id === undefined || id.length === 0) || value.origin !== undefined && origin === undefined) { return undefined; }
+  return { kind: "message", conversation: held, turn, revision, text, ...(id === undefined ? {} : { id }), ...(origin === undefined ? {} : { origin }) };
 }
 
 function eventRecord(value: Record<string, unknown>): EventRecord | undefined {
@@ -1459,4 +1466,14 @@ export function* upgradeExecution(
     writer.redirect(publication.entries);
     return publication;
   });
+}
+
+function messageOrigin(value: unknown): MessageOrigin | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) { return undefined; }
+  if (!("kind" in value)) { return undefined; }
+  if (value.kind === "ui" && Object.keys(value).length === 1) { return { kind: "ui" }; }
+  if (value.kind === "acp" && Object.keys(value).length === 2 && "attachment" in value && typeof value.attachment === "string" && value.attachment.length > 0) {
+    return { kind: "acp", attachment: value.attachment };
+  }
+  return undefined;
 }
