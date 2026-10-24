@@ -46,7 +46,7 @@ import { realpath } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import { DurableContext } from "@executablemd/durable-streams";
 import { lazily, locatorFingerprint, type AmbientRepository } from "@executablemd/git/deno";
-import { useObservationLease } from "./leases.ts";
+import { useObservationLock } from "./leases.ts";
 import { currentCoroutine } from "./local.ts";
 import {
   parseReplPlacementRecord,
@@ -130,7 +130,7 @@ export interface ReplObservationEntry {
   /** The native repository work this entry asks for, credential-free. */
   readonly operations: DenoRepositoryOperations;
   prepare?(path: string): Operation<void>;
-  ownObservation?(target: ReplGitCheckout): Operation<void>;
+  ownObservation(target: ReplGitCheckout): Operation<void>;
   /** Hold a managed slot for the entry, single-flight per root and slot. */
   holdSlot(root: string, kind: SlotKind, path: string, subject: string): Operation<void>;
   /** Run live native Git for one shared Git directory in order within this entry. */
@@ -440,9 +440,6 @@ function* route(
 function* own(entry: ReplObservationEntry, target: ReplGitCheckout): Operation<void> {
   const registration = target.registration;
   if (registration.placement.kind === "observation-worktree") {
-    if (entry.ownObservation === undefined) {
-      throw observationPlacementRefusal();
-    }
     yield* entry.ownObservation(target);
     return;
   }
@@ -586,8 +583,8 @@ const observationCoordinator: LiveDurableOperationCoordinator = {
   },
 };
 
-/** Entry-private routing for the one host-selected observation checkout. */
-export function* useObservationWorktrees(options: {
+/** Validate and register one host-selected checkout for Git reads. */
+export function* useObservationWorktree(options: {
   readonly path: string | undefined;
   readonly cwd: string;
   readonly operations: DenoRepositoryOperations;
@@ -595,7 +592,7 @@ export function* useObservationWorktrees(options: {
   serialize<T>(key: string, work: () => Operation<T>): Operation<T>;
 }): Operation<{
   prepare(path: string): Operation<void>;
-  guard(path: string): Operation<void>;
+  validateObservationTarget(path: string): Operation<void>;
   own(target: ReplGitCheckout): Operation<void>;
   checkouts(): readonly ReplGitCheckout[];
 }> {
@@ -615,7 +612,7 @@ export function* useObservationWorktrees(options: {
     const key = common + "\0" + checkout;
     let acquire = holds.get(key);
     if (acquire === undefined) {
-      acquire = lazily(owner, () => useObservationLease(common, checkout));
+      acquire = lazily(owner, () => useObservationLock(common, checkout));
       holds.set(key, acquire);
     }
     return acquire();
@@ -785,7 +782,7 @@ export function* useObservationWorktrees(options: {
     prepare,
     own,
     checkouts: () => routes,
-    *guard(path) {
+    *validateObservationTarget(path) {
       yield* prepare(path);
       const target = routes.find(
         (route) =>

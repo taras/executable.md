@@ -31,7 +31,7 @@ import {
 } from "../../../src/repl/repositories/observation-records.ts";
 import { admitReplRepositoryHistory } from "../../../src/repl/repositories/admission.ts";
 import {
-  useObservationLease,
+  useObservationLock,
   useCommonDirectoryLease,
 } from "../../../src/repl/repositories/deno/leases.ts";
 import {
@@ -193,7 +193,7 @@ describe("D3 — trusted retained observation worktrees", () => {
     const acknowledged = yield* readRecords(executionPath(fixture.journals, "execution-1"));
     const common = yield* fixture.run("rev-parse", "--git-common-dir");
     const resolvedCommon = resolve(fixture.checkout, common);
-    yield* useObservationLease(resolvedCommon, path);
+    yield* useObservationLock(resolvedCommon, path);
     const cold = { native: 0, reads: 0 };
     const file = yield* openExecutionFile(fixture.journals, "execution-1");
     const session = opened(
@@ -329,7 +329,7 @@ describe("D3 — trusted retained observation worktrees", () => {
     const common = resolve(fixture.checkout, yield* fixture.run("rev-parse", "--git-common-dir"));
     let busy = false;
     try {
-      yield* scoped(() => useObservationLease(common, path));
+      yield* scoped(() => useObservationLock(common, path));
     } catch {
       busy = true;
     }
@@ -339,7 +339,7 @@ describe("D3 — trusted retained observation worktrees", () => {
     yield* task.halt();
     expect(cleaned).toBe(true);
     expect(active).toBe(0);
-    yield* scoped(() => useObservationLease(common, path));
+    yield* scoped(() => useObservationLock(common, path));
   });
 
   it("surfaces startup failure before the read barrier and joins its session", function* () {

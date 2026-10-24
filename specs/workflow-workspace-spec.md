@@ -1027,7 +1027,7 @@ canonical local Git reads after root, linked-registration and repository
 identity validation. It neither adopts a managed slot nor expands mutation,
 publication or Files placement coverage. Its acknowledged observation placement
 is historical routing data; new reads require the current host grant and an
-entry-owned observation hold. See the REPL specification for the retained
+entry-owned observation lock. See the REPL specification for the retained
 record and replay boundary.
 
 A REPL entry selects through that same ordinary selector, and records the answer

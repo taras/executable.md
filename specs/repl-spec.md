@@ -1608,8 +1608,8 @@ routes. Its version 1 `observation-worktree` placement records the normalized
 request and credential-free routing facts before any page is served. Completed
 replay parses those facts and pages without native inspection or ownership.
 New native reads require the current explicit grant and identity validation and
-reacquire an entry-owned nonblocking observation hold outside the checkout.
-This hold is separate from the mutation lease and serializes participating
+reacquire an entry-owned nonblocking observation lock outside the checkout.
+This lock is separate from the mutation lease and serializes participating
 observation owners; it does not exclude arbitrary external Git. Reads share the
 entry's existing Git sequence turn. Failed or uncertain placement persistence
 fences the entry and yields no successful observation. An incompatible record

@@ -74,7 +74,7 @@ import { replFileMiddleware } from "./files.ts";
 import type { ReplLocalRecorder, ReplManagedPlacement } from "./files.ts";
 import { replGitMiddleware } from "./git.ts";
 import type { ReplGitCheckout, ReplGitEntry } from "./git.ts";
-import { replObservationMiddleware, useObservationWorktrees } from "./observations.ts";
+import { replObservationMiddleware, useObservationWorktree } from "./observations.ts";
 import type { ReplObservationEntry } from "./observations.ts";
 import { GitQuery } from "@executablemd/git/api";
 import { replPushAdmission, replPushPolicy } from "./push.ts";
@@ -332,13 +332,9 @@ function* initializeReplRepository(
   // coroutine consumes at its own cursor.
   const gitCheckouts: ReplGitCheckout[] = [];
 
-  let observationGuard: ((path: string) => Operation<void>) | undefined;
+  let validateObservationTarget: (path: string) => Operation<void> = function* () {};
   const recorder: ReplLocalRecorder = {
-    *guard(path) {
-      if (observationGuard !== undefined) {
-        yield* observationGuard(path);
-      }
-    },
+    validateObservationTarget: (path) => validateObservationTarget(path),
     *selection(): Operation<ReplAmbientCheckout | undefined> {
       const coroutine = yield* currentCoroutine();
       const remembered = selected.get(coroutine);
@@ -566,14 +562,14 @@ function* initializeReplRepository(
   // entry's registry, its registered checkouts, its slot acquisition and its
   // native turn, and take no mutation lease: a read changes nothing, so there
   // is nothing for one to protect.
-  const observations = yield* useObservationWorktrees({
+  const observations = yield* useObservationWorktree({
     path: options.observeWorktree,
     cwd: directory,
     operations,
     ambient: useAmbientRepository,
     serialize,
   });
-  observationGuard = observations.guard;
+  validateObservationTarget = observations.validateObservationTarget;
   const observationEntry: ReplObservationEntry = {
     prepare: observations.prepare,
     ownObservation: observations.own,
