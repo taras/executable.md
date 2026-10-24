@@ -1055,6 +1055,12 @@ if(process.env.CONTROL==='bare')reply({stopReason:'end_turn'});
           () => true,
           () => false,
         );
+        // The result settles before final store writes; the event stream joins them.
+        const events = turn.events[Symbol.asyncIterator]();
+        let event = yield* until(events.next());
+        while (!event.done) {
+          event = yield* until(events.next());
+        }
         const result = yield* until(turn.result);
         expect(result.status).toBe("completed");
         if (result.status !== "completed") {

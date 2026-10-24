@@ -138,13 +138,40 @@ function* runConfiguration(
   });
 }
 
+function configurationSucceeded(run: {
+  result: Result<Json>;
+  output: string;
+  results: readonly TestResult[];
+}): void {
+  if (!run.result.ok || run.results.some((entry) => entry.status !== "pass")) {
+    throw new Error(
+      JSON.stringify(
+        {
+          error: run.result.ok
+            ? undefined
+            : { message: run.result.error.message, stack: run.result.error.stack },
+          output: run.output,
+          results: run.results,
+        },
+        (_key, value) =>
+          value instanceof Error ? { message: value.message, stack: value.stack } : value,
+        2,
+      ),
+    );
+  }
+}
+
 describe(
   "Session configuration through TestAgent",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     it("runs configured Sessions and nested declarations through the source CLI and ACPX worker", function* () {
       const cli = yield* runCli(["test", DOC], RUN).join();
-      expect(cli.code).toBe(0);
+      if (cli.code !== 0) {
+        throw new Error(
+          `SessionConfiguration CLI exited ${cli.code}\nstdout:\n${cli.stdout}\nstderr:\n${cli.stderr}`,
+        );
+      }
       expect(cli.stdout).toContain("review deep");
       expect(cli.stdout).not.toContain("ERROR");
     });
@@ -163,7 +190,7 @@ describe(
     it("retains named native identity, isolates Tests, and replays without a worker", function* () {
       const stream = new InMemoryStream();
       const live = yield* runConfiguration(stream, cliBase());
-      expect(live.result.ok).toBe(true);
+      configurationSucceeded(live);
       expect(live.results.map((entry) => entry.status)).toEqual([
         "pass",
         "pass",
@@ -189,7 +216,7 @@ describe(
       const replay = yield* runConfiguration(stream, [
         "/nonexistent/xmd-configuration-must-not-spawn",
       ]);
-      expect(replay.result.ok).toBe(true);
+      configurationSucceeded(replay);
       expect(replay.results.map((entry) => entry.status)).toEqual(
         live.results.map((entry) => entry.status),
       );

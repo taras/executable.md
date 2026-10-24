@@ -108,7 +108,7 @@ export function* holdManagedPlacement(acquire: () => Operation<void>): Operation
   }
 }
 
-export function* useObservationLease(commonDirectory: string, checkout: string): Operation<void> {
+export function* useObservationLock(commonDirectory: string, checkout: string): Operation<void> {
   const held = yield* useAdvisoryLock(
     commonDirectoryLock("observation\0" + commonDirectory + "\0" + checkout),
   );
