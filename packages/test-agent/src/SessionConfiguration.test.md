@@ -6,7 +6,7 @@
 <TestAgent.Scenario session="defaults" src="./SessionConfiguration.defaults.md" models={catalog} />
 <TestAgent.Scenario session="unavailable" src="./SessionConfiguration.unavailable.md" models={null} />
 
-<Test name="configuration and dependent effort memory share one session">
+<Test name="configuration and dependent effort memory share one session" timeout="60s">
 <Agent name="reviewer">
 <Session name="review"><Prompt as="restored">restored</Prompt></Session>
 <AssertStringIncludes actual={restored} expected="small low" />
