@@ -118,10 +118,11 @@ export function* useSidekickDispatch(options: {
       const changed = createSignal<SidekickDispatchSnapshot, never>();
       let message: SidekickMessageReference | undefined;
       let terminal: Result<SidekickTurn> | undefined;
+      let completed: SidekickDispatchSnapshot | undefined;
       let stopped = false;
       let producer: Task<void>;
       function snapshot(): SidekickDispatchSnapshot {
-        return Object.freeze({ origin, message, reading: owner.reading, live: owner.live, preview: owner.previewing, terminal });
+        return completed ?? Object.freeze({ origin, message, reading: owner.reading, live: owner.live, preview: owner.previewing, terminal });
       }
       function publish(): void { changed.send(snapshot()); options.changed(); }
       const exchange: SidekickExchange = {
@@ -173,6 +174,7 @@ export function* useSidekickDispatch(options: {
           result = Err(error instanceof Error ? error : new Error(String(error)));
         } finally {
           terminal = result;
+          completed = snapshot();
           admission.releaseMessage(held);
           if (current === exchange) { current = undefined; }
           publish();

@@ -82,6 +82,51 @@ describe("shared Sidekick dispatch", () => {
     expect(yield* records(held.execution)).toEqual(before);
   });
 
+  it("keeps completed exchange facts while a successor streams and passive readers follow", function* () {
+    const held = yield* useHarness();
+    held.fake.script({ reply: "<Output>Completed A.</Output>" });
+    held.fake.script({ deltas: ["<Output>Streaming B.</Output>", "\n"], holdAfter: 1 });
+    const dispatch = yield* service(held);
+    const first = yield* send(dispatch, "exchange A");
+    const result = yield* first.completion;
+    expect(result.ok).toBe(true);
+    if (!result.ok) { throw result.error; }
+    expect(result.value.output).toContain("Completed A.");
+    const completed = first.snapshot;
+    expect(completed.terminal).toBe(result);
+    const reference = completed.message;
+    if (reference === undefined) { throw new Error("A saved reference missing"); }
+    const changes = yield* held.owner.changes;
+    const second = yield* send(dispatch, "exchange B");
+    yield* held.fake.streamingTurns(1);
+    while (held.owner.previewing?.output !== "Streaming B.") { yield* changes.next(); }
+    expect(second.snapshot.live?.phase).toBe("generating");
+    expect(second.snapshot.preview?.output).toBe("Streaming B.");
+    const turns = held.fake.prompts.length;
+    const chat = yield* records(held.execution);
+    const entries = yield* held.execution.stream.readAll();
+    expect(first.snapshot).toEqual(completed);
+    const direct = yield* scoped(function* () { return (yield* first.observe()).snapshot; });
+    expect(direct).toEqual(completed);
+    const followed = dispatch.follow(reference);
+    if (!followed.ok) { throw followed.error; }
+    expect(followed.value.snapshot).toEqual(completed);
+    const observed = yield* scoped(function* () { return (yield* followed.value.observe()).snapshot; });
+    expect(observed).toEqual(completed);
+    expect(observed.message).toEqual(reference);
+    expect(observed.terminal).toBe(result);
+    expect(observed.preview?.output).not.toBe("Streaming B.");
+    expect(observed.live?.response).not.toBe(second.snapshot.live?.response);
+    expect(held.fake.prompts).toHaveLength(turns);
+    expect(yield* records(held.execution)).toEqual(chat);
+    expect(yield* held.execution.stream.readAll()).toEqual(entries);
+    expect(held.owner.busy).toBe(true);
+    expect(dispatch.current).toBe(second);
+    held.fake.releaseDeltas();
+    expect((yield* second.completion).ok).toBe(true);
+    expect(first.snapshot).toEqual(completed);
+  });
+
   it("reports a failed follow-up with earlier answer as partial evidence", function* () {
     const held = yield* useHarness();
     held.fake.script({ reply: "<Output>Earlier answer.</Output>\n<REPL.Bindings />" });
