@@ -491,6 +491,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       "--default-agent",
       "--deny-all",
       "--include",
+      "--sidekick-acp",
       "--sidekick-agent",
     ]);
 
@@ -931,5 +932,32 @@ describe("REPL boundaries: how this command's repository policy reaches Git", ()
       expect(gitSpecifiers(`import { thing } from "${route}";`)).toEqual([route]);
     }
     expect(gitSpecifiers('import { probe } from "../../git/tests/support/github.ts";')).toEqual([]);
+  });
+});
+
+describe("Sidekick attachment boundaries", () => {
+  it("requires one absolute startup attachment value", function* () {
+    expect(REPL_VALUES.includes("--sidekick-acp")).toBe(true);
+    expect(
+      replGrammarError(["repl", "--sidekick-acp", "/private/owner/attachment.json"], undefined),
+    ).toBe(undefined);
+    for (const args of [
+      ["repl", "--sidekick-acp"],
+      ["repl", "--sidekick-acp", "relative"],
+      ["repl", "--sidekick-acp", "/one", "--sidekick-acp=/two"],
+    ]) {
+      expect(replGrammarError(args, undefined)).not.toBe(undefined);
+    }
+  });
+  it("installs transport only at the four runtime assemblies and shared attachment code uses the contextual host", function* () {
+    for (const entry of ["deno", "compiled", "node", "bun"]) {
+      expect(yield* read(join(CLI, "src", entry + ".ts"))).toContain("usePosixSidekickTransport");
+    }
+    for (const name of ["server", "client", "bridge", "protocol", "command"]) {
+      const text = yield* read(join(CLI, "src/sidekick-acp", name + ".ts"));
+      expect(text).not.toContain('from "node:fs');
+      expect(text).not.toContain('from "node:net');
+      expect(text).not.toContain("process.platform");
+    }
   });
 });

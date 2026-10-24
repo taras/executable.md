@@ -1377,3 +1377,24 @@ none.
 - **Teardown.** Provider-scope teardown cancels active turns and closes each
   distinct runtime handle with an all-settled strategy, throwing a single error or
   an `AggregateError` from the provider scope.
+
+
+## The CLI Sidekick attachment as an ACP backend
+
+`xmd sidekick acp --attach FILE` serves the existing live REPL Sidekick over
+ACP protocol 1. Its session ID and `agentSessionId` metadata name the issued
+outer attachment mapping, not the underlying provider's native identity.
+Session creation and exact load perform no provider turn. The mapping remains
+bound to one live owner, execution, conversation and cwd; a failed exact load
+fences fallback session creation on that bridge.
+
+The `executablemd.session-materialization/v1` accepted update is sent only after
+the root acknowledges the actual saved message. It establishes outer XMD-owner
+acceptance, independently of uncertain acceptance by the Sidekick's provider.
+A successful completing RPC carries `executablemd.sidekick-exchange/v1` metadata
+with owner, execution, conversation, message reference and joined completion.
+Cancellation returns only after that exact exchange joins. Failed endings retain
+safe partial facts and fail the RPC. Text, previews and the embedded runtime's
+timeout fallback `end_turn` without completing-RPC metadata establish no joined
+exchange result. A consumer can read/follow the known owner reference without
+another prompt; it cannot infer or resend missing acceptance.
