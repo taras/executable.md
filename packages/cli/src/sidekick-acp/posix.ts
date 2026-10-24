@@ -213,7 +213,10 @@ function useWire(socket: Socket): Operation<Wire> {
     }
   });
 }
-export function* usePosixSidekickTransport(platform: string): Operation<void> {
+export function* usePosixSidekickTransport(
+  platform: string,
+  createDirectory: (prefix: string) => Promise<string> = mkdtemp,
+): Operation<void> {
   const uid = process.getuid?.();
   yield* SidekickTransport.set({
     supported: () => platform !== "win32" && uid !== undefined,
@@ -245,6 +248,7 @@ export function* usePosixSidekickTransport(platform: string): Operation<void> {
           return until(owned);
         }
         let directory: string | undefined;
+        let directoryAcquisition: Promise<string> | undefined;
         let directoryIdentity: Stats | undefined;
         let socketIdentity: Stats | undefined;
         let descriptorIdentity: Stats | undefined;
@@ -295,6 +299,9 @@ export function* usePosixSidekickTransport(platform: string): Operation<void> {
         };
         yield* ensure(function* () {
           yield* until(Promise.allSettled(acquisitions));
+          if (directoryAcquisition !== undefined) {
+            yield* until(directoryAcquisition);
+          }
           for (const socket of sockets.keys()) {
             yield* closeSocket(socket);
           }
@@ -334,12 +341,15 @@ export function* usePosixSidekickTransport(platform: string): Operation<void> {
         });
         try {
           const temp = yield* until(realpath(tmpdir()));
-          directory = yield* retain(mkdtemp(join(temp, "xsk-")), (value) => {
-            directory = value;
+          // Cancellation must join creation and identity before removing the owned directory.
+          directoryAcquisition = createDirectory(join(temp, "xsk-")).then((created) => {
+            directory = created;
+            return lstat(created).then((identity) => {
+              directoryIdentity = identity;
+              return created;
+            });
           });
-          directoryIdentity = yield* retain(lstat(directory), (value) => {
-            directoryIdentity = value;
-          });
+          directory = yield* until(directoryAcquisition);
           yield* until(chmod(directory, 0o700));
           const socketPath = join(directory, "s");
           if (Buffer.byteLength(socketPath) > 100) {
