@@ -27,7 +27,7 @@ describe("retained mount files", () => {
     };
     const ordinary = yield* mountedRun(source, new InMemoryStream(), [], trace(), refusal);
     expect(ordinary).toContain('"../outside.md" resolves outside the working directory.');
-    for (const workspace of [undefined, "/external"]) {
+    for (const coverageRoot of [undefined, "/external"]) {
       const stream = new InMemoryStream();
       observed.length = 0;
       const output = yield* mountedRun(
@@ -35,7 +35,10 @@ describe("retained mount files", () => {
         stream,
         [{ source: "/external", target: "/reference" }],
         trace(),
-        { ...refusal, workspace },
+        {
+          ...refusal,
+          ownedFileCoverage: coverageRoot === undefined ? undefined : { root: coverageRoot },
+        },
       );
       expect(output).toBe(ordinary);
       expect(output).not.toContain("/external");
@@ -52,7 +55,7 @@ describe("retained mount files", () => {
         const record = parseReplLocalRecord(event.result.value);
         return record?.operation === "file-read" ? [record] : [];
       });
-      expect(physicalReads).toHaveLength(workspace === undefined ? 0 : 1);
+      expect(physicalReads).toHaveLength(coverageRoot === undefined ? 0 : 1);
       for (const event of events) {
         if (
           event.type === "yield" &&
@@ -62,7 +65,7 @@ describe("retained mount files", () => {
           expect(Reflect.get(Object(event.result.value), "operation")).toBe("dir-ensure");
         }
       }
-      if (workspace !== undefined) {
+      if (coverageRoot !== undefined) {
         const record = physicalReads[0];
         expect(record?.request).toEqual({ cwd: "/external/sub", path: "../outside.md" });
         expect(record?.outcome.ok).toBe(false);
@@ -76,7 +79,10 @@ describe("retained mount files", () => {
           new InMemoryStream(events.filter((event) => event.type !== "close")),
           [{ source: "/external", target: "/reference" }],
           calls,
-          { ...refusal, workspace },
+          {
+            ...refusal,
+            ownedFileCoverage: coverageRoot === undefined ? undefined : { root: coverageRoot },
+          },
         );
         expect(replayed).toBe(ordinary);
         expect(observed).toEqual([]);
@@ -119,7 +125,7 @@ describe("retained mount files", () => {
     const first = trace();
     yield* mountedRun(source, stream, [{ source: "/owned/old", target: "/reference" }], first, {
       pause: true,
-      workspace: "/owned",
+      ownedFileCoverage: { root: "/owned" },
     });
     const second = trace();
     const output = yield* mountedRun(
@@ -127,7 +133,7 @@ describe("retained mount files", () => {
       stream,
       [{ source: "/missing/new", target: "/reference" }],
       second,
-      { workspace: "/owned" },
+      { ownedFileCoverage: { root: "/owned" } },
     );
     expect(second.ensures).toEqual([]);
     expect(second.reads).toEqual([{ cwd: "/missing/new", path: "next.md" }]);
@@ -172,7 +178,7 @@ describe("additional focused boundary 1", () => {
         stream,
         [{ source: "/owned/source", target: "/reference" }],
         calls,
-        { workspace: "/owned" },
+        { ownedFileCoverage: { root: "/owned" } },
       );
     } catch (error) {
       failure = error;
@@ -277,7 +283,7 @@ describe("additional focused boundary 4", () => {
         [{ source: "/owned/source", target: "/reference" }],
         calls,
         {
-          workspace: "/owned",
+          ownedFileCoverage: { root: "/owned" },
           *before() {
             yield* Component.around({
               *expand([request], next) {
@@ -311,7 +317,7 @@ describe("additional focused boundary 4", () => {
       stream,
       [{ source: "/owned/new", target: "/reference" }],
       resumed,
-      { workspace: "/owned" },
+      { ownedFileCoverage: { root: "/owned" } },
     );
     expect(resumed.ensures).toEqual([]);
     expect(resumed.reads).toEqual([{ cwd: "/owned/new", path: "next.md" }]);
@@ -322,13 +328,13 @@ describe("additional focused boundary 5", () => {
     const source = `<PrintErrors><Dir path="/reference"><File path="never" /></Dir></PrintErrors>${question}`;
     const stream = new InMemoryStream();
     yield* mountedRun(source, stream, [{ source: "/owned/old", target: "/reference" }], trace(), {
-      workspace: "/owned",
+      ownedFileCoverage: { root: "/owned" },
       pause: true,
       refuseEnsure: true,
     });
     const calls = trace();
     yield* mountedRun(source, stream, [{ source: "/owned/new", target: "/reference" }], calls, {
-      workspace: "/owned",
+      ownedFileCoverage: { root: "/owned" },
     });
     expect(calls.ensures).toEqual([]);
     expect(calls.reads).toEqual([]);
@@ -363,7 +369,7 @@ describe("additional focused boundary 6", () => {
         stream,
         [{ source: "/owned/source", target: "/reference" }],
         calls,
-        { workspace: "/owned" },
+        { ownedFileCoverage: { root: "/owned" } },
       ),
     );
     yield* entered.operation;
@@ -391,7 +397,7 @@ describe("additional focused boundary 7", () => {
         [{ source: "/owned/source", target: "/reference" }],
         calls,
         {
-          workspace: "/owned",
+          ownedFileCoverage: { root: "/owned" },
           *before() {
             yield* API.Files.around({
               *ensureDirectory() {
@@ -463,5 +469,32 @@ describe("whole composed answer retention", () => {
     );
     expect(output).toContain("outer:/external/one.md|/external/two.md");
     expect(calls.reads).toEqual([]);
+  });
+});
+
+describe("portable entry without a retention adapter", () => {
+  it("keeps marked workspace mutations live even with an empty mount table", function* () {
+    for (const mounts of [[], [{ source: "/external", target: "/reference" }]]) {
+      const source = `<File path="note.md">data</File><File.Delete path="old.md" /><Dir path="nested">content</Dir>${question}`;
+      const stream = new InMemoryStream();
+      const first = trace();
+      yield* mountedRun(source, stream, mounts, first, { entryCwd: "/workspace", pause: true });
+      expect(first.writes).toHaveLength(1);
+      expect(first.deletes).toHaveLength(1);
+      expect(first.ensures).toEqual([{ cwd: "/workspace", path: "nested" }]);
+      expect(
+        (yield* stream.readAll()).filter(
+          (event) =>
+            event.type === "yield" &&
+            (event.description.type === REPL_REPOSITORY_LOCAL ||
+              event.description.type === MOUNT_FILE),
+        ),
+      ).toEqual([]);
+      const resumed = trace();
+      yield* mountedRun(source, stream, mounts, resumed, { entryCwd: "/workspace" });
+      expect(resumed.writes).toHaveLength(1);
+      expect(resumed.deletes).toHaveLength(1);
+      expect(resumed.ensures).toEqual(first.ensures);
+    }
   });
 });

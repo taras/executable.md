@@ -1,12 +1,14 @@
 import { Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { API, fileWriteSuccess, filesFailure } from "@executablemd/runtime";
+import { API, cwd, fileWriteSuccess, filesFailure } from "@executablemd/runtime";
 import type { FilePathInput } from "@executablemd/runtime";
 import { collect, Elicitation, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { DurableStream } from "@executablemd/durable-streams";
 import { workspaceMountInstallation } from "../../src/repl/workspace-mount-installation.ts";
 import type { WorkspaceMountTable } from "../../src/workspace-mounts.ts";
+import { useReplFileRecorder } from "../../src/repl/repositories/deno/files.ts";
+import { admitReplRepositoryHistory } from "../../src/repl/repositories/admission.ts";
 
 export interface MountTrace {
   reads: FilePathInput[];
@@ -22,7 +24,8 @@ export function mountedRun(
   calls: MountTrace,
   options: {
     pause?: boolean;
-    workspace?: string;
+    entryCwd?: string;
+    ownedFileCoverage?: { root: string };
     refuseEnsure?: boolean;
     onRead?: (request: FilePathInput) => string;
     before?: () => Operation<void>;
@@ -32,7 +35,7 @@ export function mountedRun(
     yield* API.Env.around(
       {
         *cwd() {
-          return "/host";
+          return options.entryCwd ?? "/host";
         },
       },
       { at: "min" },
@@ -85,8 +88,34 @@ export function mountedRun(
     if (options.before !== undefined) {
       yield* options.before();
     }
+    const owner =
+      options.ownedFileCoverage === undefined
+        ? undefined
+        : yield* useReplFileRecorder(
+            {
+              *selection() {
+                return undefined;
+              },
+              *hold() {
+                throw new Error("the synthetic session recorder has no Git lease");
+              },
+              placements: () => [],
+            },
+            options.ownedFileCoverage.root,
+            mounts,
+            yield* cwd(),
+          );
+    const installation = workspaceMountInstallation(
+      mounts,
+      owner === undefined ? undefined : () => owner,
+    );
     const execution = yield* executeInstalled({ ...inlineSource(source), includes: [], stream }, [
-      workspaceMountInstallation(mounts, options.workspace),
+      owner === undefined
+        ? installation
+        : {
+            ...installation,
+            admissions: [admitReplRepositoryHistory, ...(installation.admissions ?? [])],
+          },
     ]);
     if (options.pause) {
       yield* spawn(() => collect(execution));

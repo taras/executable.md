@@ -96,7 +96,7 @@ describe("mount record consistency", () => {
       stream,
       [{ source: "/owned/source", target: "/reference" }],
       trace(),
-      { pause: true, workspace: "/owned" },
+      { pause: true, ownedFileCoverage: { root: "/owned" } },
     );
     const changed = yield* stream.readAll();
     for (const event of changed) {
@@ -140,7 +140,7 @@ describe("mount record consistency", () => {
         new InMemoryStream(changed),
         [{ source: "/owned/new", target: "/reference" }],
         calls,
-        { workspace: "/owned" },
+        { ownedFileCoverage: { root: "/owned" } },
       );
     } catch (error) {
       failure = error;
@@ -163,7 +163,7 @@ function* fixture() {
     stream,
     [{ source: "/owned/source", target: "/reference" }],
     trace(),
-    { pause: true, workspace: "/owned" },
+    { pause: true, ownedFileCoverage: { root: "/owned" } },
   );
   return yield* stream.readAll();
 }
@@ -277,7 +277,7 @@ describe("closed association admission", () => {
           new InMemoryStream(events),
           [{ source: "/owned/new", target: "/reference" }],
           calls,
-          { workspace: "/owned", before: allowRunLive },
+          { ownedFileCoverage: { root: "/owned" }, before: allowRunLive },
         );
       } catch (error) {
         failure = error;
@@ -318,7 +318,7 @@ describe("closed association admission", () => {
         new InMemoryStream(events),
         [{ source: "/owned/new", target: "/reference" }],
         calls,
-        { workspace: "/owned" },
+        { ownedFileCoverage: { root: "/owned" } },
       );
     } catch (error) {
       failure = error;
@@ -332,7 +332,7 @@ describe("closed association admission", () => {
     let failure: unknown;
     try {
       yield* mountedRun(pausedSource, new InMemoryStream(yield* fixture()), [], calls, {
-        workspace: "/owned",
+        ownedFileCoverage: { root: "/owned" },
       });
     } catch (error) {
       failure = error;
@@ -366,7 +366,7 @@ describe("closed association admission", () => {
       same,
       [{ source: "/owned/source", target: "/reference" }],
       calls,
-      { workspace: "/owned" },
+      { ownedFileCoverage: { root: "/owned" } },
     );
     expect(calls.ensures).toEqual([]);
     expect(calls.reads).toEqual([]);
@@ -383,7 +383,7 @@ describe("closed association admission", () => {
         new InMemoryStream(events),
         [{ source: "/owned/new", target: "/reference" }],
         changed,
-        { workspace: "/owned" },
+        { ownedFileCoverage: { root: "/owned" } },
       );
     } catch (error) {
       failure = error;

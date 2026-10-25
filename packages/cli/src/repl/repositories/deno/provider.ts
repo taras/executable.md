@@ -255,7 +255,7 @@ export function* replRepositoryInstallation(
     replPushAdmission(owner),
     replPullRequestReadAdmission(owner),
   ];
-  const filesystem = workspaceMountInstallation(options.mounts ?? [], options.workspace, () => {
+  const filesystem = workspaceMountInstallation(options.mounts ?? [], () => {
     if (held.files === undefined) {
       throw new Error("Entry file recorder is not initialized");
     }
@@ -291,7 +291,8 @@ function* initializeReplRepository(
   deliver?: (entry: ReplPushEntry) => void,
   deliverFiles?: (entry: MountFileEntry) => void,
 ): Operation<void> {
-  const directory = options.projectCwd ?? (yield* cwd());
+  const entryDirectory = yield* cwd();
+  const directory = options.projectCwd ?? entryDirectory;
   const configuredRoot = options.root;
 
   // The entry task. Every capability below is acquired into it, so the session,
@@ -381,7 +382,7 @@ function* initializeReplRepository(
     recorder,
     options.workspace,
     options.mounts ?? [],
-    directory,
+    entryDirectory,
   );
   deliverFiles?.(files);
 

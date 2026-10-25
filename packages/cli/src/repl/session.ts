@@ -1441,12 +1441,7 @@ function* start(
         // the entry rather than to a scope that has already closed.
         const owned =
           entryInstallation === undefined
-            ? [
-                workspaceMountInstallation(
-                  options.mounts ?? [],
-                  workspace === true ? options.workspace : undefined,
-                ),
-              ]
+            ? [workspaceMountInstallation(options.mounts ?? [])]
             : [
                 yield* entryInstallation(entryOwner(execution.id, key), {
                   mounts: options.mounts ?? [],

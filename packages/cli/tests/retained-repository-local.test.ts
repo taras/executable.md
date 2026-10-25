@@ -51,7 +51,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { Execution } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
-import { collect, Elicitation, useNormalizedOutput } from "@executablemd/core";
+import { collect, Elicitation, inlineSource, useNormalizedOutput } from "@executablemd/core";
 import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { denoReplEntry } from "../src/deno-repositories.ts";
@@ -64,7 +64,10 @@ import {
   mountedReading,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
 import { createRepositoryRoot, runPhase } from "./fixtures/repl/issue-883/host.ts";
-import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
+import {
+  replRepositoryInstallation,
+  useReplRepositoryRecording,
+} from "../src/repl/repositories/deno/provider.ts";
 import { admitReplRepositoryHistory } from "../src/repl/repositories/admission.ts";
 import { useCompositionComponents } from "@executablemd/git";
 import {
@@ -1246,5 +1249,75 @@ describe("975 — workspace recording crosses the process boundary", () => {
     expect(continued.sessions).toBe(0);
     expect(continued.prompts).toBe(0);
     yield* root.discard();
+  });
+});
+
+describe("marked workspace mount initialization", () => {
+  it("seeds the frame from entry cwd while project discovery stays captured", function* () {
+    const calls: unknown[] = [];
+    const discoveries: string[] = [];
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return "/caller";
+        },
+      },
+      { at: "min" },
+    );
+    yield* scoped(function* () {
+      yield* API.Env.around(
+        {
+          *cwd() {
+            return "/workspace";
+          },
+        },
+        { at: "min" },
+      );
+      yield* API.Files.around(
+        {
+          *ensureDirectory([input]) {
+            calls.push(["ensure", { ...input }]);
+            return Ok(undefined);
+          },
+          *readTextFile([input]) {
+            calls.push(["read", { ...input }]);
+            return Ok("text");
+          },
+        },
+        { at: "min" },
+      );
+      const installation = yield* replRepositoryInstallation("workspace-mount-fixture", {
+        projectCwd: "/project",
+        workspace: "/workspace",
+        mounts: [{ source: "/external", target: "/reference" }],
+        *operations() {
+          const ordinary = yield* useDenoRepositoryOperations();
+          return {
+            ...ordinary,
+            *ambientCheckout(from: string) {
+              discoveries.push(from);
+              return undefined;
+            },
+          };
+        },
+      });
+      yield* collect(
+        yield* executeInstalled(
+          {
+            ...inlineSource('<Dir path="/reference"><File path="one.md" /></Dir>'),
+            includes: [],
+            stream: new InMemoryStream(),
+          },
+          [installation],
+        ),
+      );
+      expect(yield* cwd()).toBe("/workspace");
+    });
+    expect(yield* cwd()).toBe("/caller");
+    expect(discoveries).toEqual(["/project"]);
+    expect(calls).toEqual([
+      ["ensure", { cwd: "/workspace", path: "/external" }],
+      ["read", { cwd: "/external", path: "one.md" }],
+    ]);
   });
 });
