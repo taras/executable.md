@@ -308,6 +308,7 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
     workspace,
     ...(resumedWorkspaceEntry === undefined ? {} : { resumedWorkspaceEntry }),
     includes: profile.includes,
+    mounts: profile.mounts,
     installations: profile.installations,
     generated: profile.generated,
     permissionMode: profile.permissionMode,

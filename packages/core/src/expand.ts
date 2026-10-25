@@ -1,3 +1,5 @@
+import type { FilesystemExpansion } from "./filesystem-placement.ts";
+import { invokeFixedFilesystem, fixedFilesystemByFunction } from "./components/fixed-filesystem.ts";
 /**
  * Expansion engine (spec §5).
  *
@@ -292,6 +294,7 @@ function expandChildrenScoped(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     const overrideEnv = override === undefined ? undefined : { values: override };
@@ -316,6 +319,7 @@ function expandChildrenScoped(
       environment,
       imports,
       returnBody,
+      filesystem,
     );
   });
 }
@@ -372,6 +376,7 @@ interface ProjectionState {
    */
   checkedFailures: CheckedFailures | undefined;
   environment: ExecutionEnvironment | undefined;
+  filesystem?: FilesystemExpansion;
   /**
    * The admission a protected producer's content is narrowed to, when one
    * narrowed it.
@@ -536,6 +541,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             state.environment,
             state.imports,
             options.returnFrame,
+            state.filesystem,
           );
           outcome.resolve({ segments: rendered });
         } catch (error) {
@@ -650,6 +656,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
               state.environment,
               state.imports,
               request.kind === "markdown" ? undefined : state.callerReturn,
+              state.filesystem,
             );
             outcome.resolve({ segments: [...errors, ...rendered] });
           } catch (error) {
@@ -843,6 +850,7 @@ export function expandSegments(
   indexBase: number = 0,
   checkedFailures?: CheckedFailures,
   environment?: ExecutionEnvironment,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Segment[]> {
   return expandSegmentsWithin(
     segments,
@@ -859,6 +867,7 @@ export function expandSegments(
     // through the ordinary public Component Api, exactly as it always has.
     undefined,
     undefined,
+    filesystem,
   );
 }
 
@@ -939,6 +948,7 @@ function* expandListSegments(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -963,6 +973,7 @@ function* expandListSegments(
         environment,
         imports,
         returnBody,
+        filesystem,
       );
     });
   }
@@ -1085,6 +1096,7 @@ function* expandListSegments(
               environment,
               imports,
               returnBody,
+              filesystem,
             )),
           );
           break;
@@ -1106,6 +1118,7 @@ function* expandListSegments(
               environment,
               imports,
               returnBody,
+              filesystem,
             )),
           );
           break;
@@ -1128,6 +1141,7 @@ function* expandListSegments(
             environment,
             imports,
             returnBody,
+            filesystem,
           );
           break;
         }
@@ -1162,6 +1176,7 @@ function* expandListSegments(
             environment,
             imports,
             returnBody,
+            filesystem,
           );
           break;
         }
@@ -1181,6 +1196,7 @@ function* expandListSegments(
             environment,
             imports,
             returnBody,
+            filesystem,
           );
           break;
         }
@@ -1203,6 +1219,7 @@ function* expandListSegments(
               environment,
               imports,
               returnBody,
+              filesystem,
             );
           // Which state this is, answered by identity rather than by name:
           // a trusted harness knows which expansions its own declaration scan
@@ -1250,6 +1267,7 @@ function* expandListSegments(
             environment,
             imports,
             returnBody,
+            filesystem,
           );
           break;
         }
@@ -1287,6 +1305,7 @@ function* expandListSegments(
             checkedFailures,
             environment,
             imports,
+            filesystem,
           );
           break;
         }
@@ -1341,6 +1360,7 @@ function* expandListSegments(
             environment,
             imports,
             returnBody,
+            filesystem,
           );
           break;
         }
@@ -1364,6 +1384,7 @@ function* expandListSegments(
           environment,
           imports,
           returnBody,
+          filesystem,
         );
         // A printed error the callee produced is data, and stays data here: it
         // was decided once, where it was raised, under the error mode governing
@@ -1509,6 +1530,7 @@ function* expandListSegments(
                 environment,
                 imports,
                 returnBody,
+                filesystem,
               ),
             );
           }
@@ -1572,6 +1594,7 @@ function* checkedCommandFailure(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
   // consulted at all: the mode decides how this is reported, never whether the
@@ -1678,6 +1701,7 @@ function* expandLet(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<ErrorSegment[]> {
   // Every one of these is decided from what the author wrote, so the whole
   // catalog lives in `structural-rules.ts` where validation reads it too. The
@@ -1711,6 +1735,7 @@ function* expandLet(
       environment,
       imports,
       returnBody,
+      filesystem,
     ),
   );
 
@@ -1823,6 +1848,7 @@ function* expandEach(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Segment[]> {
   return yield* structural(segment, path, () => work());
 
@@ -1886,6 +1912,7 @@ function* expandEach(
         environment,
         imports,
         returnBody,
+        filesystem,
       );
       // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
       // items are part of the work that iteration no longer does.
@@ -2014,6 +2041,7 @@ function* expandIf(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2090,6 +2118,7 @@ function* expandIf(
         environment,
         imports,
         returnBody,
+        filesystem,
       );
     };
     // The `<Else>` is an element of its own, and only when it is the arm that
@@ -2170,6 +2199,7 @@ function* expandSwitch(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2244,6 +2274,7 @@ function* expandSwitch(
         environment,
         imports,
         returnBody,
+        filesystem,
       ),
     );
   }
@@ -2322,6 +2353,7 @@ function* expandLoop(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2383,6 +2415,7 @@ function* expandLoop(
             environment,
             imports,
             returnBody,
+            filesystem,
           );
           if (frame.broken) {
             break;
@@ -2506,6 +2539,7 @@ function spawnChild(
   inherited: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Emission[]> {
   return scoped(function* () {
     yield* provideEnv(spawnEnvironment(incoming));
@@ -2539,6 +2573,7 @@ function spawnChild(
         environment,
         imports,
         undefined,
+        filesystem,
       ),
     );
     yield* refuseCheckedFailure(ledger);
@@ -2584,6 +2619,7 @@ function* expandAll(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2614,6 +2650,7 @@ function* expandAll(
           checkedFailures,
           environment,
           imports,
+          filesystem,
         ),
     );
 
@@ -2718,6 +2755,7 @@ function* expandPrintErrors(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<void> {
   const refusal = printErrorsViolations(segment)[0];
   if (refusal !== undefined) {
@@ -2745,6 +2783,7 @@ function* expandPrintErrors(
       environment,
       imports,
       returnBody,
+      filesystem,
     );
   });
 }
@@ -2784,6 +2823,7 @@ function* expandComponent(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Segment[]> {
   // Surrounded before resolution, props validation or any body: what an
   // observer is offered is the whole of this element's expansion, including
@@ -2969,6 +3009,7 @@ function* expandComponent(
         returnBody,
         selected,
         dispatcher,
+        filesystem,
       );
     }
 
@@ -3128,6 +3169,7 @@ function* expandComponent(
         printedErrors: bodyContentErrors,
         checkedFailures,
         environment,
+        filesystem,
         imports,
       });
       // Published on the eval scope, which every task the invocation owns
@@ -3206,6 +3248,7 @@ function* expandComponent(
               bodyEnvironment,
               imports,
               returnBody,
+              filesystem,
             );
           }, observed.settled),
         );
@@ -3257,6 +3300,7 @@ function* expandComponent(
           bodyEnvironment,
           imports,
           returnBody,
+          filesystem,
         );
       }, observed.settled),
     );
@@ -3450,6 +3494,7 @@ function* expandFunctionComponent(
    * form-specific bodies (`invocation-identity.ts`).
    */
   dispatcher: FunctionComponent | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Segment[]> {
   // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
@@ -3648,6 +3693,7 @@ function* expandFunctionComponent(
           ownPath: path,
           checkedFailures,
           environment,
+          filesystem,
           imports,
         };
         // Only the ordinary handle is published. The richer projection a
@@ -3808,6 +3854,7 @@ function* expandFunctionComponent(
             try {
               return yield* dispatchBody(
                 guarded(validatedProps, issued.invocation, {
+                  filesystem,
                   syntax: environment?.syntax,
                   evaluationProfile: environment?.evaluationProfile,
                   projectContent: lease?.project,
@@ -3826,7 +3873,35 @@ function* expandFunctionComponent(
           // Ended in the same breath the body is: an issuance a wrapper kept
           // from a finished element authorizes nothing when it is routed here.
           try {
-            return yield* dispatchBody(definition.fn(validatedProps, issued.invocation));
+            const fixed =
+              filesystem === undefined ? undefined : fixedFilesystemByFunction(dispatcher);
+            const direct =
+              fixed === undefined || filesystem === undefined
+                ? undefined
+                : invokeFixedFilesystem(fixed, validatedProps, issued.invocation, {
+                    filesystem,
+                    occurrence: expansion.id,
+                    project: function* (frame) {
+                      const projected = createProjectionHandle({
+                        ...projectionState,
+                        filesystem: { ...filesystem, frame },
+                      });
+                      const outcome = yield* projected.tryProject({
+                        kind: "slot",
+                        name: undefined,
+                        mode: siteErrorMode,
+                      });
+                      if (outcome.failure !== undefined) {
+                        throw outcome.failure;
+                      }
+                      const errors = errorSegments(outcome.segments);
+                      if (errors.length > 0) {
+                        throw new ContentExpansionFailure(errors, undefined, outcome.segments);
+                      }
+                      return renderSegments(outcome.segments);
+                    },
+                  });
+            return yield* dispatchBody(direct ?? definition.fn(validatedProps, issued.invocation));
           } finally {
             issued.close();
           }
@@ -4507,6 +4582,7 @@ export function* expandBody(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, callerEnv, claim);
@@ -4523,6 +4599,7 @@ export function* expandBody(
       environment,
       imports,
       returnBody,
+      filesystem,
     );
   }
 
@@ -4546,6 +4623,7 @@ export function* expandBody(
         environment,
         imports,
         returnBody,
+        filesystem,
       );
     } else if (chunk.output) {
       yield* scoped(function* () {
@@ -4563,6 +4641,7 @@ export function* expandBody(
           environment,
           imports,
           returnBody,
+          filesystem,
         );
       });
     } else {
@@ -4582,6 +4661,7 @@ export function* expandBody(
           environment,
           imports,
           returnBody,
+          filesystem,
         );
       });
     }
@@ -4611,6 +4691,7 @@ function runDocumentation(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
@@ -4627,6 +4708,7 @@ function runDocumentation(
       environment,
       imports,
       returnBody,
+      filesystem,
     );
   });
 }
@@ -4680,6 +4762,7 @@ function* expandValueBody(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
@@ -4707,6 +4790,7 @@ function* expandValueBody(
       environment,
       imports,
       ownBody,
+      filesystem,
     );
   }
 
@@ -4749,6 +4833,7 @@ function* expandInstalledStructural(
   environment: ExecutionEnvironment,
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined = undefined,
 ): Operation<void> {
   const name = segment.name;
 
@@ -4849,6 +4934,7 @@ function* expandInstalledStructural(
     path,
     checkedFailures,
     environment,
+    filesystem,
     imports,
     returnBody,
     children: segment.children,
@@ -4902,6 +4988,7 @@ interface RegionContext {
   readonly path: string;
   readonly checkedFailures: CheckedFailures | undefined;
   readonly environment: ExecutionEnvironment;
+  readonly filesystem?: FilesystemExpansion;
   readonly imports: ComponentImportTerminal | undefined;
   readonly returnBody: ReturnBody | undefined;
   readonly children: Segment[];
@@ -5069,6 +5156,7 @@ function* produceRegion(
         context.environment,
         context.imports,
         context.returnBody,
+        context.filesystem,
       );
     } catch (error) {
       failure = { error };

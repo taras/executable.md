@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+import { parseWorkspaceMounts } from "./workspace-mounts.ts";
 /**
  * CLI — run an executable markdown document.
  *
@@ -320,6 +322,10 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  * their entries is not the same choice as who their entries talk to.
  */
 const replConfig = object({
+  mount: {
+    description: "external SOURCE:TARGET directory; repeat for each explicit TARGET",
+    ...field(z.array(z.string()), field.default([]), field.array()),
+  },
   location: {
     description:
       "a location this REPL printed earlier — `xmd://repl/<execution>/<surface>...` — to reopen " +
@@ -598,6 +604,8 @@ const REPL_HELP = [
   "  Each one starts from the bindings the entries before it published, so a",
   "  later entry can read and revise what an earlier one left behind.",
   "",
+  "  --mount SOURCE:TARGET adds an external directory at a required document path.",
+  "  Repeat it: --mount /work/manuals:/reference --mount /work/fixtures:/fixtures.",
   "  --include <directory> and --include=<directory> select component directories.",
   "  Repeat them in search order; explicit values replace the default list [components, .].",
   "  Relative directories resolve from the invocation working directory.",
@@ -657,7 +665,7 @@ export interface ReplHostAssembly {
  * silence would let them believe they got it.
  */
 /**
- * The four REPL options that carry a value, by the spelling a caller writes.
+ * The five REPL options that carry a value, by the spelling a caller writes.
  *
  * Exported because the documentation check reads this command's own examples,
  * and a token after one of these is that option's value rather than a location.
@@ -665,6 +673,7 @@ export interface ReplHostAssembly {
  * command about what it had been handed.
  */
 export const REPL_VALUES: readonly string[] = [
+  "--mount",
   "--include",
   "--agent-provider",
   "--default-agent",
@@ -722,7 +731,7 @@ export function replGrammarError(
     return (
       `unrecognized option for xmd repl: ${name} — xmd repl takes one optional location, ` +
       "the agent options --agent-provider, --default-agent, --approve-all, --approve-reads " +
-      "and --deny-all, --include for component directories, and --sidekick-agent for the Sidekick's own conversations"
+      "and --deny-all, --include for component directories, --mount SOURCE:TARGET for workspace directories, and --sidekick-agent for the Sidekick's own conversations"
     );
   }
   if (positional.length > 1) {
@@ -2943,6 +2952,13 @@ function* dispatch(
         yield* exit(1);
         break;
       }
+      const mountCwd = yield* cwd();
+      const mounts = parseWorkspaceMounts(command.config.mount, mountCwd, { resolve });
+      if (!mounts.ok) {
+        console.error(mounts.error.message);
+        yield* exit(1);
+        break;
+      }
       // The Agent configuration, settled before a terminal exists: mutual
       // exclusion, an unknown provider and `DEFAULT_AGENT_NAME` precedence are
       // all decided here, so an invocation nobody could run refuses without
@@ -3015,6 +3031,7 @@ function* dispatch(
             [testAgentChildDeclaration()],
           );
         },
+        mounts: mounts.value,
         includes: command.config.include,
         ...(command.config.sidekickAgent === undefined
           ? {}

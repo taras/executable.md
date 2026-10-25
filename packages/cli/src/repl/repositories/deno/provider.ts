@@ -1,3 +1,6 @@
+import { workspaceMountInstallation } from "../../workspace-mount-installation.ts";
+import type { MountFileEntry } from "../../workspace-mount-installation.ts";
+import type { WorkspaceMountTable } from "../../../workspace-mounts.ts";
 /**
  * One REPL entry's recording: what the entry executing right now installs.
  *
@@ -70,7 +73,7 @@ import { selectionRegistry } from "@executablemd/git/deno";
 import { holdManagedPlacement, useCommonDirectoryLease } from "./leases.ts";
 import type { ReplAmbientCheckout } from "../records.ts";
 import { currentCoroutine, selectedCheckout } from "./local.ts";
-import { replFileMiddleware } from "./files.ts";
+import { useReplFileRecorder } from "./files.ts";
 import type { ReplLocalRecorder, ReplManagedPlacement } from "./files.ts";
 import { replGitMiddleware } from "./git.ts";
 import type { ReplGitCheckout, ReplGitEntry } from "./git.ts";
@@ -101,6 +104,7 @@ import type { ReplPlacementRegistration, ReplSelectionEntry } from "./selections
 
 /** What a caller may state about one entry's recording. */
 export interface ReplRecordingOptions {
+  readonly mounts?: WorkspaceMountTable;
   readonly projectCwd?: string;
   readonly workspace?: string;
   /**
@@ -185,7 +189,7 @@ export function* replRepositoryInstallation(
   owner: string,
   options: ReplRecordingOptions = {},
 ): Operation<ExecutionInstallation> {
-  const held: { entry?: ReplPushEntry } = {};
+  const held: { entry?: ReplPushEntry; files?: MountFileEntry } = {};
   let usable = false;
 
   yield* Execution.around({
@@ -196,11 +200,18 @@ export function* replRepositoryInstallation(
       yield* ensure(() => {
         usable = false;
         delete held.entry;
+        delete held.files;
       });
-      yield* initializeReplRepository(options, (entry) => {
-        held.entry = entry;
-        usable = true;
-      });
+      yield* initializeReplRepository(
+        options,
+        (entry) => {
+          held.entry = entry;
+          usable = true;
+        },
+        (files) => {
+          held.files = files;
+        },
+      );
       yield* next();
     },
   });
@@ -244,9 +255,16 @@ export function* replRepositoryInstallation(
     replPushAdmission(owner),
     replPullRequestReadAdmission(owner),
   ];
+  const filesystem = workspaceMountInstallation(options.mounts ?? [], options.workspace, () => {
+    if (held.files === undefined) {
+      throw new Error("Entry file recorder is not initialized");
+    }
+    return held.files;
+  });
   return {
+    filesystem: filesystem.filesystem,
     components,
-    admissions,
+    admissions: [...admissions, ...(filesystem.admissions ?? [])],
     install: () => useEntryIssueTransport({}),
   };
 }
@@ -271,6 +289,7 @@ export function* replRepositoryInstallation(
 function* initializeReplRepository(
   options: ReplRecordingOptions,
   deliver?: (entry: ReplPushEntry) => void,
+  deliverFiles?: (entry: MountFileEntry) => void,
 ): Operation<void> {
   const directory = options.projectCwd ?? (yield* cwd());
   const configuredRoot = options.root;
@@ -358,7 +377,13 @@ function* initializeReplRepository(
 
   // The outermost band, so what is recorded is the result the whole composition
   // answered with rather than one layer's own.
-  yield* Files.around(replFileMiddleware(recorder, options.workspace), { at: "max" });
+  const files = yield* useReplFileRecorder(
+    recorder,
+    options.workspace,
+    options.mounts ?? [],
+    directory,
+  );
+  deliverFiles?.(files);
 
   // A recorder with no managed root records file work and installs no selector,
   // so `<Repository>` and `<Worktree>` reach their ordinary missing-provider

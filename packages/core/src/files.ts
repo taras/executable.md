@@ -335,15 +335,21 @@ export function deleteFile(input: FilePathInput): Operation<Result<void>> {
  * this operation exists for — a refusal the vocabulary does not recognize
  * happened while trying to make it, not while reading the path.
  */
-export function ensureDirectory(input: FilePathInput): Operation<Result<void>> {
-  return unit(Files.operations.ensureDirectory(input), {
+export function ensureDirectory(
+  input: FilePathInput,
+  owned?: Operation<Result<void>>,
+): Operation<Result<void>> {
+  return unit(owned ?? Files.operations.ensureDirectory(input), {
     operation: "ensure-directory",
     phase: "access",
   });
 }
 
-export function readFileText(input: FilePathInput): Operation<Result<string>> {
-  return outcome(Files.operations.readTextFile(input), {
+export function readFileText(
+  input: FilePathInput,
+  owned?: Operation<Result<string>>,
+): Operation<Result<string>> {
+  return outcome(owned ?? Files.operations.readTextFile(input), {
     operation: "read",
     phase: "access",
     payload: text,

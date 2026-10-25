@@ -52,10 +52,36 @@ only genuine absence falls through, and a selected malformed or unreadable
 component fails. These directories select ordinary components and grant no
 permission; canonical protected components keep their implementations.
 
+Add an external host directory with a required document destination:
+
+```sh
+xmd repl --mount /work/manuals:/reference --mount /work/fixtures:/fixtures
+```
+
+Both `--mount SOURCE:TARGET` and `--mount=SOURCE:TARGET` repeat. Split at the last
+colon: drive-qualified SOURCE paths retain their drive colon. SOURCE resolves
+lexically against the captured invocation cwd, without stat, creation, realpath
+or permission. No tilde, environment, URI or escape expansion is performed.
+TARGET is absolute POSIX document spelling: reject NUL, backslash, colon,
+`//`, `..` segments, normalized `/`, duplicates and overlapping destinations.
+Normalize repeated separators, dot segments and trailing separators. Disjoint
+pairs are sorted; equality is exact normalized spelling, without filesystem
+identity, symlink or case-fold equivalence. Sources may coincide.
+
+`<Dir path="/reference">` ensures the selected SOURCE before children use it as
+actual cwd. File reads/writes/deletions retain their relative operands; Glob
+retains its patterns and a foreground process its argv. The mapping grants no
+permission, Git operation or native Agent tooling. The command's own cwd and a
+held conversation's cwd never move. Under the unchanged
+`/work/manuals/docs:/reference` pair, a new nested `..` follows authored `/`,
+ensures ordinary host `/`, and only its own Unit allows children there. Scope
+exit restores `/reference` and its source. On Windows, component-changing document
+spellings refuse before provider work; native SOURCE paths keep native spelling.
+
 Everything that can be refused is refused in this order, and each step happens
 before anything the next one would touch:
 
-1. **The line.** A token that is not the location or one of those seven options,
+1. **The line.** A token that is not the location or one of those eight options,
    a switch given a value, a value option given none or an empty one, and a
    second location are each refused here — before a per-user directory is
    formed, a history file is created or the terminal's modes are touched.
@@ -63,7 +89,8 @@ before anything the next one would touch:
    `--agent-provider` are refused next, before any adapter exists.
 3. **The command assembly.** Invocation cwd, configured absolute directories,
    selected Plugins, Agent stack, provider dependencies and permission mode are
-   captured once in the command scope. After storage supplies the execution id,
+   captured once in the command scope. The mount table is admitted at this boundary
+   before any terminal, history or provider adapter exists. After storage supplies the execution id,
    one immutable execution profile adds session/components and constructs the
    includes-dependent Plan declaration and vocabulary. No Plugin or Agent stack
    is installed again, and every entry uses the same finalized search list.
@@ -1393,8 +1420,30 @@ selected and promises no row of it.
 
 ### The files an entry wrote in the checkout you are standing in
 
+Mapped File reads retain their composed values even outside checkout/session
+coverage. Continuing the same unfinished entry restores an acknowledged value
+without reading or rewriting the original source. Reassigning an unchanged
+TARGET to another distinct, unaliased source leaves that value historical and
+routes the next new read to the current source. Omitting the pair leaves the
+saved read historical and routes new work to ordinary host placement. A fresh
+entry reads live; there is no cache by path and history restores no missing pair.
+An enclosing unrecorded ensure may execute or refuse on continuation.
+
+A prospectively associated mapped ensure already covered by the existing recorder
+restores its own acknowledged Unit or ordinary refusal under source reassignment.
+Replay independently validates authored occurrence and every operand before
+original binding and physical result. Unit permits current-placement children
+without ensuring or proving the new folder exists; refusal permits none.
+Omitting that ensure's TARGET is unsupported. This adds no ensure coverage and
+no saved outcome for unacknowledged work. A separate current ensure is new authored
+work, not insertion at an old slot. Legacy physical-only history remains physical;
+malformed or inconsistent association refuses before live work rather than
+falling back. Current paths still require provider permission, actual containment
+and disclosure checks.
+
 Start the REPL inside a Git checkout and an entry's file work is retained too,
-under the ordinary records above and no record type of its own. Four things are
+under the ordinary physical records. The prospective mapped class above uses its
+closed association record. Four operations are
 kept: a self-closing `<File path="…" as="…" />` text read; a paired
 `<File path="…">…</File>` write, after its content has expanded; a self-closing
 `<File.Delete path="…" />`; and the directory a paired `<Dir path="…">…</Dir>`
@@ -1425,7 +1474,7 @@ is already done. Type a *new* entry that reads the same path and it reads what
 is there now. What is retained is each operation, not a value the session
 remembers for a path.
 
-Any of the four anywhere else — beside the document, in a temporary directory,
+Except for selected mapped reads, any of the four anywhere else — beside the document, in a temporary directory,
 in any directory outside the selected checkouts and the marked entry's owned
 workspace — is ordinary file work, is retained by nothing here, and happens again
 if the entry is continued. A marked workspace entry retains the same four

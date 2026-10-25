@@ -3015,6 +3015,24 @@ Document filesystem operations cross a provider boundary. Ordinary managed check
 
 ### The document filesystem boundary
 
+The REPL's repeatable `--mount SOURCE:TARGET` interprets explicit document
+addresses through captured host directories. It uses the existing Dir, File,
+Glob and foreground command components. The execution carries an immutable
+private authored/actual directory frame beside its expansion environment, through
+ordinary bodies, projections and admitted generated work. No Context publishes
+that frame or grants filesystem permission. A canonical Dir prepares its effective
+request and candidate frame together; only its own validated ensure Unit, after
+applicable acknowledgement, permits the candidate's content. Nested `..` follows
+the authored parent: `/work/manuals/docs:/reference` followed by `..` ensures and
+enters ordinary host `/`, then restores the enclosing pair on every exit.
+
+Interpreted document paths preserve components when converted to host paths.
+On Windows, document backslashes, colons and components ending in a dot or space
+refuse before an effective request or child frame exists. Plain `.` and `..`
+remain document navigation. Native SOURCE anchors keep their native spelling;
+the captured host drive root supplies an unmapped document root. Ordinary hosts
+and workflow logical paths keep their existing interpretation.
+
 Contextual routing is not permission. `API.Files` decides *which* provider
 answers a document's file operations; what a provider is allowed to do is
 decided by the provider, from identities the contextual layer cannot supply.
@@ -6652,6 +6670,9 @@ reinstalling Agent or Plugin stacks. Protected names and the ordinary resolution
 tiers retain their existing precedence. Only genuine absence falls through;
 a selected unreadable or malformed definition fails.
 
+The command also captures the normalized, frozen mount table once. It is separate
+from includes, permissions, Repository selection and held native Agent cwd.
+
 The profile carries data and installations. No provider, writer or live request
 reaches the application model, route or Journal through it.
 
@@ -7161,6 +7182,36 @@ exactly once.
 
 ### What one entry retains about the checkout it is standing in
 
+A selected mapped File read also retains its composed result outside existing
+checkout/session coverage. Acknowledged text or ordinary refusal answers the same
+unfinished entry without consulting its old source, current source or host folder.
+Reassignment changes genuinely new reads to the current source; omission places
+new reads in the ordinary host folder. A new entry reads live. Enclosing
+unrecorded Dir work may still execute or refuse; saved reads promise no passive
+prefix. No mapped write, deletion, Glob, process, service or external ensure gains
+retention.
+
+A prospectively recorded mapped ensure already within existing coverage retains
+its own Unit or refusal under `repl_mount_file/v1`. The same marker serves mapped
+reads. One ordinary durable operation contains independent authored occurrence,
+form and operands, original binding, the existing physical result, and original
+coverage. Active replay compares authored expectations before admitting original
+physical attribution; both admission and replay validate the original component
+conversion, physical fingerprint and result. Only the engine consumes a slot.
+A saved ensure's Unit permits current-placement content under the same TARGET
+without checking or creating today's directory; refusal stops it. Omitting that
+ensure's TARGET refuses continuation. Physical-only legacy records keep physical
+matching and acquire no reconstructed association. Malformed association and
+abandoned replay never authorize live fallback.
+
+The entry's shared recorder receives canonical read/ensure calls directly. Its
+live continuation collects the ordinary Files chain in the invoking scope,
+excludes exactly its own registration, and preserves every other middleware,
+terminal, Context change and resource lifetime inline. Completed replay collects
+none of it. Raw calls use the same recording body and validators. Appends and
+first fatal failures keep the ordinary durable boundary; an uncertain append
+establishes no saved value or Unit.
+
 The REPL is foreground experimentation, and what that means for files is one
 sentence: a completed operation answers again, and a new one executes live. An
 entry that read a file, wrote three and stopped at a question is reopened at the
@@ -7178,8 +7229,8 @@ alone. Three local Git operations are retained beside them — `<Git.Add>`,
 request and whose external outcome are two records of their own. Those counts
 are separate: the file rules below are about the four, the local Git rules
 further down are about the three, and the publication rules after them are about
-the one. A call outside every such checkout and the marked entry's owned workspace is
-ordinary filesystem behavior, recorded by nothing, so it runs again during a
+the one. Except for the selected mapped reads described above, a call outside every such
+checkout and the marked entry's owned workspace is ordinary filesystem behavior, recorded by nothing, so it runs again during a
 partial continuation. A managed placement is looked
 for first and the most specific one wins; the ambient route answers everything no
 placement covers, so an entry that selects nothing works exactly as it did
@@ -8731,6 +8782,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 
 | Term | Meaning |
 | --- | --- |
+| workspace mount | A captured SOURCE:TARGET interpretation for existing document filesystem components, without an OS mount or filesystem permission grant. |
 | behavioral predictability | a plan as a program: ~80% deterministic, ~20% probabilistic [Reference](#three-axes). |
 | replay determinism | the journal preserves the execution chain: replay restores the recorded execution state from which execution can continue; correspondence with the live environment is a separate host contract [Reference](#three-axes). |
 | replay | using the durable journal to restore the recorded portion of a document execution without repeating durable effects; after the recorded entries are consumed, execution may continue live [Reference](#replay-and-effect-transactions). |
@@ -8894,7 +8946,8 @@ Status is measured against main.
 | `GitQuery.resolve()` | verifies and resolves one Git revision expression contextually [Interface and evidence](specs/workflow-spec.md#7-the-git-capability--moved). | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry [Invariant](#workflow-run-storage); [Interface and evidence](specs/workflow-spec.md#9-retained-run-storage). | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in [Invariant](#one-database-at-a-time-and-a-transaction-a-caller-can-hold). | built on main |
-| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the captured project ambient checkout, a selected managed checkout, or the marked entry's owned session workspace — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. The local Git and issue work an entry retains have rows of their own beside this one; work outside every selected checkout and the marked entry's owned workspace stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
+| REPL workspace mounts | Repeatable explicit SOURCE:TARGET pairs interpret existing Dir scopes through a private authored/actual expansion frame. Actual cwd reaches File, Glob and foreground processes; captured native Agent placement and ordinary/workflow hosts remain separate. Selected reads and originally covered ensures use a closed authored-first association in their entry's ordered engine slots; legacy physical records retain physical matching. [Boundary](#the-document-filesystem-boundary); [retention](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | implemented on the workspace-mount branch |
+| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the captured project ambient checkout, a selected managed checkout, or the marked entry's owned session workspace — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. The shared raw/direct recorder preserves ordinary ancestor-max `Files` composition, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. The local Git and issue work an entry retains have rows of their own beside this one; except for selected mapped reads, work outside every selected checkout and the marked entry's owned workspace stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained selection | one executing REPL entry's own `<Repository>` and `<Worktree>` selections, recorded beside its file work as small routing records: the canonical managed root, the checkout root, the common Git directory, the credential-free repository identity, the display name and the owner checkout, with a root-level `<Worktree>`'s ambient owner recorded as its own answer. The selector is the ordinary managed one, with its own creation, compatible-reuse, conflict and interrupted-adoption policy; what this adds is that a completed selection answers from its record, calling no selector and reaching no clone, `worktree add`, sidecar, credential or lock — so a continuation works in a checkout somebody has since changed or removed, while only new work meets today's filesystem. Parsed facts are held to the call they stand at with pure slot arithmetic against the root the record itself carries, registered in entry-private state and minted as a fresh selection, so a copied or edited Repository value can misname a target and never reach one. One entry at a time *owns* a managed slot, held until teardown and reacquired lazily by the first new operation inside a restored placement; that is a different hold from the shared Git directory's mutation lease, which only a new `<Worktree>` selector and a new mutation take. A selection is acknowledged before its path is bound, and native work that was never acknowledged runs live again under the ordinary partial-creation policy [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained issue work | one executing REPL entry's own `<Issue>` work, retained under the ordinary `issue_effect` records beside its file work and needing no checkout at all: no repository is discovered for it, no managed root is made and no hold is taken. A completed read answers with the snapshot it saw and a completed upsert with the URL it was filed under, neither resolving a provider, reading configuration nor opening a credential. What names it is the entry's own owner — derived by the session from the execution and the entry's admission-order position — with the identity canonical execution minted where it selected this implementation for this invocation; the `runId` and `expansionId` spellings are a compatibility encoding of those two, and a REPL entry installs no synthetic WorkflowRun. Neither member is reachable from a prop, a tracker, a Context, a middleware request or a record field a document can write, and the entry's `<Issue>` is the one shared component with this entry's policy declared over the command's registered default, which a repository component still outranks. One durable boundary encloses the operation and the live attempt inside it composes `IssueOperations` over a transport-facing default of the entry's own, bound in the attempt's own scope under the attempt's own idempotency key and gone before the envelope publishes; canonical form dispatch selects which of the two effects an invocation asks for. An upsert the service accepted and this end never acknowledged retains nothing and presents the same key next time, which is what the provider adopts under; a read has no key and may be made again. The entry's retained issue records are held to its own owner before any of them are replayed [Reference](#what-one-entry-retains-about-the-issue-it-filed). | built on the #181 stack |
 | REPL entry retained local Git | one executing REPL entry's own `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>`, recorded beside its file work and its selections. The performers are the ordinary ones — exactly the pathspecs a document wrote, the ordinary branch rules, the current index and nothing else — installed as ordinary Git dispatch at the implementation slot, so middleware above may answer, refuse, or transform and delegate, and a call answered wholly by a replacement acquires no retention. One durable operation per call and no outer envelope, so a staging child inside a Commit is an earlier journal operation of its own. A completed operation answers from its saved result and runs no `git` at all, writing no tree and reading no identity; a saved commit object id names the commit that was made then and is never re-resolved against today's HEAD. A result is fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products — never a file list, a checkout snapshot or Git output, and a commit message appears as a digest and a byte length rather than a second copy of the text. Routing is private and live-only: the received working directory is canonicalized and the ordinary selector chooses the longest covering checkout among this entry's registrations under the whole authenticated Repository identity, and a saved result's checkout is held to those registrations with parsed facts alone. The invoking person's author and committer are read once per entry, lazily, and only by a genuinely live Commit; a host that cannot say becomes the existing Commit-only refusal. A live operation takes the selected placement's managed slot and then the shared Git directory's mutation lease, keeps both until teardown and takes neither on replay, with this entry's own native attempts serialized per shared Git directory. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add says what `git` reported and promises no rollback; contention, admission and infrastructure failures are fatal and unrecorded. Native completion and acknowledgement are separate: an unacknowledged Commit runs live again and may instead refuse empty-index, and a failed append fences later work with no success binding and no compensating Close. A local result confers no publication evidence, and publication is the row below rather than part of these three [Reference](#the-three-local-git-operations-and-what-a-saved-object-id-means). | built on the #181 stack |

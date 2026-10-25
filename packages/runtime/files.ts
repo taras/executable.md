@@ -66,7 +66,8 @@
  * failure into an unrecognized throw exactly when it matters most.
  */
 
-import { type Api, createApi } from "@effectionx/context-api";
+import type { Api } from "@effectionx/context-api";
+import { createFilesApi } from "./files-api.ts";
 import type { Operation, Result } from "effection";
 
 /** The stable discriminant on ordinary filesystem failure data. */
@@ -850,7 +851,7 @@ export function parseFileWriteSuccess(value: unknown): FileWriteSuccess | undefi
  * indistinguishable from an installed one, and the whole point of the boundary
  * is that a workflow run cannot silently touch the caller's filesystem.
  */
-export const Files: Api<FilesHandler> = createApi<FilesHandler>("executablemd.runtime.files", {
+const composedFiles = createFilesApi({
   // deno-lint-ignore require-yield
   *checkFilePath(_input: FilePathInput): Operation<Result<void>> {
     throw new FilesProviderUnavailableError();
@@ -880,3 +881,9 @@ export const Files: Api<FilesHandler> = createApi<FilesHandler>("executablemd.ru
     throw new FilesProviderUnavailableError();
   },
 });
+
+export const Files: Api<FilesHandler> = {
+  operations: composedFiles.operations,
+  around: composedFiles.around,
+};
+export const registerFileRecorder = composedFiles.register;

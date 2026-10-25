@@ -1,3 +1,8 @@
+import { cwd } from "@executablemd/runtime";
+import { runSelectedForm } from "../invocation-identity.ts";
+import { authoredOperation } from "../filesystem-placement.ts";
+import { readBody } from "./File.ts";
+import { dirBody } from "./Dir.ts";
 /**
  * The three filesystem components canonical core reserves the names of (spec
  * §§6.13, 6.13.1, 6.13.2).
@@ -19,10 +24,10 @@
  *
  * The other two protected components are. `<Syntax />` and `<Evaluate>` are
  * handed a site canonical execution built for them, so their bodies exist only
- * once that execution does. These three need nothing of the kind: each one is
- * an ordinary component whose body reaches the filesystem through contextual
- * operations, and the only engine-owned part is the dispatcher that decides
- * which authored form it was written as. So each definition is built once per
+ * once that execution does. These definitions remain shared. An executing REPL
+ * privately supplies its filesystem call site to the canonical body only after
+ * the same invocation and form checks; ordinary hosts use contextual operations.
+ * No execution state is stored on the definition. Each is built once per
  * loaded copy of core, exactly as the registry builds its own, and the
  * execution's protected table answers with this object rather than a rebuilt
  * one.
@@ -197,4 +202,53 @@ export const FIXED_FILESYSTEM_ORIGIN = CORE_ORIGIN;
  */
 export function fixedFilesystemDefinition(name: string): FunctionComponentDefinition | undefined {
   return BY_NAME.get(name);
+}
+
+export function invokeFixedFilesystem(
+  definition: FunctionComponentDefinition,
+  props: Record<string, import("../types.ts").Json>,
+  invocation: import("../invocation-identity.ts").ComponentInvocation,
+  site: {
+    filesystem: import("../filesystem-placement.ts").FilesystemExpansion;
+    occurrence: string;
+    project(
+      frame: import("../filesystem-host.ts").DirectoryFrame,
+    ): import("effection").Operation<string>;
+  },
+): import("effection").Operation<unknown> | undefined {
+  if (!DEFINITIONS.includes(definition) || typeof definition.fn !== "function") {
+    return undefined;
+  }
+  const declaration =
+    definition.name === "Dir" ? dirForm : definition.name === "File" ? fileForm : fileDeleteForm;
+  return runSelectedForm(definition.fn, declaration, props, invocation, function* (form, selected) {
+    const directory = yield* cwd();
+    if (directory !== site.filesystem.frame.actualDirectory || typeof props.path !== "string") {
+      return yield* selected(props, invocation);
+    }
+    const operation = definition.name === "Dir" ? "dir-ensure" : "file-read";
+    const authored = authoredOperation(
+      operation,
+      site.occurrence,
+      props.path,
+      site.filesystem.frame,
+    );
+    if (definition.name === "File" && form === "self-closing") {
+      return yield* readBody(props, (request) =>
+        site.filesystem.host.read(authored, Object.freeze({ ...request })),
+      );
+    }
+    if (definition.name === "Dir") {
+      return yield* dirBody(props, {
+        prepare: () => site.filesystem.host.prepareDirectory(authored, site.filesystem.frame),
+        ensure: (request) => site.filesystem.host.ensure(authored, Object.freeze({ ...request })),
+        project: site.project,
+      });
+    }
+    return yield* selected(props, invocation);
+  });
+}
+
+export function fixedFilesystemByFunction(fn: unknown): FunctionComponentDefinition | undefined {
+  return DEFINITIONS.find((definition) => definition.fn === fn);
 }

@@ -29,6 +29,7 @@
 import { StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
+import { admitMountRecords } from "../mount-records.ts";
 import {
   parseReplLocalRecord,
   parseReplSelectionRecord,
@@ -109,6 +110,7 @@ export class ReplRepositoryHistoryError extends StaleInputError {
  * feature's type that does not parse is, and refuses.
  */
 export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): Operation<void> {
+  yield* admitMountRecords(retained);
   // The placements this history has selected *so far*. An observation names the
   // checkout it read, and nothing outside this snapshot may authorize one: the
   // route has to be a placement a preceding record in the same history made.
