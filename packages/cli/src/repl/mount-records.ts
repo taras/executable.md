@@ -97,6 +97,14 @@ function within(style: "posix" | "win32", root: string, target: string): boolean
     host.resolve(root, relative) === host.resolve(target)
   );
 }
+export function containedMountRead(
+  pathStyle: "posix" | "win32",
+  cwd: string,
+  path: string,
+): boolean {
+  const host = pathStyle === "win32" ? win32 : posix;
+  return !host.isAbsolute(path) && within(pathStyle, cwd, host.resolve(cwd, path));
+}
 export function parseMountEnvelope(value: unknown): MountRecord {
   const parsed = shape.safeParse(value);
   if (!parsed.success) {
@@ -198,12 +206,7 @@ export function* parseMountRecord(value: unknown, name?: string): Operation<Moun
       (a.namespace !== "document" ||
         enclosingPair === null ||
         canonicalJson(enclosingPair) !== canonicalJson(b.selected) ||
-        host.isAbsolute(a.path) ||
-        !within(
-          b.pathStyle,
-          b.enclosing.actualDirectory,
-          host.resolve(b.enclosing.actualDirectory, a.path),
-        ) ||
+        !containedMountRead(b.pathStyle, b.enclosing.actualDirectory, a.path) ||
         host.resolve(b.enclosing.actualDirectory, a.path) !== actual.value))
   ) {
     throw new MountRecordError();

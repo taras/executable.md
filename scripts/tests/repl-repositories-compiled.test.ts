@@ -72,9 +72,8 @@ describe("the compiled binary's REPL entry files", () => {
     yield* requireBinary();
     yield* replGitJourney(compiled, "worktree");
   });
-});
-
-it("the compiled binary carries workspace mount replay and live placement", function* () {
-  yield* requireBinary();
-  yield* replMountsJourney(compiled);
+  it("the compiled binary carries workspace mount replay and live placement", function* () {
+    yield* requireBinary();
+    yield* replMountsJourney(compiled);
+  });
 });

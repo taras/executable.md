@@ -3,9 +3,87 @@ import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { mountedRun, trace } from "./support/mount-run.ts";
 import { MOUNT_FILE } from "../src/repl/mount-records.ts";
+import { parseReplLocalRecord, REPL_REPOSITORY_LOCAL } from "../src/repl/repositories/records.ts";
+import { parseFilesFailure } from "@executablemd/runtime";
+import type { FilePathInput } from "@executablemd/runtime";
 
 const question = '<Elicit schema={{ type: "object" }} as="answer">Continue?</Elicit>';
 describe("retained mount files", () => {
+  it("keeps nested lexical read refusals ordinary and retains only applicable physical results", function* () {
+    const source =
+      '<Dir path="/reference"><Dir path="sub"><File path="../outside.md" />AFTER</Dir></Dir>';
+    const observed: FilePathInput[] = [];
+    const refusal = {
+      *before() {
+        yield* API.Files.around({
+          *readTextFile([input]) {
+            observed.push({ ...input });
+            return Err(
+              filesFailure({ operation: "read", phase: "access", reason: "lexical-escape" }),
+            );
+          },
+        });
+      },
+    };
+    const ordinary = yield* mountedRun(source, new InMemoryStream(), [], trace(), refusal);
+    expect(ordinary).toContain('"../outside.md" resolves outside the working directory.');
+    for (const workspace of [undefined, "/external"]) {
+      const stream = new InMemoryStream();
+      observed.length = 0;
+      const output = yield* mountedRun(
+        source,
+        stream,
+        [{ source: "/external", target: "/reference" }],
+        trace(),
+        { ...refusal, workspace },
+      );
+      expect(output).toBe(ordinary);
+      expect(output).not.toContain("/external");
+      expect(observed).toEqual([{ cwd: "/external/sub", path: "../outside.md" }]);
+      const events = yield* stream.readAll();
+      const physicalReads = events.flatMap((event) => {
+        if (
+          event.type !== "yield" ||
+          event.description.type !== REPL_REPOSITORY_LOCAL ||
+          event.result.status !== "ok"
+        ) {
+          return [];
+        }
+        const record = parseReplLocalRecord(event.result.value);
+        return record?.operation === "file-read" ? [record] : [];
+      });
+      expect(physicalReads).toHaveLength(workspace === undefined ? 0 : 1);
+      for (const event of events) {
+        if (
+          event.type === "yield" &&
+          event.description.type === MOUNT_FILE &&
+          event.result.status === "ok"
+        ) {
+          expect(Reflect.get(Object(event.result.value), "operation")).toBe("dir-ensure");
+        }
+      }
+      if (workspace !== undefined) {
+        const record = physicalReads[0];
+        expect(record?.request).toEqual({ cwd: "/external/sub", path: "../outside.md" });
+        expect(record?.outcome.ok).toBe(false);
+        if (record !== undefined && !record.outcome.ok) {
+          expect(parseFilesFailure(record.outcome.error)?.reason).toBe("lexical-escape");
+        }
+        observed.length = 0;
+        const calls = trace();
+        const replayed = yield* mountedRun(
+          source,
+          new InMemoryStream(events.filter((event) => event.type !== "close")),
+          [{ source: "/external", target: "/reference" }],
+          calls,
+          { ...refusal, workspace },
+        );
+        expect(replayed).toBe(ordinary);
+        expect(observed).toEqual([]);
+        expect(calls.ensures).toEqual([]);
+      }
+    }
+  });
   for (const current of ["/old", "/new", undefined]) {
     it(`restores saved read before a new read under ${current ?? "omission"}`, function* () {
       const stream = new InMemoryStream();

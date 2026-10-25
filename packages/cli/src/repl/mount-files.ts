@@ -31,6 +31,7 @@ import {
 import type { ReplLocalValue } from "./repositories/records.ts";
 import {
   admitMountRecords,
+  containedMountRead,
   mountAuthored,
   mountFingerprint,
   mountName,
@@ -135,7 +136,8 @@ export function mountPolicy(
         enclosingPair === undefined ||
         enclosingPair.source !== selected.source ||
         enclosingPair.target !== selected.target ||
-        host.isAbsolute(a.path))
+        request.path !== a.path ||
+        !containedMountRead(pathStyle, request.cwd, a.path))
     ) {
       return undefined;
     }
