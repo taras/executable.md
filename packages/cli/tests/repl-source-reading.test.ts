@@ -1176,3 +1176,90 @@ describe("S6 a reading longer than one measuring render is still measured whole"
       }));
   }
 });
+
+/**
+ * S7 a reading with more words than one measuring render.
+ *
+ * The engine's element budget is not its only one. It keeps every
+ * space-separated part of every text a render measures in a cache it refuses
+ * from, and that cache holds 16,384 of them however few elements carry them —
+ * measured on a freshly built engine, 1,366 texts of twelve parts and one text
+ * of 16,384 both refuse. A refusal a bigger engine cannot fix is the one the
+ * renderer's recovery cannot absorb, so it reached the screen as the error that
+ * ends it.
+ *
+ * Both arms are the shape the reported crash had. An entry whose recorded
+ * output holds one line of 20,000 parts is the real one — a journal of this
+ * product holds lines of 19,999 — and it refused inside the first measurement
+ * of that single line, which no batch size bounds. A reading of 1,400 ordinary
+ * lines is the other half: each line measures on its own, and the pass that
+ * measures every finished row at once asked for more parts than the cache holds
+ * even though it asked for fewer elements than the element budget.
+ */
+/** One line of `count` space-separated parts, which is what the engine counts. */
+function parts(count: number): string {
+  return Array.from({ length: count }, (_, at) => `${at % 10}`).join(" ");
+}
+
+describe("S7 a reading with more words than one measuring render is still measured whole", () => {
+  /** One recorded output line, as the reading an entry is shown as. */
+  function outputLinesOf(output: string): readonly ReplReadingLine[] {
+    return entryReading({
+      entry: entryOf('<Json value={{ a: 1 }} as="a" />', {
+        terminal: settled("ok", output),
+        settled: true,
+      }),
+      lifecycle: NO_LIFECYCLE,
+      live: "",
+      inspected: false,
+    }).output.lines;
+  }
+
+  it("recovers one line of 20,000 parts, exactly and in order", () =>
+    withRenderer(function* (renderer) {
+      const line = parts(20000);
+      const lines = outputLinesOf(line);
+      const prepared = yield* prepareReading(renderer, WIDE, lines, 100);
+      if (!prepared.ok) {
+        throw prepared.error;
+      }
+
+      // One line of somebody's output, whole: it was wrapped into many rows and
+      // nothing was shortened to make the engine accept it.
+      const whole = recovered(prepared.value);
+      expect(whole.size).toBe(lines.length);
+      for (const one of lines) {
+        expect([one.key, whole.get(one.key)]).toEqual([one.key, one.text]);
+      }
+      const rows = prepared.value.rows.filter((one) => one.line === lines[lines.length - 1].key);
+      expect(rows.length).toBeGreaterThan(1);
+
+      // And every row still fits the region it was cut for, which is the claim a
+      // width answered for a bounded prefix could break.
+      const { reservation } = prepared.value;
+      for (const row of prepared.value.rows) {
+        expect(row.width).toBeLessThanOrEqual(reservation.content - row.indent);
+        expect(runText(row.runs)).toBe(row.text);
+      }
+    }));
+
+  it("recovers 1,400 ordinary lines whose parts outgrow one render", () =>
+    withRenderer(function* (renderer) {
+      // Distinct lines, because the engine caches one entry per exact text: a
+      // thousand copies of one line cost it the parts of a single line and
+      // would prove nothing about what a batch of them asks for.
+      const lines = outputLinesOf(
+        Array.from({ length: 1400 }, (_, at) => `line ${at} ${parts(20)}`).join("\n"),
+      );
+      const prepared = yield* prepareReading(renderer, WIDE, lines, 100);
+      if (!prepared.ok) {
+        throw prepared.error;
+      }
+
+      const whole = recovered(prepared.value);
+      expect(whole.size).toBe(lines.length);
+      for (const one of lines) {
+        expect([one.key, whole.get(one.key)]).toEqual([one.key, one.text]);
+      }
+    }));
+});
