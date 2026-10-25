@@ -307,6 +307,61 @@ const SEPARATOR = "  ";
 const WIDTHS_PER_RENDER = 1024;
 
 /**
+ * How many space-separated parts one measuring render may carry.
+ *
+ * The element budget is not the engine's only one. Every part of every text a
+ * render measures is kept in a cache the engine refuses from, and that cache
+ * holds the same number of them however few elements carry them: measured on a
+ * freshly built engine, one text of 16,384 parts and 1,366 texts of twelve each
+ * refuse, while 16,383 parts go through either way. A tab and a newline are not
+ * separators there, a run of spaces produces an empty part that costs what a
+ * word costs, and two texts spelled the same share one entry.
+ *
+ * This is the budget whose refusal the renderer's recovery cannot absorb: a
+ * replacement instance is given the same cache, so a render that overran it
+ * overruns the replacement too and the refusal reaches the screen as the error
+ * that ends it. Half the engine's own figure, which leaves the parts an
+ * instance is still holding from the render before this one somewhere to sit.
+ */
+const WORDS_PER_RENDER = 8192;
+
+/** What one text costs that budget, counted the way the engine counts it. */
+function wordsIn(text: string): number {
+  let parts = 1;
+  for (let at = 0; at < text.length; at += 1) {
+    if (text[at] === " ") {
+      parts += 1;
+    }
+  }
+  return parts;
+}
+
+/**
+ * How much of one line could still fit a region, as a length in code units.
+ *
+ * A single text is bounded by no batch size, and one line of somebody's output
+ * can hold more parts than a render measures — a journal of this product holds
+ * lines of 19,999 — so a line is measured as far as it could still fit and
+ * never further. That prefix settles the question it is asked: every part after
+ * the first is preceded by a space, so `room + 2` of them are already wider
+ * than `room` columns, and text does not narrow when more of it is appended.
+ * The prefix ends at a space, which is a grapheme boundary of its own.
+ */
+function windowOf(text: string, room: number): number {
+  const parts = Math.min(room + 2, WORDS_PER_RENDER);
+  let seen = 0;
+  for (let at = 0; at < text.length; at += 1) {
+    if (text[at] === " ") {
+      seen += 1;
+      if (seen === parts) {
+        return at;
+      }
+    }
+  }
+  return text.length;
+}
+
+/**
  * Ask the engine how wide each of these texts is.
  *
  * One fit-sized element per text, each under its own structural id, in as many
@@ -324,12 +379,26 @@ function* widths(
     return Ok([]);
   }
   const answers: number[] = [];
-  for (let from = 0; from < texts.length; from += WIDTHS_PER_RENDER) {
-    const batch = yield* batchWidths(renderer, size, texts.slice(from, from + WIDTHS_PER_RENDER));
+  let from = 0;
+  while (from < texts.length) {
+    let to = from;
+    let words = 0;
+    while (to < texts.length && to - from < WIDTHS_PER_RENDER) {
+      const cost = wordsIn(texts[to]);
+      // A text that outgrows the budget on its own still goes, alone, so the
+      // engine's refusal names that text rather than this loop never advancing.
+      if (to > from && words + cost > WORDS_PER_RENDER) {
+        break;
+      }
+      words += cost;
+      to += 1;
+    }
+    const batch = yield* batchWidths(renderer, size, texts.slice(from, to));
     if (!batch.ok) {
       return batch;
     }
     answers.push(...batch.value);
+    from = to;
   }
   return Ok(answers);
 }
@@ -679,11 +748,15 @@ function* fitLine(
   if (line.text.length === 0) {
     return Ok([piece(0, 0, false, 0)]);
   }
-  const whole = yield* widths(renderer, size, [line.text]);
-  if (!whole.ok) {
-    return whole;
+  // Asked of as much of the line as the region could still hold. One row is a
+  // line the engine measured as fitting, and a line held back from the question
+  // is longer than the answer it would have given, so it is cut.
+  const reach = windowOf(line.text, room);
+  const reaching = yield* widths(renderer, size, [line.text.slice(0, reach)]);
+  if (!reaching.ok) {
+    return reaching;
   }
-  if (whole.value[0] <= room) {
+  if (reach === line.text.length && reaching.value[0] <= room) {
     return Ok([piece(0, line.text.length, false, 0)]);
   }
   // Where this line begins, so its continuations begin there too. Bounded well
@@ -728,7 +801,10 @@ function* cutAt(
   rest: string,
   room: number,
 ): Operation<Result<number>> {
-  const stops = graphemeStops(rest);
+  // Over the boundaries of the prefix that could still fit, which is what keeps
+  // every candidate inside one render's budget and keeps this from segmenting
+  // the whole remainder once per row of a very long line.
+  const stops = graphemeStops(rest.slice(0, windowOf(rest, room)));
   // Narrow by halves over grapheme boundaries, asking the engine for one batch
   // of candidates per round rather than one render per candidate.
   let low = 0;

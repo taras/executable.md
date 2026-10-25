@@ -7085,6 +7085,19 @@ Batch-local ids keep that set as small as one batch. This bounds the request,
 not the document: nothing is truncated to make an engine accept it, and the
 answers come back one per candidate in the order they were asked for.
 
+**An engine bounds the text one render measures as well as its elements.** Every
+space-separated part of every text in a render is kept in a cache the engine
+refuses from, and that cache holds the same number of them however few elements
+carry them — so a batch well inside the element budget still overruns it when
+its rows are prose, and one line of a retained reading can hold more parts than
+any render measures whatever a batch size is. A batch is therefore bounded by
+both, and a line is measured as far as it could still fit its region rather than
+to its end: every part after the first is preceded by a space, so a prefix of
+more parts than the region has columns is already wider than the region, and
+text does not narrow when more of it is appended. The cut that prefix bounds is
+the reader's own line, measured as the row it became — a bounded question, not a
+shortened document.
+
 An engine that is asked for too much at once does not say so usefully. It
 reports unbalanced structure for a list whose opens and closes are exactly
 paired, which is not a capacity refusal — so it is not reclassified as one
