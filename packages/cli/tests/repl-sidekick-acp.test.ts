@@ -50,7 +50,7 @@ import {
 } from "./fixtures/repl/issue-883/mounted-program.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import { ReplHost } from "../src/repl/host.ts";
-import { parseEntryRecords } from "../src/repl/sidekick/history.ts";
+import { PAIRED_DIRECTORY, parseEntryRecords } from "../src/repl/sidekick/history.ts";
 import { AGENT_PROMPT } from "@executablemd/core/host";
 import {
   Descriptor,
@@ -1341,4 +1341,63 @@ describe("ACP startup bootstrap", () => {
     expect(host.fake.ensured).toHaveLength(1);
     expect(yield* until(readdir(home))).toEqual([]);
   });
+
+  for (const event of ["Control-C", "EOF"]) {
+    it(event + " cancels held initialization and joins cleanup before returning", function* () {
+      yield* usePosixSidekickTransport(process.platform);
+      const home = yield* until(realpath(yield* useTemporary("xmd-acp-bootstrap-shutdown-")));
+      yield* until(chmod(home, 0o700));
+      const host = yield* useMountedHost();
+      host.fake.script({ reply: "<Output>Never completed.</Output>", held: true });
+      const cancellation = host.fake.holdCancellation();
+      const recording = recordingTerminal();
+      yield* recording.install();
+      let completed = false;
+      const running = yield* spawn(function* () {
+        const result = yield* runReplProgram({
+          profile: host.profile,
+          sidekickAcp: join(home, "attachment.json"),
+        });
+        completed = true;
+        return result;
+      });
+      yield* ensure(() => cancellation.release());
+      yield* host.fake.holdingTurns(1);
+      const published = yield* until(readdir(join(host.root, PAIRED_DIRECTORY)));
+      expect(published).toHaveLength(1);
+      const execution = published[0];
+      const before = yield* records(yield* host.repository.open(execution));
+      if (event === "Control-C") {
+        recording.terminal.feed("\u0003");
+      } else {
+        recording.terminal.end();
+      }
+      const reached = yield* race([
+        (function* () {
+          yield* cancellation.reached;
+          return true;
+        })(),
+        (function* () {
+          yield* sleep(1000);
+          return false;
+        })(),
+      ]);
+      expect(reached).toBe(true);
+      expect(completed).toBe(false);
+      expect(host.fake.cancels).toBe(1);
+      expect(yield* until(readdir(home))).toEqual([]);
+      cancellation.release();
+      const result = yield* running;
+      expect(result.ok).toBe(true);
+      expect(completed).toBe(true);
+      expect(recording.terminal.raw).toEqual([true, false]);
+      expect(recording.terminal.resets).toBe(1);
+      expect(recording.terminal.readers).toBe(0);
+      expect(host.fake.prompts).toHaveLength(1);
+      expect(yield* records(yield* host.repository.open(execution))).toEqual(before);
+      expect(before.filter((one) => one.kind === "message")).toHaveLength(1);
+      expect(before.filter((one) => one.kind === "response")).toHaveLength(0);
+      expect(yield* until(readdir(home))).toEqual([]);
+    });
+  }
 });

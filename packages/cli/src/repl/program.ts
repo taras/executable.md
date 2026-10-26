@@ -1,4 +1,5 @@
 import { useSidekickAttachment } from "../sidekick-acp/server.ts";
+import { SidekickTransport } from "../sidekick-acp/protocol.ts";
 import { testForSidekick } from "./sidekick/admission.ts";
 /**
  * The command, as one scope.
@@ -37,6 +38,7 @@ import {
   Ok,
   type Result,
   scoped,
+  race,
   spawn,
   type Subscription,
   type Task,
@@ -683,13 +685,26 @@ function* drive(
     // sees, and the person would watch their document appear a character at a
     // time.
     const wakes = queued();
+    const shutdown = withResolvers<void>();
+    let ending = false;
 
     yield* spawn(function* reading(): Operation<void> {
       while (true) {
         const next = yield* events.next();
         if (next.done === true) {
+          ending = true;
+          shutdown.resolve();
           wakes.close();
           return;
+        }
+        if (
+          next.value.kind === "eof" ||
+          (next.value.kind === "input" &&
+            next.value.event?.kind === "key" &&
+            next.value.event.key === "Interrupt")
+        ) {
+          ending = true;
+          shutdown.resolve();
         }
         wakes.send({ kind: "screen", event: next.value });
       }
@@ -1077,6 +1092,41 @@ function* drive(
     });
     if (options.sidekickAcp !== undefined) {
       try {
+        if (ending) {
+          return Ok({ location: exitLocation(state), refusal: undefined });
+        }
+        if (!(yield* SidekickTransport.expect()).supported()) {
+          return Err(new Error("Sidekick ACP requires a same-user POSIX Unix socket."));
+        }
+        const read = sidekick.reading;
+        if (!read.ok) {
+          return read;
+        }
+        if (read.value.active === undefined) {
+          const initial = yield* dispatch.send(
+            "Initialize this Sidekick for an ACP attachment. Reply briefly in an Output region " +
+              "that you are ready, without submitting an entry or changing the draft.",
+          );
+          if (!initial.ok) {
+            return initial;
+          }
+          const completed = yield* race([
+            initial.value.completion,
+            (function* (): Operation<undefined> {
+              yield* shutdown.operation;
+              return undefined;
+            })(),
+          ]);
+          if (completed === undefined) {
+            return Ok({ location: exitLocation(state), refusal: undefined });
+          }
+          if (!completed.ok) {
+            return completed;
+          }
+        }
+        if (ending) {
+          return Ok({ location: exitLocation(state), refusal: undefined });
+        }
         yield* useSidekickAttachment(options.sidekickAcp, {
           owner: sidekick,
           dispatch,
