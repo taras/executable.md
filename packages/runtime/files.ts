@@ -67,6 +67,7 @@
  */
 
 import type { Api } from "@effectionx/context-api";
+import type { FilesApi } from "./files-api.ts";
 import { createFilesApi } from "./files-api.ts";
 import type { Operation, Result } from "effection";
 
@@ -851,7 +852,7 @@ export function parseFileWriteSuccess(value: unknown): FileWriteSuccess | undefi
  * indistinguishable from an installed one, and the whole point of the boundary
  * is that a workflow run cannot silently touch the caller's filesystem.
  */
-const composedFiles = createFilesApi({
+const composedFiles: FilesApi = createFilesApi({
   // deno-lint-ignore require-yield
   *checkFilePath(_input: FilePathInput): Operation<Result<void>> {
     throw new FilesProviderUnavailableError();

@@ -1,6 +1,6 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { posix, win32 } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { parseWorkspaceMounts } from "../src/workspace-mounts.ts";
 
 describe("workspace mount table", () => {
@@ -53,21 +53,34 @@ describe("additional focused boundary 1", () => {
 
 import { runCli } from "@executablemd/test-support/launch";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { readdir } from "@effectionx/fs";
+import { exists } from "@effectionx/fs";
 describe("additional focused boundary 2", () => {
   it("refuses invalid mount declarations before a history or terminal exists", function* () {
     const home = yield* useTempDirectory("mount-grammar-");
-    const before = yield* readdir(home);
+    const data = yield* useTempDirectory("mount-grammar-data-");
     for (const value of ["no-target", "source:/", "source:/bad/../target"]) {
       const result = yield* runCli(["repl", "--mount", value], {
         cwd: home,
-        env: { HOME: home },
+        env: { HOME: home, XDG_DATA_HOME: data, LOCALAPPDATA: data },
         inheritEnv: false,
       }).join();
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain("--mount");
+      const parsed = parseWorkspaceMounts([value], home, posix);
+      expect(parsed.ok).toBe(false);
+      expect(result.stderr.trim().endsWith(parsed.ok ? "" : parsed.error.message)).toBe(true);
+      expect(result.stderr.includes(String.fromCharCode(27))).toBe(false);
+      expect(result.stdout).toBe("");
     }
-    expect(yield* readdir(home)).toEqual(before);
+    // Child runtimes may populate their own caches; application data stays absent.
+    for (const root of [
+      data,
+      join(home, ".local", "share"),
+      join(home, "Library", "Application Support"),
+      join(home, "AppData", "Local"),
+    ]) {
+      expect(yield* exists(join(root, "xmd"))).toBe(false);
+    }
+    expect(yield* exists(join(home, ".xmd"))).toBe(false);
   });
 });
 describe("additional focused boundary 3", () => {

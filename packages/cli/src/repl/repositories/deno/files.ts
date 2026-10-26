@@ -1,5 +1,5 @@
 import type { AwaitedMountPolicy } from "../../mount-files.ts";
-import { fileRecordingMiddleware, useEntryFileRecorder } from "../../file-recorder.ts";
+import { useEntryFileRecorder } from "../../file-recorder.ts";
 import type { MountFileEntry } from "../../workspace-mount-installation.ts";
 import type { WorkspaceMountTable } from "../../../workspace-mounts.ts";
 import type { AuthoredFileOperation } from "@executablemd/core/host";
@@ -50,8 +50,6 @@ import type { Operation, Result } from "effection";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
 import { until } from "effection";
-import type { FilesHandler } from "@executablemd/runtime";
-import type { Around } from "@effectionx/context-api";
 import {
   localRecordName,
   recordedLocalOperation,
@@ -108,16 +106,6 @@ export interface ReplLocalRecorder {
    * a path a later `<Dir>` sibling renders at.
    */
   placements(): readonly ReplManagedPlacement[];
-}
-
-/** The middleware that records this entry's authored mutations. */
-export function replFileMiddleware(
-  recorder: ReplLocalRecorder,
-  workspace?: string,
-): Partial<Around<FilesHandler>> {
-  return fileRecordingMiddleware((operation, request, perform) =>
-    routed(recorder, operation, request, perform, workspace),
-  );
 }
 
 /**

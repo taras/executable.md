@@ -9,7 +9,6 @@ import type { EntryFileCalls } from "./file-recorder.ts";
 import { createMountPolicy } from "./mount-files.ts";
 import type { AwaitedMountPolicy } from "./mount-files.ts";
 import type { ReplLocalValue } from "./repositories/records.ts";
-import { MountRecordError } from "./mount-records.ts";
 
 export interface MountFileEntry {
   readonly files: EntryFileCalls;
@@ -24,13 +23,12 @@ export function workspaceMountInstallation(
   return {
     admissions: [
       function* (events: readonly DurableEvent[]) {
-        if (entry === undefined) {
-          throw new MountRecordError();
-        }
-        if (access === undefined) {
+        if (access === undefined || entry === undefined) {
           yield* admitReplRepositoryHistory(events);
         }
-        yield* entry.policy.admit(events);
+        if (entry !== undefined) {
+          yield* entry.policy.admit(events);
+        }
       },
     ],
     *filesystem(deliver) {

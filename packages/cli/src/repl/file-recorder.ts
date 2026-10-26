@@ -81,9 +81,6 @@ function recordingBody(route: FileRecordingRoute) {
     },
   };
 }
-export function fileRecordingMiddleware(route: FileRecordingRoute): Partial<Around<FilesHandler>> {
-  return recordingBody(route).boundary();
-}
 export function* useEntryFileRecorder(route: FileRecordingRoute): Operation<EntryFileCalls> {
   const body = recordingBody(route);
   const handle = yield* registerFileRecorder(body.boundary());

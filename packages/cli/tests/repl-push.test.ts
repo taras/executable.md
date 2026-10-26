@@ -33,7 +33,9 @@ import { runGit } from "./support/fixture-git.ts";
 import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
 import { replRepositoryInstallation } from "../src/repl/repositories/deno/provider.ts";
 import { REPL_REPOSITORY_PUSH_REQUEST } from "../src/repl/repositories/push-records.ts";
-import { GIT_HOST_EFFECT } from "@executablemd/git";
+import { MOUNT_FILE } from "../src/repl/mount-records.ts";
+import { PULL_REQUEST_READ } from "@executablemd/git/deno";
+import { ISSUE_EFFECT, GIT_HOST_EFFECT } from "@executablemd/git";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { selectReplEntryHost } from "../src/deno-repositories.ts";
 import { assembleReplProfile } from "../src/repl-profile.ts";
@@ -449,11 +451,41 @@ describe("how a REPL entry gets its publication capability", () => {
       "PullRequest.Comments",
       "PullRequest.Reviews",
     ]);
-    // Three admissions: the Issue history, the one walk that admits this
-    // entry's saved Push and pull-request requests beside their outcomes, and
-    // the retained reads, which are named by a question rather than paired with
-    // an outcome.
-    expect((built.admissions ?? []).length).toBe(3);
+    expect(typeof built.filesystem).toBe("function");
+    const admissions = built.admissions ?? [];
+    for (const admit of admissions) {
+      yield* admit([]);
+    }
+    const owners = new Set<number>();
+    const records: readonly (readonly [string, string])[] = [
+      [ISSUE_EFFECT, "ReplIssueHistoryError"],
+      [REPL_REPOSITORY_PUSH_REQUEST, "ReplPushHistoryError"],
+      [PULL_REQUEST_READ, "ReplPullRequestReadHistoryError"],
+      [MOUNT_FILE, "MountRecordError"],
+      ["repl_mount_file/v999", "MountRecordError"],
+    ];
+    for (const [type, errorName] of records) {
+      const event: DurableEvent = {
+        type: "yield",
+        coroutineId: "root",
+        description: { type, name: "malformed" },
+        result: { status: "ok", value: null },
+      };
+      const refusals: number[] = [];
+      for (const [index, admit] of admissions.entries()) {
+        try {
+          yield* admit([event]);
+        } catch (error) {
+          expect(error instanceof Error && error.name).toBe(errorName);
+          refusals.push(index);
+        }
+      }
+      expect(refusals).toHaveLength(1);
+      for (const index of refusals) {
+        owners.add(index);
+      }
+    }
+    expect(owners.size).toBe(admissions.length);
     expect(yield* nothingUnder(fixture.managed)).toBe(true);
   });
 });
