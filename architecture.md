@@ -8666,9 +8666,10 @@ it or release its reservation. Exact-handle Stop joins producer cleanup before
 release, and an old handle cannot stop a successor. Entry work remains owned by
 ReplSession.
 
-Message records retain an optional opaque ID and UI/attachment origin beside the
-legacy numeric `turn`. The reference is published only after the message append
-is acknowledged. Legacy records are read without rewriting or inventing IDs.
+Every message record carries an opaque ID and a UI/attachment origin beside the
+conversation-scoped numeric `turn`, and a record missing either is unreadable
+rather than assumed. The reference is published only after the message append
+is acknowledged.
 ACP-origin acknowledgement clears neither composer nor draft takeover. The live
 root indexes established IDs for passive observation; that index supplies no
 restart, resend or provider-acceptance authority. An earlier answer followed by
@@ -8842,7 +8843,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 | background automation | work designed to proceed without ongoing user or agent attention, with its persistence and recovery guarantees supplied by the workflow host |
 | REPL | the foreground interactive environment for experimenting with and testing components; replay restores recorded execution state, while the user or agent handles differences between that state and the live environment |
 | REPL history | the immutable ordered execution records the REPL reads from the durable journal and projects into `ReplModel`; the History surface presents this read model and is not itself a journal [Reference](#the-private-repl-composition-kernel). |
-| legacy message ID | the number Sidekick retains to identify a saved person message within its conversation; fixed once saved, possibly noncontiguous, and independent of the turn numbers recorded by Core. The conversation and message ID together form its lookup key |
+| message ID | the opaque identity Sidekick retains for a saved person message, written before its turn and never rewritten. The conversation and message ID together form its lookup key, and the conversation-scoped numeric `turn` beside it identifies no turn |
 | turn | one request to an agent, together with the response or failure from that request |
 | middleware | applied by the lexical structure, used by runtime execution [Reference](#two-layers). |
 | workflow run | a workflow being carried out with its progress and outcome recorded durably; document executions perform its work, while ongoing effects remain scoped to the document execution in which they run [Reference](#workflow-runs). |

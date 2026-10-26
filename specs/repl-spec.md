@@ -2535,10 +2535,10 @@ message append, provider turn or entry. The returned handle observes this exact
 exchange. Dropping observation leaves the root-owned producer and reservation
 intact; cancellation through an old completed handle reaches no later exchange.
 
-New saved messages carry an opaque public ID and their origin while retaining
-the existing conversation-scoped numeric `turn`. A public message reference binds
-execution, conversation and the acknowledged saved ID. Old records retain their
-original shape and have no invented follow ID. External-origin messages preserve
+Every saved message carries an opaque public ID and its origin beside the
+conversation-scoped numeric `turn`, and a record missing either is unreadable
+rather than assumed. A public message reference binds execution, conversation
+and the acknowledged saved ID. External-origin messages preserve
 unsent human composer text and held draft ownership; only a UI acknowledgement
 clears its exact UI revision. External attribution appears in the existing chat.
 Passive observation exposes current public state and subsequent changes without

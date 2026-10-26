@@ -677,7 +677,9 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
       throw new Error("Failed follow-up must retain its partial result");
     }
     const partial = answered.error.partial;
-    if (partial === undefined) { throw new Error("Earlier evaluated response was lost"); }
+    if (partial === undefined) {
+      throw new Error("Earlier evaluated response was lost");
+    }
     expect(partial.failure).not.toBe(undefined);
     // The candidate is no longer what is being shown: the evaluated reply below
     // is, and two accounts of one response would be two items for one thing.

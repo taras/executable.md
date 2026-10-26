@@ -2287,7 +2287,7 @@ export function sidekickChatRows(
         conversation: item.conversation,
         turn: item.turn,
         kind: item.kind,
-        ...(item.kind === "person" && item.origin.kind !== "legacy" ? { origin: item.origin } : {}),
+        ...(item.kind === "person" ? { origin: item.origin } : {}),
         text: item.text,
         hasOutput: item.kind === "reply" ? item.hasOutput : false,
         // The reply's own retained failure, carried through rather than

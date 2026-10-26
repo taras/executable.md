@@ -159,8 +159,10 @@ function lastVerified(
 export type SidekickChatItem =
   | {
       readonly kind: "person";
-      readonly id?: string;
-      readonly origin: import("./history.ts").MessageOrigin | { readonly kind: "legacy" };
+      /** The saved message's own opaque ID, as the record holds it. */
+      readonly id: string;
+      /** Which surface sent it: this host's own UI, or a named live attachment. */
+      readonly origin: import("./history.ts").MessageOrigin;
       readonly conversation: string;
       /**
        * The retained message ID, independent of saved turn numbering.
@@ -1026,8 +1028,8 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
         chatAt.push(index);
         chat.push({
           kind: "person",
-          ...(record.id === undefined ? {} : { id: record.id }),
-          origin: record.origin ?? { kind: "legacy" },
+          id: record.id,
+          origin: record.origin,
           conversation: record.conversation,
           // Its own ID, and the saved turn its own request became — which
           // is unknown when that request's records hold no saved turn.

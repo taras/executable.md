@@ -278,7 +278,9 @@ export function* useHarness(
     draft: () => state.draft,
     // deno-lint-ignore require-yield
     *acknowledge(): Operation<void> {
-      if (extra.acknowledge !== undefined) { yield* extra.acknowledge(); }
+      if (extra.acknowledge !== undefined) {
+        yield* extra.acknowledge();
+      }
       // Nothing to apply: these rows own the state directly rather than through
       // a loop, so a saved message is acknowledged the moment it is saved.
     },

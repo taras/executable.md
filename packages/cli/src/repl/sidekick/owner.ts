@@ -122,7 +122,10 @@ import type { PairedChatStorage } from "./repository.ts";
 
 /** Why one explicit message could not be taken, or could not finish. */
 export class SidekickOwnerError extends Error {
-  constructor(message: string, readonly partial?: SidekickTurn) {
+  constructor(
+    message: string,
+    readonly partial?: SidekickTurn,
+  ) {
     super(message);
     this.name = "SidekickOwnerError";
   }
@@ -1089,7 +1092,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       return Ok({ id, handle: opened.value });
     }
 
-    function* message(text: string, options: SidekickMessageOptions = { origin: { kind: "ui" } }): Operation<Result<SidekickTurn>> {
+    function* message(
+      text: string,
+      options: SidekickMessageOptions = { origin: { kind: "ui" } },
+    ): Operation<Result<SidekickTurn>> {
       if (busy) {
         return Err(
           new SidekickOwnerError(
@@ -1130,7 +1136,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       working = held;
       try {
         const result = yield* answer.operation;
-        if (result.ok) { yield* task; }
+        if (result.ok) {
+          yield* task;
+        }
         return result;
       } finally {
         // Only if this cycle is still the one in flight. Stop releases the
@@ -1418,7 +1426,11 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       return settled.ok ? Ok(undefined) : settled;
     }
 
-    function* cycle(text: string, revision: number, options: SidekickMessageOptions): Operation<Result<SidekickTurn>> {
+    function* cycle(
+      text: string,
+      revision: number,
+      options: SidekickMessageOptions,
+    ): Operation<Result<SidekickTurn>> {
       const known = history();
       if (!known.ok) {
         return known;
@@ -1457,11 +1469,20 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       while (true) {
         const responded: Result<Responded> = yield* respond(paired, conversation, handle, sending);
         if (!responded.ok) {
-          return last === undefined ? responded : Err(new SidekickOwnerError(responded.error.message, last));
+          return last === undefined
+            ? responded
+            : Err(new SidekickOwnerError(responded.error.message, last));
         }
         const settled: SidekickTurn = responded.value.held;
         if (!responded.value.answered) {
-          return last === undefined ? Ok(settled) : Err(new SidekickOwnerError(settled.failure ?? "The follow-up did not establish a completed response.", last));
+          return last === undefined
+            ? Ok(settled)
+            : Err(
+                new SidekickOwnerError(
+                  settled.failure ?? "The follow-up did not establish a completed response.",
+                  last,
+                ),
+              );
         }
         last = settled;
         if (responded.value.next === undefined) {

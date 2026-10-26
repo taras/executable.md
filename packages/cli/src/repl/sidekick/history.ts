@@ -214,16 +214,20 @@ export interface ReferenceRecord {
   readonly versions: Readonly<Record<string, string>>;
 }
 
-export type MessageOrigin = { readonly kind: "ui" } | { readonly kind: "acp"; readonly attachment: string };
+export type MessageOrigin =
+  | { readonly kind: "ui" }
+  | { readonly kind: "acp"; readonly attachment: string };
 
 /** Exactly what a person sent, and which chat revision it cleared. */
 export interface MessageRecord {
-  readonly id?: string;
-  readonly origin?: MessageOrigin;
   readonly kind: "message";
+  /** This host's opaque identity for the saved message, written before its turn. */
+  readonly id: string;
+  /** Which surface sent it: this host's own UI, or a named live attachment. */
+  readonly origin: MessageOrigin;
   readonly conversation: string;
   /**
-   * This message's ID — it does not identify a turn.
+   * This message's conversation-scoped number — it does not identify a turn.
    *
    * This host's own numbering, written before the turn and never rewritten
    * afterwards, scoped to the conversation and not promised to be contiguous.
@@ -605,20 +609,22 @@ function reference(value: Record<string, unknown>): ReferenceRecord | undefined 
 }
 
 function message(value: Record<string, unknown>): MessageRecord | undefined {
-  if (!exactly(value, ["kind", "conversation", "turn", "revision", "text", ...(value.id === undefined ? [] : ["id"]), ...(value.origin === undefined ? [] : ["origin"])])) {
+  if (!exactly(value, ["kind", "id", "origin", "conversation", "turn", "revision", "text"])) {
     return undefined;
   }
+  const id = str(value.id);
+  const origin = messageOrigin(value.origin);
   const held = str(value.conversation);
   const turn = whole(value.turn);
   const revision = whole(value.revision);
   const text = str(value.text);
+  if (id === undefined || id.length === 0 || origin === undefined) {
+    return undefined;
+  }
   if (held === undefined || turn === undefined || revision === undefined || text === undefined) {
     return undefined;
   }
-  const id = value.id === undefined ? undefined : str(value.id);
-  const origin = value.origin === undefined ? undefined : messageOrigin(value.origin);
-  if (value.id !== undefined && (id === undefined || id.length === 0) || value.origin !== undefined && origin === undefined) { return undefined; }
-  return { kind: "message", conversation: held, turn, revision, text, ...(id === undefined ? {} : { id }), ...(origin === undefined ? {} : { origin }) };
+  return { kind: "message", id, origin, conversation: held, turn, revision, text };
 }
 
 function eventRecord(value: Record<string, unknown>): EventRecord | undefined {
@@ -1469,10 +1475,22 @@ export function* upgradeExecution(
 }
 
 function messageOrigin(value: unknown): MessageOrigin | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) { return undefined; }
-  if (!("kind" in value)) { return undefined; }
-  if (value.kind === "ui" && Object.keys(value).length === 1) { return { kind: "ui" }; }
-  if (value.kind === "acp" && Object.keys(value).length === 2 && "attachment" in value && typeof value.attachment === "string" && value.attachment.length > 0) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  if (!("kind" in value)) {
+    return undefined;
+  }
+  if (value.kind === "ui" && Object.keys(value).length === 1) {
+    return { kind: "ui" };
+  }
+  if (
+    value.kind === "acp" &&
+    Object.keys(value).length === 2 &&
+    "attachment" in value &&
+    typeof value.attachment === "string" &&
+    value.attachment.length > 0
+  ) {
     return { kind: "acp", attachment: value.attachment };
   }
   return undefined;
