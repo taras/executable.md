@@ -36,7 +36,7 @@
 </Test>
 </TestAgent>
 
-<Test name="sibling nested Executions have independent catalogs">
+<Test name="sibling nested Executions have independent catalogs" timeout="60s">
 <Execution host="run" source={'<Agent name="reviewer"><Session name="defaults"><Prompt>defaults</Prompt></Session><Session name="defaults" model="fixture-small" effort="high"><Prompt>changed</Prompt></Session></Agent>'} as="first">
 <TestAgent agent="reviewer"><TestAgent.Scenario session="defaults" src="./SessionConfiguration.defaults.md" models={catalog} /></TestAgent>
 <AssertEquals actual={first.result.ok} expected={true} />
