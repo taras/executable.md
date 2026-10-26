@@ -806,6 +806,9 @@ describe("REPL command: what runs before the host is reached", () => {
       ["repl", "--include", ""],
       ["repl", "--include", "--deny-all"],
       ["repl", "xmd://nope"],
+      ["repl", "--mount", "no-target"],
+      ["repl", "--mount", "source:/"],
+      ["repl", "--mount", "source:/bad/../target"],
     ]) {
       const ran = yield* invoke(args);
       expect(ran.status).toBe(1);

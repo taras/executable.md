@@ -54,21 +54,42 @@ describe("additional focused boundary 1", () => {
 import { runCli } from "@executablemd/test-support/launch";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { exists } from "@effectionx/fs";
+function withoutDiagnosticStyles(text: string): string {
+  return text.replace(/\u001b\[[0-9;]*m/g, "");
+}
+
 describe("additional focused boundary 2", () => {
+  it("allows diagnostic styling while preserving terminal-control escapes", function* () {
+    const escape = String.fromCharCode(27);
+    expect(withoutDiagnosticStyles(`${escape}[0m${escape}[32mDownload${escape}[0m package`)).toBe(
+      "Download package",
+    );
+    for (const control of ["[?1049h", "[?25l", "[2J", "[H", "]0;title\u0007"]) {
+      expect(withoutDiagnosticStyles(escape + control).includes(escape)).toBe(true);
+    }
+  });
   it("refuses invalid mount declarations before a history or terminal exists", function* () {
     const home = yield* useTempDirectory("mount-grammar-");
     const data = yield* useTempDirectory("mount-grammar-data-");
     for (const value of ["no-target", "source:/", "source:/bad/../target"]) {
       const result = yield* runCli(["repl", "--mount", value], {
         cwd: home,
-        env: { HOME: home, XDG_DATA_HOME: data, LOCALAPPDATA: data },
+        env: {
+          HOME: home,
+          XDG_DATA_HOME: data,
+          LOCALAPPDATA: data,
+          CI: "1",
+          FORCE_COLOR: "1",
+          TERM: "xterm-256color",
+        },
         inheritEnv: false,
       }).join();
       expect(result.code).toBe(1);
       const parsed = parseWorkspaceMounts([value], home, posix);
       expect(parsed.ok).toBe(false);
-      expect(result.stderr.trim().endsWith(parsed.ok ? "" : parsed.error.message)).toBe(true);
-      expect(result.stderr.includes(String.fromCharCode(27))).toBe(false);
+      const diagnostic = withoutDiagnosticStyles(result.stderr);
+      expect(diagnostic.trim().endsWith(parsed.ok ? "" : parsed.error.message)).toBe(true);
+      expect(diagnostic.includes(String.fromCharCode(27))).toBe(false);
       expect(result.stdout).toBe("");
     }
     // Child runtimes may populate their own caches; application data stays absent.
