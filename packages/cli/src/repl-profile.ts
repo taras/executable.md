@@ -1,3 +1,4 @@
+import type { WorkspaceMountTable } from "./workspace-mounts.ts";
 /**
  * Capture command selections once, then finalize one execution's component paths.
  *
@@ -55,6 +56,7 @@ export interface ReplProfileSeams {
  * parameter: a caller states what it knows and leaves out the rest.
  */
 export interface ReplProfileFacts extends ReplProfileSeams {
+  readonly mounts?: WorkspaceMountTable;
   readonly testingHarness?: (includes: readonly string[]) => Operation<ExecutionInstallation>;
   readonly includes?: readonly string[];
   /**
@@ -97,6 +99,7 @@ export interface ReplProfileAssembly {
 
 /** One finalized execution profile, shared by validation, descriptions and entries. */
 export interface ReplExecutionProfile {
+  readonly mounts?: WorkspaceMountTable;
   readonly testing?: ReplTesting;
   readonly projectCwd?: string;
   /** Where a declared name is looked for, outermost first. */
@@ -202,6 +205,7 @@ export function* assembleReplProfile(
   facts: ReplProfileFacts = {},
 ): Operation<ReplProfileAssembly> {
   const projectCwd = yield* cwd();
+  const mounts = facts.mounts;
   const configuredIncludes = Object.freeze(
     (facts.includes ?? REPL_INCLUDES).map((path) => resolve(projectCwd, path)),
   );
@@ -258,6 +262,7 @@ export function* assembleReplProfile(
       });
 
       const profile = Object.freeze({
+        mounts,
         includes,
         projectCwd,
         vocabulary: entryVocabulary(includes, plugins),

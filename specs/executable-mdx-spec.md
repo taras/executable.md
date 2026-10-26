@@ -1022,6 +1022,9 @@ block starts no process.
 
 An `exec` block is a foreground child process.
 
+A REPL workspace mount delivers the actual scoped cwd to process start. It
+rewrites no argv and supplies no subprocess sandbox or new process retention.
+
 **The boundary.** A command's output passes through several hands:
 
 ```
@@ -8635,6 +8638,12 @@ it was. Which class is asked for is the form — reading asks `read`, writing as
 `write` — and the pure path check a write performs before its children asks
 nothing at all.
 
+The REPL's explicit workspace mounts deliver actual SOURCE cwd through this same
+provider boundary. Selected mapped reads retain acknowledged values in the same
+unfinished entry, including across source reassignment or pair omission. Genuinely
+new reads use current placement and current permission; a new entry reads live.
+Writes and deletions gain no mapped retention or containment exemption.
+
 Because the path is contextual, `<File>` composes with `<TempDir>` (§6.11)
 without either component knowing about the other:
 
@@ -9262,6 +9271,23 @@ selects no repository, which is what lets the self-closing `<Worktree as="…">`
 spelling compose with it: the Repository a later Git element acts on is still
 the enclosing one.
 
+#### REPL workspace mounts
+
+A REPL invoked with `--mount SOURCE:TARGET` interprets an absolute document Dir
+destination under TARGET as SOURCE plus its document suffix. Its private authored
+and actual directory scopes travel together. Ensure precedes binding and content;
+a refusal installs neither. A new nested `..` under `/reference` mapped from
+`/work/manuals/docs` ensures and enters authored and actual `/`, then restores
+the enclosing pair on success, child failure or cancellation. The written operand
+is preserved separately from the effective absolute request. Ordinary hosts retain
+their relative-escape refusal, and workflow paths remain logical Workspace paths.
+
+A mapped ensure gains no external retention. Where existing coverage retains a
+prospective association, its own validated acknowledged Unit can permit
+current-placement content after source reassignment without current ensure I/O or
+an existence assertion. Its own refusal still stops content; an unacknowledged
+operation supplies no saved Unit. Restoration does not roll directory effects back.
+
 #### Ownership, and what restoring does not do
 
 The enclosing working directory is restored when the invocation ends — on
@@ -9307,6 +9333,9 @@ contextual `Env.cwd` a set of patterns selects:
 The search is a `read`, asked of `Permissions` by the provider before it touches
 the directory it would walk (§1.2); a refusal traverses nothing and reports the
 ordinary sanitized sentence.
+
+A REPL mount changes the actual cwd delivered here, without rewriting either
+pattern list or adding retention, merged roots or outward symlink traversal.
 
 `include` is required and holds at least one pattern. `exclude` is optional and
 defaults to empty. Both are lists of glob patterns, and both are evaluated

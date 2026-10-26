@@ -1,3 +1,4 @@
+import type { FilesystemExpansion } from "./filesystem-placement.ts";
 /**
  * Evaluating XMD an Agent generated, under a constrained allowlist
  * (specs/workflow-workspace-spec.md §8.4).
@@ -708,6 +709,7 @@ interface RootRendering {
  * hands it over across one Core-private call and keeps it.
  */
 export interface GeneratedRootBinding {
+  readonly filesystem?: FilesystemExpansion;
   /**
    * The execution's captured selection, resolved for the classes one root asks
    * for.
@@ -736,6 +738,7 @@ export interface GeneratedRootBinding {
  * execution.
  */
 interface ResolvedRoot {
+  readonly filesystem?: FilesystemExpansion;
   readonly describing: readonly CapturedEntry[];
   readonly componentRouting: ComponentRouting;
   readonly reference: SyntaxReference | undefined;
@@ -2324,6 +2327,7 @@ function expand(
    * its own owner outside the expansion.
    */
   owner: Segment[] | undefined,
+  filesystem?: FilesystemExpansion,
 ): Operation<string> {
   return scoped(function* () {
     yield* SourceOwner.set(undefined);
@@ -2415,6 +2419,7 @@ function expand(
         environment,
         undefined,
         undefined,
+        filesystem,
       );
       return renderSegments(owner ?? []);
     }
@@ -2436,6 +2441,7 @@ function expand(
       // A generated fragment is the engine's own text, so it owns no value body
       // and a <Return> written into it satisfies no declaration.
       undefined,
+      filesystem,
     );
     return renderSegments(expanded);
   });
@@ -2463,6 +2469,7 @@ export function* evaluateProtectedGeneratedXmd(
   request: GeneratedFragmentRequest,
   componentRouting: ComponentRouting | undefined,
   syntax: SyntaxReference | undefined,
+  filesystem?: FilesystemExpansion,
 ): Operation<string> {
   return yield* evaluateGenerated(
     request,
@@ -2471,6 +2478,8 @@ export function* evaluateProtectedGeneratedXmd(
     componentRouting,
     syntax,
     undefined,
+    undefined,
+    filesystem,
   );
 }
 
@@ -2492,6 +2501,7 @@ function* evaluateGenerated(
   rendering: RootRendering | undefined,
   /** What this root was resolved to, for a root evaluation. */
   resolved?: ResolvedRoot,
+  filesystem?: FilesystemExpansion,
 ): Operation<string> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
@@ -2584,6 +2594,7 @@ function* evaluateGenerated(
     narrowed,
     reference,
     rendering?.owner,
+    filesystem,
   );
 }
 
@@ -2707,6 +2718,7 @@ function* evaluateRoot(
           reference: binding.reference,
           live: binding.live,
         },
+        binding.filesystem,
       );
     });
     return Ok({ output, hasOutput });

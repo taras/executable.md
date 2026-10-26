@@ -1,3 +1,5 @@
+import { workspaceMountInstallation } from "./workspace-mount-installation.ts";
+import type { WorkspaceMountTable } from "../workspace-mounts.ts";
 /**
  * One execution, running or reconstructed, and what the application reads.
  *
@@ -511,6 +513,7 @@ export interface ReplSessionOptions {
   readonly execution: ReplExecution;
   /** Where components are looked for. */
   readonly includes?: readonly string[];
+  readonly mounts?: WorkspaceMountTable;
   /** What this host installs around the document. */
   readonly installations?: readonly ExecutionInstallation[];
   /**
@@ -1438,9 +1441,10 @@ function* start(
         // the entry rather than to a scope that has already closed.
         const owned =
           entryInstallation === undefined
-            ? []
+            ? [workspaceMountInstallation(options.mounts ?? [])]
             : [
                 yield* entryInstallation(entryOwner(execution.id, key), {
+                  mounts: options.mounts ?? [],
                   ...(options.projectCwd === undefined ? {} : { projectCwd: options.projectCwd }),
                   ...(workspace === true && options.workspace !== undefined
                     ? { workspace: options.workspace }

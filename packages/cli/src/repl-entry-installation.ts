@@ -1,3 +1,4 @@
+import type { WorkspaceMountTable } from "./workspace-mounts.ts";
 /**
  * The entry capability this host carries, as inert code.
  *
@@ -45,7 +46,11 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
  */
 export type ReplEntryInstallation = (
   owner: string,
-  placement?: { readonly projectCwd?: string; readonly workspace?: string },
+  placement?: {
+    readonly projectCwd?: string;
+    readonly workspace?: string;
+    readonly mounts?: WorkspaceMountTable;
+  },
 ) => Operation<ExecutionInstallation>;
 
 /** The factory this host runs REPL entries with, or absence. */

@@ -22,7 +22,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, Err, resource, scoped, until } from "effection";
+import { ensure, Err, Ok, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { exec } from "@effectionx/process";
 import { rm } from "@effectionx/fs";
@@ -35,6 +35,7 @@ import {
   parseFilesFailure,
   parseFilesFatal,
 } from "@executablemd/runtime";
+import { registerFileRecorder, assembleFileCall } from "@executablemd/runtime/files-host";
 import { InvocationTeardownError } from "../src/invocation.ts";
 import { deleteFile } from "../src/files.ts";
 import { DocumentationError, fatalCause, filesFatalFailure } from "../src/errors.ts";
@@ -49,6 +50,7 @@ const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
 
 /** What a separately loaded copy of the module exposes to this test. */
 interface LoadedCopy {
+  Files: typeof Files;
   FilesProviderUnavailableError: new () => Error;
   FilesInvariantError: new (category: string) => Error;
   parseFilesFatal: (error: unknown) => unknown;
@@ -61,6 +63,9 @@ function isLoadedCopy(value: unknown): value is LoadedCopy {
   }
   const module: Record<string, unknown> = Object.fromEntries(Object.entries(value));
   return (
+    typeof module.Files === "object" &&
+    module.Files !== null &&
+    typeof Reflect.get(module.Files, "around") === "function" &&
     typeof module.FilesProviderUnavailableError === "function" &&
     typeof module.FilesInvariantError === "function" &&
     typeof module.parseFilesFatal === "function" &&
@@ -109,6 +114,41 @@ function useSeparateCopy(): Operation<LoadedCopy> {
 }
 
 describe("Tier LC — a separately loaded runtime copy", () => {
+  it("LC4: a foreign Files layer composes inline with the exact local recorder", function* () {
+    const copy = yield* useSeparateCopy();
+    const seen: string[] = [];
+    const boundary = {
+      *readTextFile(
+        [input]: Parameters<typeof Files.operations.readTextFile>,
+        next: typeof Files.operations.readTextFile,
+      ) {
+        seen.push("boundary");
+        return yield* next(input);
+      },
+    };
+    const handle = yield* registerFileRecorder(boundary);
+    yield* copy.Files.around({
+      *readTextFile([input], next) {
+        seen.push("foreign");
+        const result = yield* next({ ...input, path: "changed" });
+        return result.ok ? Ok(`outer:${result.value}`) : result;
+      },
+    });
+    yield* Files.around(
+      {
+        *readTextFile([input]) {
+          seen.push(input.path);
+          return Ok("terminal");
+        },
+      },
+      { at: "min" },
+    );
+    expect(yield* assembleFileCall(handle, "readTextFile")({ cwd: "/", path: "original" })).toEqual(
+      Ok("outer:terminal"),
+    );
+    expect(seen).toEqual(["foreign", "changed"]);
+  });
+
   it("LC1: a failure built by another copy is discovered as fatal, by identity", function* () {
     const copy = yield* useSeparateCopy();
     const foreign = new copy.FilesProviderUnavailableError();

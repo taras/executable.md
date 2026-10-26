@@ -427,3 +427,13 @@ export type { AnswersState, DeclarationScanner } from "./src/declaration-scan.ts
  * confers no execution authority.
  */
 export { useSyntax } from "./src/use-syntax.ts";
+
+export type {
+  AuthoredFileOperation,
+  DirectoryFrame,
+  DirectoryPair,
+  FilesystemHost,
+  FilesystemInstaller,
+  PreparedDirectory,
+} from "./src/filesystem-host.ts";
+export { admitDocumentHostPath, authoredOperation } from "./src/filesystem-placement.ts";

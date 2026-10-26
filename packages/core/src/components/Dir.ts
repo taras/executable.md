@@ -74,7 +74,19 @@ function reason(value: string): string {
   }
 }
 
-function* Dir(props: Record<string, Json>): Operation<string> {
+export function* dirBody(
+  props: Record<string, Json>,
+  site?: {
+    prepare(
+      enclosing: string,
+      path: string,
+    ): import("effection").Result<import("../filesystem-host.ts").PreparedDirectory>;
+    ensure(
+      input: import("@executablemd/runtime").FilePathInput,
+    ): Operation<import("effection").Result<void>>;
+    project(frame: import("../filesystem-host.ts").DirectoryFrame): Operation<string>;
+  },
+): Operation<string> {
   const path = props.path;
   if (typeof path !== "string" || path === "") {
     throw new DirInvocationError("<Dir> needs a non-empty path.");
@@ -86,9 +98,15 @@ function* Dir(props: Record<string, Json>): Operation<string> {
   // therefore means that Repository's `nested`, and a `<Dir>` that meant the
   // Workspace root would be the surprising one.
   const enclosing = yield* cwd();
-  const target = path.startsWith("/")
-    ? path
-    : `${enclosing.endsWith("/") ? enclosing.slice(0, -1) : enclosing}/${path}`;
+  const prepared = site?.prepare(enclosing, path);
+  if (prepared !== undefined && !prepared.ok) {
+    throw new DirInvocationError(prepared.error.message);
+  }
+  const target = prepared?.ok
+    ? prepared.value.candidate.actualDirectory
+    : path.startsWith("/")
+      ? path
+      : `${enclosing.endsWith("/") ? enclosing.slice(0, -1) : enclosing}/${path}`;
 
   // Before the working directory is installed and before any content expands.
   // A document that names a directory has asked for it to exist, and content
@@ -99,7 +117,8 @@ function* Dir(props: Record<string, Json>): Operation<string> {
   // — the caller's own or a workflow run's logical one — is the installed
   // provider's business, and a component that asked would be a component that
   // behaves differently under the two profiles.
-  const refusal = yield* ensureDirectory({ cwd: enclosing, path });
+  const request = prepared?.ok ? prepared.value.request : { cwd: enclosing, path };
+  const refusal = yield* ensureDirectory(request, site?.ensure(request));
   if (!refusal.ok) {
     const failure = parseFilesFailure(refusal.error);
     throw new DirInvocationError(
@@ -118,7 +137,9 @@ function* Dir(props: Record<string, Json>): Operation<string> {
     },
     { at: "min" },
   );
-  return yield* content();
+  return prepared?.ok && site !== undefined
+    ? yield* site.project(prepared.value.candidate)
+    : yield* content();
 }
 
 /**
@@ -136,7 +157,7 @@ function* Dir(props: Record<string, Json>): Operation<string> {
  */
 export const form: FormDeclaration = {
   forms: "paired",
-  fn: Dir,
+  fn: (props) => dirBody(props),
   refuse: (props: Record<string, Json>, written: InvocationForm | undefined) =>
     new DirInvocationError(
       written === "self-closing"

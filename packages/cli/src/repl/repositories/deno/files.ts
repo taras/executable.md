@@ -1,3 +1,9 @@
+import type { AwaitedMountPolicy } from "../../mount-files.ts";
+import { useEntryFileRecorder } from "../../file-recorder.ts";
+import type { MountFileEntry } from "../../workspace-mount-installation.ts";
+import type { WorkspaceMountTable } from "../../../workspace-mounts.ts";
+import type { AuthoredFileOperation } from "@executablemd/core/host";
+import { createMountPolicy } from "../../mount-files.ts";
 /**
  * The file work one REPL entry records, and the work it simply performs.
  *
@@ -40,26 +46,10 @@
  * received request stays the operation's name.
  */
 
-import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
 import { until } from "effection";
-import {
-  FilesInvariantError,
-  fileWriteFailure,
-  filesFailure,
-  parseFilesFailure,
-  parseFileWriteFailure,
-  parseFileWriteSuccess,
-} from "@executablemd/runtime";
-import type {
-  FilesHandler,
-  FilesOperation,
-  FilesPhase,
-  FileWriteSuccess,
-} from "@executablemd/runtime";
-import type { Around } from "@effectionx/context-api";
 import {
   localRecordName,
   recordedLocalOperation,
@@ -118,66 +108,6 @@ export interface ReplLocalRecorder {
   placements(): readonly ReplManagedPlacement[];
 }
 
-/** The middleware that records this entry's authored mutations. */
-export function replFileMiddleware(
-  recorder: ReplLocalRecorder,
-  workspace?: string,
-): Partial<Around<FilesHandler>> {
-  return {
-    *readTextFile([input], next): Operation<Result<string>> {
-      const produced = yield* routed(
-        recorder,
-        "file-read",
-        { cwd: input.cwd, path: input.path },
-        function* () {
-          return yield* textOutcome(next(input));
-        },
-        workspace,
-      );
-      return produced.ok ? Ok(expectText(produced.value)) : produced;
-    },
-    *writeTextFile([input], next): Operation<Result<FileWriteSuccess>> {
-      const produced = yield* routed(
-        recorder,
-        "file-write",
-        { cwd: input.cwd, path: input.path, content: input.content },
-        function* () {
-          return yield* writeOutcome(next(input));
-        },
-        workspace,
-      );
-      return produced.ok ? Ok(expectWritten(produced.value)) : produced;
-    },
-    *deleteFile([input], next): Operation<Result<void>> {
-      const produced = yield* routed(
-        recorder,
-        "file-delete",
-        { cwd: input.cwd, path: input.path },
-        function* () {
-          return yield* unitOutcome(next(input), { operation: "delete", phase: "access" });
-        },
-        workspace,
-      );
-      return produced.ok ? Ok(undefined) : produced;
-    },
-    *ensureDirectory([input], next): Operation<Result<void>> {
-      const produced = yield* routed(
-        recorder,
-        "dir-ensure",
-        { cwd: input.cwd, path: input.path },
-        function* () {
-          return yield* unitOutcome(next(input), {
-            operation: "ensure-directory",
-            phase: "access",
-          });
-        },
-        workspace,
-      );
-      return produced.ok ? Ok(undefined) : produced;
-    },
-  };
-}
-
 /**
  * Answer this request from the journal, or route it and perform it live.
  *
@@ -193,15 +123,30 @@ function* routed(
   request: ReplLocalRequest,
   perform: () => Operation<Result<ReplLocalValue>>,
   workspace: string | undefined,
+  authored?: AuthoredFileOperation,
+  mounts?: AwaitedMountPolicy,
 ): Operation<Result<ReplLocalValue>> {
+  if (mounts !== undefined) {
+    yield* mounts.guard();
+  }
   const name = yield* localRecordName({ operation, request });
   if (yield* retainedSelectionAhead()) {
     yield* recorder.selection();
+  }
+  if (authored !== undefined && mounts !== undefined) {
+    const replay = yield* mounts.replay(authored, request);
+    if (replay !== undefined) {
+      return yield* replay;
+    }
   }
   if (yield* retainedResultAhead(name)) {
     return yield* recordedLocalOperation({ operation, request, perform });
   }
 
+  const retain = (coverage: import("../../mount-records.ts").MountCoverage) =>
+    authored === undefined || mounts === undefined
+      ? recordedLocalOperation({ operation, request, perform })
+      : mounts.record(authored, request, perform, coverage);
   const target = yield* targetOf(request);
   const managed = covering(recorder.placements(), target);
   if (managed !== undefined) {
@@ -209,7 +154,15 @@ function* routed(
     // answers is that one entry at a time owns this managed checkout, which an
     // observation inside it needs as much as a change does.
     yield* managed.own();
-    return yield* held(recorder, managed.commonDirectory, { operation, request, perform });
+    if (operation !== "file-read") {
+      yield* recorder.hold(managed.commonDirectory);
+    }
+    return yield* retain({
+      kind: "existing",
+      owner: "placement",
+      root: managed.checkoutRoot,
+      target,
+    });
   }
   const checkout = yield* recorder.selection();
   if (checkout === undefined || !inside(checkout.checkoutRoot, target)) {
@@ -221,35 +174,22 @@ function* routed(
           ? resolve(root, relative(lexical, target))
           : target;
       if (root === resolvedTarget || inside(root, resolvedTarget)) {
-        return yield* recordedLocalOperation({ operation, request, perform });
+        return yield* retain({ kind: "existing", owner: "session", root, target: resolvedTarget });
       }
     }
-    return yield* perform();
+    return authored !== undefined && mounts !== undefined
+      ? yield* mounts.record(authored, request, perform, { kind: "external-mapped-read" })
+      : yield* perform();
   }
-  return yield* held(recorder, checkout.commonDirectory, { operation, request, perform });
-}
-
-/**
- * Record this operation, holding the shared Git directory when it changes one.
- *
- * Only a mutation takes the lease. A read is retained like the rest, but the
- * lease is about one entry at a time *changing* a repository, and an
- * observation is not a change: a read that took it would refuse while somebody
- * else is working, and refuse them while it is only looking.
- */
-function* held(
-  recorder: ReplLocalRecorder,
-  commonDirectory: string,
-  operation: {
-    readonly operation: ReplLocalOperation;
-    readonly request: ReplLocalRequest;
-    perform(): Operation<Result<ReplLocalValue>>;
-  },
-): Operation<Result<ReplLocalValue>> {
-  if (operation.operation !== "file-read") {
-    yield* recorder.hold(commonDirectory);
+  if (operation !== "file-read") {
+    yield* recorder.hold(checkout.commonDirectory);
   }
-  return yield* recordedLocalOperation(operation);
+  return yield* retain({
+    kind: "existing",
+    owner: "checkout",
+    root: checkout.checkoutRoot,
+    target,
+  });
 }
 
 /**
@@ -326,210 +266,15 @@ function inside(checkoutRoot: string, target: string): boolean {
   return at !== "" && !at.startsWith("..") && !isAbsolute(at);
 }
 
-/**
- * The write outcome the composition answered with, normalized before it is kept.
- *
- * Canonical core validates this same value again on the way out, and it is the
- * authority: `packages/core/src/files.ts` decides what a settlement, a Unit
- * success and an unrecognized failure mean. The readers below are its readers,
- * because what arrives here is an arbitrary runtime value rather than the
- * `Result` the signature promises — a `Proxy` can refuse to be read — and a
- * wrapper that normalized differently would either record an outcome core is
- * about to refuse or erase the invalid data core detects it by.
- *
- * A write's report is the one outcome that says something about the world, so
- * both a malformed success and a malformed failure are fatal: a provider that
- * cannot describe what it did may not have done it.
- */
-function* writeOutcome(call: Operation<Result<unknown>>): Operation<Result<ReplLocalValue>> {
-  const produced: unknown = yield* call;
-  const settled = settlement(produced);
-  if (settled === undefined) {
-    throw new FilesInvariantError("protocol");
-  }
-  if (settled) {
-    const carried = read(produced, "value");
-    if (carried === undefined) {
-      throw new FilesInvariantError("protocol");
-    }
-    const success = parseFileWriteSuccess(carried.value);
-    if (success === undefined) {
-      throw new FilesInvariantError("protocol");
-    }
-    return Ok(success);
-  }
-  const reported = read(produced, "error");
-  if (reported === undefined) {
-    throw new FilesInvariantError("protocol");
-  }
-  const data = parseFileWriteFailure(reported.value);
-  if (data === undefined) {
-    throw new FilesInvariantError("protocol");
-  }
-  return Err(
-    fileWriteFailure({
-      phase: data.phase,
-      ...(data.reason === undefined ? {} : { reason: data.reason }),
-      ...(data.cleanup === undefined ? {} : { cleanup: data.cleanup }),
-    }),
+export function* useReplFileRecorder(
+  recorder: ReplLocalRecorder,
+  workspace: string | undefined,
+  mounts: WorkspaceMountTable,
+  directory: string,
+): Operation<MountFileEntry> {
+  const policy = yield* createMountPolicy(mounts, directory);
+  const files = yield* useEntryFileRecorder((operation, request, perform, authored) =>
+    routed(recorder, operation, request, perform, workspace, authored, policy),
   );
-}
-
-/**
- * The read outcome the composition answered with, normalized before it is kept.
- *
- * Core's rules for a payload-carrying non-write operation: a readable boolean
- * settlement, a `value` that is really a string, and — where it failed — the
- * generic ordinary refusal for failure data this version does not recognize,
- * because an unrecognized reason still described a failure and the document
- * carries on past it.
- */
-function* textOutcome(call: Operation<Result<string>>): Operation<Result<ReplLocalValue>> {
-  const produced: unknown = yield* call;
-  const settled = settlement(produced);
-  if (settled === undefined) {
-    throw new FilesInvariantError("protocol");
-  }
-  if (!settled) {
-    const reported = read(produced, "error");
-    if (reported === undefined) {
-      throw new FilesInvariantError("protocol");
-    }
-    const data = parseFilesFailure(reported.value);
-    if (data === undefined || data.operation !== "read") {
-      return Err(filesFailure({ operation: "read", phase: "access", reason: "operation-failed" }));
-    }
-    return Err(filesFailure({ operation: data.operation, phase: data.phase, reason: data.reason }));
-  }
-  const carried = read(produced, "value");
-  if (carried === undefined || typeof carried.value !== "string") {
-    throw new FilesInvariantError("protocol");
-  }
-  return Ok(carried.value);
-}
-
-/**
- * The outcome of the two operations that answer with nothing, normalized.
- *
- * Core's rules, kept exactly. A success carries no payload at all, so an
- * *absent* `value` is the ordinary answer; one that cannot be read, and one
- * that is present but is not `undefined`, are both provider-contract failures.
- *
- * A failure is where the two differ from a write, and the difference matters: an
- * `error` that reads fine but carries data this version does not recognize *did*
- * describe a failure, just not a known one, so it becomes the generic ordinary
- * refusal and the document carries on. Only an `error` that is absent or
- * unreadable is fatal.
- */
-function* unitOutcome(
-  call: Operation<Result<void>>,
-  contract: { readonly operation: FilesOperation; readonly phase: FilesPhase },
-): Operation<Result<ReplLocalValue>> {
-  const produced: unknown = yield* call;
-  const settled = settlement(produced);
-  if (settled === undefined) {
-    throw new FilesInvariantError("protocol");
-  }
-  if (!settled) {
-    const reported = read(produced, "error");
-    if (reported === undefined) {
-      throw new FilesInvariantError("protocol");
-    }
-    const data = parseFilesFailure(reported.value);
-    if (data === undefined || data.operation !== contract.operation) {
-      return Err(
-        filesFailure({
-          operation: contract.operation,
-          phase: contract.phase,
-          reason: "operation-failed",
-        }),
-      );
-    }
-    return Err(filesFailure({ operation: data.operation, phase: data.phase, reason: data.reason }));
-  }
-  const carried = present(produced, "value");
-  if (carried === undefined) {
-    throw new FilesInvariantError("protocol");
-  }
-  if (carried) {
-    // Present, so it has to be readable *and* be the absent payload. Asking
-    // only whether the value is `undefined` would let a member that refused to
-    // be read pass as one that read as nothing.
-    const value = read(produced, "value");
-    if (value === undefined || value.value !== undefined) {
-      throw new FilesInvariantError("protocol");
-    }
-  }
-  return Ok(undefined);
-}
-
-/**
- * Whether a member is there at all, or `undefined` when asking threw.
- *
- * Core's reader, because this boundary reads the same provider-controlled
- * values it does. Absence and unreadability are different answers and only one
- * of them is ever legitimate, and a `has` trap can refuse the question.
- */
-function present(target: unknown, name: string): boolean | undefined {
-  if (typeof target !== "object" || target === null) {
-    return undefined;
-  }
-  try {
-    return Reflect.has(target, name);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * A member of a value this code did not create, boxed so that an absent member
- * is distinguishable from one that could not be read.
- */
-function read(target: unknown, name: string): { readonly value: unknown } | undefined {
-  if (present(target, name) !== true) {
-    return undefined;
-  }
-  try {
-    return { value: Reflect.get(Object(target), name) };
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Whether this container said it succeeded, as a boolean it really carries.
- *
- * Truthiness is not the question: a provider whose `ok` is a string has not
- * described a settlement, and reading it as success would record an outcome
- * core is about to refuse.
- */
-function settlement(result: unknown): boolean | undefined {
-  const ok = read(result, "ok");
-  return typeof ok?.value === "boolean" ? ok.value : undefined;
-}
-
-/**
- * The write success a recorded write answers with.
- *
- * A record of a write carries one by construction, so an absent payload here is
- * this host's own invariant rather than anything a provider did.
- */
-function expectWritten(value: ReplLocalValue): FileWriteSuccess {
-  if (value === undefined || typeof value === "string") {
-    throw new FilesInvariantError("protocol");
-  }
-  return value;
-}
-
-/**
- * The text a recorded read answers with.
- *
- * A record of a read carries a string by construction, so anything else here is
- * this host's own invariant rather than anything a provider did.
- */
-function expectText(value: ReplLocalValue): string {
-  if (typeof value !== "string") {
-    throw new FilesInvariantError("protocol");
-  }
-  return value;
+  return { files, policy };
 }

@@ -210,6 +210,7 @@ export type ProjectProtectedContent = (syntax: SyntaxReference) => Operation<str
  * the private resolution it is already holding.
  */
 export interface ProtectedSite {
+  readonly filesystem?: import("./filesystem-placement.ts").FilesystemExpansion;
   /**
    * The syntax reference in scope where the element was written.
    *
@@ -655,30 +656,11 @@ export function formDispatcher(declaration: FormDeclaration): FunctionComponent 
       : declaration.forms === "either"
         ? { "self-closing": declaration.fn, paired: declaration.fn }
         : { [declaration.forms]: declaration.fn };
-  const refuse: FormRefusal =
-    declaration.forms === "self-closing" || declaration.forms === "paired"
-      ? declaration.refuse
-      : unusable;
-
   function* dispatch(
     props: Record<string, Json>,
     invocation: ComponentInvocation,
   ): Operation<unknown> {
-    const issuance = stateOf(invocation);
-    if (
-      issuance === undefined ||
-      !issuance.live ||
-      issuance.selection !== dispatch ||
-      issuance.frame !== (yield* useScope())
-    ) {
-      throw refuse(props, undefined);
-    }
-    const form: InvocationForm = issuance.content ? "paired" : "self-closing";
-    const handler = handlers[form];
-    if (handler === undefined) {
-      throw refuse(props, form);
-    }
-    return yield* handler(props, invocation);
+    return yield* runSelectedForm(dispatch, declaration, props, invocation);
   }
 
   // The declaration a component wears travels to the dispatcher, because the
@@ -689,6 +671,39 @@ export function formDispatcher(declaration: FormDeclaration): FunctionComponent 
   }
   Object.defineProperty(dispatch, DISPATCHER, { value: true, enumerable: false });
   return dispatch;
+}
+
+export function* runSelectedForm(
+  dispatcher: FunctionComponent,
+  declaration: FormDeclaration,
+  props: Record<string, Json>,
+  invocation: ComponentInvocation,
+  body?: (form: InvocationForm, selected: FunctionComponent) => Operation<unknown>,
+): Operation<unknown> {
+  const issuance = stateOf(invocation);
+  const refuse: FormRefusal =
+    declaration.forms === "self-closing" || declaration.forms === "paired"
+      ? declaration.refuse
+      : unusable;
+  if (
+    issuance === undefined ||
+    !issuance.live ||
+    issuance.selection !== dispatcher ||
+    issuance.frame !== (yield* useScope())
+  ) {
+    throw refuse(props, undefined);
+  }
+  const form: InvocationForm = issuance.content ? "paired" : "self-closing";
+  const handler =
+    declaration.forms === "both"
+      ? declaration[form]
+      : declaration.forms === "either" || declaration.forms === form
+        ? declaration.fn
+        : undefined;
+  if (handler === undefined) {
+    throw refuse(props, form);
+  }
+  return yield* body === undefined ? handler(props, invocation) : body(form, handler);
 }
 
 /** The fallback refusal, for a declaration that names no sentence of its own. */

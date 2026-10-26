@@ -62,6 +62,11 @@ function* publishedFiles(pkg: string): Operation<string[]> {
   if (dry.timeout) {
     throw new Error(`deno publish --dry-run timed out for ${pkg}`);
   }
+  if (dry.value.code !== 0) {
+    throw new Error(
+      `deno publish --dry-run failed for ${pkg}:\n${dry.value.stdout}\n${dry.value.stderr}`,
+    );
+  }
   const listed: string[] = [];
   for (const line of `${dry.value.stdout}\n${dry.value.stderr}`.split("\n")) {
     const trimmed = line.trim();

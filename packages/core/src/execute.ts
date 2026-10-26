@@ -1,3 +1,5 @@
+import type { FilesystemHost, FilesystemInstaller } from "./filesystem-host.ts";
+import type { FilesystemExpansion } from "./filesystem-placement.ts";
 /**
  * Entry point — execute (spec §7).
  *
@@ -2111,6 +2113,7 @@ function* runValueRoot(
   importTerminal: ComponentImportTerminal,
   /** This execution's own binding owner, for the byproduct its body computes. */
   computed: ComputedBindings,
+  filesystem?: FilesystemExpansion,
 ): Operation<DocumentResult> {
   // Created outside the scope the body runs in, so the value it selected is
   // still readable after that scope — and its teardown — has finished.
@@ -2142,6 +2145,7 @@ function* runValueRoot(
         environment,
         importTerminal,
         ownBody,
+        filesystem,
       );
       const exactRecord = environment.sourceSegments;
       for (const resolved of expanded) {
@@ -2204,6 +2208,7 @@ function* documentWorkflow(
    * a document, a component or middleware can name reaches it.
    */
   computed: ComputedBindings,
+  filesystem?: FilesystemExpansion,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -2356,6 +2361,7 @@ function* documentWorkflow(
         environment,
         importTerminal,
         computed,
+        filesystem,
       );
     }
 
@@ -2381,6 +2387,7 @@ function* documentWorkflow(
         environment,
         importTerminal,
         undefined,
+        filesystem,
       );
       // An empty buffered root emits no output event.
       const runs = emissions(exactRecord, selected);
@@ -2410,6 +2417,7 @@ function* documentWorkflow(
         environment,
         importTerminal,
         undefined,
+        filesystem,
       );
 
       while (emittedThrough < produced.length) {
@@ -2848,6 +2856,7 @@ function* executeDocument(
    * *against*, and these are values the document's own namespace starts with.
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
+  filesystem?: FilesystemExpansion,
 ): Operation<CanonicalInvocation> {
   const {
     stream,
@@ -3161,6 +3170,7 @@ function* executeDocument(
               );
             }
           : bindGeneratedRootEvaluator({
+              filesystem,
               // The selection this execution captured, resolved per evaluation
               // through the one machinery the authored site also goes through, and
               // complete: canonical `<Syntax />` is in the table a root is admitted
@@ -3240,6 +3250,7 @@ function* executeDocument(
               initialBindings,
               roots,
               computed,
+              filesystem,
             ),
           );
           try {
@@ -3425,6 +3436,7 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
  * `install` runs contextual behavior the document inherits.
  */
 export interface ExecutionInstallation {
+  readonly filesystem?: FilesystemInstaller;
   /**
    * Retained-history requirements, copied into an execution-owned collection
    * that installed code cannot observe, add to or remove from.
@@ -3984,6 +3996,19 @@ function* invoke(
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
 ): Operation<CanonicalInvocation> {
+  const filesystemFactories = installations.flatMap((installation) => {
+    const factory = installation.filesystem;
+    return factory === undefined ? [] : [factory.bind(installation)];
+  });
+  if (filesystemFactories.length > 1) {
+    throw new Error("Multiple filesystem owners");
+  }
+  let filesystem: FilesystemExpansion | undefined;
+  let filesystemLive = true;
+  yield* ensure(() => {
+    filesystemLive = false;
+    filesystem = undefined;
+  });
   const admissions = Object.freeze(
     installations.flatMap((installation) => [...(installation.admissions ?? [])]),
   );
@@ -4118,6 +4143,49 @@ function* invoke(
   // layer acquires is torn down with this execution and joined before it
   // settles, and a failure here reaches no policy, no root import and no body.
   yield* Execution.operations.init();
+  if (filesystemFactories[0] !== undefined) {
+    let accepting = true;
+    let delivered: FilesystemHost | undefined;
+    try {
+      yield* filesystemFactories[0]((host) => {
+        if (!accepting || delivered !== undefined || !filesystemLive) {
+          throw new Error("Invalid filesystem delivery");
+        }
+        delivered = host;
+      });
+    } finally {
+      accepting = false;
+    }
+    if (delivered === undefined) {
+      throw new Error("Filesystem owner supplied no host");
+    }
+    const selected = delivered;
+    const prepare = selected.prepareDirectory.bind(selected);
+    const read = selected.read.bind(selected);
+    const ensure = selected.ensure.bind(selected);
+    const host = Object.freeze<FilesystemHost>({
+      root: Object.freeze({ ...selected.root }),
+      prepareDirectory(authored, enclosing) {
+        if (!filesystemLive) {
+          throw new Error("Filesystem owner has closed");
+        }
+        return prepare(authored, enclosing);
+      },
+      *read(authored, request) {
+        if (!filesystemLive) {
+          throw new Error("Filesystem owner has closed");
+        }
+        return yield* read(authored, request);
+      },
+      *ensure(authored, request) {
+        if (!filesystemLive) {
+          throw new Error("Filesystem owner has closed");
+        }
+        return yield* ensure(authored, request);
+      },
+    });
+    filesystem = Object.freeze({ host, frame: host.root });
+  }
 
   // Each provider installer first, then that installation's ordinary `install`,
   // in the order the installations were captured. A provider registers
@@ -4190,6 +4258,7 @@ function* invoke(
     issued.completions(),
     preparations,
     initialBindings,
+    filesystem,
   );
 }
 

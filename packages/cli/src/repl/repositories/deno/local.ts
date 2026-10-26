@@ -250,7 +250,7 @@ function* recording(operation: LocalOperation): Operation<Result<ReplLocalValue>
  * returned. A failing append is the engine's own persistence fence and is not
  * caught here.
  */
-const localOperationCoordinator: LiveDurableOperationCoordinator = {
+export const localOperationCoordinator: LiveDurableOperationCoordinator = {
   *run<T extends Json>(
     execute: () => Operation<T>,
     publish: (result: ProtocolResult) => Operation<void>,

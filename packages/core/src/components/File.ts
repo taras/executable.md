@@ -88,15 +88,22 @@ export class FileAccessError extends Error {
 }
 
 /** The self-closing body: it reads, and there is no path from here to a write. */
-const read = printErrors(function* (props: Record<string, Json>): Operation<string> {
+export function* readBody(
+  props: Record<string, Json>,
+  owned?: (
+    input: import("@executablemd/runtime").FilePathInput,
+  ) => Operation<import("effection").Result<string>>,
+): Operation<string> {
   const requested = String(props.path);
   const directory = yield* cwd();
-  const text = yield* readFileText({ cwd: directory, path: requested });
+  const input = { cwd: directory, path: requested };
+  const text = yield* readFileText(input, owned?.(input));
   if (!text.ok) {
     throw new FileAccessError(refusal(requested, "read", parseFilesFailure(text.error)));
   }
   return text.value;
-});
+}
+const read = printErrors((props) => readBody(props));
 
 /** The paired body: it writes, and there is no path from here to a read. */
 const write = printErrors(function* (props: Record<string, Json>): Operation<string> {

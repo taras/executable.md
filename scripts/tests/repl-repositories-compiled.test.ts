@@ -1,3 +1,4 @@
+import { replMountsJourney } from "../../packages/cli/tests/support/repl-mounts-journey.ts";
 /**
  * The same journey, against the compiled binary (#181 E1).
  *
@@ -70,5 +71,9 @@ describe("the compiled binary's REPL entry files", () => {
   it("E1: carries them inside a selected Worktree too", function* (): Operation<void> {
     yield* requireBinary();
     yield* replGitJourney(compiled, "worktree");
+  });
+  it("the compiled binary carries workspace mount replay and live placement", function* () {
+    yield* requireBinary();
+    yield* replMountsJourney(compiled);
   });
 });

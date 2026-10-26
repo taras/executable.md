@@ -246,7 +246,12 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       entries.admitted.map((entry) => entry.definition.fn),
     );
     try {
-      return yield* evaluateProtectedGeneratedXmd(request, narrowedBodies, narrowedSyntax);
+      return yield* evaluateProtectedGeneratedXmd(
+        request,
+        narrowedBodies,
+        narrowedSyntax,
+        site.filesystem,
+      );
     } finally {
       narrowedBodies?.close();
     }

@@ -81,7 +81,7 @@ function* seedCheckout(home: string): Operation<string> {
 }
 
 /** Walk the focus ring until this control is the marked one. */
-function* reach(pty: Pty, label: string): Operation<void> {
+export function* reach(pty: Pty, label: string): Operation<void> {
   const deadline = Date.now() + ACT_MS;
   while (!(yield* pty.shows()).some((line) => line.includes(`> ${label}`))) {
     if (Date.now() > deadline) {
@@ -104,7 +104,7 @@ function* reach(pty: Pty, label: string): Operation<void> {
  * values: they are drawn and pointable, and a pointer is how a keyboard-only
  * harness reaches one.
  */
-function* click(pty: Pty, text: string): Operation<void> {
+export function* click(pty: Pty, text: string): Operation<void> {
   const screen = yield* pty.shows();
   const row = screen.findIndex((line) => line.includes(text));
   if (row < 0) {
@@ -120,7 +120,7 @@ function* click(pty: Pty, text: string): Operation<void> {
 }
 
 /** Wait until this file holds this exact text. */
-function* holding(path: string, content: string): Operation<void> {
+export function* holding(path: string, content: string): Operation<void> {
   const deadline = Date.now() + ACT_MS;
   while (true) {
     if ((yield* exists(path)) && (yield* readTextFile(path)) === content) {
@@ -159,7 +159,7 @@ function* removed(path: string): Operation<void> {
 }
 
 /** Wait for the command to end, and answer with its status. */
-function* ended(pty: Pty): Operation<number> {
+export function* ended(pty: Pty): Operation<number> {
   const deadline = Date.now() + ACT_MS;
   while (true) {
     const status = yield* pty.status();
@@ -177,7 +177,7 @@ function* ended(pty: Pty): Operation<number> {
 }
 
 /** The one location this command printed for a caller to come back with. */
-function printedLocation(screen: string): string {
+export function printedLocation(screen: string): string {
   const found = screen.match(/xmd repl '(xmd:\/\/repl\/[^']+)'/);
   if (found === null || found[1] === undefined) {
     throw new Error(
