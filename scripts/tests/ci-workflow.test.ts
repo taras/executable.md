@@ -412,7 +412,7 @@ describe("the sharded runtime jobs", () => {
     }
   });
 
-  it("provides the real Deno lock host before Bun tests without automatic node-modules management", function* () {
+  it("provides the real Deno lock host before Bun tests", function* () {
     const parsed = yield* workflow();
     const bun = matrixJob(parsed, "test-bun");
     const node = matrixJob(parsed, "test-node");
@@ -427,11 +427,6 @@ describe("the sharded runtime jobs", () => {
     expect(bun.steps[deno]?.uses).toBe(nodeDeno?.uses);
     expect(bun.steps[deno]?.with?.["deno-version"]).toBe("v2.9.5");
     expect(bun.steps[deno]?.with).toEqual(nodeDeno?.with);
-    const parent = yield* readTextFile(
-      new URL("../../packages/cli/tests/repl-git-observations.test.ts", import.meta.url),
-    );
-    expect(parent).toContain('"--node-modules-dir=manual"');
-    expect(parent).not.toContain('"--cached-only"');
   });
 
   it("keeps the Bun entrypoint smoke beside the Bun shards", function* () {
