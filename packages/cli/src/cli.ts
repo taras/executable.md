@@ -325,7 +325,7 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  */
 const replConfig = object({
   sidekickAcp: {
-    description: "absolute private attachment file for this live Sidekick (POSIX only)",
+    description: "absolute private attachment file; initializes Sidekick when needed (POSIX only)",
     ...field(z.string().optional()),
   },
   mount: {

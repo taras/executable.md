@@ -8,6 +8,7 @@ import { runSidekickBridge } from "./bridge.ts";
 export const SIDEKICK_HELP = [
   "Attach to the existing Sidekick of one live REPL (POSIX only).",
   "  xmd repl [location] --sidekick-acp /absolute/private/attachment.json",
+  "--sidekick-acp sends an initial Sidekick message when no conversation is selected; existing history is reused.",
   "  xmd sidekick acp --attach /absolute/private/attachment.json",
   "  xmd sidekick read --attach /absolute/private/attachment.json status",
   "  xmd sidekick read --attach FILE message MESSAGE_REF [--follow]",

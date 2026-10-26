@@ -260,16 +260,33 @@ export function* useSidekickAttachment(path: string, root: AttachmentRoot): Oper
   if (!host.supported()) {
     throw new Error("Sidekick ACP requires a same-user POSIX Unix socket.");
   }
-  const read = root.owner.reading;
+  let read = root.owner.reading;
   if (!read.ok) {
     throw read.error;
+  }
+  if (read.value.active === undefined) {
+    const initial = yield* root.dispatch.send(
+      "Initialize this Sidekick for an ACP attachment. Reply briefly in an Output region " +
+        "that you are ready, without submitting an entry or changing the draft.",
+    );
+    if (!initial.ok) {
+      throw initial.error;
+    }
+    const completed = yield* initial.value.completion;
+    if (!completed.ok) {
+      throw completed.error;
+    }
+    read = root.owner.reading;
+    if (!read.ok) {
+      throw read.error;
+    }
   }
   const conversation = read.value.active;
   if (
     conversation === undefined ||
     !read.value.conversations.some((one) => one.id === conversation && one.phase === "activated")
   ) {
-    throw new Error("Sidekick ACP requires an already established selected conversation.");
+    throw new Error("Sidekick ACP initialization did not establish a selected conversation.");
   }
   const listener = yield* host.publish(path, {
     owner: host.identify(),

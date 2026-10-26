@@ -6422,7 +6422,13 @@ pure and answers with the exact objects that model holds.
 ### Local Sidekick attachments
 
 The CLI-private `sidekick-acp` composition attaches observers and an ACP stdio
-bridge to the live root's existing Sidekick dispatch. It introduces no evaluator,
+bridge to the live root's existing Sidekick dispatch. With `--sidekick-acp` and
+no selected conversation, startup sends one real initialization message through
+that dispatch and waits for joined completion before publishing the endpoint.
+Existing selected history needs no initialization turn or provider setup; an
+initialization failure is reported without publishing an endpoint. Ordinary
+startup remains passive. Initialization retains captured provider configuration,
+entry admission and pending/uncertain-effect rules. It introduces no evaluator,
 journal writer or conversation controller. The root owns producers and issued
 attachment mappings; each connection owns its bounded public observation and
 request tasks. EOF releases only those observations. Explicit cancellation

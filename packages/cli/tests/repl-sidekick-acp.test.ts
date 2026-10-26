@@ -6,7 +6,7 @@ import { exec } from "@effectionx/process";
 import { Agent, Execution } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdtemp, realpath, rmdir, symlink, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readdir, realpath, rmdir, symlink, unlink } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
@@ -42,6 +42,13 @@ import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sideki
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { requestAttachment } from "../src/sidekick-acp/client.ts";
 import { usePosixSidekickTransport } from "../src/sidekick-acp/posix.ts";
+import {
+  recordingTerminal,
+  untilDrawn,
+  useMountedHost,
+  MOUNTED_AGENT,
+} from "./fixtures/repl/issue-883/mounted-program.ts";
+import { runReplProgram } from "../src/repl/program.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { parseEntryRecords } from "../src/repl/sidekick/history.ts";
 import { AGENT_PROMPT } from "@executablemd/core/host";
@@ -1217,5 +1224,121 @@ describe("A5: cancels pending endpoint directory acquisition", () => {
     yield* refused(until(lstat(file)));
     yield* refused(until(lstat(join(directory, "s"))));
     expect(exists).toBe(false);
+  });
+});
+
+describe("ACP startup bootstrap", () => {
+  it("creates a real initial message without UI input and joins the first external prompt", function* () {
+    yield* usePosixSidekickTransport(process.platform);
+    const home = yield* until(realpath(yield* useTemporary("xmd-acp-startup-")));
+    yield* until(chmod(home, 0o700));
+    const path = join(home, "attachment.json");
+    const host = yield* useMountedHost();
+    host.fake.script({ reply: "<Output>Ready for ACP.</Output>", held: true });
+    yield* scoped(function* () {
+      const recording = recordingTerminal();
+      yield* recording.install();
+      const starting = yield* spawn(() =>
+        runReplProgram({ profile: host.profile, sidekickAcp: path }),
+      );
+      yield* race([
+        host.fake.startedTurns(1),
+        (function* (): Operation<void> {
+          const result = yield* starting;
+          throw result.ok ? new Error("REPL ended before its initialization turn.") : result.error;
+        })(),
+      ]);
+      yield* refused(until(lstat(path)));
+      host.fake.releaseTurn();
+      yield* untilDrawn(recording.terminal);
+      const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
+      const opened = yield* host.repository.open(descriptor.execution);
+      const saved = yield* records(opened);
+      expect(saved.filter((one) => one.kind === "message")).toHaveLength(1);
+      expect(
+        saved.filter((one) => one.kind === "conversation" && one.phase === "activated"),
+      ).toHaveLength(1);
+      expect(host.fake.ensured[0]?.agent).toBe(MOUNTED_AGENT);
+      expect(host.fake.created[0]?.permissionMode).toBe("deny-all");
+      expect(host.fake.configCalls).toEqual([]);
+      const attached = attachResult.parse(
+        yield* requestAttachment(path, { method: "attach", cwd: descriptor.cwd }),
+      );
+      host.fake.script({ reply: "<Output>First external request completed.</Output>", held: true });
+      let completed = false;
+      const observing = yield* spawn(function* () {
+        const answer = yield* requestAttachment(path, {
+          method: "prompt",
+          attachment: attached.attachment,
+          text: "first external request",
+        });
+        completed = true;
+        return exchangeSchema.parse(answer);
+      });
+      yield* host.fake.startedTurns(2);
+      expect(completed).toBe(false);
+      host.fake.releaseTurn();
+      const answer = yield* observing;
+      expect(answer.ending).toMatchObject({ joined: true, outcome: "completed" });
+      expect(answer.output).toContain("First external request completed.");
+      expect(host.fake.prompts).toHaveLength(2);
+    });
+    expect(yield* until(readdir(home))).toEqual([]);
+  });
+
+  it("reopens existing history without another initial message or provider setup", function* () {
+    yield* usePosixSidekickTransport(process.platform);
+    const home = yield* until(realpath(yield* useTemporary("xmd-acp-resume-")));
+    yield* until(chmod(home, 0o700));
+    const path = join(home, "attachment.json");
+    const host = yield* useMountedHost();
+    host.fake.script({ reply: "<Output>Ready.</Output>" });
+    const first = yield* scoped(function* () {
+      const recording = recordingTerminal();
+      yield* recording.install();
+      yield* spawn(() => runReplProgram({ profile: host.profile, sidekickAcp: path }));
+      yield* untilDrawn(recording.terminal);
+      return Descriptor.parse(JSON.parse(yield* readTextFile(path)));
+    });
+    const before = yield* records(yield* host.repository.open(first.execution));
+    const setups = host.fake.ensured.length;
+    yield* scoped(function* () {
+      const recording = recordingTerminal();
+      yield* recording.install();
+      yield* spawn(() =>
+        runReplProgram({
+          profile: host.profile,
+          sidekickAcp: path,
+          location: `xmd://repl/${first.execution}/entries`,
+        }),
+      );
+      yield* untilDrawn(recording.terminal);
+      const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
+      expect(descriptor.conversation).toBe(first.conversation);
+      expect(host.fake.prompts).toHaveLength(1);
+      expect(host.fake.ensured).toHaveLength(setups);
+      expect(yield* records(yield* host.repository.open(first.execution))).toEqual(before);
+    });
+    expect(yield* until(readdir(home))).toEqual([]);
+  });
+
+  it("reports provider initialization failure and leaves no published endpoint", function* () {
+    yield* usePosixSidekickTransport(process.platform);
+    const home = yield* until(realpath(yield* useTemporary("xmd-acp-init-failure-")));
+    yield* until(chmod(home, 0o700));
+    const path = join(home, "attachment.json");
+    const host = yield* useMountedHost();
+    host.fake.unavailable(MOUNTED_AGENT, new Error("controlled initialization refusal"));
+    const recording = recordingTerminal();
+    yield* recording.install();
+    const result = yield* runReplProgram({ profile: host.profile, sidekickAcp: path });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Initialization unexpectedly succeeded.");
+    }
+    expect(result.error.message).toContain("controlled initialization refusal");
+    expect(host.fake.prompts).toHaveLength(0);
+    expect(host.fake.ensured).toHaveLength(1);
+    expect(yield* until(readdir(home))).toEqual([]);
   });
 });

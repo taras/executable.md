@@ -1902,11 +1902,11 @@ recorded output replaces it.
 
 ## Attaching to the live Sidekick
 
-A POSIX REPL can publish a private attachment for its already established,
-selected Sidekick conversation:
+A POSIX REPL can initialize its Sidekick and publish a private attachment without
+UI input:
 
 ```sh
-xmd repl 'xmd://repl/<execution>/entries' --sidekick-acp /absolute/private/attachment.json
+xmd repl --sidekick-acp /absolute/private/attachment.json
 xmd sidekick acp --attach /absolute/private/attachment.json
 xmd sidekick read --attach /absolute/private/attachment.json status
 ```
@@ -1914,9 +1914,18 @@ xmd sidekick read --attach /absolute/private/attachment.json status
 `--sidekick-acp` occurs once and requires an absolute file name. It is off
 when omitted. Unsupported hosts refuse the option; the ordinary REPL remains
 available. Attachment is specific to this Sidekick, independently of repository
-ACP. It creates no underlying conversation and changes no provider, model,
-effort, includes, permissions or native identity. A conversation switch
-invalidates the attachment.
+ACP. If no conversation is selected, startup sends one real initial Sidekick
+message through the root's dispatch and waits for its joined completion before
+publishing the attachment. The message asks for a brief readiness reply without
+entry submission or draft changes. Existing selected history is reused without
+another initialization message or provider setup. Initialization failure is an
+observable startup error and leaves no published endpoint. Omitting the option
+keeps ordinary startup passive.
+
+Initialization changes no provider, model, effort, includes, permissions or
+native identity. It uses the same entry admission and pending/uncertain-effect
+rules as every Sidekick message. A conversation switch invalidates the
+attachment.
 
 The descriptor is an exclusively published regular mode-0600 file in an
 owner-controlled parent, pointing to a Unix socket inside a fresh mode-0700

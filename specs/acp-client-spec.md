@@ -1384,7 +1384,12 @@ none.
 `xmd sidekick acp --attach FILE` serves the existing live REPL Sidekick over
 ACP protocol 1. Its session ID and `agentSessionId` metadata name the issued
 outer attachment mapping, not the underlying provider's native identity.
-Session creation and exact load perform no provider turn. The mapping remains
+The REPL's `--sidekick-acp` startup sends and joins one real initialization
+message only when no conversation is selected; it reports initialization failure
+before publishing an endpoint. Existing selected history is reused without a
+duplicate message. This uses the captured provider configuration and ordinary
+admission, uncertain-effect and scoped-cleanup rules. Once the endpoint exists,
+outer ACP session creation and exact load perform no provider turn. The mapping remains
 bound to one live owner, execution, conversation and cwd; a failed exact load
 fences fallback session creation on that bridge.
 
