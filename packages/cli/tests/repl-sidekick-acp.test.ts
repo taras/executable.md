@@ -6,6 +6,7 @@ import { exec } from "@effectionx/process";
 import { Agent, Execution } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { chmod, lstat, mkdtemp, readdir, realpath, rmdir, symlink, unlink } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -219,7 +220,14 @@ function* refused(operation: Operation<unknown>): Operation<void> {
   expect(error).toBeInstanceOf(Error);
 }
 function* clientIdentity() {
-  const packagePath = yield* until(realpath(join(ROOT, "node_modules/acpx/package.json")));
+  // Resolved the way production resolves it, from the package that declares it.
+  // `packages/acp` is ACPX's declarer, and each runtime's own installer places
+  // it differently: Deno's links it at the repository root, pnpm's beside that
+  // declarer, Bun's somewhere else again. A path built from the root happens to
+  // exist under two of those layouts and not the third, so the resolver answers
+  // instead of a guess.
+  const fromDeclarer = createRequire(join(ROOT, "packages/acp/package.json"));
+  const packagePath = yield* until(realpath(fromDeclarer.resolve("acpx/package.json")));
   const info = z
     .object({ version: z.literal("0.12.0") })
     .passthrough()
