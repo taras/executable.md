@@ -13,6 +13,9 @@ import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { createConnection } from "node:net";
+import type { Socket } from "node:net";
+import { once } from "@effectionx/node/events";
 import { Writable } from "node:stream";
 import {
   ensure,
@@ -209,6 +212,10 @@ function sdk(
       connection.close();
     }
   });
+}
+function* deadline(what: string): Operation<never> {
+  yield* sleep(5000);
+  throw new Error(what);
 }
 function* refused(operation: Operation<unknown>): Operation<void> {
   let error: unknown;
@@ -1238,6 +1245,111 @@ describe("A5: cancels pending endpoint directory acquisition", () => {
     yield* refused(until(lstat(file)));
     yield* refused(until(lstat(join(directory, "s"))));
     expect(exists).toBe(false);
+  });
+});
+
+describe("A5: a peer the listener accepts after teardown begins", () => {
+  it("A5: a late peer is still owned, closed and joined", function* () {
+    const home = yield* until(realpath(yield* useTemporary("xmd-late-peer-")));
+    yield* until(chmod(home, 0o700));
+    const file = join(home, "attachment.json");
+    // A raw promise, because this barrier is released from a synchronous
+    // `finally` here while the owner's own cleanup waits on it: an operation
+    // would have to be yielded, and unwinding is where it must let go.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const holding = withResolvers<void>();
+    let barriers = 0;
+    // Only the first accepted socket is held. Whatever the listener accepts
+    // afterwards closes normally, which is what this row is about.
+    yield* usePosixSidekickTransport(process.platform, mkdtemp, function* () {
+      barriers += 1;
+      if (barriers > 1) {
+        return;
+      }
+      holding.resolve();
+      yield* until(released);
+    });
+    const host = yield* SidekickTransport.expect();
+    const listening = withResolvers<{
+      descriptor: { socket: string };
+      accept(): Operation<unknown>;
+    }>();
+    let joined = false;
+    let late: Socket | undefined;
+    let early: Socket | undefined;
+    let lateClosed = false;
+    let directory: string | undefined;
+    let socketPath: string | undefined;
+    try {
+      const owner = yield* spawn(function* () {
+        const listener = yield* host.publish(file, {
+          owner: "late-peer-owner",
+          execution: "late-peer-execution",
+          conversation: "late-peer-conversation",
+          cwd: home,
+        });
+        listening.resolve(listener);
+        yield* suspend();
+      });
+      const listener = yield* race([
+        listening.operation,
+        (function* (): Operation<never> {
+          yield* owner;
+          throw new Error("The publication ended before it published.");
+        })(),
+      ]);
+      socketPath = listener.descriptor.socket;
+      directory = dirname(socketPath);
+
+      // One peer this listener has adopted: accepting it is what says the
+      // transport tracked the socket, rather than that connect() returned.
+      early = createConnection(socketPath);
+      yield* once(early, "connect");
+      yield* race([listener.accept(), deadline("The listener never accepted the first peer.")]);
+
+      // Teardown begins and stops inside that socket's own cleanup, before its
+      // close. The listener still exists here, and the owner has not joined.
+      const stopping = yield* spawn(function* () {
+        yield* owner.halt();
+        joined = true;
+      });
+      yield* race([holding.operation, deadline("The first peer's cleanup never ran.")]);
+      expect(joined).toBe(false);
+
+      // The peer that arrives in that window, and the listener's own account of
+      // accepting it: a connect that returned proves only that the kernel
+      // queued it.
+      late = createConnection(socketPath);
+      yield* once(late, "connect");
+      const held = late;
+      const watching = yield* spawn(function* () {
+        yield* once(held, "close");
+        lateClosed = true;
+      });
+      yield* race([listener.accept(), deadline("The listener never accepted the late peer.")]);
+
+      release();
+      yield* race([stopping, deadline("The owner never joined after its cleanup was released.")]);
+      // Closed by the owner that accepted it, and awaited before this fixture
+      // touches either peer.
+      yield* race([watching, deadline("The late peer was never closed by its owner.")]);
+    } finally {
+      release();
+      early?.destroy();
+      late?.destroy();
+    }
+    console.log(
+      JSON.stringify({ kind: "late-peer-teardown-result", joined, lateClosed, barriers }),
+    );
+    expect(joined).toBe(true);
+    expect(lateClosed).toBe(true);
+    expect(barriers).toBeGreaterThan(1);
+    yield* refused(until(lstat(file)));
+    yield* refused(until(lstat(socketPath)));
+    yield* refused(until(lstat(directory)));
   });
 });
 

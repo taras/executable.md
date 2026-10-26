@@ -216,6 +216,14 @@ function useWire(socket: Socket): Operation<Wire> {
 export function* usePosixSidekickTransport(
   platform: string,
   createDirectory: (prefix: string) => Promise<string> = mkdtemp,
+  /**
+   * Held just before an accepted socket's own close, so a test can observe the
+   * window in which this listener is still accepting while teardown runs.
+   *
+   * The close below stays this cleanup's: waiting here delays it and owns
+   * nothing. Omitted everywhere but that test.
+   */
+  beforeCloseAcceptedSocket?: () => Operation<void>,
 ): Operation<void> {
   const uid = process.getuid?.();
   yield* SidekickTransport.set({
@@ -268,7 +276,12 @@ export function* usePosixSidekickTransport(
         const connected = (socket: Socket) => {
           sockets.add(socket);
           connections.run(function* () {
-            yield* ensure(() => closeSocket(socket));
+            yield* ensure(function* () {
+              if (beforeCloseAcceptedSocket !== undefined) {
+                yield* beforeCloseAcceptedSocket();
+              }
+              yield* closeSocket(socket);
+            });
             yield* action<void>((resolve) => {
               const closed = () => {
                 const at = pending.indexOf(socket);
