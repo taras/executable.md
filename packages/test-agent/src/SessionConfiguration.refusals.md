@@ -1,7 +1,7 @@
 <TestAgent agent="reviewer">
 <TestAgent.Scenario session="review" src="./SessionConfiguration.refusal-behavior.md" models={{selected:"A",options:[{id:"A",efforts:{selected:"low",options:["low","high"]}},{id:"B",efforts:{selected:"brief",options:["brief","deep"]}},{id:"none"}]}} />
 <TestAgent.Scenario session="unavailable" src="./SessionConfiguration.unavailable.md" />
-<Test name="invalid configuration starts no prompt and restores the original session">
+<Test name="invalid configuration starts no prompt and restores the original session" timeout="60s">
 <Agent name="reviewer">
 <ExpectRefusal message="Unknown model">
 <Session name="review" model="unknown"><Prompt>not started</Prompt></Session>
