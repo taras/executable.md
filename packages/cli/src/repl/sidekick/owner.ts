@@ -1,3 +1,4 @@
+import type { MessageOrigin } from "./history.ts";
 import type { ReplTesting } from "./testing.ts";
 /**
  * The conversation this execution owns, and the one cycle it runs at a time.
@@ -154,7 +155,7 @@ export interface SidekickAssembly {
  * one response's results is retained as feedback naming that response.
  */
 export interface SidekickMessageOptions {
-  readonly origin: import("./history.ts").MessageOrigin;
+  readonly origin: MessageOrigin;
   saved?(conversation: string, id: string): void;
 }
 

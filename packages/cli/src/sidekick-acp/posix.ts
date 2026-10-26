@@ -407,7 +407,13 @@ export function* usePosixSidekickTransport(
             },
           });
         } finally {
-          server?.off("connection", connected);
+          // Only the error handler comes off here. The connection handler is
+          // what tracks an accepted socket, and this block runs before the
+          // teardown below has closed the listener — so detaching it here
+          // leaves a window in which the listener still accepts a peer that
+          // nothing tracks or destroys, and `close()` then waits for a socket
+          // no owner holds. That teardown takes it off synchronously, in the
+          // statement before `close()`.
           server?.off("error", serverFailed);
         }
       });

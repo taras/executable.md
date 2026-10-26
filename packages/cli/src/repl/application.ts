@@ -8,6 +8,7 @@
  * adoption; a refusal preserves the standing route, selection and draft.
  */
 
+import type { MessageOrigin } from "./sidekick/history.ts";
 import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import type { AgentOption, AgentOptions, SessionConfiguration } from "@executablemd/core";
@@ -206,7 +207,7 @@ export interface ReplLive {
  * reader left it on when the next reply arrives.
  */
 export interface ReplSidekickChatRow {
-  readonly origin?: import("./sidekick/history.ts").MessageOrigin;
+  readonly origin?: MessageOrigin;
   /**
    * The saved request this failed attempt could be asked again, or none.
    *

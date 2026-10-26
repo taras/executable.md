@@ -33,9 +33,7 @@ const attached = z.object({ attachment: z.string().min(1) }).strict();
 const loaded = z
   .object({
     attachment: z.string(),
-    replay: z.array(
-      z.object({ kind: z.enum(["person", "reply", "unknown"]), text: z.string() }).strict(),
-    ),
+    replay: z.array(z.object({ kind: z.enum(["person", "reply"]), text: z.string() }).strict()),
     status: z.unknown(),
   })
   .strict();
@@ -122,9 +120,6 @@ export function* runSidekickBridge(path: string): Operation<void> {
             );
             sessions.add(value.attachment);
             for (const item of value.replay) {
-              if (item.kind === "unknown") {
-                continue;
-              }
               yield* until(
                 ctx.client.notify(acp.methods.client.session.update, {
                   sessionId: value.attachment,

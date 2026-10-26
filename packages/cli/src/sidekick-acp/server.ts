@@ -111,18 +111,11 @@ function status(root: AttachmentRoot, descriptor: Descriptor) {
     canonical: read.value.conversations
       .filter((one) => one.id === descriptor.conversation)
       .map((one) => ({ conversation: one.id, attempted: one.attempted, completed: one.completed })),
-    messages: read.value.chat
-      .filter(
-        (one) =>
-          one.kind === "person" &&
-          one.id !== undefined &&
-          one.conversation === descriptor.conversation,
-      )
-      .map((one) =>
-        one.kind === "person"
-          ? { execution: descriptor.execution, conversation: one.conversation, id: one.id }
-          : null,
-      ),
+    messages: read.value.chat.flatMap((one) =>
+      one.kind === "person" && one.conversation === descriptor.conversation
+        ? [{ execution: descriptor.execution, conversation: one.conversation, id: one.id }]
+        : [],
+    ),
     entries: head.value.entries.map((one, index) => ({
       entry: index + 1,
       key: one.key,
@@ -136,19 +129,11 @@ function replay(root: AttachmentRoot, descriptor: Descriptor) {
   if (!read.ok) {
     throw read.error;
   }
-  return read.value.chat
-    .filter(
-      (one) =>
-        one.conversation === descriptor.conversation &&
-        (one.kind === "person" || one.kind === "reply"),
-    )
-    .map((one) =>
-      one.kind === "person"
-        ? { kind: "person", text: one.text }
-        : one.kind === "reply"
-          ? { kind: "reply", text: one.text }
-          : { kind: "unknown", text: "" },
-    );
+  return read.value.chat.flatMap((one) =>
+    one.conversation === descriptor.conversation && (one.kind === "person" || one.kind === "reply")
+      ? [{ kind: one.kind, text: one.text }]
+      : [],
+  );
 }
 function entry(
   root: AttachmentRoot,
