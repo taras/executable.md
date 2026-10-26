@@ -39,16 +39,17 @@ export function parseWorkspaceMounts(
       return Err(new Error("--mount TARGET cannot be the document root /."));
     }
     const destination = normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
-    if (
-      pairs.some(
-        (pair) =>
-          pair.target === destination ||
-          pair.target.startsWith(destination + "/") ||
-          destination.startsWith(pair.target + "/"),
-      )
-    ) {
+    const conflicting = pairs.find(
+      (pair) =>
+        pair.target === destination ||
+        pair.target.startsWith(destination + "/") ||
+        destination.startsWith(pair.target + "/"),
+    );
+    if (conflicting !== undefined) {
       return Err(
-        new Error(`--mount TARGET ${JSON.stringify(destination)} overlaps another TARGET.`),
+        new Error(
+          `--mount TARGET ${JSON.stringify(destination)} overlaps ${JSON.stringify(conflicting.target)}.`,
+        ),
       );
     }
     pairs.push(

@@ -29,6 +29,20 @@ describe("workspace mount table", () => {
     for (const target of ["/a", "/a/b"]) {
       expect(parseWorkspaceMounts(["one:/a", `two:${target}`], "/work", posix).ok).toBe(false);
     }
+    for (const targets of [
+      ["/a", "/a/b"],
+      ["/a/b", "/a"],
+      ["/a", "/a"],
+    ]) {
+      const first = targets[0];
+      const second = targets[1];
+      const result = parseWorkspaceMounts([`one:${first}`, `two:${second}`], "/work", posix);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain(`TARGET ${JSON.stringify(second)}`);
+        expect(result.error.message).toContain(`overlaps ${JSON.stringify(first)}`);
+      }
+    }
     expect(parseWorkspaceMounts(["C:\\manuals:/reference"], "C:\\work", win32)).toEqual({
       ok: true,
       value: [{ source: "C:\\manuals", target: "/reference" }],

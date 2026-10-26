@@ -393,3 +393,57 @@ describe("closed association admission", () => {
     expect(changed.reads).toEqual([]);
   });
 });
+
+describe("canonical coverage and lexical physical attribution", () => {
+  it("validates the saved router pair independently and still refuses malformed coverage", function* () {
+    const authored = mountAuthored(
+      authoredOperation("dir-ensure", "ensure", "/reference", {
+        authoredDirectory: "/host",
+        actualDirectory: "/host",
+        namespace: "host",
+        interpreting: true,
+      }),
+    );
+    const request = { cwd: "/host", path: "/alias/old" };
+    const record: MountRecord = {
+      version: 1,
+      operation: "dir-ensure",
+      authored,
+      authoredFingerprint: yield* mountFingerprint({ operation: "dir-ensure", authored }),
+      binding: {
+        pathStyle: "posix",
+        selected: { source: "/alias/old", target: "/reference" },
+        enclosing: {
+          authoredDirectory: "/host",
+          actualDirectory: "/host",
+          namespace: "host",
+          pair: null,
+        },
+        destination: { authored: "/reference", actual: "/alias/old" },
+      },
+      physical: replLocalRecordJson({
+        operation: "dir-ensure",
+        request,
+        outcome: Ok(undefined),
+        fingerprint: yield* replLocalFingerprint({ operation: "dir-ensure", request }),
+      }),
+      coverage: { kind: "existing", owner: "session", root: "/owned", target: "/owned/old" },
+    };
+
+    expect((yield* parseMountRecord(record)).coverage).toEqual(record.coverage);
+    for (const coverage of [
+      { kind: "existing", owner: "session", root: "/owned", target: "/alias/old" },
+      { kind: "existing", owner: "session", root: "/owned/../owned", target: "/owned/old" },
+      { kind: "existing", owner: "session", root: "owned", target: "/owned/old" },
+      { kind: "existing", owner: "session", root: "/owned", target: "/owned/old\0hidden" },
+    ]) {
+      let refusal: unknown;
+      try {
+        yield* parseMountRecord({ ...record, coverage });
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(MountRecordError);
+    }
+  });
+});

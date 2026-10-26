@@ -2,7 +2,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { mountedRun, trace } from "./support/mount-run.ts";
-import { MOUNT_FILE } from "../src/repl/mount-records.ts";
+import { MOUNT_FILE, parseMountRecord } from "../src/repl/mount-records.ts";
 import { parseReplLocalRecord, REPL_REPOSITORY_LOCAL } from "../src/repl/repositories/records.ts";
 import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilePathInput } from "@executablemd/runtime";
@@ -496,5 +496,123 @@ describe("portable entry without a retention adapter", () => {
       expect(resumed.deletes).toHaveLength(1);
       expect(resumed.ensures).toEqual(first.ensures);
     }
+  });
+});
+
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { ensureDir } from "@effectionx/fs";
+import { until } from "effection";
+import { symlink, realpath } from "node:fs/promises";
+import { join } from "node:path";
+
+describe("symlinked SOURCE association", () => {
+  it("keeps covered ensure/read associations and replays their own results after reassignment", function* () {
+    const temp = yield* useTempDirectory("mount-source-link-");
+    const root = yield* until(realpath(temp));
+    const owned = join(root, "owned");
+    const alias = join(root, "alias");
+    yield* ensureDir(join(owned, "old"));
+    yield* until(symlink(owned, alias, "dir"));
+    const stream = new InMemoryStream();
+    const source =
+      '<Dir path="/reference"><File path="old.md" as="saved" /><Elicit schema={{ type: "object" }} as="answer">Continue?</Elicit>{saved}<File path="next.md" /></Dir>';
+    yield* mountedRun(
+      source,
+      stream,
+      [{ source: join(alias, "old"), target: "/reference" }],
+      trace(),
+      {
+        pause: true,
+        ownedFileCoverage: { root: alias },
+        onRead: () => "historical",
+      },
+    );
+    const saved = yield* stream.readAll();
+    const associations = saved.filter(
+      (event) => event.type === "yield" && event.description.type === MOUNT_FILE,
+    );
+    expect(associations).toHaveLength(2);
+    for (const event of associations) {
+      if (event.type === "yield" && event.result.status === "ok") {
+        const record = yield* parseMountRecord(event.result.value, event.description.name);
+        expect(record.binding.selected.source).toBe(join(alias, "old"));
+        expect(record.coverage.kind).toBe("existing");
+        if (record.coverage.kind === "existing") {
+          expect(record.coverage.root).toBe(owned);
+          expect(record.coverage.target.startsWith(owned)).toBe(true);
+          expect(record.coverage.target).not.toBe(record.binding.destination.actual);
+        }
+      }
+    }
+    const resumed = trace();
+    const output = yield* mountedRun(
+      source,
+      stream,
+      [{ source: join(root, "missing-new"), target: "/reference" }],
+      resumed,
+      {
+        ownedFileCoverage: { root: alias },
+        onRead: () => "current",
+      },
+    );
+    expect(resumed.ensures).toEqual([]);
+    expect(resumed.reads).toEqual([{ cwd: join(root, "missing-new"), path: "next.md" }]);
+    expect(output).toContain("historical");
+    expect(output).toContain("current");
+  });
+});
+
+describe("mounted Dir output failure", () => {
+  it("keeps its rendered prefix just like the ordinary host", function* () {
+    const source = [
+      "<Output>",
+      "",
+      '<Dir path="/reference">',
+      "",
+      "PREFIX",
+      "",
+      "```bash exec",
+      "FAIL",
+      "```",
+      "",
+      "AFTER",
+      "",
+      "</Dir>",
+      "",
+      "</Output>",
+    ].join("\n");
+    const outputs: string[] = [];
+    for (const ordinaryHost of [true, false]) {
+      let output = "";
+      let failure: unknown;
+      try {
+        yield* mountedRun(
+          source,
+          new InMemoryStream(),
+          [{ source: "/external", target: "/reference" }],
+          trace(),
+          {
+            ordinaryHost,
+            before: function* () {
+              yield* API.Process.around({
+                *exec() {
+                  return { exitCode: 1, stdout: "", stderr: "stage failed" };
+                },
+              });
+            },
+            onOutput: (chunk) => {
+              output += chunk;
+            },
+          },
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect(output).toContain("PREFIX");
+      expect(output).not.toContain("AFTER");
+      outputs.push(output);
+    }
+    expect(outputs[1]).toBe(outputs[0]);
   });
 });

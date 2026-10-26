@@ -1,5 +1,3 @@
-import type { FilesystemExpansion } from "./filesystem-placement.ts";
-import { invokeFixedFilesystem, fixedFilesystemByFunction } from "./components/fixed-filesystem.ts";
 /**
  * Expansion engine (spec §5).
  *
@@ -14,6 +12,9 @@ import { invokeFixedFilesystem, fixedFilesystemByFunction } from "./components/f
  * This ensures code blocks before <Content /> (e.g., provider
  * middleware installation) execute before children's code blocks.
  */
+
+import type { FilesystemExpansion } from "./filesystem-placement.ts";
+import { invokeFixedFilesystem, fixedFilesystemByFunction } from "./components/fixed-filesystem.ts";
 
 import { all, ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
 import type { Operation, Result, Stream } from "effection";
@@ -3399,6 +3400,25 @@ class ContentExpansionFailure extends ContentError {
   }
 }
 
+function* projectSlot(handle: ProjectionHandle, mode: ErrorMode, name?: string): Operation<string> {
+  const outcome = yield* handle.tryProject({ kind: "slot", name, mode });
+  if (outcome.failure !== undefined) {
+    if (outcome.failure instanceof DocumentationError) {
+      throw new ContentExpansionFailure(
+        [outcome.failure.segment],
+        outcome.failure,
+        outcome.segments,
+      );
+    }
+    throw outcome.failure;
+  }
+  const errors = errorSegments(outcome.segments);
+  if (errors.length > 0) {
+    throw new ContentExpansionFailure(errors, undefined, outcome.segments);
+  }
+  return renderSegments(outcome.segments);
+}
+
 function errorSegments(segments: Segment[]): ErrorSegment[] {
   return segments.filter((segment) => segment.type === "error");
 }
@@ -3710,35 +3730,7 @@ function* expandFunctionComponent(
         yield* provideRetain(siteEvalScope);
         yield* Component.around(
           {
-            *content([slotName], _next) {
-              // Asked for as an outcome, so a failure arrives with what the
-              // projection rendered before it. `content()` still presents the
-              // failure at the author's call — the difference is that the text
-              // is no longer lost when the component does not recover.
-              const outcome = yield* handle.tryProject({
-                kind: "slot",
-                name: slotName,
-                mode: siteErrorMode,
-              });
-              if (outcome.failure !== undefined) {
-                // A throwing error mode already decided this execution fails; the call
-                // site still sees the public shape, and the original failure
-                // travels as the cause so the boundary can restore it.
-                if (outcome.failure instanceof DocumentationError) {
-                  throw new ContentExpansionFailure(
-                    [outcome.failure.segment],
-                    outcome.failure,
-                    outcome.segments,
-                  );
-                }
-                throw outcome.failure;
-              }
-              const errors = errorSegments(outcome.segments);
-              if (errors.length > 0) {
-                throw new ContentExpansionFailure(errors, undefined, outcome.segments);
-              }
-              return renderSegments(outcome.segments);
-            },
+            content: ([slotName]) => projectSlot(handle, siteErrorMode, slotName),
             // The element's shape, not its rendered result: content that renders
             // an empty string is still content.
             // deno-lint-ignore require-yield
@@ -3836,19 +3828,7 @@ function* expandFunctionComponent(
                     // one narrows nothing because it admitted nothing.
                     environment: environment === undefined ? undefined : { ...environment, syntax },
                   });
-                  const outcome = yield* narrowed.tryProject({
-                    kind: "slot",
-                    name: undefined,
-                    mode: siteErrorMode,
-                  });
-                  if (outcome.failure !== undefined) {
-                    throw outcome.failure;
-                  }
-                  const errors = errorSegments(outcome.segments);
-                  if (errors.length > 0) {
-                    throw new ContentExpansionFailure(errors, undefined, outcome.segments);
-                  }
-                  return renderSegments(outcome.segments);
+                  return yield* projectSlot(narrowed, siteErrorMode);
                 });
             let active = true;
             try {
@@ -3886,19 +3866,7 @@ function* expandFunctionComponent(
                         ...projectionState,
                         filesystem: { ...filesystem, frame },
                       });
-                      const outcome = yield* projected.tryProject({
-                        kind: "slot",
-                        name: undefined,
-                        mode: siteErrorMode,
-                      });
-                      if (outcome.failure !== undefined) {
-                        throw outcome.failure;
-                      }
-                      const errors = errorSegments(outcome.segments);
-                      if (errors.length > 0) {
-                        throw new ContentExpansionFailure(errors, undefined, outcome.segments);
-                      }
-                      return renderSegments(outcome.segments);
+                      return yield* projectSlot(projected, siteErrorMode);
                     },
                   });
             return yield* dispatchBody(direct ?? definition.fn(validatedProps, issued.invocation));

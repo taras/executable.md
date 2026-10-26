@@ -31,6 +31,7 @@ import {
 import type { ReplLocalValue } from "./repositories/records.ts";
 import {
   admitMountRecords,
+  validateMountCoverage,
   containedMountRead,
   mountAuthored,
   mountFingerprint,
@@ -297,15 +298,12 @@ export function mountPolicy(
     ): Operation<Result<ReplLocalValue>> {
       yield* guard();
       const binding = bindingFor(a, request);
-      if (
-        binding === undefined ||
-        (a.operation === "dir-ensure" && coverage.kind !== "existing") ||
-        (coverage.kind === "existing" && coverage.target !== binding.destination.actual)
-      ) {
+      if (binding === undefined || (a.operation === "dir-ensure" && coverage.kind !== "existing")) {
         return coverage.kind === "existing"
           ? yield* recordedLocalOperation({ operation: a.operation, request, perform })
           : yield* perform();
       }
+      validateMountCoverage(coverage, pathStyle, a.operation);
       const fingerprint = yield* mountFingerprint({
         operation: a.operation,
         authored: mountAuthored(a),

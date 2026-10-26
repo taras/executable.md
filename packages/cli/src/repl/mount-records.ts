@@ -97,6 +97,28 @@ function within(style: "posix" | "win32", root: string, target: string): boolean
     host.resolve(root, relative) === host.resolve(target)
   );
 }
+export function validateMountCoverage(
+  coverage: MountCoverage,
+  pathStyle: "posix" | "win32",
+  operation: "file-read" | "dir-ensure",
+): void {
+  if (coverage.kind === "external-mapped-read") {
+    if (operation !== "file-read") {
+      throw new MountRecordError();
+    }
+    return;
+  }
+  const host = pathStyle === "win32" ? win32 : posix;
+  const normalized = (path: string) =>
+    path.length > 0 && !path.includes("\0") && host.isAbsolute(path) && host.resolve(path) === path;
+  if (
+    !normalized(coverage.root) ||
+    !normalized(coverage.target) ||
+    !within(pathStyle, coverage.root, coverage.target)
+  ) {
+    throw new MountRecordError();
+  }
+}
 export function containedMountRead(
   pathStyle: "posix" | "win32",
   cwd: string,
@@ -211,17 +233,7 @@ export function* parseMountRecord(value: unknown, name?: string): Operation<Moun
   ) {
     throw new MountRecordError();
   }
-  if (record.operation === "dir-ensure" && record.coverage.kind !== "existing") {
-    throw new MountRecordError();
-  }
-  if (
-    record.coverage.kind === "existing" &&
-    (record.coverage.target !== actual.value ||
-      !host.isAbsolute(record.coverage.root) ||
-      !within(b.pathStyle, record.coverage.root, actual.value))
-  ) {
-    throw new MountRecordError();
-  }
+  validateMountCoverage(record.coverage, b.pathStyle, record.operation);
   return record;
 }
 export function* admitMountRecords(events: readonly DurableEvent[]): Operation<void> {

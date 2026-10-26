@@ -3,6 +3,7 @@ import type { Operation } from "effection";
 import { API, cwd, fileWriteSuccess, filesFailure } from "@executablemd/runtime";
 import type { FilePathInput } from "@executablemd/runtime";
 import { collect, Elicitation, inlineSource } from "@executablemd/core";
+import { forEach } from "@effectionx/stream-helpers";
 import { executeInstalled } from "@executablemd/core/host";
 import type { DurableStream } from "@executablemd/durable-streams";
 import { workspaceMountInstallation } from "../../src/repl/workspace-mount-installation.ts";
@@ -24,6 +25,8 @@ export function mountedRun(
   calls: MountTrace,
   options: {
     pause?: boolean;
+    ordinaryHost?: boolean;
+    onOutput?: (chunk: string) => void;
     entryCwd?: string;
     ownedFileCoverage?: { root: string };
     refuseEnsure?: boolean;
@@ -109,18 +112,28 @@ export function mountedRun(
       mounts,
       owner === undefined ? undefined : () => owner,
     );
-    const execution = yield* executeInstalled({ ...inlineSource(source), includes: [], stream }, [
-      owner === undefined
-        ? installation
-        : {
-            ...installation,
-            admissions: [admitReplRepositoryHistory, ...(installation.admissions ?? [])],
-          },
-    ]);
+    const execution = yield* executeInstalled(
+      { ...inlineSource(source), includes: [], stream },
+      options.ordinaryHost
+        ? []
+        : [
+            owner === undefined
+              ? installation
+              : {
+                  ...installation,
+                  admissions: [admitReplRepositoryHistory, ...(installation.admissions ?? [])],
+                },
+          ],
+    );
     if (options.pause) {
       yield* spawn(() => collect(execution));
       yield* paused.operation;
       return "paused";
+    }
+    if (options.onOutput !== undefined) {
+      yield* forEach(function* (chunk: string) {
+        options.onOutput?.(chunk);
+      }, execution.output);
     }
     return String(yield* collect(execution));
   });
