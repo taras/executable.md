@@ -949,6 +949,20 @@ describe("Sidekick attachment boundaries", () => {
       expect(replGrammarError(args, undefined)).not.toBe(undefined);
     }
   });
+  it("declares the attachment SDK for both dependency layouts, at one version", function* () {
+    // Two layouts, not one: `deno.json` is what Deno resolves through, and
+    // `package.json` is what pnpm and Bun link per package. A dependency the
+    // attachment imports and only `deno.json` declares resolves under Deno and
+    // is missing from `packages/cli/node_modules`, so every Node and Bun
+    // invocation of this CLI fails to load — which no import-graph test selects
+    // for, because the manifests are not in anybody's import graph.
+    const imported = "@agentclientprotocol/sdk";
+    expect(yield* read(join(CLI, "src/sidekick-acp/bridge.ts"))).toContain(`from "${imported}"`);
+    const deno = JSON.parse(yield* read(join(CLI, "deno.json")));
+    const pkg = JSON.parse(yield* read(join(CLI, "package.json")));
+    const specifier = deno.imports?.[imported];
+    expect(specifier).toBe(`npm:${imported}@${pkg.dependencies?.[imported]}`);
+  });
   it("installs transport only at the four runtime assemblies and shared attachment code uses the contextual host", function* () {
     for (const entry of ["deno", "compiled", "node", "bun"]) {
       expect(yield* read(join(CLI, "src", entry + ".ts"))).toContain("usePosixSidekickTransport");

@@ -1141,7 +1141,13 @@ describe("A5: cancels pending endpoint directory acquisition", () => {
     yield* until(chmod(home, 0o700));
     const file = join(home, "attachment.json");
     const created = withResolvers<string>();
-    const release = Promise.withResolvers<void>();
+    // A raw promise, because the factory below is a plain callback the host
+    // calls outside this operation: Effection's own `withResolvers` hands back
+    // an operation, which that callback cannot await.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const cancelling = withResolvers<void>();
     let published = false;
     let joined = false;
@@ -1165,7 +1171,7 @@ describe("A5: cancels pending endpoint directory acquisition", () => {
     yield* usePosixSidekickTransport(process.platform, (prefix) =>
       mkdtemp(prefix).then((path) => {
         created.resolve(path);
-        return release.promise.then(() => path);
+        return released.then(() => path);
       }),
     );
     const host = yield* SidekickTransport.expect();
@@ -1196,10 +1202,10 @@ describe("A5: cancels pending endpoint directory acquisition", () => {
       yield* cancelling.operation;
       expect(joined).toBe(false);
       expect(published).toBe(false);
-      release.resolve();
+      release();
       yield* stopping;
     } finally {
-      release.resolve();
+      release();
     }
     let exists = true;
     try {

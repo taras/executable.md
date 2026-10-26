@@ -255,7 +255,14 @@ export function* useSidekickDispatch(options: {
             return sent;
           });
         } catch (error) {
+          // Recorded for this exchange's observers and then raised again. An
+          // error thrown out of the owner is not one of its ordinary refusals,
+          // which arrive as a failed Result: it is an authority — persistence,
+          // the files provider, disclosure — saying this command is over, so it
+          // reaches the owner of this producer rather than ending here as one
+          // message's failure.
           result = Err(error instanceof Error ? error : new Error(String(error)));
+          throw error;
         } finally {
           terminal = result;
           completed = snapshot();
