@@ -27,10 +27,14 @@ import type { AnswerConfiguration } from "@executablemd/core/host";
 import { executeInstalled } from "@executablemd/core/host";
 import { API } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { installTestingComponents, useTesting } from "@executablemd/testing";
+import {
+  installTestingComponents,
+  testHarnessInstallation,
+  useTesting,
+} from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
 import { installTestAgentComponents } from "../src/components.ts";
-import { installChildTestAgent } from "../src/child-configuration.ts";
+import { installChildTestAgent, testAgentChildDeclaration } from "../src/child-configuration.ts";
 import { useCommand } from "./command.ts";
 import { cliBase } from "@executablemd/test-support/launch";
 import type { Json } from "@executablemd/core";
@@ -44,6 +48,7 @@ interface Run {
 }
 
 interface RunOptions {
+  child?: boolean;
   session?: boolean;
   /**
    * Search these for repository components, relative to the fixture directory.
@@ -107,7 +112,21 @@ function* runDoc(files: Record<string, string>, options?: RunOptions): Operation
             ? { includes: options.includes.map((d) => path.join(dir, d)) }
             : {}),
         },
-        [{ components: agentIdentityComponents() }],
+        [
+          { components: agentIdentityComponents() },
+          ...(options?.child
+            ? [
+                testHarnessInstallation(
+                  {
+                    *runChild() {
+                      throw new Error("invalid catalog reached child provisioning");
+                    },
+                  },
+                  [testAgentChildDeclaration()],
+                ),
+              ]
+            : []),
+        ],
       );
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
@@ -127,6 +146,48 @@ const TWO_STAGES =
 
 describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResources: false }, () => {
   beforeAll(() => useTempFileCompiler());
+  it("rejects malformed catalogs equivalently in wrapper and nested declarations before provisioning", function* () {
+    const invalid = [
+      { selected: "A", options: [] },
+      { selected: "A", options: [{ id: "A" }, { id: "A" }] },
+      { selected: "missing", options: [{ id: "A" }] },
+      { selected: "A", options: [{ id: "" }] },
+      { selected: "A", options: [{ id: "A", efforts: { selected: "low", options: [] } }] },
+      { selected: "A", options: [{ id: "A", efforts: { selected: "missing", options: ["low"] } }] },
+      {
+        selected: "A",
+        options: [{ id: "A", efforts: { selected: "low", options: ["low", "low"] } }],
+      },
+    ];
+    for (const models of invalid) {
+      const declaration = `<TestAgent.Scenario session="review" src="./hi.md" models={${JSON.stringify(models)}} />`;
+      const wrapper = yield* runDoc({
+        "hi.md": HI,
+        "doc.md": `<TestAgent>\n${declaration}\n<Test name="unused">never reached</Test>\n</TestAgent>\n`,
+      });
+      expect(wrapper.result.ok).toBe(false);
+      const nested = yield* runDoc(
+        {
+          "hi.md": HI,
+          "doc.md": `<Test name="invalid nested">\n<Execution host="run" source="child">\n<TestAgent>\n${declaration}\n</TestAgent>\n</Execution>\n</Test>\n`,
+        },
+        { child: true },
+      );
+      expect(nested.results.map((result) => result.status)).toEqual(["fail"]);
+      expect(nested.output).not.toContain("invalid catalog reached child provisioning");
+    }
+  });
+
+  it("fails the owning Test when actual prompt configuration violates a constraint", function* () {
+    const run = yield* runDoc({
+      "hi.md": '<WhenPrompt template="hi" model="B" />\n\nwrong\n',
+      "doc.md":
+        '<TestAgent>\n<TestAgent.Scenario src="./hi.md" models={{selected:"A",options:[{id:"A"},{id:"B"}]}} />\n<Test name="mismatch">\n<Agent name="test"><Prompt>hi</Prompt></Agent>\n</Test>\n</TestAgent>\n',
+    });
+    expect(run.results.map((result) => result.status)).toEqual(["fail"]);
+    expect(run.output).toContain("Prompt configuration does not match");
+  });
+
   it("TV1: <TestAgent> outside an active testing session is a configuration error", function* () {
     const run = yield* runDoc(
       { "doc.md": "<TestAgent>\nbody\n</TestAgent>\n" },

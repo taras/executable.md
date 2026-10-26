@@ -26,6 +26,7 @@ interface Step {
   name?: string;
   run?: string;
   uses?: string;
+  with?: Record<string, string>;
 }
 
 interface Strategy {
@@ -80,6 +81,7 @@ function steps(value: unknown, label: string): Step[] {
       name: "name" in step ? string(step.name, `${label}[${index}].name`) : undefined,
       run: "run" in step ? string(step.run, `${label}[${index}].run`) : undefined,
       uses: "uses" in step ? string(step.uses, `${label}[${index}].uses`) : undefined,
+      with: "with" in step ? stringRecord(step.with, `${label}[${index}].with`) : undefined,
     };
   });
 }
@@ -408,6 +410,23 @@ describe("the sharded runtime jobs", () => {
         previous = at;
       }
     }
+  });
+
+  it("provides the real Deno lock host before Bun tests", function* () {
+    const parsed = yield* workflow();
+    const bun = matrixJob(parsed, "test-bun");
+    const node = matrixJob(parsed, "test-node");
+    const deno = bun.steps.findIndex((step) => step.uses?.startsWith("denoland/setup-deno@"));
+    const install = bun.steps.findIndex((step) => step.run === "bun install");
+    const nodeDeno = node.steps.find((step) => step.uses?.startsWith("denoland/setup-deno@"));
+    expect(deno).toBeGreaterThanOrEqual(0);
+    expect(deno).toBeLessThan(install);
+    expect(bun.steps[deno]?.uses).toBe(
+      "denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb",
+    );
+    expect(bun.steps[deno]?.uses).toBe(nodeDeno?.uses);
+    expect(bun.steps[deno]?.with?.["deno-version"]).toBe("v2.9.5");
+    expect(bun.steps[deno]?.with).toEqual(nodeDeno?.with);
   });
 
   it("keeps the Bun entrypoint smoke beside the Bun shards", function* () {

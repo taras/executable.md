@@ -17,6 +17,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import process from "node:process";
 import { useTestAgentController } from "../src/controller.ts";
+import { configOptions, selectConfiguration } from "../src/configuration.ts";
+import type { ScenarioModels } from "@executablemd/testing";
 import type { TestAgentControllerInternals } from "../src/controller.ts";
 import { useLineServer } from "../src/net.ts";
 import { cliCommand } from "@executablemd/test-support/launch";
@@ -163,7 +165,7 @@ interface GateHandle {
   release(): void;
 }
 
-type GateKind = "journal" | "recorded";
+type GateKind = "journal" | "recorded" | "configuration";
 
 interface GatedController {
   route: string;
@@ -178,7 +180,11 @@ interface GatedController {
  * worker inside a controller round-trip and drive cancellation
  * deterministically, without timing sleeps.
  */
-function* useGatedController(doc: { path: string; source: string }): Operation<GatedController> {
+function* useGatedController(
+  doc: { path: string; source: string },
+  initialModels?: ScenarioModels,
+): Operation<GatedController> {
+  let models = initialModels;
   const journal: DurableEvent[] = [];
   let gate: { kind: GateKind; held: WithResolvers<void>; release: WithResolvers<void> } | undefined;
   function* holdIf(kind: GateKind): Operation<void> {
@@ -208,12 +214,20 @@ function* useGatedController(doc: { path: string; source: string }): Operation<G
             doc,
             journal: [...journal],
             nativeSessionId: "native-worker-lifecycle",
+            ...(models === undefined ? {} : { models }),
           }),
         );
         yield* each.next();
         continue;
       }
       switch (message.t) {
+        case "configuration": {
+          const selected = selectConfiguration(models, message.configId, message.value);
+          yield* holdIf("configuration");
+          models = selected;
+          conn.send(encodeMessage({ t: "configuration", models }));
+          break;
+        }
         case "journal": {
           yield* holdIf("journal");
           journal.push(message.event);
@@ -288,7 +302,168 @@ function* runScenario(
   });
 }
 
+const MODELS = {
+  selected: "A",
+  options: [
+    { id: "A", efforts: { selected: "low", options: ["low", "high"] } },
+    { id: "B", efforts: { selected: "brief", options: ["brief", "deep"] } },
+    { id: "none" },
+  ],
+};
+
 describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("waits for configuration acknowledgement before returning refreshed choices or accepting a turn", function* () {
+    const controller = yield* useGatedController(
+      {
+        path: "config.md",
+        source: '<WhenPrompt template="go" model="B" effort="brief" />\n\nacknowledged\n',
+      },
+      MODELS,
+    );
+    const worker = yield* useWorker(controller.route);
+    yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+    const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
+    expect(created.result?.configOptions).toEqual(configOptions(MODELS));
+    const gate = controller.armGate("configuration");
+    let returned = false;
+    const pending = yield* spawn(function* () {
+      const result = yield* worker.request("session/set_config_option", {
+        sessionId: "s",
+        configId: "model",
+        value: "B",
+      });
+      returned = true;
+      return result;
+    });
+    yield* gate.held;
+    const refused = yield* worker.request("session/prompt", {
+      sessionId: "s",
+      prompt: [{ type: "text", text: "go" }],
+    });
+    expect(refused.error?.message).toContain("still being acknowledged");
+    expect(returned).toBe(false);
+    gate.release();
+    expect((yield* pending).result?.configOptions).toEqual(
+      configOptions(selectConfiguration(MODELS, "model", "B")),
+    );
+    expect(
+      (yield* worker.request("session/prompt", {
+        sessionId: "s",
+        prompt: [{ type: "text", text: "go" }],
+      })).result,
+    ).toMatchObject({ stopReason: "end_turn" });
+  });
+
+  it("reconnects with acknowledged settings and rehydrates constrained observations, refusing a missing snapshot", function* () {
+    const source =
+      '<WhenPrompt as="r" template="Review {?subject}" model="B" effort="deep" />\n\n{r.subject}\n\n<WhenPrompt template="done" model="A" effort="low" />\n\nfinished\n';
+    const dir = path.join(os.tmpdir(), `xmd-config-${randomUUID()}`);
+    yield* ensureDir(dir);
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    const controller = yield* useTestAgentController();
+    const scenario = yield* controller.useScenario({
+      document: { path: "config.md", source },
+      rootDir: dir,
+      models: MODELS,
+    });
+    let nativeId: unknown;
+    let journalBefore = 0;
+    yield* scoped(function* () {
+      const worker = yield* useWorker(scenario.route);
+      yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+      const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
+      const meta = created.result?._meta;
+      nativeId = isRecord(meta) ? meta.agentSessionId : undefined;
+      expect(typeof nativeId).toBe("string");
+      const record = controller.getScenarioRecord(scenario.id)!;
+      journalBefore = record.journal.length;
+      const invalid = yield* worker.request("session/set_config_option", {
+        sessionId: nativeId,
+        configId: "model",
+        value: "unknown",
+      });
+      expect(invalid.error).toBeDefined();
+      expect(record.journal.length).toBe(journalBefore);
+      expect(record.models).toEqual(MODELS);
+      for (const [configId, value] of [
+        ["model", "B"],
+        ["effort", "deep"],
+      ]) {
+        expect(
+          (yield* worker.request("session/set_config_option", {
+            sessionId: nativeId,
+            configId,
+            value,
+          })).error,
+        ).toBe(undefined);
+      }
+      const beforeMismatch = record.journal.length;
+      const mismatch = yield* worker.request("session/prompt", {
+        sessionId: nativeId,
+        prompt: [{ type: "text", text: "wrong" }],
+      });
+      expect(mismatch.error).toBeDefined();
+      expect(record.journal.length).toBe(beforeMismatch);
+      const matched = yield* worker.request("session/prompt", {
+        sessionId: nativeId,
+        prompt: [{ type: "text", text: "Review core" }],
+      });
+      expect(matched.result).toMatchObject({ stopReason: "end_turn" });
+      expect(chunkText(worker.notifications)).toContain("core");
+      yield* worker.request("session/set_config_option", {
+        sessionId: nativeId,
+        configId: "model",
+        value: "A",
+      });
+      const stages = record.journal.filter(
+        (event) => event.type === "yield" && event.description.type === "when_prompt",
+      );
+      expect(JSON.stringify(stages)).toContain('"configuration":{"model":"B","effort":"deep"}');
+    });
+    yield* scoped(function* () {
+      const worker = yield* useWorker(scenario.route);
+      yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+      const loaded = yield* worker.request("session/load", {
+        sessionId: nativeId,
+        cwd: "/",
+        mcpServers: [],
+      });
+      expect(loaded.error).toBe(undefined);
+      expect(loaded.result?.configOptions).toEqual(configOptions(MODELS));
+      const renewed = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
+      expect(renewed.result?._meta).toMatchObject({ agentSessionId: nativeId });
+    });
+    const record = controller.getScenarioRecord(scenario.id)!;
+    let removed = false;
+    for (const event of record.journal) {
+      if (
+        event.type === "yield" &&
+        event.description.type === "when_prompt" &&
+        event.result.status === "ok"
+      ) {
+        const value = event.result.value;
+        if (isRecord(value) && "configuration" in value) {
+          delete value.configuration;
+          removed = true;
+          break;
+        }
+      }
+    }
+    expect(removed).toBe(true);
+    const beforeCorruptLoad = record.journal.length;
+    yield* scoped(function* () {
+      const worker = yield* useWorker(scenario.route);
+      yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+      const loaded = yield* worker.request("session/load", {
+        sessionId: nativeId,
+        cwd: "/",
+        mcpServers: [],
+      });
+      expect(loaded.error?.message).toContain("Divergence: workflow root terminated");
+      expect(loaded.error?.message).toContain("unreached entry");
+      expect(record.journal.length).toBe(beforeCorruptLoad);
+    });
+  });
   it("TW1: initialize, session/new, matched turns, mismatch, restart + session/load", function* () {
     const dir = path.join(os.tmpdir(), `xmd-tw-${randomUUID()}`);
     yield* ensureDir(dir);
@@ -399,11 +574,17 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       const scenario = yield* controller.useScenario({
         document: { path: "slow.md", source: behavior },
         rootDir: dir,
+        models: MODELS,
       });
       const worker = yield* useWorker(scenario.route);
       yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
       const created = yield* worker.request("session/new", { cwd: "/", mcpServers: [] });
       const sessionId = created.result?.sessionId;
+      yield* worker.request("session/set_config_option", {
+        sessionId,
+        configId: "effort",
+        value: "high",
+      });
       const baseline = controller.getScenarioRecord(scenario.id)!.journal.length;
 
       const pending = yield* spawn(() =>
@@ -416,6 +597,9 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       worker.notify("session/cancel", { sessionId });
       const cancelled = yield* pending;
       expect(cancelled.result).toMatchObject({ stopReason: "cancelled" });
+      expect(controller.getScenarioRecord(scenario.id)?.models?.options[0].efforts?.selected).toBe(
+        "high",
+      );
       // Nothing committed: the controller journal is exactly where it
       // was before the cancelled turn.
       expect(controller.getScenarioRecord(scenario.id)!.journal.length).toBe(baseline);

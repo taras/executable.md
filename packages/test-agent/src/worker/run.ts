@@ -23,6 +23,8 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { encodeMessage, parseControllerMessage, parseRoute, PROBE_INSTANCE } from "../protocol.ts";
 import type { ControllerMessage, WorkerMessage } from "../protocol.ts";
+import { configOptions, configurationSnapshot } from "../configuration.ts";
+import type { ConfigurationSnapshot } from "../configuration.ts";
 import { createTurnBridge, collectTurn } from "./bridge.ts";
 import type { Captures } from "@executablemd/core";
 import { PromptMismatchError } from "@executablemd/core";
@@ -58,7 +60,7 @@ interface ScenarioRuntime {
   task: Task<void>;
   turnEvents: Subscription<BridgeEvent, never>;
   ready: Operation<void>;
-  offer(text: string): Operation<Result<Captures>>;
+  offer(text: string, configuration: ConfigurationSnapshot): Operation<Result<Captures>>;
   flush(): Operation<void>;
   isExhausted(): boolean;
   markExhausted(): void;
@@ -103,6 +105,7 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
   }
 
   const scenario = config;
+  let models = scenario.models;
   // The worker-side mirror of the controller's journal: only events the
   // controller has acknowledged. Cancellation rebuilds from exactly
   // this list.
@@ -250,7 +253,7 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
       task,
       turnEvents,
       ready: readiness.operation,
-      offer: (text) => bridge.offer(text),
+      offer: (text, configuration) => bridge.offer(text, configuration),
       flush,
       isExhausted: () => exhausted,
       markExhausted: () => {
@@ -261,6 +264,7 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
 
   let current = yield* startRuntime();
   let cancelRequested: (() => void) | undefined;
+  let configurationPending = false;
 
   function* restart(): Operation<void> {
     yield* current.task.halt();
@@ -287,7 +291,36 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
         client.send(session);
         return scenario.nativeSessionId;
       },
+      *configuration() {
+        yield* current.ready;
+        return configOptions(models);
+      },
+      *setConfiguration(configId, value) {
+        yield* current.ready;
+        if (configurationPending || cancelRequested !== undefined) {
+          throw new RequestError(-32602, "A scenario operation is already running.");
+        }
+        configurationPending = true;
+        try {
+          client.send({ t: "configuration", configId, value });
+          const reply = yield* client.next();
+          if (reply.t !== "configuration") {
+            throw new RequestError(
+              -32602,
+              reply.t === "error" ? reply.message : "Controller did not acknowledge configuration.",
+            );
+          }
+          models = reply.models;
+          return configOptions(models) ?? [];
+        } finally {
+          configurationPending = false;
+        }
+      },
       *runTurn(text): Operation<TurnResult> {
+        if (configurationPending) {
+          throw new RequestError(-32602, "Scenario configuration is still being acknowledged.");
+        }
+        const configuration = configurationSnapshot(models);
         if (current.isExhausted()) {
           yield* report({ t: "turn-failure", kind: "exhausted", actual: text });
           throw new RequestError(
@@ -302,10 +335,8 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
           const outcome = yield* race([
             cancellation.operation,
             (function* (): Operation<TurnResult> {
-              const match = yield* runtime.offer(text);
+              const match = yield* runtime.offer(text, configuration);
               if (!match.ok) {
-                // Only matchPrompt fails an offer, so the mismatch detail is
-                // always there; `text` is the prompt it compared against.
                 const mismatch =
                   match.error instanceof PromptMismatchError ? match.error : undefined;
                 const failure: WorkerMessage = {

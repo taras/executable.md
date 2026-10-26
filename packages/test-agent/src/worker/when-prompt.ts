@@ -7,12 +7,13 @@
  * advances to the active matcher without re-matching.
  */
 
-import { scoped } from "effection";
+import { scoped, Err } from "effection";
 import type { Operation } from "effection";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Json, Workflow } from "@executablemd/durable-streams";
 import {
   env,
+  PromptMismatchError,
   hasContent,
   getExpansion,
   matchPrompt,
@@ -32,14 +33,22 @@ import type {
 
 import type { TurnBridge } from "./bridge.ts";
 
+import { z } from "zod";
+import type { ConfigurationSnapshot } from "../configuration.ts";
+
+const snapshotSchema = z
+  .object({ model: z.string().min(1).nullable(), effort: z.string().min(1).nullable() })
+  .strict();
+
 const WHEN_PROMPT = "when_prompt";
 
 interface StageRecord {
   prompt: string;
   captures: Record<string, string>;
+  configuration?: ConfigurationSnapshot;
 }
 
-function parseStageRecord(value: unknown): StageRecord | undefined {
+function parseStageRecord(value: unknown, constrained: boolean): StageRecord | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
@@ -60,7 +69,17 @@ function parseStageRecord(value: unknown): StageRecord | undefined {
     }
     parsed[name] = text;
   }
-  return { prompt, captures: parsed };
+  const snapshot = snapshotSchema.safeParse(
+    "configuration" in value ? value.configuration : undefined,
+  );
+  if (constrained && !snapshot.success) {
+    return undefined;
+  }
+  return {
+    prompt,
+    captures: parsed,
+    ...(constrained && snapshot.success ? { configuration: snapshot.data } : {}),
+  };
 }
 
 function configError(message: string): ErrorSegment {
@@ -84,13 +103,36 @@ function* awaitMatch(
   bridge: TurnBridge,
   template: ParsedTemplate,
   bindings: Record<string, unknown>,
+  constraints: { model?: string | null; effort?: string | null },
 ): Operation<StageRecord> {
   while (true) {
     const offer = yield* bridge.nextOffer();
-    const outcome = matchPrompt(template, offer.text, bindings);
+    let outcome = matchPrompt(template, offer.text, bindings);
+    const constrained = Object.keys(constraints).length > 0;
+    if (
+      outcome.ok &&
+      constrained &&
+      (!offer.configuration ||
+        Object.entries(constraints).some(
+          ([key, value]) => offer.configuration?.[key === "model" ? "model" : "effort"] !== value,
+        ))
+    ) {
+      outcome = Err(
+        new PromptMismatchError(
+          "mismatch",
+          JSON.stringify(constraints),
+          JSON.stringify(offer.configuration),
+          "Prompt configuration does not match <WhenPrompt> constraints.",
+        ),
+      );
+    }
     offer.respond(outcome);
     if (outcome.ok) {
-      return { prompt: offer.text, captures: outcome.value };
+      return {
+        prompt: offer.text,
+        captures: outcome.value,
+        ...(constrained ? { configuration: offer.configuration } : {}),
+      };
     }
   }
 }
@@ -98,6 +140,7 @@ function* awaitMatch(
 function* persistStage(
   identity: { name: string; input: string; position?: Readonly<SourcePosition> },
   live: () => Operation<StageRecord>,
+  constrained: boolean,
 ): Workflow<StageRecord> {
   const stored = yield createDurableOperation<Json>(
     {
@@ -108,10 +151,16 @@ function* persistStage(
     },
     function* (): Operation<Json> {
       const record = yield* live();
-      return { prompt: record.prompt, captures: record.captures };
+      return {
+        prompt: record.prompt,
+        captures: record.captures,
+        ...(record.configuration === undefined
+          ? {}
+          : { configuration: { ...record.configuration } }),
+      };
     },
   );
-  const parsed = parseStageRecord(stored);
+  const parsed = parseStageRecord(stored, constrained);
   if (!parsed) {
     throw new Error(`journaled when_prompt "${identity.name}" has an unexpected shape`);
   }
@@ -160,6 +209,14 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
       return reported.message;
     }
 
+    const constraints: { model?: string | null; effort?: string | null } = {};
+    if (props.model !== undefined) {
+      constraints.model = typeof props.model === "string" ? props.model : null;
+    }
+    if (props.effort !== undefined) {
+      constraints.effort = typeof props.effort === "string" ? props.effort : null;
+    }
+    const constrained = Object.keys(constraints).length > 0;
     const expansion = yield* getExpansion();
     const location = formatLocation(expansion);
     const ordinal = ordinals.get(location) ?? 0;
@@ -172,13 +229,30 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
     // follows all of that stage's output through one ordered channel,
     // so the collector never loses the final chunk.
     const record = yield* persistStage(
-      { name: `when:${location}#${ordinal}`, input: source, position: expansion.position },
+      {
+        name: `when:${location}#${ordinal}`,
+        input: constrained
+          ? JSON.stringify({ template: source, configuration: constraints })
+          : source,
+        position: expansion.position,
+      },
       () =>
         scoped(function* () {
           yield* bridge.events.send({ kind: "suspended", stage: source });
-          return yield* awaitMatch(bridge, parsed.value, currentEnv.values);
+          return yield* awaitMatch(bridge, parsed.value, currentEnv.values, constraints);
         }),
+      constrained,
     );
+
+    if (
+      constrained &&
+      (!record.configuration ||
+        Object.entries(constraints).some(
+          ([key, value]) => record.configuration?.[key === "model" ? "model" : "effort"] !== value,
+        ))
+    ) {
+      throw new Error("Journaled prompt configuration does not satisfy its recorded constraints.");
+    }
 
     // Returned rather than bound here: `as` is the engine's, and a return binds
     // by reference under it. A template with captures invoked without `as`
@@ -201,6 +275,10 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
 
 const WHEN_PROMPT_PROPS: PropsSchema = {
   type: "object",
-  properties: { template: { type: "string" } },
+  properties: {
+    template: { type: "string" },
+    model: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
+    effort: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
+  },
   additionalProperties: false,
 };

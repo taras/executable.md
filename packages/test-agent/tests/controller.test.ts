@@ -51,7 +51,82 @@ function* useClient(route: string): Operation<TestClient> {
   };
 }
 
+const MODELS = {
+  selected: "A",
+  options: [
+    { id: "A", efforts: { selected: "low", options: ["low", "high"] } },
+    { id: "B", efforts: { selected: "brief", options: ["brief", "deep"] } },
+    { id: "none" },
+  ],
+};
+
 describe("Tier TC — controller", () => {
+  it("acknowledges exact selections per scenario, retaining each model's effort", function* () {
+    const controller = yield* useTestAgentController();
+    const scenario = yield* controller.useScenario({
+      document: { path: "config.md", source: '<WhenPrompt template="hi" />' },
+      rootDir: os.tmpdir(),
+      models: MODELS,
+    });
+    const sibling = yield* controller.useScenario({
+      document: { path: "config.md", source: '<WhenPrompt template="hi" />' },
+      rootDir: os.tmpdir(),
+      models: MODELS,
+    });
+    yield* scoped(function* () {
+      const parsed = parseRoute(scenario.route);
+      if (!parsed.ok) {
+        throw parsed.error;
+      }
+      const client = yield* useClient(scenario.route);
+      client.send({ t: "attach", token: parsed.value.token, instance: scenario.id });
+      expect(yield* client.next()).toMatchObject({ t: "config", models: MODELS });
+      for (const [configId, value] of [
+        ["effort", "high"],
+        ["model", "B"],
+        ["effort", "deep"],
+        ["model", "A"],
+        ["model", "A"],
+      ]) {
+        client.send({ t: "configuration", configId, value });
+        expect((yield* client.next()).t).toBe("configuration");
+      }
+      const record = controller.getScenarioRecord(scenario.id);
+      expect(record?.models?.selected).toBe("A");
+      expect(record?.models?.options[0].efforts?.selected).toBe("high");
+      expect(record?.models?.options[1].efforts?.selected).toBe("deep");
+      const before = JSON.stringify(record?.models);
+      for (const [configId, value] of [
+        ["model", "unknown"],
+        ["effort", "deep"],
+        ["other", "A"],
+      ]) {
+        client.send({ t: "configuration", configId, value });
+        expect((yield* client.next()).t).toBe("error");
+        expect(JSON.stringify(record?.models)).toBe(before);
+      }
+      expect(controller.getScenarioRecord(sibling.id)?.models).toEqual(MODELS);
+    });
+    yield* scoped(function* () {
+      const parsed = parseRoute(scenario.route);
+      if (!parsed.ok) {
+        throw parsed.error;
+      }
+      const client = yield* useClient(scenario.route);
+      client.send({ t: "attach", token: parsed.value.token, instance: scenario.id });
+      expect(yield* client.next()).toMatchObject({
+        t: "config",
+        models: {
+          selected: "A",
+          options: [
+            { id: "A", efforts: { selected: "high" } },
+            { id: "B", efforts: { selected: "deep" } },
+            { id: "none" },
+          ],
+        },
+      });
+    });
+  });
   it("TC1: probe attach configures probe mode; bad tokens are rejected", function* () {
     const controller = yield* useTestAgentController();
     const parsed = parseRoute(controller.probeRoute);
