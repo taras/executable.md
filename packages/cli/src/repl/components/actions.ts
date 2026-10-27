@@ -227,6 +227,14 @@ export type ReplAction =
   | { readonly kind: "select-session"; readonly session: string }
   /** Show every conversation again. Distinct from selecting one, so it cannot be a key nobody has. */
   | { readonly kind: "all-sessions" }
+  /**
+   * Show the Transcript's conversation choices, or put them away again.
+   *
+   * Presentation and nothing else: it starts no provider, writes no record and
+   * changes no filter. Closing the choices leaves whichever conversation is
+   * chosen exactly as it stands, because dismissing a chooser is not a choice.
+   */
+  | { readonly kind: "toggle-session-filter" }
   /** Open the drawer over the one pending permission request this key names. */
   | { readonly kind: "select-permission"; readonly request: string }
   /** Answer the selected request with one option the provider offered. */

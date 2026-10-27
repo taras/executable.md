@@ -1008,10 +1008,19 @@ selected entry, the conversation filter and the draft.
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 The **Transcript** on the left is the agent work this execution has, read as
-requests and replies: a closed **All sessions** selector at its head, then the
-**Entry agents** and **Sidekick** groups described under
-[Sessions](#sessions-two-owners-and-which-conversation-you-are-reading), each
-conversation named by what the provider actually opened.
+requests and replies, as **one list**: the entry agents' turns and the
+Sidekick's in the same list, neither of them under a heading of its own. Each
+row says whose work it is and which conversation it was in, which is how the two
+owners are told apart here — they keep their own authority and their own
+recorded order, and one displayed list does not merge their histories.
+
+The **All sessions** selector at its head is the filter for that list. It is a
+control: activating it shows the conversations this reading holds — the same
+choices [Sessions](#sessions-two-owners-and-which-conversation-you-are-reading)
+offers, each named by what the provider actually opened — and choosing one
+leaves only that conversation's rows, whichever owner did them. **All sessions**
+brings them all back. The choices are put away again by choosing one or by
+activating the selector a second time, and putting them away chooses nothing.
 
 The **selected work** in the centre names the entry and the scopes you are
 reading as breadcrumbs, with the way to the Entries catalog in front of them, and

@@ -1029,6 +1029,16 @@ export interface ReplState {
    * submission are paused — not refused forever, and not silently resumed.
    */
   readonly takenOver: boolean;
+  /**
+   * Whether the Transcript's conversation selector is showing its choices.
+   *
+   * Process-local, like the question form and the Configure drawer: whether a
+   * chooser happens to be open is a fact about somebody standing in front of
+   * this terminal, and a location that carried it would describe a screen
+   * rather than a reading. Which conversation is *chosen* is the route's
+   * {@link ReplRoute.session}, and closing the chooser leaves it alone.
+   */
+  readonly filtering: boolean;
 }
 
 /** What the root must perform, because a component cannot. */
@@ -1486,6 +1496,7 @@ export function initialState(execution: string): ReplState {
     message: "",
     revisions: initialRevisions(),
     takenOver: false,
+    filtering: false,
   });
 }
 
@@ -1519,6 +1530,9 @@ export function stateFor(location: string): Result<ReplState> {
       message: "",
       revisions: initialRevisions(),
       takenOver: false,
+      // Closed, for the same reason: a reader arriving at a location is shown
+      // the conversation it names, not somebody else's open chooser.
+      filtering: false,
     }),
   );
 }
@@ -2030,10 +2044,26 @@ export function reduceRepl(
       // The window goes back to the first row, because a filtered reading is a
       // different list: row forty of everything is not row forty of one
       // conversation, and keeping the number would open somewhere nobody chose.
-      return navigate(atFirstRow(state), model, { ...state.route, session: action.session }, live);
+      return navigate(
+        chosen(atFirstRow(state)),
+        model,
+        { ...state.route, session: action.session },
+        live,
+      );
     }
     case "all-sessions": {
-      return navigate(atFirstRow(state), model, { ...state.route, session: undefined }, live);
+      return navigate(
+        chosen(atFirstRow(state)),
+        model,
+        { ...state.route, session: undefined },
+        live,
+      );
+    }
+    case "toggle-session-filter": {
+      // Presentation alone. The chosen conversation, the window, the surface,
+      // the scope path, the history position and both drafts stay exactly as
+      // they stand: putting the choices away is not choosing one of them.
+      return settled(Object.freeze({ ...state, filtering: !state.filtering }));
     }
     case "read-sidekick-turn": {
       // The reading moves and nothing else does: the surface, the selected
@@ -3252,6 +3282,16 @@ function revealedAt(
     return undefined;
   }
   return Math.min(Math.max(0, at - capacity + 1), at);
+}
+
+/**
+ * The same state with the Transcript's conversation choices put away.
+ *
+ * Choosing one is the whole of what the chooser is for, so it closes behind the
+ * choice rather than staying open over the reading it just changed.
+ */
+function chosen(state: ReplState): ReplState {
+  return state.filtering ? Object.freeze({ ...state, filtering: false }) : state;
 }
 
 /** The same state with the Sessions reading back at its first row. */
@@ -5432,17 +5472,22 @@ function sessionRows(
    *
    * Absent is no Sidekick installation at all, and the surface then draws
    * exactly the one entry reading it always did — no section headings, and the
-   * same empty placeholder. Present is the two labelled sections, because an
-   * execution that has a Sidekick has two owners doing agent work and one
-   * interleaved list would have to assert an order these two files do not share.
+   * same empty placeholder. Present is both owners' work: two labelled sections
+   * on the Sessions surface, and one combined list in the staged Transcript.
+   * Neither interleaves them — the entry turns keep their order and the chat's
+   * follow in theirs, because an interleaving would have to assert an order
+   * these two files do not share.
    */
   sidekick: ReplSidekickReading | undefined,
   /**
    * Whether these are the staged composition's compact request and reply rows.
    *
-   * The same rows, keys and actions. The conversation choices move to the
-   * column's selector, each request and reply is marked with who it came from,
-   * and a conversation is named once above the run of turns that share it.
+   * The same rows, keys and actions, drawn as one list: the Transcript is a
+   * single reading, so neither owner is given a heading of its own. The
+   * conversation choices belong to the column's selector and are drawn here
+   * only while it is open, each request and reply is marked with who it came
+   * from, and a conversation is named once above the run of turns that share
+   * it.
    */
   compact = false,
 ): readonly Described[] {
@@ -5457,7 +5502,9 @@ function sessionRows(
       offered.push(key);
     }
   }
-  if (offered.length > 0 && !compact) {
+  // The Sessions surface keeps its choices above its list; the staged
+  // Transcript keeps them behind its selector and shows them while it is open.
+  if (offered.length > 0 && (!compact || state.filtering)) {
     // All is a control rather than the absence of one: clearing a filter is
     // something a person does, and a list that could only be narrowed would
     // leave them holding a view they cannot get out of.
@@ -5487,9 +5534,15 @@ function sessionRows(
   }
   // Which owner's work this is, said once above each list. Without a Sidekick
   // there is one owner and the surface says so by having no sections at all;
-  // with one there are two, in a fixed order, each keeping its own history's
-  // order rather than being merged into an order neither file establishes.
-  if (sidekick !== undefined) {
+  // with one the Sessions surface names two, in a fixed order, each keeping its
+  // own history's order rather than being merged into an order neither file
+  // establishes.
+  //
+  // The staged Transcript names none of them. It is one list — that is the
+  // reading it was asked for — and each row still says whose work it is and
+  // which conversation it was in, so owner authority is read from the rows
+  // rather than asserted by a heading over a block of them.
+  if (sidekick !== undefined && !compact) {
     items.push(line("sessions:section:entries", "  Entry agents", styleOf("pane-heading")));
   }
   const entries: Described[] = [];
@@ -5628,12 +5681,15 @@ function sessionRows(
     // One owner, one list, and exactly the surface this has always been.
     return items;
   }
-  if (entries.length === 0) {
+  if (entries.length === 0 && !compact) {
     // Said rather than left blank: a section that drew nothing would read as a
     // gap, and a reader cannot tell a gap from a list that failed to appear.
+    // One list has no section to report empty, so it says so once at the end.
     items.push(line("sessions:entries:none", "    No entry turns.", styleOf("metadata")));
   }
-  items.push(line("sessions:section:sidekick", "  Sidekick", styleOf("pane-heading")));
+  if (!compact) {
+    items.push(line("sessions:section:sidekick", "  Sidekick", styleOf("pane-heading")));
+  }
   if (sidekick.refusal !== undefined) {
     // A chat history this version cannot read. Its own reason stands here, and
     // it does not masquerade as a Sidekick that has done no work: showing
@@ -5646,6 +5702,15 @@ function sessionRows(
   }
   const chat = sidekick.turns.filter((turn) => filter === undefined || turn.sessionKey === filter);
   if (chat.length === 0) {
+    if (compact) {
+      // One list, so one placeholder, and only where the whole list is empty.
+      // A Transcript that said "no Sidekick turns" under an entry turn it is
+      // already showing would be naming a section this reading does not have.
+      if (entries.length === 0) {
+        items.push(line("sessions:none", `${CONTROL_ROOM}(none retained)`, styleOf("metadata")));
+      }
+      return items;
+    }
     items.push(line("sessions:sidekick:none", "    No Sidekick turns.", styleOf("metadata")));
     return items;
   }
@@ -9135,10 +9200,16 @@ function workspaceChatComposed(
 /**
  * The staged left column's own headings, and the selected work's.
  *
- * The Transcript names itself and its closed conversation selector; the
- * selected work names the entry and the scopes being read as breadcrumbs, with
- * the way to the Entries catalog in front of them and the entry's state at the
- * end. The selector draws no choices while it is closed.
+ * The Transcript names itself and its conversation selector; the selected work
+ * names the entry and the scopes being read as breadcrumbs, with the way to the
+ * Entries catalog in front of them and the entry's state at the end.
+ *
+ * The selector is a control, not a caption: activating it shows the
+ * conversations this reading actually holds, as the same choices the Sessions
+ * surface offers, and activating it again puts them away. The choices
+ * themselves are rows of the list it filters, because that is the thing they
+ * move — a chooser drawn in the heading band would be a list of controls in a
+ * region measured for one row.
  */
 function workspaceHeadings(
   view: ReplView,
@@ -9154,10 +9225,12 @@ function workspaceHeadings(
   if (shown.transcript) {
     items.push(line("transcript:title", "TRANSCRIPT", styleOf("pane-heading")));
     items.push(
-      line(
+      row(
         "transcript:selector",
         `${view.state.route.session === undefined ? "All sessions" : headline(view.state.route.session)} ▾`,
-        styleOf("field-label"),
+        { select: "session-filter" },
+        styleOf("field-label", { selected: view.state.filtering }),
+        { here: view.focused },
       ),
     );
   }
@@ -9994,7 +10067,12 @@ export function workspaceHeaderLines(
     }
     lines.push({
       key: `header:${header.id}`,
-      text: `${left}${" ".repeat(header.gap)}${right}`,
+      // Two gaps, not one: the drawn row is the left group, the spacer that
+      // takes what is over, and the right group, and the engine puts its gap on
+      // both sides of that spacer. A text that counted one of them would say a
+      // row fits in the one case where it is exactly one gap too wide, and the
+      // engine would then squeeze a fitted label onto a fraction of a cell.
+      text: `${left}${" ".repeat(header.gap * 2)}${right}`,
       room,
     });
   }

@@ -343,6 +343,9 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "all-sessions") {
     return { kind: "all-sessions" };
   }
+  if (select === "session-filter") {
+    return { kind: "toggle-session-filter" };
+  }
   // One saved Sidekick turn, by its own chat and canonical ordinal. Both,
   // because a turn number means nothing outside the conversation that holds
   // it, and a row that carried only one of them would open a chat at a turn

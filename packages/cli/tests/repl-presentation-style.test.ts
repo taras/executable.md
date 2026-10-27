@@ -107,13 +107,18 @@ import {
 } from "./fixtures/repl/presentation.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
 import {
+  CHECKPOINT_DRAFT,
+  CHECKPOINT_LIVE,
   CHECKPOINT_MEDIUM,
+  CHECKPOINT_MESSAGE,
   CHECKPOINT_NARROW,
+  CHECKPOINT_SIDEKICK,
   CHECKPOINT_SIZE,
   CHECKPOINT_SIZES,
   CHECKPOINT_ASKING,
   chatAt,
   checkpointModel,
+  checkpointViewOf,
   crowdedQueue,
   checkpointScopes,
   checkpointStateModel,
@@ -4598,6 +4603,167 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
     expect(grid.styleAt(state.x, state.y).foreground).not.toBe(
       grid.styleAt(placed(observed, "work:crumbs").x, state.y).foreground,
     );
+  });
+
+  /**
+   * #971: the Transcript is one list, and the conversations are its filter.
+   *
+   * The person who accepted this screen asked for exactly that — one list
+   * rather than two headed sections, with All sessions filtering it
+   * (`human-transcript-single-list-20261027-1706.json`). Every fact here is the
+   * reading's own: two owners that really did work under two different provider
+   * session keys, and the keys themselves read from those records rather than
+   * named here.
+   *
+   * One displayed list is not one lifetime. The owners keep their own authority
+   * and their own recorded order — this asserts what a reader sees and what the
+   * selector does to it, and nothing about merging the two histories.
+   */
+  it("A5: one Transcript list, with the conversations as its filter", function* () {
+    const entryTurn = CHECKPOINT_LIVE.agent.turns[0];
+    const chatTurn = CHECKPOINT_SIDEKICK.turns[0];
+    if (entryTurn === undefined || chatTurn === undefined) {
+      throw new Error("this reading holds no turn for one of its two owners");
+    }
+    // Two owners, two provider conversations: a filter that kept both rows
+    // under either key would prove nothing about filtering.
+    const entryKey = entryTurn.sessionKey;
+    const chatKey = chatTurn.sessionKey;
+    if (entryKey === undefined || chatKey === undefined || entryKey === chatKey) {
+      throw new Error("this reading does not hold two separate provider conversations");
+    }
+    const entryRow = `sessions:turn:${entryTurn.key}`;
+    const chatRow = `sessions:${chatTurn.key}`;
+
+    const presenter = yield* usePresenter(CHECKPOINT_SIZE);
+    const opened = yield* commitCheckpoint(presenter);
+    const { model } = opened;
+
+    /** What activating one drawn row asks for, as the pointer reaches it. */
+    function* activated(observed: Observed, key: string): Operation<ReplAction> {
+      const bounds = placed(observed, key);
+      const pointed = yield* presenter.tree.dispatch({
+        kind: "pointer",
+        target: observed.committed.rendered.map.at(bounds.x, bounds.y) ?? "",
+        frame: observed.committed.rendered.tree,
+      });
+      if (!pointed.ok) {
+        throw new Error(`activating ${key} was refused`);
+      }
+      return asked(pointed.value);
+    }
+
+    /** The next frame of this same screen, after one action was reduced. */
+    function* acted(
+      state: ReplState,
+      action: ReplAction,
+    ): Operation<{ readonly state: ReplState; readonly observed: Observed }> {
+      const next = reduceRepl(state, action, model, CHECKPOINT_LIVE);
+      // Filtering is a reading, not work: no provider is started and no record
+      // is written by any of these.
+      expect(next.intent).toEqual({ kind: "none" });
+      const observed = yield* presenter.commit(
+        checkpointViewOf(model, presenter.tree.keyOf(presenter.tree.focused() ?? "") ?? undefined, {
+          state: next.state,
+        }),
+      );
+      return { state: next.state, observed };
+    }
+
+    // One list. A row from each owner is in it, and there is no heading over
+    // either of them and no per-owner placeholder beneath either.
+    expect(opened.observed.keys).toContain(entryRow);
+    expect(opened.observed.keys).toContain(chatRow);
+    for (const gone of [
+      "sessions:section:entries",
+      "sessions:section:sidekick",
+      "sessions:entries:none",
+      "sessions:sidekick:none",
+    ]) {
+      expect({ key: gone, drawn: opened.observed.keys.includes(gone) }).toEqual({
+        key: gone,
+        drawn: false,
+      });
+    }
+    // Each row still says whose work it is, which is where owner authority is
+    // read now that no heading says it.
+    expect(opened.observed.cells.get(`${entryRow}:whose`) ?? "").toContain(entryKey);
+    expect(opened.observed.cells.get(`${chatRow}:whose`) ?? "").toContain(chatTurn.conversation);
+    // And each goes where it always did.
+    const toEntry = yield* activated(opened.observed, entryRow);
+    const toChat = yield* activated(opened.observed, chatRow);
+    expect(toChat).toEqual({
+      kind: "read-sidekick-turn",
+      conversation: chatTurn.conversation,
+      turn: chatTurn.turn,
+    });
+
+    // The selector is a control a keystroke reaches, not a caption — and it
+    // draws no choices while it is closed.
+    yield* focusOn(presenter, "transcript:selector");
+    const pressed = yield* presenter.tree.dispatch({ kind: "key", key: "Enter" });
+    if (!pressed.ok) {
+      throw new Error("the Transcript selector refused its own activation");
+    }
+    expect(asked(pressed.value)).toEqual({ kind: "toggle-session-filter" });
+    expect(opened.observed.keys.some((key) => key.startsWith("sessions:conversation:"))).toBe(
+      false,
+    );
+
+    // Opened, it offers the conversations this reading actually holds, once
+    // each, with the way back to all of them.
+    const showing = yield* acted(opened.view.state, { kind: "toggle-session-filter" });
+    expect(showing.observed.keys).toContain("sessions:all");
+    expect(showing.observed.keys).toContain(`sessions:conversation:${entryKey}`);
+    expect(showing.observed.keys).toContain(`sessions:conversation:${chatKey}`);
+    // Both owners' rows are still in the list behind the open chooser.
+    expect(showing.observed.keys).toContain(entryRow);
+    expect(showing.observed.keys).toContain(chatRow);
+
+    // Choosing one is the key that row names, and it filters the whole list:
+    // only that conversation's rows remain, across both owners.
+    const chose = yield* activated(showing.observed, `sessions:conversation:${entryKey}`);
+    expect(chose).toEqual({ kind: "select-session", session: entryKey });
+    const filtered = yield* acted(showing.state, chose);
+    expect(filtered.state.route.session).toBe(entryKey);
+    expect(filtered.observed.keys).toContain(entryRow);
+    expect(filtered.observed.keys).not.toContain(chatRow);
+    // The choice closes the chooser behind it, and the selector says what is
+    // chosen.
+    expect(filtered.observed.keys.some((key) => key.startsWith("sessions:conversation:"))).toBe(
+      false,
+    );
+    expect(filtered.observed.cells.get("transcript:selector") ?? "").toContain(entryKey);
+    // The entry row goes exactly where it went unfiltered.
+    expect(yield* activated(filtered.observed, entryRow)).toEqual(toEntry);
+    // Nothing anybody was typing moved.
+    expect(filtered.state.draft).toBe(CHECKPOINT_DRAFT);
+    expect(filtered.state.message).toBe(CHECKPOINT_MESSAGE);
+
+    // All sessions restores both owners' rows to the one list.
+    const restored = yield* acted(filtered.state, { kind: "all-sessions" });
+    expect(restored.state.route.session).toBe(undefined);
+    expect(restored.observed.keys).toContain(entryRow);
+    expect(restored.observed.keys).toContain(chatRow);
+
+    // The other conversation filters to its own owner's rows, so the filter is
+    // the key rather than a section this list no longer has.
+    const theirs = yield* acted(restored.state, { kind: "select-session", session: chatKey });
+    expect(theirs.observed.keys).toContain(chatRow);
+    expect(theirs.observed.keys).not.toContain(entryRow);
+
+    // And closing the chooser without choosing changes no selection: the
+    // conversation stands, the list stands, and both texts stand.
+    const reopened = yield* acted(theirs.state, { kind: "toggle-session-filter" });
+    const closed = yield* acted(reopened.state, { kind: "toggle-session-filter" });
+    expect(closed.state.route).toEqual(theirs.state.route);
+    expect(closed.observed.keys.some((key) => key.startsWith("sessions:conversation:"))).toBe(
+      false,
+    );
+    expect(closed.observed.keys).toContain(chatRow);
+    expect(closed.observed.keys).not.toContain(entryRow);
+    expect(closed.state.draft).toBe(CHECKPOINT_DRAFT);
+    expect(closed.state.message).toBe(CHECKPOINT_MESSAGE);
   });
 });
 

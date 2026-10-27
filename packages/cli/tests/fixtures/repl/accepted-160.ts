@@ -10,6 +10,15 @@
  *
  * Coordinates are zero-based cells; widths and heights are whole cells.
  * Colours are 24-bit, as the renderer reports them back.
+ *
+ * One part of that capture has since been superseded by the person who accepted
+ * it: the Transcript held two headed sections, and they asked for one list with
+ * the conversations as its filter
+ * (`human-transcript-single-list-20261027-1706.json`). The rows in that column
+ * are therefore what the correction draws rather than what attempt 4 drew, and
+ * the corrected screen is itself pending review. Everything else here — every
+ * region, every pinned control, every probed cell and every other row — is
+ * still the accepted capture and is not re-transcribed from production.
  */
 
 /** One rectangle of the accepted screen. */
@@ -653,23 +662,23 @@ export const ACCEPTED_160 = Object.freeze({
     },
     {
       y: 5,
-      text: "   codex · sess-architect-7f2c      │  │  Reading checkout.md and                                     │     fix it?                                             ",
+      text: "   [A] Review checkout… · streaming │  │  Reading checkout.md and                                     │     fix it?                                             ",
     },
     {
       y: 6,
-      text: "   [A] Review checkout… · streaming │  │  architecture.md                                             │                                                         ",
+      text: "       Reading checkout.md and arc… │  │  architecture.md                                             │                                                         ",
     },
     {
       y: 8,
-      text: "   Sidekick                         │  │  # Review the checkout total                                 │     total, so I computed it in checkout.md.             ",
+      text: "   [U] Checkout fails:… · completed │  │  # Review the checkout total                                 │     total, so I computed it in checkout.md.             ",
     },
     {
       y: 9,
-      text: "   claude · chat · sess-sidekick-4… │  │                                                              │                                                         ",
+      text: "   [S] The API response has subtot… │  │                                                              │                                                         ",
     },
     {
       y: 13,
-      text: "   [S] I started the Architect rev… │  │  ```                                                         │                                                         ",
+      text: "                                    │  │  ```                                                         │                                                         ",
     },
     {
       y: 15,
