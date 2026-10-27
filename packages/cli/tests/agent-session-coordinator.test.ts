@@ -573,3 +573,92 @@ describe("Tier HC — host session ownership", () => {
     expect(useExecutableObserver() === undefined).toBe(!onDeno());
   });
 });
+
+import {
+  parseAgentSessionOwnership,
+  serializeAgentSessionOwnership,
+  agentSessionKeyDigest,
+} from "@executablemd/runtime";
+import { hostAcpDependencies, resolvePlanWriterStack } from "../src/agent-stack.ts";
+
+describe("Current ownership format and administration assembly", () => {
+  it("HC13: one closed current shape retains force facts and refuses format selection", function* () {
+    const keyDigest = agentSessionKeyDigest({
+      provider: "acpx",
+      agent: "fixture",
+      sessionKey: "fixture",
+    });
+    const current = {
+      keyDigest,
+      state: "idle",
+      ownerKind: "session",
+      operationId: "old",
+      release: "quiesced",
+      lastForcedRecovery: null,
+    };
+    const marker = {
+      recoveryId: "00000000-0000-4000-8000-000000000001",
+      abandonedOwnerKind: "prompt",
+      abandonedOperationId: "old",
+      expectedRevision: "a".repeat(64),
+      backendQuiescenceProved: false,
+      interruptedOutcome: "unknown",
+    };
+    const forced = {
+      ...current,
+      ownerKind: "prompt",
+      release: "forced",
+      lastForcedRecovery: marker,
+    };
+    for (const value of [current, forced]) {
+      const parsed = parseAgentSessionOwnership(value);
+      expect(parsed).toEqual(value);
+      if (!parsed) {
+        throw new Error("valid fixture refused");
+      }
+      expect(JSON.parse(serializeAgentSessionOwnership(parsed))).not.toHaveProperty("schema");
+      expect(
+        parseAgentSessionOwnership(JSON.parse(serializeAgentSessionOwnership(parsed))),
+      ).toEqual(value);
+    }
+    const { release: _release, lastForcedRecovery: _last, ...incomplete } = current;
+    for (const invalid of [
+      incomplete,
+      { schema: "agent-session-ownership.v1", ...incomplete },
+      { schema: "agent-session-ownership.v2", ...forced },
+      { schema: "agent-session-ownership.v3", ...forced },
+      { ...current, extra: true },
+      { ...forced, lastForcedRecovery: null },
+      { ...forced, lastForcedRecovery: { ...marker, extra: true } },
+      { ...forced, lastForcedRecovery: { ...marker, backendQuiescenceProved: true } },
+      { ...forced, state: "active" },
+      { ...forced, release: "none" },
+      { ...forced, operationId: "different" },
+      { ...forced, lastForcedRecovery: { ...marker, recoveryId: "not-a-uuid" } },
+      { ...forced, keyDigest: "BAD" },
+    ]) {
+      expect(parseAgentSessionOwnership(invalid)).toBe(undefined);
+    }
+    for (const value of [
+      { ...forced, state: "active", release: "none", operationId: "next" },
+      { ...forced, release: "quiesced", operationId: "next" },
+      { ...current, state: "active", release: "none" },
+    ]) {
+      expect(parseAgentSessionOwnership(value)).not.toBe(undefined);
+    }
+  });
+  it("HC14: administration stays in host assembly and never crosses the provider whitelist", function* () {
+    const assembly = useMachineSessions();
+    expect(assembly.ownershipAdministration === undefined).toBe(!onDeno());
+    const stack = yield* resolvePlanWriterStack(
+      { agentProvider: "acpx", defaultAgent: "claude" },
+      assembly,
+    );
+    if (!stack.ok) {
+      throw stack.error;
+    }
+    const dependencies = hostAcpDependencies(stack.value);
+    expect(Reflect.has(dependencies, "ownershipAdministration")).toBe(false);
+    expect(dependencies.coordinator).toBe(assembly.coordinator);
+  });
+});

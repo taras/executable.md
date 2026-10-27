@@ -57,6 +57,20 @@ prove that the earlier effect happened. These distinctions govern
 
 Start with the properties every execution shares: predictable behavior, scoped ownership and composition across independently loaded package copies.
 
+### Internal persistence during prerelease
+
+XMD is in prerelease. Each kind of internally stored data has exactly one
+supported format: the current format. We change that format in place. We do not
+preserve earlier formats or add version branches, migrations, upgrade paths, or
+compatibility adapters for earlier development builds. This prohibition includes
+manually invoked paths.
+
+Readers validate the complete current declaration and refuse incomplete,
+obsolete or extra fields. This applies to session ownership as well as workflow
+storage and other internal records. A retained schema label is not a promise to
+accept another shape. Third-party protocol versions and public artifact
+contracts keep their separately stated requirements.
+
 ### Security model
 
 Installed plugins, providers, middleware and TypeScript components are trusted
@@ -81,7 +95,7 @@ receive. Missing fields and invalid values in a JSON response are relevant;
 deliberately malicious JavaScript getters require executable code covered by
 the trusted-extension assumption.
 
-Saved history is checked for format, supported version and consistency with
+Saved history is checked for its current format and consistency with
 the intended run and effects. These checks protect continuation from corrupted
 or mismatched records. XMD makes no authenticity guarantee against someone who
 can deliberately rewrite the underlying local database and construct a
@@ -3533,6 +3547,13 @@ agent session right now, across processes. It is passed directly into the provid
 needs it and is deliberately not contextual: a decision document middleware could
 replace is not one. Acquisition never waits.
 
+The same host also builds an ownership-administration view for the CLI alone.
+Inspection reads one exact digest's record bytes without probing a lock or
+contacting a provider. Explicit force compares their SHA-256 under the same
+occupancy reservation and persistent sidecar lock used by ordinary acquisition.
+A live owner stays busy. This capability never enters provider dependencies or
+an authored component.
+
 #### Construction routes
 
 A construction route records how one logical agent session was first constructed —
@@ -3586,13 +3607,30 @@ provider-returned, which is the only compatibility inference.
 
 Quiescence is the one-use acknowledgement an ownership body gives. It does not mean "I
 finished" — it means nothing this owner started can still act on the session, which is
-why a handoff that could not release its handle never gives it.
+why a handoff that could not release its handle never gives it. Ordinary release
+writes idle only after this acknowledgement. Pending host I/O settles before
+locks, file handles or occupancy are released, including calls that finish
+after cancellation.
 
 #### Unproven release
 
 A recovery tombstone is an ownership record left active because its owner never proved
 it stopped. A crash releases the kernel lock and not this, and no pid, elapsed time,
-released lock or empty transcript clears it.
+released lock or empty transcript clears it. An operator can explicitly accept
+that uncertainty with `xmd session recover --key-digest D --expect R --force`.
+The exact byte revision must still match under the lock. Forced release records
+backend quiescence unproved and interrupted outcome unknown; it proves neither
+that prior work finished nor that a backend stopped.
+
+Ownership has one current unversioned record with release state and a nullable
+latest forced-release marker. Force writes the marker; later active and genuinely
+quiesced writes preserve it. Obsolete shapes refuse under the
+[prerelease persistence policy](#internal-persistence-during-prerelease). Publication uses a fresh
+exclusive staging file, whole writes, file sync, atomic replacement and directory
+sync. Cancellation before replacement removes only that attempt's staging;
+a replacement already in flight settles and is synced while the lock is held.
+A post-replacement failure reports publication unknown and permits no automatic
+repeat. Routes, provider identities and journals are separate and unchanged.
 
 #### Provider partitions
 

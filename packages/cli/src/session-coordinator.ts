@@ -14,11 +14,12 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-  createDenoAgentSessionCoordinator,
-  createDenoExecutableObserver,
+import { createDenoAgentSessionHost, createDenoExecutableObserver } from "@executablemd/runtime";
+import type {
+  AgentSessionCoordinator,
+  AgentSessionOwnershipAdministration,
+  ExecutableObserver,
 } from "@executablemd/runtime";
-import type { AgentSessionCoordinator, ExecutableObserver } from "@executablemd/runtime";
 import {
   ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
@@ -42,6 +43,7 @@ export function sessionCoordinatorRoot(): string {
  */
 export interface MachineSessionAssembly {
   coordinator?: AgentSessionCoordinator;
+  ownershipAdministration?: AgentSessionOwnershipAdministration;
   routeStore?: AgentSessionRouteStore;
   executableObserver?: ExecutableObserver;
   advertiseNativeLaunch: readonly string[];
@@ -50,7 +52,7 @@ export interface MachineSessionAssembly {
 
 /** This host's session coordinator, or nothing when it cannot provide one. */
 export function useSessionCoordinator(): AgentSessionCoordinator | undefined {
-  return createDenoAgentSessionCoordinator(sessionCoordinatorRoot());
+  return createDenoAgentSessionHost(sessionCoordinatorRoot())?.coordinator;
 }
 
 /**
@@ -78,12 +80,15 @@ export function useExecutableObserver(): ExecutableObserver | undefined {
  * proven against the installed CLI.
  */
 export function useMachineSessions(): MachineSessionAssembly {
+  const host = createDenoAgentSessionHost(sessionCoordinatorRoot());
+  const routeStore = useSessionRouteStore();
+  const executableObserver = useExecutableObserver();
   return {
-    ...(useSessionCoordinator() === undefined ? {} : { coordinator: useSessionCoordinator() }),
-    ...(useSessionRouteStore() === undefined ? {} : { routeStore: useSessionRouteStore() }),
-    ...(useExecutableObserver() === undefined
-      ? {}
-      : { executableObserver: useExecutableObserver() }),
+    ...(host
+      ? { coordinator: host.coordinator, ownershipAdministration: host.ownershipAdministration }
+      : {}),
+    ...(routeStore ? { routeStore } : {}),
+    ...(executableObserver ? { executableObserver } : {}),
     advertiseNativeLaunch: ADVERTISED_NATIVE_LAUNCH,
     advertiseClientNativeAttachment: ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   };

@@ -104,6 +104,14 @@ routes an opaque request and cannot manufacture that result.
   effect — no availability probe, no runtime, no route read, no identity, no
   child. An agent that is not advertised keeps ordinary ACP behavior on every
   host.
+- Exact-target session ownership inspection and explicit operator force are
+  separate CLI capabilities. They never enter provider dependencies. Default
+  acquisition remains conservative; force compares exact record bytes under the
+  same lock and records backend quiescence unproved and interrupted outcome
+  unknown. A live owner stays busy. The one current ownership shape retains
+  the latest forced-release marker across ordinary ownership. Obsolete shapes
+  refuse; there is no ownership format selection or compatibility reader.
+  Recovery sends no provider request and repairs no identity, route or journal.
 - The host also passes in a **construction-route store** and an **executable
   observer**, directly and from the same trusted root as the coordinator. Both
   are required only for an advertised agent whose adapter binds a build. Which

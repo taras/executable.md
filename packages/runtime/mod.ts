@@ -156,20 +156,28 @@ export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host
 export {
   AgentSessionBusy,
   agentSessionKeyDigest,
+  AgentSessionOwnershipError,
   AgentSessionRecoveryRequired,
   parseAgentSessionOwnership,
   serializeAgentSessionOwnership,
 } from "./agent-session-coordinator.ts";
 export type {
   AgentSessionCoordinator,
+  AgentSessionForcedRecovery,
+  AgentSessionForceRecoveryReceipt,
+  AgentSessionHost,
   AgentSessionKey,
   AgentSessionOwner,
   AgentSessionOwnerKind,
   AgentSessionOwnership,
-  AgentSessionOwnershipRecordV1,
+  AgentSessionOwnershipAdministration,
+  AgentSessionOwnershipFailureCode,
+  AgentSessionOwnershipInspection,
+  AgentSessionOwnershipRecord,
 } from "./agent-session-coordinator.ts";
 export {
   createDenoAgentSessionCoordinator,
+  createDenoAgentSessionHost,
   hasDenoAgentSessionCoordinator,
 } from "./deno-agent-session-coordinator.ts";
 export { ExecutableObservationError } from "./executable-observer.ts";

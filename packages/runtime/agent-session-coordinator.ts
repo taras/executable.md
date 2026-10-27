@@ -62,6 +62,13 @@ export class AgentSessionBusy extends Error {
  */
 export class AgentSessionRecoveryRequired extends Error {
   override name = "AgentSessionRecoveryRequired";
+  readonly keyDigest?: string;
+  readonly recordRevision?: string;
+  constructor(message: string, metadata?: { keyDigest: string; recordRevision: string }) {
+    super(message);
+    this.keyDigest = metadata?.keyDigest;
+    this.recordRevision = metadata?.recordRevision;
+  }
 }
 
 export interface AgentSessionCoordinator {
@@ -94,12 +101,13 @@ export function agentSessionKeyDigest(key: AgentSessionKey): string {
 }
 
 /** The exact durable record one owner writes. No other member is accepted. */
-export interface AgentSessionOwnershipRecordV1 {
-  schema: "agent-session-ownership.v1";
+export interface AgentSessionOwnershipRecord {
   keyDigest: string;
   state: "active" | "idle";
   ownerKind: AgentSessionOwnerKind;
   operationId: string;
+  release: "none" | "quiesced" | "forced";
+  lastForcedRecovery: AgentSessionForcedRecovery | null;
 }
 
 const OWNER_KINDS: readonly AgentSessionOwnerKind[] = ["session", "prompt", "native-launch"];
@@ -108,52 +116,155 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Read an ownership record strictly.
- *
- * An unknown schema, a missing field, or a member this build cannot account for
- * describes state it must not act on — so it is refused rather than read
- * partially, and never repaired.
- */
-export function parseAgentSessionOwnership(
-  value: unknown,
-): AgentSessionOwnershipRecordV1 | undefined {
-  if (!isRecord(value) || value.schema !== "agent-session-ownership.v1") {
-    return undefined;
-  }
-  const allowed = ["schema", "keyDigest", "state", "ownerKind", "operationId"];
-  for (const member of Object.keys(value)) {
-    if (!allowed.includes(member)) {
-      return undefined;
-    }
-  }
-  const { keyDigest, state, operationId } = value;
-  if (typeof keyDigest !== "string" || !/^[0-9a-f]{64}$/.test(keyDigest)) {
-    return undefined;
-  }
-  if (state !== "active" && state !== "idle") {
-    return undefined;
-  }
-  if (typeof operationId !== "string" || operationId.length === 0) {
-    return undefined;
-  }
-  const ownerKind = OWNER_KINDS.find((kind) => kind === value.ownerKind);
-  if (!ownerKind) {
-    return undefined;
-  }
-  return { schema: "agent-session-ownership.v1", keyDigest, state, ownerKind, operationId };
+export interface AgentSessionForcedRecovery {
+  recoveryId: string;
+  abandonedOwnerKind: AgentSessionOwnerKind;
+  abandonedOperationId: string;
+  expectedRevision: string;
+  backendQuiescenceProved: false;
+  interruptedOutcome: "unknown";
 }
 
-export function serializeAgentSessionOwnership(record: AgentSessionOwnershipRecordV1): string {
-  return `${JSON.stringify(
-    {
-      schema: record.schema,
-      keyDigest: record.keyDigest,
-      state: record.state,
-      ownerKind: record.ownerKind,
-      operationId: record.operationId,
-    },
-    null,
-    2,
-  )}\n`;
+export interface AgentSessionOwnershipInspection {
+  keyDigest: string;
+  recordRevision: string;
+  record: AgentSessionOwnershipRecord;
+}
+export interface AgentSessionForceRecoveryReceipt {
+  keyDigest: string;
+  previousRecordRevision: string;
+  recordRevision: string;
+  recoveryId: string;
+  release: "forced";
+  backendQuiescenceProved: false;
+  interruptedOutcome: "unknown";
+  providerRequestSent: false;
+}
+export interface AgentSessionOwnershipAdministration {
+  inspectOwnership(keyDigest: string): Operation<Result<AgentSessionOwnershipInspection>>;
+  forceRecoverOwnership(request: {
+    keyDigest: string;
+    expectedRevision: string;
+    force: true;
+  }): Operation<Result<AgentSessionForceRecoveryReceipt>>;
+}
+export interface AgentSessionHost {
+  coordinator: AgentSessionCoordinator;
+  ownershipAdministration: AgentSessionOwnershipAdministration;
+}
+export type AgentSessionOwnershipFailureCode =
+  | "busy"
+  | "stale-expectation"
+  | "not-found"
+  | "not-recovery-required"
+  | "record-invalid"
+  | "unsupported-capability"
+  | "publication-unknown"
+  | "io-failure";
+const FAILURE_MESSAGES: Record<AgentSessionOwnershipFailureCode, string> = {
+  busy: "another live owner holds this session",
+  "stale-expectation": "the ownership record changed; this expectation authorizes no recovery",
+  "not-found": "no ownership record exists for this digest",
+  "not-recovery-required": "this record does not require recovery",
+  "record-invalid": "the ownership record or request is invalid",
+  "unsupported-capability": "this host cannot administer session ownership",
+  "publication-unknown": "ownership publication is UNKNOWN; do not repeat recovery automatically",
+  "io-failure": "ownership IO failed",
+};
+export class AgentSessionOwnershipError extends Error {
+  override name = "AgentSessionOwnershipError";
+  constructor(
+    readonly code: AgentSessionOwnershipFailureCode,
+    options?: ErrorOptions,
+  ) {
+    super(FAILURE_MESSAGES[code], options);
+  }
+}
+
+/** Read only the complete current ownership shape; incomplete or extra fields refuse. */
+export function parseAgentSessionOwnership(
+  value: unknown,
+): AgentSessionOwnershipRecord | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).sort().join() !==
+      ["keyDigest", "state", "ownerKind", "operationId", "release", "lastForcedRecovery"]
+        .sort()
+        .join()
+  ) {
+    return undefined;
+  }
+  const { keyDigest, state, operationId, release } = value;
+  const ownerKind = OWNER_KINDS.find((kind) => kind === value.ownerKind);
+  if (
+    typeof keyDigest !== "string" ||
+    !/^[0-9a-f]{64}$/.test(keyDigest) ||
+    (state !== "active" && state !== "idle") ||
+    typeof operationId !== "string" ||
+    operationId.length === 0 ||
+    !ownerKind ||
+    (release !== "none" && release !== "quiesced" && release !== "forced") ||
+    (state === "active") !== (release === "none")
+  ) {
+    return undefined;
+  }
+  const lastForcedRecovery =
+    value.lastForcedRecovery === null ? null : parseForcedRecovery(value.lastForcedRecovery);
+  if (
+    lastForcedRecovery === undefined ||
+    (release === "forced" &&
+      (lastForcedRecovery === null ||
+        ownerKind !== lastForcedRecovery.abandonedOwnerKind ||
+        operationId !== lastForcedRecovery.abandonedOperationId))
+  ) {
+    return undefined;
+  }
+  return { keyDigest, state, ownerKind, operationId, release, lastForcedRecovery };
+}
+
+function parseForcedRecovery(last: unknown): AgentSessionForcedRecovery | undefined {
+  if (
+    !isRecord(last) ||
+    Object.keys(last).sort().join() !==
+      [
+        "recoveryId",
+        "abandonedOwnerKind",
+        "abandonedOperationId",
+        "expectedRevision",
+        "backendQuiescenceProved",
+        "interruptedOutcome",
+      ]
+        .sort()
+        .join()
+  ) {
+    return undefined;
+  }
+  const abandonedOwnerKind = OWNER_KINDS.find((kind) => kind === last.abandonedOwnerKind);
+  if (
+    !abandonedOwnerKind ||
+    typeof last.abandonedOperationId !== "string" ||
+    last.abandonedOperationId.length === 0 ||
+    typeof last.recoveryId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      last.recoveryId,
+    ) ||
+    typeof last.expectedRevision !== "string" ||
+    !/^[0-9a-f]{64}$/.test(last.expectedRevision) ||
+    last.backendQuiescenceProved !== false ||
+    last.interruptedOutcome !== "unknown"
+  ) {
+    return undefined;
+  }
+  return {
+    recoveryId: last.recoveryId,
+    abandonedOwnerKind,
+    abandonedOperationId: last.abandonedOperationId,
+    expectedRevision: last.expectedRevision,
+    backendQuiescenceProved: false,
+    interruptedOutcome: "unknown",
+  };
+}
+
+export function serializeAgentSessionOwnership(record: AgentSessionOwnershipRecord): string {
+  return `${JSON.stringify({ keyDigest: record.keyDigest, state: record.state, ownerKind: record.ownerKind, operationId: record.operationId, release: record.release, lastForcedRecovery: record.lastForcedRecovery }, null, 2)}\n`;
 }
