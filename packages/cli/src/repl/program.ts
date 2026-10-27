@@ -3494,7 +3494,17 @@ export function* prepareFrame(
   // takes its minimum from its widest child: one unbounded row would make the
   // column wider than its share and squeeze the column beside it, and the number
   // this pass reports would be the number that row caused.
-  const probe = presentationFor(view, measuringAt(undefined, false, undefined));
+  //
+  // The tray's own row is the exception, and it is the reason this pass says
+  // so: the width this pass reports for a queued message's text is read off
+  // that row's box, and a tray already holding more rows than its column
+  // allocated it would otherwise describe none — leaving the queue no width to
+  // fit against, and so no fitted rows for any later pass to admit. It is a
+  // blank row until something has been fitted, so it makes no column wider.
+  const probe = presentationFor(view, {
+    ...measuringAt(undefined, false, undefined),
+    queueProbe: true,
+  });
   const first = yield* renderer.measure(skeletonOps(probe.manifest.root), view.size);
   if (!first.ok) {
     return first;

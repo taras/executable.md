@@ -114,6 +114,7 @@ import {
   CHECKPOINT_ASKING,
   chatAt,
   checkpointModel,
+  crowdedQueue,
   checkpointScopes,
   checkpointStateModel,
   lastQueued,
@@ -5177,5 +5178,78 @@ describe("Checkpoint #971 R2 — the tray's window and the chat's", () => {
     expect({ distinct: new Set(inks.values()).size }).toEqual({
       distinct: OUTCOMES.length,
     });
+  });
+
+  // The other way a tray overflows, and the one that decides where the width
+  // its text is fitted to comes from. The case above overflows because six
+  // messages wrap into twenty rows — before anything is fitted it is six rows,
+  // which the tray has room for. These nine are over the budget in the pass
+  // that is still asking how wide a queued message's text may be, and a queue
+  // measured at no width has no fitted rows for anything to admit: the tray
+  // drew nothing at all while reporting a capacity of eight.
+  it("R2: a tray already over its budget before fitting still measures, fits and draws", function* () {
+    const model = yield* checkpointStateModel();
+    const size = CHECKPOINT_MEDIUM;
+    const presenter = yield* usePresenter(size);
+    const crowded = crowdedQueue(9);
+    const asking = { model, size, live: CHECKPOINT_ASKING } as const;
+    const committed = yield* commitCheckpoint(presenter, { ...asking, workspace: crowded });
+    const prepared = yield* prepareFrame(presenter.renderer, committed.view);
+    if (!prepared.ok) {
+      throw prepared.error;
+    }
+
+    // Its unfitted sequence is already longer than the tray's own budget.
+    const window = windowOf(committed.observed.committed.admission, QUEUE_WINDOW);
+    expect({
+      crowded: crowded.queued.length > window.capacity,
+      total: window.total,
+      count: window.count,
+    }).toEqual({ crowded: true, total: crowded.queued.length, count: window.capacity });
+
+    // The engine still measured a width for its text, and the queue was still
+    // fitted to it.
+    expect({ measured: (prepared.value.context.widths?.queue ?? 0) > 0 }).toEqual({
+      measured: true,
+    });
+    expect({ fitted: prepared.value.context.queue?.length }).toEqual({
+      fitted: crowded.queued.length,
+    });
+
+    // The rows this window admitted are on the screen, saying what they say,
+    // each with its own withdrawal control.
+    const said = presenter.grid
+      .textIn({ x: 0, y: 0, width: size.columns, height: size.rows })
+      .join("\n");
+    const shown = crowded.queued.slice(0, window.count);
+    for (const message of shown) {
+      expect({ key: message.key, drawn: said.includes(message.text) }).toEqual({
+        key: message.key,
+        drawn: true,
+      });
+      expect({
+        key: message.key,
+        control: committed.observed.boundsOf(`queue:${message.key}:remove`) !== undefined,
+      }).toEqual({ key: message.key, control: true });
+    }
+
+    // And the one past the window is reached by moving it, rather than gone.
+    const hidden = crowded.queued[crowded.queued.length - 1];
+    if (hidden === undefined) {
+      throw new Error("this tray holds no message to hide");
+    }
+    expect(committed.observed.nodeOf(`queue:${hidden.key}:remove`)).toBe(undefined);
+    const moved = yield* commitCheckpoint(presenter, {
+      ...asking,
+      workspace: crowdedQueue(9, window.total - window.capacity),
+      focused: committed.focused,
+    });
+    const after = presenter.grid
+      .textIn({ x: 0, y: 0, width: size.columns, height: size.rows })
+      .join("\n");
+    expect({ drawn: after.includes(hidden.text) }).toEqual({ drawn: true });
+    expect({
+      control: moved.observed.boundsOf(`queue:${hidden.key}:remove`) !== undefined,
+    }).toEqual({ control: true });
   });
 });

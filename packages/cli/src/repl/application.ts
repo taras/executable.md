@@ -7572,14 +7572,18 @@ export interface ReplPresentationContext {
    */
   readonly headers?: ReadonlySet<string> | undefined;
   /**
-   * Whether this pass exists only to have a queued row's control measured.
+   * Whether this pass exists only to have a queued row measured.
    *
-   * One pass asks how wide that control is, and a different pass asks how many
-   * rows the tray can hold. They cannot be the same pass: a scrolling viewport
-   * is measured empty, and an empty viewport holds no control to measure. So
-   * the probe draws the sequence's first row and admits nothing, and every
-   * other pass leaves the overflowing viewport empty until a window says which
-   * rows go in it.
+   * One pass asks how wide that row's text and control are, and a different
+   * pass asks how many rows the tray can hold. They cannot be the same pass: a
+   * scrolling viewport is measured empty, and an empty viewport holds no row
+   * to measure. So a probe draws the sequence's first row and admits nothing,
+   * and every other pass leaves the overflowing viewport empty until a window
+   * says which rows go in it.
+   *
+   * Two passes set this, and neither admits anything: the one that answers
+   * what the widths are, before the queue has been fitted to any of them, and
+   * the one that has the engine size the control beside a fitted row.
    */
   readonly queueProbe?: boolean | undefined;
 }

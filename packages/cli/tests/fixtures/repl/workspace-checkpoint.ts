@@ -513,6 +513,33 @@ export function queueAt(offset: number): ReplWorkspace {
   return Object.freeze({ ...OVERFLOW_WORKSPACE, queueOffset: offset });
 }
 
+/**
+ * More queued messages than the tray's budget, each short enough to be one row.
+ *
+ * The other way a tray overflows, and the one that decides where its width
+ * comes from. `OVERFLOW_WORKSPACE` overflows because six messages wrap into
+ * twenty rows: before anything is fitted it is six rows, which the tray has
+ * room for. These nine are nine rows before fitting and nine after, so the
+ * tray is already over its budget in the pass that is still asking how wide a
+ * queued message's text may be — and a queue measured at no width is a queue
+ * with no fitted rows for any later pass to admit.
+ */
+export function crowdedQueue(count: number, offset = 0): ReplWorkspace {
+  const first = OVERFLOW_WORKSPACE.queued[0];
+  if (first === undefined) {
+    throw new Error("this tray holds no message to crowd");
+  }
+  return Object.freeze({
+    ...OVERFLOW_WORKSPACE,
+    queueOffset: offset,
+    queued: Object.freeze(
+      Array.from({ length: count }, (_, at) =>
+        Object.freeze({ ...first, key: `crowd-${at}`, text: `queued note ${at}` }),
+      ),
+    ),
+  });
+}
+
 /** The last queued message, which no window at any review size shows first. */
 export function lastQueued(): ReplQueuedMessage {
   const last = OVERFLOW_WORKSPACE.queued[OVERFLOW_WORKSPACE.queued.length - 1];
