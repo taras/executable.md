@@ -1260,6 +1260,37 @@ export function withWorkspace(view: ReplView, workspace: ReplWorkspace): ReplVie
 }
 
 /**
+ * What the ordinary root's own screen stages, from what it actually holds.
+ *
+ * Everything here is a fact this reading already carries or a part of the
+ * screen that is honestly empty. Nothing is supplied so that a control has
+ * something to point at:
+ *
+ * - **Associated work** is the association between a chat row and the entry
+ *   that row's evaluation admitted. Nothing creates one yet: that association
+ *   is made when a Sidekick reply evaluates and admits a round, which is the
+ *   continuation work this screen is still waiting on. So an ordinary root
+ *   has none, and the pane shows the reading without association rows rather
+ *   than inventing an entry for a message.
+ * - **Queued messages** are the shared queue's, and there is no shared queue
+ *   here. An empty tray is what this execution holds; a populated one would be
+ *   a fiction in a screen somebody is working from.
+ * - **Follow** is drawn unchecked and does nothing, because what it would
+ *   continue does not exist yet.
+ *
+ * The tray opens on QUEUE because that is the tab whose emptiness is a true
+ * statement about this execution; TODO is the placeholder it has always been.
+ */
+export function workspaceOf(): ReplWorkspace {
+  return Object.freeze({
+    follow: false,
+    tray: "queue" as const,
+    queued: Object.freeze([]),
+    work: Object.freeze([]),
+  });
+}
+
+/**
  * Whether this view is drawn as the staged workspace composition.
  *
  * At every profile this product draws at, and only with a reading to draw: a
@@ -7595,6 +7626,15 @@ export interface ReplPresentationContext {
    * whose row fits its own map.
    */
   readonly historyMap?: number | undefined;
+  /**
+   * How wide the accepted wide row's gap is, once its map has been measured.
+   *
+   * Declared so that the controls beside it are the row's one growing child:
+   * two growing siblings halve what the map leaves, and half of an odd number
+   * of cells is a position the renderer refuses. Absent until that measurement,
+   * and absent at every other profile, whose rows are arranged differently.
+   */
+  readonly historyGap?: number | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -9608,6 +9648,43 @@ export function draftFieldWidth(
 /** The staged History row's map, which is drawn rather than mounted. */
 const HISTORY_MAP = "box:history:map";
 
+/** The staged History row, which the map and the controls divide. */
+const HISTORY_ROW = "box:history";
+
+/** The gap the accepted wide row keeps between its map and its controls. */
+const HISTORY_SPACE = "box:history:space";
+
+/**
+ * How wide the accepted wide row's gap is, for this exact measured frame.
+ *
+ * That row is a fitted map, this gap, and the controls — and the gap and the
+ * controls both grow, so the engine divides what the map leaves between them.
+ * It divides it in halves, and half of an odd number of cells is not a cell:
+ * measured, an ordinary root's 25-cell map left 135, which came out 67.5 and
+ * 67.5, and put History at x=92.5 where the renderer refuses to draw it. The
+ * accepted fixture's map happens to leave 126, so its halves were whole and
+ * nothing said the arrangement only worked for even remainders.
+ *
+ * So the gap is declared instead, and the controls stay the one growing child.
+ * This is an integer budget decided before anything is placed — the engine
+ * still measures where each control lands and how many of them there is room
+ * for, and every control is still fitted to its own label. The odd cell goes
+ * to the controls, which are what somebody is aiming at.
+ */
+export function historyGapWidth(widthOf: (id: string) => number | undefined): number | undefined {
+  const row = widthOf(HISTORY_ROW);
+  const map = widthOf(HISTORY_MAP);
+  if (row === undefined || map === undefined) {
+    return undefined;
+  }
+  // Both from this frame, and both whole: a width the engine had already
+  // divided into halves of a cell is not a budget to divide again.
+  if (!Number.isInteger(row) || !Number.isInteger(map)) {
+    return undefined;
+  }
+  return Math.floor(Math.max(0, row - map) / 2);
+}
+
 /**
  * How wide the History row's map is left, for this exact measured frame.
  *
@@ -10493,13 +10570,23 @@ function workspacePresentation(input: {
                   // child and puts the controls at the trailing edge. Whether
                   // the wide screen should follow them is a question for the
                   // image review, not one to answer by moving an accepted row.
-                  ...(accepted ? [spacer("box:history:space", "footer")] : []),
+                  ...(accepted
+                    ? [
+                        context.historyGap === undefined
+                          ? spacer(HISTORY_SPACE, "footer")
+                          : box({
+                              id: HISTORY_SPACE,
+                              region: "footer",
+                              props: statedPartProps(context.historyGap),
+                            }),
+                      ]
+                    : []),
                   box({
                     id: ACTION_ROW,
                     region: "footer",
                     props: accepted ? actionRowProps() : inlineActionRowProps(),
                     children: [
-                      ...(accepted ? [] : [spacer("box:history:space", "footer")]),
+                      ...(accepted ? [] : [spacer(HISTORY_SPACE, "footer")]),
                       ...placed.map((candidate) =>
                         box({
                           id: `box:action:${candidate.key}`,

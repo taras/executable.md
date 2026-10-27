@@ -19,11 +19,22 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 
 import { NARROW, profileFor, skeletonOps } from "../src/repl/layout.ts";
+import { projectRepl } from "../src/repl/model.ts";
+import { navigationOf } from "../src/repl/navigation.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { prepareFrame } from "../src/repl/program.ts";
-import { QUEUE_WINDOW } from "../src/repl/application.ts";
+import {
+  ACTION_ROW,
+  initialState,
+  NO_AGENT,
+  QUEUE_WINDOW,
+  viewFor,
+  withWorkspace,
+  workspaceOf,
+} from "../src/repl/application.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { createGrid, useCommitter, usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
@@ -666,5 +677,91 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
       above: above.y + above.height <= last.bounds.y,
       below: below.y >= last.bounds.y + last.bounds.height,
     }).toEqual({ above: true, below: true });
+  });
+
+  // The accepted wide row is a fitted map, a gap and the controls. The gap and
+  // the controls both grew, so the engine divided what the map left between
+  // them — in halves, and half of an odd number of cells is not a cell. The
+  // accepted fixture's map happens to leave an even remainder, so nothing said
+  // the arrangement only worked for even ones. An ordinary empty root leaves an
+  // odd one, and every control after the gap landed on half a cell.
+  it("A2: the wide History row divides an odd remainder into whole cells", function* () {
+    const empty = projectRepl([]);
+    if (!empty.ok) {
+      throw empty.error;
+    }
+    const size = CHECKPOINT_SIZE;
+    const model = empty.value;
+    const view = viewFor(
+      initialState("ordinary-root"),
+      model,
+      {
+        output: "",
+        question: undefined,
+        expansion: "playing" as const,
+        pausable: false,
+        running: false,
+        agent: NO_AGENT,
+        lifecycle: NO_LIFECYCLE,
+      },
+      size,
+      undefined,
+      navigationOf(model.checkpoints, "empty"),
+    );
+    if (!view.ok) {
+      throw view.error;
+    }
+    const presenter = yield* usePresenter(size);
+    const staged = withWorkspace(view.value, workspaceOf());
+    const first = yield* presenter.commit(staged);
+    const node = presenter.tree.focused();
+    const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+    const committed = yield* presenter.commit({ ...staged, focused });
+
+    // The remainder this reading leaves really is odd, which is the whole
+    // reason the row needed a rule. Measured, not assumed.
+    const row = first.regionOf("box:history");
+    const map = first.regionOf("box:history:map");
+    if (row === undefined || map === undefined) {
+      throw new Error("this frame drew no History row to divide");
+    }
+    expect({ odd: (row.width - map.width) % 2 === 1 }).toEqual({ odd: true });
+
+    // Committing is the assertion the renderer makes: it refuses a control on
+    // half a cell rather than rounding it, so a frame that drew at all drew on
+    // whole cells. Said again here over every published rectangle.
+    for (const key of ["footer:history", "footer:exit"]) {
+      const bounds = committed.boundsOf(key);
+      if (bounds === undefined) {
+        throw new Error(`${key} was not drawn on the ordinary root's own screen`);
+      }
+      expect({
+        key,
+        whole: Number.isInteger(bounds.x) && Number.isInteger(bounds.width),
+      }).toEqual({ key, whole: true });
+      expect({ key, room: bounds.width > 0 }).toEqual({ key, room: true });
+    }
+    const gap = committed.regionOf("box:history:space");
+    const actions = committed.regionOf(ACTION_ROW);
+    if (gap === undefined || actions === undefined) {
+      throw new Error("this row drew no gap and controls to divide");
+    }
+    // The odd cell goes to the controls, which are what somebody is aiming at.
+    expect({ whole: Number.isInteger(gap.width) && Number.isInteger(actions.width) }).toEqual({
+      whole: true,
+    });
+    expect({ gap: gap.width, actions: actions.width }).toEqual({
+      gap: Math.floor((row.width - map.width) / 2),
+      actions: row.width - map.width - Math.floor((row.width - map.width) / 2),
+    });
+
+    // The controls say what they are, where the frame put them.
+    const history = committed.boundsOf("footer:history");
+    if (history === undefined) {
+      throw new Error("the History control was not drawn");
+    }
+    expect(presenter.grid.textIn(history).join(" ")).toContain("[history]");
+    // And focus is the mounted tree's own answer, read back rather than set.
+    expect({ focused: focused !== undefined }).toEqual({ focused: true });
   });
 });

@@ -76,6 +76,7 @@ import {
   chatLinesFor,
   draftFieldWidth,
   draftLinesOf,
+  historyGapWidth,
   historyMapWidth,
   queueTextWidth,
   draftRowsOf,
@@ -3551,10 +3552,12 @@ export function* prepareFrame(
   let field: number | undefined;
   let messageText: number | undefined;
   let historyRoom: number | undefined;
+  let historySpace: number | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
     ...(wrapped.size === 0 ? {} : { headers: wrapped }),
+    ...(historySpace === undefined ? {} : { historyGap: historySpace }),
     ...(field === undefined ? {} : { draftField: field }),
     ...(messageText === undefined ? {} : { queueText: messageText }),
     ...(historyRoom === undefined ? {} : { historyMap: historyRoom }),
@@ -3629,6 +3632,11 @@ export function* prepareFrame(
     (id) => fitted.value.boundsOf(id)?.width,
     widths.body,
   );
+  // What the accepted wide row's gap is, from the row and the map this frame
+  // measured. Taken here, from the pass that already holds a fitted map and
+  // the whole footer, and before anything is admitted: the question is how to
+  // divide the room the map leaves, which no admitted set changes.
+  historySpace = historyGapWidth((id) => fitted.value.boundsOf(id)?.width);
   historyRoom = historyMapWidth(
     probed.manifest,
     (id) => fitted.value.boundsOf(id)?.width,
@@ -3874,6 +3882,7 @@ export function* prepareFrame(
     draftField: field,
     queueText: messageText,
     historyMap: historyRoom,
+    historyGap: historySpace,
     draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
     queue: queued.value,
     headers: wrapped.size === 0 ? undefined : wrapped,
