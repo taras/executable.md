@@ -33,7 +33,7 @@ import { cwd as processCwd } from "@effectionx/fs";
 import { useComponentModules } from "./typescript-module.ts";
 import type { LoadComponentModule } from "./typescript-module.ts";
 import { pathToFileURL } from "node:url";
-import type { Workflow, Json } from "@executablemd/durable-streams";
+import type { DurableRootControl, Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
 import { ExecutionProtocolError, issueExecution } from "./execution-request.ts";
 import { DocumentProtocolError, issueDocument } from "./document-request.ts";
@@ -2857,6 +2857,16 @@ function* executeDocument(
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
   filesystem?: FilesystemExpansion,
+  /**
+   * Hand this document's own root control to the invocation that owns it.
+   *
+   * By value, in one direction, and only to a caller that already owns this
+   * run: the control carries no stream, no append and no event, so what
+   * travels is the authority to ask this exact root to end as cancelled and
+   * to read back what it actually retained. Absent — which is every ordinary
+   * execution — nothing changes.
+   */
+  control?: (control: DurableRootControl) => void,
 ): Operation<CanonicalInvocation> {
   const {
     stream,
@@ -3337,6 +3347,7 @@ function* executeDocument(
         },
         {
           stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions),
+          ...(control === undefined ? {} : { control }),
         },
       );
       // Taken rather than read, so the handoff belongs to the run that made it.

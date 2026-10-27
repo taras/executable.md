@@ -13,7 +13,7 @@
  * See integration doc §10, protocol spec §4.
  */
 
-import { scoped, useScope } from "effection";
+import { ensure, scoped, useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { DurableContext } from "./context.ts";
 import { activeDurabilityFailure, appendDurableEvent } from "./durability.ts";
@@ -65,6 +65,44 @@ export interface DurableRunOptions {
   stream: DurableStream;
   /** Coroutine ID for the root workflow. Defaults to "root". */
   coroutineId?: string;
+  /**
+   * Hand this run's own root control to its caller, before anything runs.
+   *
+   * Absent — which is every ordinary caller — this run's cancellation
+   * behaviour is exactly what it has always been: a halted root unwinds
+   * without a terminal, because a generator's return cannot be observed by
+   * the `catch` below. The control is how one trusted caller asks for the
+   * other ending, and it is minted over *this* call's own context, replay
+   * index and terminal state rather than looked up by name.
+   */
+  control?: (control: DurableRootControl) => void;
+}
+
+/**
+ * One run's own authority to end its root as cancelled.
+ *
+ * It carries no stream, no append and no event: what a holder may do is ask,
+ * and read back what actually settled. Whether the ask is accepted is this
+ * run's decision and nobody else's — a root whose terminal append has already
+ * begun keeps the terminal it was writing.
+ */
+export interface DurableRootControl {
+  /**
+   * Ask this root to end as cancelled, and say whether it will.
+   *
+   * Synchronous and decided here, because the question is whether this root is
+   * still open: a decision made anywhere else would be made about a terminal
+   * phase that may have moved while the answer travelled. Repeated asks are
+   * the same ask.
+   */
+  requestInterruption(): boolean;
+  /**
+   * Which terminal this root actually retained, once one is acknowledged.
+   *
+   * `undefined` until an append has been acknowledged, so a caller cannot
+   * mistake an attempt for a record.
+   */
+  settled(): "ok" | "err" | "cancelled" | undefined;
 }
 
 /**
@@ -91,7 +129,14 @@ export function* durableRun<T extends WorkflowValue>(
   workflow: () => Workflow<T> | Operation<T>,
   options: DurableRunOptions,
 ): Operation<T> {
-  const { stream, coroutineId = "root" } = options;
+  const { stream, coroutineId = "root", control } = options;
+  // This root's own terminal phase, read and written only here. `open` is the
+  // only phase a cancellation may claim: once an append has begun, the record
+  // being written is the one this root ends with, and a request that arrived
+  // during it joins that ending rather than replacing it.
+  let phase: "open" | "appending" | "settled" = "open";
+  let retained: "ok" | "err" | "cancelled" | undefined;
+  let interrupting = false;
 
   const events = yield* stream.readAll();
   const replayIndex = new ReplayIndex(events);
@@ -150,6 +195,51 @@ export function* durableRun<T extends WorkflowValue>(
   }
   replayIndex.claim(coroutineId);
 
+  if (control !== undefined) {
+    control({
+      requestInterruption(): boolean {
+        if (phase !== "open") {
+          return interrupting;
+        }
+        interrupting = true;
+        return true;
+      },
+      settled: () => retained,
+    });
+  }
+
+  // The other ending, and only where it was asked for. Registered before the
+  // workflow so it unwinds after everything the workflow owns, and inert
+  // unless this root accepted a request while it was still open: an ordinary
+  // halt reaches here with `interrupting` false and appends nothing, which is
+  // what every caller without a control has always seen.
+  yield* ensure(function* () {
+    if (!interrupting || phase !== "open") {
+      return;
+    }
+    phase = "appending";
+    // The same refusals the ordinary terminals make. A sticky durability
+    // failure is already this root's outcome, and retained history the
+    // definition did not align with is divergence rather than a stopped run —
+    // neither may be papered over with a cancelled close.
+    if (activeDurabilityFailure(ctx) !== undefined) {
+      phase = "open";
+      return;
+    }
+    if (unalignedReplay(replayIndex, coroutineId) !== undefined) {
+      phase = "open";
+      return;
+    }
+    const closeEvent: Close = {
+      type: "close",
+      coroutineId,
+      result: { status: "cancelled" },
+    };
+    yield* scoped(() => appendDurableEvent(ctx, closeEvent));
+    phase = "settled";
+    retained = "cancelled";
+  });
+
   try {
     const result: T = yield* workflow();
 
@@ -179,7 +269,14 @@ export function* durableRun<T extends WorkflowValue>(
     // compensating Close(err) from the same scope, so a turn still held here
     // would make that append wait forever. A boundary around the attempt
     // returns the turn as part of the outcome.
+    //
+    // The phase moves first, so a cancellation asked for from here on joins
+    // this ending rather than cancelling the write and compensating over a
+    // backend that may already hold it.
+    phase = "appending";
     yield* scoped(() => appendDurableEvent(ctx, closeEvent));
+    phase = "settled";
+    retained = "ok";
 
     return result;
   } catch (error) {
@@ -208,7 +305,10 @@ export function* durableRun<T extends WorkflowValue>(
     };
 
     try {
+      phase = "appending";
       yield* scoped(() => appendDurableEvent(ctx, closeEvent));
+      phase = "settled";
+      retained = "err";
     } catch (closeError) {
       const closeDurabilityFailure = activeDurabilityFailure(ctx, closeError);
       if (closeDurabilityFailure) {

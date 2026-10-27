@@ -15,6 +15,7 @@ import {
   type DurableStream,
   InMemoryStream,
   type Json,
+  type DurableRootControl,
   type Workflow,
   durableAction,
   durableCall,
@@ -476,3 +477,138 @@ describe("durableRun", () => {
     }
   });
 });
+
+/**
+ * The other ending a root may have, and only where it was asked for.
+ *
+ * A generator's return cannot be observed by the `catch` that writes this
+ * root's terminals, so an ordinary halt has always unwound without recording
+ * one — which is what leaves an interrupted run resumable. One trusted caller
+ * needs the opposite ending, and asks for it through this run's own control.
+ *
+ * What is under test is the authority rather than the plumbing: who may ask,
+ * when the ask is still answerable, and what is actually retained.
+ */
+describe("durableRun: the cancelled ending, asked for through its own control", () => {
+  it("absent the hook, a halted root still records nothing", function* () {
+    const stream = new InMemoryStream();
+    const started = withResolvers<void>();
+    const task = yield* spawn(function* () {
+      return yield* durableRun(
+        function* () {
+          started.resolve();
+          yield* withResolvers<void>().operation;
+          return "unreachable";
+        },
+        { stream },
+      );
+    });
+    yield* started.operation;
+    yield* task.halt();
+
+    // Exactly the behaviour every caller has always seen.
+    expect(stream.snapshot().some((event) => event.type === "close")).toBe(false);
+  });
+
+  it("an accepted request records exactly one cancelled close", function* () {
+    const stream = new InMemoryStream();
+    const started = withResolvers<void>();
+    let control: DurableRootControl | undefined;
+    const task = yield* spawn(function* () {
+      return yield* durableRun(
+        function* () {
+          started.resolve();
+          yield* withResolvers<void>().operation;
+          return "unreachable";
+        },
+        { stream, control: (own) => (control = own) },
+      );
+    });
+    yield* started.operation;
+    if (control === undefined) {
+      throw new Error("this run handed out no control");
+    }
+
+    // Asked while the root is open, so it is answerable — and nothing is
+    // retained by the asking itself.
+    expect(control.requestInterruption()).toBe(true);
+    expect(control.settled()).toBe(undefined);
+    // Repeated asks are the same ask.
+    expect(control.requestInterruption()).toBe(true);
+
+    yield* task.halt();
+
+    const closes = stream.snapshot().filter((event) => event.type === "close");
+    expect(closes.length).toBe(1);
+    const only = closes[0];
+    if (only === undefined || only.type !== "close") {
+      throw new Error("this run recorded no close");
+    }
+    expect(only.coroutineId).toBe("root");
+    expect(only.result.status).toBe("cancelled");
+    // The protocol's cancelled result carries a status and nothing else.
+    expect(Object.keys(only.result)).toEqual(["status"]);
+    // And the control says what was actually retained, not what was asked.
+    expect(control.settled()).toBe("cancelled");
+  });
+
+  it("a terminal already being written keeps the ending it was writing", function* () {
+    const order: string[] = [];
+    const stream = new PausedCloseStream(order);
+    let control: DurableRootControl | undefined;
+    const task = yield* spawn(function* () {
+      return yield* durableRun(
+        function* () {
+          return "done";
+        },
+        { stream, control: (own) => (control = own) },
+      );
+    });
+    yield* stream.appendStarted.operation;
+    if (control === undefined) {
+      throw new Error("this run handed out no control");
+    }
+
+    // The root is no longer open: its own terminal is already on its way to
+    // the stream, so the ask is refused rather than cancelling that write and
+    // compensating over a backend that may already hold it.
+    expect(control.requestInterruption()).toBe(false);
+    stream.allowAppend.resolve();
+    expect(yield* task).toBe("done");
+
+    const closes = stream.inner.snapshot().filter((event) => event.type === "close");
+    expect(closes.length).toBe(1);
+    const only = closes[0];
+    if (only === undefined || only.type !== "close") {
+      throw new Error("this run recorded no close");
+    }
+    expect(only.result.status).toBe("ok");
+    expect(control.settled()).toBe("ok");
+  });
+});
+
+/** A stream that holds the root's own Close until its caller lets it through. */
+class PausedCloseStream implements DurableStream {
+  readonly appendStarted = withResolvers<void>();
+  readonly allowAppend = withResolvers<void>();
+  readonly inner = new InMemoryStream();
+
+  constructor(readonly order: string[]) {}
+
+  *readAll(): Operation<DurableEvent[]> {
+    return yield* this.inner.readAll();
+  }
+
+  *append(event: DurableEvent): Operation<void> {
+    if (event.type === "close") {
+      this.order.push("close:started");
+      this.appendStarted.resolve();
+      yield* this.allowAppend.operation;
+    }
+    yield* this.inner.append(event);
+  }
+
+  snapshot(): DurableEvent[] {
+    return this.inner.snapshot();
+  }
+}

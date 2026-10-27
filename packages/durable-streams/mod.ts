@@ -111,4 +111,4 @@ export { ephemeral } from "./ephemeral.ts";
 
 // Entry point
 export { durableRun } from "./run.ts";
-export type { DurableRunOptions } from "./run.ts";
+export type { DurableRootControl, DurableRunOptions } from "./run.ts";
