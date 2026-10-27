@@ -18,18 +18,24 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import { NARROW, profileFor } from "../src/repl/layout.ts";
+import { NARROW, profileFor, skeletonOps } from "../src/repl/layout.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
+import type { ReplRenderer } from "../src/repl/renderer.ts";
+import { prepareFrame } from "../src/repl/program.ts";
+import { QUEUE_WINDOW } from "../src/repl/application.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { createGrid, useCommitter, usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
 import { useTempFileCompiler } from "@executablemd/core";
 import {
+  CHECKPOINT_ASKING,
   CHECKPOINT_MEDIUM,
   CHECKPOINT_NARROW,
   CHECKPOINT_SIZE,
   checkpointModel,
+  checkpointStateModel,
+  checkpointViewOf,
   commitCheckpoint,
   OVERFLOW_WORKSPACE,
 } from "./fixtures/repl/workspace-checkpoint.ts";
@@ -569,5 +575,96 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
         });
       }
     }
+  });
+
+  // The capacity a window is admitted against has to be the capacity of the
+  // region the frame will draw. A scrolling viewport stretched by its own rows
+  // reports the room its contents wanted, and one measured before the controls
+  // that sit around it reports a rectangle that is about to move — so what the
+  // preparation measured last and what it finally describes would be two
+  // different regions that happen to agree.
+  //
+  // Read by watching the preparation's own measurements go past. Nothing here
+  // changes an operation or a returned rectangle; the same production
+  // `prepareFrame` runs against the same real engine.
+  it("A2: the measurement the queue is admitted from is empty, with its controls around it", function* () {
+    yield* useTempFileCompiler();
+    const model = yield* checkpointStateModel();
+    const size = CHECKPOINT_MEDIUM;
+    const presenter = yield* usePresenter(size);
+    const view = checkpointViewOf(model, undefined, {
+      size,
+      live: CHECKPOINT_ASKING,
+      workspace: OVERFLOW_WORKSPACE,
+    });
+    const viewport = `box:${QUEUE_WINDOW}:viewport`;
+    const row = /^box:inspection:queue:.*:row:\d+:row$/;
+    const seen: {
+      bounds: ReplBounds | undefined;
+      rows: number;
+      earlier: boolean;
+      later: boolean;
+    }[] = [];
+    const delegate = presenter.renderer;
+    const watching: ReplRenderer = {
+      *measure(ops, measured) {
+        const result = yield* delegate.measure(ops, measured);
+        const ids = ops.flatMap((op) => ("id" in op && typeof op.id === "string" ? [op.id] : []));
+        if (result.ok && ids.includes(viewport)) {
+          seen.push({
+            bounds: result.value.boundsOf(viewport),
+            rows: ids.filter((id) => row.test(id)).length,
+            earlier: ids.includes("box:inspection:queue:earlier"),
+            later: ids.includes("box:inspection:queue:later"),
+          });
+        }
+        return result;
+      },
+      draw: (input) => delegate.draw(input),
+      resize: (next) => delegate.resize(next),
+      last: () => delegate.last(),
+      engines: () => delegate.engines(),
+    };
+    const prepared = yield* prepareFrame(watching, view);
+    if (!prepared.ok) {
+      throw prepared.error;
+    }
+    // This tray holds more rows than its column allocated it, which is the
+    // case the viewport exists for at all.
+    const window = windowOf(prepared.value.admission, QUEUE_WINDOW);
+    expect({ beyond: window.total > window.capacity }).toEqual({ beyond: true });
+
+    // The last measurement that held the viewport is the one the admission
+    // above came from.
+    const last = seen[seen.length - 1];
+    if (last === undefined) {
+      throw new Error("this preparation measured no queue viewport");
+    }
+    expect({ rows: last.rows, earlier: last.earlier, later: last.later }).toEqual({
+      rows: 0,
+      earlier: true,
+      later: true,
+    });
+
+    // And it is the region the frame describes: the same rectangle the final
+    // manifest places that viewport at, measured by the same engine.
+    const final = yield* delegate.measure(
+      skeletonOps(prepared.value.presentation.manifest.root),
+      size,
+    );
+    if (!final.ok) {
+      throw final.error;
+    }
+    expect(last.bounds).toEqual(final.value.boundsOf(viewport));
+    // Both controls are outside it, which is why it starts where it does.
+    const above = final.value.boundsOf("box:inspection:queue:earlier");
+    const below = final.value.boundsOf("box:inspection:queue:later");
+    if (above === undefined || below === undefined || last.bounds === undefined) {
+      throw new Error("this frame drew the queue without its own controls");
+    }
+    expect({
+      above: above.y + above.height <= last.bounds.y,
+      below: below.y >= last.bounds.y + last.bounds.height,
+    }).toEqual({ above: true, below: true });
   });
 });

@@ -7571,6 +7571,17 @@ export interface ReplPresentationContext {
    * measurement, which is the pass that has no widths to ask about yet.
    */
   readonly headers?: ReadonlySet<string> | undefined;
+  /**
+   * Whether this pass exists only to have a queued row's control measured.
+   *
+   * One pass asks how wide that control is, and a different pass asks how many
+   * rows the tray can hold. They cannot be the same pass: a scrolling viewport
+   * is measured empty, and an empty viewport holds no control to measure. So
+   * the probe draws the sequence's first row and admits nothing, and every
+   * other pass leaves the overflowing viewport empty until a window says which
+   * rows go in it.
+   */
+  readonly queueProbe?: boolean | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -9397,24 +9408,48 @@ function workspaceControls(
   );
   if (workspace.tray === "queue") {
     const window = context.admission.windows.get(QUEUE_WINDOW);
-    // Both controls where the tray holds more than it can show, and neither
-    // where it does not: a control that scrolls nothing is a Tab stop and a
-    // pointer target over a reading that is already whole.
-    if (window !== undefined && window.total > window.capacity) {
-      items.push(
-        row("queue:earlier", `  ${EARLIER}`, {}, styleOf("navigate"), { here: view.focused }),
-      );
-    }
     // Rows rather than messages. The window counts fitted rows, so the
     // description selects the same fitted rows: a slice of messages would put
     // more rows in the tray than it measured room for.
     const sequence = queueSequence(workspace, context.queue);
-    // The pass that has no window yet describes the whole sequence, which is
-    // how its text box gets a width to be measured at. That costs this window
-    // nothing: unlike a growing viewport, the tray's is declared at the rows
-    // it was allocated, so its capacity is that height whatever is inside it.
-    const shownRows =
-      window === undefined ? sequence : sequence.slice(window.from, window.from + window.count);
+    // Whether this tray holds more rows than its column allocated it, answered
+    // from that declared allocation rather than from a window that has already
+    // been admitted. An admitted window is the later of the two answers, and
+    // the measurement that produces it needs this one — a capacity measured
+    // without the controls that will sit around the viewport is the capacity
+    // of a region nobody is going to draw.
+    const beside = items.filter(
+      (one) => one.key === "sidekick:back" || one.key === "sidekick:answer",
+    ).length;
+    const overflowing = trayAllocation(view, context, beside) !== undefined;
+    // Both controls where the tray holds more than it can show, and neither
+    // where it does not: a control that scrolls nothing is a Tab stop and a
+    // pointer target over a reading that is already whole.
+    if (overflowing) {
+      items.push(
+        row("queue:earlier", `  ${EARLIER}`, {}, styleOf("navigate"), { here: view.focused }),
+      );
+    }
+    // Which rows this pass puts in the tray.
+    //
+    // A tray whose rows fit has no window and no viewport: its rows are its
+    // own content, and every pass describes all of them. An overflowing one is
+    // measured empty, because a scrolling viewport stretched by its own
+    // contents reports the room its contents wanted rather than the room the
+    // column gave it — and the window that admits rows into it is derived from
+    // that measurement.
+    //
+    // The width probe is the single exception, and it is not the pass the
+    // admission comes from: it draws the sequence's first row so the engine
+    // can say how wide that row's control is, which is what every row's text
+    // box is then stated from.
+    const shownRows = !overflowing
+      ? sequence
+      : window !== undefined
+        ? sequence.slice(window.from, window.from + window.count)
+        : context.queueProbe === true
+          ? sequence.slice(0, 1)
+          : [];
     for (const one of shownRows) {
       const mark = originMark(one.message.origin);
       const marked = one.first && one.text.startsWith(MARKER_ROOM);
@@ -9442,7 +9477,7 @@ function workspaceControls(
         );
       }
     }
-    if (window !== undefined && window.total > window.capacity) {
+    if (overflowing) {
       items.push(row("queue:later", `  ${LATER}`, {}, styleOf("navigate"), { here: view.focused }));
     }
   }
@@ -10195,9 +10230,6 @@ function workspacePresentation(input: {
               children: [
                 ...headerRows("tray", region, REPL_PALETTE.composerSurface),
                 ...byKey("queue:earlier").map((one) => rowBox(one, region, room)),
-                // A tray that fits places its rows where the accepted screen
-                // has them. One that does not is a window of the declared
-                // budget, whose room the engine measures like any other.
                 // A tray whose rows fit places them where the accepted screen
                 // has them. One that does not is a window of the rows it was
                 // allocated, whose room the engine measures like any other.

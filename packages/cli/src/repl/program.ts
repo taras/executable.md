@@ -155,14 +155,7 @@ import { lifecycleRefusal, openReplSession } from "./session.ts";
 import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
-import {
-  committedOps,
-  drawerRect,
-  flatten,
-  profileFor,
-  routeDrawerRect,
-  skeletonOps,
-} from "./layout.ts";
+import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
 import { createFitStore, createPlainFitStore, fitPlain, prepareReading } from "./fitting.ts";
 import type { ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
 import { prepareRail } from "./history-rail.ts";
@@ -3407,14 +3400,6 @@ function measuringAt(
   };
 }
 
-/** Whether these two rectangles are the same one, or both absent. */
-function sameBounds(one: ReplBounds | undefined, two: ReplBounds | undefined): boolean {
-  if (one === undefined || two === undefined) {
-    return one === two;
-  }
-  return one.x === two.x && one.y === two.y && one.width === two.width && one.height === two.height;
-}
-
 /**
  * The row below the whole fitted guidance block, as the engine placed it.
  *
@@ -3614,10 +3599,13 @@ export function* prepareFrame(
     refused.value === undefined
       ? undefined
       : Object.freeze(refused.value.map((own) => `${" ".repeat(own.indent)}${own.text}`));
-  const probed = presentationFor(
-    view,
-    queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1)),
-  );
+  // The width probe. Its only question is how wide a fitted control is, so it
+  // is the one pass that puts a queued row in the tray — and it is deliberately
+  // not the pass anything is admitted from.
+  const probed = presentationFor(view, {
+    ...queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1)),
+    queueProbe: true,
+  });
   const fitted = yield* renderer.measure(skeletonOps(probed.manifest.root), view.size);
   if (!fitted.ok) {
     return fitted;
@@ -3643,16 +3631,18 @@ export function* prepareFrame(
     guidanceBottomOf(probed.manifest, fitted.value),
     workspace,
   );
-  const settled = sameBounds(envelope, drawerRect(view.size, workspace));
-  const measured = settled
-    ? probed
-    : presentationFor(
-        view,
-        queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, 1, envelope)),
-      );
-  const third = settled
-    ? fitted
-    : yield* renderer.measure(skeletonOps(measured.manifest.root), view.size);
+  // The structural skeleton, under that envelope: every scrolling viewport
+  // empty, with the controls that sit around it already in place. This is the
+  // measurement an admission may be derived from, which is why it is measured
+  // again rather than reusing the probe above — the probe was holding a row
+  // inside the tray's viewport so the engine would size that row's control,
+  // and a viewport stretched by its own contents reports the room its contents
+  // wanted. Bounded: one pass, never a loop.
+  const measured = presentationFor(
+    view,
+    queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, 1, envelope)),
+  );
+  const third = yield* renderer.measure(skeletonOps(measured.manifest.root), view.size);
   if (!third.ok) {
     return third;
   }
