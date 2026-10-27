@@ -6419,6 +6419,38 @@ projection detaches every value it retains and freezes it, so nothing below
 holds a `DurableEvent` and nothing above can change one. Route resolution is
 pure and answers with the exact objects that model holds.
 
+### Local Sidekick attachments
+
+The CLI-private `sidekick-acp` composition attaches observers and an ACP stdio
+bridge to the live root's existing Sidekick dispatch. With `--sidekick-acp` and
+no selected conversation, startup sends one real initialization message through
+that dispatch and waits for joined completion before publishing the endpoint.
+Existing selected history needs no initialization turn or provider setup; an
+initialization failure is reported without publishing an endpoint. Ordinary
+startup remains passive. Initialization retains captured provider configuration,
+entry admission and pending/uncertain-effect rules. It introduces no evaluator,
+journal writer or conversation controller. The root owns producers and issued
+attachment mappings; each connection owns its bounded public observation and
+request tasks. EOF releases only those observations. Explicit cancellation
+captures an exact exchange before suspension and joins it; enclosing command
+teardown joins both producer and transport resources.
+
+A contextual transport is installed explicitly by each runtime entrypoint. Its
+POSIX adapter owns asynchronous socket/file acquisition, exclusive complete
+descriptor publication and identity-checked cleanup. Shared attachment modules
+use that context and detached acknowledged reads. A descriptor binds its live
+owner/execution/conversation/cwd, and every connection handshakes that exact
+binding. Conversation selection changes invalidate it. Private protocol schemas
+bound both framing and the read surface; an observer that exceeds its mailbox
+cannot block the root producer.
+
+The bridge distinguishes three facts: accepted saved message, joined exchange
+completion and the product verdict inside evaluated Output. Provisional activity
+is marked as such, and no native transcript crosses this boundary. Outer ACP
+identity/materialization describes only the attachment and its message acceptance;
+it does not assert acceptance by the underlying Sidekick provider. Unknown
+feedback keeps its existing refusal and is never resent through attachment.
+
 ### Session workspace placement
 
 A Sidekick response and an entry submitted through its controls start in the
@@ -8623,6 +8655,26 @@ every root job and subscription are children of that screen scope, so Exit,
 Control-C, end of input and failure all unwind and join the Sidekick's work
 before the command reports its outcome and the terminal is released.
 
+**One root-owned dispatch spans the whole Sidekick exchange.** UI Send and
+Retry use the same private service and admission policy as an attributed external
+caller. Constructing an operation does nothing; executing it captures lexical
+origin and conversation selection, then reserves before producer work. Message,
+inspection, save and replacement share the existing policy: save and replacement
+may accompany a message, while explicit configuration jobs exclude one another.
+The producer belongs to the live command. Detaching an observer does not cancel
+it or release its reservation. Exact-handle Stop joins producer cleanup before
+release, and an old handle cannot stop a successor. Entry work remains owned by
+ReplSession.
+
+Every message record carries an opaque ID and a UI/attachment origin beside the
+conversation-scoped numeric `turn`, and a record missing either is unreadable
+rather than assumed. The reference is published only after the message append
+is acknowledged.
+ACP-origin acknowledgement clears neither composer nor draft takeover. The live
+root indexes established IDs for passive observation; that index supplies no
+restart, resend or provider-acceptance authority. An earlier answer followed by
+a failed turn remains partial evidence in the failed exchange result.
+
 **The owner reports its own changes to the loop, and that report carries no
 authority.** A reply arriving, an automatic follow-up starting, a cycle failing
 and a joined Stop are things no keystroke announces, so the owner owns a signal
@@ -8791,7 +8843,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 | background automation | work designed to proceed without ongoing user or agent attention, with its persistence and recovery guarantees supplied by the workflow host |
 | REPL | the foreground interactive environment for experimenting with and testing components; replay restores recorded execution state, while the user or agent handles differences between that state and the live environment |
 | REPL history | the immutable ordered execution records the REPL reads from the durable journal and projects into `ReplModel`; the History surface presents this read model and is not itself a journal [Reference](#the-private-repl-composition-kernel). |
-| message ID | the number Sidekick retains to identify a saved person message within its conversation; fixed once saved, possibly noncontiguous, and independent of the turn numbers recorded by Core. The conversation and message ID together form its lookup key |
+| message ID | the opaque identity Sidekick retains for a saved person message, written before its turn and never rewritten. The conversation and message ID together form its lookup key, and the conversation-scoped numeric `turn` beside it identifies no turn |
 | turn | one request to an agent, together with the response or failure from that request |
 | middleware | applied by the lexical structure, used by runtime execution [Reference](#two-layers). |
 | workflow run | a workflow being carried out with its progress and outcome recorded durably; document executions perform its work, while ongoing effects remain scoped to the document execution in which they run [Reference](#workflow-runs). |

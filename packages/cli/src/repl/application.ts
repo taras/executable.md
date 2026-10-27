@@ -8,6 +8,7 @@
  * adoption; a refusal preserves the standing route, selection and draft.
  */
 
+import type { MessageOrigin } from "./sidekick/history.ts";
 import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import type { AgentOption, AgentOptions, SessionConfiguration } from "@executablemd/core";
@@ -206,6 +207,7 @@ export interface ReplLive {
  * reader left it on when the next reply arrives.
  */
 export interface ReplSidekickChatRow {
+  readonly origin?: MessageOrigin;
   /**
    * The saved request this failed attempt could be asked again, or none.
    *
@@ -3250,7 +3252,13 @@ function sidekickComposedRows(
   }
   for (const item of shownChat) {
     if (item.kind === "person") {
-      items.push(text(`sidekick:${item.key}`, `  you: ${item.text}`, styleOf("source")));
+      items.push(
+        text(
+          `sidekick:${item.key}`,
+          `  ${item.origin?.kind === "acp" ? "ACP (" + item.origin.attachment + ")" : "you"}: ${item.text}`,
+          styleOf("source"),
+        ),
+      );
       continue;
     }
     if (item.kind === "preview") {

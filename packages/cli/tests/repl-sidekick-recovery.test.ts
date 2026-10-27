@@ -231,7 +231,15 @@ describe("Tier R2 — a reading claims nothing a canonical turn does not establi
     // actually retained, the reply is published and the delivery counted.
     const reading = project([
       ...opened(),
-      { kind: "message", conversation: CHAT, turn: 1, revision: 1, text: "greet them" },
+      {
+        kind: "message",
+        id: "message-1",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 1,
+        revision: 1,
+        text: "greet them",
+      },
       turn(1, "Hello", { input: "greet them" }),
       reply(1, "Hello"),
       // The feedback text, retained before the turn that carries it — which is
@@ -257,7 +265,15 @@ describe("Tier R2 — a reading claims nothing a canonical turn does not establi
       // — and that they agree is a coincidence of this history rather than the
       // thing that associated them: the association comes from the canonical
       // turn sitting among that message's own records.
-      { kind: "person", conversation: CHAT, message: 1, turn: 1, text: "greet them" },
+      {
+        kind: "person",
+        id: "message-1",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        message: 1,
+        turn: 1,
+        text: "greet them",
+      },
       {
         kind: "reply",
         conversation: CHAT,
@@ -359,7 +375,15 @@ describe("Tier R2 — a reading claims nothing a canonical turn does not establi
       refusalOf([
         { kind: "owner", version: 1, execution: "exec" },
         { kind: "ready" },
-        { kind: "message", conversation: "never-opened", turn: 1, revision: 1, text: "hi" },
+        {
+          kind: "message",
+          id: "message-1",
+          origin: { kind: "ui" },
+          conversation: "never-opened",
+          turn: 1,
+          revision: 1,
+          text: "hi",
+        },
       ]),
     ).toContain("never opened");
 
@@ -1541,19 +1565,51 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
     // conversation at all.
     const reading = project([
       ...opened(),
-      { kind: "message", conversation: CHAT, turn: 1, revision: 1, text: "first" },
+      {
+        kind: "message",
+        id: "message-1",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 1,
+        revision: 1,
+        text: "first",
+      },
       turn(1, "Hello", { input: "first", sessionKey: "sk:one" }),
       reply(1, "Hello"),
-      { kind: "message", conversation: CHAT, turn: 2, revision: 1, text: "second" },
+      {
+        kind: "message",
+        id: "message-2",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 2,
+        revision: 1,
+        text: "second",
+      },
       turn(2, "half a", {
         input: "second",
         status: "failed",
         sessionKey: "sk:two",
         error: { message: "the agent gave up." },
       }),
-      { kind: "message", conversation: CHAT, turn: 3, revision: 1, text: "third" },
+      {
+        kind: "message",
+        id: "message-3",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 3,
+        revision: 1,
+        text: "third",
+      },
       turn(3, "", { input: "third", status: "cancelled", sessionKey: "sk:three" }),
-      { kind: "message", conversation: CHAT, turn: 4, revision: 1, text: "fourth" },
+      {
+        kind: "message",
+        id: "message-4",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 4,
+        revision: 1,
+        text: "fourth",
+      },
       turn(4, "", { input: "fourth", sessionKey: "" }),
     ]);
 
@@ -1624,7 +1680,15 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
     ].join("\n");
     const reading = project([
       ...opened(),
-      { kind: "message", conversation: CHAT, turn: 1, revision: 1, text: "ask" },
+      {
+        kind: "message",
+        id: "message-1",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 1,
+        revision: 1,
+        text: "ask",
+      },
       turn(1, source, { input: "ask", status: "failed", stopReason: "max_tokens" }),
     ]);
 
@@ -1641,7 +1705,15 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
     // vocabulary does not have renders nothing, and nothing is what is shown.
     const unreadable = project([
       ...opened(),
-      { kind: "message", conversation: CHAT, turn: 1, revision: 1, text: "ask" },
+      {
+        kind: "message",
+        id: "message-1",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 1,
+        revision: 1,
+        text: "ask",
+      },
       turn(1, "<Output><NotAThing /></Output>", { input: "ask", status: "failed" }),
     ]);
     expect(unreadable.turns[0]?.incomplete?.output).toBe("");
@@ -1654,7 +1726,15 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
     const machine = "## Results\n\n<REPL.Bindings /> returned two names.";
     const reading = project([
       ...opened(),
-      { kind: "message", conversation: CHAT, turn: 1, revision: 1, text: "greet them" },
+      {
+        kind: "message",
+        id: "message-1",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 1,
+        revision: 1,
+        text: "greet them",
+      },
       turn(1, "Hello", { input: "greet them" }),
       reply(1, "Hello"),
       { kind: "feedback", conversation: CHAT, response: "r1", turn: null, text: machine },
@@ -1688,7 +1768,15 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
       ...opened(),
       turn(1, "Hello", { input: "something this history never wrote down" }),
       reply(1, "Hello"),
-      { kind: "message", conversation: CHAT, turn: 2, revision: 1, text: "a later question" },
+      {
+        kind: "message",
+        id: "message-2",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 2,
+        revision: 1,
+        text: "a later question",
+      },
     ]);
 
     expect(reading.turns.map((one) => [one.turn, one.asked, one.title])).toEqual([
@@ -1748,6 +1836,8 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
         ? [
             {
               kind: "message",
+              id: "message-unacknowledged",
+              origin: { kind: "ui" },
               conversation: "old",
               turn: 1,
               revision: 0,
@@ -1755,7 +1845,15 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
             } satisfies SidekickRecord,
           ]
         : []),
-      { kind: "message", conversation: "old", turn: diverged ? 2 : 1, revision: 0, text: "saved" },
+      {
+        kind: "message",
+        id: "message-saved",
+        origin: { kind: "ui" },
+        conversation: "old",
+        turn: diverged ? 2 : 1,
+        revision: 0,
+        text: "saved",
+      },
       attempted("old", "scribe", 1, false),
       {
         kind: "response",
@@ -1768,6 +1866,8 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
       },
       {
         kind: "message",
+        id: "message-old-failed",
+        origin: { kind: "ui" },
         conversation: "old",
         turn: diverged ? 3 : 2,
         revision: 0,
@@ -1775,7 +1875,15 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
       },
       attempted("old", "scribe", 2, true),
       ...opening("current", "scrivener"),
-      { kind: "message", conversation: "current", turn: 1, revision: 0, text: "first" },
+      {
+        kind: "message",
+        id: "message-1",
+        origin: { kind: "ui" },
+        conversation: "current",
+        turn: 1,
+        revision: 0,
+        text: "first",
+      },
       attempted("current", "scrivener", 1, false),
       {
         kind: "response",
@@ -1786,7 +1894,15 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
         hasOutput: true,
         output: "New reply.",
       },
-      { kind: "message", conversation: "current", turn: 2, revision: 0, text: "new failed" },
+      {
+        kind: "message",
+        id: "message-2",
+        origin: { kind: "ui" },
+        conversation: "current",
+        turn: 2,
+        revision: 0,
+        text: "new failed",
+      },
       attempted("current", "scrivener", 2, true),
     ];
     const known = project(saved);
@@ -1837,7 +1953,15 @@ describe("Tier SS — what a saved Sidekick turn establishes about itself", () =
       { kind: "ready" },
       { kind: "conversation", conversation: CHAT, agent: AGENT, phase: "prepared" },
       { kind: "conversation", conversation: CHAT, agent: AGENT, phase: "activated" },
-      { kind: "message", conversation: CHAT, turn: 1, revision: 1, text: "first" },
+      {
+        kind: "message",
+        id: "message-1",
+        origin: { kind: "ui" },
+        conversation: CHAT,
+        turn: 1,
+        revision: 1,
+        text: "first",
+      },
       turn(1, "Hello", { input: "first", sessionKey: "sk:shared" }),
       reply(1, "Hello"),
       {

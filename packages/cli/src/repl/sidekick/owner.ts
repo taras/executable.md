@@ -1,3 +1,4 @@
+import type { MessageOrigin } from "./history.ts";
 import type { ReplTesting } from "./testing.ts";
 /**
  * The conversation this execution owns, and the one cycle it runs at a time.
@@ -122,7 +123,10 @@ import type { PairedChatStorage } from "./repository.ts";
 
 /** Why one explicit message could not be taken, or could not finish. */
 export class SidekickOwnerError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly partial?: SidekickTurn,
+  ) {
     super(message);
     this.name = "SidekickOwnerError";
   }
@@ -150,9 +154,15 @@ export interface SidekickAssembly {
  * ever oriented: a person's message is retained as a message, and a delivery of
  * one response's results is retained as feedback naming that response.
  */
+export interface SidekickMessageOptions {
+  readonly origin: MessageOrigin;
+  saved?(conversation: string, id: string): void;
+}
+
 type Sending =
   | {
       readonly kind: "message";
+      readonly options: SidekickMessageOptions;
       readonly text: string;
       /**
        * The message revision this was asked for at.
@@ -517,7 +527,7 @@ export interface SidekickOwner {
    */
   select(agent: string): Operation<Result<void>>;
   /** Send one explicit message, and run the turn it produces. */
-  message(text: string): Operation<Result<SidekickTurn>>;
+  message(text: string, options?: SidekickMessageOptions): Operation<Result<SidekickTurn>>;
   /**
    * Stop whatever this Sidekick is doing, and join it.
    *
@@ -1083,7 +1093,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       return Ok({ id, handle: opened.value });
     }
 
-    function* message(text: string): Operation<Result<SidekickTurn>> {
+    function* message(
+      text: string,
+      options: SidekickMessageOptions = { origin: { kind: "ui" } },
+    ): Operation<Result<SidekickTurn>> {
       if (busy) {
         return Err(
           new SidekickOwnerError(
@@ -1118,12 +1131,16 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // waiting for cannot outlive the thing that asked for it.
       const answer = withResolvers<Result<SidekickTurn>>();
       const task = yield* spawn(function* (): Operation<void> {
-        answer.resolve(yield* cycle(text, revision));
+        answer.resolve(yield* cycle(text, revision, options));
       });
       const held = { task, answer, operation: answer.operation };
       working = held;
       try {
-        return yield* answer.operation;
+        const result = yield* answer.operation;
+        if (result.ok) {
+          yield* task;
+        }
+        return result;
       } finally {
         // Only if this cycle is still the one in flight. Stop releases the
         // owner itself, so by the time this runs a new message may already have
@@ -1410,7 +1427,11 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       return settled.ok ? Ok(undefined) : settled;
     }
 
-    function* cycle(text: string, revision: number): Operation<Result<SidekickTurn>> {
+    function* cycle(
+      text: string,
+      revision: number,
+      options: SidekickMessageOptions,
+    ): Operation<Result<SidekickTurn>> {
       const known = history();
       if (!known.ok) {
         return known;
@@ -1444,23 +1465,25 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // No cap: each pass costs a provider turn, a response that asked for
       // nothing ends it, and a provider failure pauses — so what bounds this is
       // the conversation itself rather than a number chosen here.
-      let sending: Sending = { kind: "message", text, revision };
+      let sending: Sending = { kind: "message", text, revision, options };
       let last: SidekickTurn | undefined;
       while (true) {
         const responded: Result<Responded> = yield* respond(paired, conversation, handle, sending);
         if (!responded.ok) {
-          // A turn that could not be sent at all. Whatever an earlier response
-          // in this exchange answered stands, so that is the answer; with none,
-          // the refusal is.
-          return last === undefined ? responded : Ok(last);
+          return last === undefined
+            ? responded
+            : Err(new SidekickOwnerError(responded.error.message, last));
         }
         const settled: SidekickTurn = responded.value.held;
         if (!responded.value.answered) {
-          // The provider did not finish this turn, so it answered nobody. An
-          // earlier response in this exchange may have, and that is what the
-          // person was answered by; the attempt itself is in the chat either
-          // way.
-          return Ok(last ?? settled);
+          return last === undefined
+            ? Ok(settled)
+            : Err(
+                new SidekickOwnerError(
+                  settled.failure ?? "The follow-up did not establish a completed response.",
+                  last,
+                ),
+              );
         }
         last = settled;
         if (responded.value.next === undefined) {
@@ -1638,7 +1661,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             text: request,
           });
         }
+        const messageId = yield* ReplHost.operations.identify();
         yield* paired.writer.append({
+          id: messageId,
+          origin: sending.options.origin,
           kind: "message",
           conversation,
           turn,
@@ -1654,7 +1680,10 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // root to have applied that, before a prompt is sent and before a reply
         // that came back immediately could report anything of its own.
         yield* refresh();
-        yield* input.acknowledge(sending.revision);
+        sending.options.saved?.(conversation, messageId);
+        if (sending.options.origin.kind === "ui") {
+          yield* input.acknowledge(sending.revision);
+        }
       } else {
         // Claimed before it is sent, and claiming nothing: an interrupted
         // process left a readable "this was composed" and no assertion that any

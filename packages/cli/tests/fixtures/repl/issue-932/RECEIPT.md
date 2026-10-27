@@ -30,8 +30,14 @@ This half does not depend on which controls a response may write, so
 
 ## `sidekick.jsonl` — a pinned pre-retirement chat
 
-22 records, 27847 bytes, sha256
-`fbd0175e4195a88063191f49c015a9732fba3ae72eee3e7d9ff72d4e0e22b68b`.
+22 records, 27887 bytes, sha256
+`9ca9783a0b7238689504973095b7c685429ca42e2e08409cd52632a1f6df674b`.
+
+Its one `message` record was brought to the current record format in place when
+`id` and `origin` became required of every saved message: there is one supported
+format, so a stored record moves to it rather than being read as an earlier one.
+That edit added those two fields to that record and changed nothing else — the
+run-produced content, record count and order are the ones produced below.
 
 One exchange whose reply wrote `<REPL.EntryOutput entry="entry-2" />`, so the
 chat retains that control's own `control` and `control-outcome` pair with its

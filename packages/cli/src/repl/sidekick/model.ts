@@ -31,6 +31,7 @@
  * identity and whose identity holder, stays a canonical Core and provider matter.
  */
 
+import type { MessageOrigin } from "./history.ts";
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import { AGENT_PROMPT, parsePromptRecord, previewGeneratedXmdRoot } from "@executablemd/core/host";
@@ -159,6 +160,10 @@ function lastVerified(
 export type SidekickChatItem =
   | {
       readonly kind: "person";
+      /** The saved message's own opaque ID, as the record holds it. */
+      readonly id: string;
+      /** Which surface sent it: this host's own UI, or a named live attachment. */
+      readonly origin: MessageOrigin;
       readonly conversation: string;
       /**
        * The retained message ID, independent of saved turn numbering.
@@ -1024,6 +1029,8 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
         chatAt.push(index);
         chat.push({
           kind: "person",
+          id: record.id,
+          origin: record.origin,
           conversation: record.conversation,
           // Its own ID, and the saved turn its own request became — which
           // is unknown when that request's records hold no saved turn.

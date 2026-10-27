@@ -491,6 +491,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       "--default-agent",
       "--deny-all",
       "--include",
+      "--sidekick-acp",
       "--sidekick-agent",
     ]);
 
@@ -931,5 +932,46 @@ describe("REPL boundaries: how this command's repository policy reaches Git", ()
       expect(gitSpecifiers(`import { thing } from "${route}";`)).toEqual([route]);
     }
     expect(gitSpecifiers('import { probe } from "../../git/tests/support/github.ts";')).toEqual([]);
+  });
+});
+
+describe("Sidekick attachment boundaries", () => {
+  it("requires one absolute startup attachment value", function* () {
+    expect(REPL_VALUES.includes("--sidekick-acp")).toBe(true);
+    expect(
+      replGrammarError(["repl", "--sidekick-acp", "/private/owner/attachment.json"], undefined),
+    ).toBe(undefined);
+    for (const args of [
+      ["repl", "--sidekick-acp"],
+      ["repl", "--sidekick-acp", "relative"],
+      ["repl", "--sidekick-acp", "/one", "--sidekick-acp=/two"],
+    ]) {
+      expect(replGrammarError(args, undefined)).not.toBe(undefined);
+    }
+  });
+  it("declares the attachment SDK for both dependency layouts, at one version", function* () {
+    // Two layouts, not one: `deno.json` is what Deno resolves through, and
+    // `package.json` is what pnpm and Bun link per package. A dependency the
+    // attachment imports and only `deno.json` declares resolves under Deno and
+    // is missing from `packages/cli/node_modules`, so every Node and Bun
+    // invocation of this CLI fails to load — which no import-graph test selects
+    // for, because the manifests are not in anybody's import graph.
+    const imported = "@agentclientprotocol/sdk";
+    expect(yield* read(join(CLI, "src/sidekick-acp/bridge.ts"))).toContain(`from "${imported}"`);
+    const deno = JSON.parse(yield* read(join(CLI, "deno.json")));
+    const pkg = JSON.parse(yield* read(join(CLI, "package.json")));
+    const specifier = deno.imports?.[imported];
+    expect(specifier).toBe(`npm:${imported}@${pkg.dependencies?.[imported]}`);
+  });
+  it("installs transport only at the four runtime assemblies and shared attachment code uses the contextual host", function* () {
+    for (const entry of ["deno", "compiled", "node", "bun"]) {
+      expect(yield* read(join(CLI, "src", entry + ".ts"))).toContain("usePosixSidekickTransport");
+    }
+    for (const name of ["server", "client", "bridge", "protocol", "command"]) {
+      const text = yield* read(join(CLI, "src/sidekick-acp", name + ".ts"));
+      expect(text).not.toContain('from "node:fs');
+      expect(text).not.toContain('from "node:net');
+      expect(text).not.toContain("process.platform");
+    }
   });
 });

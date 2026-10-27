@@ -16,8 +16,15 @@ accepted source C** before the PR2 worktree left that commit.
 
 ## What it holds
 
-`xmd/repl/v1/chat/sidekick.jsonl` — 20 records, 25327 bytes,
-sha256 `333c901fd223788b366d4ebd363c67da090e9254e060b29c96de5db77c07f400`
+`xmd/repl/v1/chat/sidekick.jsonl` — 20 records, 25407 bytes,
+sha256 `1097cd1700c5c6ca70a5ebe1b3c4e6f151fc976f164fa217cab016b0350cdea6`
+
+Its two `message` records were brought to the current record format in place
+when `id` and `origin` became required of every saved message: there is one
+supported format, so a stored record moves to it rather than being read as an
+earlier one. That edit added those two fields to those records and changed
+nothing else — the run-produced content, record count and order are the ones
+the phases below produced.
 
 | kind | count |
 | --- | --- |

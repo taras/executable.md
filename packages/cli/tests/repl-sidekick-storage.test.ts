@@ -1050,3 +1050,32 @@ describe("Tier R1 — the Sidekick writer's one order, and leaving its queue", (
     expect(written).toEqual(["one", "two"]);
   });
 });
+
+describe("message attribution", () => {
+  it("round-trips acknowledged identity/origin and requires both", function* () {
+    const attributed = {
+      kind: "message",
+      id: "opaque-message",
+      origin: { kind: "acp", attachment: "local" },
+      conversation: "chat",
+      turn: 1,
+      revision: 4,
+      text: "old",
+    };
+    expect(parseSidekickRecord(JSON.stringify(attributed))).toEqual(attributed);
+    expect(parseSidekickRecord(JSON.stringify({ ...attributed, origin: { kind: "ui" } }))).toEqual({
+      ...attributed,
+      origin: { kind: "ui" },
+    });
+    expect(parseSidekickRecord(JSON.stringify({ ...attributed, origin: { kind: "other" } }))).toBe(
+      undefined,
+    );
+    expect(parseSidekickRecord(JSON.stringify({ ...attributed, id: "" }))).toBe(undefined);
+    // The one supported shape is the current one: a record saved without an ID
+    // or an origin is unreadable rather than read as some earlier format.
+    const { id: _id, ...noId } = attributed;
+    const { origin: _origin, ...noOrigin } = attributed;
+    expect(parseSidekickRecord(JSON.stringify(noId))).toBe(undefined);
+    expect(parseSidekickRecord(JSON.stringify(noOrigin))).toBe(undefined);
+  });
+});

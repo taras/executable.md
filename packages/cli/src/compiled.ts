@@ -1,3 +1,4 @@
+import { usePosixSidekickTransport } from "./sidekick-acp/posix.ts";
 /**
  * Compiled-binary entrypoint — what `deno task build` compiles.
  *
@@ -55,6 +56,7 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
   await main(() => runCredentialHelper(process.argv.slice(2)));
 } else {
   await main(function* (args) {
+    yield* usePosixSidekickTransport(process.platform);
     yield* useDenoComponentModuleLoader();
     // The base providers for this host. `at: "min"` puts them beneath ordinary
     // middleware, so middleware installed later can wrap either one.

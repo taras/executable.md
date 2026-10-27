@@ -113,6 +113,8 @@ export function* useHarness(
      * being admitted, and that interval is inside the entry's execution.
      */
     readonly entryInstallation?: ExecutionInstallation;
+    readonly state?: (initial: ReplState) => ReplState;
+    readonly acknowledge?: () => Operation<void>;
     /**
      * The draft fill, replaced whole, so a case can hold a control open.
      *
@@ -187,7 +189,7 @@ export function* useHarness(
   const session = opened.value;
 
   // The loop's state, and the one slot the person and a reply contend for.
-  let state = initialState(execution.id);
+  let state = extra.state?.(initialState(execution.id)) ?? initialState(execution.id);
   const admitting: Admitting = newAdmitting();
 
   function facts(): DraftFacts {
@@ -276,6 +278,9 @@ export function* useHarness(
     draft: () => state.draft,
     // deno-lint-ignore require-yield
     *acknowledge(): Operation<void> {
+      if (extra.acknowledge !== undefined) {
+        yield* extra.acknowledge();
+      }
       // Nothing to apply: these rows own the state directly rather than through
       // a loop, so a saved message is acknowledged the moment it is saved.
     },
