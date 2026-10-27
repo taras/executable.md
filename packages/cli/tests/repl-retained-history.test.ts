@@ -18,6 +18,9 @@
  *   supported length is refused by a sentence naming the limit.
  * - **Exact bytes.** The Sidekick's prefix bindings and the single-file-to-pair
  *   upgrade measure and copy the file's own bytes through the same reader.
+ * - **Bounded reading of a long value.** What the screen says a binding is
+ *   stays what it said, without writing out a value to show twenty columns of
+ *   it.
  *
  * Files are real, in a per-row temporary directory, because what is under test
  * is how bytes on disk are read; the chunk size comes from the reader itself so
@@ -36,6 +39,17 @@ import type { Operation } from "effection";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
+import { INLINE_SOURCE_PATH } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
+
+import { describeApplication, initialState, NO_AGENT, viewFor } from "../src/repl/application.ts";
+import type { ReplLive } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
+import { fields, readDescription } from "../src/repl/description.ts";
+import type { ReplRoute } from "../src/repl/route.ts";
+import type { ReplRenderer } from "../src/repl/renderer.ts";
+import type { ReplTerminalSize } from "../src/repl/terminal.ts";
+import { committedContext, useMeasuringRenderer } from "./fixtures/repl/presentation.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import {
   HISTORY_LIMIT,
@@ -43,7 +57,7 @@ import {
   readRecords,
   RetainedReplStream,
 } from "../src/repl/journal.ts";
-import { EntrySegmentStream } from "../src/repl/entries.ts";
+import { EntrySegmentStream, ROOT_IMPORT } from "../src/repl/entries.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import { READ_CHUNK } from "../src/repl/record-file.ts";
 import {
@@ -245,6 +259,64 @@ describe("#992 — retained events are kept once and shared", () => {
     expect(seen[0]).toBe(held[1]);
     // What was retained before the append is still the very same object.
     expect(held[0]).toBe(before[0]);
+  });
+
+  it("H1: a frozen accessor operand is retained as the reading that was written", function* () {
+    const directory = yield* useTempDirectory("xmd-retained-");
+    yield* useHost("h1f");
+    const path = join(directory, "h1f.jsonl");
+    const physical = new RetainedReplStream(path);
+    const observed: DurableEvent[] = [];
+    physical.onAppend = (event) => {
+      observed.push(event);
+    };
+    const segment = new EntrySegmentStream(physical);
+
+    // The caller's own state, read through getters, inside frozen containers.
+    // Frozen says nothing about what a getter will answer next, so a retained
+    // event that kept these objects would be a live reading of this state
+    // rather than a record of what was written.
+    const caller = { answer: "acknowledged", held: ["kept"] };
+    const value: { readonly nested: { readonly answer: string } } = Object.freeze({
+      nested: Object.freeze({
+        get answer(): string {
+          return caller.answer;
+        },
+      }),
+    });
+    yield* segment.append({
+      type: "yield",
+      coroutineId: "root",
+      description: Object.freeze({
+        type: "test_effect",
+        name: "accessor",
+        get held(): string[] {
+          return caller.held;
+        },
+      }),
+      result: { status: "ok", value },
+    });
+    const written = yield* until(readFile(path, "utf8"));
+
+    caller.answer = "changed after acknowledgement";
+    caller.held.push("added later");
+
+    // Every reader, every time, still describes the record the file holds.
+    for (const read of [
+      yield* physical.readAll(),
+      yield* segment.readAll(),
+      yield* physical.readAll(),
+      yield* segment.readAll(),
+      observed,
+    ]) {
+      expect(read).toHaveLength(1);
+      expect(read.map(serializeDurableEvent).join("")).toBe(written);
+    }
+    // And they are still one shared graph rather than a copy each.
+    expect((yield* physical.readAll())[0]).toBe((yield* segment.readAll())[0]);
+    // The caller's own objects are untouched and still answer for the caller.
+    expect(value.nested.answer).toBe("changed after acknowledgement");
+    expect(caller.held).toEqual(["kept", "added later"]);
   });
 
   it("H1: sealing keeps member order, absent and undefined members, and an own __proto__", function* () {
@@ -489,6 +561,135 @@ describe("#992 — every saved history reads as it did", () => {
       } else if (!now.ok && !before.ok) {
         expect(now.error.message).toBe(before.error.message);
       }
+    }
+  });
+});
+
+describe("#992 — a long value is summarized without being written out", () => {
+  const EXECUTION = "summary";
+  const SCREEN: ReplTerminalSize = { columns: 160, rows: 36 };
+  const NOTHING_LIVE: ReplLive = Object.freeze({
+    output: "",
+    question: undefined,
+    expansion: "playing",
+    pausable: false,
+    running: false,
+    agent: NO_AGENT,
+    lifecycle: NO_LIFECYCLE,
+  });
+
+  /** One settled entry that published `held`, as a run records one. */
+  function publishing(value: Json): DurableEvent[] {
+    const content = "```js eval\nconst held = 1;\n```\n";
+    return [
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "import_component", name: ROOT_IMPORT },
+        result: {
+          status: "ok",
+          value: { kind: "repository", path: INLINE_SOURCE_PATH, content },
+        },
+      },
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: {
+          type: "eval",
+          name: "eval:eval:root:0",
+          language: "js",
+          "executablemd.source-position": {
+            path: INLINE_SOURCE_PATH,
+            offset: 0,
+            line: 1,
+            column: 1,
+          },
+        },
+        result: { status: "ok", value: { value: { held: value } } },
+      },
+      {
+        type: "close",
+        coroutineId: "root",
+        result: {
+          status: "ok",
+          value: { status: "ok", output: "", value: "", bindings: { held: value } },
+        },
+      },
+    ];
+  }
+
+  /** What the binding rows of this reading say, as a reader reads them. */
+  function* bindingRows(value: Json, engine: ReplRenderer): Operation<string[]> {
+    const projected = projectRepl(publishing(value));
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    const opening = initialState(EXECUTION);
+    // The bindings pane explicitly: the right-hand column defaults to the
+    // Sidekick, so this asks for the pane the way a person does.
+    const route: ReplRoute = { ...opening.route, scopes: ["entry-1"], right: "bindings" };
+    const view = viewFor(
+      Object.freeze({ ...opening, route }),
+      projected.value,
+      NOTHING_LIVE,
+      SCREEN,
+    );
+    if (!view.ok) {
+      throw view.error;
+    }
+    const context = yield* committedContext(engine, view.value);
+    const rows: string[] = [];
+    for (const description of describeApplication(view.value, context)) {
+      const read = readDescription(description);
+      const label = fields(read.input)?.["label"];
+      if (read.key.startsWith("binding:") && typeof label === "string") {
+        rows.push(label.trim());
+      }
+    }
+    return rows;
+  }
+
+  /**
+   * The summary writing the whole value out produced.
+   *
+   * Twenty columns, with the twentieth given to an ellipsis where there was
+   * more — stated here as the contract rather than read from the screen's own
+   * constant, so a changed constant fails this row instead of agreeing with it.
+   */
+  function whole(value: Json): string {
+    const written = JSON.stringify(value) ?? "null";
+    return written.length <= 20 ? written : `${written.slice(0, 19)}\u2026`;
+  }
+
+  it("H6: a value too long to show reads exactly as writing it out whole did", function* () {
+    const engine = yield* useMeasuringRenderer(SCREEN);
+    const values: Json[] = [
+      // Long enough that a summary is a cut, in the shapes a cut could move:
+      // plain text, text whose every character escapes into two, quotes at the
+      // front, characters outside the basic plane, and long text nested in a
+      // container and in a list.
+      "a".repeat(5000),
+      "\n".repeat(5000),
+      `${'"'.repeat(10)}${"b".repeat(5000)}`,
+      "\u{1f600}".repeat(3000),
+      `\u2014${"c".repeat(5000)}`,
+      { log: "d".repeat(5000) },
+      ["e".repeat(5000)],
+      { first: "f".repeat(5000), second: "g".repeat(5000) },
+      // And the lengths either side of the twenty columns a summary keeps, so
+      // the row that is shown whole is shown whole.
+      "h".repeat(17),
+      "i".repeat(18),
+      "j".repeat(19),
+      "alpha",
+      42,
+      null,
+      true,
+      { a: 1 },
+      [],
+    ];
+    for (const value of values) {
+      expect(yield* bindingRows(value, engine)).toEqual([`held = ${whole(value)}`]);
     }
   });
 });

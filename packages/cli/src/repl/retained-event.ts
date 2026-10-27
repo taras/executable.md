@@ -158,12 +158,32 @@ function sealJson(value: Json, share: StringSharing | undefined): Json {
 /**
  * Whether this container can be shared as it is.
  *
- * Frozen, and a plain object or array: a class instance can answer its members
- * from accessors, so freezing it says nothing about what it will read as next.
+ * Frozen is not enough on its own, and this is the whole of why sharing is
+ * decided here rather than at the call sites. Freezing an object keeps whatever
+ * accessors it was declared with, and an accessor answers from wherever its
+ * getter reads — so a frozen container holding one getter is a live reading of
+ * somebody else's state rather than a record of what was retained, and the
+ * value it reads as can change after the record it came from was written. A
+ * class instance answers the same way from a field nothing here can see.
+ *
+ * So a container is shared only when it is frozen, its prototype is the
+ * ordinary one, and every own property is a plain value. Anything else is
+ * copied: reading each member once is what turns a live object into the fixed
+ * reading a retained event is.
  */
 function reusable(value: object): boolean {
+  if (!Object.isFrozen(value)) {
+    return false;
+  }
   const prototype = Object.getPrototypeOf(value);
-  return (
-    Object.isFrozen(value) && (prototype === Object.prototype || prototype === Array.prototype)
-  );
+  if (prototype !== Object.prototype && prototype !== Array.prototype) {
+    return false;
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) {
+      return false;
+    }
+  }
+  return true;
 }

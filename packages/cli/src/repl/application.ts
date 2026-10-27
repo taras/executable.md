@@ -3656,12 +3656,54 @@ function shortened(text: string): string {
 
 /** How a value reads in one line of a list. */
 function summarize(value: Json): string {
-  const written = JSON.stringify(value) ?? "null";
+  const written = JSON.stringify(cut(value)) ?? "null";
   return written.length <= SUMMARY_WIDTH ? written : `${written.slice(0, SUMMARY_WIDTH - 1)}…`;
 }
 
 /** How much of a value one line of a list shows. */
 const SUMMARY_WIDTH = 20;
+
+/**
+ * The same value with every long string cut to more than a summary can show.
+ *
+ * A binding is as long as whatever the run bound to it, and a captured command
+ * output is megabytes. Writing one out to keep its first twenty columns
+ * allocated the whole of it, escapes and all, every time a frame was drawn —
+ * which is on every keystroke as well as on every record.
+ *
+ * What a summary shows is unchanged, and that is a property of where the cut
+ * is rather than of the shape of the value. Writing a string escapes each
+ * character into one or more characters and never into none, so a string cut
+ * to {@link SUMMARY_KEEP} characters writes at least that many — and
+ * {@link SUMMARY_KEEP} is beyond the columns a summary keeps. A cut therefore
+ * moves no character a reader sees, and a value that holds nothing long enough
+ * to cut is written exactly as it was.
+ */
+function cut(value: Json): Json {
+  if (typeof value === "string") {
+    return value.length <= SUMMARY_KEEP ? value : value.slice(0, SUMMARY_KEEP);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(cut);
+  }
+  const shorter: { [key: string]: Json } = {};
+  for (const [key, member] of Object.entries(value)) {
+    shorter[key] = cut(member);
+  }
+  return shorter;
+}
+
+/**
+ * How much of one string a summary may need.
+ *
+ * Twice the columns it keeps, which is more than escaping can consume: the
+ * summary keeps `SUMMARY_WIDTH - 1` characters of written text, and this many
+ * characters of a string write as at least this many.
+ */
+const SUMMARY_KEEP = SUMMARY_WIDTH * 2;
 
 /**
  * One long string as rows that fit, in order, losing nothing.

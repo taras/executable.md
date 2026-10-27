@@ -29,7 +29,16 @@ export const READ_CHUNK = 1 << 20;
 
 const NEWLINE = 0x0a;
 
-/** One file's bytes, in order, a chunk at a time. */
+/**
+ * One file's bytes, in order, a chunk at a time.
+ *
+ * Each chunk is a view of the one buffer this reader owns, so a chunk is what
+ * the file held until the next one is asked for. Every consumer here reads it
+ * at once — hashing it, scanning it for a record boundary, decoding it — and
+ * one that needs to keep bytes copies them. A buffer per read would allocate
+ * the whole file again in a megabyte at a time, which is what reading a
+ * half-gigabyte history used to do on top of reading it.
+ */
 interface FileChunks {
   /** The next chunk, or nothing once the file has been read to its end. */
   next(): Operation<Uint8Array | undefined>;
@@ -57,9 +66,9 @@ function useFileChunks(path: string): Operation<FileChunks> {
     });
     opening = open(path, "r");
     const handle = yield* until(opening);
+    const buffer = new Uint8Array(READ_CHUNK);
     yield* provide({
       *next(): Operation<Uint8Array | undefined> {
-        const buffer = new Uint8Array(READ_CHUNK);
         const read = handle.read(buffer, 0, READ_CHUNK, null);
         reading = read;
         const { bytesRead } = yield* until(read);
