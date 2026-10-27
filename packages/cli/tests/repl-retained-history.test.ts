@@ -540,9 +540,12 @@ describe("#992 — Sidekick prefixes and the upgrade use the file's own bytes", 
 describe("#992 — every saved history reads as it did", () => {
   it("H5: each entry history under fixtures/repl reads and projects as a whole-file read does", function* () {
     const fixtures = fileURLToPath(new URL("./fixtures/repl/", import.meta.url));
+    // Sorted in place, on the array `filter` just made rather than on anything
+    // the walk still holds, and with `sort` rather than `toSorted`: the Node
+    // typecheck's library is ES2022, where the copying form does not exist.
     const names = (yield* until(readdir(fixtures, { recursive: true })))
       .filter((name) => name.endsWith(".jsonl") && basename(name) !== SIDEKICK_FILE)
-      .toSorted();
+      .sort();
     // The inventory this row was written against; a new saved history joins it
     // rather than going unread.
     expect(names.length).toBeGreaterThanOrEqual(3);
