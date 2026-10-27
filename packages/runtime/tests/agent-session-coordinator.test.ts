@@ -508,6 +508,7 @@ describe("Explicit ownership recovery", () => {
       },
     });
     expect(parseAgentSessionOwnership(inspect.value.record)).toEqual(inspect.value.record);
+    expect(result.ok && result.value.recordRevision).toBe(inspect.value.recordRevision);
     const marker = inspect.value.record.lastForcedRecovery;
     const next = yield* value.coordinator.coordinate(
       KEY,

@@ -13,6 +13,7 @@ import type {
   AgentSessionCoordinator,
   AgentSessionForceRecoveryReceipt,
   AgentSessionHost,
+  AgentSessionOwnershipInspection,
   AgentSessionOwnershipRecord,
 } from "./agent-session-coordinator.ts";
 
@@ -330,6 +331,7 @@ export function createAgentSessionHostFromIO(
         firstFailure = cause;
         throw error(renameStarted ? "publication-unknown" : "io-failure", cause);
       }
+      return revision(bytes);
     });
   }
 
@@ -394,9 +396,9 @@ export function createAgentSessionHostFromIO(
           const digest = agentSessionKeyDigest(key);
           try {
             return yield* exclusive(digest, function* () {
-              let retained: AgentSessionOwnershipRecord | undefined;
+              let retained: AgentSessionOwnershipInspection | undefined;
               try {
-                retained = (yield* read(digest)).record;
+                retained = yield* read(digest);
               } catch (cause) {
                 if (!(cause instanceof AgentSessionOwnershipError) || cause.code !== "not-found") {
                   if (
@@ -410,12 +412,11 @@ export function createAgentSessionHostFromIO(
                   throw cause;
                 }
               }
-              if (retained?.state === "active") {
-                const observed = yield* read(digest);
+              if (retained?.record.state === "active") {
                 return Err(
                   new AgentSessionRecoveryRequired(
-                    `session ownership requires recovery; inspect with xmd session ownership --key-digest ${digest} --json; explicit recovery requires --expect ${observed.recordRevision} --force`,
-                    { keyDigest: digest, recordRevision: observed.recordRevision },
+                    `session ownership requires recovery; inspect with xmd session ownership --key-digest ${digest} --json; explicit recovery requires --expect ${retained.recordRevision} --force`,
+                    { keyDigest: digest, recordRevision: retained.recordRevision },
                   ),
                 );
               }
@@ -425,7 +426,7 @@ export function createAgentSessionHostFromIO(
                 ownerKind: owner.kind,
                 operationId: owner.operationId,
                 release: "none",
-                lastForcedRecovery: retained?.lastForcedRecovery ?? null,
+                lastForcedRecovery: retained?.record.lastForcedRecovery ?? null,
               };
               yield* publish(digest, active);
               let quiesced = false;
@@ -500,13 +501,11 @@ export function createAgentSessionHostFromIO(
                 interruptedOutcome: "unknown",
               },
             };
-            yield* publish(request.keyDigest, record);
+            const recordRevision = yield* publish(request.keyDigest, record);
             const receipt: AgentSessionForceRecoveryReceipt = {
               keyDigest: request.keyDigest,
               previousRecordRevision: request.expectedRevision,
-              recordRevision: revision(
-                new TextEncoder().encode(serializeAgentSessionOwnership(record)),
-              ),
+              recordRevision,
               recoveryId,
               release: "forced",
               backendQuiescenceProved: false,

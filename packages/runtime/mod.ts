@@ -156,19 +156,28 @@ export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host
 export {
   AgentSessionBusy,
   agentSessionKeyDigest,
+  AgentSessionOwnershipError,
   AgentSessionRecoveryRequired,
   parseAgentSessionOwnership,
   serializeAgentSessionOwnership,
 } from "./agent-session-coordinator.ts";
 export type {
   AgentSessionCoordinator,
+  AgentSessionForcedRecovery,
+  AgentSessionForceRecoveryReceipt,
+  AgentSessionHost,
   AgentSessionKey,
   AgentSessionOwner,
   AgentSessionOwnerKind,
   AgentSessionOwnership,
+  AgentSessionOwnershipAdministration,
+  AgentSessionOwnershipFailureCode,
+  AgentSessionOwnershipInspection,
+  AgentSessionOwnershipRecord,
 } from "./agent-session-coordinator.ts";
 export {
   createDenoAgentSessionCoordinator,
+  createDenoAgentSessionHost,
   hasDenoAgentSessionCoordinator,
 } from "./deno-agent-session-coordinator.ts";
 export { ExecutableObservationError } from "./executable-observer.ts";
@@ -181,15 +190,3 @@ export {
   createDenoExecutableObserver,
   hasDenoExecutableObserver,
 } from "./deno-executable-observer.ts";
-
-export { AgentSessionOwnershipError } from "./agent-session-coordinator.ts";
-export type {
-  AgentSessionHost,
-  AgentSessionOwnershipAdministration,
-  AgentSessionOwnershipInspection,
-  AgentSessionForceRecoveryReceipt,
-  AgentSessionOwnershipRecord,
-  AgentSessionForcedRecovery,
-  AgentSessionOwnershipFailureCode,
-} from "./agent-session-coordinator.ts";
-export { createDenoAgentSessionHost } from "./deno-agent-session-coordinator.ts";
