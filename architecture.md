@@ -8829,6 +8829,8 @@ DurableEvents -> frozen ReplModel -> resolved immutable view
 | `model.ts` | projecting one validated Journal prefix into a frozen model |
 | `route.ts` | the location grammar, and resolving one against a model |
 | `journal.ts` | the retained NDJSON stream and the repository over a root |
+| `retained-event.ts` | the one frozen copy of an event that every reader of a retained stream shares |
+| `record-file.ts` | reading a history file a chunk at a time: its lines, and fingerprints of its own bytes |
 | `session.ts` | admitting entries in turn, reopening one history, and the live overlay |
 | `entries.ts` | partitioning one physical journal into entry segments, and the private stream view over one of them |
 | `expansion.ts` | pausing and continuing expansion over the public seams |
