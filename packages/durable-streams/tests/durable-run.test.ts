@@ -8,7 +8,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { spawn, suspend, withResolvers, type Operation } from "effection";
+import { scoped, spawn, suspend, withResolvers, type Operation } from "effection";
 import {
   type DurableEvent,
   DurablePersistenceError,
@@ -21,7 +21,9 @@ import {
   durableAction,
   durableCall,
   durableRun,
+  DurableContext,
 } from "../mod.ts";
+import { activeDurabilityFailure, appendDurableEvent } from "../durability.ts";
 
 class PausedYieldStream implements DurableStream {
   readonly appendStarted = withResolvers<void>();
@@ -598,34 +600,44 @@ describe("durableRun: the cancelled ending, asked for through its own control", 
  * of its own, and whoever asked it to stop has to learn which one.
  */
 describe("durableRun: what an accepted request owns, and what it refuses", () => {
-  it("a request accepted while open beats a later ordinary return", function* () {
+  it("a request accepted while open ends the run, however the workflow returns", function* () {
     const stream = new InMemoryStream();
     const started = withResolvers<void>();
     const release = withResolvers<void>();
     let control: DurableRootControl | undefined;
-    const task = yield* spawn(function* () {
-      return yield* durableRun(
+    // Asked from beside this run rather than from a task that holds it: a
+    // spawned run that fails takes its parent down with it, so a caller
+    // cannot both own the run and watch it fail.
+    yield* spawn(function* () {
+      yield* started.operation;
+      control?.requestInterruption();
+      release.resolve();
+    });
+
+    let completed = false;
+    let caught: unknown;
+    try {
+      yield* durableRun(
         function* () {
           started.resolve();
           yield* release.operation;
-          return "returned after the claim";
+          return "returned after the request";
         },
         { stream, control: (own) => (control = own) },
       );
-    });
-    yield* started.operation;
-    if (control === undefined) {
-      throw new Error("this run handed out no control");
+      completed = true;
+    } catch (error) {
+      caught = error;
     }
-    expect(control.requestInterruption()).toBe(true);
 
-    // The workflow runs to its own end afterwards. That does not undo what
-    // was accepted: the value still reaches its caller, and the record says
-    // this root was stopped.
-    release.resolve();
-    expect(yield* task).toBe("returned after the claim");
-    expect(control.settled()).toBe("cancelled");
+    // The workflow ran to its own end afterwards. That does not undo what was
+    // accepted: this root was stopped, so it completes successfully for
+    // nobody and publishes no value to its caller.
+    expect(completed).toBe(false);
+    expect(caught).toBeInstanceOf(Error);
+    expect(control?.settled()).toBe("cancelled");
 
+    // And exactly one terminal, saying stopped rather than succeeded.
     const closes = stream.snapshot().filter((event) => event.type === "close");
     expect(closes.length).toBe(1);
     const only = closes[0];
@@ -633,6 +645,7 @@ describe("durableRun: what an accepted request owns, and what it refuses", () =>
       throw new Error("this run recorded no close");
     }
     expect(only.result.status).toBe("cancelled");
+    expect(Object.keys(only.result)).toEqual(["status"]);
   });
 
   it("a request over an unaligned prefix raises divergence and records nothing", function* () {
@@ -646,9 +659,11 @@ describe("durableRun: what an accepted request owns, and what it refuses", () =>
     ]);
     const started = withResolvers<void>();
     let control: DurableRootControl | undefined;
+    let captured: DurableContext | undefined;
     const task = yield* spawn(function* () {
       yield* durableRun(
         function* () {
+          captured = yield* DurableContext.expect();
           started.resolve();
           yield* suspend();
         },
@@ -674,6 +689,31 @@ describe("durableRun: what an accepted request owns, and what it refuses", () =>
     expect(control.settled()).toBe(undefined);
     // And the root has ended, so it accepts nothing further.
     expect(control.requestInterruption()).toBe(false);
+
+    // That failure is this run's, not only this frame's: it is remembered in
+    // the shared state, so every later append through the same context is
+    // refused by the same failure rather than writing into a history that has
+    // already diverged.
+    if (captured === undefined) {
+      throw new Error("this run published no context");
+    }
+    const ctx = captured;
+    expect(Object.is(activeDurabilityFailure(ctx), failure)).toBe(true);
+    let late: unknown;
+    try {
+      yield* scoped(() =>
+        appendDurableEvent(ctx, {
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "action", name: "after-divergence" },
+          result: { status: "ok", value: "must not append" },
+        }),
+      );
+    } catch (error) {
+      late = error;
+    }
+    expect(Object.is(late, failure)).toBe(true);
+    expect(stream.snapshot().length).toBe(1);
   });
 
   it("a request after a sticky append failure escapes by identity", function* () {

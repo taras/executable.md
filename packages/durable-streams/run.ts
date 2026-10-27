@@ -16,7 +16,11 @@
 import { ensure, scoped, useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { DurableContext } from "./context.ts";
-import { activeDurabilityFailure, appendDurableEvent } from "./durability.ts";
+import {
+  activeDurabilityFailure,
+  appendDurableEvent,
+  rememberDurabilityFailure,
+} from "./durability.ts";
 import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
 import { consumable, observeEvent } from "./retained.ts";
@@ -86,6 +90,22 @@ export interface DurableRunOptions {
  * run's decision and nobody else's — a root whose terminal append has already
  * begun keeps the terminal it was writing.
  */
+/**
+ * This root ending because a Stop owned it, rather than because of a fault.
+ *
+ * Never seen outside this module's own frames: the catch lets it past without
+ * writing a terminal around it, and the cancellation finalizer records what
+ * actually happened. It exists so an interrupted root stops *being* a
+ * successful completion without a fault being invented to carry it out.
+ */
+class RootInterrupted extends Error {
+  override name = "RootInterrupted";
+
+  constructor(coroutineId: string) {
+    super(`Workflow ${coroutineId} was stopped`);
+  }
+}
+
 /** Where this root stands, and what it will still answer for. */
 type RootPhase = "open" | "claimed" | "appending" | "settled" | "ended";
 
@@ -220,16 +240,21 @@ export function* durableRun<T extends WorkflowValue>(
   // accepted a claim while it was still open: an ordinary halt reaches here
   // unclaimed and appends nothing, which is what every caller without a
   // control has always seen.
-  yield* ensure(function* () {
-    if (phaseNow() !== "claimed") {
-      return;
-    }
-    // The same refusals the ordinary terminals make, and made the same way.
-    // A sticky durability failure is already this root's outcome and retained
-    // history the definition did not align with is divergence rather than a
-    // stopped run: neither is papered over with a cancelled close, and
-    // neither is swallowed — the holder of this control has to learn which
-    // failure ended the root it asked to stop.
+  /**
+   * End this root as stopped: the refusals its ordinary terminals make, then
+   * the one close the protocol already has.
+   *
+   * Called from the finalizer when the root is unwound, and directly from the
+   * return path when the workflow finished after the request was accepted —
+   * that frame leaves by throwing, and an append started while an error is
+   * already unwinding does not reliably finish.
+   */
+  function* settleStopped(): Operation<void> {
+    // A sticky durability failure is already this root's outcome, and
+    // retained history the definition did not align with is divergence rather
+    // than a stopped run: neither is papered over with a cancelled close, and
+    // neither is swallowed — whoever asked this root to stop has to learn
+    // which failure ended it.
     const durabilityFailure = activeDurabilityFailure(ctx);
     if (durabilityFailure !== undefined) {
       phase = "ended";
@@ -238,12 +263,21 @@ export function* durableRun<T extends WorkflowValue>(
     const unconsumed = unalignedReplay(replayIndex, coroutineId);
     if (unconsumed !== undefined) {
       phase = "ended";
-      throw new TerminalDivergenceError(
+      const failure = new TerminalDivergenceError(
         unconsumed.coroutineId,
         unconsumed.cursor,
         unconsumed.totalYields,
-        { unconsumed: unconsumed.entry },
+        {
+          message: `Divergence: workflow ${coroutineId} was stopped before retained history was exhausted`,
+          unconsumed: unconsumed.entry,
+        },
       );
+      // Remembered in the shared state before it is thrown, as a cancelled
+      // child's divergence is: this is the failure this run ended on, so every
+      // later append through the same context has to be refused by it rather
+      // than writing into a history that has already diverged.
+      rememberDurabilityFailure(ctx, failure);
+      throw failure;
     }
     phase = "appending";
     const closeEvent: Close = {
@@ -254,6 +288,13 @@ export function* durableRun<T extends WorkflowValue>(
     yield* scoped(() => appendDurableEvent(ctx, closeEvent));
     phase = "settled";
     retained = "cancelled";
+  }
+
+  yield* ensure(function* () {
+    if (phaseNow() !== "claimed") {
+      return;
+    }
+    yield* settleStopped();
   });
 
   if (control !== undefined) {
@@ -303,13 +344,16 @@ export function* durableRun<T extends WorkflowValue>(
     // would make that append wait forever. A boundary around the attempt
     // returns the turn as part of the outcome.
     //
-    // A Stop that claimed this root while it was open owns its ending, and
-    // the workflow returning afterwards does not undo that claim: no ok close
-    // is acknowledged here, and the cancellation finalizer is what settles
-    // this root. The value the workflow computed still comes back to its
-    // caller — what it may not do is become this root's recorded ending.
+    // A Stop accepted while this root was open owns its ending, and the
+    // workflow returning afterwards does not undo that. This root was
+    // interrupted, so it does not complete successfully for anybody: no ok
+    // close is acknowledged, no value is published, and the cancellation
+    // finalizer is what settles it. Leaving as `RootInterrupted` is how the
+    // caller learns that, and the catch below lets it past untouched so no
+    // compensating error close is written around it.
     if (phaseNow() === "claimed") {
-      return result;
+      yield* settleStopped();
+      throw new RootInterrupted(coroutineId);
     }
     // The phase moves first, so a cancellation asked for from here on joins
     // this ending rather than cancelling the write and compensating over a
@@ -321,6 +365,12 @@ export function* durableRun<T extends WorkflowValue>(
 
     return result;
   } catch (error) {
+    // A root a Stop already owns leaves as itself. The finalizer is what
+    // settles it, and a terminal written around that would be this run
+    // recording two endings.
+    if (error instanceof RootInterrupted) {
+      throw error;
+    }
     const primary = error instanceof Error ? error : new Error(String(error));
     const durabilityFailure = activeDurabilityFailure(ctx, primary);
     if (durabilityFailure) {
