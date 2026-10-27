@@ -56,20 +56,25 @@ import {
   bandRowProps,
   BODY_GUTTER,
   fittedPartProps,
+  flatten,
   GROWING_STACK_PROPS,
   inlineActionRowProps,
   partsRowProps,
   SPACER_PROPS,
-  WORKSPACE_CONVERSATION_COLUMNS,
+  statedPartProps,
+  WORKSPACE_DRAFT_GAP,
   WORKSPACE_DRAFT_ROWS,
+  WORKSPACE_CHROME_ROWS,
   WORKSPACE_LIST_GUTTER,
-  WORKSPACE_TRANSCRIPT_COLUMNS,
+  WORKSPACE_QUEUE_ROWS,
+  workspaceBodyRows,
   TAB_GAP,
   workspaceBlockProps,
   workspaceBodyProps,
   workspaceColumnProps,
   workspaceConversationWidth,
   workspaceHeaderProps,
+  workspaceInsideWidth,
   workspaceTranscriptWidth,
   workspaceWorkWidth,
 } from "./layout.ts";
@@ -107,13 +112,7 @@ import type { ReplFittedLine, ReplPreparedReading, ReplPreparedRow } from "./fit
 import { cleared, clearedMessage, edited, initialRevisions, submittable } from "./sidekick/gate.ts";
 import type { Instruction, Reservation, Revisions, Submitter } from "./sidekick/gate.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
-import {
-  decodeLocation,
-  encodeLocation,
-  NO_LIVE,
-  resolveLocation,
-  surfaceForDrawer,
-} from "./route.ts";
+import { decodeLocation, encodeLocation, resolveLocation, surfaceForDrawer } from "./route.ts";
 import type {
   ReplDrawerRef,
   ReplLiveAvailability,
@@ -1224,7 +1223,7 @@ export interface ReplView {
 }
 
 /** One message waiting behind the active exchange, as the staged screen lists it. */
-interface ReplQueuedMessage {
+export interface ReplQueuedMessage {
   readonly key: string;
   readonly origin: MessageOrigin;
   readonly text: string;
@@ -1244,6 +1243,15 @@ export interface ReplWorkspace {
   readonly tray: "todo" | "queue";
   readonly queued: readonly ReplQueuedMessage[];
   readonly work: readonly ReplAssociatedWork[];
+  /**
+   * How far the tray's own window is scrolled through those messages.
+   *
+   * Part of this inert presentation rather than of the screen's state, for the
+   * reason the rest of it is: nothing here admits, orders, withdraws or holds a
+   * message. Admission clamps it against the room the frame measured, so a
+   * value past the end shows the last messages rather than nothing.
+   */
+  readonly queueOffset?: number;
 }
 
 /** The same view, drawn as the staged workspace composition where it is wide. */
@@ -7302,6 +7310,15 @@ export const SIDEKICK_WINDOW = "sidekick";
 export const ENTRIES_WINDOW = "entries";
 /** The open drawer's content window, whichever reading it is showing. */
 export const DRAWER_WINDOW = "drawer";
+
+/**
+ * The staged tray's own window, over the messages waiting behind the exchange.
+ *
+ * Its own, because the conversation above it is a separate reading with a
+ * separate offset: one window meaning either would move whichever the frame
+ * measured last.
+ */
+export const QUEUE_WINDOW = "queue";
 /** The entry reading's window: output and source together, in the transcript. */
 export const READING_WINDOW = "reading";
 /** The action row's own structural id, which admission measures against. */
@@ -7529,6 +7546,23 @@ export interface ReplPresentationContext {
    */
   readonly queue?: readonly ReplFittedLine[] | undefined;
   /**
+   * How wide the Draft's field is, once its row and its control are measured.
+   *
+   * Derived from the engine's answers for this exact frame — the heading row's
+   * width, the control's own fitted width and the row's declared gap — never
+   * from a label's characters. Absent before that measurement, where the field
+   * grows and the pass is only answering widths.
+   */
+  readonly draftField?: number | undefined;
+  /**
+   * How wide a queued message's text is, once its control has been measured.
+   *
+   * Derived the way the Draft's field is, and for the same reason: the row
+   * holds the text and the control beside it, and a grown remainder is not
+   * always whole.
+   */
+  readonly queueText?: number | undefined;
+  /**
    * The staged headers whose two groups do not fit one row, by their own key.
    *
    * Measured by the preparation against the width the engine gave each header,
@@ -7678,7 +7712,9 @@ type ReplSlot =
   /** The chat window's own two controls, which surround it. */
   | "inspection-window"
   /** The staged composition's own rows, placed by key. */
-  | "workspace";
+  | "workspace"
+  /** The tray window's two controls, which surround it rather than move in it. */
+  | "queue-fixed";
 
 function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:open") {
@@ -7766,6 +7802,9 @@ function slotOf(key: string): ReplSlot | undefined {
   }
   if (key === "guidance" || key.startsWith("guidance:row:")) {
     return "located";
+  }
+  if (key === "queue:earlier" || key === "queue:later") {
+    return "queue-fixed";
   }
   if (
     key === "transcript:title" ||
@@ -8623,15 +8662,17 @@ export function admissionFor(input: {
   readonly preview?: readonly ReplFittedLine[] | undefined;
   /** The chat, fitted, which its own window admits rows of. */
   readonly chat?: readonly ReplFittedLine[] | undefined;
+  /** The tray's messages, fitted, which its own window admits rows of. */
+  readonly queue?: readonly ReplFittedLine[] | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
-  const { view, manifest, widths, reading, preview, chat, boundsOf } = input;
+  const { view, manifest, widths, reading, preview, chat, queue, boundsOf } = input;
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
     // The count first, because a window that follows its newest rows needs to
     // know where they end before it can say where it is.
-    const total = totalOf(view, widths, reading, preview, chat, slot.window);
+    const total = totalOf(view, widths, reading, preview, chat, queue, slot.window);
     windows.set(
       slot.window,
       admitRows({
@@ -8742,6 +8783,9 @@ function chatRead(view: ReplView): string {
 
 /** How far one window is scrolled, as this process is holding it. */
 function offsetOf(view: ReplView, window: string): number {
+  if (window === QUEUE_WINDOW) {
+    return staged(view)?.queueOffset ?? 0;
+  }
   if (window === SESSIONS_WINDOW) {
     return view.state.viewports.sessions;
   }
@@ -8770,8 +8814,12 @@ function totalOf(
   reading: ReplPreparedReading | undefined,
   preview: readonly ReplFittedLine[] | undefined,
   chat: readonly ReplFittedLine[] | undefined,
+  queue: readonly ReplFittedLine[] | undefined,
   window: string,
 ): number {
+  if (window === QUEUE_WINDOW) {
+    return queue?.length ?? 0;
+  }
   if (window === SESSIONS_WINDOW) {
     return sessionContentRows(view.state, view.model, view.live, staged(view) !== undefined);
   }
@@ -9348,33 +9396,54 @@ function workspaceControls(
         }),
   );
   if (workspace.tray === "queue") {
-    const fitted = context.queue;
-    for (const message of workspace.queued) {
-      const mark = originMark(message.origin);
-      // Before the queue is fitted each message is one blank row: the count is
-      // the geometry question, and its text would be fitted to nothing.
-      const pieces =
-        fitted === undefined
-          ? [{ text: "", indent: 0 }]
-          : fitted.filter((piece) => piece.line === `queue:${message.key}`);
-      for (const [at, piece] of pieces.entries()) {
-        const text = `${" ".repeat(piece.indent)}${piece.text}`;
-        const first = at === 0 && text.startsWith(MARKER_ROOM);
-        const said = first ? `${mark.text}${text.slice(MARKER_ROOM.length)}` : text;
+    const window = context.admission.windows.get(QUEUE_WINDOW);
+    // Both controls where the tray holds more than it can show, and neither
+    // where it does not: a control that scrolls nothing is a Tab stop and a
+    // pointer target over a reading that is already whole.
+    if (window !== undefined && window.total > window.capacity) {
+      items.push(
+        row("queue:earlier", `  ${EARLIER}`, {}, styleOf("navigate"), { here: view.focused }),
+      );
+    }
+    // Rows rather than messages. The window counts fitted rows, so the
+    // description selects the same fitted rows: a slice of messages would put
+    // more rows in the tray than it measured room for.
+    const sequence = queueSequence(workspace, context.queue);
+    // The pass that has no window yet describes the whole sequence, which is
+    // how its text box gets a width to be measured at. That costs this window
+    // nothing: unlike a growing viewport, the tray's is declared at the rows
+    // it was allocated, so its capacity is that height whatever is inside it.
+    const shownRows =
+      window === undefined ? sequence : sequence.slice(window.from, window.from + window.count);
+    for (const one of shownRows) {
+      const mark = originMark(one.message.origin);
+      const marked = one.first && one.text.startsWith(MARKER_ROOM);
+      const said = marked ? `${mark.text}${one.text.slice(MARKER_ROOM.length)}` : one.text;
+      items.push(
+        line(
+          `queue:${one.message.key}:row:${one.offset}`,
+          said,
+          styleOf("queued"),
+          marked ? markedRuns(mark, said, "queued") : undefined,
+        ),
+      );
+      // The control belongs to the row its message begins at and shares it, so
+      // it takes no row of the window, and a continuation shown without its
+      // beginning offers no control that would act on the wrong message.
+      if (one.first) {
         items.push(
-          line(
-            `queue:${message.key}:row:${at}`,
-            said,
-            styleOf("queued"),
-            first ? markedRuns(mark, said, "queued") : undefined,
+          row(
+            `queue:${one.message.key}:remove`,
+            "X",
+            { name: "Remove message" },
+            styleOf("metadata"),
+            { here: view.focused },
           ),
         );
       }
-      items.push(
-        row(`queue:${message.key}:remove`, "X", { name: "Remove message" }, styleOf("metadata"), {
-          here: view.focused,
-        }),
-      );
+    }
+    if (window !== undefined && window.total > window.capacity) {
+      items.push(row("queue:later", `  ${LATER}`, {}, styleOf("navigate"), { here: view.focused }));
     }
   }
   const claiming = claim === "sidekick:message";
@@ -9437,6 +9506,56 @@ export const QUEUE_TEXT = "box:queue:text:0";
 
 /** The staged guidance row's inside, which the guidance is fitted to. */
 export const GUIDANCE_ROW = "box:guidance:body";
+
+/** The Draft's heading row, whose measured width its field is derived from. */
+export const DRAFT_HEADING = "box:draft:heading";
+
+/**
+ * How wide a queued message's text is left beside its control.
+ *
+ * The row's own measured room, less the width the engine gave that control,
+ * less the gap the row declares. None before either has been measured.
+ */
+export function queueTextWidth(
+  manifest: ReplLayoutManifest,
+  widthOf: (id: string) => number | undefined,
+  room: number | undefined,
+): number | undefined {
+  const control = flatten(manifest.root).find((one) => one.key?.endsWith(":remove") === true);
+  if (control === undefined || room === undefined || room < 1) {
+    return undefined;
+  }
+  const button = widthOf(control.id);
+  if (button === undefined || button < 1) {
+    return undefined;
+  }
+  return Math.max(0, room - button - WORKSPACE_DRAFT_GAP);
+}
+
+/**
+ * How wide the Draft's field is left, for this exact measured frame.
+ *
+ * The heading row's own measured width, less the width the engine gave the
+ * control beside it, less the gap that row declares. None where this frame drew
+ * no Draft, or where the measurement has answered for neither box yet.
+ */
+export function draftFieldWidth(
+  manifest: ReplLayoutManifest,
+  widthOf: (id: string) => number | undefined,
+): number | undefined {
+  const control = flatten(manifest.root).find(
+    (one) => one.key === "draft:stop" || one.key === "draft:send",
+  );
+  if (control === undefined) {
+    return undefined;
+  }
+  const heading = widthOf(DRAFT_HEADING);
+  const button = widthOf(control.id);
+  if (heading === undefined || button === undefined || heading < 1 || button < 1) {
+    return undefined;
+  }
+  return Math.max(0, heading - button - WORKSPACE_DRAFT_GAP);
+}
 
 /** The staged History row's map, which is drawn rather than mounted. */
 const HISTORY_MAP = "box:history:map";
@@ -9513,6 +9632,97 @@ function compactHistoryRuns(view: ReplView): readonly ReplTokenRun[] {
  * them. The Draft's own heading is not here — its field grows into whatever its
  * controls leave, so it has nothing to wrap.
  */
+/**
+ * How many rows an overflowing tray takes, and how many of them are its window.
+ *
+ * Declared once, from the same parts the manifest places: the tray's own
+ * heading rows, the two rows its navigation takes, the window itself, and the
+ * composer's fitted rows. A content-fitted tray leaves the column dividing a
+ * remainder between a growing body and a fitted block, and that division is not
+ * whole — measured, it put the chat body at 18.0078125 rows and every row under
+ * it on a fraction of a cell.
+ *
+ * The window is bounded by {@link WORKSPACE_QUEUE_ROWS} and by what the column
+ * has left once its heading, the blank row above its body, the chat's own two
+ * controls and one row of chat are taken. Eight is a maximum rather than a
+ * promise: a narrower column allows fewer, and one with no room allows none,
+ * which admits no queue rows at all.
+ *
+ * None where the tray's rows fit what it has, so that tray keeps the
+ * content-sized placement the accepted screen was reviewed with.
+ */
+function trayAllocation(
+  view: ReplView,
+  context: ReplPresentationContext,
+  extras: number,
+): { readonly tray: number; readonly queue: number } | undefined {
+  const workspace = staged(view);
+  if (workspace === undefined || workspace.tray !== "queue") {
+    return undefined;
+  }
+  const wrapped = (id: string): number => (context.headers?.has(`header:${id}`) === true ? 2 : 1);
+  const composer = 1 + messageValueRows(context).length;
+  const navigation = 2;
+  const held = queueSequence(workspace, context.queue).length;
+  const column =
+    workspaceBodyRows(view.size) - wrapped("conversation") - 1 - navigation - 1 - extras;
+  const queue = Math.max(
+    0,
+    Math.min(WORKSPACE_QUEUE_ROWS, column - wrapped("tray") - navigation - composer),
+  );
+  if (held <= queue) {
+    return undefined;
+  }
+  return { tray: wrapped("tray") + navigation + queue + composer, queue };
+}
+
+/** One drawn row of the tray, and the message whose text it carries. */
+interface ReplQueuedRow {
+  readonly message: ReplQueuedMessage;
+  /** Which row of its own message this is; zero is where the message begins. */
+  readonly offset: number;
+  readonly text: string;
+  /** Whether this row begins its message, which is where its control goes. */
+  readonly first: boolean;
+}
+
+/**
+ * Every row the tray's messages occupy, in order, as one sequence.
+ *
+ * The one list the window counts, slices and draws from, so the rows a capacity
+ * is measured against and the rows a frame shows cannot be two different lists.
+ * Before the queue is fitted each message is one blank row: that count is the
+ * geometry question, and its text would be fitted to nothing.
+ */
+function queueSequence(
+  workspace: ReplWorkspace,
+  fitted: readonly ReplFittedLine[] | undefined,
+): readonly ReplQueuedRow[] {
+  const rows: ReplQueuedRow[] = [];
+  for (const message of workspace.queued) {
+    const pieces =
+      fitted === undefined
+        ? [{ text: "", indent: 0 }]
+        : fitted.filter((piece) => piece.line === `queue:${message.key}`);
+    for (const [offset, piece] of pieces.entries()) {
+      const text = `${" ".repeat(piece.indent)}${piece.text}`;
+      rows.push(
+        Object.freeze({
+          message,
+          offset,
+          text,
+          // Where the message begins, which is a fact about the row rather
+          // than about its characters: a pass that has fitted no text yet
+          // still has a first row, and its control must exist there to be
+          // measured.
+          first: offset === 0,
+        }),
+      );
+    }
+  }
+  return Object.freeze(rows);
+}
+
 const WORKSPACE_HEADERS: readonly {
   readonly id: string;
   readonly gap: number;
@@ -9761,14 +9971,18 @@ function workspacePresentation(input: {
   };
 
   /** The Transcript of agent work: its heading, and the reading under it. */
-  const transcriptColumn = (region: ReplRegion, body: string): readonly ReplBox[] => {
+  const transcriptColumn = (
+    region: ReplRegion,
+    body: string,
+    inside?: number,
+  ): readonly ReplBox[] => {
     contents.push({ region, id: body, kind: "body" });
     return [
       ...headerRows("transcript", region, header),
       box({
         id: `${body}:gutter`,
         region,
-        props: workspaceBodyProps(WORKSPACE_LIST_GUTTER, 1),
+        props: workspaceBodyProps(WORKSPACE_LIST_GUTTER, 1, inside),
         children: [
           box({
             id: body,
@@ -9789,7 +10003,7 @@ function workspacePresentation(input: {
   };
 
   /** The selected work: its breadcrumbs and state, its reading, and the Draft. */
-  const workColumn = (region: ReplRegion, body: string): readonly ReplBox[] => {
+  const workColumn = (region: ReplRegion, body: string, inside?: number): readonly ReplBox[] => {
     contents.push({ region, id: body, kind: "body" });
     const draft = of("draft");
     const value = startingWith("draft:value:");
@@ -9798,7 +10012,7 @@ function workspacePresentation(input: {
       box({
         id: `${body}:gutter`,
         region,
-        props: workspaceBodyProps(BODY_GUTTER, 1),
+        props: workspaceBodyProps(BODY_GUTTER, 1, inside),
         children: [
           box({
             id: body,
@@ -9828,20 +10042,38 @@ function workspacePresentation(input: {
               ),
               children: [
                 box({
-                  id: "box:draft:heading",
+                  id: DRAFT_HEADING,
                   region,
-                  props: partsRowProps(1, 1),
+                  props: partsRowProps(1, WORKSPACE_DRAFT_GAP, context.widths?.surfaceBody),
                   children: [
                     ...draft.map((one) =>
                       box({
                         id: `box:${region}:${one.key}`,
                         key: one.key,
                         region,
-                        props: SPACER_PROPS,
+                        // What this row has left once the engine has measured
+                        // the control beside it. Grown instead, the engine
+                        // divides that remainder itself and the division is not
+                        // always whole — measured, it left this field
+                        // 52.00732421875 wide and put the control on a fraction
+                        // of a cell. The control is still measured by its own
+                        // label, so its hit box is still the label somebody
+                        // aims at; only what is left over is stated.
+                        props:
+                          context.draftField === undefined
+                            ? SPACER_PROPS
+                            : statedPartProps(context.draftField),
                         text: one.text,
                         control: one.control,
                         style: one.style,
-                        runs: one.runs,
+                        // No stretches: this row is drawn in one ink, which is
+                        // what the reviewed screen shows — its marker and the
+                        // composer's below it both take their own row's style,
+                        // bolded where the focus is. Stating a width is what
+                        // makes the builder apply a row's stretches, and the
+                        // marker would otherwise take the focus ink here; the
+                        // width the engine had already divided is the only
+                        // thing this was meant to settle.
                       }),
                     ),
                     ...parts(["draft:stop", "draft:send"], region),
@@ -9855,7 +10087,11 @@ function workspacePresentation(input: {
   };
 
   /** Bindings or the Sidekick: the tabs, the reading, and the tray below it. */
-  const conversationColumn = (region: ReplRegion, body: string): readonly ReplBox[] => {
+  const conversationColumn = (
+    region: ReplRegion,
+    body: string,
+    inside?: number,
+  ): readonly ReplBox[] => {
     const showing = showingSidekick(view);
     if (showing) {
       contents.push({ region, id: body, kind: "body" });
@@ -9868,36 +10104,69 @@ function workspacePresentation(input: {
       ...byKey("sidekick:send"),
     ];
     const held = staged(view);
-    const queued = held?.tray === "queue" ? held.queued : [];
-    const queueRows = queued.map((message, at) => {
-      const text = `box:queue:text:${at}`;
-      if (at === 0) {
-        contents.push({ region, id: text, kind: "body" });
+    // One box per row this frame described, walked in description order so the
+    // rows placed are exactly the rows the window admitted. A box per message
+    // reports its whole rectangle even where the window clipped it, and the
+    // row after it is then placed over the control below.
+    const described = candidates.filter(
+      (one) =>
+        one.key.startsWith("queue:") && one.key !== "queue:earlier" && one.key !== "queue:later",
+    );
+    let named = false;
+    const queueRows: ReplBox[] = [];
+    for (const [at, one] of described.entries()) {
+      if (one.key.endsWith(":remove")) {
+        continue;
       }
-      return box({
-        id: `box:queue:${message.key}`,
-        region,
-        props: partsRowProps("fit", 1),
-        children: [
-          box({
-            id: text,
-            region,
-            props: GROWING_STACK_PROPS,
-            children: startingWith(`queue:${message.key}:row:`).map((one) =>
-              rowBox(one, region, context.widths?.queue),
-            ),
-          }),
-          ...parts([`queue:${message.key}:remove`], region),
-        ],
-      });
-    });
+      const after = described[at + 1];
+      const control =
+        after !== undefined && after.key.endsWith(":remove") ? [part(after, region)] : [];
+      // The first text box this frame draws is the one the preparation asks
+      // how wide a queued message's text may be; the rest carry their own ids.
+      const heading = !named;
+      if (heading) {
+        named = true;
+        contents.push({ region, id: QUEUE_TEXT, kind: "body" });
+      }
+      queueRows.push(
+        box({
+          id: `box:${region}:${one.key}:row`,
+          region,
+          props: partsRowProps(1, WORKSPACE_DRAFT_GAP, room),
+          children: [
+            // The room this row's text has, as a box of its own: what is left
+            // once the engine has measured the control beside it, derived the
+            // way the Draft's field is — a grown remainder is not always whole,
+            // and measured it left this text 51.005859375 wide with the control
+            // on a fraction of a cell. The control is still sized by its own
+            // label. The row inside keeps the key, so its cell is drawn under
+            // the node that owns it while this box stays measurable.
+            box({
+              id: heading ? QUEUE_TEXT : `box:${region}:${one.key}:text`,
+              region,
+              props:
+                context.queueText === undefined ? SPACER_PROPS : statedPartProps(context.queueText),
+              children: [rowBox(one, region, context.widths?.queue)],
+            }),
+            ...control,
+          ],
+        }),
+      );
+    }
+    const queueViewport = `box:${QUEUE_WINDOW}:viewport`;
+    // The rows this body draws besides its chat and that chat's two controls.
+    const extras = byKey("sidekick:back").length + byKey("sidekick:answer").length;
+    const allocation = trayAllocation(view, context, extras);
+    if (held?.tray === "queue" && allocation !== undefined) {
+      viewports.push(Object.freeze({ id: queueViewport, region, window: QUEUE_WINDOW }));
+    }
     const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
     return [
       ...headerRows("conversation", region, header),
       box({
         id: showing ? `${body}:gutter` : "box:inspection:reading:gutter",
         region,
-        props: workspaceBodyProps(WORKSPACE_LIST_GUTTER, 1),
+        props: workspaceBodyProps(WORKSPACE_LIST_GUTTER, 1, inside),
         children: [
           box({
             id: showing ? body : "box:inspection:reading",
@@ -9918,13 +10187,31 @@ function workspacePresentation(input: {
               id: "box:tray",
               region,
               props: workspaceBlockProps(
-                "fit",
+                allocation?.tray ?? "fit",
                 REPL_PALETTE.composerSurface,
                 WORKSPACE_LIST_GUTTER,
+                inside,
               ),
               children: [
                 ...headerRows("tray", region, REPL_PALETTE.composerSurface),
-                ...queueRows,
+                ...byKey("queue:earlier").map((one) => rowBox(one, region, room)),
+                // A tray that fits places its rows where the accepted screen
+                // has them. One that does not is a window of the declared
+                // budget, whose room the engine measures like any other.
+                // A tray whose rows fit places them where the accepted screen
+                // has them. One that does not is a window of the rows it was
+                // allocated, whose room the engine measures like any other.
+                ...(held?.tray === "queue" && allocation !== undefined
+                  ? [
+                      box({
+                        id: queueViewport,
+                        region,
+                        props: viewportProps(allocation.queue),
+                        children: queueRows,
+                      }),
+                    ]
+                  : queueRows),
+                ...byKey("queue:later").map((one) => rowBox(one, region, room)),
                 ...composer.map((one) => rowBox(one, region, room)),
               ],
             }),
@@ -9939,10 +10226,10 @@ function workspacePresentation(input: {
     regions.push({ region: "content", id: "box:content" });
     const routed = view.state.route.surface;
     const routedRows = showingSidekick(view)
-      ? conversationColumn("content", SIDEKICK_BODY)
+      ? conversationColumn("content", SIDEKICK_BODY, size.columns)
       : routed === "sessions"
-        ? transcriptColumn("content", SIDEBAR_BODY)
-        : workColumn("content", TRANSCRIPT_BODY);
+        ? transcriptColumn("content", SIDEBAR_BODY, size.columns)
+        : workColumn("content", TRANSCRIPT_BODY, size.columns);
     columns.push(
       box({
         id: "box:content",
@@ -9978,7 +10265,11 @@ function workspacePresentation(input: {
           REPL_PALETTE.transcriptPaneSurface,
           false,
         ),
-        children: transcriptColumn("sidebar", SIDEBAR_BODY),
+        children: transcriptColumn(
+          "sidebar",
+          SIDEBAR_BODY,
+          workspaceInsideWidth(workspaceTranscriptWidth(size), false),
+        ),
       }),
       box({
         id: "box:transcript",
@@ -9992,8 +10283,14 @@ function workspacePresentation(input: {
           box({
             id: "box:transcript:content",
             region: "transcript",
-            props: paneContentProps(),
-            children: workColumn("transcript", TRANSCRIPT_BODY),
+            // Stated, so the width a header is fitted to is the width its row
+            // has: a growing content box reports its own content instead.
+            props: workspaceBodyProps(0, 0, workspaceInsideWidth(workspaceWorkWidth(size), true)),
+            children: workColumn(
+              "transcript",
+              TRANSCRIPT_BODY,
+              workspaceInsideWidth(workspaceWorkWidth(size), true),
+            ),
           }),
         ],
       }),
@@ -10009,8 +10306,16 @@ function workspacePresentation(input: {
           box({
             id: "box:inspection:content",
             region: "inspection",
-            props: paneContentProps(),
-            children: conversationColumn("inspection", SIDEKICK_BODY),
+            props: workspaceBodyProps(
+              0,
+              0,
+              workspaceInsideWidth(workspaceConversationWidth(size), true),
+            ),
+            children: conversationColumn(
+              "inspection",
+              SIDEKICK_BODY,
+              workspaceInsideWidth(workspaceConversationWidth(size), true),
+            ),
           }),
         ],
       }),
@@ -10077,7 +10382,12 @@ function workspacePresentation(input: {
           box({
             id: "box:footer",
             region: "footer",
-            props: stackProps("fit"),
+            // Two rows, stated: the History row and the guidance row. A fitted
+            // stack takes its height from its content, and the engine's own
+            // arithmetic over that content is not always whole — measured, a
+            // fitted staged footer came back 1.9921875 tall and put every row
+            // of the body, the band and the guidance on a fraction of a cell.
+            props: stackProps(WORKSPACE_CHROME_ROWS - 1),
             children: [
               box({
                 id: "box:history",

@@ -112,17 +112,20 @@ import {
   CHECKPOINT_SIZE,
   CHECKPOINT_SIZES,
   CHECKPOINT_ASKING,
+  chatAt,
   checkpointModel,
   checkpointScopes,
   checkpointStateModel,
+  lastQueued,
   OVERFLOW_WORKSPACE,
+  queueAt,
   commitCheckpoint,
   RUNNING_SOURCE,
   WRAPPING_LINE,
   WRAPPING_QUEUED,
 } from "./fixtures/repl/workspace-checkpoint.ts";
 import { ACCEPTED_160 } from "./fixtures/repl/accepted-160.ts";
-import { chatLinesFor } from "../src/repl/application.ts";
+import { chatLinesFor, QUEUE_WINDOW } from "../src/repl/application.ts";
 import { readDescription } from "../src/repl/description.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
@@ -4752,31 +4755,84 @@ describe("Checkpoint #971 A2 — the staged screen at the two smaller sizes", ()
     }
   });
 
-  it("A2: medium keeps three columns and wraps a header it cannot hold whole", function* () {
+  it("A2: medium gives the selected work room its reading can use", function* () {
     const presenter = yield* usePresenter(CHECKPOINT_MEDIUM);
-    const observed = (yield* commitCheckpoint(presenter, { size: CHECKPOINT_MEDIUM })).observed;
-    // The plan's proposed medium proportions, dividers included.
+    const committed = yield* commitCheckpoint(presenter, { size: CHECKPOINT_MEDIUM });
+    const { observed } = committed;
+    // The corrected medium proportions, dividers included: the selected work
+    // takes the remainder because it is the column whose room is spent on a
+    // reserved rail and badge column before a reader sees any source.
     expect(regionBounds(observed, "sidebar")).toEqual({ x: 0, y: 1, width: 36, height: 27 });
-    expect(regionBounds(observed, "transcript")).toEqual({ x: 36, y: 1, width: 34, height: 27 });
-    expect(regionBounds(observed, "inspection")).toEqual({ x: 70, y: 1, width: 50, height: 27 });
+    expect(regionBounds(observed, "transcript")).toEqual({ x: 36, y: 1, width: 52, height: 27 });
+    expect(regionBounds(observed, "inspection")).toEqual({ x: 88, y: 1, width: 32, height: 27 });
 
-    // The selected work's heading does not fit its column, so it takes a
-    // second row of that column's own body rather than a shortened label, a
-    // dropped control or an overlap. The left group keeps the first row.
-    const first = placed(observed, "entries:heading");
-    const crumbs = placed(observed, "work:crumbs");
-    const state = placed(observed, "work:state");
-    expect(first.y).toBe(crumbs.y);
-    expect(state.y).toBe(first.y + 1);
-    expect(state.x + state.width).toBeLessThanOrEqual(70);
-    // Both rows belong to the column, which is what makes them measured.
-    expect(observed.regionOf("box:transcript:header")?.width).toBe(34);
-    expect(observed.regionOf("box:transcript:header:second")?.width).toBe(34);
+    // What that buys is source room, measured through the reading's own
+    // reservation rather than counted from the column's width.
+    const prepared = yield* prepareFrame(presenter.renderer, committed.view);
+    if (!prepared.ok) {
+      throw prepared.error;
+    }
+    const reservation = prepared.value.context.reading?.reservation;
+    expect(reservation?.content).toBeGreaterThanOrEqual(24);
+    // The reservation itself is unchanged: the rail, its separators and a
+    // column as wide as the widest badge this reading could ever hold.
+    expect(reservation?.rail).toBeGreaterThan(0);
+    expect(reservation?.status).toBeGreaterThan(0);
+
+    // A header whose groups do not fit one row still takes a second row of its
+    // own column rather than a shortened label or a dropped control.
+    for (const id of ["box:inspection:tabs", "box:tray:controls"]) {
+      const row = observed.regionOf(id);
+      const second = observed.regionOf(`${id}:second`);
+      expect({ id, wrapped: second === undefined || second.y === (row?.y ?? 0) + 1 }).toEqual({
+        id,
+        wrapped: true,
+      });
+    }
 
     // The Draft keeps its four rows at the foot of that column.
     const draft = observed.regionOf("box:draft");
     expect(draft?.height).toBe(4);
     expect((draft?.y ?? 0) + (draft?.height ?? 0)).toBe(CHECKPOINT_MEDIUM.rows - 2);
+  });
+
+  it("A2: the selected work's source wraps at word boundaries and stays exact", function* () {
+    const presenter = yield* usePresenter(CHECKPOINT_MEDIUM);
+    const committed = yield* commitCheckpoint(presenter, { size: CHECKPOINT_MEDIUM });
+    const prepared = yield* prepareFrame(presenter.renderer, committed.view);
+    if (!prepared.ok) {
+      throw prepared.error;
+    }
+    const rows = prepared.value.context.reading?.rows ?? [];
+    const texts = rows.map((one) => one.text);
+
+    // The output line breaks between whole words, and neither filename is cut.
+    // The boundary space stays on the row that ends with it: whitespace is
+    // part of the line, and the next row does not begin with somebody else's.
+    const opened = texts.indexOf("Reading checkout.md and ");
+    expect(opened).toBeGreaterThanOrEqual(0);
+    expect(texts[opened + 1]).toBe("architecture.md");
+
+    // The long source line reconstructs exactly, four spaces included, and the
+    // remainder that fits a row stays whole on it.
+    const started = texts.findIndex((one) => WRAPPING_LINE.startsWith(one.trimEnd()) && one !== "");
+    expect(started).toBeGreaterThanOrEqual(0);
+    let said = "";
+    let at = started;
+    while (at < texts.length && said.length < WRAPPING_LINE.length) {
+      said += texts[at];
+      at += 1;
+    }
+    expect(said).toBe(WRAPPING_LINE);
+    expect(said).toContain("once,    after");
+    // The last row of that line is its whole remainder: what fits a row stays
+    // on it, which is the behaviour D10's own regressions hold the fitter to.
+    expect(texts[at - 1]).toBe("customer pays.");
+    // Each drawn row fits the room the reading reserved for its content.
+    const content = prepared.value.context.reading?.reservation.content ?? 0;
+    for (const row of rows) {
+      expect(row.width + row.indent).toBeLessThanOrEqual(content);
+    }
   });
 
   it("A2: narrow routes one outlet, keeps both surface controls and the Draft", function* () {
@@ -4928,5 +4984,198 @@ describe("Checkpoint #971 A4 — states and overflow at every size", () => {
         removes: drawn.length,
       });
     }
+  });
+});
+
+/**
+ * #971 R2: both windows this screen holds, traversed rather than described.
+ *
+ * The tray and the chat each hold more than they can show, and the question
+ * either answers is the same one: is what the window is not showing reachable,
+ * and is what it *is* showing something a person can act on? So this walks
+ * them — the tray to a message its first window hides, the chat to the
+ * outcomes its first window cuts off — and reads the answers off the committed
+ * frame rather than off the description that produced it.
+ *
+ * One presenter, one tree and one grid throughout: the screen under test is
+ * what the frames have left in the grid together, which is also the only way a
+ * row that stopped being drawn can be told from a row that is still there.
+ */
+describe("Checkpoint #971 R2 — the tray's window and the chat's", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The four outcomes this reading holds, as the words the screen says. */
+  const OUTCOMES = ["✓ COMPLETED", "× FAILED", "- INTERRUPTED", "● ACTIVE"] as const;
+
+  /** Every queue row key this tray drew, in the order the tray drew them. */
+  function drawnRows(observed: Observed, key: string): readonly string[] {
+    const rows: string[] = [];
+    for (let at = 0; ; at += 1) {
+      const row = `queue:${key}:row:${at}`;
+      if (observed.boundsOf(row) === undefined) {
+        return rows;
+      }
+      rows.push(row);
+    }
+  }
+
+  it("R2: a hidden message is reached with its own control, and all four outcomes read", function* () {
+    const model = yield* checkpointStateModel();
+    const size = CHECKPOINT_SIZE;
+    const presenter = yield* usePresenter(size);
+    const asking = { model, size, live: CHECKPOINT_ASKING } as const;
+
+    // The tray that fits keeps the appearance it was reviewed with: no window,
+    // and neither of the controls that would move one. A control that scrolls
+    // nothing is chrome over a reading that is already whole.
+    const fitting = yield* commitCheckpoint(presenter, asking);
+    expect(fitting.observed.committed.admission.windows.get(QUEUE_WINDOW)).toBe(undefined);
+    for (const key of ["queue:earlier", "queue:later"]) {
+      expect({ key, mounted: fitting.observed.nodeOf(key) !== undefined }).toEqual({
+        key,
+        mounted: false,
+      });
+    }
+
+    // The controlled tray holds more rows than its measured window admits.
+    const first = yield* commitCheckpoint(presenter, {
+      ...asking,
+      workspace: OVERFLOW_WORKSPACE,
+    });
+    const window = windowOf(first.observed.committed.admission, QUEUE_WINDOW);
+    expect({ beyond: window.total > window.capacity }).toEqual({
+      beyond: true,
+    });
+    // So now both controls are there, and each is a target of its own.
+    for (const key of ["queue:earlier", "queue:later"]) {
+      const node = first.observed.nodeOf(key);
+      expect({ key, mounted: node !== undefined }).toEqual({
+        key,
+        mounted: true,
+      });
+      expect({
+        key,
+        target: first.observed.targets.some((one) => one.node === node),
+      }).toEqual({ key, target: true });
+    }
+
+    // The last message is not on this screen at all: not a row, not a control,
+    // not a mounted node. It is in the tray, which is what the window's own
+    // total says, and it is reached by moving the window rather than by
+    // shrinking the message that is there.
+    const hidden = lastQueued();
+    expect(drawnRows(first.observed, hidden.key)).toEqual([]);
+    expect(first.observed.nodeOf(`queue:${hidden.key}:remove`)).toBe(undefined);
+
+    // Moved to the end of the tray, that same message is drawn with its own
+    // withdrawal control beside it.
+    const moved = yield* commitCheckpoint(presenter, {
+      ...asking,
+      workspace: queueAt(window.total - window.capacity),
+      focused: first.focused,
+    });
+    const after = windowOf(moved.observed.committed.admission, QUEUE_WINDOW);
+    expect({ from: after.from, less: after.less, more: after.more }).toEqual({
+      from: window.total - window.capacity,
+      less: true,
+      more: false,
+    });
+    const reached = drawnRows(moved.observed, hidden.key);
+    expect({ rows: reached.length > 0 }).toEqual({ rows: true });
+    const withdraw = moved.observed.boundsOf(`queue:${hidden.key}:remove`);
+    if (withdraw === undefined) {
+      throw new Error("the message this window moved to drew no control");
+    }
+    // Its exact control, on the row that message begins on, inside the window
+    // that admitted it.
+    const viewport = viewportBounds(moved.observed, QUEUE_WINDOW);
+    const begins = moved.observed.boundsOf(`queue:${hidden.key}:row:0`);
+    if (begins === undefined || viewport === undefined) {
+      throw new Error("this window published no bounds to check against");
+    }
+    expect({ y: withdraw.y }).toEqual({ y: begins.y });
+    expect({
+      inside:
+        withdraw.y >= viewport.y && withdraw.y + withdraw.height <= viewport.y + viewport.height,
+    }).toEqual({ inside: true });
+
+    // And every row this tray drew owns its own targets: a message whose first
+    // row is drawn has exactly one control, a continuation drawn without its
+    // beginning has none, and nothing is drawn outside the window.
+    for (const message of OVERFLOW_WORKSPACE.queued) {
+      const rows = drawnRows(moved.observed, message.key);
+      const control = moved.observed.nodeOf(`queue:${message.key}:remove`);
+      expect({ key: message.key, control: control !== undefined }).toEqual({
+        key: message.key,
+        control: rows.length > 0,
+      });
+      for (const row of rows) {
+        const bounds = moved.observed.boundsOf(row);
+        if (bounds === undefined) {
+          throw new Error(`${row} stopped reporting its own bounds`);
+        }
+        expect({
+          row,
+          inside:
+            bounds.y >= viewport.y && bounds.y + bounds.height <= viewport.y + viewport.height,
+        }).toEqual({ row, inside: true });
+      }
+    }
+
+    // The rest of the column is still there to come back to: the toolbar, the
+    // composer, the controls that move the chat, and at least one chat row.
+    for (const key of [
+      "tray:todo",
+      "tray:queue",
+      "sidekick:message",
+      "sidekick:earlier",
+      "sidekick:later",
+    ]) {
+      expect({ key, drawn: moved.observed.boundsOf(key) !== undefined }).toEqual({
+        key,
+        drawn: true,
+      });
+    }
+    const chat = windowOf(moved.observed.committed.admission, SIDEKICK_WINDOW);
+    expect({ rows: chat.count >= 1 }).toEqual({ rows: true });
+
+    // One traversal of the chat's own window, which holds more rows than it
+    // shows: each outcome's ink is read the first time that outcome is on the
+    // screen, and the walk stops once all four have been.
+    const inks = new Map<string, number | undefined>();
+    // Where the window actually sat at each step. A following chat sits at its
+    // own end, so this walk moves it down from there rather than up.
+    const visited = new Set<number>([chat.from]);
+    for (let offset = 0; offset <= chat.total && inks.size < OUTCOMES.length; offset += 1) {
+      const at = yield* commitCheckpoint(presenter, {
+        ...asking,
+        workspace: queueAt(window.total - window.capacity),
+        state: chatAt(model, offset),
+        focused: moved.focused,
+      });
+      visited.add(windowOf(at.observed.committed.admission, SIDEKICK_WINDOW).from);
+      const said = presenter.grid
+        .textIn({ x: 0, y: 0, width: size.columns, height: size.rows })
+        .join("\n");
+      for (const word of OUTCOMES) {
+        const found = said.indexOf(word);
+        if (found < 0 || inks.has(word)) {
+          continue;
+        }
+        const before = said.slice(0, found).split("\n");
+        const y = before.length - 1;
+        const x = before[before.length - 1]?.length ?? 0;
+        inks.set(word, presenter.grid.styleAt(x, y).foreground);
+      }
+    }
+    // The walk moved the window rather than redrawing the same rows.
+    expect({ moved: visited.size > 1 }).toEqual({ moved: true });
+    // All four were rendered, and no two of them in the same ink.
+    expect({ read: [...inks.keys()].sort() }).toEqual({
+      read: [...OUTCOMES].sort(),
+    });
+    expect({ distinct: new Set(inks.values()).size }).toEqual({
+      distinct: OUTCOMES.length,
+    });
   });
 });

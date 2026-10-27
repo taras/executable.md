@@ -74,7 +74,9 @@ import {
   SIDEKICK_BODY,
   SIDEKICK_WINDOW,
   chatLinesFor,
+  draftFieldWidth,
   draftLinesOf,
+  queueTextWidth,
   draftRowsOf,
   GUIDANCE_ROW,
   QUEUE_TEXT,
@@ -3545,10 +3547,19 @@ export function* prepareFrame(
       wrapped.add(line.key);
     }
   }
+  // What the Draft's field has left, once this frame's own heading row and the
+  // control beside it have been measured. Settled here, before anything is
+  // mounted, and carried into every pass after it — the field is stated in the
+  // measuring ops and in the committed ops alike, because a width the two
+  // passes disagreed about is a control drawn where nothing measured it.
+  let field: number | undefined;
+  let messageText: number | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
     ...(wrapped.size === 0 ? {} : { headers: wrapped }),
+    ...(field === undefined ? {} : { draftField: field }),
+    ...(messageText === undefined ? {} : { queueText: messageText }),
   });
 
   // The catalog without its controls: if it fits, it keeps its natural footprint
@@ -3611,6 +3622,12 @@ export function* prepareFrame(
   if (!fitted.ok) {
     return fitted;
   }
+  field = draftFieldWidth(probed.manifest, (id) => fitted.value.boundsOf(id)?.width);
+  messageText = queueTextWidth(
+    probed.manifest,
+    (id) => fitted.value.boundsOf(id)?.width,
+    widths.body,
+  );
   // Where a route drawer goes, now that the block it must stay clear of has
   // been fitted and placed. The guidance is as many rows as its words need, so
   // this is read from the rows the frame published rather than counted here.
@@ -3828,6 +3845,7 @@ export function* prepareFrame(
     reading: reading.value,
     preview: preview.value,
     chat: chat.value,
+    queue: queued.value,
     boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -3845,6 +3863,8 @@ export function* prepareFrame(
     refusal: refusalRows,
     rail: rail.value,
     drawer: envelope,
+    draftField: field,
+    queueText: messageText,
     draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
     queue: queued.value,
     headers: wrapped.size === 0 ? undefined : wrapped,

@@ -77,15 +77,21 @@ import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { agentReferenceEvents } from "./fixtures/repl/reference.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { usePresenter } from "./fixtures/repl/presentation.ts";
+import type { CheckpointFrame } from "./fixtures/repl/workspace-checkpoint.ts";
 import {
+  CHECKPOINT_ASKING,
   CHECKPOINT_BELOW,
-  CHECKPOINT_DRAFT,
   CHECKPOINT_MEDIUM,
-  CHECKPOINT_MESSAGE,
   CHECKPOINT_NARROW,
+  CHECKPOINT_QUESTION,
+  CHECKPOINT_QUESTION_FORM,
   CHECKPOINT_SIZE,
   checkpointModel,
+  checkpointState,
   commitCheckpoint,
+  SEEDED_DRAFT,
+  SEEDED_MESSAGE,
+  seededState,
 } from "./fixtures/repl/workspace-checkpoint.ts";
 import { runReplProgram, sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
@@ -96,6 +102,8 @@ import {
   initialState,
   LATER,
   NO_AGENT,
+  presentedDrawer,
+  reduceRepl,
   SCROLL_DOWN,
   SCROLL_UP,
   viewFor,
@@ -104,7 +112,9 @@ import type {
   ReplLive,
   ReplSidekickChatRow,
   ReplSidekickReading,
+  ReplState,
 } from "../src/repl/application.ts";
+
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { FOOTER_ROWS, inspectionWidth, NARROW, sidebarWidth } from "../src/repl/layout.ts";
 import {
@@ -5261,17 +5271,38 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
     // file's other rows get from the program they run.
     yield* useTempFileCompiler();
     const model = yield* checkpointModel();
+    // Seeded once, and the only reading in this journey: a recorded history
+    // position, the entry and nested scope that position holds, and two texts
+    // no default supplies. A frame that rebuilt the fixture's own state instead
+    // of carrying this one would be visibly a different screen.
+    const state = seededState(model);
     const presenter = yield* usePresenter(CHECKPOINT_SIZE);
-    const first = yield* commitCheckpoint(presenter, { model });
+    const first = yield* commitCheckpoint(presenter, { model, state });
     expect(first.focused).toBe("footer:input");
-    const scopes = first.view.state.route.scopes;
-    const at = first.view.state.route.at;
+    const scopes = state.route.scopes;
+    const at = state.route.at;
     expect(scopes.length).toBe(2);
+    // The position is the one this model was projected at, which is what makes
+    // the route a valid one to carry rather than one resolution would refuse.
+    expect(at).toBe(model.selection);
+
+    // The key the tree answered with, carried from size to size. Passing it is
+    // what tells the fixture not to let the Draft take focus again:
+    // re-offering it at every size would be restoring focus rather than
+    // keeping whatever a resize left focused.
+    let held = first.focused;
 
     /** The same reading at one more size, committed into the same tree. */
     const resized = function* (size: ReplTerminalSize) {
       presenter.resize(size);
-      return yield* commitCheckpoint(presenter, { model, size });
+      const committed = yield* commitCheckpoint(presenter, {
+        model,
+        state,
+        size,
+        ...(held === undefined ? {} : { focused: held }),
+      });
+      held = committed.focused;
+      return committed;
     };
 
     for (const size of [CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
@@ -5283,11 +5314,11 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
       expect({ where, at: committed.view.state.route.at }).toEqual({ where, at });
       expect({ where, draft: committed.view.state.draft }).toEqual({
         where,
-        draft: CHECKPOINT_DRAFT,
+        draft: SEEDED_DRAFT,
       });
       expect({ where, message: committed.view.state.message }).toEqual({
         where,
-        message: CHECKPOINT_MESSAGE,
+        message: SEEDED_MESSAGE,
       });
       // The Draft is still on this screen, so focus is still on it.
       expect({ where, focused: committed.focused }).toEqual({ where, focused: "footer:input" });
@@ -5323,8 +5354,8 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
     const recovered = yield* resized(CHECKPOINT_SIZE);
     expect(recovered.view.state.route.scopes).toEqual(scopes);
     expect(recovered.view.state.route.at).toEqual(at);
-    expect(recovered.view.state.draft).toBe(CHECKPOINT_DRAFT);
-    expect(recovered.view.state.message).toBe(CHECKPOINT_MESSAGE);
+    expect(recovered.view.state.draft).toBe(SEEDED_DRAFT);
+    expect(recovered.view.state.message).toBe(SEEDED_MESSAGE);
     expect(recovered.focused).toBe("footer:input");
     expect(recovered.observed.boundsOf("footer:input")).not.toBe(undefined);
     for (const key of ["tray:queue", "follow", "sidekick:stop"]) {
@@ -5333,5 +5364,112 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
         drawn: true,
       });
     }
+  });
+});
+
+/**
+ * #971 R3: the Sidekick's question, opened and typed into at a new size.
+ *
+ * The question is compiled from a closed object schema by the product's own
+ * parser, so the form this screen draws is one the REPL's form language
+ * actually supports — a form asserted into shape would draw fields the parser
+ * would have refused.
+ *
+ * And it is opened the way a person opens it: the action the control carries,
+ * through the reducer, against what the frame measured. A test that set
+ * `asking` itself would be asserting the drawer rather than reaching it, and
+ * would not notice a control that stopped being able to.
+ */
+describe("Tier R3 — the Sidekick's parsed question at a constrained size", () => {
+  it("R3: the drawer opens through its own action and its field takes text", function* () {
+    yield* useTempFileCompiler();
+    const model = yield* checkpointModel();
+    // The narrowest size this screen supports, with the conversation routed to
+    // the one outlet it has: the drawer has least to work with here.
+    const size = CHECKPOINT_NARROW;
+    const presenter = yield* usePresenter(size);
+    const routed = {
+      model,
+      size,
+      live: CHECKPOINT_ASKING,
+      sidekick: true,
+    } as const;
+
+    // One ordinary string field, as the parser read it.
+    expect(CHECKPOINT_QUESTION_FORM.fields.map((one) => one.name)).toEqual(["rule"]);
+    const field = "rule";
+
+    // The question is announced where it can be answered.
+    const asked = yield* commitCheckpoint(presenter, routed);
+    expect(asked.observed.boundsOf("sidekick:answer")).not.toBe(undefined);
+    expect(asked.view.live.sidekick?.question?.key).toBe(CHECKPOINT_QUESTION);
+
+    /**
+     * The same reducer the keystroke reaches, against what this frame measured
+     * and which of the Sidekick's drawers it presented. Both are the frame's
+     * own answers: a form held open in state while the screen shows something
+     * else owns no keystroke, so a field action reduced without the frame that
+     * drew the field is refused.
+     */
+    const act = (
+      state: ReplState,
+      action: Parameters<typeof reduceRepl>[1],
+      frame: CheckpointFrame,
+    ) =>
+      reduceRepl(
+        state,
+        action,
+        model,
+        CHECKPOINT_ASKING,
+        frame.observed.committed.admission,
+        presentedDrawer(frame.view),
+      ).state;
+
+    // Opened by the action its own control carries, not by a fixture.
+    const opened = act(
+      checkpointState(model, routed),
+      { kind: "open-sidekick-question", question: CHECKPOINT_QUESTION },
+      asked,
+    );
+    expect({ key: opened.asking?.key, open: opened.asking?.open }).toEqual({
+      key: CHECKPOINT_QUESTION,
+      open: true,
+    });
+
+    // Drawn, the drawer carries that one field.
+    const drawn = yield* commitCheckpoint(presenter, {
+      ...routed,
+      state: opened,
+      focused: asked.focused,
+    });
+    expect(drawn.observed.boundsOf("drawer:open")).not.toBe(undefined);
+    expect(drawn.observed.boundsOf(`drawer:field:${field}`)).not.toBe(undefined);
+
+    // The field takes the focus text acts on, and then the text.
+    const answered = "half up, to the cent";
+    const selected = act(
+      opened,
+      { kind: "select-sidekick-field", question: CHECKPOINT_QUESTION, field },
+      drawn,
+    );
+    expect(selected.asking?.form.field).toBe(field);
+    const typed = act(selected, { kind: "type", text: answered, field }, drawn);
+    // The question this is an answer to is still the question that was asked.
+    expect({
+      key: typed.asking?.key,
+      value: typed.asking?.form.values[field],
+    }).toEqual({ key: CHECKPOINT_QUESTION, value: answered });
+
+    // And the screen says so, in the row the value belongs to.
+    const held = yield* commitCheckpoint(presenter, {
+      ...routed,
+      state: typed,
+      focused: drawn.focused,
+    });
+    const row = held.observed.boundsOf(`drawer:field:${field}`);
+    if (row === undefined) {
+      throw new Error("the field that took the text is no longer drawn");
+    }
+    expect(presenter.grid.textIn(row).join(" ")).toContain("half up");
   });
 });

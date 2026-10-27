@@ -1070,14 +1070,38 @@ export const WORKSPACE_CONVERSATION_COLUMNS = 58;
 /**
  * How wide the conversation column is at the medium profile.
  *
- * Fifty rather than the wide profile's fifty-eight, which is the pinned v2
- * medium proportion: the left column keeps its thirty-six for legibility and
- * the selected work takes what the two leave — thirty-four at 120 columns.
+ * Thirty-two, which is what the selected work can spare. An entry reading
+ * reserves its rail, two separators and a column as wide as the widest badge
+ * it could ever hold — so the centre's declared width and its room for source
+ * are far apart, and at the pinned medium proportion of fifty the centre's
+ * thirty-four left seven cells of source. The conversation keeps its own rows
+ * readable at thirty-two because they are wrapped prose rather than source
+ * standing beside a reserved column.
  */
-export const WORKSPACE_CONVERSATION_MEDIUM = 50;
+export const WORKSPACE_CONVERSATION_MEDIUM = 32;
 
 /** The selected work's Draft: its heading row and three value rows. */
 export const WORKSPACE_DRAFT_ROWS = 4;
+
+/**
+ * The cells between the Draft's field and the control beside it.
+ *
+ * Declared once, because two readers need the same answer: the row that places
+ * them, and the preparation that derives what the field has left once the
+ * engine has measured that control.
+ */
+export const WORKSPACE_DRAFT_GAP = 1;
+
+/**
+ * The most rows the tray gives the messages waiting behind the exchange.
+ *
+ * A declared budget, like the Draft's rows: the conversation above it is the
+ * reading somebody is having, and a tray sized by however many messages had
+ * arrived would push that reading off its own column. A tray holding no more
+ * than this shows all of it and keeps the appearance it was reviewed with; one
+ * holding more is a window, with the two controls that move it.
+ */
+export const WORKSPACE_QUEUE_ROWS = 8;
 
 /**
  * The rows the staged composition keeps around its body.
@@ -1122,6 +1146,10 @@ export function workspaceConversationWidth(size: ReplTerminalSize): number | und
  * 34-column column report 40 and pushed the conversation column off the frame.
  * The product already decides the other two widths, so the remainder is a
  * product fact rather than a second measurement.
+ *
+ * It is the remainder because this is the column whose room is spent before a
+ * reader sees any of it: the reading inside reserves a rail, two separators and
+ * the widest badge it could hold, and what survives that is the source.
  */
 export function workspaceWorkWidth(size: ReplTerminalSize): number | undefined {
   const left = workspaceTranscriptWidth(size);
@@ -1191,6 +1219,16 @@ export const SPACER_PROPS: ReplBoxProps = Object.freeze({
   layout: Object.freeze({ width: grow(), height: fixed(1) }),
 });
 
+/**
+ * One part of a row at a width something else measured, one row tall.
+ *
+ * For the part that takes what a row has left: the engine divides a growing
+ * remainder itself, and that division is not always whole.
+ */
+export function statedPartProps(width: number): ReplBoxProps {
+  return { layout: { width: fixed(Math.max(0, width)), height: fixed(1) } };
+}
+
 /** One part of a row that is exactly as wide as its own text. */
 export function fittedPartProps(surface?: number): ReplBoxProps {
   return {
@@ -1204,10 +1242,22 @@ export function fittedPartProps(surface?: number): ReplBoxProps {
  *
  * `top` blank rows above it stand for the reference's twenty-pixel padding.
  */
-export function workspaceBodyProps(gutter: number, top = 0): ReplBoxProps {
+export function workspaceBodyProps(
+  gutter: number,
+  top = 0,
+  /**
+   * How wide this body's column leaves it, where the product knows.
+   *
+   * Stated for the reason its column's width is: a growing box takes its
+   * minimum from its content, and a toolbar wider than the column it is in
+   * would push that column's rows past the frame. The gutter is still the
+   * engine's padding, so the room inside is still the engine's answer.
+   */
+  width?: number,
+): ReplBoxProps {
   return {
     layout: {
-      width: grow(),
+      width: width === undefined ? grow() : fixed(Math.max(0, width)),
       height: grow(),
       direction: "ttb",
       padding: { left: gutter, right: gutter, top },
@@ -1215,15 +1265,24 @@ export function workspaceBodyProps(gutter: number, top = 0): ReplBoxProps {
   };
 }
 
+/** How wide one staged column's inside is, once its divider is taken. */
+export function workspaceInsideWidth(
+  column: number | undefined,
+  divided: boolean,
+): number | undefined {
+  return column === undefined ? undefined : Math.max(0, column - (divided ? 1 : 0));
+}
+
 /** A block of `rows` rows on its own ground, inset by `gutter`. */
 export function workspaceBlockProps(
   rows: number | "fit",
   surface: number,
   gutter: number,
+  width?: number,
 ): ReplBoxProps {
   return {
     layout: {
-      width: grow(),
+      width: width === undefined ? grow() : fixed(Math.max(0, width)),
       height: rows === "fit" ? fit() : fixed(rows),
       direction: "ttb",
       padding: { left: gutter, right: gutter },
@@ -1232,11 +1291,18 @@ export function workspaceBlockProps(
   };
 }
 
-/** Parts side by side, as wide as their region, `height` rows tall. */
-export function partsRowProps(height: number | "fit" = 1, gap = 1): ReplBoxProps {
+/**
+ * Parts side by side, `height` rows tall and as wide as `width` states.
+ *
+ * A stated width is what leaves exactly one remainder for the row's growing
+ * part to take. Grown instead, the row resolves against the flow around it and
+ * that resolution is not always whole — measured, a Draft heading row left its
+ * field 52.00732421875 wide and its Stop at x=92.00732421875.
+ */
+export function partsRowProps(height: number | "fit" = 1, gap = 1, width?: number): ReplBoxProps {
   return {
     layout: {
-      width: grow(),
+      width: width === undefined ? grow() : fixed(Math.max(0, width)),
       height: height === "fit" ? fit() : fixed(height),
       direction: "ltr",
       gap,

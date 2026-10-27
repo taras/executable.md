@@ -23,9 +23,11 @@ import { entryInitialBindings, projectRepl } from "../../../src/repl/model.ts";
 import type { ReplModel } from "../../../src/repl/model.ts";
 import { EntrySegmentStream } from "../../../src/repl/entries.ts";
 import { initialState, NO_AGENT, viewFor, withWorkspace } from "../../../src/repl/application.ts";
+import { readQuestionForm } from "../../../src/repl/elicitation.ts";
+import type { ReplQuestionForm } from "../../../src/repl/elicitation.ts";
 import type {
   ReplLive,
-  ReplSidekickQuestion,
+  ReplQueuedMessage,
   ReplSidekickChatRow,
   ReplSidekickReading,
   ReplState,
@@ -343,6 +345,21 @@ export function checkpointScopes(model: ReplModel): readonly string[] {
 
 /** How one checkpoint reading differs from the accepted 160x36 one. */
 export interface CheckpointOptions {
+  /**
+   * The exact state to read, where a caller is carrying one of its own.
+   *
+   * A resize journey supplies this: it seeds a reading once and then carries it
+   * from size to size, so what the screen keeps is a person's own reading
+   * rather than the default this fixture would build again.
+   */
+  readonly state?: ReplState;
+  /**
+   * The key the mounted tree already holds focus on, where it holds one.
+   *
+   * Supplied after the opening frame, so a later frame composes from the tree's
+   * own answer instead of letting the Draft take focus a second time.
+   */
+  readonly focused?: string;
   readonly size?: ReplTerminalSize;
   /** Which surface a narrow frame routes; wider frames show all three columns. */
   readonly surface?: "sessions" | "entries";
@@ -419,18 +436,37 @@ export function* checkpointStateModel(): Operation<ReplModel> {
   return projected(whole.slice(0, lastClose(whole)));
 }
 
+/** The schema this screen's question is asked through. */
+const QUESTION_SCHEMA: Json = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: ["rule"],
+  properties: Object.freeze({
+    rule: Object.freeze({ type: "string", title: "Rounding rule" }),
+  }),
+});
+
+/** The key the live question and the open form both name. */
+export const CHECKPOINT_QUESTION = "ask-1";
+
+/**
+ * The Sidekick's waiting question, as the product's own parser reads it.
+ *
+ * Compiled from the schema above through `readQuestionForm`, so the form this
+ * screen draws is one the REPL's form language actually supports — a form
+ * asserted into shape would draw fields the parser would have refused.
+ */
+export const CHECKPOINT_QUESTION_FORM: ReplQuestionForm = readQuestionForm(QUESTION_SCHEMA);
+
 /** The same Sidekick, with a question of its own waiting to be answered. */
 export const CHECKPOINT_ASKING: ReplLive = Object.freeze({
   ...CHECKPOINT_LIVE,
   sidekick: Object.freeze({
     ...CHECKPOINT_SIDEKICK,
     question: Object.freeze({
-      key: "ask-1",
+      key: CHECKPOINT_QUESTION,
       message: "Which rounding rule should the tax use?",
-      form: Object.freeze({
-        fields: Object.freeze([]),
-        message: undefined,
-      }) as unknown as ReplSidekickQuestion["form"],
+      form: CHECKPOINT_QUESTION_FORM,
     }),
   }),
 });
@@ -444,6 +480,7 @@ export const CHECKPOINT_ASKING: ReplLive = Object.freeze({
  * rather than asking for four screens of one outcome each.
  */
 export const OVERFLOW_WORKSPACE: ReplWorkspace = Object.freeze({
+  queueOffset: 0,
   ...CHECKPOINT_WORKSPACE,
   work: Object.freeze([
     Object.freeze({ message: "chat:response:1", entry: "entry-1" }),
@@ -471,8 +508,48 @@ export const OVERFLOW_WORKSPACE: ReplWorkspace = Object.freeze({
   ]),
 });
 
+/** The same tray, moved so a message the first window hid is the one shown. */
+export function queueAt(offset: number): ReplWorkspace {
+  return Object.freeze({ ...OVERFLOW_WORKSPACE, queueOffset: offset });
+}
+
+/** The last queued message, which no window at any review size shows first. */
+export function lastQueued(): ReplQueuedMessage {
+  const last = OVERFLOW_WORKSPACE.queued[OVERFLOW_WORKSPACE.queued.length - 1];
+  if (last === undefined) {
+    throw new Error("this tray holds no messages");
+  }
+  return last;
+}
+
+/**
+ * The same reading with its conversation held at one position.
+ *
+ * The chat ordinarily follows its newest rows, so a reader looking at an
+ * earlier outcome has stopped following: this is that reader's own state.
+ */
+export function chatAt(
+  model: ReplModel,
+  offset: number,
+  options: CheckpointOptions = {},
+): ReplState {
+  const base = checkpointState(model, { ...options, state: undefined });
+  const chat = CHECKPOINT_SIDEKICK.reading ?? "";
+  return Object.freeze({
+    ...base,
+    viewports: Object.freeze({
+      ...base.viewports,
+      sidekick: Object.freeze({ ...base.viewports.sidekick, [chat]: offset }),
+      sidekickFollowing: Object.freeze({ ...base.viewports.sidekickFollowing, [chat]: false }),
+    }),
+  });
+}
+
 /** The state the checkpoint reads: the nested scope selected, both texts typed. */
 export function checkpointState(model: ReplModel, options: CheckpointOptions = {}): ReplState {
+  if (options.state !== undefined) {
+    return options.state;
+  }
   const base = initialState(CHECKPOINT_EXECUTION);
   return Object.freeze({
     ...base,
@@ -526,7 +603,7 @@ export interface CheckpointFrame {
 /**
  * Commit the checkpoint screen, in the two frames the product itself takes.
  *
- * The first frame carries no focused key, so the Draft's own claim takes focus
+ * The first frame carries no focused key, so the Draft takes focus on its own
  * exactly as it does when a command opens. The tree is then asked where focus
  * actually ended up, and the frame under review is composed with that answer —
  * so the cue drawn on the Draft is the cue of the control a keystroke reaches,
@@ -540,10 +617,47 @@ export function* commitCheckpoint(
   options: CheckpointOptions = {},
 ): Operation<CheckpointFrame> {
   const model = options.model ?? (yield* checkpointModel());
-  yield* presenter.commit(checkpointViewOf(model, undefined, options));
+  // The opening frame, where the Draft's own claim takes focus — and only
+  // where nobody is carrying focus already. A caller resizing a screen passes
+  // the tree's current answer instead, because offering the opening claim again
+  // at every size would restore the Draft rather than keep what was focused.
+  if (options.focused === undefined) {
+    yield* presenter.commit(checkpointViewOf(model, undefined, options));
+  }
   const node = presenter.tree.focused();
   const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
   const view = checkpointViewOf(model, focused, options);
   const observed = yield* presenter.commit(view);
   return { model, view, focused, observed };
 }
+
+/**
+ * One reading a person has actually moved to, seeded once.
+ *
+ * The exact position this model holds, the entry and nested scope selected
+ * under it, and texts neither composer started with — so a frame that rebuilt
+ * the default reading instead of carrying this one is visibly a different
+ * screen.
+ */
+export function seededState(model: ReplModel, options: CheckpointOptions = {}): ReplState {
+  const base = checkpointState(model, { ...options, state: undefined });
+  return Object.freeze({
+    ...base,
+    draft: SEEDED_DRAFT,
+    message: SEEDED_MESSAGE,
+    // The position this model was projected at, which is the only one
+    // resolution accepts: a route naming any other marker is refused until the
+    // prefix it names has been projected, and inspecting one needs a position
+    // to inspect. An earlier retained marker is not an option for this screen
+    // either — a view frozen at a prefix shows nothing of the present, and the
+    // question, the tray and the running entry this screen is made of are all
+    // present rather than recorded.
+    route: Object.freeze({ ...base.route, at: model.selection }),
+  });
+}
+
+/** The Draft text the seeded reading carries, which no default supplies. */
+export const SEEDED_DRAFT = "<Checkout cart={cart} coupon={coupon} />";
+
+/** The composer text the seeded reading carries. */
+export const SEEDED_MESSAGE = "And say what the coupon does to the total.";

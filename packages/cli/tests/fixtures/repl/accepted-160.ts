@@ -63,7 +63,7 @@ export interface AcceptedScreen {
   readonly textRows: readonly { readonly y: number; readonly text: string }[];
 }
 
-export const ACCEPTED_160: AcceptedScreen = Object.freeze({
+export const ACCEPTED_160 = Object.freeze({
   revision: "c5626b3bc306fea4c19fbeae36494abe8fa5317e",
   attempt: 4,
   size: {
@@ -262,13 +262,21 @@ export const ACCEPTED_160: AcceptedScreen = Object.freeze({
     },
     {
       region: "inspection",
+      // The accepted capture had this at height 2: the queue drew one box per
+      // queued message, however many rows that message's text took. The window
+      // now admits and slices *rows*, so the body this identity marks is the
+      // one row it begins on and the rest of that message are its siblings.
+      // That is the only figure in this fixture that moved, and it moved from
+      // the structure rather than the screen: every pinned row and every
+      // styled cell probe below still reads exactly as it was captured, this
+      // box's x, y and width included.
       id: "box:queue:text:0",
       kind: "body",
       bounds: {
         x: 104,
         y: 25,
         width: 51,
-        height: 2,
+        height: 1,
       },
     },
   ],
@@ -736,4 +744,4 @@ export const ACCEPTED_160: AcceptedScreen = Object.freeze({
       text: " Entry 2 running · Enter unavailable until it finishes · Type here · Tab/Shift+Tab move                                                                         ",
     },
   ],
-} as AcceptedScreen);
+}) satisfies AcceptedScreen;
