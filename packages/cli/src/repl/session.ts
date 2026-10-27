@@ -457,6 +457,26 @@ export interface ReplSession {
     starting?: StartingCheck,
     workspace?: true,
   ): Operation<Result<ReplSubmission>>;
+  /**
+   * Stop the entry this key names, and join everything it owned.
+   *
+   * The explicit Stop a person asks for, and nothing else: it is not response
+   * cancellation, not Exit and not teardown. The entry it ends is *final* — its
+   * root retains a cancelled close, the effects it already completed stand, the
+   * text it already printed stays partial, and it is never resumed as that
+   * entry. Answering `Ok` means the terminal was retained and every resource
+   * the entry held has been released, which is also when a successor may be
+   * admitted.
+   *
+   * The key is the caller's own rendered identity. A key this session is no
+   * longer running, a startup the history has not acknowledged, or no running
+   * entry at all starts nothing and answers why. Pressing it again while one is
+   * in progress joins that one.
+   *
+   * It writes no record. The root that owns this entry's journal writes the
+   * close, through the same acknowledged append path every other record takes.
+   */
+  stopEntry(expectedEntryKey: string): Operation<Result<void>>;
 }
 
 /**
@@ -567,11 +587,33 @@ export function openReplSession(options: ReplSessionOptions): Operation<Result<R
   return start(options, undefined);
 }
 
+/**
+ * One admitted entry's own authority to end its execution, by value.
+ *
+ * Published by the startup that created the execution, so what a stop reaches
+ * is the handle of *that* run and nothing it had to look up. It writes no
+ * record: the root that owns the journal does.
+ */
+type ReplEntryStop = () => Operation<Result<void>>;
+
 /** The one entry task a session owns, for as long as it owns one. */
 interface ReplEntryTask {
   /** The admission-order key of the entry this task is running. */
   readonly key: string;
   readonly task: Task<void>;
+  /**
+   * This entry's own execution stop, once its startup has published one.
+   *
+   * Entry-local readiness, because admission can precede it: the record that
+   * gives this entry a position is appended by the execution's own setup
+   * import, and the handle exists from the moment `executeInstalled` returns —
+   * close together, and not ordered. A Stop that arrived in between waits here
+   * rather than finding nothing and deciding there is nothing to stop.
+   *
+   * It answers `Err` where this startup will never publish one, so the wait
+   * always ends.
+   */
+  readonly stopping: Operation<Result<ReplEntryStop>>;
   /** Resolves once this entry's work has passed what its segment retained. */
   readonly admitted: Operation<Result<void>>;
   /** Resolves with how this entry's execution finished. */
@@ -600,6 +642,10 @@ interface ReplEntryTask {
    * be the answer to a question nobody had asked yet.
    */
   arm(): void;
+  /** Publish this entry's own execution stop, from the startup that built it. */
+  supplyStop(stop: ReplEntryStop): void;
+  /** Say this startup will never publish one, so a waiting Stop stops waiting. */
+  failStop(error: Error): void;
 }
 
 function* start(
@@ -734,6 +780,19 @@ function* start(
     let positioned = false;
     /** The one entry task this session owns, or none. */
     let running: ReplEntryTask | undefined;
+    /**
+     * The explicit Stop this session is carrying out, while it is carrying one.
+     *
+     * Session-owned rather than caller-owned, so a second press joins the first
+     * instead of starting a second one, and so a caller that goes away does not
+     * abandon a stop half-way through its cleanup. It names the exact task it
+     * is stopping, which is also what keeps that task's slot held: a Stop owns
+     * the slot from the moment it starts until it has confirmed a terminal and
+     * joined the cleanup, and the task's own early release must not take it.
+     */
+    let stopped:
+      | { readonly held: ReplEntryTask; readonly joined: Operation<Result<void>> }
+      | undefined;
     /** Whether this session still starts entry tasks. */
     let admitting = true;
     /** How the last entry to finish finished. */
@@ -954,6 +1013,9 @@ function* start(
       ): Operation<Result<ReplSubmission>> {
         return submitting(source, pausing, starting, workspace);
       },
+      stopEntry(expectedEntryKey: string): Operation<Result<void>> {
+        return stopEntry(expectedEntryKey);
+      },
     };
 
     function open(): void {
@@ -1044,6 +1106,138 @@ function* start(
       // teardown, which is what a caller told "this entry is finished" needs.
       yield* held.task.halt();
       return outcome;
+    }
+
+    /**
+     * Carry out one explicit Stop of this exact entry, and join all of it.
+     *
+     * Four waits in one order, and the order is the whole of it. This entry's
+     * own execution handle — published by the startup that built it, waited for
+     * here because admission can arrive first. Then that execution's stop,
+     * which asks its root to end as cancelled, halts the document runner so the
+     * root's own finalizer appends that ending through the journal it still
+     * owns, and joins it. Then this entry's outcome. Then everything the entry
+     * task itself still holds: its output consumer, its Agent attachment, its
+     * installations.
+     *
+     * The slot stays occupied for all of it, so nothing is admitted into a stop
+     * that has not finished. It is released at the end, and only after a
+     * terminal has actually been retained and the cleanup has joined.
+     *
+     * A failure of the append or of the cleanup is the answer, and it also
+     * withdraws this session's authority to start anything else: a journal this
+     * process could not finish writing is not one to add to. A document that
+     * merely failed on its own is not that — the stop still happened, and that
+     * failure is the entry's own outcome.
+     */
+    function* carryOutStop(held: ReplEntryTask): Operation<Result<void>> {
+      const handle = yield* held.stopping;
+      // Rechecked after the wait, by identity. Whatever this session was
+      // holding when the key was matched may have been replaced while this
+      // suspended, and a Stop that went on would be stopping whatever happens
+      // to be running now rather than what somebody pressed Stop on.
+      if (running !== held) {
+        return Err(
+          new ReplLifecycleError(
+            `this execution's ${held.key} is no longer the entry running here, so there is ` +
+              "nothing of it to stop.",
+          ),
+        );
+      }
+      if (!handle.ok) {
+        return handle;
+      }
+      const canonical = yield* handle.value();
+      // The entry's own outcome, then the task's own teardown. Two different
+      // moments: a root that has closed is still releasing what the entry
+      // acquired around it, and the slot belongs to the stop until both are
+      // past.
+      yield* held.finished;
+      yield* held.task.halt();
+      if (!canonical.ok) {
+        // Admission is withdrawn before any guard is released, so no successor
+        // can be admitted in the window between this failing and this
+        // answering.
+        admitting = false;
+        return canonical;
+      }
+      return Ok(undefined);
+    }
+
+    /**
+     * Stop the entry this key names, if it is the one actually running.
+     *
+     * The key is the caller's own rendered identity, which is what makes this
+     * refusable: a Stop drawn against an entry that has since finished, or
+     * against a frozen reading of an older one, names a key this session is no
+     * longer running and starts nothing. Nothing here is a Close — the root
+     * that owns the journal writes that, and this asks the execution that owns
+     * the root.
+     *
+     * A startup that was never acknowledged is not an entry: there is no
+     * position for anything to follow, and stopping it would be stopping work
+     * the history holds nothing of. Repeated presses for the same task join the
+     * one operation already running rather than starting a second.
+     */
+    function* stopEntry(expectedEntryKey: string): Operation<Result<void>> {
+      const already = stopped;
+      if (already !== undefined) {
+        return already.held.key === expectedEntryKey
+          ? yield* already.joined
+          : Err(
+              new ReplLifecycleError(
+                `this execution's ${already.held.key} is being stopped, so ${expectedEntryKey} is ` +
+                  "not the entry this session is running.",
+              ),
+            );
+      }
+      const held = running;
+      if (!live || held === undefined) {
+        return Err(
+          new ReplLifecycleError("this session is running no entry, so there is nothing to stop."),
+        );
+      }
+      if (held.key !== expectedEntryKey) {
+        return Err(
+          new ReplLifecycleError(
+            `this execution is running ${held.key} rather than ${expectedEntryKey}, so that ` +
+              "entry is not the one to stop.",
+          ),
+        );
+      }
+      if (!held.placed()) {
+        return Err(
+          new ReplLifecycleError(
+            `this execution's ${expectedEntryKey} has not been acknowledged yet, so there is no ` +
+              "entry to stop.",
+          ),
+        );
+      }
+      const settlement = withResolvers<Result<void>>();
+      stopped = { held, joined: settlement.operation };
+      // Run in the session's own scope, so a caller that goes away mid-stop
+      // leaves the stop running rather than abandoning a half-joined entry.
+      owner.run(function* () {
+        let answer: Result<void>;
+        try {
+          answer = yield* carryOutStop(held);
+        } catch (error) {
+          admitting = false;
+          answer = Err(error instanceof Error ? error : new Error(String(error)));
+        }
+        // Released here and nowhere else: the terminal is retained and the
+        // cleanup has joined, so what follows reads the acknowledged history
+        // rather than this process's memory of it. Only this task's own slot —
+        // a stop that ran long enough for something else to occupy it clears
+        // nothing and disarms nobody.
+        if (running === held) {
+          running = undefined;
+        }
+        stopped = undefined;
+        reproject();
+        settlement.resolve(answer);
+      });
+      return yield* settlement.operation;
     }
 
     /**
@@ -1196,6 +1390,22 @@ function* start(
     ): ReplEntryTask {
       const admission = withResolvers<Result<void>>();
       const completion = withResolvers<Result<unknown>>();
+      // This entry's own readiness for being stopped. Created before the task,
+      // because the task is what resolves it and a Stop may arrive first.
+      const stopping = withResolvers<Result<ReplEntryStop>>();
+      let published = false;
+      function supplyStop(stop: ReplEntryStop): void {
+        if (!published) {
+          published = true;
+          stopping.resolve(Ok(stop));
+        }
+      }
+      function failStop(error: Error): void {
+        if (!published) {
+          published = true;
+          stopping.resolve(Err(error));
+        }
+      }
       let admitted = false;
       let settled = false;
       /**
@@ -1261,6 +1471,29 @@ function* start(
       positioned = false;
       lifecycle.open(key);
       const task = owner.run(function* () {
+        // Registered first, so it unwinds last: however this startup ends, a
+        // Stop waiting for a handle it was going to publish stops waiting. A
+        // handle already published is kept — this only answers for the case
+        // where there will never be one.
+        yield* ensure(() => {
+          failStop(
+            new ReplLifecycleError(`this execution's ${key} never reached an execution to stop.`),
+          );
+        });
+        // And however this task ends, whoever is waiting for its outcome gets
+        // one. An entry halted or failed part-way never reaches the settlement
+        // below, and a join that waited for it would wait for an answer that
+        // was never coming. It says nothing about the file: what the history
+        // holds is whatever was acknowledged, and this is a fact about the task.
+        yield* ensure(() => {
+          settle(
+            Err(
+              new ReplLifecycleError(
+                `this execution's ${key} did not reach an outcome of its own.`,
+              ),
+            ),
+          );
+        });
         // Registered before anything this task acquires, and therefore released
         // after all of it: destructors run in reverse order of registration. By
         // the time this runs the execution has been torn down, every provider,
@@ -1279,7 +1512,12 @@ function* start(
         // is no entry for anything to follow — so holding the slot against it
         // would wedge the session over work that never happened.
         yield* ensure(() => {
-          if (running?.task === task && (settled || !placed)) {
+          // And never while an explicit Stop owns this task. That operation
+          // holds the slot across the whole of itself — the canonical stop,
+          // this entry's outcome, and every resource this task is still
+          // releasing right now — and clearing it here would let a successor be
+          // admitted into a stop that has not finished.
+          if (running?.task === task && (settled || !placed) && stopped?.held.task !== task) {
             running = undefined;
           }
         });
@@ -1327,7 +1565,7 @@ function* start(
         // scheduled to notice the admission instead would be ordered by the
         // scheduler rather than by the record, and the continuation it was
         // racing has no reason to lose.
-        const outcome = yield* runEntry(key, source, view, initialBindings, workspace);
+        const outcome = yield* runEntry(key, source, view, initialBindings, supplyStop, workspace);
         settle(outcome);
         // A settled entry is past whatever its segment retained, whichever way
         // it settled — including a failure that appended nothing at all, which
@@ -1339,9 +1577,12 @@ function* start(
         task,
         admitted: admission.operation,
         finished: completion.operation,
+        stopping: stopping.operation,
         admit,
         settle,
         arm,
+        supplyStop,
+        failStop,
         place: () => {
           placed = true;
         },
@@ -1406,6 +1647,14 @@ function* start(
       source: string,
       view: EntrySegmentStream,
       initialBindings: Readonly<Record<string, Json>>,
+      /**
+       * Where this entry publishes its own execution's stop.
+       *
+       * Handed in rather than reached back for: the task is created before the
+       * record of it is, so a startup that looked the entry up to publish on it
+       * would be looking for something that may not be there yet.
+       */
+      supplyStop: (stop: ReplEntryStop) => void,
       workspace?: true,
     ): Operation<Result<unknown>> {
       try {
@@ -1479,6 +1728,11 @@ function* start(
           [...installations, lifecycle.installation, installation, ...owned],
           { initialBindings },
         );
+        // This entry's own stop, by value, as soon as there is an execution to
+        // stop. The handle is this exact run's: it closes over that run's
+        // runner task and its root writer, so nothing here has to name an
+        // execution, look one up or hold a stream to reach it.
+        supplyStop(() => started.stop());
         // This entry's owned read, published for as long as this entry is the
         // one running and withdrawn with it. Registered after the execution
         // exists, so there is never a handle that answers about a root that

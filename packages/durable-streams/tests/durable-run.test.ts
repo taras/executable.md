@@ -646,6 +646,36 @@ describe("durableRun: what an accepted request owns, and what it refuses", () =>
     }
     expect(only.result.status).toBe("cancelled");
     expect(Object.keys(only.result)).toEqual(["status"]);
+
+    // And that leaving belongs to this run alone. Carried into a second root
+    // that nobody asked to stop, it is an ordinary failure: that root was not
+    // interrupted, so it writes the error close every other failure writes
+    // rather than leaving its segment with no terminal at all.
+    if (!(caught instanceof Error)) {
+      throw new Error("the stopped root left without an error to carry");
+    }
+    const elsewhere = new InMemoryStream();
+    let carried: unknown;
+    yield* scoped(function* () {
+      try {
+        yield* durableRun(
+          function* () {
+            throw caught;
+          },
+          { stream: elsewhere },
+        );
+      } catch (error) {
+        carried = error;
+      }
+    });
+    expect(Object.is(carried, caught)).toBe(true);
+    const theirs = elsewhere.snapshot().filter((event) => event.type === "close");
+    expect(theirs.length).toBe(1);
+    const ending = theirs[0];
+    if (ending === undefined || ending.type !== "close") {
+      throw new Error("the unrequested root recorded no close");
+    }
+    expect(ending.result.status).toBe("err");
   });
 
   it("a request over an unaligned prefix raises divergence and records nothing", function* () {

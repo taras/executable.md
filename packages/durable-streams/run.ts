@@ -97,6 +97,10 @@ export interface DurableRunOptions {
  * writing a terminal around it, and the cancellation finalizer records what
  * actually happened. It exists so an interrupted root stops *being* a
  * successful completion without a fault being invented to carry it out.
+ *
+ * The bypass is keyed to the exact object one run minted, never to this class:
+ * which root was stopped is not something the type of an error can answer, and
+ * a root that throws another root's interruption is an ordinary failure.
  */
 class RootInterrupted extends Error {
   override name = "RootInterrupted";
@@ -163,6 +167,14 @@ export function* durableRun<T extends WorkflowValue>(
   // after its owner has gone is refused rather than accepted into nothing.
   let phase: RootPhase = "open";
   let retained: "ok" | "err" | "cancelled" | undefined;
+  // This run's own leaving, minted only if this run is actually stopped.
+  //
+  // The bypass below is keyed to this exact object rather than to the class:
+  // an interruption is a fact about *one* invocation, and a root that merely
+  // happens to throw somebody else's — a stopped root's error carried into a
+  // later workflow, say — was not itself stopped. Classifying by type would
+  // let that root leave with no terminal at all, having asked for nothing.
+  let interruption: RootInterrupted | undefined;
   // Read through a call rather than directly: the control below moves this
   // while the workflow is suspended, which narrowing by assignment cannot see.
   const phaseNow = (): RootPhase => phase;
@@ -353,7 +365,8 @@ export function* durableRun<T extends WorkflowValue>(
     // compensating error close is written around it.
     if (phaseNow() === "claimed") {
       yield* settleStopped();
-      throw new RootInterrupted(coroutineId);
+      interruption = new RootInterrupted(coroutineId);
+      throw interruption;
     }
     // The phase moves first, so a cancellation asked for from here on joins
     // this ending rather than cancelling the write and compensating over a
@@ -367,8 +380,10 @@ export function* durableRun<T extends WorkflowValue>(
   } catch (error) {
     // A root a Stop already owns leaves as itself. The finalizer is what
     // settles it, and a terminal written around that would be this run
-    // recording two endings.
-    if (error instanceof RootInterrupted) {
+    // recording two endings. By identity, and only this run's own: an
+    // interruption some other root minted is an ordinary failure here, and it
+    // gets the ordinary error close every other failure gets.
+    if (interruption !== undefined && Object.is(error, interruption)) {
       throw error;
     }
     const primary = error instanceof Error ? error : new Error(String(error));

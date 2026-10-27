@@ -346,6 +346,14 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "session-filter") {
     return { kind: "toggle-session-filter" };
   }
+  if (select === "stop-entry") {
+    // The entry this control was drawn against, and only a real one: a row
+    // with no entry to name is a row that stops nothing.
+    const entry = named["entry"];
+    return typeof entry === "string" && entry.length > 0
+      ? { kind: "stop-entry", entry }
+      : undefined;
+  }
   // One saved Sidekick turn, by its own chat and canonical ordinal. Both,
   // because a turn number means nothing outside the conversation that holds
   // it, and a row that carried only one of them would open a chat at a turn

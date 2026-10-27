@@ -5006,3 +5006,281 @@ describe("REPL entries: what the Bindings reading shows at each position (#939)"
     expect(yield* bindingsAt(terminal, "entry-1")).toEqual(['token = "alpha"']);
   });
 });
+
+/**
+ * One entry that completes an effect, publishes a value, prints, and then waits.
+ *
+ * Everything an explicit Stop has to leave alone is in it before the wait: the
+ * first block is an effect whose record the journal acknowledges, `token` is an
+ * eval export the prefix retains, and the text it prints is output this process
+ * emitted and no record holds. Then it stops at a real question, which is where
+ * a person presses Stop.
+ */
+const STOPS = [
+  "```js eval",
+  'const token = "held";',
+  'output("printed before the question");',
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+  "One: {answer.decision}",
+  "",
+].join("\n");
+
+/**
+ * Whether this failure is the given one, or carries it as a cause.
+ *
+ * By identity, through the cause chain: a failure that travelled through a
+ * reconciling boundary may be wrapped, and what must not happen is a different
+ * failure being reported in its place.
+ */
+function causedBy(failure: unknown, original: Error): boolean {
+  let seen: unknown = failure;
+  for (let depth = 0; depth < 16 && seen !== undefined && seen !== null; depth += 1) {
+    if (Object.is(seen, original)) {
+      return true;
+    }
+    if (seen instanceof AggregateError && seen.errors.some((one) => Object.is(one, original))) {
+      return true;
+    }
+    seen = seen instanceof Error ? seen.cause : undefined;
+  }
+  return false;
+}
+
+describe("REPL entries: the explicit Stop, and what it is not (#971 B2)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EL2: Stop retains a cancelled entry, and nothing follows until its cleanup joins", function* () {
+    const holder = replExecution();
+    const entered = gate();
+    const release = gate();
+    try {
+      yield* scoped(function* () {
+        const session = opened(
+          yield* submitReplEntry({
+            execution: holder,
+            source: STOPS,
+            installations: [holdingTeardown(entered, release)],
+          }),
+        );
+        // A real question, reached by really running the entry. Everything
+        // before it is already in the file.
+        yield* asking(session);
+        const key = session.model.entries[0]?.key;
+        if (key === undefined) {
+          throw new Error("this session admitted no entry to stop");
+        }
+        const before = yield* holder.stream.readAll();
+        expect(before.some((event) => event.type === "close")).toBe(false);
+        expect(session.printing?.output).toContain("printed before the question");
+
+        // A key this session is not running stops nothing at all, and leaves
+        // the file exactly as it stands. Measured before the real Stop, so the
+        // stale press cannot be the one that did the work.
+        const stale = yield* session.stopEntry("entry-7");
+        expect(stale.ok).toBe(false);
+        expect(yield* holder.stream.readAll()).toEqual(before);
+
+        // The Stop itself, spawned, because its cleanup is held open below and
+        // this row has to stand inside that hold.
+        const answered = withResolvers<Result<void>>();
+        yield* spawn(function* () {
+          answered.resolve(yield* session.stopEntry(key));
+        });
+
+        // Cleanup is held. The entry's root has already written its ending by
+        // the time an execution's own finalizer is entered, so this is the
+        // state where "settled" and "joined" disagree — and a successor is
+        // refused in it.
+        yield* awaiting("the stopped entry reaching its teardown", entered.opened);
+        const held = yield* holder.stream.readAll();
+        const closes = held.filter((event) => event.type === "close");
+        expect(closes.length).toBe(1);
+        const only = closes[0];
+        if (only === undefined || only.type !== "close") {
+          throw new Error("the stopped entry recorded no close");
+        }
+        // Exactly the protocol's cancelled terminal: no output, no bindings and
+        // no invented answer travel in it.
+        expect(only.result.status).toBe("cancelled");
+        expect(Object.keys(only.result)).toEqual(["status"]);
+
+        const refused = refusedSubmission(yield* session.submit(PLAIN));
+        expect(refused.name).toBe("ReplLifecycleError");
+        expect(started(yield* holder.stream.readAll())).toBe(1);
+
+        // Released, and only now does the Stop answer: it owns the slot across
+        // the whole of its own cleanup.
+        release.open();
+        const stopped = yield* answered.operation;
+        expect(stopped.ok).toBe(true);
+
+        // What the stopped entry left, read from the acknowledged history.
+        const settled = projected(yield* holder.stream.readAll());
+        expect(settled.entries[0]?.terminal?.status).toBe("cancelled");
+        // The question was never answered. A stopped entry fabricates no answer
+        // and no schema data: the entry holds no elicitation at all, and its
+        // records stop at the import that asked.
+        expect(settled.entries[0]?.scope.elicitations).toEqual([]);
+        expect(settled.entries[0]?.records.map((record) => record.type)).toEqual([
+          "import_component",
+          "eval",
+          "import_component",
+          "close",
+        ]);
+        // Partial stays partial, in the channel it was already in. The text the
+        // entry really printed is retained beside the eval record that printed
+        // it; the cancelled terminal's own output is empty, because a stopped
+        // run rendered no document and nothing invents one for it.
+        expect(
+          settled.entries[0]?.transcript.some(
+            (row) => row.kind === "output" && row.text.includes("printed before the question"),
+          ),
+        ).toBe(true);
+        expect(settled.entries[0]?.terminal?.output).toBe("");
+        // And what a successor inherits is exactly what the prefix really
+        // retained — the exports the eval block published before the wait, not
+        // a map synthesized for a cancelled close and not the answer that was
+        // never given.
+        const inheriting = entryInitialBindings(settled);
+        expect(Object.keys(inheriting).sort()).toEqual(["schema", "token"]);
+        expect(inheriting["token"]).toBe("held");
+
+        // A successor is admitted now, into the stopped entry's own history.
+        accepted(yield* session.submit(PLAIN));
+        yield* session.join();
+        const after = projected(yield* holder.stream.readAll());
+        expect(after.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+        expect(after.entries[0]?.terminal?.status).toBe("cancelled");
+
+        // The successor settled on its own terms, and the stale Stop that
+        // follows is still stale: it names the entry that was stopped, which is
+        // no longer the entry running, so it reaches the successor not at all.
+        expect(after.entries[1]?.terminal?.status).toBe("ok");
+        const late = yield* session.stopEntry(key);
+        expect(late.ok).toBe(false);
+        expect(projected(yield* holder.stream.readAll()).entries[1]?.terminal?.status).toBe("ok");
+      });
+    } finally {
+      release.open();
+    }
+
+    // Cold: the stopped segment is projected, never resumed, and neither it nor
+    // its completed effect runs again.
+    const cold = yield* holder.stream.readAll();
+    const reopened = replExecution(cold);
+    yield* scoped(function* () {
+      const session = opened(yield* openReplSession({ execution: reopened }));
+      expect(session.live).toBe(false);
+      expect(session.model.entries[0]?.terminal?.status).toBe("cancelled");
+      expect(entryInitialBindings(session.model)["token"]).toBe("held");
+    });
+    // Byte for byte what it opened: a cold read of a stopped history executes
+    // nothing and writes nothing.
+    expect(yield* reopened.stream.readAll()).toEqual(cold);
+  });
+
+  it("EL2: a refused cancelled close is the Stop's failure, and admits no successor", function* () {
+    // One deterministic gate: this journal takes everything except the ending a
+    // Stop writes. Nothing else about the entry changes.
+    const refusal = new Error("this journal refused the stopped ending");
+    const stream = new InMemoryStream();
+    const appended = stream.append.bind(stream);
+    stream.append = function* (event: DurableEvent): Operation<void> {
+      if (event.type === "close" && event.result.status === "cancelled") {
+        throw refusal;
+      }
+      yield* appended(event);
+    };
+    const holder: ReplExecution = { id: "entries", stream };
+    const entered = gate();
+    const release = gate();
+    try {
+      yield* scoped(function* () {
+        const session = opened(
+          yield* submitReplEntry({
+            execution: holder,
+            source: STOPS,
+            installations: [holdingTeardown(entered, release)],
+          }),
+        );
+        yield* asking(session);
+        const key = session.model.entries[0]?.key;
+        if (key === undefined) {
+          throw new Error("this session admitted no entry to stop");
+        }
+
+        const answered = withResolvers<Result<void>>();
+        yield* spawn(function* () {
+          answered.resolve(yield* session.stopEntry(key));
+        });
+
+        // The remaining cleanup is still attempted: a refused append does not
+        // abandon what the entry was holding.
+        yield* awaiting("the stopped entry reaching its teardown", entered.opened);
+        release.open();
+
+        const stopped = yield* answered.operation;
+        expect(stopped.ok).toBe(false);
+        // The original failure, by identity, rather than a description of one.
+        if (stopped.ok) {
+          throw new Error("the refused append reported a successful stop");
+        }
+        expect(causedBy(stopped.error, refusal)).toBe(true);
+
+        // Nothing was written around it: no compensating ending of any kind,
+        // and the entry therefore has no outcome.
+        const events = yield* stream.readAll();
+        expect(events.some((event) => event.type === "close")).toBe(false);
+        expect(partitioned(events).map((segment) => segment.settled)).toEqual([false]);
+
+        // And this session admits nothing further. A stop whose append failed
+        // stopped nothing safely, so its authority to start work is withdrawn
+        // before any guard is released.
+        const refused = refusedSubmission(yield* session.submit(PLAIN));
+        expect(refused.name).toBe("ReplLifecycleError");
+        expect(started(yield* stream.readAll())).toBe(1);
+      });
+    } finally {
+      release.open();
+    }
+  });
+
+  it("EL2: the same source left by teardown keeps its unfinished segment", function* () {
+    // The paired control. Identical source, identical wait — and the session is
+    // *torn down* rather than stopped, which is what Exit does.
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution: holder, source: STOPS }));
+      yield* asking(session);
+    });
+
+    const events = yield* holder.stream.readAll();
+    // No outcome of any kind. Teardown fabricates none, and the segment it
+    // leaves is unfinished.
+    expect(events.some((event) => event.type === "close")).toBe(false);
+    expect(partitioned(events).map((segment) => segment.settled)).toEqual([false]);
+    // So nothing may follow it, exactly as the row above this describe measures.
+    const blocked = refusedSession(
+      yield* submitReplEntry({ execution: replExecution(events), source: PLAIN }),
+    );
+    expect(blocked.message).toContain("has not settled");
+
+    // And reopening resumes that one segment without repeating the effect it
+    // already acknowledged: one task over this execution, not two.
+    const resumed = replExecution(events);
+    yield* scoped(function* () {
+      const session = opened(yield* openReplSession({ execution: resumed }));
+      yield* asking(session);
+      expect(started(yield* resumed.stream.readAll())).toBe(1);
+    });
+  });
+});

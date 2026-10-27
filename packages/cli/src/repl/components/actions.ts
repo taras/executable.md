@@ -45,6 +45,16 @@ export type ReplAction =
    * all three would be three decisions behind one key.
    */
   | { readonly kind: "stop-sidekick" }
+  /**
+   * Stop this exact entry's execution, and join everything it owned.
+   *
+   * Only that entry, and only the one this frame drew the control against: a
+   * press that arrives after it has finished, or from a frozen reading of an
+   * older one, names an entry the session is no longer running and stops
+   * nothing. It carries no record and no outcome — what a stopped entry
+   * retains is the root's to write, through the journal that root owns.
+   */
+  | { readonly kind: "stop-entry"; readonly entry: string }
   | { readonly kind: "select-surface"; readonly surface: ReplSurface }
   /**
    * Read one of the two right-hand panes.

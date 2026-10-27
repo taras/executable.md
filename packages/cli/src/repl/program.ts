@@ -1470,6 +1470,9 @@ function* drive(
             return Ok({ text: saved.value, held });
           },
         },
+        (refusal: string): void => {
+          sidekickReports.push({ kind: "refused", refusal });
+        },
       );
       if (performed.answered !== undefined) {
         // The question took it, so the drawer that was asking is over. The model
@@ -2718,6 +2721,14 @@ function* perform(
      */
     retrying(conversation: string, message: number): Result<{ text: string; held: Instruction }>;
   },
+  /**
+   * Say why something this performed refused, on the next pass of the loop.
+   *
+   * For the work that is spawned and answers later: the record a person reads
+   * is the screen's, and a refusal decided after this returned has no
+   * `Performed` left to travel on.
+   */
+  refuse: (refusal: string) => void,
 ): Operation<Performed> {
   switch (intent.kind) {
     case "none":
@@ -2785,6 +2796,30 @@ function* perform(
         }
         wakes.send({ kind: "session" });
       });
+      return { remounted: true };
+    }
+    case "stop-entry": {
+      // Spawned, for the reason the Sidekick's Stop is: this joins everything
+      // that entry owned — its root's own cancelled ending, its outcome, its
+      // output consumer, its Agent attachment — and answers only once all of
+      // it has come down. A person who pressed it keeps a usable keyboard
+      // while it does, and the screen wakes when it is over.
+      //
+      // The key is the one the frame drew the control against. Whether that is
+      // still the entry running, whether the history has acknowledged it and
+      // whether a stop may start at all are the session's answers, not this
+      // branch's: a refusal comes back and is shown rather than guessed at
+      // here.
+      const stopping = intent.entry;
+      yield* spawn(function* (): Operation<void> {
+        const stopped = yield* session.stopEntry(stopping);
+        if (!stopped.ok) {
+          refuse(stopped.error.message);
+        }
+        wakes.send({ kind: "session" });
+      });
+      // The row beside the field is what this frame left mounted; the next
+      // event in this burst is dispatched against that.
       return { remounted: true };
     }
     case "answer": {

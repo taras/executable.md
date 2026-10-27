@@ -1068,6 +1068,14 @@ export type ReplIntent =
     }
   /** Stop the Sidekick's own work, and join it. */
   | { readonly kind: "stop-sidekick" }
+  /**
+   * Stop this exact entry, and join everything it owned.
+   *
+   * The key travels with it because the root performs this against a session
+   * that may have moved on: the frame that drew the control knew which entry
+   * it was drawing against, and that is the entry a person pressed Stop on.
+   */
+  | { readonly kind: "stop-entry"; readonly entry: string }
   | { readonly kind: "pause" }
   | { readonly kind: "continue" }
   | { readonly kind: "answer"; readonly values: Readonly<Record<string, string>> }
@@ -1868,6 +1876,17 @@ export function reduceRepl(
       return {
         state: Object.freeze({ ...state, refusal: undefined }),
         intent: { kind: "stop-sidekick" },
+      };
+    }
+    case "stop-entry": {
+      // The key is carried through exactly as the frame drew it. Which entry
+      // is actually running, whether the history has acknowledged it and
+      // whether it may be stopped at all are the session's to answer, and
+      // answering any of them here would be this screen deciding from a
+      // reading instead of from the session that owns the work.
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: { kind: "stop-entry", entry: action.entry },
       };
     }
     case "exit": {
@@ -9633,9 +9652,12 @@ function workspaceControls(
  * The selected work's Draft: one field whose heading carries its own Send, or
  * Stop while an entry is running, and whose value takes the rows beneath it.
  *
- * Send and Stop here are mounted controls that ask the root for nothing: Enter
- * in the field still submits, and Entry Stop's interrupted finality is the
- * accepted contract, not something this composition performs.
+ * Send is a mounted control that asks the root for nothing: Enter in the field
+ * still submits. Stop does ask: it carries the key of the entry this frame is
+ * actually drawing it for, so what it stops is that entry and not whatever is
+ * running by the time the key is pressed. It is offered only at the live head —
+ * a frozen reading is of an entry this process may no longer be running, and a
+ * Stop there would be aimed at history.
  */
 function workspaceDraft(
   view: ReplView,
@@ -9650,9 +9672,22 @@ function workspaceDraft(
       ...(claiming ? { focus: true } : {}),
     }),
   );
+  // The entry a Stop here would be aimed at: the last one the live head
+  // admitted. Entries are serial, so only the last one can still be running —
+  // the same rule the entry reading uses to decide whose live output it is
+  // showing. A reading with no entry at all has nothing to aim a Stop at, and
+  // a frozen position is excluded below, because an entry read there may not be
+  // the one this process is running.
+  const open = view.model.entries[view.model.entries.length - 1]?.key;
   items.push(
-    view.live.running && view.state.route.at === undefined
-      ? row("draft:stop", "[stop]", {}, styleOf("failed-outcome"), { here: view.focused })
+    view.live.running && view.state.route.at === undefined && open !== undefined
+      ? row(
+          "draft:stop",
+          "[stop]",
+          { select: "stop-entry", entry: open },
+          styleOf("failed-outcome"),
+          { here: view.focused },
+        )
       : row("draft:send", "[send]", {}, styleOf("action"), { here: view.focused }),
   );
   const rows = context.draft ?? ["", "", ""];

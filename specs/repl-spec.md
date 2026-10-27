@@ -461,10 +461,27 @@ entry holds, a value an entry that never settled computed, a value a discarded
 result had. The reserved `props` namespace belongs to each entry's
 own validated root and is never inherited.
 
-An entry interrupted before its root closed is a different thing. The file holds
-no close for it, so it is unfinished, and an unfinished entry permits no
-successor — reopen that execution and it resumes where its records stop, and
-another entry can be submitted once it has settled.
+An entry interrupted before its root closed is a different thing, and there are
+two kinds of it.
+
+**Left unfinished.** Exit, EOF, a terminal failure and the command's own
+teardown end an entry without appending any outcome for it. The file holds no
+close, so the entry is unfinished, and an unfinished entry permits no successor
+— reopen that execution and it resumes where its records stop, without
+repeating the effects it already recorded, and another entry can be submitted
+once it has settled.
+
+**Stopped.** An explicit Entry Stop is the other kind, and it is final. The
+entry's own root retains a cancelled close before the entry is released, so the
+entry has an outcome and is settled: what it had already completed stands, what
+it had already printed stays where it was recorded, the retained exports it
+published are inherited exactly as a settled entry's are, and no answer,
+permission or result it was waiting on is invented for it. It is projected and
+never resumed — reopening that execution reads it and runs nothing — and a
+successor may be submitted once that terminal is retained **and** every
+resource the stopped entry held has been released. A stop whose append or
+cleanup failed is not a stop that succeeded: the session admits no successor
+after one.
 
 ### A history written before captures were retained
 
@@ -556,16 +573,25 @@ instead of being replaced.
 
 ## Sessions: two owners, and which conversation you are reading
 
-The Transcript column — the Sessions surface where the screen routes one outlet —
-shows the agent work this execution has, in two labelled sections: **Entry
-agents**, then **Sidekick**. Two, because the two histories
-are two files with two owners and no shared scheduling number — one interleaved
-list would have to claim an order neither file establishes. Each section keeps
-its own order, and an empty one says it holds no turns. A Sidekick history this
-version cannot read says why instead, because an empty section for a file that
-holds somebody's conversations is the one answer that cannot be corrected later.
-An execution with no Sidekick installation has one list and says so when it is
-empty.
+The **Sessions surface** shows the agent work this execution has, in two
+labelled sections: **Entry agents**, then **Sidekick**. Two, because the two
+histories are two files with two owners and no shared scheduling number — one
+*interleaved* list would have to claim an order neither file establishes. Each
+section keeps its own order, and an empty one says it holds no turns. A Sidekick
+history this version cannot read says why instead, because an empty section for a
+file that holds somebody's conversations is the one answer that cannot be
+corrected later. An execution with no Sidekick installation has one list and says
+so when it is empty.
+
+The **Transcript column** of the staged workspace — and its narrow outlet —
+shows the same work as **one displayed list**, with no section heading over
+either owner. That is what the person who accepted this screen asked for. It is a
+presentation and nothing more: the two owners keep their separate domains, each
+keeps its own recorded order, each row keeps its own destination, and every row
+says whose work it is and which conversation it was in. The two orders are shown
+one after the other and never interleaved, so this list still claims no order
+across the two files. Everything the sections say below about what each owner
+holds, what a row means and how a conversation filters is true of this list too.
 
 **Entry agents** shows every Agent turn the entries did, in one order: the turns
 the history retains, then the turns this process is watching, by the order they
@@ -599,9 +625,9 @@ never merged, whatever they have in common: they have different owners, so an
 equal provider conversation or an equal turn number leaves two rows.
 
 Conversations are the provider's own session keys, offered in Entry agents order
-and then Sidekick order, each section earliest-observed first and a duplicate
-key offered once, through the **All sessions** selector at the head of the
-Transcript. A queued turn belongs to none of them yet, and the name the document
+and then Sidekick order, each owner earliest-observed first and a duplicate
+key offered once: above the Sessions surface's own list, and behind the **All
+sessions** selector at the head of the Transcript. A queued turn belongs to none of them yet, and the name the document
 gave its `<Session>` is not an answer to which conversation a provider opened, so
 a turn without one appears under **All sessions** and nowhere else. A Sidekick turn's key is the one its own saved record names — a failed or
 cancelled record included — and an earlier turn's key is never substituted for a
@@ -609,7 +635,8 @@ later one's. The conversation a successful publication names belongs to its own
 live turn before anything is acknowledged, and it still does not make that turn
 saved.
 
-Selecting a conversation filters both sections and changes nothing else: the
+Selecting a conversation filters both owners' rows — both sections on the
+Sessions surface, the one list in the Transcript — and changes nothing else: the
 route gains a session and keeps its surface, its scopes and its history
 position, and the selected work, the Draft, the composer and focus stay where
 they were. Clearing it back to All restores both whole. The Sidekick's facts are

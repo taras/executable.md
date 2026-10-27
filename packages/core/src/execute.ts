@@ -1016,6 +1016,16 @@ const NO_ROOT_VOCABULARY =
   "vocabulary to describe";
 
 /**
+ * What a document that was stopped completes as.
+ *
+ * Not a fault the document raised, and not a success: a run somebody ended is a
+ * run that produced no outcome of its own, and this is what a caller reads
+ * where there is nothing else to read. A run that had already acknowledged a
+ * terminal keeps that terminal and never reaches this.
+ */
+const DOCUMENT_STOPPED = "this document execution was stopped";
+
+/**
  * What a recorded event turned out to be.
  *
  * "Not the root import" and "the root import, malformed" are deliberately
@@ -2576,6 +2586,29 @@ export interface HostExecution extends DocumentExecution {
    * the data nor the matched text.
    */
   bindings(): Operation<Result<JsonObject>>;
+  /**
+   * End this execution explicitly, and wait for all of it.
+   *
+   * For the one caller that owns the run: a host that decided this document
+   * should stop. It asks this execution's own root to end as cancelled while
+   * the root is still open, halts the document runner so the root's own
+   * finalizer writes that ending through the journal it still owns, joins it,
+   * closes the output with whatever had actually been rendered, and then waits
+   * for this invocation's installations to unwind.
+   *
+   * `Ok` means the stop and the join completed. It never means the document
+   * succeeded: a stopped document is not `Ok` to `yield* execution`, and a
+   * document that had already acknowledged a terminal of its own keeps it. A
+   * failed append or a cleanup that could not finish is `Err` here and is this
+   * execution's completion too, so a caller cannot read a successful stop
+   * around one. A document that merely failed on its own is still a successful
+   * stop — the failure is its completion's to carry.
+   *
+   * It writes no record itself and is handed no stream, no append and no event
+   * to write one with. What it holds is the authority to ask the root that owns
+   * them.
+   */
+  stop(): Operation<Result<void>>;
 }
 
 /**
@@ -2857,16 +2890,6 @@ function* executeDocument(
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
   filesystem?: FilesystemExpansion,
-  /**
-   * Hand this document's own root control to the invocation that owns it.
-   *
-   * By value, in one direction, and only to a caller that already owns this
-   * run: the control carries no stream, no append and no event, so what
-   * travels is the authority to ask this exact root to end as cancelled and
-   * to read back what it actually retained. Absent — which is every ordinary
-   * execution — nothing changes.
-   */
-  control?: (control: DurableRootControl) => void,
 ): Operation<CanonicalInvocation> {
   const {
     stream,
@@ -2932,6 +2955,39 @@ function* executeDocument(
   const channel = createReplayStream<string, string>();
   const { operation, resolve } = withResolvers<Result<Json>>();
 
+  // What this invocation owns about its own run, held out here rather than
+  // inside the runner task, because the stop below is a *second* frame that has
+  // to read and finish the same things: the text that actually cleared the live
+  // scanner, the one settlement this completion ever takes, and the one close
+  // its consumers ever see.
+  let emittedText = "";
+  let settled = false;
+  /** Settle this completion once. A terminal already acknowledged wins. */
+  const settle = (result: Result<Json>): void => {
+    if (!settled) {
+      settled = true;
+      resolve(result);
+    }
+  };
+  let closed = false;
+  /** Close the output once, with whatever had actually been rendered. */
+  function* closeOutput(text: string): Operation<void> {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    yield* channel.close(text);
+  }
+  /**
+   * This root's own authority to end as cancelled, while it is still open.
+   *
+   * Minted by `durableRun` over its own ctx, replay index and terminal phase,
+   * and handed here by value: it carries no stream, no append and no event, so
+   * what this invocation holds is the authority to *ask* and to read back what
+   * actually settled.
+   */
+  let rootControl: DurableRootControl | undefined;
+
   // Created before the run it belongs to, because the handle is published
   // before the document workflow has installed anything: a trusted host holds
   // the operation immediately, and what that operation can do begins when the
@@ -2945,9 +3001,12 @@ function* executeDocument(
   // require having activated its runner first.
   yield* roots.attend();
 
-  yield* spawn(function* () {
+  // Retained, because stopping this document is halting *this* task and
+  // joining it: the root's own cancellation finalizer runs inside it, while the
+  // canonical journal and its policy are still owned. Halting anything above it
+  // would take that journal down before the close could be written.
+  const runner = yield* spawn(function* () {
     let emitted = false;
-    let emittedText = "";
     let restoring = false;
 
     // The ENTIRE setup and workflow sit inside one error boundary: once the
@@ -3347,7 +3406,9 @@ function* executeDocument(
         },
         {
           stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions),
-          ...(control === undefined ? {} : { control }),
+          control: (own) => {
+            rootControl = own;
+          },
         },
       );
       // Taken rather than read, so the handoff belongs to the run that made it.
@@ -3369,24 +3430,66 @@ function* executeDocument(
         restoring = false;
       }
 
-      yield* channel.close(result.output);
+      yield* closeOutput(result.output);
       if (result.status === "err") {
         const failure = failureError(result.error, live);
-        resolve(Err(failure instanceof Error ? failure : new Error(String(failure))));
+        settle(Err(failure instanceof Error ? failure : new Error(String(failure))));
         return;
       }
       // The execution's own evaluation policy first, then whatever the host
       // registered. An authoritative failure one of this execution's root
       // evaluations raised is this run's outcome: a host that caught the
       // failure on the call cannot read a successful main result around it.
-      resolve(settleCompletion(Ok(result.value), [roots.completion, ...completions]));
+      settle(settleCompletion(Ok(result.value), [roots.completion, ...completions]));
     } catch (error) {
       // Close with everything already emitted — printed errors produced before
       // an abort stay visible to consumers of the close value.
-      yield* channel.close(emittedText);
-      resolve(Err(error instanceof Error ? error : new Error(String(error))));
+      yield* closeOutput(emittedText);
+      settle(Err(error instanceof Error ? error : new Error(String(error))));
     }
   });
+
+  /**
+   * End this document explicitly, and join everything it owns.
+   *
+   * Four things in one order, and the order is the whole of it.
+   *
+   * The root is **asked** first, while it is still open: a root whose own
+   * terminal append has already begun keeps the ending it was writing, and
+   * this says so by being refused. Then the runner task is **halted** — that
+   * task and not the invocation owner above it, because the root's cancellation
+   * finalizer appends inside it and the canonical journal, its secret policy
+   * and its guard are still owned there. Halting returns once that unwinding
+   * has finished, so what comes back is a joined runner rather than a request
+   * that one stop.
+   *
+   * Then the consumers are finished: the output is closed with the text that
+   * actually cleared the live scanner — partial, and still only what this run
+   * rendered — and completion settles. A normal terminal that had already been
+   * acknowledged wins both, because both are taken once.
+   *
+   * `Ok` says the stop and the join completed; it never says the document
+   * succeeded. A failure the halt raised — a refused append, a cleanup that
+   * could not finish — is this operation's answer *and* this document's
+   * completion, so a caller cannot read a successful stop around it.
+   */
+  function* stopDocument(): Operation<Result<void>> {
+    rootControl?.requestInterruption();
+    try {
+      yield* runner.halt();
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      yield* closeOutput(emittedText);
+      settle(Err(failure));
+      return Err(failure);
+    }
+    yield* closeOutput(emittedText);
+    // Only where the run settled nothing of its own. The document was stopped,
+    // so it completed successfully for nobody — and a terminal it had already
+    // acknowledged is the one it ends with, not this.
+    settle(Err(new HostExecutionError(DOCUMENT_STOPPED)));
+    return Ok(undefined);
+  }
 
   return {
     execution: {
@@ -3398,6 +3501,7 @@ function* executeDocument(
     evaluateGeneratedXmdRoot: roots.evaluate,
     evaluation: roots.completion,
     computed,
+    stop: stopDocument,
   };
 }
 
@@ -3426,6 +3530,15 @@ interface CanonicalInvocation {
    * document always ends — has nothing of its own for it to be additive to.
    */
   readonly evaluation: CompletionFailure;
+  /**
+   * End this document explicitly, and join it.
+   *
+   * Private to canonical execution and published only to a trusted host. It is
+   * bound over this invocation's own runner task and root writer state, so
+   * there is nothing to look up and nothing to name: a caller that does not
+   * already hold this invocation cannot reach it.
+   */
+  readonly stop: () => Operation<Result<void>>;
 }
 
 /**
@@ -3674,6 +3787,16 @@ function* runInvocation(
   // window in which no evaluation can have been asked for.
   let evaluation: CompletionFailure = () => undefined;
 
+  /**
+   * What this invocation's own teardown raised, from the frame that raised it.
+   *
+   * Kept beside the completion rather than read back out of it: a stop is a
+   * success only when the cleanup after it finished, and "did cleanup fail" is
+   * not a question the reconciled completion's error text can be asked. A
+   * document that failed on its own is a different thing and leaves this unset.
+   */
+  let teardownFailure: Error | undefined;
+
   const owner = yield* spawn(function* () {
     // Whatever ends this task — completion, failure, or a cancelled handle —
     // leaves no observer waiting on a run that is over. A document that already
@@ -3708,6 +3831,7 @@ function* runInvocation(
       });
     } catch (error) {
       const teardown = error instanceof Error ? error : new Error(String(error));
+      teardownFailure = teardown;
       if (!published) {
         // No handle exists, so this throws — but a durability or Files failure
         // raised during cleanup is still the failure that gets reported.
@@ -3721,9 +3845,36 @@ function* runInvocation(
   });
 
   const invoked = yield* ready.operation;
+  /**
+   * End this invocation explicitly, and wait for all of it.
+   *
+   * The canonical stop first: it asks the root, halts the document runner and
+   * joins it, so the cancelled close is written while the journal is still
+   * owned. Then this invocation's own completion, which is what the owner
+   * resolves *after* its installations have unwound — so a caller whose stop
+   * has returned knows the whole of it is over, not merely the document part.
+   *
+   * What the two say is ranked rather than merged. A document that failed on
+   * its own is not this operation's failure: the stop still happened, and the
+   * completion carries the document's outcome for whoever reads it. A failed
+   * append or a cleanup that could not finish is different — it comes from the
+   * frame that raised it rather than from the completion's text, and it is this
+   * operation's answer, because a stop whose cleanup failed stopped nothing
+   * safely.
+   */
+  function* stopInvocation(): Operation<Result<void>> {
+    const stopped = yield* invoked.stop();
+    yield* settled.operation;
+    if (!stopped.ok) {
+      return stopped;
+    }
+    return teardownFailure === undefined ? Ok(undefined) : Err(teardownFailure);
+  }
+
   return {
     evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
     computed: invoked.computed,
+    stop: stopInvocation,
     // Carried through unchanged. The completion this handle publishes has
     // already been reconciled with it, so nothing above reads it again; it
     // stays on the handle because it is this invocation's policy and a handle
@@ -4446,6 +4597,7 @@ export function* executeInstalled(
     },
     evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
     bindings: invoked.computed.read,
+    stop: invoked.stop,
   };
 }
 
