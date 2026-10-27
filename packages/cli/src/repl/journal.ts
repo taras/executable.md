@@ -226,17 +226,19 @@ export function* readRecords(
   yield* forEachLine(
     path,
     {
-      limit,
-      refusals: {
-        unterminated: () =>
-          new ReplJournalError(
-            "this execution's history ends in a record that was never finished writing.",
-          ),
+      limit: {
+        units: limit,
         exceeded: () =>
           new ReplJournalError(
             `this execution's history exceeds the supported limit of ` +
               `${limit.toLocaleString("en-US")} UTF-16 code units. Start a new execution with ` +
               "`xmd repl` for further work; this history was left unchanged.",
+          ),
+      },
+      refusals: {
+        unterminated: () =>
+          new ReplJournalError(
+            "this execution's history ends in a record that was never finished writing.",
           ),
       },
     },

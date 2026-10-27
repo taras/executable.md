@@ -535,6 +535,45 @@ describe("#992 — Sidekick prefixes and the upgrade use the file's own bytes", 
     // The original is retained, untouched.
     expect(yield* until(readFile(legacy, "utf8"))).toBe(text);
   });
+
+  it("H4: a history that is not UTF-8 opens, refuses its upgrade, and keeps its bytes", function* () {
+    const root = yield* useTempDirectory("xmd-upgrade-");
+    yield* useHost("not-text");
+    // One byte that begins no UTF-8 sequence, inside a record that is otherwise
+    // a record: it stands where a bound value's text goes. Opening decodes
+    // leniently, so the value reads as one replacement character and the record
+    // parses; the copy decodes strictly, because what it appends has to encode
+    // back to the bytes it read.
+    const legacy = join(root, "not-text.jsonl");
+    const [before, after] = line(record("one", "MARK")).split("MARK");
+    const encoder = new TextEncoder();
+    const damaged = new Uint8Array([
+      ...encoder.encode(before ?? ""),
+      0xff,
+      ...encoder.encode(after ?? ""),
+    ]);
+    yield* until(writeFile(legacy, damaged));
+    const repository = pairedReplRepository(root);
+
+    const opened = yield* repository.open("not-text");
+    const admitted = yield* opened.stream.readAll();
+    expect(admitted).toHaveLength(1);
+    expect(admitted[0]?.result).toEqual({ status: "ok", value: "\uFFFD" });
+
+    expect(yield* refusal(() => repository.upgrade(opened))).toBe(
+      "this execution's entry history holds bytes that are not text, so it cannot be copied " +
+        "exactly.",
+    );
+    // The older history still holds every byte it held.
+    expect(new Uint8Array(yield* until(readFile(legacy)))).toEqual(damaged);
+    // And what the refusal left is an interrupted publication: the pair's two
+    // files exist and hold no publication, so reopening the execution refuses
+    // them and never falls back to the older file beside them.
+    expect(yield* refusal(() => pairedReplRepository(root).open("not-text"))).toBe(
+      "this execution's chat history does not begin with the record that publishes it, so this " +
+        "is an interrupted publication rather than a history to continue.",
+    );
+  });
 });
 
 describe("#992 — every saved history reads as it did", () => {

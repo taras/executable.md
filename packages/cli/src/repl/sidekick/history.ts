@@ -1305,44 +1305,19 @@ export interface Publication {
 }
 
 /**
- * Publish a pair for an execution that has none, copying an exact prefix.
+ * Publish an empty pair, for an execution whose history starts here.
  *
- * The order is the contract. Both files are created exclusively, the copied
- * prefix is appended record by record so the new entry file holds exactly the
- * records the old one held, the owner naming that exact origin is written, and
- * `ready` is written last — so a crash anywhere before `ready` leaves a
- * directory that refuses rather than a pair that looks usable, and leaves the
- * original recoverable and untouched.
+ * The order is the contract: both files are created exclusively, the owner is
+ * written, and `ready` is written last — so a crash anywhere before `ready`
+ * leaves a directory that refuses rather than a pair that looks usable.
  *
- * Nothing here executes a copied record. They are a person's history, not a
- * migration script.
+ * An execution that grew out of an older single file is published by
+ * {@link upgradeExecution} instead, which copies that file's bytes between
+ * these same two steps and names what it copied in the owner record.
  */
-export function* publishPair(
-  root: string,
-  execution: string,
-  prefix: {
-    /**
-     * The acknowledged bytes to copy, exactly as the older file holds them.
-     *
-     * The bytes rather than the events, because re-encoding parsed events is
-     * not copying them: `parseDurableEvent` rebuilds an envelope in its own
-     * member order and `serializeDurableEvent` preserves whatever order it is
-     * handed, so a round trip produces *a* valid encoding of the same history
-     * and not the encoding the origin's digest describes. The events beside it
-     * are that same snapshot parsed, for the retained stream to answer reads.
-     */
-    readonly body: string;
-    readonly events: readonly DurableEvent[];
-    readonly origin?: RetainedOrigin;
-  },
-): Operation<Publication> {
+export function* publishPair(root: string, execution: string): Operation<Publication> {
   const location = yield* establishPair(root, execution);
-  if (prefix.body.length > 0) {
-    // One append of the whole snapshot. Every record it holds is already
-    // terminated, so the copy is byte-for-byte what the origin's digest covers.
-    yield* ReplHost.operations.appendRecord(location.entries, prefix.body);
-  }
-  return yield* acknowledgePair(location, execution, prefix.events, prefix.origin);
+  return yield* acknowledgePair(location, execution, [], undefined);
 }
 
 /** Create both files of a new pair, exclusively, and nothing else yet. */
@@ -1399,6 +1374,16 @@ const COPY_BATCH = 1 << 22;
  * covers; a file that is not UTF-8 is refused rather than copied as something
  * else. No parsed record is kept — the retained stream already holds this
  * history's events — and the count read must be the count it holds.
+ *
+ * The bytes rather than the events, because re-encoding parsed events is not
+ * copying them: `parseDurableEvent` rebuilds an envelope in its own member
+ * order and `serializeDurableEvent` preserves whatever order it is handed, so
+ * a round trip produces *a* valid encoding of the same history and not the
+ * encoding the origin's digest describes.
+ *
+ * No bound is passed. The file this reads is one `readRecords` has already
+ * opened under the supported limit, so a bound here would be a sentence
+ * nothing could reach.
  */
 function* copyEntryRecords(from: string, to: string, expected: number): Operation<RetainedOrigin> {
   const hash = createHash("sha256");
@@ -1409,7 +1394,6 @@ function* copyEntryRecords(from: string, to: string, expected: number): Operatio
   const records = yield* forEachLine(
     from,
     {
-      limit: Number.POSITIVE_INFINITY,
       strict: true,
       observe: (chunk) => {
         hash.update(chunk);
@@ -1420,8 +1404,6 @@ function* copyEntryRecords(from: string, to: string, expected: number): Operatio
           new SidekickHistoryError(
             "this execution's history ends in a record that was never finished writing.",
           ),
-        exceeded: () =>
-          new SidekickHistoryError("this execution's history is too long to publish as a pair."),
         undecodable: () =>
           new SidekickHistoryError(
             "this execution's entry history holds bytes that are not text, so it cannot be " +
@@ -1526,6 +1508,16 @@ export function* openPair(
  * whole reason `redirect` is synchronous: between acknowledging publication and
  * selecting the new destination there is no point at which another coroutine
  * could append to the path whose prefix was just declared final.
+ *
+ * What a refusal leaves behind is the pair's two empty files and no `owner`,
+ * because the copy is what reads the older history and the pair exists before
+ * it starts. That directory is an interrupted publication from then on: opening
+ * the execution refuses it and never falls back to the older file, which is
+ * still there and still holds everything. Cancellation leaves the same thing.
+ * The one refusal a history this process has already opened can reach is the
+ * copy's strict decoding, because {@link readRecords} decodes leniently — so a
+ * history with a byte that is not UTF-8 opens, and upgrading it stops at a
+ * refusal rather than publishing a pair whose bytes are not the bytes it read.
  */
 export function* upgradeExecution(
   root: string,

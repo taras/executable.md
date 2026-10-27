@@ -87,22 +87,33 @@ function ignore(): undefined {
 export interface LineRefusals {
   /** The file's last line has no newline, so it was never finished writing. */
   unterminated(): Error;
-  /** The file holds more text than `limit` allows. */
-  exceeded(): Error;
   /** A line is not UTF-8, when decoding is strict. */
   undecodable?(): Error;
 }
 
-export interface LineOptions {
+/**
+ * How much text a read may decode, and the refusal that names the bound.
+ *
+ * The two together, because a bound nobody can state is a bound nobody can be
+ * told about: a reader with no bound to state passes none, and then carries no
+ * sentence for a refusal that cannot happen.
+ */
+export interface LineBound {
   /**
    * The most UTF-16 code units the file may decode to, newlines included.
    *
    * Counted as the file is read and checked before each piece of a line joins
-   * the rest, so a file past the limit is refused without building a string
+   * the rest, so a file past the bound is refused without building a string
    * past it. Code units rather than bytes, because the ceiling this guards is a
    * string length and a byte count is a different number for the same text.
    */
-  readonly limit: number;
+  readonly units: number;
+  exceeded(): Error;
+}
+
+export interface LineOptions {
+  /** What the decoded text may not exceed, where the caller has a bound. */
+  readonly limit?: LineBound;
   /** Refuse bytes that are not UTF-8, rather than replacing them. */
   readonly strict?: boolean;
   readonly refusals: LineRefusals;
@@ -132,6 +143,7 @@ export function forEachLine(
       fatal: options.strict === true,
       ignoreBOM: true,
     });
+    const bound = options.limit;
     let pieces: string[] = [];
     let units = 0;
     let lines = 0;
@@ -145,8 +157,8 @@ export function forEachLine(
         throw options.refusals.undecodable?.() ?? error;
       }
       units += text.length;
-      if (units > options.limit) {
-        throw options.refusals.exceeded();
+      if (bound !== undefined && units > bound.units) {
+        throw bound.exceeded();
       }
       if (text.length > 0) {
         pieces.push(text);
@@ -161,8 +173,8 @@ export function forEachLine(
         // settled here rather than carried into the next line.
         decode(chunk.subarray(start, end), false);
         units += 1;
-        if (units > options.limit) {
-          throw options.refusals.exceeded();
+        if (bound !== undefined && units > bound.units) {
+          throw bound.exceeded();
         }
         const line = pieces.join("");
         pieces = [];
