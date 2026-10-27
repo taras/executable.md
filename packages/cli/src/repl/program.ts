@@ -76,6 +76,7 @@ import {
   chatLinesFor,
   draftFieldWidth,
   draftLinesOf,
+  historyMapWidth,
   queueTextWidth,
   draftRowsOf,
   GUIDANCE_ROW,
@@ -3549,12 +3550,14 @@ export function* prepareFrame(
   // passes disagreed about is a control drawn where nothing measured it.
   let field: number | undefined;
   let messageText: number | undefined;
+  let historyRoom: number | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
     ...(wrapped.size === 0 ? {} : { headers: wrapped }),
     ...(field === undefined ? {} : { draftField: field }),
     ...(messageText === undefined ? {} : { queueText: messageText }),
+    ...(historyRoom === undefined ? {} : { historyMap: historyRoom }),
   });
 
   // The catalog without its controls: if it fits, it keeps its natural footprint
@@ -3625,6 +3628,11 @@ export function* prepareFrame(
     probed.manifest,
     (id) => fitted.value.boundsOf(id)?.width,
     widths.body,
+  );
+  historyRoom = historyMapWidth(
+    probed.manifest,
+    (id) => fitted.value.boundsOf(id)?.width,
+    view.size.columns,
   );
   // Where a route drawer goes, now that the block it must stay clear of has
   // been fitted and placed. The guidance is as many rows as its words need, so
@@ -3865,6 +3873,7 @@ export function* prepareFrame(
     drawer: envelope,
     draftField: field,
     queueText: messageText,
+    historyMap: historyRoom,
     draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
     queue: queued.value,
     headers: wrapped.size === 0 ? undefined : wrapped,

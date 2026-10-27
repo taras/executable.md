@@ -294,8 +294,8 @@ function* runEntry(
   }
 }
 
-function projected(events: readonly DurableEvent[]): ReplModel {
-  const result = projectRepl(events);
+function projected(events: readonly DurableEvent[], selection?: string): ReplModel {
+  const result = projectRepl(events, selection);
   if (!result.ok) {
     throw result.error;
   }
@@ -303,12 +303,15 @@ function projected(events: readonly DurableEvent[]): ReplModel {
 }
 
 /**
- * The journal: a completed first entry, then a second that has not closed.
+ * The journal this screen reads: a completed first entry, then a second that
+ * has not closed.
  *
  * The second runs whole in a stream of its own and is cut before its root's
- * close, so its segment is exactly what a prefix read mid-run holds.
+ * close, so its segment is exactly what a prefix read mid-run holds. Returned
+ * as events rather than as a model, because the same events are projected
+ * twice: once at the present, and once at a position somebody moved to.
  */
-export function* checkpointModel(): Operation<ReplModel> {
+export function* checkpointEvents(): Operation<readonly DurableEvent[]> {
   const physical = new InMemoryStream();
   yield* runEntry(physical, COMPLETED);
   const settled = yield* physical.readAll();
@@ -319,7 +322,39 @@ export function* checkpointModel(): Operation<ReplModel> {
     .map((event, at) => ({ event, at }))
     .filter((one) => one.event.type === "close");
   const last = closes[closes.length - 1];
-  return projected(whole.slice(0, last.at));
+  if (last === undefined) {
+    throw new Error("this checkpoint journal closed nothing");
+  }
+  return Object.freeze(whole.slice(0, last.at));
+}
+
+export function* checkpointModel(): Operation<ReplModel> {
+  return projected(yield* checkpointEvents());
+}
+
+/**
+ * The same journal read at a position somebody moved to, and that position.
+ *
+ * A route may only name the position its model was projected at, so a reading
+ * of a retained position is a *different projection* of the same events rather
+ * than a marker set on the model of the present. This returns both halves of
+ * that pair, so a caller cannot hold one without the other.
+ *
+ * The position is the one where the selected entry's own nested scope was
+ * admitted: the reading this screen shows is that entry and that scope, so a
+ * prefix that stopped before the scope would be a reading of something else.
+ */
+export function* checkpointSelected(): Operation<{
+  readonly model: ReplModel;
+  readonly at: string;
+}> {
+  const events = yield* checkpointEvents();
+  const head = projected(events);
+  const scope = head.checkpoints.filter((one) => one.kind === "scope").pop();
+  if (scope === undefined) {
+    throw new Error("this checkpoint journal retained no scope to read at");
+  }
+  return { model: projected(events, scope.marker), at: scope.marker };
 }
 
 /**
@@ -661,10 +696,11 @@ export function* commitCheckpoint(
 /**
  * One reading a person has actually moved to, seeded once.
  *
- * The exact position this model holds, the entry and nested scope selected
- * under it, and texts neither composer started with — so a frame that rebuilt
- * the default reading instead of carrying this one is visibly a different
- * screen.
+ * The exact position the given model holds, the entry and nested scope
+ * selected under it, and texts neither composer started with — so a frame that
+ * rebuilt the default reading instead of carrying this one is visibly a
+ * different screen. Given a prefix projection, that position is a real
+ * retained marker; given the present, it is the present.
  */
 export function seededState(model: ReplModel, options: CheckpointOptions = {}): ReplState {
   const base = checkpointState(model, { ...options, state: undefined });
@@ -674,11 +710,10 @@ export function seededState(model: ReplModel, options: CheckpointOptions = {}): 
     message: SEEDED_MESSAGE,
     // The position this model was projected at, which is the only one
     // resolution accepts: a route naming any other marker is refused until the
-    // prefix it names has been projected, and inspecting one needs a position
-    // to inspect. An earlier retained marker is not an option for this screen
-    // either — a view frozen at a prefix shows nothing of the present, and the
-    // question, the tray and the running entry this screen is made of are all
-    // present rather than recorded.
+    // prefix it names has been projected. So this is a retained position
+    // exactly when the model it is given is a projection of one —
+    // `checkpointSelected` returns that pair, and `checkpointModel` returns
+    // the present.
     route: Object.freeze({ ...base.route, at: model.selection }),
   });
 }

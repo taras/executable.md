@@ -7586,6 +7586,15 @@ export interface ReplPresentationContext {
    * the one that has the engine size the control beside a fitted row.
    */
   readonly queueProbe?: boolean | undefined;
+  /**
+   * How wide the History row's map is, once its controls have been measured.
+   *
+   * Derived the way the Draft's field is, and for the same reason: the row
+   * holds the map and the controls beside it, and a map longer than its row is
+   * squeezed onto a fraction of a cell. Absent on the accepted wide screen,
+   * whose row fits its own map.
+   */
+  readonly historyMap?: number | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -9600,6 +9609,36 @@ export function draftFieldWidth(
 const HISTORY_MAP = "box:history:map";
 
 /**
+ * How wide the History row's map is left, for this exact measured frame.
+ *
+ * The row's own width, less the width the engine gave the controls beside it.
+ * The map is the one thing on that row that may be shortened: the controls are
+ * fitted to their own labels, because a pointer lands on the label somebody is
+ * aiming at.
+ *
+ * It matters where the map is longer than what is left. A fitted box asked for
+ * more room than the row has is squeezed by the engine's own arithmetic, and
+ * that arithmetic is not whole — measured, a 72-column row holding a reading
+ * of a retained position wanted 52 cells of map beside 21 of controls and came
+ * back 51.0078125 wide, which the renderer refuses rather than rounds. Stated,
+ * the map is cut at a whole cell and keeps the stretches that fall inside it.
+ */
+export function historyMapWidth(
+  manifest: ReplLayoutManifest,
+  widthOf: (id: string) => number | undefined,
+  room: number | undefined,
+): number | undefined {
+  if (flatten(manifest.root).every((one) => one.id !== HISTORY_MAP)) {
+    return undefined;
+  }
+  const actions = widthOf(ACTION_ROW);
+  if (actions === undefined || room === undefined || room < 1) {
+    return undefined;
+  }
+  return Math.max(0, room - actions);
+}
+
+/**
  * The staged composition's identity row: what this is and which execution.
  *
  * Read from the route, so it names nothing this reading does not hold.
@@ -10433,7 +10472,14 @@ function workspacePresentation(input: {
                   box({
                     id: HISTORY_MAP,
                     region: "footer",
-                    props: fittedPartProps(),
+                    // The accepted wide row fits this map to its own text, and
+                    // that row has room for it. Elsewhere it takes what the
+                    // measured controls leave, because a map longer than its
+                    // row is squeezed onto a fraction of a cell.
+                    props:
+                      accepted || context.historyMap === undefined
+                        ? fittedPartProps()
+                        : statedPartProps(context.historyMap),
                     text: runText(map),
                     runs: map,
                     style: styleOf("history", { inspected }),

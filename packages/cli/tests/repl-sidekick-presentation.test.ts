@@ -87,6 +87,7 @@ import {
   CHECKPOINT_QUESTION_FORM,
   CHECKPOINT_SIZE,
   checkpointModel,
+  checkpointSelected,
   checkpointState,
   commitCheckpoint,
   SEEDED_DRAFT,
@@ -5270,11 +5271,15 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
     // The fixture's entries compile their own eval blocks, which is what this
     // file's other rows get from the program they run.
     yield* useTempFileCompiler();
-    const model = yield* checkpointModel();
-    // Seeded once, and the only reading in this journey: a recorded history
-    // position, the entry and nested scope that position holds, and two texts
-    // no default supplies. A frame that rebuilt the fixture's own state instead
-    // of carrying this one would be visibly a different screen.
+    // The journal read at a position somebody moved to, rather than at its
+    // head. Both halves come from one call, because a route may only name the
+    // position its own model was projected at: a marker set on the model of
+    // the present is a route resolution refuses.
+    const { model, at: selected } = yield* checkpointSelected();
+    // Seeded once, and the only reading in this journey: that retained
+    // position, the entry and nested scope it holds, and two texts no default
+    // supplies. A frame that rebuilt the fixture's own state instead of
+    // carrying this one would be visibly a different screen.
     const state = seededState(model);
     const presenter = yield* usePresenter(CHECKPOINT_SIZE);
     const first = yield* commitCheckpoint(presenter, { model, state });
@@ -5282,9 +5287,27 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
     const scopes = state.route.scopes;
     const at = state.route.at;
     expect(scopes.length).toBe(2);
-    // The position is the one this model was projected at, which is what makes
-    // the route a valid one to carry rather than one resolution would refuse.
+
+    // The position is a real one: a marker this journal retained, named by the
+    // route, and the one its model was projected at. All three, because any
+    // two of them agreeing on `undefined` would say only that this reading is
+    // of the present.
+    expect(typeof at).toBe("string");
+    expect(at).toBe(selected);
     expect(at).toBe(model.selection);
+    expect(model.checkpoints.map((one) => one.marker)).toContain(selected);
+    expect(selected.length).toBeGreaterThan(0);
+
+    // And the screen says which reading it is showing: a position behind HEAD
+    // marks the History band, which a reading of the present does not.
+    const banded = (frame: CheckpointFrame): string => {
+      const bounds = frame.observed.regionOf("box:history");
+      if (bounds === undefined) {
+        throw new Error("this frame published no History band");
+      }
+      return presenter.grid.textIn(bounds).join(" ");
+    };
+    expect(banded(first)).toContain("reading earlier");
 
     // The key the tree answered with, carried from size to size. Passing it is
     // what tells the fixture not to let the Draft take focus again:
@@ -5320,6 +5343,21 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
         where,
         message: SEEDED_MESSAGE,
       });
+      // And it is still showing the retained reading rather than the present,
+      // wherever the row has the cells to say so. The band is content, so it
+      // is cut at the room its own measured controls leave it; at 72 columns
+      // this reading's band is longer than that room, and what falls off is
+      // the phrase below. That the row cannot hold it is an appearance
+      // question for the image review these sizes are already waiting on —
+      // what this journey holds is that the reading itself does not change.
+      const band = banded(committed);
+      expect({ where, drawn: band.length > 0 }).toEqual({ where, drawn: true });
+      if (size.columns >= CHECKPOINT_MEDIUM.columns) {
+        expect({ where, banded: band.includes("reading earlier") }).toEqual({
+          where,
+          banded: true,
+        });
+      }
       // The Draft is still on this screen, so focus is still on it.
       expect({ where, focused: committed.focused }).toEqual({ where, focused: "footer:input" });
       expect({
@@ -5358,6 +5396,7 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
     expect(recovered.view.state.message).toBe(SEEDED_MESSAGE);
     expect(recovered.focused).toBe("footer:input");
     expect(recovered.observed.boundsOf("footer:input")).not.toBe(undefined);
+    expect(banded(recovered)).toContain("reading earlier");
     for (const key of ["tray:queue", "follow", "sidekick:stop"]) {
       expect({ key, drawn: recovered.observed.boundsOf(key) !== undefined }).toEqual({
         key,
