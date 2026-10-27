@@ -794,6 +794,14 @@ function piece(from: number, length: number, continuation: boolean, indent: numb
  * space. A word longer than the region has no such boundary and is broken at
  * the longest fitting grapheme instead, which is the only way text wider than
  * its pane can be read at all.
+ *
+ * Backing off is for a prefix, and what is left of a line is not one. Where the
+ * measured prefix reaches the end of the whole remainder, that remainder is the
+ * row: there is nothing after it for a boundary to put on a row of its own, and
+ * shortening it anyway would break a row the engine had already accepted —
+ * measured, a tail of `it asks for.` came out as `it asks ` and then `for.`.
+ * The end of the *remainder* is what decides it, never the end of the bounded
+ * window the search was asked over, which can stop short of it.
  */
 function* cutAt(
   renderer: ReplRenderer,
@@ -831,6 +839,9 @@ function* cutAt(
     );
   }
   const longest = stops[low];
+  if (longest === rest.length) {
+    return Ok(longest);
+  }
   const preferred = wordBoundary(rest, longest);
   return Ok(preferred === undefined ? longest : preferred);
 }
