@@ -79,6 +79,8 @@ import {
   GUIDANCE_ROW,
   QUEUE_TEXT,
   queueLinesOf,
+  stagedWorkspace,
+  workspaceHeaderLines,
   readsGeometry,
   reduceRepl,
   refusedView,
@@ -3523,8 +3525,31 @@ export function* prepareFrame(
   if (!queued.ok) {
     return queued;
   }
-  const queuing = (context: ReplPresentationContext): ReplPresentationContext =>
-    queued.value === undefined ? context : { ...context, queue: queued.value };
+  // Which staged headers need two rows, asked of the engine rather than
+  // counted: each header's one-row text is fitted to the width the engine
+  // measured for it, and a header whose text needs more than one row is drawn
+  // as two rows of its own pane's body.
+  const headerLines = workspaceHeaderLines(view, measuringAt(widths, false, undefined), widths);
+  const wrapped = new Set<string>();
+  for (const line of headerLines) {
+    const fitted = yield* fitPlain(
+      renderer,
+      view.size,
+      [{ key: line.key, text: line.text }],
+      line.room,
+    );
+    if (!fitted.ok) {
+      return fitted;
+    }
+    if (fitted.value.length > 1) {
+      wrapped.add(line.key);
+    }
+  }
+  const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
+    ...context,
+    ...(queued.value === undefined ? {} : { queue: queued.value }),
+    ...(wrapped.size === 0 ? {} : { headers: wrapped }),
+  });
 
   // The catalog without its controls: if it fits, it keeps its natural footprint
   // and the column keeps the rows those controls would have taken.
@@ -3595,8 +3620,13 @@ export function* prepareFrame(
   // that counts them has to be a pass that knows where it starts. Bounded, not
   // a loop — a floating layer takes no row out of any column's flow, so the
   // guidance it was moved clear of cannot move because it moved.
-  const envelope = routeDrawerRect(view.size, guidanceBottomOf(probed.manifest, fitted.value));
-  const settled = sameBounds(envelope, drawerRect(view.size));
+  const workspace = stagedWorkspace(view) !== undefined;
+  const envelope = routeDrawerRect(
+    view.size,
+    guidanceBottomOf(probed.manifest, fitted.value),
+    workspace,
+  );
+  const settled = sameBounds(envelope, drawerRect(view.size, workspace));
   const measured = settled
     ? probed
     : presentationFor(
@@ -3817,6 +3847,7 @@ export function* prepareFrame(
     drawer: envelope,
     draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
     queue: queued.value,
+    headers: wrapped.size === 0 ? undefined : wrapped,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }

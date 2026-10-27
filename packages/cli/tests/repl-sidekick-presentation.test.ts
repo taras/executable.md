@@ -15,6 +15,7 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation, Result } from "effection";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
@@ -76,6 +77,16 @@ import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { agentReferenceEvents } from "./fixtures/repl/reference.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { usePresenter } from "./fixtures/repl/presentation.ts";
+import {
+  CHECKPOINT_BELOW,
+  CHECKPOINT_DRAFT,
+  CHECKPOINT_MEDIUM,
+  CHECKPOINT_MESSAGE,
+  CHECKPOINT_NARROW,
+  CHECKPOINT_SIZE,
+  checkpointModel,
+  commitCheckpoint,
+} from "./fixtures/repl/workspace-checkpoint.ts";
 import { runReplProgram, sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { projectSidekick, SAVED_WITHOUT_REPLY } from "../src/repl/sidekick/model.ts";
@@ -5229,5 +5240,98 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
     expect(rowsShow(wide(), "Bindings")).toBe(true);
     expect(messageTextIn(wide())).toContain("kept question");
     expect(rowsShow(wide(), "Draft: kept entry")).toBe(true);
+  });
+});
+
+/**
+ * #971 A3: one mounted screen carried through every supported size and back.
+ *
+ * One presenter, one tree and one grid throughout, because what is under test
+ * is what survives a resize rather than what a fresh frame can draw: the
+ * reading, the selection, both texts, and the control a keystroke reaches.
+ *
+ * The sizes below the minimum are part of the journey. That frame draws one
+ * sentence and places no control at all, and the one after it has to bring the
+ * reading back — a screen that recovered into something else would be a resize
+ * that lost somebody's work.
+ */
+describe("Tier A3 — the staged screen resized, and recovered", () => {
+  it("A3: 160 to 120 to 72, below the minimum, and back", function* () {
+    // The fixture's entries compile their own eval blocks, which is what this
+    // file's other rows get from the program they run.
+    yield* useTempFileCompiler();
+    const model = yield* checkpointModel();
+    const presenter = yield* usePresenter(CHECKPOINT_SIZE);
+    const first = yield* commitCheckpoint(presenter, { model });
+    expect(first.focused).toBe("footer:input");
+    const scopes = first.view.state.route.scopes;
+    const at = first.view.state.route.at;
+    expect(scopes.length).toBe(2);
+
+    /** The same reading at one more size, committed into the same tree. */
+    const resized = function* (size: ReplTerminalSize) {
+      presenter.resize(size);
+      return yield* commitCheckpoint(presenter, { model, size });
+    };
+
+    for (const size of [CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
+      const where = `${size.columns}x${size.rows}`;
+      const committed = yield* resized(size);
+      // The reading is the same reading: same entry, same nested scope, same
+      // recorded position, and both texts exactly as they were typed.
+      expect({ where, scopes: committed.view.state.route.scopes }).toEqual({ where, scopes });
+      expect({ where, at: committed.view.state.route.at }).toEqual({ where, at });
+      expect({ where, draft: committed.view.state.draft }).toEqual({
+        where,
+        draft: CHECKPOINT_DRAFT,
+      });
+      expect({ where, message: committed.view.state.message }).toEqual({
+        where,
+        message: CHECKPOINT_MESSAGE,
+      });
+      // The Draft is still on this screen, so focus is still on it.
+      expect({ where, focused: committed.focused }).toEqual({ where, focused: "footer:input" });
+      expect({
+        where,
+        drawn: committed.observed.boundsOf("footer:input") !== undefined,
+      }).toEqual({ where, drawn: true });
+    }
+
+    // A control narrowing removed is not merely hidden: it is in no cell, no
+    // frame map and no mounted node, so nothing can activate it.
+    const narrow = presenter.last();
+    if (narrow === undefined) {
+      throw new Error("this journey committed no narrow frame");
+    }
+    for (const key of ["tray:queue", "follow", "sidekick:stop"]) {
+      expect({ key, mounted: narrow.keys.includes(key) }).toEqual({ key, mounted: false });
+      expect({ key, drawn: narrow.boundsOf(key) !== undefined }).toEqual({ key, drawn: false });
+    }
+
+    // Below the minimum the frame is its own refusal: one sentence, and not one
+    // control anywhere on it.
+    const refused = yield* resized(CHECKPOINT_BELOW);
+    expect(refused.observed.committed.manifest.profile).toBe("too-small");
+    expect(refused.observed.targets.length).toBe(0);
+    expect(refused.observed.committed.manifest.actions).toBe(undefined);
+    const said = presenter.grid
+      .textIn({ x: 0, y: 0, width: CHECKPOINT_BELOW.columns, height: CHECKPOINT_BELOW.rows })
+      .join(" ");
+    expect(said).toContain(`${NARROW.columns}x${NARROW.rows}`);
+
+    // And growing the window brings the same reading back.
+    const recovered = yield* resized(CHECKPOINT_SIZE);
+    expect(recovered.view.state.route.scopes).toEqual(scopes);
+    expect(recovered.view.state.route.at).toEqual(at);
+    expect(recovered.view.state.draft).toBe(CHECKPOINT_DRAFT);
+    expect(recovered.view.state.message).toBe(CHECKPOINT_MESSAGE);
+    expect(recovered.focused).toBe("footer:input");
+    expect(recovered.observed.boundsOf("footer:input")).not.toBe(undefined);
+    for (const key of ["tray:queue", "follow", "sidekick:stop"]) {
+      expect({ key, drawn: recovered.observed.boundsOf(key) !== undefined }).toEqual({
+        key,
+        drawn: true,
+      });
+    }
   });
 });

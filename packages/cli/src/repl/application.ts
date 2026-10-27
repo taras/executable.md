@@ -57,16 +57,21 @@ import {
   BODY_GUTTER,
   fittedPartProps,
   GROWING_STACK_PROPS,
+  inlineActionRowProps,
   partsRowProps,
   SPACER_PROPS,
   WORKSPACE_CONVERSATION_COLUMNS,
   WORKSPACE_DRAFT_ROWS,
   WORKSPACE_LIST_GUTTER,
   WORKSPACE_TRANSCRIPT_COLUMNS,
+  TAB_GAP,
   workspaceBlockProps,
   workspaceBodyProps,
   workspaceColumnProps,
+  workspaceConversationWidth,
   workspaceHeaderProps,
+  workspaceTranscriptWidth,
+  workspaceWorkWidth,
 } from "./layout.ts";
 import type {
   ReplBounds,
@@ -1249,15 +1254,21 @@ export function withWorkspace(view: ReplView, workspace: ReplWorkspace): ReplVie
 /**
  * Whether this view is drawn as the staged workspace composition.
  *
- * Only at the wide profile, and only with a reading to draw: the medium and
- * narrow compositions follow the 160x36 image review, and a refusal is the
- * whole of its own screen.
+ * At every profile this product draws at, and only with a reading to draw: a
+ * refusal is the whole of its own screen, and below the minimum there is no
+ * frame to compose at all. The wide proportions are accepted; the medium and
+ * narrow ones are proposals under image review.
  */
 function staged(view: ReplView): ReplWorkspace | undefined {
-  if (view.refusal !== undefined || profileFor(view.size) !== "wide") {
+  if (view.refusal !== undefined || profileFor(view.size) === "too-small") {
     return undefined;
   }
   return view.workspace;
+}
+
+/** The staged presentation one view carries, for a caller outside this module. */
+export function stagedWorkspace(view: ReplView): ReplWorkspace | undefined {
+  return staged(view);
 }
 
 /**
@@ -4727,7 +4738,11 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     styleOf("pane-heading", { selected: routed === "entries" }),
     { here: view.focused },
   );
-  if (workspace === undefined) {
+  // The way between surfaces belongs to neither of them. A narrow frame mounts
+  // one outlet, so both controls are described there whichever composition is
+  // drawing it; a wider staged frame reaches the catalog through the selected
+  // work's own Entries control instead.
+  if (workspace === undefined || narrow) {
     items.push(toSessions);
   }
   // In a narrow frame the two are one navigation bar above the routed outlet. In
@@ -4789,7 +4804,16 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     );
   }
   if (workspace !== undefined) {
-    items.push(...workspaceHeadings(view));
+    // Each heading belongs to the surface it names, so a narrow frame describes
+    // only the one its route is showing: a heading for an outlet this frame has
+    // no region for would be a row mounted nowhere.
+    items.push(
+      ...workspaceHeadings(view, {
+        transcript: !narrow || routed === "sessions",
+        work: !narrow || (routed === "entries" && !showSidekick),
+        entries: !narrow,
+      }),
+    );
   } else if (!narrow) {
     items.push(toEntries);
   }
@@ -5204,7 +5228,11 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   const claiming =
     state.route.drawers.length === 0 && view.focused === undefined && claim === undefined;
   if (workspace !== undefined) {
-    items.push(...workspaceDraft(view, context, claiming));
+    // With the selected work, which is the surface it is part of. A narrow
+    // frame showing the Transcript or the Sidekick has no region to draw it in.
+    if (!narrow || (routed === "entries" && !showSidekick)) {
+      items.push(...workspaceDraft(view, context, claiming));
+    }
   } else {
     items.push(
       field(
@@ -5985,12 +6013,16 @@ function modalOpen(view: ReplView): boolean {
  * pane's own, they begin at the top of it, and the gap is not in that pane.
  */
 function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBounds | undefined {
+  // Which body this layer covers: the staged composition keeps three rows
+  // around its body where the ordinary one keeps seven, so a rectangle derived
+  // from the other budget would hang off the bottom of this screen.
+  const workspace = staged(view) !== undefined;
   if (view.selection.drawers.length > 0) {
-    return context.drawer ?? drawerRect(view.size);
+    return context.drawer ?? drawerRect(view.size, workspace);
   }
   return presentedAsking(view) === undefined && presentedConfiguring(view) === undefined
     ? undefined
-    : sidekickDrawerRect(view.size);
+    : sidekickDrawerRect(view.size, workspace);
 }
 
 /**
@@ -7496,6 +7528,15 @@ export interface ReplPresentationContext {
    * count is the geometry question and the text would be fitted to nothing.
    */
   readonly queue?: readonly ReplFittedLine[] | undefined;
+  /**
+   * The staged headers whose two groups do not fit one row, by their own key.
+   *
+   * Measured by the preparation against the width the engine gave each header,
+   * so a header that wraps does so because a row of this frame could not hold
+   * it — not because a count of characters said so. Absent before that
+   * measurement, which is the pass that has no widths to ask about yet.
+   */
+  readonly headers?: ReadonlySet<string> | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -8004,6 +8045,15 @@ export function presentationFor(
     rowSlot: ReplSlot,
     window: string,
     rows?: number,
+    /**
+     * How wide a row in this window may be, where the region alone cannot say.
+     *
+     * The staged narrow outlet is one region for all three readings, and each
+     * of them publishes its own inset body — so the room is that body's, not
+     * the outlet's. Absent everywhere else, which keeps every other column
+     * reading exactly the width it always did.
+     */
+    room?: number,
   ): readonly ReplBox[] => {
     const fixed = of(fixedSlot);
     // The window controls sit outside the thing they move, so they are siblings
@@ -8014,18 +8064,18 @@ export function presentationFor(
       (candidate) => !candidate.key.endsWith(":earlier") && !candidate.key.endsWith(":later"),
     );
     const id = `box:${window}:viewport`;
-    const room = bodyWidthOfRegion(region);
+    const inside = room ?? bodyWidthOfRegion(region);
     viewports.push(Object.freeze({ id, region, window }));
     return [
-      ...rest.map((candidate) => rowBox(candidate, region, room)),
-      ...above.map((candidate) => rowBox(candidate, region, room)),
+      ...rest.map((candidate) => rowBox(candidate, region, inside)),
+      ...above.map((candidate) => rowBox(candidate, region, inside)),
       box({
         id,
         region,
         props: viewportProps(rows),
-        children: of(rowSlot).map((candidate) => rowBox(candidate, region, room)),
+        children: of(rowSlot).map((candidate) => rowBox(candidate, region, inside)),
       }),
-      ...below.map((candidate) => rowBox(candidate, region, room)),
+      ...below.map((candidate) => rowBox(candidate, region, inside)),
     ];
   };
 
@@ -8820,9 +8870,12 @@ function workState(
     if (terminal.status === "ok") {
       return { word: "✓ COMPLETED", style: styleOf("successful-outcome") };
     }
+    // An interruption reads as its own outcome rather than as a failure: what
+    // the entry completed stands and what it printed is partial, which is not
+    // what a run going wrong says.
     return terminal.status === "err"
       ? { word: "× FAILED", style: styleOf("failed-outcome") }
-      : { word: "× INTERRUPTED", style: styleOf("failed-outcome") };
+      : { word: "- INTERRUPTED", style: styleOf("interrupted-outcome") };
   }
   const last = model.entries[model.entries.length - 1];
   if (live.running && last?.key === entry.key) {
@@ -8975,25 +9028,41 @@ function workspaceChatComposed(
  * the way to the Entries catalog in front of them and the entry's state at the
  * end. The selector draws no choices while it is closed.
  */
-function workspaceHeadings(view: ReplView): readonly Described[] {
+function workspaceHeadings(
+  view: ReplView,
+  /** Which of the two headings this frame has a region for. */
+  shown: {
+    readonly transcript: boolean;
+    readonly work: boolean;
+    /** Whether this heading owns the Entries control, or a surface bar does. */
+    readonly entries: boolean;
+  },
+): readonly Described[] {
   const items: Described[] = [];
-  items.push(line("transcript:title", "TRANSCRIPT", styleOf("pane-heading")));
-  items.push(
-    line(
-      "transcript:selector",
-      `${view.state.route.session === undefined ? "All sessions" : headline(view.state.route.session)} ▾`,
-      styleOf("field-label"),
-    ),
-  );
-  items.push(
-    row(
-      "entries:heading",
-      "Entries",
-      { select: "surface", surface: "entries" },
-      styleOf("navigate"),
-      { here: view.focused },
-    ),
-  );
+  if (shown.transcript) {
+    items.push(line("transcript:title", "TRANSCRIPT", styleOf("pane-heading")));
+    items.push(
+      line(
+        "transcript:selector",
+        `${view.state.route.session === undefined ? "All sessions" : headline(view.state.route.session)} ▾`,
+        styleOf("field-label"),
+      ),
+    );
+  }
+  if (!shown.work) {
+    return items;
+  }
+  if (shown.entries) {
+    items.push(
+      row(
+        "entries:heading",
+        "Entries",
+        { select: "surface", surface: "entries" },
+        styleOf("navigate"),
+        { here: view.focused },
+      ),
+    );
+  }
   const entry =
     view.selection.entry === undefined
       ? view.model.entries[view.model.entries.length - 1]
@@ -9437,14 +9506,149 @@ function compactHistoryRuns(view: ReplView): readonly ReplTokenRun[] {
 }
 
 /**
+ * The staged composition's headers, as the two groups each of them holds.
+ *
+ * Named once, because two readers need the same answer: the preparation that
+ * measures whether a header's groups fit one row, and the builder that places
+ * them. The Draft's own heading is not here — its field grows into whatever its
+ * controls leave, so it has nothing to wrap.
+ */
+const WORKSPACE_HEADERS: readonly {
+  readonly id: string;
+  readonly gap: number;
+  readonly left: readonly string[];
+  readonly right: readonly string[];
+  /** The left group where one outlet is routed, if it differs. */
+  readonly outletLeft?: readonly string[];
+}[] = Object.freeze([
+  Object.freeze({
+    id: "transcript",
+    gap: TAB_GAP,
+    left: Object.freeze(["transcript:title"]),
+    right: Object.freeze(["transcript:selector"]),
+  }),
+  Object.freeze({
+    id: "work",
+    gap: 1,
+    // The Entries control where this heading owns it. A narrow frame's surface
+    // bar holds that control instead, and one key is one mounted node — so the
+    // outlet's own heading is the breadcrumb alone.
+    left: Object.freeze(["entries:heading", "work:crumbs"]),
+    outletLeft: Object.freeze(["work:crumbs"]),
+    right: Object.freeze(["work:state"]),
+  }),
+  Object.freeze({
+    id: "conversation",
+    gap: TAB_GAP,
+    left: Object.freeze(["tab:bindings", "tab:sidekick"]),
+    right: Object.freeze(["sidekick:configure"]),
+  }),
+  Object.freeze({
+    id: "tray",
+    gap: TAB_GAP,
+    left: Object.freeze(["tray:todo", "tray:queue"]),
+    right: Object.freeze(["follow", "sidekick:stop", "sidekick:send"]),
+  }),
+]);
+
+/** One staged header's two groups, as the frame drawing it holds them. */
+function headerGroupsOf(
+  id: string,
+  outlet: boolean,
+):
+  | { readonly gap: number; readonly left: readonly string[]; readonly right: readonly string[] }
+  | undefined {
+  const spec = WORKSPACE_HEADERS.find((one) => one.id === id);
+  if (spec === undefined) {
+    return undefined;
+  }
+  return {
+    gap: spec.gap,
+    left: outlet ? (spec.outletLeft ?? spec.left) : spec.left,
+    right: spec.right,
+  };
+}
+
+/** Which measured width one staged header's row is built to. */
+function headerRoomOf(id: string, widths: ReplMeasuredWidths): number {
+  const pane =
+    id === "transcript" ? widths.list : id === "work" ? widths.surface : widths.inspection;
+  return pane - 2 * WORKSPACE_LIST_GUTTER;
+}
+
+/**
+ * Each staged header as the one row it would have to be, and the room it has.
+ *
+ * Fitted by the preparation against the width the engine measured for it: a
+ * header whose two groups need more than that row is drawn as two rows
+ * instead, which is a row of the pane's own body rather than an overlap, a
+ * shortened label or a control left out.
+ *
+ * The texts are the ones the descriptions carry, read from a pass that has
+ * described them — never spelled a second time here, which is how the row that
+ * is measured and the row that is drawn stay the same row.
+ */
+export function workspaceHeaderLines(
+  view: ReplView,
+  context: ReplPresentationContext,
+  widths: ReplMeasuredWidths,
+): readonly { readonly key: string; readonly text: string; readonly room: number }[] {
+  if (staged(view) === undefined) {
+    return [];
+  }
+  const screen = described(view, context);
+  // What each row would draw, answered by the same function the measuring pass
+  // asks: a row whose characters all mean one thing carries no runs, and a map
+  // built from runs alone would read those rows as empty.
+  const text = new Map(
+    screen.rows.map((one) => {
+      const read = readDescription(one.description);
+      return [one.key, measurementTextOf(read.component, read.input)];
+    }),
+  );
+  const said = (keys: readonly string[], gap: number): string =>
+    keys
+      .map((key) => text.get(key))
+      .filter((one): one is string => one !== undefined && one !== "")
+      .join(" ".repeat(gap));
+  const outlet = profileFor(view.size) === "narrow";
+  const lines: { key: string; text: string; room: number }[] = [];
+  for (const header of WORKSPACE_HEADERS) {
+    const groups = headerGroupsOf(header.id, outlet);
+    if (groups === undefined) {
+      continue;
+    }
+    const left = said(groups.left, header.gap);
+    const right = said(groups.right, header.gap);
+    if (left === "" || right === "") {
+      continue;
+    }
+    const room = headerRoomOf(header.id, widths);
+    if (room < 1) {
+      continue;
+    }
+    lines.push({
+      key: `header:${header.id}`,
+      text: `${left}${" ".repeat(header.gap)}${right}`,
+      room,
+    });
+  }
+  return Object.freeze(lines);
+}
+
+/**
  * The staged workspace composition's boxes, from the same classified rows.
  *
- * One identity row, three columns — the Transcript of agent work, the selected
- * work with its Draft, and Bindings/Sidekick with the tray above its composer —
- * and below them one compact History row carrying the contextual actions, and
- * one guidance row. The same measured bodies and windows the ordinary
- * composition publishes, so preparation, admission and fitting read them by the
- * same names.
+ * One identity row, the body, and below it one compact History row carrying the
+ * contextual actions and one guidance row. The wide and medium profiles give
+ * the body three columns — the Transcript of agent work, the selected work with
+ * its Draft, and Bindings/Sidekick with the tray above its composer. The narrow
+ * profile routes one outlet instead, under the two surface controls, exactly as
+ * the ordinary composition does: the surface it is not showing is in no cell,
+ * no frame map and no target.
+ *
+ * The same measured bodies and windows the ordinary composition publishes, so
+ * preparation, admission and fitting read them by the same names.
  */
 function workspacePresentation(input: {
   readonly view: ReplView;
@@ -9458,6 +9662,7 @@ function workspacePresentation(input: {
     rowSlot: ReplSlot,
     window: string,
     rows?: number,
+    room?: number,
   ) => readonly ReplBox[];
   readonly chatColumn: (region: ReplRegion) => readonly ReplBox[];
   readonly viewports: ReplViewportSlot[];
@@ -9466,6 +9671,10 @@ function workspacePresentation(input: {
 }): ReplPresentation {
   const { view, context, descriptions, candidates, rail, viewports, regions, contents } = input;
   const size = view.size;
+  const profile = profileFor(size);
+  const outlet = profile === "narrow";
+  /** Whether this frame is the accepted wide screen, whose row placement is reviewed. */
+  const accepted = profile === "wide";
   const of = (slot: ReplSlot): readonly ReplCandidate[] =>
     candidates.filter((candidate) => candidate.slot === slot);
   const byKey = (key: string): readonly ReplCandidate[] =>
@@ -9487,239 +9696,353 @@ function workspacePresentation(input: {
   const spacer = (id: string, region: ReplRegion): ReplBox =>
     box({ id, region, props: SPACER_PROPS });
   const header = REPL_PALETTE.paneHeaderSurface;
+  const parts = (keys: readonly string[], region: ReplRegion, surface?: number): ReplBox[] =>
+    keys.flatMap((key) => byKey(key).map((one) => part(one, region, surface)));
 
-  regions.push(
-    { region: "sidebar", id: "box:sidebar" },
-    { region: "transcript", id: "box:transcript" },
-    { region: "inspection", id: "box:inspection" },
-  );
-
-  contents.push({ region: "sidebar", id: SIDEBAR_BODY, kind: "body" });
-  const left = box({
-    id: "box:sidebar",
-    region: "sidebar",
-    props: workspaceColumnProps(
-      WORKSPACE_TRANSCRIPT_COLUMNS,
-      REPL_PALETTE.transcriptPaneSurface,
-      false,
-    ),
-    children: [
+  /**
+   * One staged header, in the one row it fits or the two rows it needs.
+   *
+   * Two rows keep the groups in their order — the left group's row first, the
+   * right group's row under it, still at the trailing edge — so nothing moves
+   * out from under a reader who learned where it was at a wider size. The
+   * second row is a row of this pane, which is what makes it measured rather
+   * than an overlay.
+   */
+  const headerRows = (id: string, region: ReplRegion, surface: number): readonly ReplBox[] => {
+    const spec = headerGroupsOf(id, outlet);
+    if (spec === undefined) {
+      return [];
+    }
+    const left = parts(spec.left, region, surface);
+    const right = parts(spec.right, region, surface);
+    if (left.length === 0 && right.length === 0) {
+      return [];
+    }
+    // The ids the accepted frame published, so a header that still fits one row
+    // is the same box it always was. The tray is a row of its own block rather
+    // than a pane heading, so it keeps that block's inset instead of a
+    // heading's.
+    const first =
+      id === "conversation"
+        ? TAB_ROW
+        : id === "tray"
+          ? "box:tray:controls"
+          : `box:${region}:header`;
+    const props = () =>
+      id === "tray" ? partsRowProps(1, spec.gap) : workspaceHeaderProps(surface, spec.gap);
+    if (
+      !(context.headers?.has(`header:${id}`) ?? false) ||
+      left.length === 0 ||
+      right.length === 0
+    ) {
+      return [
+        box({
+          id: first,
+          region,
+          props: props(),
+          children: [...left, spacer(`${first}:space`, region), ...right],
+        }),
+      ];
+    }
+    return [
       box({
-        id: "box:sidebar:header",
-        region: "sidebar",
-        props: workspaceHeaderProps(header),
-        children: [
-          ...byKey("transcript:title").map((one) => part(one, "sidebar", header)),
-          spacer("box:sidebar:header:space", "sidebar"),
-          ...byKey("transcript:selector").map((one) => part(one, "sidebar", header)),
-        ],
+        id: first,
+        region,
+        props: props(),
+        children: [...left, spacer(`${first}:space`, region)],
       }),
       box({
-        id: `${SIDEBAR_BODY}:gutter`,
-        region: "sidebar",
+        id: `${first}:second`,
+        region,
+        props: props(),
+        children: [spacer(`${first}:second:space`, region), ...right],
+      }),
+    ];
+  };
+
+  /** The Transcript of agent work: its heading, and the reading under it. */
+  const transcriptColumn = (region: ReplRegion, body: string): readonly ReplBox[] => {
+    contents.push({ region, id: body, kind: "body" });
+    return [
+      ...headerRows("transcript", region, header),
+      box({
+        id: `${body}:gutter`,
+        region,
         props: workspaceBodyProps(WORKSPACE_LIST_GUTTER, 1),
         children: [
           box({
-            id: SIDEBAR_BODY,
-            region: "sidebar",
+            id: body,
+            region,
             props: paneContentProps(),
-            children: input.listColumn("sidebar", "sessions-fixed", "sessions", SESSIONS_WINDOW),
-          }),
-        ],
-      }),
-    ],
-  });
-
-  contents.push({ region: "transcript", id: "box:transcript:content", kind: "pane" });
-  contents.push({ region: "transcript", id: TRANSCRIPT_BODY, kind: "body" });
-  const surfaceBody = context.widths?.surfaceBody;
-  const centre = box({
-    id: "box:transcript",
-    region: "transcript",
-    props: workspaceColumnProps(undefined, REPL_PALETTE.applicationSurface, true),
-    children: [
-      box({
-        id: "box:transcript:content",
-        region: "transcript",
-        props: paneContentProps(),
-        children: [
-          box({
-            id: "box:transcript:header",
-            region: "transcript",
-            props: workspaceHeaderProps(header, 1),
-            children: [
-              ...byKey("entries:heading").map((one) => part(one, "transcript", header)),
-              ...byKey("work:crumbs").map((one) => part(one, "transcript", header)),
-              spacer("box:transcript:header:space", "transcript"),
-              ...byKey("work:state").map((one) => part(one, "transcript", header)),
-            ],
-          }),
-          box({
-            id: `${TRANSCRIPT_BODY}:gutter`,
-            region: "transcript",
-            props: workspaceBodyProps(BODY_GUTTER, 1),
-            children: [
-              box({
-                id: TRANSCRIPT_BODY,
-                region: "transcript",
-                props: paneContentProps(),
-                children: input.listColumn(
-                  "transcript",
-                  "reading-fixed",
-                  "reading",
-                  READING_WINDOW,
-                ),
-              }),
-            ],
-          }),
-          box({
-            id: "box:draft",
-            region: "transcript",
-            props: workspaceBlockProps(
-              WORKSPACE_DRAFT_ROWS,
-              REPL_PALETTE.draftSurface,
-              BODY_GUTTER,
+            children: input.listColumn(
+              region,
+              "sessions-fixed",
+              "sessions",
+              SESSIONS_WINDOW,
+              undefined,
+              context.widths?.listBody,
             ),
-            children: [
-              box({
-                id: "box:draft:heading",
-                region: "transcript",
-                props: partsRowProps(1, 1),
-                children: [
-                  ...of("draft").map((one) =>
-                    box({
-                      id: `box:transcript:${one.key}`,
-                      key: one.key,
-                      region: "transcript",
-                      props: SPACER_PROPS,
-                      text: one.text,
-                      control: one.control,
-                      style: one.style,
-                      runs: one.runs,
-                    }),
-                  ),
-                  ...byKey("draft:stop").map((one) => part(one, "transcript")),
-                  ...byKey("draft:send").map((one) => part(one, "transcript")),
-                ],
-              }),
-              ...startingWith("draft:value:").map((one) => rowBox(one, "transcript", surfaceBody)),
-            ],
           }),
         ],
       }),
-    ],
-  });
+    ];
+  };
 
-  contents.push({ region: "inspection", id: "box:inspection:content", kind: "pane" });
-  const showing = showingSidekick(view);
-  if (showing) {
-    contents.push({ region: "inspection", id: SIDEKICK_BODY, kind: "body" });
-  }
-  const body = context.widths?.body;
-  const tray = [
-    ...startingWith("tray:"),
-    ...byKey("follow"),
-    ...byKey("sidekick:stop"),
-    ...byKey("sidekick:send"),
-  ];
-  const queued = staged(view)?.tray === "queue" ? (staged(view)?.queued ?? []) : [];
-  const queueRows = queued.map((message, at) => {
-    const text = `box:queue:text:${at}`;
-    if (at === 0) {
-      contents.push({ region: "inspection", id: text, kind: "body" });
-    }
-    return box({
-      id: `box:queue:${message.key}`,
-      region: "inspection",
-      props: partsRowProps("fit", 1),
-      children: [
-        box({
-          id: text,
-          region: "inspection",
-          props: GROWING_STACK_PROPS,
-          children: startingWith(`queue:${message.key}:row:`).map((one) =>
-            rowBox(one, "inspection", context.widths?.queue),
-          ),
-        }),
-        ...byKey(`queue:${message.key}:remove`).map((one) => part(one, "inspection")),
-      ],
-    });
-  });
-  const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
-  const right = box({
-    id: "box:inspection",
-    region: "inspection",
-    props: workspaceColumnProps(
-      WORKSPACE_CONVERSATION_COLUMNS,
-      REPL_PALETTE.conversationSurface,
-      true,
-    ),
-    children: [
+  /** The selected work: its breadcrumbs and state, its reading, and the Draft. */
+  const workColumn = (region: ReplRegion, body: string): readonly ReplBox[] => {
+    contents.push({ region, id: body, kind: "body" });
+    const draft = of("draft");
+    const value = startingWith("draft:value:");
+    return [
+      ...headerRows("work", region, header),
       box({
-        id: "box:inspection:content",
-        region: "inspection",
-        props: paneContentProps(),
+        id: `${body}:gutter`,
+        region,
+        props: workspaceBodyProps(BODY_GUTTER, 1),
         children: [
           box({
-            id: TAB_ROW,
-            region: "inspection",
-            props: workspaceHeaderProps(header),
-            children: [
-              ...of("inspection-above").map((one) => part(one, "inspection", header)),
-              spacer("box:inspection:header:space", "inspection"),
-              ...byKey("sidekick:configure").map((one) => part(one, "inspection", header)),
-            ],
+            id: body,
+            region,
+            props: paneContentProps(),
+            children: input.listColumn(
+              region,
+              "reading-fixed",
+              "reading",
+              READING_WINDOW,
+              undefined,
+              context.widths?.surfaceBody,
+            ),
           }),
-          box({
-            id: showing ? `${SIDEKICK_BODY}:gutter` : "box:inspection:reading:gutter",
-            region: "inspection",
-            props: workspaceBodyProps(WORKSPACE_LIST_GUTTER, 1),
-            children: [
-              box({
-                id: showing ? SIDEKICK_BODY : "box:inspection:reading",
-                region: "inspection",
-                props: paneContentProps(),
-                children: [
-                  ...input.chatColumn("inspection"),
-                  ...byKey("sidekick:back").map((one) => rowBox(one, "inspection", body)),
-                  ...byKey("sidekick:answer").map((one) => rowBox(one, "inspection", body)),
-                ],
-              }),
-            ],
-          }),
-          ...(tray.length === 0 && composer.length === 0
-            ? []
-            : [
+        ],
+      }),
+      ...(draft.length === 0 && value.length === 0
+        ? []
+        : [
+            box({
+              id: "box:draft",
+              region,
+              props: workspaceBlockProps(
+                WORKSPACE_DRAFT_ROWS,
+                REPL_PALETTE.draftSurface,
+                BODY_GUTTER,
+              ),
+              children: [
                 box({
-                  id: "box:tray",
-                  region: "inspection",
-                  props: workspaceBlockProps(
-                    "fit",
-                    REPL_PALETTE.composerSurface,
-                    WORKSPACE_LIST_GUTTER,
-                  ),
+                  id: "box:draft:heading",
+                  region,
+                  props: partsRowProps(1, 1),
                   children: [
-                    box({
-                      id: "box:tray:controls",
-                      region: "inspection",
-                      props: partsRowProps(1, 2),
-                      children: [
-                        ...startingWith("tray:").map((one) => part(one, "inspection")),
-                        spacer("box:tray:space", "inspection"),
-                        ...tray
-                          .filter((one) => !one.key.startsWith("tray:"))
-                          .map((one) => part(one, "inspection")),
-                      ],
-                    }),
-                    ...queueRows,
-                    ...composer.map((one) => rowBox(one, "inspection", body)),
+                    ...draft.map((one) =>
+                      box({
+                        id: `box:${region}:${one.key}`,
+                        key: one.key,
+                        region,
+                        props: SPACER_PROPS,
+                        text: one.text,
+                        control: one.control,
+                        style: one.style,
+                        runs: one.runs,
+                      }),
+                    ),
+                    ...parts(["draft:stop", "draft:send"], region),
                   ],
                 }),
-              ]),
+                ...value.map((one) => rowBox(one, region, context.widths?.surfaceBody)),
+              ],
+            }),
+          ]),
+    ];
+  };
+
+  /** Bindings or the Sidekick: the tabs, the reading, and the tray below it. */
+  const conversationColumn = (region: ReplRegion, body: string): readonly ReplBox[] => {
+    const showing = showingSidekick(view);
+    if (showing) {
+      contents.push({ region, id: body, kind: "body" });
+    }
+    const room = context.widths?.body;
+    const tray = [
+      ...startingWith("tray:"),
+      ...byKey("follow"),
+      ...byKey("sidekick:stop"),
+      ...byKey("sidekick:send"),
+    ];
+    const held = staged(view);
+    const queued = held?.tray === "queue" ? held.queued : [];
+    const queueRows = queued.map((message, at) => {
+      const text = `box:queue:text:${at}`;
+      if (at === 0) {
+        contents.push({ region, id: text, kind: "body" });
+      }
+      return box({
+        id: `box:queue:${message.key}`,
+        region,
+        props: partsRowProps("fit", 1),
+        children: [
+          box({
+            id: text,
+            region,
+            props: GROWING_STACK_PROPS,
+            children: startingWith(`queue:${message.key}:row:`).map((one) =>
+              rowBox(one, region, context.widths?.queue),
+            ),
+          }),
+          ...parts([`queue:${message.key}:remove`], region),
+        ],
+      });
+    });
+    const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
+    return [
+      ...headerRows("conversation", region, header),
+      box({
+        id: showing ? `${body}:gutter` : "box:inspection:reading:gutter",
+        region,
+        props: workspaceBodyProps(WORKSPACE_LIST_GUTTER, 1),
+        children: [
+          box({
+            id: showing ? body : "box:inspection:reading",
+            region,
+            props: paneContentProps(),
+            children: [
+              ...input.chatColumn(region),
+              ...byKey("sidekick:back").map((one) => rowBox(one, region, room)),
+              ...byKey("sidekick:answer").map((one) => rowBox(one, region, room)),
+            ],
+          }),
         ],
       }),
-    ],
-  });
+      ...(tray.length === 0 && composer.length === 0
+        ? []
+        : [
+            box({
+              id: "box:tray",
+              region,
+              props: workspaceBlockProps(
+                "fit",
+                REPL_PALETTE.composerSurface,
+                WORKSPACE_LIST_GUTTER,
+              ),
+              children: [
+                ...headerRows("tray", region, REPL_PALETTE.composerSurface),
+                ...queueRows,
+                ...composer.map((one) => rowBox(one, region, room)),
+              ],
+            }),
+          ]),
+    ];
+  };
+
+  const columns: ReplBox[] = [];
+  if (outlet) {
+    // One routed surface, and nothing else. The surface this route did not
+    // select is described nowhere, so it is in no cell and no target map.
+    regions.push({ region: "content", id: "box:content" });
+    const routed = view.state.route.surface;
+    const routedRows = showingSidekick(view)
+      ? conversationColumn("content", SIDEKICK_BODY)
+      : routed === "sessions"
+        ? transcriptColumn("content", SIDEBAR_BODY)
+        : workColumn("content", TRANSCRIPT_BODY);
+    columns.push(
+      box({
+        id: "box:content",
+        region: "content",
+        // The whole terminal, stated: a growing outlet takes its minimum from
+        // its own content, and a breadcrumb or a control is content.
+        props: workspaceColumnProps(size.columns, REPL_PALETTE.applicationSurface, false),
+        children: [
+          box({
+            id: "box:content:surfaces",
+            region: "content",
+            props: workspaceHeaderProps(header, TAB_GAP),
+            children: parts(["sessions:heading", "entries:heading"], "content", header),
+          }),
+          ...routedRows,
+        ],
+      }),
+    );
+  } else {
+    regions.push(
+      { region: "sidebar", id: "box:sidebar" },
+      { region: "transcript", id: "box:transcript" },
+      { region: "inspection", id: "box:inspection" },
+    );
+    contents.push({ region: "transcript", id: "box:transcript:content", kind: "pane" });
+    contents.push({ region: "inspection", id: "box:inspection:content", kind: "pane" });
+    columns.push(
+      box({
+        id: "box:sidebar",
+        region: "sidebar",
+        props: workspaceColumnProps(
+          workspaceTranscriptWidth(size),
+          REPL_PALETTE.transcriptPaneSurface,
+          false,
+        ),
+        children: transcriptColumn("sidebar", SIDEBAR_BODY),
+      }),
+      box({
+        id: "box:transcript",
+        region: "transcript",
+        props: workspaceColumnProps(
+          workspaceWorkWidth(size),
+          REPL_PALETTE.applicationSurface,
+          true,
+        ),
+        children: [
+          box({
+            id: "box:transcript:content",
+            region: "transcript",
+            props: paneContentProps(),
+            children: workColumn("transcript", TRANSCRIPT_BODY),
+          }),
+        ],
+      }),
+      box({
+        id: "box:inspection",
+        region: "inspection",
+        props: workspaceColumnProps(
+          workspaceConversationWidth(size),
+          REPL_PALETTE.conversationSurface,
+          true,
+        ),
+        children: [
+          box({
+            id: "box:inspection:content",
+            region: "inspection",
+            props: paneContentProps(),
+            children: conversationColumn("inspection", SIDEKICK_BODY),
+          }),
+        ],
+      }),
+    );
+  }
+
+  // Whichever drawer is presented, through the one calculation both use.
+  const rect = presentedRect(view, context);
+  const [title] = of("drawer-title");
+  if (rect !== undefined && title !== undefined) {
+    const id = `box:${DRAWER_WINDOW}:viewport`;
+    viewports.push(Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW }));
+    regions.push({ region: "drawer", id: "box:drawer:layer" });
+    columns.push(
+      box({
+        id: "box:drawer:layer",
+        region: "drawer",
+        props: drawerLayerProps(rect, context.capture),
+        children: [
+          rowBox(title, "drawer", context.widths?.drawer),
+          ...of("drawer-above").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
+          box({
+            id,
+            region: "drawer",
+            props: viewportProps(),
+            children: of("drawer").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
+          }),
+          ...of("drawer-below").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
+        ],
+      }),
+    );
+  }
 
   const offered = [...of("action"), ...of("status")];
   const placed = offered.filter(
@@ -9731,7 +10054,7 @@ function workspacePresentation(input: {
   return {
     descriptions,
     manifest: Object.freeze({
-      profile: profileFor(size),
+      profile,
       size: Object.freeze({ ...size }),
       root: box({
         id: "box:root",
@@ -9750,7 +10073,7 @@ function workspacePresentation(input: {
               }),
             ],
           }),
-          box({ id: "box:body", props: bodyProps(false), children: [left, centre, right] }),
+          box({ id: "box:body", props: bodyProps(false), children: columns }),
           box({
             id: "box:footer",
             region: "footer",
@@ -9769,23 +10092,35 @@ function workspacePresentation(input: {
                     runs: map,
                     style: styleOf("history", { inspected }),
                   }),
-                  spacer("box:history:space", "footer"),
+                  // The accepted wide screen divides what the map leaves
+                  // between a gap and this row, which is where its controls
+                  // were reviewed. Two growing siblings split a remainder in
+                  // the engine's own arithmetic and that arithmetic is not
+                  // whole — measured, a 72-column row placed a control at
+                  // x=41.9921875 — so every other profile states one growing
+                  // child and puts the controls at the trailing edge. Whether
+                  // the wide screen should follow them is a question for the
+                  // image review, not one to answer by moving an accepted row.
+                  ...(accepted ? [spacer("box:history:space", "footer")] : []),
                   box({
                     id: ACTION_ROW,
                     region: "footer",
-                    props: actionRowProps(),
-                    children: placed.map((candidate) =>
-                      box({
-                        id: `box:action:${candidate.key}`,
-                        key: candidate.key,
-                        region: "footer",
-                        props: CONTROL_PROPS,
-                        text: candidate.text,
-                        control: candidate.control,
-                        style: candidate.style,
-                        runs: candidate.runs,
-                      }),
-                    ),
+                    props: accepted ? actionRowProps() : inlineActionRowProps(),
+                    children: [
+                      ...(accepted ? [] : [spacer("box:history:space", "footer")]),
+                      ...placed.map((candidate) =>
+                        box({
+                          id: `box:action:${candidate.key}`,
+                          key: candidate.key,
+                          region: "footer",
+                          props: CONTROL_PROPS,
+                          text: candidate.text,
+                          control: candidate.control,
+                          style: candidate.style,
+                          runs: candidate.runs,
+                        }),
+                      ),
+                    ],
                   }),
                 ],
               }),
@@ -9814,7 +10149,11 @@ function workspacePresentation(input: {
       }),
       viewports: Object.freeze(viewports),
       actions: Object.freeze({
-        id: ACTION_ROW,
+        // The box whose trailing edge bounds this row. Where the controls are a
+        // group as wide as itself, that edge is the band's rather than the
+        // group's — a group bounded by its own width would admit every control
+        // it was offered, however little room the row had.
+        id: accepted ? ACTION_ROW : "box:history",
         controls: Object.freeze(
           offered.map((candidate) => ({
             key: candidate.key,

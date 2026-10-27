@@ -107,13 +107,22 @@ import {
 } from "./fixtures/repl/presentation.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
 import {
+  CHECKPOINT_MEDIUM,
+  CHECKPOINT_NARROW,
   CHECKPOINT_SIZE,
+  CHECKPOINT_SIZES,
+  CHECKPOINT_ASKING,
+  checkpointModel,
   checkpointScopes,
+  checkpointStateModel,
+  OVERFLOW_WORKSPACE,
   commitCheckpoint,
   RUNNING_SOURCE,
   WRAPPING_LINE,
   WRAPPING_QUEUED,
 } from "./fixtures/repl/workspace-checkpoint.ts";
+import { ACCEPTED_160 } from "./fixtures/repl/accepted-160.ts";
+import { chatLinesFor } from "../src/repl/application.ts";
 import { readDescription } from "../src/repl/description.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
@@ -4585,5 +4594,339 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
     expect(grid.styleAt(state.x, state.y).foreground).not.toBe(
       grid.styleAt(placed(observed, "work:crumbs").x, state.y).foreground,
     );
+  });
+});
+
+/**
+ * #971 A1: the accepted 160x36 screen, held to what was accepted.
+ *
+ * Every expectation comes from `accepted-160.ts`, which is a transcript of the
+ * capture the Product Owner accepted — not from the palette and layout
+ * constants that produced it. A change that moves this screen fails here even
+ * where production still agrees with itself, which is the whole point of
+ * pinning a reviewed appearance.
+ */
+describe("Checkpoint #971 A1 — the accepted screen stays accepted", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("A1: bounds, targets, selection, focus, cells and rows are the accepted ones", function* () {
+    expect(ACCEPTED_160.size).toEqual({ columns: 160, rows: 36 });
+    const presenter = yield* usePresenter(CHECKPOINT_SIZE);
+    const committed = yield* commitCheckpoint(presenter);
+    const { view, observed } = committed;
+    const { grid } = presenter;
+
+    // Where the frame put every region, pane body and named box.
+    for (const one of [...ACCEPTED_160.regions, ...ACCEPTED_160.named, ...ACCEPTED_160.contents]) {
+      expect({ id: one.id, bounds: observed.regionOf(one.id) }).toEqual({
+        id: one.id,
+        bounds: one.bounds,
+      });
+    }
+
+    // Every control the accepted capture pinned, still mounted and still at the
+    // box it was accepted at. The pinned set is a reading of that capture
+    // rather than the whole of it, so this says each of them is where it was —
+    // a control that moved or went fails, and the frame's own completeness is
+    // the neighbouring case's to assert.
+    const targets = new Map(
+      observed.targets.map((one) => [presenter.tree.keyOf(one.node), one.bounds]),
+    );
+    expect(ACCEPTED_160.targets.length).toBeGreaterThan(0);
+    for (const one of ACCEPTED_160.targets) {
+      expect({ key: one.key, bounds: targets.get(one.key) }).toEqual({
+        key: one.key,
+        bounds: one.bounds,
+      });
+    }
+
+    // The reading it is a reading of, and the control a keystroke reaches.
+    expect(view.state.route.scopes).toEqual(ACCEPTED_160.ancestry.scopes);
+    expect(
+      view.selection.ancestry.map((one) => ({ key: one.key, kind: one.kind, name: one.name })),
+    ).toEqual(ACCEPTED_160.ancestry.ancestry);
+    expect(view.model.entries.map((one) => ({ key: one.key, order: one.order }))).toEqual(
+      ACCEPTED_160.ancestry.entries,
+    );
+    expect(committed.focused).toBe(ACCEPTED_160.focus);
+    expect(focusKeyOf(presenter)).toBe(ACCEPTED_160.focus);
+
+    // What the cells hold, including the blank ones a surface paints.
+    for (const probe of ACCEPTED_160.cellProbes) {
+      const style = grid.styleAt(probe.x, probe.y);
+      expect({
+        x: probe.x,
+        y: probe.y,
+        c: grid.at(probe.x, probe.y),
+        fg: style.foreground ?? null,
+        bg: style.background ?? null,
+        attrs: [...style.attrs],
+      }).toEqual({ ...probe, attrs: [...probe.attrs] });
+    }
+
+    // And the rows themselves, which is the corrected wrapping, the real
+    // ancestry and the utterance gaps read as one.
+    for (const row of ACCEPTED_160.textRows) {
+      expect({
+        y: row.y,
+        text: grid.textIn({ x: 0, y: row.y, width: 160, height: 1 })[0],
+      }).toEqual({ y: row.y, text: row.text });
+    }
+  });
+});
+
+/**
+ * #971 A2: the same controlled reading at 120x30 and 72x20.
+ *
+ * The geometry here is the plan's proposal — 36/34/50 at medium, one routed
+ * outlet at narrow — and is under image review rather than accepted. What the
+ * assertions hold to is what cannot be a proposal: whole measured controls
+ * inside the frame, nothing mounted where it is not drawn, every surface still
+ * reachable, and text that wraps rather than being clipped or dropped.
+ */
+describe("Checkpoint #971 A2 — the staged screen at the two smaller sizes", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** Every mounted control's box, by the key that owns it. */
+  function targetsOf(presenter: Presenter, observed: Observed): ReadonlyMap<string, ReplBounds> {
+    return new Map(
+      observed.targets.flatMap((one) => {
+        const key = presenter.tree.keyOf(one.node);
+        return key === undefined ? [] : [[key, one.bounds] as const];
+      }),
+    );
+  }
+
+  it("A2: every size places whole controls inside the frame and keeps its routes", function* () {
+    for (const size of CHECKPOINT_SIZES) {
+      const where = `${size.columns}x${size.rows}`;
+      const presenter = yield* usePresenter(size);
+      const observed = (yield* commitCheckpoint(presenter, { size })).observed;
+
+      // Three rows of chrome at every size: the identity row above the body,
+      // then the compact History row and the guidance row below it.
+      expect({ where, bounds: observed.regionOf("box:identity") }).toEqual({
+        where,
+        bounds: { x: 0, y: 0, width: size.columns, height: 1 },
+      });
+      expect({ where, bounds: observed.regionOf("box:body") }).toEqual({
+        where,
+        bounds: { x: 0, y: 1, width: size.columns, height: size.rows - 3 },
+      });
+      expect({ where, bounds: observed.regionOf("box:history") }).toEqual({
+        where,
+        bounds: { x: 0, y: size.rows - 2, width: size.columns, height: 1 },
+      });
+      expect({ where, bounds: observed.regionOf("box:guidance") }).toEqual({
+        where,
+        bounds: { x: 0, y: size.rows - 1, width: size.columns, height: 1 },
+      });
+
+      // Whole cells, inside the frame, and no two controls over one another.
+      const targets = [...targetsOf(presenter, observed).values()];
+      expect({ where, count: targets.length > 0 }).toEqual({ where, count: true });
+      for (const one of targets) {
+        expect({ where, whole: Number.isInteger(one.x) && Number.isInteger(one.y) }).toEqual({
+          where,
+          whole: true,
+        });
+        expect({
+          where,
+          inside:
+            one.x >= 0 &&
+            one.y >= 0 &&
+            one.x + one.width <= size.columns &&
+            one.y + one.height <= size.rows,
+        }).toEqual({ where, inside: true });
+      }
+      for (const [at, one] of targets.entries()) {
+        for (const other of targets.slice(at + 1)) {
+          const apart =
+            one.x + one.width <= other.x ||
+            other.x + other.width <= one.x ||
+            one.y + one.height <= other.y ||
+            other.y + other.height <= one.y;
+          expect({ where, apart }).toEqual({ where, apart: true });
+        }
+      }
+    }
+  });
+
+  it("A2: medium keeps three columns and wraps a header it cannot hold whole", function* () {
+    const presenter = yield* usePresenter(CHECKPOINT_MEDIUM);
+    const observed = (yield* commitCheckpoint(presenter, { size: CHECKPOINT_MEDIUM })).observed;
+    // The plan's proposed medium proportions, dividers included.
+    expect(regionBounds(observed, "sidebar")).toEqual({ x: 0, y: 1, width: 36, height: 27 });
+    expect(regionBounds(observed, "transcript")).toEqual({ x: 36, y: 1, width: 34, height: 27 });
+    expect(regionBounds(observed, "inspection")).toEqual({ x: 70, y: 1, width: 50, height: 27 });
+
+    // The selected work's heading does not fit its column, so it takes a
+    // second row of that column's own body rather than a shortened label, a
+    // dropped control or an overlap. The left group keeps the first row.
+    const first = placed(observed, "entries:heading");
+    const crumbs = placed(observed, "work:crumbs");
+    const state = placed(observed, "work:state");
+    expect(first.y).toBe(crumbs.y);
+    expect(state.y).toBe(first.y + 1);
+    expect(state.x + state.width).toBeLessThanOrEqual(70);
+    // Both rows belong to the column, which is what makes them measured.
+    expect(observed.regionOf("box:transcript:header")?.width).toBe(34);
+    expect(observed.regionOf("box:transcript:header:second")?.width).toBe(34);
+
+    // The Draft keeps its four rows at the foot of that column.
+    const draft = observed.regionOf("box:draft");
+    expect(draft?.height).toBe(4);
+    expect((draft?.y ?? 0) + (draft?.height ?? 0)).toBe(CHECKPOINT_MEDIUM.rows - 2);
+  });
+
+  it("A2: narrow routes one outlet, keeps both surface controls and the Draft", function* () {
+    const model = yield* checkpointModel();
+    // The entry surface: the selected work, its reading and its Draft.
+    const work = yield* usePresenter(CHECKPOINT_NARROW);
+    const entries = (yield* commitCheckpoint(work, { size: CHECKPOINT_NARROW, model })).observed;
+    expect(regionBounds(entries, "content")).toEqual({ x: 0, y: 1, width: 72, height: 17 });
+    // Neither of the other two columns exists at this size.
+    expect(regionBounds(entries, "sidebar")).toBe(undefined);
+    expect(regionBounds(entries, "inspection")).toBe(undefined);
+    for (const key of ["sessions:heading", "entries:heading", "footer:input", "draft:stop"]) {
+      expect({ key, drawn: entries.boundsOf(key) !== undefined }).toEqual({ key, drawn: true });
+    }
+    // The Sidekick's own rows are on no other surface's screen.
+    for (const key of ["tray:queue", "follow", "sidekick:message"]) {
+      expect({ key, drawn: entries.keys.includes(key) }).toEqual({ key, drawn: false });
+    }
+
+    // The Sessions surface: the Transcript's own reading, and no Draft.
+    const sessions = yield* usePresenter(CHECKPOINT_NARROW);
+    const read = (yield* commitCheckpoint(sessions, {
+      size: CHECKPOINT_NARROW,
+      model,
+      surface: "sessions",
+    })).observed;
+    expect(read.keys.includes("transcript:title")).toBe(true);
+    expect(read.keys.includes("footer:input")).toBe(false);
+    expect(read.boundsOf("sessions:heading")).not.toBe(undefined);
+
+    // The Sidekick surface: its chat, its tray and its composer, reached by the
+    // route rather than by a tab this size does not draw.
+    const chat = yield* usePresenter(CHECKPOINT_NARROW);
+    const talking = (yield* commitCheckpoint(chat, {
+      size: CHECKPOINT_NARROW,
+      model,
+      sidekick: true,
+    })).observed;
+    for (const key of ["tray:todo", "tray:queue", "follow", "sidekick:stop", "sidekick:message"]) {
+      expect({ key, drawn: talking.boundsOf(key) !== undefined }).toEqual({ key, drawn: true });
+    }
+    expect(talking.keys.includes("tab:bindings")).toBe(false);
+    expect(talking.keys.includes("footer:input")).toBe(false);
+  });
+});
+
+/**
+ * #971 A4: every outcome a reading can hold, on one screen, at each size.
+ *
+ * One controlled reading rather than one per state: four entries that really
+ * ran — settled, failed, stopped and still running — a Sidekick question
+ * waiting, and a queue longer than the tray can show. Asking for a screen per
+ * state would be asking for the same frame fifteen times.
+ *
+ * What this proves is fitting and state: that each outcome is on the screen,
+ * that they read differently, and that nothing the window holds is unreachable.
+ * Whether it looks right is the image review's answer, not a test's.
+ */
+describe("Checkpoint #971 A4 — states and overflow at every size", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The four outcomes this reading holds, as the words the screen says. */
+  const OUTCOMES = ["✓ COMPLETED", "× FAILED", "- INTERRUPTED", "● ACTIVE"] as const;
+
+  it("A4: four outcomes, a waiting question and an overflowing queue", function* () {
+    const model = yield* checkpointStateModel();
+    expect(model.entries.map((one) => one.terminal?.status ?? "unfinished")).toEqual([
+      "ok",
+      "err",
+      "cancelled",
+      "unfinished",
+    ]);
+
+    for (const size of CHECKPOINT_SIZES) {
+      const where = `${size.columns}x${size.rows}`;
+      const narrow = size.columns === CHECKPOINT_NARROW.columns;
+      const presenter = yield* usePresenter(size);
+      const committed = yield* commitCheckpoint(presenter, {
+        model,
+        size,
+        live: CHECKPOINT_ASKING,
+        workspace: OVERFLOW_WORKSPACE,
+        // A narrow frame routes one outlet, and the conversation is the outlet
+        // these readings are in.
+        ...(narrow ? { sidekick: true } : {}),
+      });
+      const { observed } = committed;
+      const { admission } = observed.committed;
+
+      // Every outcome is in the reading this screen is showing, whatever its
+      // window has room for: a smaller screen scrolls to them rather than
+      // losing them. The rows come from the production builder, so this is the
+      // reading the frame draws from rather than a second account of it.
+      const reading = chatLinesFor(committed.view)
+        .map((one) => one.text)
+        .join("\n");
+      for (const word of OUTCOMES) {
+        expect({ where, word, held: reading.includes(word) }).toEqual({
+          where,
+          word,
+          held: true,
+        });
+      }
+      // And what this window is not showing is reachable rather than gone.
+      const whole = windowOf(admission, SIDEKICK_WINDOW);
+      expect({
+        where,
+        reachable: whole.total >= whole.count && whole.from + whole.count <= whole.total,
+      }).toEqual({ where, reachable: true });
+
+      // The outcomes this frame is actually showing read differently from one
+      // another: no two of them in the same ink.
+      const said = presenter.grid
+        .textIn({ x: 0, y: 0, width: size.columns, height: size.rows })
+        .join("\n");
+      const shown = OUTCOMES.filter((word) => said.includes(word));
+      const inks = new Set<number | undefined>();
+      for (const word of shown) {
+        const at = said.indexOf(word);
+        const before = said.slice(0, at).split("\n");
+        const y = before.length - 1;
+        const x = before[before.length - 1].length;
+        inks.add(presenter.grid.styleAt(x, y).foreground);
+      }
+      expect({ where, distinct: inks.size }).toEqual({ where, distinct: shown.length });
+
+      // The question announces itself where it can be answered, and answering
+      // it is a control rather than a sentence.
+      if (!narrow || committed.view.state.route.view === "sidekick") {
+        expect({ where, asked: observed.boundsOf("sidekick:answer") !== undefined }).toEqual({
+          where,
+          asked: true,
+        });
+      }
+
+      // And the queue is longer than this tray shows, with every pending
+      // message still a row this reading holds.
+      expect({ where, queued: OVERFLOW_WORKSPACE.queued.length }).toEqual({ where, queued: 6 });
+      const drawn = OVERFLOW_WORKSPACE.queued.filter(
+        (one) => observed.boundsOf(`queue:${one.key}:row:0`) !== undefined,
+      );
+      const removable = OVERFLOW_WORKSPACE.queued.filter(
+        (one) => observed.boundsOf(`queue:${one.key}:remove`) !== undefined,
+      );
+      // Each message the frame drew has its own withdrawal control beside it.
+      expect({ where, rows: drawn.length, removes: removable.length }).toEqual({
+        where,
+        rows: drawn.length,
+        removes: drawn.length,
+      });
+    }
   });
 });

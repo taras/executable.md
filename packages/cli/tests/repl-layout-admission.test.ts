@@ -23,7 +23,16 @@ import type { ReplBounds } from "../src/repl/layout.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
-import { createGrid, useCommitter, windowOf } from "./fixtures/repl/presentation.ts";
+import { createGrid, useCommitter, usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
+import { useTempFileCompiler } from "@executablemd/core";
+import {
+  CHECKPOINT_MEDIUM,
+  CHECKPOINT_NARROW,
+  CHECKPOINT_SIZE,
+  checkpointModel,
+  commitCheckpoint,
+  OVERFLOW_WORKSPACE,
+} from "./fixtures/repl/workspace-checkpoint.ts";
 import type { Committer, Drawn, TerminalGrid } from "./fixtures/repl/presentation.ts";
 import {
   EMPTY,
@@ -488,6 +497,77 @@ describe("REPL layout: the profiles this product supports", () => {
         const draft = drawn.boundsOf("footer:input");
         expect(draft?.y).toBe(size.rows - 1);
       });
+    }
+  });
+});
+
+/**
+ * #971 A2: what the staged composition admits at each supported size.
+ *
+ * The same invariant the rest of this file is about, asked of the screen the
+ * workspace draws: every window the frame measured holds a whole number of rows
+ * it has room for, every control it published was drawn, and nothing it left
+ * out is reachable. The geometry those numbers come from is a proposal under
+ * image review; that each of them is measured rather than computed here is not.
+ */
+describe("REPL layout: what the staged workspace admits at each size", () => {
+  it("A2: every measured window is whole, bounded and reachable", function* () {
+    yield* useTempFileCompiler();
+    const model = yield* checkpointModel();
+    for (const size of [CHECKPOINT_SIZE, CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
+      const where = `${size.columns}x${size.rows}`;
+      const presenter = yield* usePresenter(size);
+      const committed = yield* commitCheckpoint(presenter, {
+        model,
+        size,
+        workspace: OVERFLOW_WORKSPACE,
+      });
+      const { admission, manifest } = committed.observed.committed;
+
+      // A window holds whole rows, never more than its capacity, and never a
+      // capacity it did not measure.
+      expect({ where, windows: admission.windows.size > 0 }).toEqual({ where, windows: true });
+      for (const slot of manifest.viewports) {
+        const window = windowOf(admission, slot.window);
+        const bounds = committed.observed.regionOf(slot.id);
+        expect({ where, window: slot.window, measured: bounds !== undefined }).toEqual({
+          where,
+          window: slot.window,
+          measured: true,
+        });
+        expect({
+          where,
+          window: slot.window,
+          whole: Number.isInteger(window.capacity) && Number.isInteger(window.count),
+        }).toEqual({ where, window: slot.window, whole: true });
+        expect({ where, window: slot.window, room: window.capacity >= 0 }).toEqual({
+          where,
+          window: slot.window,
+          room: true,
+        });
+        expect({
+          where,
+          window: slot.window,
+          within: window.count <= window.capacity && window.from + window.count <= window.total,
+        }).toEqual({ where, window: slot.window, within: true });
+      }
+
+      // Every admitted action was drawn, and nothing the row left out was.
+      const drawn = new Set(
+        committed.observed.targets.flatMap((one) => {
+          const key = presenter.tree.keyOf(one.node);
+          return key === undefined ? [] : [key];
+        }),
+      );
+      for (const candidate of manifest.actions?.controls ?? []) {
+        const admitted = admission.actions.has(candidate.key);
+        expect({ where, key: candidate.key, admitted, drawn: drawn.has(candidate.key) }).toEqual({
+          where,
+          key: candidate.key,
+          admitted,
+          drawn: admitted,
+        });
+      }
     }
   });
 });

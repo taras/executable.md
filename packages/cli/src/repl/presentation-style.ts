@@ -58,6 +58,14 @@ export type ReplPresentationRole =
   | "successful-outcome"
   /** A root that closed `err`, and a refusal of something asked for. */
   | "failed-outcome"
+  /**
+   * A root that was stopped rather than one that failed.
+   *
+   * Its own reading, because an interruption is not the run going wrong: what
+   * it completed stands and what it printed is partial. The word says so too,
+   * so the colour is never the only thing that does.
+   */
+  | "interrupted-outcome"
   /** Something that has not settled, and the affordance that attends to it. */
   | "waiting"
   /** Something activating does. */
@@ -447,6 +455,8 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
       return REPL_PALETTE.success;
     case "failed-outcome":
       return REPL_PALETTE.failure;
+    case "interrupted-outcome":
+      return REPL_PALETTE.muted;
     case "waiting":
       return REPL_PALETTE.waiting;
     case "history":

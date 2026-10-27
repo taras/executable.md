@@ -316,13 +316,25 @@ export function inspectionWidth(size: ReplTerminalSize): number | undefined {
  * Over the body and above the footer rather than across it: a modal that covered
  * the draft would hide the thing the question is about.
  */
-export function drawerRect(size: ReplTerminalSize): ReplBounds | undefined {
+export function drawerRect(
+  size: ReplTerminalSize,
+  /**
+   * Whether the staged composition's body is the one being covered.
+   *
+   * It keeps three rows around its body where the ordinary one keeps seven, and
+   * its body starts below an identity row rather than at the top of the frame —
+   * so a rectangle derived from the ordinary budget would hang off the bottom of
+   * this screen and cover a row of chrome this one does not have there.
+   */
+  staged = false,
+): ReplBounds | undefined {
   if (profileFor(size) === "too-small") {
     return undefined;
   }
-  const body = bodyRows(size);
+  const body = staged ? workspaceBodyRows(size) : bodyRows(size);
+  const top = staged ? 1 : 0;
   const x = Math.floor(size.columns / DRAWER_SHARE);
-  const y = Math.floor(body / DRAWER_SHARE);
+  const y = top + Math.floor(body / DRAWER_SHARE);
   return Object.freeze({
     x,
     y,
@@ -358,9 +370,17 @@ export function drawerRect(size: ReplTerminalSize): ReplBounds | undefined {
 export function routeDrawerRect(
   size: ReplTerminalSize,
   guidanceBottom: number | undefined,
+  staged = false,
 ): ReplBounds | undefined {
-  const base = drawerRect(size);
-  if (base === undefined || profileFor(size) === "narrow" || guidanceBottom === undefined) {
+  const base = drawerRect(size, staged);
+  // The staged composition draws its guidance below the body rather than above
+  // its reading, so there is no block in this layer's way to move clear of.
+  if (
+    base === undefined ||
+    staged ||
+    profileFor(size) === "narrow" ||
+    guidanceBottom === undefined
+  ) {
     return base;
   }
   const bottom = base.y + base.height;
@@ -385,18 +405,18 @@ export function routeDrawerRect(
  * drawing and hit testing alike — a second opinion about where this rectangle
  * is would be a drawer whose cells and whose targets disagreed.
  */
-export function sidekickDrawerRect(size: ReplTerminalSize): ReplBounds | undefined {
+export function sidekickDrawerRect(size: ReplTerminalSize, staged = false): ReplBounds | undefined {
   const profile = profileFor(size);
   if (profile === "too-small") {
     return undefined;
   }
-  const inspection = inspectionWidth(size);
+  const inspection = staged ? workspaceConversationWidth(size) : inspectionWidth(size);
   const width = inspection ?? size.columns;
   return Object.freeze({
     x: size.columns - width,
-    y: 0,
+    y: staged ? 1 : 0,
     width,
-    height: bodyRows(size),
+    height: staged ? workspaceBodyRows(size) : bodyRows(size),
   });
 }
 
@@ -1047,8 +1067,70 @@ export function box(input: {
 export const WORKSPACE_TRANSCRIPT_COLUMNS = 36;
 export const WORKSPACE_CONVERSATION_COLUMNS = 58;
 
+/**
+ * How wide the conversation column is at the medium profile.
+ *
+ * Fifty rather than the wide profile's fifty-eight, which is the pinned v2
+ * medium proportion: the left column keeps its thirty-six for legibility and
+ * the selected work takes what the two leave — thirty-four at 120 columns.
+ */
+export const WORKSPACE_CONVERSATION_MEDIUM = 50;
+
 /** The selected work's Draft: its heading row and three value rows. */
 export const WORKSPACE_DRAFT_ROWS = 4;
+
+/**
+ * The rows the staged composition keeps around its body.
+ *
+ * One identity row above it, and one compact History row and one guidance row
+ * below — three, where the ordinary composition's footer is seven. Stated here
+ * so the drawer rectangles and the body are measured against the same budget.
+ */
+export const WORKSPACE_CHROME_ROWS = 3;
+
+/** How many rows the staged body has: everything those three rows leave. */
+export function workspaceBodyRows(size: ReplTerminalSize): number {
+  return Math.max(0, size.rows - WORKSPACE_CHROME_ROWS);
+}
+
+/**
+ * How wide the staged Transcript column is, or none where there is one outlet.
+ *
+ * A legibility requirement rather than a share, for the reason the ordinary
+ * sidebar's is: the rows in it are text whose meaning is lost when it is cut.
+ */
+export function workspaceTranscriptWidth(size: ReplTerminalSize): number | undefined {
+  const profile = profileFor(size);
+  return profile === "wide" || profile === "medium" ? WORKSPACE_TRANSCRIPT_COLUMNS : undefined;
+}
+
+/** How wide the staged conversation column is, or none at one outlet. */
+export function workspaceConversationWidth(size: ReplTerminalSize): number | undefined {
+  const profile = profileFor(size);
+  if (profile === "wide") {
+    return WORKSPACE_CONVERSATION_COLUMNS;
+  }
+  return profile === "medium" ? WORKSPACE_CONVERSATION_MEDIUM : undefined;
+}
+
+/**
+ * How wide the staged selected work is: whatever the other two columns leave.
+ *
+ * Stated rather than grown, and that is load-bearing. A growing column takes
+ * its minimum from its own content, and this column's heading is a breadcrumb
+ * as long as the scopes somebody selected — measured, a crumb trail made a
+ * 34-column column report 40 and pushed the conversation column off the frame.
+ * The product already decides the other two widths, so the remainder is a
+ * product fact rather than a second measurement.
+ */
+export function workspaceWorkWidth(size: ReplTerminalSize): number | undefined {
+  const left = workspaceTranscriptWidth(size);
+  const right = workspaceConversationWidth(size);
+  if (left === undefined || right === undefined) {
+    return undefined;
+  }
+  return Math.max(0, size.columns - left - right);
+}
 
 /**
  * How far a staged list sits in from its column's edges.
@@ -1160,6 +1242,36 @@ export function partsRowProps(height: number | "fit" = 1, gap = 1): ReplBoxProps
       gap,
     },
   };
+}
+
+/**
+ * The staged contextual actions: the rest of the History row, controls at its
+ * trailing edge.
+ *
+ * Growing, and the only growing child of that row, because two growing
+ * siblings split the remainder in the engine's own arithmetic and that
+ * arithmetic is not whole — measured, a 72-column History row came back with a
+ * child at x=41.9921875. Its own leading spacer is likewise the only growing
+ * child inside it, which is what puts the controls at the edge without an
+ * alignment that places at half a cell.
+ *
+ * Not clipped, for the same reason: a clipping parent resolves a growing child
+ * against its content, and that spacer would collapse. A control the row cannot
+ * hold whole is left out by admission before it is ever described.
+ */
+export function inlineActionRowProps(): ReplBoxProps {
+  return { layout: { width: grow(), height: fixed(1), direction: "ltr", gap: 1 } };
+}
+
+/**
+ * A row exactly as wide as the parts in it, side by side.
+ *
+ * For a group placed at the trailing edge of a row whose other child grows: the
+ * growing child takes the whole integral remainder, so neither this group nor
+ * the row it is in can land on half a cell.
+ */
+export function fittedRowProps(gap = 1): ReplBoxProps {
+  return { layout: { width: fit(), height: fixed(1), direction: "ltr", gap } };
 }
 
 /** A part that grows into a row's remaining width and stacks its own rows. */
