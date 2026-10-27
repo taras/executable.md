@@ -3691,7 +3691,16 @@ function cut(value: Json): Json {
   }
   const shorter: { [key: string]: Json } = {};
   for (const [key, member] of Object.entries(value)) {
-    shorter[key] = cut(member);
+    // Defined rather than assigned, as `detach()` defines the model's own
+    // members: `shorter[key] = …` for the key `__proto__` reaches
+    // `Object.prototype`'s inherited setter instead of creating a member, and
+    // a value parsed from `{"__proto__":{…}}` would read as `{}`.
+    Object.defineProperty(shorter, key, {
+      value: cut(member),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return shorter;
 }

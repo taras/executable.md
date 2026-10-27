@@ -39,7 +39,7 @@ import type { Operation } from "effection";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
-import { INLINE_SOURCE_PATH } from "@executablemd/core";
+import { INLINE_SOURCE_PATH, parseJson } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 
 import { describeApplication, initialState, NO_AGENT, viewFor } from "../src/repl/application.ts";
@@ -687,6 +687,11 @@ describe("#992 — a long value is summarized without being written out", () => 
       true,
       { a: 1 },
       [],
+      // An own `__proto__` member, which a history can hold because
+      // `JSON.parse` makes one an own property and Core's parser keeps it.
+      // Shortening a value by assigning its members would reach the inherited
+      // setter instead, and this row would read as `{}`.
+      parseJson(JSON.parse('{"__proto__":{"x":1}}')),
     ];
     for (const value of values) {
       expect(yield* bindingRows(value, engine)).toEqual([`held = ${whole(value)}`]);
