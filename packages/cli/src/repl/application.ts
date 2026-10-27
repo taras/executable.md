@@ -8905,15 +8905,9 @@ function workspaceChatComposed(
   if (shownChat.length === 0) {
     items.push(text("sidekick:empty", "No messages yet.", styleOf("metadata"), SIDEKICK_MARK));
   }
-  for (const [at, item] of shownChat.entries()) {
+  for (const item of shownChat) {
     const key = `sidekick:${item.key}`;
     if (item.kind === "person") {
-      if (at > 0) {
-        // One blank row between exchanges, as the reference separates them.
-        items.push(
-          Object.freeze({ kind: "text" as const, key: `${key}:gap`, text: "", style: ORDINARY }),
-        );
-      }
       items.push(text(key, item.text, styleOf("source"), originMark(item.origin)));
     } else if (item.kind === "preview") {
       items.push(text(key, item.text, styleOf("waiting"), SIDEKICK_MARK));
@@ -8957,7 +8951,20 @@ function workspaceChatComposed(
       ),
     );
   }
-  return items;
+  // One blank row between utterances and the work they started, as the
+  // reference separates them. Display only: a gap is no message.
+  const spaced: ReplChatComposed[] = [];
+  for (const [at, one] of items.entries()) {
+    const key = one.kind === "text" ? one.key : one.described.key;
+    const continues = one.kind === "text" && key.endsWith(":output");
+    if (at > 0 && !continues) {
+      spaced.push(
+        Object.freeze({ kind: "text" as const, key: `${key}:gap`, text: "", style: ORDINARY }),
+      );
+    }
+    spaced.push(one);
+  }
+  return spaced;
 }
 
 /**
