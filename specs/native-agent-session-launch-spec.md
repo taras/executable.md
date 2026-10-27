@@ -760,8 +760,8 @@ An active record is a recovery tombstone. A crash releases the kernel lock but
 not the record, and nothing observable afterwards distinguishes a session whose
 owner died mid-turn from one it left cleanly — so the next owner receives
 `session-recovery-required` rather than inferring safety from a pid, an elapsed
-time, an empty transcript, or the lock being free. V1 exposes no recovery
-operation.
+time, an empty transcript, or the lock being free. Explicit operator recovery
+accepts this uncertainty without representing it as quiescence.
 
 The Deno and compiled hosts combine three things a single one of which would not
 be enough: a process-local occupancy table, one non-blocking advisory lock, and
@@ -778,13 +778,13 @@ each hold "the" session:
 ```
 
 Directories are `0700` and files `0600`; lease sidecars are never unlinked. The
-record is exactly `schema`, `keyDigest`, `state`, `ownerKind` and `operationId`,
-and a record carrying any other member is refused rather than read partially.
+record has the single current shape described below. Missing or extra members
+refuse rather than read partially; ownership has no format discriminator.
 It holds no instructions, credential, cwd, executable path, argv, environment,
 transcript, or temporary path — the digest is the only name in the namespace.
 
 Node and Bun build no coordinator. Neither runtime exposes a cross-process
-advisory lock, and V1 emulates none: a pid, heartbeat, or stale-file timeout
+advisory lock, and neither emulates one: a pid, heartbeat, or stale-file timeout
 calls a paused process dead and admits two owners. So every advertised
 session, prompt, launch and incomplete replay refuses there with
 `unsupported-capability`, before contacting an agent, while read-only resolution
@@ -793,6 +793,73 @@ binds a build also requires a route store and
 executable observer. Missing either refuses before any provider effect,
 whichever side names the session. An adapter that binds no build keeps its
 ordinary behavior without those dependencies.
+
+
+### Exact-target ownership inspection and recovery
+
+```sh
+xmd session ownership --key-digest D --json
+xmd session ownership --provider P --agent-command A --session-key K --json
+xmd session recover --key-digest D --expect R --force --json
+```
+
+`D` and `R` are lowercase SHA-256 digests. The triple form hashes the exact
+provider, already resolved configured agent command and logical session key;
+it never resolves an alias or contacts an agent. Inspection reads at most 64KiB
+of one exact record, decodes strict UTF-8 and validates the complete schema and
+key. Its revision hashes the exact bytes, including whitespace and newline.
+It creates no directory or lease, probes no lock and makes no liveness assertion.
+
+Recovery requires the digest form, the inspected byte revision and explicit
+`--force`. Under the shared nonblocking lock it rereads the record. Busy, missing,
+invalid, idle and stale-expectation records refuse. Only an active record with
+matching bytes can become idle/forced. The persistent lease inode is never
+removed. A forced release neither cancels a live owner nor sends, resends,
+initializes, closes or kills provider work. It changes no route, session identity,
+build binding, journal or prior outcome.
+
+Ownership has one current unversioned shape with exactly `keyDigest`, `state`,
+`ownerKind`, `operationId`, `release` and `lastForcedRecovery`. Active requires
+release `none`; idle requires `quiesced` or `forced`. The latest-force member is
+null before any force. A force requires a non-null object containing only a
+fresh UUID `recoveryId`, `abandonedOwnerKind`, `abandonedOperationId`, the matched
+`expectedRevision`, `backendQuiescenceProved:false` and
+`interruptedOutcome:"unknown"`. A forced idle record retains the abandoned owner
+in its outer fields. Ordinary subsequent ownership preserves this object,
+writes its own active owner with release `none`, and writes idle/quiesced only
+on genuine acknowledgement. Later force replaces the latest summary.
+
+The prerelease persistence policy amends this shape in place. There is no
+ownership schema discriminator, historical-format reader, migration or upgrade.
+Missing fields, extra fields and obsolete version-tagged records refuse unchanged.
+
+All valued options accept separate or `--name=value` spelling. Mixing digest
+and triple, missing or empty values, duplicate or unknown options, positional
+extras and values on `--force` or `--json` refuse. Inspection accepts no force or
+expectation; recovery accepts no triple. There is no configurable root, path,
+listing, history, provider selection or plugin option. `session --help`,
+`session ownership --help` and `session recover --help` exit0 without capability
+access. Node and Bun refuse inspection and recovery as unsupported.
+
+Success exits0. Refusal, grammar and persistence failures exit1 with safe stderr.
+JSON mode emits one closed object and newline: inspection uses
+`agent-session-ownership-inspection` with digest, recordRevision and record;
+force uses `agent-session-force-recovery` with digest, previousRecordRevision,
+recordRevision, recoveryId, release forced, backendQuiescenceProved false,
+interruptedOutcome unknown and providerRequestSent false. Errors use
+`agent-session-ownership-error`, code and safe message, a validated digest
+when available, and applied unknown only for publication uncertainty. Human
+output states the same distinction between forced release and proven quiescence.
+
+Publication exclusively creates a fresh UUID staging file, writes it whole,
+syncs and closes it, atomically replaces the record, then syncs the directory
+before success. Pending I/O is joined before releasing resources or occupancy.
+Before rename, cancellation retains the active record and removes only its own
+staging file. A rename already started settles while locked, and a successful
+late replacement is directory-synced and retained. Failures after replacement
+may leave publication UNKNOWN; neither rollback nor automatic repeat is allowed.
+A new inspection observes current state and cannot prove that an earlier command
+completed. Another operator action compares the current bytes explicitly.
 
 
 ## Construction route
@@ -1226,8 +1293,9 @@ Bun keep the same advertised names and assemble none of the answers, so every
 advertised operation refuses before provider work rather than acting while a
 native UI may be in the conversation — as *Ownership and concurrency* describes.
 
-Only ordinary `xmd run` receives that assembly. Every other command receives
-none, and a host profile whose session capabilities differ from ordinary `xmd run`
+Ordinary `xmd run` receives the provider view of that assembly. The `session`
+command receives only its separate ownership-administration view. Other commands
+receive none, and a host profile whose session capabilities differ from ordinary `xmd run`
 states its capability sets explicitly rather than inheriting the provider
 package's. The workflow Agent profile selects both sets empty and installs no
 native foreground launcher, so `Session.Launch` is unsupported there without
@@ -1484,7 +1552,8 @@ Implementation review checks these frozen invariants:
     coordinator reaches the installed provider directly.
 14. Every operation that can act on an advertised session takes ownership under
     one natural key first, contention refuses rather than queues, and an owner
-    that did not prove it stopped leaves the session owned.
+    that did not prove it stopped leaves the session owned until an explicit,
+    matching operator force records release with quiescence unproved.
 15. A session is constructed once, by one mechanism, and its create-once route
     says which. Routes never convert, and the loser of a race adopts the winner
     rather than replacing it.

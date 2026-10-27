@@ -9,12 +9,46 @@
  * It lives in the repository rather than a temporary directory because it
  * imports workspace packages, which resolve only inside the project.
  */
-import { main, suspend } from "effection";
-import { createDenoAgentSessionCoordinator } from "@executablemd/runtime";
+import { main, suspend, until } from "effection";
+import {
+  createDenoAgentSessionCoordinator,
+  createDenoAgentSessionHost,
+  agentSessionKeyDigest,
+} from "@executablemd/runtime";
 
-const [root, provider, agent, sessionKey] = Deno.args;
+const [root, provider, agent, sessionKey, expectedRevision] = Deno.args;
 
 await main(function* () {
+  if (expectedRevision) {
+    const host = createDenoAgentSessionHost(root!);
+    if (!host) {
+      throw new Error("fixture host unavailable");
+    }
+    console.log("recovery:ready");
+    const reader = Deno.stdin.readable.getReader();
+    try {
+      yield* until(reader.read());
+    } finally {
+      reader.releaseLock();
+    }
+    const result = yield* host.ownershipAdministration.forceRecoverOwnership({
+      keyDigest: agentSessionKeyDigest({
+        provider: provider!,
+        agent: agent!,
+        sessionKey: sessionKey!,
+      }),
+      expectedRevision,
+      force: true,
+    });
+    console.log(
+      JSON.stringify(
+        result.ok
+          ? { ok: true, receipt: result.value }
+          : { ok: false, code: Reflect.get(result.error, "code") },
+      ),
+    );
+    return;
+  }
   const coordinator = createDenoAgentSessionCoordinator(root!);
   if (!coordinator) {
     console.log("owner:unavailable");

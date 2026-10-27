@@ -477,3 +477,30 @@ describe("Sidekick attachment help", () => {
     }
   });
 });
+
+describe("Session ownership help", () => {
+  it("describes exact-target inspection and explicit force without initializing a session", function* () {
+    expect((yield* runCli(["--help"]).expect()).stdout).toContain("session");
+    for (const args of [
+      ["session", "--help"],
+      ["session", "ownership", "--help"],
+      ["session", "recover", "--help"],
+    ]) {
+      const result = yield* runCli(args).expect();
+      for (const word of [
+        "--key-digest",
+        "--provider",
+        "--agent-command",
+        "--session-key",
+        "--expect",
+        "--force",
+        "--json",
+        "unproved",
+        "UNKNOWN",
+        "no provider requests",
+      ]) {
+        expect(result.stdout).toContain(word);
+      }
+    }
+  });
+});

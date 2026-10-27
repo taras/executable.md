@@ -1,3 +1,4 @@
+import { runSessionOwnership } from "./session-ownership.ts";
 import { runSidekickCommand, SIDEKICK_HELP } from "./sidekick-acp/command.ts";
 import { SidekickTransport } from "./sidekick-acp/protocol.ts";
 import { isAbsolute, resolve } from "node:path";
@@ -572,6 +573,7 @@ const xmd = program({
       agent: { ...agentConfig, description: AGENT_DESCRIPTION },
       upgrade: { ...upgradeConfig, description: UPGRADE_DESCRIPTION },
       repl: { ...replConfig, description: REPL_DESCRIPTION },
+      session: { description: "Inspect or explicitly reclaim session ownership.", ...object({}) },
       sidekick: { description: "Attach to or passively read one live Sidekick.", ...object({}) },
       "test-agent": testAgentConfig,
       workflow: workflowConfig,
@@ -2539,6 +2541,7 @@ const COMMAND_NAMES = [
   "agent",
   "repl",
   "sidekick",
+  "session",
   "test-agent",
   "workflow",
 ];
@@ -3467,6 +3470,13 @@ export function* runXmd(
   // restore.
   replHost?: ReplHostAssembly,
 ): Operation<void> {
+  if (args[0] === "session") {
+    const code = yield* runSessionOwnership(args.slice(1), sessions?.ownershipAdministration);
+    if (code !== 0) {
+      yield* exit(code);
+    }
+    return;
+  }
   if (args[0] === "sidekick") {
     try {
       yield* runSidekickCommand(args.slice(1));

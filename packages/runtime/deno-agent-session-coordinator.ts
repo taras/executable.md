@@ -1,46 +1,38 @@
-/**
- * The Deno implementation of session ownership.
- *
- * Constructed at a runtime-named boundary and handed to a provider by the host
- * that built it. Shared modules never reach for it, and never ask what runtime
- * they are on.
- *
- * Exclusivity is the kernel's, and durability is the filesystem's, because the
- * two questions are different. The advisory lock answers "is another live
- * process in this session right now", which a crash correctly ends. The
- * ownership record answers "did the last owner prove it stopped", which a crash
- * must *not* end — so the record is written active before any provider work and
- * replaced with idle only after the body acknowledges quiescence. A process
- * that dies in between releases the lock and leaves the active record, and the
- * next owner refuses rather than inferring safety from a pid, an elapsed time,
- * an empty transcript, or the lock being free.
- *
- * A process-local occupancy table sits in front of both. Advisory locks are
- * per-process on some hosts, so two provider scopes in one process could
- * otherwise both believe they hold the same session.
- */
-
-import { ensure, Err, Ok, type Operation, scoped, until } from "effection";
-import type { Result } from "effection";
+import { ensure, Err, Ok, scoped, until, type Operation, type Result } from "effection";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   AgentSessionBusy,
-  agentSessionKeyDigest,
   AgentSessionRecoveryRequired,
+  AgentSessionOwnershipError,
+  agentSessionKeyDigest,
   parseAgentSessionOwnership,
   serializeAgentSessionOwnership,
 } from "./agent-session-coordinator.ts";
 import type {
   AgentSessionCoordinator,
-  AgentSessionKey,
-  AgentSessionOwner,
-  AgentSessionOwnership,
-  AgentSessionOwnershipRecordV1,
+  AgentSessionForceRecoveryReceipt,
+  AgentSessionHost,
+  AgentSessionOwnershipRecord,
 } from "./agent-session-coordinator.ts";
 
-type HostCall = (...args: unknown[]) => unknown;
+export interface AgentSessionHostFile {
+  read(bytes: Uint8Array): Promise<number | null>;
+  write(bytes: Uint8Array): Promise<number>;
+  tryLock(exclusive: boolean): Promise<boolean>;
+  unlock(): Promise<void>;
+  sync(): Promise<void>;
+  close(): void;
+}
 
-/** One of the host's methods, bound to it, or nothing when it has none. */
+export interface AgentSessionHostIO {
+  mkdir(path: string, options: { recursive: boolean; mode: number }): Promise<unknown>;
+  open(path: string, options: Record<string, boolean | number>): Promise<AgentSessionHostFile>;
+  rename(from: string, to: string): Promise<unknown>;
+  remove(path: string): Promise<unknown>;
+}
+
+type HostCall = (...args: unknown[]) => unknown;
 function callable(host: object, name: string): HostCall | undefined {
   const member: unknown = Reflect.get(host, name);
   if (typeof member !== "function") {
@@ -49,265 +41,487 @@ function callable(host: object, name: string): HostCall | undefined {
   return (...args) => Reflect.apply(member, host, args);
 }
 
-/**
- * The filesystem surface this adapter needs, read off the host rather than
- * imported, so the module stays loadable where it is never constructed.
- */
-interface CoordinatorHost {
-  mkdir(path: string, options: { recursive: boolean; mode: number }): Promise<unknown>;
-  open(path: string, options: Record<string, boolean | number>): Promise<unknown>;
-  readTextFile(path: string): Promise<string>;
-  writeTextFile(path: string, data: string, options: { mode: number }): Promise<unknown>;
-  rename(from: string, to: string): Promise<unknown>;
-  remove(path: string): Promise<unknown>;
-}
-
-interface HostFile {
-  tryLock(exclusive: boolean): Promise<unknown>;
-  unlock(): Promise<unknown>;
-  sync(): Promise<unknown>;
-  close(): void;
-}
-
-function hostFile(value: unknown): HostFile | undefined {
+function file(value: unknown): AgentSessionHostFile {
   if (typeof value !== "object" || value === null) {
-    return undefined;
+    throw new Error("host returned no file");
   }
+  const read = callable(value, "read");
+  const write = callable(value, "write");
   const tryLock = callable(value, "tryLock");
   const unlock = callable(value, "unlock");
   const sync = callable(value, "sync");
   const close = callable(value, "close");
-  if (!tryLock || !unlock || !sync || !close) {
-    return undefined;
+  if (!read || !write || !tryLock || !unlock || !sync || !close) {
+    throw new Error("host lacks ownership file operations");
   }
   return {
-    tryLock: (exclusive) => Promise.resolve(tryLock(exclusive)),
-    unlock: () => Promise.resolve(unlock()),
-    sync: () => Promise.resolve(sync()),
+    read: (bytes) =>
+      Promise.resolve(read(bytes)).then((n) => {
+        if (n === null || typeof n === "number") {
+          return n;
+        }
+        throw new Error("invalid host read");
+      }),
+    write: (bytes) =>
+      Promise.resolve(write(bytes)).then((n) => {
+        if (typeof n === "number") {
+          return n;
+        }
+        throw new Error("invalid host write");
+      }),
+    tryLock: (exclusive) => Promise.resolve(tryLock(exclusive)).then((v) => v === true),
+    unlock: () => Promise.resolve(unlock()).then(() => {}),
+    sync: () => Promise.resolve(sync()).then(() => {}),
     close: () => {
       close();
     },
   };
 }
 
-function coordinatorHost(): CoordinatorHost | undefined {
-  if (!Reflect.has(globalThis, "Deno")) {
-    return undefined;
-  }
+/** Native IO is exported only here so host tests can gate the real operations. */
+export function createDenoAgentSessionHostIO(): AgentSessionHostIO | undefined {
   const host: unknown = Reflect.get(globalThis, "Deno");
   if (typeof host !== "object" || host === null) {
     return undefined;
   }
-  const names = ["mkdir", "open", "readTextFile", "writeTextFile", "rename", "remove"] as const;
-  const calls: Record<string, HostCall> = {};
-  for (const name of names) {
-    const call = callable(host, name);
-    if (!call) {
-      return undefined;
-    }
-    calls[name] = call;
+  const mkdir = callable(host, "mkdir");
+  const open = callable(host, "open");
+  const rename = callable(host, "rename");
+  const remove = callable(host, "remove");
+  if (!mkdir || !open || !rename || !remove) {
+    return undefined;
   }
   return {
-    mkdir: (path, options) => Promise.resolve(calls.mkdir!(path, options)),
-    open: (path, options) => Promise.resolve(calls.open!(path, options)),
-    readTextFile: (path) =>
-      Promise.resolve(calls.readTextFile!(path)).then((value: unknown) => String(value)),
-    writeTextFile: (path, data, options) =>
-      Promise.resolve(calls.writeTextFile!(path, data, options)),
-    rename: (from, to) => Promise.resolve(calls.rename!(from, to)),
-    remove: (path) => Promise.resolve(calls.remove!(path)),
+    mkdir: (path, options) => Promise.resolve(mkdir(path, options)),
+    open: (path, options) => Promise.resolve(open(path, options)).then(file),
+    rename: (from, to) => Promise.resolve(rename(from, to)),
+    remove: (path) => Promise.resolve(remove(path)),
   };
 }
 
-/** Whether this host can coordinate agent sessions at all. */
 export function hasDenoAgentSessionCoordinator(): boolean {
-  return coordinatorHost() !== undefined;
+  return createDenoAgentSessionHostIO() !== undefined;
 }
 
-function isMissing(cause: unknown): boolean {
+function missing(error: unknown): boolean {
   return (
-    (typeof cause === "object" && cause !== null && Reflect.get(cause, "code") === "ENOENT") ||
-    (cause instanceof Error && cause.name === "NotFound")
+    error instanceof Error && (error.name === "NotFound" || Reflect.get(error, "code") === "ENOENT")
   );
 }
 
-/**
- * Build the coordinator rooted at `root`.
- *
- * Returns nothing on a host with no such filesystem: a host that cannot answer
- * the ownership question installs no coordinator, and every advertised
- * provider-returned operation refuses.
- */
+function error(code: ConstructorParameters<typeof AgentSessionOwnershipError>[0], cause?: unknown) {
+  return new AgentSessionOwnershipError(code, { cause });
+}
+
+/** Settlement stays inside the caller's resource lifetime, including late answers. */
+function pending<T>(start: () => Promise<T>, adopt: (value: T) => void = () => {}): Operation<T> {
+  return scoped(function* () {
+    let call: Promise<Result<T>> | undefined;
+    let consumed = false;
+    yield* ensure(function* () {
+      if (!consumed && call) {
+        const result = yield* until(call);
+        consumed = true;
+        if (!result.ok) {
+          throw result.error;
+        }
+        adopt(result.value);
+      }
+    });
+    call = start().then(
+      (value) => Ok(value),
+      (cause: unknown) =>
+        Err(cause instanceof Error ? cause : new Error("host IO failed", { cause })),
+    );
+    const result = yield* until(call);
+    consumed = true;
+    if (!result.ok) {
+      throw result.error;
+    }
+    adopt(result.value);
+    return result.value;
+  });
+}
+
+const MAX_OWNERSHIP_RECORD_BYTES = 65536;
+const digestPattern = /^[0-9a-f]{64}$/;
+const revision = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+export function createDenoAgentSessionHost(root: string): AgentSessionHost | undefined {
+  const io = createDenoAgentSessionHostIO();
+  return io ? createAgentSessionHostFromIO(root, io) : undefined;
+}
+
 export function createDenoAgentSessionCoordinator(
   root: string,
 ): AgentSessionCoordinator | undefined {
-  const found = coordinatorHost();
-  if (!found) {
-    return undefined;
-  }
-  const host: CoordinatorHost = found;
-  // Sibling provider scopes in one process contend here before they contend in
-  // the kernel, because an advisory lock does not always separate them.
+  return createDenoAgentSessionHost(root)?.coordinator;
+}
+
+export function createAgentSessionHostFromIO(
+  root: string,
+  io: AgentSessionHostIO,
+): AgentSessionHost {
   const occupied = new Set<string>();
+  const leases = join(root, "leases");
+  const ownership = join(root, "ownership");
+  const recordPath = (digest: string) => join(ownership, `${digest}.json`);
 
-  function* readOwnership(path: string): Operation<AgentSessionOwnershipRecordV1 | undefined> {
-    const text = yield* until(
-      host.readTextFile(path).catch((cause: unknown) => {
-        if (isMissing(cause)) {
-          return undefined;
+  function read(digest: string) {
+    return scoped(function* () {
+      let handle: AgentSessionHostFile | undefined;
+      yield* ensure(() => {
+        handle?.close();
+      });
+      try {
+        yield* pending(
+          () => io.open(recordPath(digest), { read: true }),
+          (value) => {
+            handle = value;
+          },
+        );
+      } catch (cause) {
+        if (missing(cause)) {
+          throw error("not-found");
         }
-        throw cause;
-      }),
-    );
-    if (text === undefined) {
-      return undefined;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new AgentSessionRecoveryRequired(
-        "the retained agent session ownership record is not readable",
-      );
-    }
-    const record = parseAgentSessionOwnership(parsed);
-    if (!record) {
-      throw new AgentSessionRecoveryRequired(
-        "the retained agent session ownership record is not valid",
-      );
-    }
-    return record;
+        throw error("io-failure", cause);
+      }
+      if (!handle) {
+        throw error("io-failure");
+      }
+      const opened = handle;
+      const bytes = new Uint8Array(MAX_OWNERSHIP_RECORD_BYTES + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const n = yield* pending(() => opened.read(bytes.subarray(length)));
+        if (n === null) {
+          break;
+        }
+        if (n <= 0 || n > bytes.length - length) {
+          throw error("record-invalid");
+        }
+        length += n;
+      }
+      if (length > MAX_OWNERSHIP_RECORD_BYTES) {
+        throw error("record-invalid");
+      }
+      const raw = bytes.subarray(0, length);
+      let record: AgentSessionOwnershipRecord | undefined;
+      try {
+        record = parseAgentSessionOwnership(
+          JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)),
+        );
+      } catch (cause) {
+        throw error("record-invalid", cause);
+      }
+      if (!record || record.keyDigest !== digest) {
+        throw error("record-invalid");
+      }
+      return { keyDigest: digest, recordRevision: revision(raw), record };
+    });
   }
 
-  /**
-   * Replace the ownership record durably.
-   *
-   * Written whole, flushed, renamed over the destination, and the directory
-   * flushed behind it — so a reader sees the old record or the new one, and a
-   * crash cannot leave a half-written state that parses as something weaker.
-   */
-  function* publish(
-    directory: string,
-    destination: string,
-    record: AgentSessionOwnershipRecordV1,
-  ): Operation<void> {
-    const staging = `${destination}.${record.operationId}.staging`;
-    yield* until(
-      host.writeTextFile(staging, serializeAgentSessionOwnership(record), { mode: 0o600 }),
-    );
-    const staged = hostFile(yield* until(host.open(staging, { read: true })));
-    if (staged) {
-      yield* until(staged.sync());
-      staged.close();
-    }
-    yield* until(host.rename(staging, destination));
-    const opened = hostFile(yield* until(host.open(directory, { read: true })));
-    if (opened) {
-      yield* until(opened.sync());
-      opened.close();
-    }
+  function publish(digest: string, record: AgentSessionOwnershipRecord) {
+    return scoped(function* () {
+      const bytes = new TextEncoder().encode(serializeAgentSessionOwnership(record));
+      if (bytes.length > MAX_OWNERSHIP_RECORD_BYTES) {
+        throw error("record-invalid");
+      }
+      const destination = recordPath(digest);
+      const staging = `${destination}.${randomUUID()}.staging`;
+      let staged: AgentSessionHostFile | undefined;
+      let directory: AgentSessionHostFile | undefined;
+      let created = false;
+      let renameStarted = false;
+      let replaced = false;
+      let synced = false;
+      let syncStarted = false;
+      let firstFailure: unknown;
+      yield* ensure(function* () {
+        try {
+          staged?.close();
+          staged = undefined;
+          if (replaced && !synced && !syncStarted) {
+            if (!directory) {
+              yield* pending(
+                () => io.open(ownership, { read: true }),
+                (value) => {
+                  directory = value;
+                },
+              );
+            }
+            if (!directory) {
+              throw error("publication-unknown");
+            }
+            const opened = directory;
+            syncStarted = true;
+            yield* pending(
+              () => opened.sync(),
+              () => {
+                synced = true;
+              },
+            );
+          }
+        } catch (cause) {
+          if (firstFailure === undefined) {
+            throw error(renameStarted ? "publication-unknown" : "io-failure", cause);
+          }
+        } finally {
+          directory?.close();
+        }
+        if (created && !replaced) {
+          try {
+            yield* pending(() => io.remove(staging));
+          } catch (cause) {
+            if (!missing(cause) && firstFailure === undefined) {
+              throw error("io-failure", cause);
+            }
+          }
+        }
+      });
+      try {
+        yield* pending(
+          () => io.open(staging, { write: true, createNew: true, mode: 0o600 }),
+          (value) => {
+            staged = value;
+            created = true;
+          },
+        );
+        if (!staged) {
+          throw error("io-failure");
+        }
+        const opened = staged;
+        let offset = 0;
+        while (offset < bytes.length) {
+          const n = yield* pending(() => opened.write(bytes.subarray(offset)));
+          if (n <= 0 || n > bytes.length - offset) {
+            throw error("io-failure");
+          }
+          offset += n;
+        }
+        yield* pending(() => opened.sync());
+        opened.close();
+        staged = undefined;
+        renameStarted = true;
+        yield* pending(
+          () => io.rename(staging, destination),
+          () => {
+            replaced = true;
+          },
+        );
+        yield* pending(
+          () => io.open(ownership, { read: true }),
+          (value) => {
+            directory = value;
+          },
+        );
+        if (!directory) {
+          throw error("publication-unknown");
+        }
+        const dir = directory;
+        syncStarted = true;
+        yield* pending(
+          () => dir.sync(),
+          () => {
+            synced = true;
+          },
+        );
+      } catch (cause) {
+        firstFailure = cause;
+        throw error(renameStarted ? "publication-unknown" : "io-failure", cause);
+      }
+    });
+  }
+
+  function exclusive<T>(digest: string, body: () => Operation<T>): Operation<T> {
+    return scoped(function* () {
+      let claimed = false;
+      let handle: AgentSessionHostFile | undefined;
+      let locked = false;
+      yield* ensure(function* () {
+        try {
+          if (handle && locked) {
+            const opened = handle;
+            yield* pending(() => opened.unlock());
+          }
+        } finally {
+          handle?.close();
+          if (claimed) {
+            occupied.delete(digest);
+          }
+        }
+      });
+      if (occupied.has(digest)) {
+        throw error("busy");
+      }
+      occupied.add(digest);
+      claimed = true;
+      yield* pending(() => io.mkdir(leases, { recursive: true, mode: 0o700 }));
+      yield* pending(() => io.mkdir(ownership, { recursive: true, mode: 0o700 }));
+      yield* pending(
+        () =>
+          io.open(join(leases, `${digest}.lease`), {
+            read: true,
+            write: true,
+            create: true,
+            mode: 0o600,
+          }),
+        (value) => {
+          handle = value;
+        },
+      );
+      if (!handle) {
+        throw error("io-failure");
+      }
+      const opened = handle;
+      yield* pending(
+        () => opened.tryLock(true),
+        (value) => {
+          locked = value;
+        },
+      );
+      if (!locked) {
+        throw error("busy");
+      }
+      return yield* body();
+    });
   }
 
   return {
-    coordinate<T>(
-      key: AgentSessionKey,
-      owner: AgentSessionOwner,
-      body: (ownership: AgentSessionOwnership) => Operation<T>,
-    ): Operation<Result<T>> {
-      // Scoped, not a resource: ownership has to end when the body ends. A
-      // resource acquired in the caller's scope would hold the lock and the
-      // active record until *that* scope closed, which is a different — and
-      // much longer — lifetime than the work it protects.
-      return scoped(function* (): Operation<Result<T>> {
-        const digest = agentSessionKeyDigest(key);
-        const leases = join(root, "leases");
-        const ownership = join(root, "ownership");
-        yield* until(host.mkdir(leases, { recursive: true, mode: 0o700 }));
-        yield* until(host.mkdir(ownership, { recursive: true, mode: 0o700 }));
-        const record = join(ownership, `${digest}.json`);
-
-        if (occupied.has(digest)) {
-          return Err(busy(key));
-        }
-        occupied.add(digest);
-        yield* ensure(() => {
-          occupied.delete(digest);
-        });
-
-        // Opened for the ownership scope and never unlinked: deleting it would
-        // let a second process create a fresh file and lock that instead.
-        const opened = hostFile(
-          yield* until(
-            host.open(join(leases, `${digest}.lease`), {
-              read: true,
-              write: true,
-              create: true,
-              mode: 0o600,
-            }),
-          ),
-        );
-        if (!opened) {
-          throw new Error("this host opened a file with no advisory-lock operations");
-        }
-        let locked = false;
-        yield* ensure(function* () {
-          if (locked) {
-            yield* until(opened.unlock());
+    coordinator: {
+      coordinate(key, owner, body) {
+        return scoped(function* () {
+          const digest = agentSessionKeyDigest(key);
+          try {
+            return yield* exclusive(digest, function* () {
+              let retained: AgentSessionOwnershipRecord | undefined;
+              try {
+                retained = (yield* read(digest)).record;
+              } catch (cause) {
+                if (!(cause instanceof AgentSessionOwnershipError) || cause.code !== "not-found") {
+                  if (
+                    cause instanceof AgentSessionOwnershipError &&
+                    cause.code === "record-invalid"
+                  ) {
+                    throw new AgentSessionRecoveryRequired(
+                      "the retained ownership record is invalid",
+                    );
+                  }
+                  throw cause;
+                }
+              }
+              if (retained?.state === "active") {
+                const observed = yield* read(digest);
+                return Err(
+                  new AgentSessionRecoveryRequired(
+                    `session ownership requires recovery; inspect with xmd session ownership --key-digest ${digest} --json; explicit recovery requires --expect ${observed.recordRevision} --force`,
+                    { keyDigest: digest, recordRevision: observed.recordRevision },
+                  ),
+                );
+              }
+              const active: AgentSessionOwnershipRecord = {
+                keyDigest: digest,
+                state: "active",
+                ownerKind: owner.kind,
+                operationId: owner.operationId,
+                release: "none",
+                lastForcedRecovery: retained?.lastForcedRecovery ?? null,
+              };
+              yield* publish(digest, active);
+              let quiesced = false;
+              yield* ensure(function* () {
+                if (quiesced) {
+                  yield* publish(digest, { ...active, state: "idle", release: "quiesced" });
+                }
+              });
+              return Ok(
+                yield* body({
+                  quiesced() {
+                    quiesced = true;
+                  },
+                }),
+              );
+            });
+          } catch (cause) {
+            if (cause instanceof AgentSessionOwnershipError && cause.code === "busy") {
+              return Err(new AgentSessionBusy("another live owner holds this session"));
+            }
+            if (cause instanceof AgentSessionOwnershipError && cause.code === "record-invalid") {
+              return Err(cause);
+            }
+            throw cause;
           }
-          opened.close();
         });
-        locked = (yield* until(opened.tryLock(true))) === true;
-        if (!locked) {
-          return Err(busy(key));
+      },
+    },
+    ownershipAdministration: {
+      *inspectOwnership(digest) {
+        if (!digestPattern.test(digest)) {
+          return Err(error("record-invalid"));
         }
-
-        const retained = yield* readOwnership(record);
-        if (retained?.state === "active") {
-          // The lock is free and the record is not. Whoever held it last never
-          // said it had stopped, and nothing here can say it for them.
+        try {
+          return Ok(yield* read(digest));
+        } catch (cause) {
           return Err(
-            new AgentSessionRecoveryRequired(
-              `session "${key.sessionKey}" was left owned by an XMD process that did not ` +
-                `finish. Nothing here can prove that owner stopped, so it stays owned until ` +
-                `it is recovered deliberately.`,
-            ),
+            cause instanceof AgentSessionOwnershipError ? cause : error("io-failure", cause),
           );
         }
-
-        const active: AgentSessionOwnershipRecordV1 = {
-          schema: "agent-session-ownership.v1",
-          keyDigest: digest,
-          state: "active",
-          ownerKind: owner.kind,
-          operationId: owner.operationId,
-        };
-        yield* publish(ownership, record, active);
-
-        let quiesced = false;
-        // Registered before the body runs, so an idle record is published on
-        // every ordinary exit — and on none of the others.
-        yield* ensure(function* () {
-          if (!quiesced) {
-            return;
-          }
-          yield* publish(ownership, record, { ...active, state: "idle" });
-        });
-
-        return Ok(
-          yield* body({
-            quiesced() {
-              quiesced = true;
-            },
-          }),
-        );
-      });
+      },
+      *forceRecoverOwnership(request) {
+        if (
+          request.force !== true ||
+          !digestPattern.test(request.keyDigest) ||
+          !digestPattern.test(request.expectedRevision)
+        ) {
+          return Err(error("record-invalid"));
+        }
+        try {
+          const receipt = yield* exclusive(request.keyDigest, function* () {
+            const old = yield* read(request.keyDigest);
+            if (old.recordRevision !== request.expectedRevision) {
+              throw error("stale-expectation");
+            }
+            if (old.record.state !== "active") {
+              throw error("not-recovery-required");
+            }
+            const recoveryId = randomUUID();
+            const record: AgentSessionOwnershipRecord = {
+              keyDigest: request.keyDigest,
+              state: "idle",
+              ownerKind: old.record.ownerKind,
+              operationId: old.record.operationId,
+              release: "forced",
+              lastForcedRecovery: {
+                recoveryId,
+                abandonedOwnerKind: old.record.ownerKind,
+                abandonedOperationId: old.record.operationId,
+                expectedRevision: request.expectedRevision,
+                backendQuiescenceProved: false,
+                interruptedOutcome: "unknown",
+              },
+            };
+            yield* publish(request.keyDigest, record);
+            const receipt: AgentSessionForceRecoveryReceipt = {
+              keyDigest: request.keyDigest,
+              previousRecordRevision: request.expectedRevision,
+              recordRevision: revision(
+                new TextEncoder().encode(serializeAgentSessionOwnership(record)),
+              ),
+              recoveryId,
+              release: "forced",
+              backendQuiescenceProved: false,
+              interruptedOutcome: "unknown",
+              providerRequestSent: false,
+            };
+            return receipt;
+          });
+          return Ok(receipt);
+        } catch (cause) {
+          return Err(
+            cause instanceof AgentSessionOwnershipError ? cause : error("io-failure", cause),
+          );
+        }
+      },
     },
   };
-}
-
-function busy(key: AgentSessionKey): AgentSessionBusy {
-  return new AgentSessionBusy(
-    `another XMD owner is using session "${key.sessionKey}" — a native UI or a turn in ` +
-      `another process holds it. Run this again once that owner exits.`,
-  );
 }
