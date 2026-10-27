@@ -758,7 +758,7 @@ function* phases(): Operation<unknown> {
     // the only part of these cases that is a fixture: section 3 opens no
     // conversation, and a Submit outside one is not a state this grammar has.
     yield* useHost(dataRoot);
-    const published = yield* publishPair(repository, execution, { body: "", events: [] });
+    const published = yield* publishPair(repository, execution);
     for (const record of conversationWithReply()) {
       yield* published.sidekick.append(record);
     }
@@ -919,7 +919,7 @@ function* phases(): Operation<unknown> {
     // the production owner in the phases below, not seeded here: cases 2, 5 and
     // 6 are about what that owner leaves behind.
     yield* useHost(dataRoot);
-    yield* publishPair(repository, execution, { body: "", events: [] });
+    yield* publishPair(repository, execution);
     return { seeded: true, records: (yield* readSidekickRecords(sidekick)).map((one) => one.kind) };
   }
 

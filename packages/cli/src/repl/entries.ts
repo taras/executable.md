@@ -33,6 +33,8 @@ import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import type { DurableEvent, DurableStream, Yield } from "@executablemd/durable-streams";
 
+import { sealEvent } from "./retained-event.ts";
+
 /** The durable name of the root document import, on the root coroutine. */
 export const ROOT_IMPORT = "__root__";
 
@@ -232,6 +234,10 @@ export interface EntrySegmentView {
  * the file does not hold. After a failed append there is nothing to roll back,
  * because nothing moved.
  *
+ * Events are kept and handed out as the same frozen graphs the physical stream
+ * keeps (see `retained-event.ts`), so a segment adds no copy of the history it
+ * reads, and `readAll()` is a fresh array of them.
+ *
  * No physical position crosses this boundary. The execution learns how much of
  * its own range it has, which is all replay needs; where that range sits in the
  * file is the command's business, and its observer already knows the whole
@@ -250,7 +256,7 @@ export class EntrySegmentStream implements DurableStream {
 
   constructor(physical: DurableStream, view: EntrySegmentView = {}) {
     this.physical = physical;
-    this.snapshot = (view.retained ?? []).map(clone);
+    this.snapshot = (view.retained ?? []).map((event) => sealEvent(event));
     this.last = view.final ?? true;
     // Read off the range rather than taken as a claim: what settles an entry is
     // its own terminal close, and the records say whether it holds one.
@@ -265,7 +271,7 @@ export class EntrySegmentStream implements DurableStream {
 
   // deno-lint-ignore require-yield
   *readAll(): Operation<DurableEvent[]> {
-    return this.snapshot.map(clone);
+    return this.snapshot.slice();
   }
 
   *append(event: DurableEvent): Operation<void> {
@@ -281,20 +287,16 @@ export class EntrySegmentStream implements DurableStream {
           "end of its own history.",
       );
     }
-    const recorded = clone(event);
+    // Sealed before the write suspends, so what the caller does with its own
+    // object afterwards reaches neither this range nor the physical stream.
+    // Both keep this one graph: it is frozen, so neither side can edit it.
+    const recorded = sealEvent(event);
 
     yield* this.physical.append(recorded);
 
-    // A copy of its own, because the physical stream may retain the object it
-    // was handed: two records of one event that share a graph are one record
-    // either side could edit.
-    this.snapshot.push(clone(recorded));
+    this.snapshot.push(recorded);
     if (settlesRoot(recorded)) {
       this.closed = true;
     }
   }
-}
-
-function clone(event: DurableEvent): DurableEvent {
-  return structuredClone(event);
 }

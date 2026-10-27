@@ -13,6 +13,12 @@
  * refusal never does is quote the file back: its contents are a person's own
  * history.
  *
+ * Reading is also incremental. The file is read a record at a time and never
+ * held as one string, and the records keep one instance of each large string
+ * they repeat — a root close hands on every value it inherited, so the same
+ * captured output recurs in every later close. A history past
+ * {@link HISTORY_LIMIT} is refused by name rather than by the engine.
+ *
  * Nothing here chooses a runtime. Reading, existence, kind and directory
  * creation are `@effectionx/fs` operations; the two this repository's portable
  * filesystem layer does not offer — creating a name exclusively and appending to
@@ -28,12 +34,14 @@
 
 import { withResolvers } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, exists, readTextFile, stat } from "@effectionx/fs";
+import { ensureDir, exists, stat } from "@effectionx/fs";
 import { join } from "node:path";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 
 import { ReplHost } from "./host.ts";
+import { forEachLine } from "./record-file.ts";
+import { sealEvent, stringSharing } from "./retained-event.ts";
 import { isOpaqueExecution } from "./route.ts";
 
 /** What the REPL could not read or write, and nothing of what it held. */
@@ -63,6 +71,14 @@ export interface RetainedStream extends DurableStream {
  * in hand is what the file holds. An append reaches the file first and is only
  * then acknowledged — remembered and announced — so nothing downstream ever sees
  * a record that a crash would have lost.
+ *
+ * Every event is held once, as a frozen graph, and every reader is handed that
+ * graph: `readAll()` answers with a fresh array of the same events, and the
+ * observer is told the event that was retained. Nobody can change what another
+ * reader sees, because nobody can change it at all — and the history is not
+ * copied once per reader. What an append is handed is copied before the write
+ * suspends, so a caller that edits its own object afterwards edits nothing
+ * retained.
  */
 export class RetainedReplStream implements RetainedStream {
   readonly path: string;
@@ -73,21 +89,21 @@ export class RetainedReplStream implements RetainedStream {
 
   constructor(path: string, retained: readonly DurableEvent[] = []) {
     this.path = path;
-    this.events = retained.map(clone);
+    this.events = retained.map((event) => sealEvent(event));
   }
 
   // deno-lint-ignore require-yield
   *readAll(): Operation<DurableEvent[]> {
-    return this.events.map(clone);
+    return this.events.slice();
   }
 
   *append(event: DurableEvent): Operation<void> {
-    const recorded = clone(event);
+    const recorded = sealEvent(event);
 
     yield* ReplHost.operations.appendRecord(this.path, serializeDurableEvent(recorded));
 
     this.events.push(recorded);
-    this.onAppend?.(clone(recorded));
+    this.onAppend?.(recorded);
   }
 }
 
@@ -181,36 +197,64 @@ export function* openExecutionFile(root: string, execution: string): Operation<R
 }
 
 /**
+ * The most text a history may decode to and still be reopened, in UTF-16 code units.
+ *
+ * V8's longest string, which is what reading a history as one string used to
+ * run into. Reading no longer builds that string, but this stays the supported
+ * bound: a history past it is refused with a sentence that names it, rather
+ * than read into a heap it may not fit. It bounds reopening only — a running
+ * history can grow past it, and it is this reader that then refuses.
+ */
+export const HISTORY_LIMIT = 0x1fffffe8;
+
+/**
  * Every record one file holds, in append order.
  *
  * A missing final newline is a refusal rather than a shorter history: the last
  * record was still being written, and reading around it would present a prefix
  * as the whole of what happened.
+ *
+ * `limit` is {@link HISTORY_LIMIT} everywhere but a test that has to reach it
+ * without writing half a gigabyte.
  */
-export function* readRecords(path: string): Operation<DurableEvent[]> {
-  const text = yield* readTextFile(path);
-  if (text.length === 0) {
-    return [];
-  }
-  if (!text.endsWith("\n")) {
-    throw new ReplJournalError(
-      "this execution's history ends in a record that was never finished writing.",
-    );
-  }
-
+export function* readRecords(
+  path: string,
+  limit: number = HISTORY_LIMIT,
+): Operation<DurableEvent[]> {
   const events: DurableEvent[] = [];
-  for (const line of text.slice(0, -1).split("\n")) {
-    const parsed = parseDurableEvent(line);
-    if (!parsed.ok) {
-      // The record's own text stays out of this: a history holds whatever a
-      // person's document held.
-      throw new ReplJournalError(
-        `this execution's history holds a record this version cannot read (record ` +
-          `${events.length + 1}).`,
-      );
-    }
-    events.push(parsed.value);
-  }
+  const share = stringSharing();
+  yield* forEachLine(
+    path,
+    {
+      limit: {
+        units: limit,
+        exceeded: () =>
+          new ReplJournalError(
+            `this execution's history exceeds the supported limit of ` +
+              `${limit.toLocaleString("en-US")} UTF-16 code units. Start a new execution with ` +
+              "`xmd repl` for further work; this history was left unchanged.",
+          ),
+      },
+      refusals: {
+        unterminated: () =>
+          new ReplJournalError(
+            "this execution's history ends in a record that was never finished writing.",
+          ),
+      },
+    },
+    function* (line): Operation<void> {
+      const parsed = parseDurableEvent(line);
+      if (!parsed.ok) {
+        // The record's own text stays out of this: a history holds whatever a
+        // person's document held.
+        throw new ReplJournalError(
+          `this execution's history holds a record this version cannot read (record ` +
+            `${events.length + 1}).`,
+        );
+      }
+      events.push(sealEvent(parsed.value, share));
+    },
+  );
   return events;
 }
 
@@ -357,8 +401,4 @@ export function movableWriter(initial: RetainedStream): MovableWriter {
     },
   };
   return facade;
-}
-
-function clone(event: DurableEvent): DurableEvent {
-  return structuredClone(event);
 }

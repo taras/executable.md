@@ -505,7 +505,10 @@ reconstructed from the location and the retained events. Settled entries are
 projected and never performed again; only a final entry the file shows as
 unfinished is given back to the engine to continue. A location naming a history
 this version cannot read, or naming an entry its selected prefix never admitted,
-refuses whole — with nothing appended and no execution started.
+refuses whole — with nothing appended and no execution started. So does a
+history longer than 536,870,888 UTF-16 code units, newlines included, and its
+refusal names that limit. A running execution can grow its history past it;
+the history is left as it is, and further work starts in a new execution.
 
 You may supply the include options again when reopening a location. Completed
 entries show their retained output and submitted entry source even after included

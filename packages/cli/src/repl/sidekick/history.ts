@@ -66,10 +66,13 @@ import {
 import type { DurableEvent, DurableStream, SerializedError } from "@executablemd/durable-streams";
 import { call, ensure, scoped, withResolvers } from "effection";
 import type { Operation } from "effection";
+import { createHash } from "node:crypto";
 
 import { ReplHost } from "../host.ts";
 import { readRecords, RetainedReplStream } from "../journal.ts";
 import type { MovableWriter, RetainedStream } from "../journal.ts";
+import { fileFingerprint, forEachLine, measureLines } from "../record-file.ts";
+import type { LinePrefix } from "../record-file.ts";
 import { isOpaqueExecution } from "../route.ts";
 
 /** What the Sidekick history could not be read or written as, and nothing it held. */
@@ -939,8 +942,7 @@ export function* verifyRetainedOrigin(origin: RetainedOrigin, path: string): Ope
     // courtesy, and this feature never deleted it.
     return;
   }
-  const body = yield* readTextFile(path);
-  const measured = yield* fingerprint(body);
+  const measured = yield* fileFingerprint(path);
   if (measured.bytes !== origin.bytes || measured.sha256 !== origin.sha256) {
     throw new SidekickHistoryError(
       "the older history this execution was published from has changed since, so which of the " +
@@ -1000,15 +1002,14 @@ export function parseEntryRecords(body: string): DurableEvent[] {
  * past the copy, which is the whole point of having made it.
  */
 export function* verifyCopiedPrefix(origin: RetainedOrigin, entriesPath: string): Operation<void> {
-  const lines = terminatedLines(yield* readTextFile(entriesPath));
-  if (lines.length < origin.records) {
+  const lines = yield* terminatedPrefix(entriesPath, origin.records);
+  const measured = lines.prefix;
+  if (lines.records < origin.records) {
     throw new SidekickHistoryError(
       "this execution's entry history holds fewer records than the prefix it was published " +
         "with, so it is not the history that pair describes.",
     );
   }
-  const claimed = lines.slice(0, origin.records).join("");
-  const measured = yield* fingerprint(claimed);
   if (measured.bytes !== origin.bytes || measured.sha256 !== origin.sha256) {
     throw new SidekickHistoryError(
       "this execution's entry history no longer begins with the records it was published with, " +
@@ -1030,9 +1031,8 @@ export function* verifyCopiedPrefix(origin: RetainedOrigin, entriesPath: string)
  * which is exactly what the reader has to refuse.
  */
 export function* bindRetainedPrefix(entriesPath: string): Operation<RetainedPrefix> {
-  const lines = terminatedLines(yield* readTextFile(entriesPath));
-  const measured = yield* fingerprint(lines.join(""));
-  return { records: lines.length, bytes: measured.bytes, sha256: measured.sha256 };
+  const lines = yield* terminatedPrefix(entriesPath);
+  return { records: lines.records, bytes: lines.prefix.bytes, sha256: lines.prefix.sha256 };
 }
 
 /**
@@ -1052,11 +1052,25 @@ export function* measureRetainedPrefix(
   readonly records: number;
   readonly measured: { readonly bytes: number; readonly sha256: string } | undefined;
 }> {
-  const lines = terminatedLines(yield* readTextFile(entriesPath));
-  if (lines.length < claimed) {
-    return { records: lines.length, measured: undefined };
+  const lines = yield* terminatedPrefix(entriesPath, claimed);
+  return { records: lines.records, measured: lines.records < claimed ? undefined : lines.prefix };
+}
+
+/**
+ * One entry file's records, measured off its bytes, refusing an unfinished last record.
+ *
+ * Read a chunk at a time, so measuring a history costs no string of its size:
+ * the byte count and digest are of the file's own bytes up to the end of the
+ * `count`th record, and the record count is of the whole file.
+ */
+function* terminatedPrefix(entriesPath: string, count?: number): Operation<LinePrefix> {
+  const lines = yield* measureLines(entriesPath, count);
+  if (!lines.terminated) {
+    throw new SidekickHistoryError(
+      "this execution's history ends in a record that was never finished writing.",
+    );
   }
-  return { records: lines.length, measured: yield* fingerprint(lines.slice(0, claimed).join("")) };
+  return lines;
 }
 
 /**
@@ -1291,37 +1305,23 @@ export interface Publication {
 }
 
 /**
- * Publish a pair for an execution that has none, copying an exact prefix.
+ * Publish an empty pair, for an execution whose history starts here.
  *
- * The order is the contract. Both files are created exclusively, the copied
- * prefix is appended record by record so the new entry file holds exactly the
- * records the old one held, the owner naming that exact origin is written, and
- * `ready` is written last — so a crash anywhere before `ready` leaves a
- * directory that refuses rather than a pair that looks usable, and leaves the
- * original recoverable and untouched.
+ * The order is the contract: both files are created exclusively, the owner is
+ * written, and `ready` is written last — so a crash anywhere before `ready`
+ * leaves a directory that refuses rather than a pair that looks usable.
  *
- * Nothing here executes a copied record. They are a person's history, not a
- * migration script.
+ * An execution that grew out of an older single file is published by
+ * {@link upgradeExecution} instead, which copies that file's bytes between
+ * these same two steps and names what it copied in the owner record.
  */
-export function* publishPair(
-  root: string,
-  execution: string,
-  prefix: {
-    /**
-     * The acknowledged bytes to copy, exactly as the older file holds them.
-     *
-     * The bytes rather than the events, because re-encoding parsed events is
-     * not copying them: `parseDurableEvent` rebuilds an envelope in its own
-     * member order and `serializeDurableEvent` preserves whatever order it is
-     * handed, so a round trip produces *a* valid encoding of the same history
-     * and not the encoding the origin's digest describes. The events beside it
-     * are that same snapshot parsed, for the retained stream to answer reads.
-     */
-    readonly body: string;
-    readonly events: readonly DurableEvent[];
-    readonly origin?: RetainedOrigin;
-  },
-): Operation<Publication> {
+export function* publishPair(root: string, execution: string): Operation<Publication> {
+  const location = yield* establishPair(root, execution);
+  return yield* acknowledgePair(location, execution, [], undefined);
+}
+
+/** Create both files of a new pair, exclusively, and nothing else yet. */
+function* establishPair(root: string, execution: string): Operation<PairedLocation> {
   const location = pairedLocation(root, execution);
   yield* ensureDir(location.directory);
   yield* ensureDir(join(location.directory, "components"));
@@ -1340,22 +1340,104 @@ export function* publishPair(
       cause: error,
     });
   }
+  return location;
+}
 
-  if (prefix.body.length > 0) {
-    // One append of the whole snapshot. Every record it holds is already
-    // terminated, so the copy is byte-for-byte what the origin's digest covers.
-    yield* ReplHost.operations.appendRecord(location.entries, prefix.body);
-  }
+/** Write `owner` and then `ready`, once the entry file holds its whole prefix. */
+function* acknowledgePair(
+  location: PairedLocation,
+  execution: string,
+  events: readonly DurableEvent[],
+  origin: RetainedOrigin | undefined,
+): Operation<Publication> {
   const sidekick = new SidekickWriter(location.sidekick);
   yield* sidekick.append({
     kind: "owner",
     version: SIDEKICK_VERSION,
     execution,
-    ...(prefix.origin === undefined ? {} : { origin: prefix.origin }),
+    ...(origin === undefined ? {} : { origin }),
   });
   yield* sidekick.append({ kind: "ready" });
 
-  return { location, entries: pairedEntryStream(location.entries, prefix.events), sidekick };
+  return { location, entries: pairedEntryStream(location.entries, events), sidekick };
+}
+
+/** How much copied text an upgrade gathers before appending it. */
+const COPY_BATCH = 1 << 22;
+
+/**
+ * Copy an older entry file into a new pair's, a record at a time, and fingerprint what was copied.
+ *
+ * One pass over one snapshot: the bytes fingerprinted, the records parsed for
+ * validity and the text appended are the same bytes, read once. Decoding is
+ * strict, so the text appended encodes back to exactly the bytes the digest
+ * covers; a file that is not UTF-8 is refused rather than copied as something
+ * else. No parsed record is kept — the retained stream already holds this
+ * history's events — and the count read must be the count it holds.
+ *
+ * The bytes rather than the events, because re-encoding parsed events is not
+ * copying them: `parseDurableEvent` rebuilds an envelope in its own member
+ * order and `serializeDurableEvent` preserves whatever order it is handed, so
+ * a round trip produces *a* valid encoding of the same history and not the
+ * encoding the origin's digest describes.
+ *
+ * No bound is passed. The file this reads is one `readRecords` has already
+ * opened under the supported limit, so a bound here would be a sentence
+ * nothing could reach.
+ */
+function* copyEntryRecords(from: string, to: string, expected: number): Operation<RetainedOrigin> {
+  const hash = createHash("sha256");
+  let bytes = 0;
+  let batch: string[] = [];
+  let batched = 0;
+  let parsed = 0;
+  const records = yield* forEachLine(
+    from,
+    {
+      strict: true,
+      observe: (chunk) => {
+        hash.update(chunk);
+        bytes += chunk.length;
+      },
+      refusals: {
+        unterminated: () =>
+          new SidekickHistoryError(
+            "this execution's history ends in a record that was never finished writing.",
+          ),
+        undecodable: () =>
+          new SidekickHistoryError(
+            "this execution's entry history holds bytes that are not text, so it cannot be " +
+              "copied exactly.",
+          ),
+      },
+    },
+    function* (line): Operation<void> {
+      if (!parseDurableEvent(line).ok) {
+        throw new SidekickHistoryError(
+          `this execution's entry history holds a record this version cannot read (record ` +
+            `${parsed + 1}).`,
+        );
+      }
+      parsed += 1;
+      batch.push(line, "\n");
+      batched += line.length + 1;
+      if (batched >= COPY_BATCH) {
+        yield* ReplHost.operations.appendRecord(to, batch.join(""));
+        batch = [];
+        batched = 0;
+      }
+    },
+  );
+  if (batched > 0) {
+    yield* ReplHost.operations.appendRecord(to, batch.join(""));
+  }
+  if (records !== expected) {
+    throw new SidekickHistoryError(
+      "this execution's entry history no longer holds the records this process retained, so " +
+        "it cannot be published as a pair.",
+    );
+  }
+  return { bytes, sha256: hash.digest("hex"), records };
 }
 
 /**
@@ -1426,6 +1508,16 @@ export function* openPair(
  * whole reason `redirect` is synchronous: between acknowledging publication and
  * selecting the new destination there is no point at which another coroutine
  * could append to the path whose prefix was just declared final.
+ *
+ * What a refusal leaves behind is the pair's two empty files and no `owner`,
+ * because the copy is what reads the older history and the pair exists before
+ * it starts. That directory is an interrupted publication from then on: opening
+ * the execution refuses it and never falls back to the older file, which is
+ * still there and still holds everything. Cancellation leaves the same thing.
+ * The one refusal a history this process has already opened can reach is the
+ * copy's strict decoding, because {@link readRecords} decodes leniently — so a
+ * history with a byte that is not UTF-8 opens, and upgrading it stops at a
+ * refusal rather than publishing a pair whose bytes are not the bytes it read.
  */
 export function* upgradeExecution(
   root: string,
@@ -1456,18 +1548,16 @@ export function* upgradeExecution(
     // retained origin no longer matching the fingerprint taken from it, which
     // is what makes the execution refuse to reopen at all.
     yield* writer.hold();
+    // The events this process already retained, shared rather than parsed a
+    // second time: the writer is held, so they are the records the file holds.
+    const events = yield* writer.readAll();
+    const location = yield* establishPair(root, execution);
     // One snapshot, read once: what is fingerprinted, what is parsed for
     // validity and what is copied are the same bytes. Reading the file a second
     // time would let a record land between the reads and leave the owner record
     // describing neither of them.
-    const body = yield* readTextFile(legacyPath);
-    const measured = yield* fingerprint(body);
-    const events = parseEntryRecords(body);
-    const publication = yield* publishPair(root, execution, {
-      body,
-      events,
-      origin: { bytes: measured.bytes, sha256: measured.sha256, records: events.length },
-    });
+    const origin = yield* copyEntryRecords(legacyPath, location.entries, events.length);
+    const publication = yield* acknowledgePair(location, execution, events, origin);
 
     writer.redirect(publication.entries);
     return publication;

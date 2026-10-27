@@ -101,7 +101,7 @@ export function pairedReplRepository(root: string): PairedReplRepository {
       // two processes racing for the same name is a refusal rather than a merge
       // — the same guarantee the single-file format took from exclusive create.
       const execution = yield* ReplHost.operations.identify();
-      const published = yield* publishPair(root, execution, { body: "", events: [] });
+      const published = yield* publishPair(root, execution);
       return {
         id: execution,
         stream: movableWriter(published.entries),
