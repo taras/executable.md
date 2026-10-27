@@ -1074,6 +1074,169 @@ describe("Tier EP — the execution protocol", () => {
     }
   });
 
+  /**
+   * EP29: what an explicit host Stop answers for, and what it leaves alone.
+   *
+   * `HostExecution.stop()` answers for the stop and the join — never for the
+   * document. These four are the boundaries that distinction is decided at, and
+   * each is reached by a real gate rather than by timing: a normal terminal
+   * whose append began first, a durability failure, that same failure beside an
+   * ordinary cleanup error, and an ordinary document failure on its own.
+   */
+  it("EP29: Stop joins a terminal already being written and keeps fatal identity", function* () {
+    // A normal root Close whose append is held open. Stop arrives while it is
+    // in flight, which is the one moment a stop could cancel an ending the
+    // backend may already hold.
+    const inner = new InMemoryStream();
+    const appending = withResolvers<void>();
+    const release = withResolvers<void>();
+    let appendCancelled = false;
+    const held = {
+      readAll: () => inner.readAll(),
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type !== "close") {
+          yield* inner.append(event);
+          return;
+        }
+        let acknowledged = false;
+        try {
+          appending.resolve();
+          yield* release.operation;
+          yield* inner.append(event);
+          acknowledged = true;
+        } finally {
+          appendCancelled = !acknowledged;
+        }
+      },
+    };
+
+    yield* scoped(function* () {
+      const execution = yield* executeInstalled(
+        { ...inlineSource("# a normal ending\n"), stream: held },
+        [],
+      );
+      yield* appending.operation;
+      const stopped = withResolvers<Result<void>>();
+      const asking = withResolvers<void>();
+      yield* spawn(function* () {
+        asking.resolve();
+        stopped.resolve(yield* execution.stop());
+      });
+      yield* asking.operation;
+      release.resolve();
+
+      // The ending it was writing is the ending it has. The append was not
+      // cancelled, the retained close says `ok`, the completion is that same
+      // success, and the stop is `Ok` because the stop and the join both
+      // completed — not because the document was stopped.
+      const answer = yield* stopped.operation;
+      const completion = yield* execution;
+      expect(answer.ok).toBe(true);
+      expect(completion.ok).toBe(true);
+      expect(appendCancelled).toBe(false);
+      const closes = inner.snapshot().filter((event) => event.type === "close");
+      expect(closes.length).toBe(1);
+      expect(closes[0]?.type === "close" ? closes[0].result.status : undefined).toBe("ok");
+    });
+
+    // A durability failure, alone and then beside an ordinary cleanup error.
+    // Both times the run's own failure is the stop's answer, by identity: a
+    // fatal failure belongs to the run whichever layer raised it, and it cannot
+    // be reported as a successful stop or lose to a later ordinary error.
+    for (const alsoFailCleanup of [false, true]) {
+      const refusing = new InMemoryStream();
+      const appendCause = new Error("this journal refused the root close");
+      const cleanupCause = new Error("ORDINARY-CLEANUP");
+      const stream = {
+        readAll: () => refusing.readAll(),
+        *append(event: DurableEvent): Operation<void> {
+          if (event.type === "close") {
+            throw appendCause;
+          }
+          yield* refusing.append(event);
+        },
+      };
+      yield* scoped(function* () {
+        const execution = yield* executeInstalled(
+          { ...inlineSource("# a refused ending\n"), stream },
+          alsoFailCleanup
+            ? [
+                {
+                  *install(): Operation<void> {
+                    yield* ensure(() => {
+                      throw cleanupCause;
+                    });
+                  },
+                },
+              ]
+            : [],
+        );
+        const completion = yield* execution;
+        const answer = yield* execution.stop();
+        expect(completion.ok).toBe(false);
+        expect(answer.ok).toBe(false);
+        const failed = completion.ok ? undefined : completion.error;
+        const refused = answer.ok ? undefined : answer.error;
+        expect(failed).toBeInstanceOf(DurablePersistenceError);
+        expect(refused).toBeInstanceOf(DurablePersistenceError);
+        // The same object, not a second description of it.
+        expect(refused).toBe(failed);
+        expect(String(refused?.message)).not.toContain("ORDINARY-CLEANUP");
+      });
+    }
+
+    // An ordinary document failure with a clean teardown is still a successful
+    // stop: the failure is the completion's to carry, and the stop did stop.
+    yield* scoped(function* () {
+      const execution = yield* executeInstalled(
+        { ...inlineSource("<OrdinaryFailure />\n"), stream: new InMemoryStream() },
+        [
+          {
+            *install(): Operation<void> {
+              yield* registerComponents([
+                {
+                  name: "OrdinaryFailure",
+                  origin: "execution-protocol",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  // deno-lint-ignore require-yield
+                  *fn(): Operation<string> {
+                    throw new Error("AUTHORED-FAILURE");
+                  },
+                },
+              ]);
+            },
+          },
+        ],
+      );
+      const completion = yield* execution;
+      const answer = yield* execution.stop();
+      expect(completion.ok).toBe(false);
+      expect(String(completion.ok ? "" : completion.error.message)).toContain("AUTHORED-FAILURE");
+      expect(answer.ok).toBe(true);
+    });
+
+    // And a cleanup that could not finish is not a successful stop, even though
+    // the document itself ended perfectly well.
+    yield* scoped(function* () {
+      const cleanupCause = new Error("CLEANUP-REFUSED");
+      const execution = yield* executeInstalled(
+        { ...inlineSource("# a clean document\n"), stream: new InMemoryStream() },
+        [
+          {
+            *install(): Operation<void> {
+              yield* ensure(() => {
+                throw cleanupCause;
+              });
+            },
+          },
+        ],
+      );
+      const answer = yield* execution.stop();
+      expect(answer.ok).toBe(false);
+      expect(answer.ok ? undefined : answer.error).toBe(cleanupCause);
+    });
+  });
+
   // EP28: an observer belongs to the invocation it watches. Two executions run
   // concurrently, each with its own callback and its own finalizer; cancelling
   // one consumer must reach only that invocation. A single shared slot would

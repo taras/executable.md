@@ -1161,6 +1161,34 @@ function* start(
         admitting = false;
         return canonical;
       }
+      // And the file has to say so. A canonical stop that answered `Ok` says
+      // the stop and the join completed; what makes this entry *settled* is a
+      // terminal the journal acknowledged, and only the acknowledged reading
+      // can establish one. The task's own completion cannot: it is this
+      // process's memory of how a task ended, and a halted task has one of
+      // those whether or not anything was ever written.
+      //
+      // Any retained terminal, not only a cancelled one: a normal ending whose
+      // append had already begun keeps the ending it was writing, and a stop
+      // that joined it stopped this entry exactly as truthfully.
+      const settlement = projectRepl(retained);
+      if (!settlement.ok) {
+        admitting = false;
+        return settlement;
+      }
+      const entry = settlement.value.entries.find((one) => one.key === held.key);
+      if (entry?.terminal === undefined) {
+        // Nothing was retained, so nothing settled. This session admits no
+        // successor into a segment that has no outcome, for the same reason an
+        // entry left unfinished by teardown permits none.
+        admitting = false;
+        return Err(
+          new ReplLifecycleError(
+            `this execution's ${held.key} retained no outcome, so it is unfinished and nothing ` +
+              "may follow it.",
+          ),
+        );
+      }
       return Ok(undefined);
     }
 

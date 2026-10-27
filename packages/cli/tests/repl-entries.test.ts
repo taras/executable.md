@@ -5254,6 +5254,63 @@ describe("REPL entries: the explicit Stop, and what it is not (#971 B2)", () => 
     }
   });
 
+  it("EL2: a cleanup that fails during Stop is the Stop's failure, and admits no successor", function* () {
+    // The journal takes everything, so the stopped ending really is retained.
+    // What fails is the entry's own teardown, after it — which is the other
+    // half of "a stop succeeded": a terminal was written *and* everything the
+    // entry held came down.
+    const holder = replExecution();
+    const entered = gate();
+    const refusal = new Error("this installation's cleanup refused to finish");
+    const refusingCleanup: ExecutionInstallation = {
+      *install(): Operation<void> {
+        yield* ensure(() => {
+          entered.open();
+          throw refusal;
+        });
+      },
+    };
+
+    yield* scoped(function* () {
+      const session = opened(
+        yield* submitReplEntry({
+          execution: holder,
+          source: STOPS,
+          installations: [refusingCleanup],
+        }),
+      );
+      yield* asking(session);
+      const key = session.model.entries[0]?.key;
+      if (key === undefined) {
+        throw new Error("this session admitted no entry to stop");
+      }
+
+      const stopped = yield* session.stopEntry(key);
+      // The cleanup was attempted and it failed, so this is not a stop that
+      // succeeded — whatever the journal managed to retain.
+      expect(stopped.ok).toBe(false);
+      if (stopped.ok) {
+        throw new Error("a refused cleanup reported a successful stop");
+      }
+      expect(causedBy(stopped.error, refusal)).toBe(true);
+      yield* awaiting("the entry's own cleanup being attempted", entered.opened);
+
+      // The ending was still written — a cleanup failure does not unwrite an
+      // acknowledged terminal, and nothing compensates around it.
+      const events = yield* holder.stream.readAll();
+      const closes = events.filter((event) => event.type === "close");
+      expect(closes.length).toBe(1);
+      expect(closes[0]?.type === "close" ? closes[0].result.status : undefined).toBe("cancelled");
+
+      // And this session admits nothing further, because its authority to start
+      // work was withdrawn before any guard was released.
+      expect(session.admits().ok).toBe(false);
+      const refused = refusedSubmission(yield* session.submit(PLAIN));
+      expect(refused.name).toBe("ReplLifecycleError");
+      expect(started(yield* holder.stream.readAll())).toBe(1);
+    });
+  });
+
   it("EL2: the same source left by teardown keeps its unfinished segment", function* () {
     // The paired control. Identical source, identical wait — and the session is
     // *torn down* rather than stopped, which is what Exit does.

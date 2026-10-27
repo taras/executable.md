@@ -3474,7 +3474,36 @@ function* executeDocument(
    * completion, so a caller cannot read a successful stop around it.
    */
   function* stopDocument(): Operation<Result<void>> {
-    rootControl?.requestInterruption();
+    // The root has not been created yet: this run is still starting, or it
+    // failed before reaching its workflow. There is no terminal to lose, so
+    // halting the runner is the whole of ending it.
+    if (rootControl === undefined) {
+      return yield* haltRunner();
+    }
+    if (!rootControl.requestInterruption()) {
+      // Refused, which means this root's own terminal is being written or has
+      // already been acknowledged. That terminal is the one it ends with. So
+      // nothing is halted, nothing is closed here and nothing is settled here:
+      // the run finishes writing, publishes its own result and output, and this
+      // waits for it. Halting now would cancel an append over a backend that
+      // may already hold it, and a cancelled ending written around it would be
+      // this run recording two.
+      yield* operation;
+      return Ok(undefined);
+    }
+    return yield* haltRunner();
+  }
+
+  /**
+   * End the runner and finish the consumers, for the two endings that halt it.
+   *
+   * The accepted interruption, where the root's own cancellation finalizer
+   * appends inside this task; and the startup that has no root yet. Both leave
+   * nothing acknowledged behind them, so the output is closed with what had
+   * actually been rendered and completion settles as stopped — unless the run
+   * settled something of its own first, in which case both are already taken.
+   */
+  function* haltRunner(): Operation<Result<void>> {
     try {
       yield* runner.halt();
     } catch (error) {
@@ -3484,9 +3513,6 @@ function* executeDocument(
       return Err(failure);
     }
     yield* closeOutput(emittedText);
-    // Only where the run settled nothing of its own. The document was stopped,
-    // so it completed successfully for nobody — and a terminal it had already
-    // acknowledged is the one it ends with, not this.
     settle(Err(new HostExecutionError(DOCUMENT_STOPPED)));
     return Ok(undefined);
   }
@@ -3864,9 +3890,33 @@ function* runInvocation(
    */
   function* stopInvocation(): Operation<Result<void>> {
     const stopped = yield* invoked.stop();
-    yield* settled.operation;
-    if (!stopped.ok) {
-      return stopped;
+    // The whole of it, joined: this resolves once the installations have
+    // unwound and the completion has been reconciled, so what is ranked below
+    // is what this invocation actually ended as rather than what the document
+    // part of it reported.
+    const completion = yield* settled.operation;
+    const stopFailure = stopped.ok ? undefined : stopped.error;
+    const documentFailure = completion.ok ? undefined : completion.error;
+
+    // Kind first, then occurrence within that kind, by identity — the same
+    // ranking the completion was reconciled by, extended by this stop's own
+    // report, which happened last. A durability or Files failure is the run's
+    // whichever layer raised it, so it can neither be reported as a successful
+    // stop nor lose to an ordinary cleanup error that happened after it.
+    const durable = fromEach(durabilityFailure, documentFailure, teardownFailure, stopFailure);
+    if (durable !== undefined) {
+      return Err(durable);
+    }
+    const files = fromEach(filesFatalFailure, documentFailure, teardownFailure, stopFailure);
+    if (files !== undefined) {
+      return Err(files);
+    }
+    // Below the fatal kinds, what this operation answers for is the stop and
+    // the join, not the document. A document that failed on its own stopped
+    // cleanly and that failure is its completion's to carry; a cleanup that
+    // could not finish did not stop cleanly, and neither did a refused append.
+    if (stopFailure !== undefined) {
+      return Err(stopFailure);
     }
     return teardownFailure === undefined ? Ok(undefined) : Err(teardownFailure);
   }
@@ -3958,6 +4008,29 @@ function reconcileExpansion(
 /** The fatal failure this one carries, if it carries one. */
 function fatalOf(error: unknown): Error | undefined {
   return durabilityFailure(error) ?? filesFatalFailure(error);
+}
+
+/**
+ * The first failure of one kind among these, in the order they happened.
+ *
+ * The order of the arguments is the order of occurrence, which is what decides
+ * within a kind. What comes back is the object the classifier found, never a
+ * rebuilt one, because the engine's fences match on identity.
+ */
+function fromEach<T>(
+  classify: (error: unknown) => T | undefined,
+  ...failures: readonly (Error | undefined)[]
+): T | undefined {
+  for (const failure of failures) {
+    if (failure === undefined) {
+      continue;
+    }
+    const found = classify(failure);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 /**
