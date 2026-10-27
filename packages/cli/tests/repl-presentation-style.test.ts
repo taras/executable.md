@@ -106,6 +106,14 @@ import {
   windowOf,
 } from "./fixtures/repl/presentation.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
+import {
+  CHECKPOINT_SIZE,
+  checkpointView,
+  RUNNING_SOURCE,
+  WRAPPING_LINE,
+  WRAPPING_QUEUED,
+} from "./fixtures/repl/workspace-checkpoint.ts";
+import { readDescription } from "../src/repl/description.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import { createFitStore, createPlainFitStore, fitPlain } from "../src/repl/fitting.ts";
@@ -4365,5 +4373,190 @@ describe("Tier BP5 — header space, the inset title and pane navigation", () =>
         REPL_PALETTE.draftSurface,
       ]);
     }
+  });
+});
+
+/**
+ * #971 checkpoint C1/C2: the staged workspace screen, drawn by the production
+ * pipeline at 160x36 from one controlled reading.
+ *
+ * The geometry asserted here is the plan's proposal — columns of 36, 66 and 58
+ * cells, one identity row, 33 body rows, a four-row Draft, one History row and
+ * one guidance row — not a reviewed image. Colours are asserted only as the
+ * distinctions the screen has to keep; the palette itself waits for the
+ * Product Owner's image review.
+ */
+describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("C1/C2: every surface is placed whole, wraps inside its region and keeps its styles", function* () {
+    const view = yield* checkpointView();
+    expect(RUNNING_SOURCE.includes(WRAPPING_LINE)).toBe(true);
+    const presenter = yield* usePresenter(CHECKPOINT_SIZE);
+    const observed = yield* presenter.commit(view);
+    const { grid } = presenter;
+    const region = (id: string): ReplBounds => {
+      const found = observed.regionOf(id);
+      if (found === undefined) {
+        throw new Error(`this frame placed no ${id}`);
+      }
+      return found;
+    };
+
+    // C1: the rows above, inside and below the body.
+    expect(region("box:identity")).toEqual({ x: 0, y: 0, width: 160, height: 1 });
+    expect(region("box:body")).toEqual({ x: 0, y: 1, width: 160, height: 33 });
+    expect(region("box:history")).toEqual({ x: 0, y: 34, width: 160, height: 1 });
+    expect(region("box:guidance")).toEqual({ x: 0, y: 35, width: 160, height: 1 });
+    // The three columns, dividers included, side by side and whole.
+    expect(regionBounds(observed, "sidebar")).toEqual({ x: 0, y: 1, width: 36, height: 33 });
+    expect(regionBounds(observed, "transcript")).toEqual({ x: 36, y: 1, width: 66, height: 33 });
+    expect(regionBounds(observed, "inspection")).toEqual({ x: 102, y: 1, width: 58, height: 33 });
+    // The Draft is four rows at the foot of the selected work.
+    const draft = region("box:draft");
+    expect(draft.height).toBe(4);
+    expect(draft.y + draft.height).toBe(34);
+    expect(draft.x).toBeGreaterThanOrEqual(36);
+    expect(draft.x + draft.width).toBeLessThanOrEqual(102);
+
+    // The old composition's surfaces are not on this screen at all.
+    for (const key of observed.keys) {
+      expect(key.startsWith("entry:")).toBe(false);
+      expect(key === "sessions:heading" || key === "transcript:heading").toBe(false);
+    }
+    expect(observed.regionOf("box:band:0")).toBe(undefined);
+
+    // The Draft's own Stop shares its heading row, at the right of the field.
+    const input = placed(observed, "footer:input");
+    const draftStop = placed(observed, "draft:stop");
+    expect(input.y).toBe(draft.y);
+    expect(draftStop.y).toBe(draft.y);
+    expect(draftStop.x).toBeGreaterThan(input.x);
+    expect(draftStop.x + draftStop.width).toBeLessThanOrEqual(draft.x + draft.width);
+
+    // TODO then QUEUE on the left, checked Follow then the Sidekick's Stop on the
+    // right, on one row above the composer.
+    const todo = placed(observed, "tray:todo");
+    const queue = placed(observed, "tray:queue");
+    const follow = placed(observed, "follow");
+    const sidekickStop = placed(observed, "sidekick:stop");
+    for (const one of [queue, follow, sidekickStop]) {
+      expect(one.y).toBe(todo.y);
+    }
+    expect(todo.x).toBeLessThan(queue.x);
+    expect(queue.x).toBeLessThan(follow.x);
+    expect(follow.x).toBeLessThan(sidekickStop.x);
+    expect(sidekickStop.x + sidekickStop.width).toBeGreaterThan(155);
+    expect(observed.cells.get("follow")?.includes("[x] Follow")).toBe(true);
+    expect(placed(observed, "sidekick:message").y).toBeGreaterThan(todo.y);
+
+    // Three pending messages, in order, each with one remove control on its
+    // first row whose accessible name is Remove message.
+    const prepared = yield* prepareFrame(presenter.renderer, view);
+    if (!prepared.ok) {
+      throw prepared.error;
+    }
+    const inputs = new Map(
+      prepared.value.presentation.descriptions.map((one) => {
+        const read = readDescription(one);
+        return [read.key, read.input] as const;
+      }),
+    );
+    let previous = todo.y;
+    for (const key of ["q1", "q2", "q3"]) {
+      const first = placed(observed, `queue:${key}:row:0`);
+      const remove = placed(observed, `queue:${key}:remove`);
+      expect(first.y).toBeGreaterThan(previous);
+      expect(remove.y).toBe(first.y);
+      expect(remove.x).toBeGreaterThan(first.x + first.width - 1);
+      expect(inputs.get(`queue:${key}:remove`)).toEqual({ label: "X", name: "Remove message" });
+      previous = first.y;
+    }
+    // The long message wraps between its origin and its X, its continuation
+    // set in to its text, and its rows spell exactly the message.
+    const wrapped = observed.keys.filter((key) => key.startsWith("queue:q2:row:"));
+    expect(wrapped.length).toBeGreaterThan(1);
+    const said = wrapped.map((key) => observed.cells.get(key) ?? "");
+    expect(said[0].startsWith("[C] ")).toBe(true);
+    expect(said.slice(1).every((one) => one.startsWith("    "))).toBe(true);
+    expect(said.map((one) => one.slice(4)).join("")).toBe(WRAPPING_QUEUED);
+    // The unsent composer text is not one of them.
+    expect(said.join("").includes("empty cart renders")).toBe(false);
+
+    // Mounted controls are whole, inside the screen, and never overlap.
+    const targets = observed.targets.map((one) => one.bounds);
+    for (const one of targets) {
+      expect(Number.isInteger(one.x) && Number.isInteger(one.y)).toBe(true);
+      expect(one.x).toBeGreaterThanOrEqual(0);
+      expect(one.x + one.width).toBeLessThanOrEqual(160);
+      expect(one.y + one.height).toBeLessThanOrEqual(36);
+    }
+    for (const [at, one] of targets.entries()) {
+      for (const other of targets.slice(at + 1)) {
+        const apart =
+          one.x + one.width <= other.x ||
+          other.x + other.width <= one.x ||
+          one.y + one.height <= other.y ||
+          other.y + other.height <= one.y;
+        expect(apart).toBe(true);
+      }
+    }
+
+    // C2: the exact source wraps at measured word boundaries inside the
+    // selected work, and the run of spaces in it survives.
+    const body = region(TRANSCRIPT_BODY);
+    for (const key of observed.keys.filter((one) => one.startsWith("reading:"))) {
+      const row = placed(observed, key);
+      expect(row.x).toBeGreaterThanOrEqual(body.x);
+      expect(row.x + row.width).toBeLessThanOrEqual(body.x + body.width);
+    }
+    const centre = grid.textIn(body);
+    const start = centre.findIndex((one) => one.includes("Compute the total once,    after"));
+    expect(start).toBeGreaterThanOrEqual(0);
+    const column = centre[start].indexOf("Compute");
+    const pieces: string[] = [];
+    for (
+      let at = start;
+      at < centre.length && pieces.join(" ").length < WRAPPING_LINE.length;
+      at += 1
+    ) {
+      pieces.push(centre[at].slice(column).trimEnd());
+    }
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.join(" ")).toBe(WRAPPING_LINE);
+
+    // Surfaces: the three columns, a header row and the Draft are each their
+    // own ground, blank cells included.
+    const left = grid.styleAt(30, 30).background;
+    const middle = grid.styleAt(80, 26).background;
+    const right = grid.styleAt(150, 22).background;
+    const heading = grid.styleAt(30, 1).background;
+    const drafted = grid.styleAt(draft.x + draft.width - 2, draft.y + 2).background;
+    expect(new Set([left, middle, right, heading, drafted]).size).toBe(5);
+    for (const key of ["draft:value:0", "draft:value:1", "draft:value:2"]) {
+      const row = placed(observed, key);
+      expect(grid.styleAt(row.x + row.width - 1, row.y).background).toBe(drafted);
+    }
+    // Focus is on the Draft: its marker is bold and its source keeps its colours.
+    const marker = grid.styleAt(input.x, input.y);
+    expect(grid.at(input.x, input.y)).toBe(">");
+    expect(marker.attrs.includes(BOLD)).toBe(true);
+    const value = placed(observed, "draft:value:0");
+    expect(grid.styleAt(value.x, value.y).foreground).not.toBe(
+      grid.styleAt(value.x + 1, value.y).foreground,
+    );
+    // Origins, queued text, the composer and execution state read differently.
+    const firstQueued = placed(observed, "queue:q2:row:0");
+    const origin = grid.styleAt(firstQueued.x, firstQueued.y).foreground;
+    const queuedText = grid.styleAt(firstQueued.x + 5, firstQueued.y).foreground;
+    expect(origin).not.toBe(queuedText);
+    const composer = placed(observed, "sidekick:message:value:0");
+    expect(grid.styleAt(composer.x, composer.y).foreground).not.toBe(queuedText);
+    const person = placed(observed, "queue:q1:row:0");
+    expect(grid.styleAt(person.x, person.y).foreground).not.toBe(origin);
+    const state = placed(observed, "work:state");
+    expect(grid.styleAt(state.x, state.y).foreground).not.toBe(
+      grid.styleAt(placed(observed, "work:crumbs").x, state.y).foreground,
+    );
   });
 });

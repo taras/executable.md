@@ -53,6 +53,20 @@ import {
   tabProps,
   tabRowProps,
   viewportProps,
+  bandRowProps,
+  BODY_GUTTER,
+  fittedPartProps,
+  GROWING_STACK_PROPS,
+  partsRowProps,
+  SPACER_PROPS,
+  WORKSPACE_CONVERSATION_COLUMNS,
+  WORKSPACE_DRAFT_ROWS,
+  WORKSPACE_LIST_GUTTER,
+  WORKSPACE_TRANSCRIPT_COLUMNS,
+  workspaceBlockProps,
+  workspaceBodyProps,
+  workspaceColumnProps,
+  workspaceHeaderProps,
 } from "./layout.ts";
 import type {
   ReplBounds,
@@ -73,7 +87,7 @@ import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
 import { ORDINARY, REPL_PALETTE, styleOf } from "./presentation-style.ts";
 import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts";
 import { jsonRuns, sourceRuns } from "./presentation-text.ts";
-import { NO_NAVIGATION, numbered, pointLabel } from "./navigation.ts";
+import { HEAD_LABELS, NO_NAVIGATION, numbered, pointLabel } from "./navigation.ts";
 import type { ReplHistoryNavigation } from "./navigation.ts";
 import { blankBand, EMPTY_BAND } from "./history-rail.ts";
 import type { ReplPreparedRail } from "./history-rail.ts";
@@ -1191,6 +1205,59 @@ export interface ReplView {
    * rather than something the renderer decorates.
    */
   readonly focused: string | undefined;
+  /**
+   * The staged workspace composition's own presentation, where a caller gave one.
+   *
+   * Inert: what Follow shows, which tray is selected, the messages waiting
+   * behind the active exchange and which entry a Sidekick message submitted. No
+   * owner, writer, reservation or provider is reachable through it. The root
+   * never supplies it, so the screen a command draws is the ordinary
+   * composition; a wide view carrying it is drawn as the #971 composition under
+   * image review.
+   */
+  readonly workspace?: ReplWorkspace;
+}
+
+/** One message waiting behind the active exchange, as the staged screen lists it. */
+interface ReplQueuedMessage {
+  readonly key: string;
+  readonly origin: MessageOrigin;
+  readonly text: string;
+}
+
+/** The entry one Sidekick message submitted, shown after that message as work. */
+interface ReplAssociatedWork {
+  /** The chat row the work follows, by the key the reading gives that row. */
+  readonly message: string;
+  /** The entry, by its catalog key. Its state and output are read from the model. */
+  readonly entry: string;
+}
+
+/** What the staged workspace composition shows that no reading holds yet. */
+export interface ReplWorkspace {
+  readonly follow: boolean;
+  readonly tray: "todo" | "queue";
+  readonly queued: readonly ReplQueuedMessage[];
+  readonly work: readonly ReplAssociatedWork[];
+}
+
+/** The same view, drawn as the staged workspace composition where it is wide. */
+export function withWorkspace(view: ReplView, workspace: ReplWorkspace): ReplView {
+  return Object.freeze({ ...view, workspace });
+}
+
+/**
+ * Whether this view is drawn as the staged workspace composition.
+ *
+ * Only at the wide profile, and only with a reading to draw: the medium and
+ * narrow compositions follow the 160x36 image review, and a refusal is the
+ * whole of its own screen.
+ */
+function staged(view: ReplView): ReplWorkspace | undefined {
+  if (view.refusal !== undefined || profileFor(view.size) !== "wide") {
+    return undefined;
+  }
+  return view.workspace;
 }
 
 /**
@@ -3201,6 +3268,8 @@ type ReplChatComposed =
       readonly key: string;
       readonly text: string;
       readonly style: ReplRowStyle;
+      /** The origin drawn over the first four cells of its first row, where marked. */
+      readonly mark?: ReplOriginMark;
     }
   | { readonly kind: "control"; readonly described: Described };
 
@@ -3208,7 +3277,17 @@ function sidekickComposedRows(
   reading: ReplSidekickReading | undefined,
   /** The key of whatever holds focus, for the one row that wears the marker. */
   focused: string | undefined,
+  /** The staged composition's associated work, where this reading is drawn there. */
+  staging?: ReplChatStaging,
 ): readonly ReplChatComposed[] {
+  if (
+    staging !== undefined &&
+    reading !== undefined &&
+    reading.refusal === undefined &&
+    (reading.setup === undefined || reading.setup.phase === "activated")
+  ) {
+    return workspaceChatComposed(reading, staging);
+  }
   const items: ReplChatComposed[] = [];
   /** One row of readable text, which a width still has to cut into rows. */
   const text = (key: string, label: string, style: ReplRowStyle): ReplChatComposed =>
@@ -3395,8 +3474,9 @@ function chatLinesOf(
  */
 export function sidekickChatLines(
   reading: ReplSidekickReading | undefined,
+  staging?: ReplChatStaging,
 ): readonly { readonly key: string; readonly text: string }[] {
-  return sidekickComposedRows(reading, undefined).flatMap((one) =>
+  return sidekickComposedRows(reading, undefined, staging).flatMap((one) =>
     one.kind === "text" ? chatLinesOf(one.key, one.text) : [],
   );
 }
@@ -3427,8 +3507,9 @@ function sidekickReadingRows(
   focused: string | undefined,
   /** The lines this frame fitted, or none before it has fitted any. */
   fitted?: readonly ReplFittedLine[] | undefined,
+  staging?: ReplChatStaging,
 ): readonly Described[] {
-  const composed = sidekickComposedRows(reading, focused);
+  const composed = sidekickComposedRows(reading, focused, staging);
   const cuts = new Map<string, ReplFittedLine[]>();
   for (const cut of fitted ?? []) {
     const held = cuts.get(cut.line);
@@ -3448,7 +3529,7 @@ function sidekickReadingRows(
       const pieces = cuts.get(own.key);
       if (pieces === undefined) {
         // No width was asked for, so this line stands as the one line it is.
-        rows.push(line(own.key, own.text, one.style));
+        rows.push(chatRow(own.key, own.text, one, own.key === one.key));
         continue;
       }
       for (const piece of pieces) {
@@ -3456,11 +3537,39 @@ function sidekickReadingRows(
         // the room the cut already reserved for them: a wrapped message reads
         // as the one message it is, and a row drawn flush left would be as wide
         // as the fitting assumed it was narrow.
-        rows.push(line(piece.key, `${" ".repeat(piece.indent)}${piece.text}`, one.style));
+        rows.push(
+          chatRow(
+            piece.key,
+            `${" ".repeat(piece.indent)}${piece.text}`,
+            one,
+            own.key === one.key && !piece.continuation,
+          ),
+        );
       }
     }
   }
   return rows;
+}
+
+/**
+ * One drawn row of a composed chat item, with its origin over the first row.
+ *
+ * Only the first row of a marked item carries the mark, and only where the room
+ * it was composed behind is still there: its continuations are set in to the
+ * same column instead.
+ */
+function chatRow(
+  key: string,
+  label: string,
+  one: { readonly style: ReplRowStyle; readonly mark?: ReplOriginMark },
+  first: boolean,
+): Described {
+  const mark = one.mark;
+  if (!first || mark === undefined || !label.startsWith(MARKER_ROOM)) {
+    return line(key, label, one.style);
+  }
+  const drawn = `${mark.text}${label.slice(MARKER_ROOM.length)}`;
+  return line(key, drawn, one.style, markedRuns(mark, drawn, one.style.role));
 }
 
 /**
@@ -4590,6 +4699,10 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
    * already are — described once, in the active focus root.
    */
   const covered = presentedAsking(view) !== undefined;
+  // The staged composition draws the Transcript of agent work on the left and
+  // reaches the catalog through the selected work's breadcrumbs, so the two
+  // surface headings and the catalog's own rows have no region in it.
+  const workspace = staged(view);
 
   const showEntry = (!narrow || routed === "entries") && !(narrow && showSidekick);
 
@@ -4614,7 +4727,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     styleOf("pane-heading", { selected: routed === "entries" }),
     { here: view.focused },
   );
-  items.push(toSessions);
+  if (workspace === undefined) {
+    items.push(toSessions);
+  }
   // In a narrow frame the two are one navigation bar above the routed outlet. In
   // a sidebar each heading stays with the list it names, which is where a reader
   // looks for it.
@@ -4645,6 +4760,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       claim,
       context.widths?.listBody,
       live.sidekick,
+      workspace !== undefined,
     );
     // Outside the thing they move, like the drawer's: a control inside the
     // window would scroll away from whoever was reaching for it.
@@ -4672,10 +4788,12 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       ),
     );
   }
-  if (!narrow) {
+  if (workspace !== undefined) {
+    items.push(...workspaceHeadings(view));
+  } else if (!narrow) {
     items.push(toEntries);
   }
-  if (showEntry) {
+  if (showEntry && workspace === undefined) {
     // One window over the whole catalog, for the same reason the Sessions
     // reading has one: a list that described every entry and every nested scope
     // beneath them would have its tail placed nowhere, and a row layout cannot
@@ -4734,7 +4852,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // title described there would be a mounted node with no box to draw it in.
   // The two surface controls are that frame's own headings.
   if (!narrow) {
-    items.push(line("transcript:heading", "Transcript", styleOf("pane-heading")));
+    if (workspace === undefined) {
+      items.push(line("transcript:heading", "Transcript", styleOf("pane-heading")));
+    }
     // Both tabs, always, and they are the right column's heading: the pane named
     // itself above them until the two names together said Sidekick twice when the
     // Sidekick was the reading. One row, each name once, and which of them is
@@ -4753,7 +4873,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           // And whether the Sidekick is waiting on an answer, said on the tab
           // while its pane is the hidden one: a question nobody can see
           // announced is a question nobody knows to go and answer.
-          `${pane === "sidekick" ? "Sidekick" : "Bindings"}${
+          `${pane === "sidekick" ? (workspace === undefined ? "Sidekick" : "SIDEKICK") : workspace === undefined ? "Bindings" : "BINDINGS"}${
             pane === "sidekick" && !here && live.sidekick?.question !== undefined
               ? " (question)"
               : ""
@@ -4798,7 +4918,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       );
       items.push(
         ...shown(
-          sidekickReadingRows(live.sidekick, view.focused, context.chat),
+          sidekickReadingRows(live.sidekick, view.focused, context.chat, chatStagingOf(view)),
           context,
           SIDEKICK_WINDOW,
         ),
@@ -4812,7 +4932,11 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           { here: view.focused },
         ),
       );
-      items.push(...sidekickControls(state, live.sidekick, view, claim, context));
+      items.push(
+        ...(workspace === undefined
+          ? sidekickControls(state, live.sidekick, view, claim, context)
+          : workspaceControls(state, live.sidekick, view, claim, context, workspace)),
+      );
     }
   }
 
@@ -5079,22 +5203,26 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // focus, and a drawer that just went says which one it is.
   const claiming =
     state.route.drawers.length === 0 && view.focused === undefined && claim === undefined;
-  items.push(
-    field(
-      "footer:input",
-      // Named, because the row below a reading has to say that it is where typing
-      // goes rather than one more line of that reading. The marker in front of it
-      // is still the focus cue `fieldText` writes, so this row reads `>> Draft: `
-      // while it holds focus and ` > Draft: ` while it does not.
-      "> Draft: ",
-      state.draft,
-      "draft",
-      styleOf("draft"),
-      claiming
-        ? { focus: true, here: view.focused, classify: sourceRuns }
-        : { here: view.focused, classify: sourceRuns },
-    ),
-  );
+  if (workspace !== undefined) {
+    items.push(...workspaceDraft(view, context, claiming));
+  } else {
+    items.push(
+      field(
+        "footer:input",
+        // Named, because the row below a reading has to say that it is where typing
+        // goes rather than one more line of that reading. The marker in front of it
+        // is still the focus cue `fieldText` writes, so this row reads `>> Draft: `
+        // while it holds focus and ` > Draft: ` while it does not.
+        "> Draft: ",
+        state.draft,
+        "draft",
+        styleOf("draft"),
+        claiming
+          ? { focus: true, here: view.focused, classify: sourceRuns }
+          : { here: view.focused, classify: sourceRuns },
+      ),
+    );
+  }
 
   const drawer = drawerFor(view, context, history, exit, drawable);
   if (drawer === undefined) {
@@ -5242,6 +5370,14 @@ function sessionRows(
    * interleaved list would have to assert an order these two files do not share.
    */
   sidekick: ReplSidekickReading | undefined,
+  /**
+   * Whether these are the staged composition's compact request and reply rows.
+   *
+   * The same rows, keys and actions. The conversation choices move to the
+   * column's selector, each request and reply is marked with who it came from,
+   * and a conversation is named once above the run of turns that share it.
+   */
+  compact = false,
 ): readonly Described[] {
   const items: Described[] = [];
   const filter = state.route.session;
@@ -5254,7 +5390,7 @@ function sessionRows(
       offered.push(key);
     }
   }
-  if (offered.length > 0) {
+  if (offered.length > 0 && !compact) {
     // All is a control rather than the absence of one: clearing a filter is
     // something a person does, and a list that could only be narrowed would
     // leave them holding a view they cannot get out of.
@@ -5290,8 +5426,24 @@ function sessionRows(
     items.push(line("sessions:section:entries", "  Entry agents", styleOf("pane-heading")));
   }
   const entries: Described[] = [];
+  let named: string | undefined;
   for (const turn of turns) {
     if (filter !== undefined && turn.sessionKey !== filter) {
+      continue;
+    }
+    if (compact) {
+      const whose = [turn.agent, turn.sessionKey].filter((fact) => fact !== undefined).join(" · ");
+      if (whose !== "" && whose !== named) {
+        entries.push(
+          line(
+            `sessions:turn:${turn.key}:whose`,
+            fitLine([{ text: CONTROL_ROOM }, { text: whose, elide: true }], width),
+            styleOf("metadata"),
+          ),
+        );
+      }
+      named = whose;
+      entries.push(...compactTurn(turn, width, focused, claim));
       continue;
     }
     entries.push(
@@ -5430,6 +5582,26 @@ function sessionRows(
     items.push(line("sessions:sidekick:none", "    No Sidekick turns.", styleOf("metadata")));
     return items;
   }
+  if (compact) {
+    let label: string | undefined;
+    for (const turn of chat) {
+      const whose = [turn.agent, turn.conversation, turn.sessionKey]
+        .filter((fact) => fact !== undefined)
+        .join(" \u00b7 ");
+      if (whose !== label) {
+        items.push(
+          line(
+            `sessions:${turn.key}:whose`,
+            fitLine([{ text: CONTROL_ROOM }, { text: whose, elide: true }], width),
+            styleOf("metadata"),
+          ),
+        );
+      }
+      label = whose;
+      items.push(...compactSidekickTurn(turn, sidekick, width, focused));
+    }
+    return items;
+  }
   for (const turn of chat) {
     items.push(
       row(
@@ -5507,9 +5679,21 @@ function sessionRows(
  * clamps against cannot disagree with the list it is clamping: one definition of
  * what the reading is, asked twice.
  */
-function sessionContentRows(state: ReplState, model: ReplModel, live: ReplLive): number {
-  return sessionRows(state, chronology(model, live), undefined, undefined, undefined, live.sidekick)
-    .length;
+function sessionContentRows(
+  state: ReplState,
+  model: ReplModel,
+  live: ReplLive,
+  compact = false,
+): number {
+  return sessionRows(
+    state,
+    chronology(model, live),
+    undefined,
+    undefined,
+    undefined,
+    live.sidekick,
+    compact,
+  ).length;
 }
 
 /**
@@ -7164,6 +7348,13 @@ export interface ReplMeasuredWidths {
   readonly body: number;
   /** The drawer's own interior. */
   readonly drawer: number;
+  /**
+   * The staged queue's text column, between a message's origin and its remove
+   * control. Zero where the frame draws no queue.
+   */
+  readonly queue?: number;
+  /** The row the guidance is drawn in, where a frame draws it apart from the work. */
+  readonly guidance?: number;
 }
 
 /**
@@ -7291,6 +7482,20 @@ export interface ReplPresentationContext {
    * counts, and nothing is admitted into a drawer from them.
    */
   readonly drawer: ReplBounds | undefined;
+  /**
+   * The rows the staged Draft draws of the draft's own value, or none.
+   *
+   * Fitted to the selected work's measured width and windowed to the newest
+   * rows the Draft has room for. The value itself is untouched.
+   */
+  readonly draft?: readonly string[] | undefined;
+  /**
+   * The staged queue's messages, fitted to the width their rows measured.
+   *
+   * A measuring pass carries none, and each message is then one blank row: the
+   * count is the geometry question and the text would be fitted to nothing.
+   */
+  readonly queue?: readonly ReplFittedLine[] | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -7430,7 +7635,9 @@ type ReplSlot =
   /** The Sidekick's own input row and its controls, below its chat. */
   | "inspection-below"
   /** The chat window's own two controls, which surround it. */
-  | "inspection-window";
+  | "inspection-window"
+  /** The staged composition's own rows, placed by key. */
+  | "workspace";
 
 function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:open") {
@@ -7518,6 +7725,20 @@ function slotOf(key: string): ReplSlot | undefined {
   }
   if (key === "guidance" || key.startsWith("guidance:row:")) {
     return "located";
+  }
+  if (
+    key === "transcript:title" ||
+    key === "transcript:selector" ||
+    key === "work:crumbs" ||
+    key === "work:state" ||
+    key === "draft:stop" ||
+    key === "draft:send" ||
+    key === "follow" ||
+    key.startsWith("draft:value:") ||
+    key.startsWith("tray:") ||
+    key.startsWith("queue:")
+  ) {
+    return "workspace";
   }
   // Above the surface, where there is a row's full width for a sentence. On the
   // action row it would be one truncated line beside the control.
@@ -8012,6 +8233,22 @@ export function presentationFor(
     });
   };
 
+  const workspace = staged(view);
+  if (workspace !== undefined) {
+    return workspacePresentation({
+      view,
+      context,
+      descriptions,
+      candidates,
+      rail,
+      listColumn,
+      chatColumn,
+      viewports,
+      regions,
+      contents,
+    });
+  }
+
   const columns: ReplBox[] = [];
   if (profile === "narrow") {
     // Exactly the routed surface, and nothing else. A narrow screen that stacked
@@ -8486,14 +8723,14 @@ function totalOf(
   window: string,
 ): number {
   if (window === SESSIONS_WINDOW) {
-    return sessionContentRows(view.state, view.model, view.live);
+    return sessionContentRows(view.state, view.model, view.live, staged(view) !== undefined);
   }
   if (window === SIDEKICK_WINDOW) {
     // Counted by the builder that produces those rows, so what a scroll clamps
     // against cannot disagree with the list it is clamping — fitted rows
     // included, because a message that occupies three rows is three rows to
     // scroll past.
-    return sidekickReadingRows(view.live.sidekick, undefined, chat).length;
+    return sidekickReadingRows(view.live.sidekick, undefined, chat, chatStagingOf(view)).length;
   }
   if (window === ENTRIES_WINDOW) {
     return entriesRowCount(view.model);
@@ -8507,4 +8744,1138 @@ function totalOf(
   return drawerContent(view, widths?.drawer ?? 0, preview)?.content.length ?? 0;
 }
 
+/**
+ * The four cells a marked row's origin takes.
+ *
+ * A marked row is composed behind four blanks and the marker is drawn over
+ * them, so the text is measured and wrapped at exactly the width it is drawn
+ * at, and its continuation rows are set in to the same column as its first.
+ */
+const MARKER_ROOM = "    ";
+
+/** The two cells in front of a control's label that its focus marker takes. */
+const CONTROL_ROOM = "  ";
+
+/** Who one marked row came from: the marker it shows and the colour it takes. */
+interface ReplOriginMark {
+  readonly text: string;
+  readonly role: ReplPresentationRole;
+}
+
+const PERSON_MARK: ReplOriginMark = Object.freeze({ text: "[U] ", role: "origin-person" });
+const SIDEKICK_MARK: ReplOriginMark = Object.freeze({ text: "[S] ", role: "origin-sidekick" });
+const AGENT_MARK: ReplOriginMark = Object.freeze({ text: "[A] ", role: "origin-agent" });
+const ATTACHMENT_MARK: ReplOriginMark = Object.freeze({
+  text: "[C] ",
+  role: "origin-attachment",
+});
+const WORK_MARK: ReplOriginMark = Object.freeze({ text: "[R] ", role: "origin-repl" });
+
+/** The mark a message's own origin earns: a person here, or an attached client. */
+function originMark(origin: MessageOrigin | undefined): ReplOriginMark {
+  return origin?.kind === "acp" ? ATTACHMENT_MARK : PERSON_MARK;
+}
+
+/** A label whose first four cells are its origin mark, as the runs that draw it. */
+function markedRuns(
+  mark: ReplOriginMark,
+  label: string,
+  role: ReplPresentationRole,
+): readonly ReplTokenRun[] {
+  return tokenRuns([
+    { text: mark.text, token: mark.role },
+    { text: label.slice(mark.text.length), token: role },
+  ]);
+}
+
+/** What the staged chat adds to a reading: the work its messages submitted. */
+interface ReplChatStaging {
+  readonly model: ReplModel;
+  readonly live: ReplLive;
+  readonly work: readonly ReplAssociatedWork[];
+}
+
+function chatStagingOf(view: ReplView): ReplChatStaging | undefined {
+  const workspace = staged(view);
+  if (workspace === undefined) {
+    return undefined;
+  }
+  return { model: view.model, live: view.live, work: workspace.work };
+}
+
+/**
+ * What one entry is doing, in one word and the role that colours it.
+ *
+ * Read from the entry's own retained outcome, and from this process only for the
+ * final entry it is running. An entry with no outcome and nothing running it is
+ * unfinished, never assumed to be either.
+ */
+function workState(
+  entry: ReplEntry,
+  model: ReplModel,
+  live: ReplLive,
+): { readonly word: string; readonly style: ReplRowStyle } {
+  const terminal = entry.terminal;
+  if (terminal !== undefined) {
+    if (terminal.status === "ok") {
+      return { word: "✓ COMPLETED", style: styleOf("successful-outcome") };
+    }
+    return terminal.status === "err"
+      ? { word: "× FAILED", style: styleOf("failed-outcome") }
+      : { word: "× INTERRUPTED", style: styleOf("failed-outcome") };
+  }
+  const last = model.entries[model.entries.length - 1];
+  if (live.running && last?.key === entry.key) {
+    return { word: "● ACTIVE", style: styleOf("lifecycle-active") };
+  }
+  return { word: "UNFINISHED", style: styleOf("metadata") };
+}
+
+/** The rows of work one Sidekick message submitted, after that message. */
+function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatComposed[] {
+  const found: ReplChatComposed[] = [];
+  for (const one of staging.work) {
+    if (`sidekick:${one.message}` !== key) {
+      continue;
+    }
+    const entry = staging.model.entries.find((candidate) => candidate.key === one.entry);
+    if (entry === undefined) {
+      // An entry this prefix does not hold is not work this reading can show.
+      continue;
+    }
+    const state = workState(entry, staging.model, staging.live);
+    found.push(
+      Object.freeze({
+        kind: "text" as const,
+        key: `sidekick:work:${entry.key}`,
+        text: `${MARKER_ROOM}Entry ${entry.order} · ${state.word}`,
+        style: state.style,
+        mark: WORK_MARK,
+      }),
+    );
+    // The record's own final line break ends its last line rather than adding one.
+    const recorded = entry.terminal?.output ?? "";
+    const output = recorded.endsWith("\n") ? recorded.slice(0, -1) : recorded;
+    if (output !== "") {
+      found.push(
+        Object.freeze({
+          kind: "text" as const,
+          key: `sidekick:work:${entry.key}:output`,
+          text: output
+            .split("\n")
+            .map((own) => `${MARKER_ROOM}${own}`)
+            .join("\n"),
+          style: styleOf("output"),
+        }),
+      );
+    }
+  }
+  return found;
+}
+
+/**
+ * The staged chat: each message marked with who it came from, and the work a
+ * message submitted shown after it as work rather than as something said.
+ *
+ * Only explicit evaluated Output is the Sidekick's own row. An entry's state and
+ * output are read from the model, never from a reply's wording.
+ */
+function workspaceChatComposed(
+  reading: ReplSidekickReading,
+  staging: ReplChatStaging,
+): readonly ReplChatComposed[] {
+  const items: ReplChatComposed[] = [];
+  const text = (
+    key: string,
+    said: string,
+    style: ReplRowStyle,
+    mark: ReplOriginMark,
+  ): ReplChatComposed =>
+    Object.freeze({
+      kind: "text" as const,
+      key,
+      text: said
+        .split("\n")
+        .map((own) => `${MARKER_ROOM}${own}`)
+        .join("\n"),
+      style,
+      mark,
+    });
+  const shownChat = reading.chat.filter((item) => item.conversation === reading.reading);
+  if (shownChat.length === 0) {
+    items.push(text("sidekick:empty", "No messages yet.", styleOf("metadata"), SIDEKICK_MARK));
+  }
+  for (const [at, item] of shownChat.entries()) {
+    const key = `sidekick:${item.key}`;
+    if (item.kind === "person") {
+      if (at > 0) {
+        // One blank row between exchanges, as the reference separates them.
+        items.push(
+          Object.freeze({ kind: "text" as const, key: `${key}:gap`, text: "", style: ORDINARY }),
+        );
+      }
+      items.push(text(key, item.text, styleOf("source"), originMark(item.origin)));
+    } else if (item.kind === "preview") {
+      items.push(text(key, item.text, styleOf("waiting"), SIDEKICK_MARK));
+    } else if (item.kind === "saved") {
+      items.push(
+        text(
+          key,
+          item.automatic === true ? `Automatic feedback · ${item.text}` : item.text,
+          styleOf("metadata"),
+          SIDEKICK_MARK,
+        ),
+      );
+    } else if (item.kind === "incomplete" || item.failure !== undefined) {
+      items.push(
+        text(
+          key,
+          `(${item.kind === "incomplete" ? "unfinished" : "failed"}) ${
+            item.failure ?? "this turn did not complete"
+          }`,
+          styleOf("failed-outcome"),
+          SIDEKICK_MARK,
+        ),
+      );
+    } else if (item.hasOutput) {
+      items.push(text(key, item.text, styleOf("output"), SIDEKICK_MARK));
+    }
+    items.push(...workComposed(staging, key));
+  }
+  if (reading.busy) {
+    const running = staging.model.entries.find(
+      (entry) =>
+        staging.work.some((one) => one.entry === entry.key) &&
+        workState(entry, staging.model, staging.live).style.role === "lifecycle-active",
+    );
+    items.push(
+      text(
+        "sidekick:status",
+        running === undefined ? "working" : `○ waiting for Entry ${running.order}`,
+        styleOf("waiting"),
+        SIDEKICK_MARK,
+      ),
+    );
+  }
+  return items;
+}
+
+/**
+ * The staged left column's own headings, and the selected work's.
+ *
+ * The Transcript names itself and its closed conversation selector; the
+ * selected work names the entry and the scopes being read as breadcrumbs, with
+ * the way to the Entries catalog in front of them and the entry's state at the
+ * end. The selector draws no choices while it is closed.
+ */
+function workspaceHeadings(view: ReplView): readonly Described[] {
+  const items: Described[] = [];
+  items.push(line("transcript:title", "TRANSCRIPT", styleOf("pane-heading")));
+  items.push(
+    line(
+      "transcript:selector",
+      `${view.state.route.session === undefined ? "All sessions" : headline(view.state.route.session)} ▾`,
+      styleOf("field-label"),
+    ),
+  );
+  items.push(
+    row(
+      "entries:heading",
+      "Entries",
+      { select: "surface", surface: "entries" },
+      styleOf("navigate"),
+      { here: view.focused },
+    ),
+  );
+  const entry =
+    view.selection.entry === undefined
+      ? view.model.entries[view.model.entries.length - 1]
+      : view.model.entries.find((one) => one.key === view.selection.entry?.key);
+  if (entry === undefined) {
+    items.push(line("work:crumbs", "› No entry yet", styleOf("metadata")));
+    return items;
+  }
+  const names = [
+    `Entry ${entry.order}`,
+    ...view.selection.ancestry.slice(1).map((one) => one.name),
+  ];
+  const separator = " › ";
+  const said = `› ${names.join(separator)}`;
+  const runs: ReplTokenRun[] = [];
+  for (const [at, name] of names.entries()) {
+    runs.push({ text: at === 0 ? "› " : separator, token: "punctuation" });
+    runs.push({ text: name, token: at === names.length - 1 ? "xmd-tag" : "metadata" });
+  }
+  items.push(line("work:crumbs", said, styleOf("metadata"), tokenRuns(runs)));
+  const state = workState(entry, view.model, view.live);
+  items.push(line("work:state", state.word, state.style));
+  return items;
+}
+
+/**
+ * One entry agent turn as the staged Transcript reads it: the request, marked
+ * as the agent's, with its state kept whole, then the reply beneath it.
+ *
+ * The same keys and the same activation the ordinary rows have, so selecting a
+ * turn goes where it always did.
+ */
+function compactTurn(
+  turn: ReplSessionTurn,
+  width: number | undefined,
+  focused: string | undefined,
+  claim: string | undefined,
+): readonly Described[] {
+  const rows: Described[] = [];
+  const style = turnStyle(turn);
+  const label = fitControl(
+    [
+      { text: AGENT_MARK.text },
+      { text: headline(turn.prompt), elide: true },
+      { text: " · " },
+      { text: stateOf(turn), keep: true },
+    ],
+    width,
+  );
+  rows.push(
+    row(
+      `sessions:turn:${turn.key}`,
+      label,
+      turn.marker === undefined
+        ? { select: "surface", surface: "sessions" }
+        : { select: "marker", marker: turn.marker },
+      style,
+      { here: focused, claim, runs: markedRuns(AGENT_MARK, label, style.role) },
+    ),
+  );
+  if (turn.text.length > 0) {
+    rows.push(
+      line(
+        `sessions:turn:${turn.key}:text`,
+        fitLine(
+          [{ text: `${CONTROL_ROOM}${MARKER_ROOM}` }, { text: headline(turn.text), elide: true }],
+          width,
+        ),
+        styleOf("output"),
+      ),
+    );
+  }
+  if (turn.failure !== undefined) {
+    rows.push(
+      line(
+        `sessions:turn:${turn.key}:failed`,
+        fitLine(
+          [
+            { text: `${CONTROL_ROOM}${MARKER_ROOM}` },
+            { text: headline(turn.failure), elide: true },
+          ],
+          width,
+        ),
+        styleOf("failed-outcome"),
+      ),
+    );
+  }
+  const request = turn.request;
+  if (request !== undefined) {
+    rows.push(
+      line(
+        `sessions:request:${request.key}`,
+        fitLine(
+          [
+            { text: `${CONTROL_ROOM}${MARKER_ROOM}asks: ` },
+            { text: headline(request.title ?? request.toolCallId), elide: true },
+          ],
+          width,
+        ),
+        styleOf("waiting"),
+      ),
+    );
+  }
+  return rows;
+}
+
+/**
+ * One Sidekick turn as the staged Transcript reads it: the message, marked with
+ * where it came from, then the reply, marked as the Sidekick's.
+ *
+ * The origin is the saved message's own, found by its conversation and turn; a
+ * turn whose message this reading does not hold is marked as a person's, which
+ * is what every message without an attachment is.
+ */
+function compactSidekickTurn(
+  turn: ReplSidekickTurnRow,
+  sidekick: ReplSidekickReading,
+  width: number | undefined,
+  focused: string | undefined,
+): readonly Described[] {
+  const rows: Described[] = [];
+  const asked = sidekick.chat.find(
+    (item) =>
+      item.kind === "person" &&
+      item.conversation === turn.conversation &&
+      item.turn !== null &&
+      item.turn === turn.turn,
+  );
+  const mark = originMark(asked?.origin);
+  const style = turn.running
+    ? styleOf("waiting")
+    : turn.failed
+      ? styleOf("failed-outcome")
+      : styleOf("source");
+  const label = fitControl(
+    [
+      { text: mark.text },
+      { text: headline(turn.title), elide: true },
+      { text: " · " },
+      { text: turn.state, keep: true },
+    ],
+    width,
+  );
+  rows.push(
+    row(
+      `sessions:${turn.key}`,
+      label,
+      {
+        select: "sidekick-turn",
+        conversation: turn.conversation,
+        ...(turn.turn === null ? {} : { turn: turn.turn }),
+      },
+      style,
+      { here: focused, runs: markedRuns(mark, label, style.role) },
+    ),
+  );
+  if (turn.text.length > 0) {
+    const said = fitLine(
+      [
+        { text: `${CONTROL_ROOM}${SIDEKICK_MARK.text}` },
+        { text: headline(turn.text), elide: true },
+      ],
+      width,
+    );
+    rows.push(
+      line(
+        `sessions:${turn.key}:text`,
+        said,
+        styleOf("output"),
+        tokenRuns([
+          { text: CONTROL_ROOM, token: "output" },
+          ...markedRuns(SIDEKICK_MARK, said.slice(CONTROL_ROOM.length), "output"),
+        ]),
+      ),
+    );
+  }
+  if (turn.failure !== undefined) {
+    rows.push(
+      line(
+        `sessions:${turn.key}:failed`,
+        fitLine(
+          [
+            { text: `${CONTROL_ROOM}${MARKER_ROOM}` },
+            { text: headline(turn.failure), elide: true },
+          ],
+          width,
+        ),
+        styleOf("failed-outcome"),
+      ),
+    );
+  }
+  return rows;
+}
+
+/**
+ * The staged Sidekick pane's own controls: the tray above the composer, Follow
+ * and the Sidekick's Send or Stop beside it, the waiting messages, and the
+ * composer itself.
+ *
+ * TODO, QUEUE, Follow and each message's remove control are mounted controls
+ * that ask the root for nothing: their behaviour is the queue contract's (#964)
+ * and the shared TODO's (#901), and none of it is wired here. Send and Stop are
+ * the Sidekick's own, with the actions they always had.
+ */
+function workspaceControls(
+  state: ReplState,
+  reading: ReplSidekickReading | undefined,
+  view: ReplView,
+  claim: string | undefined,
+  context: ReplPresentationContext,
+  workspace: ReplWorkspace,
+): readonly Described[] {
+  const items: Described[] = [];
+  if (reading === undefined) {
+    return items;
+  }
+  if (state.route.sidekick !== undefined) {
+    items.push(
+      row(
+        "sidekick:back",
+        "[Back to current chat]",
+        { select: "sidekick-back" },
+        styleOf("action"),
+        {
+          here: view.focused,
+        },
+      ),
+    );
+  }
+  if (reading.refusal !== undefined || !reading.current) {
+    return items;
+  }
+  items.push(
+    row(
+      "sidekick:configure",
+      `[configure ${reading.agent}]`,
+      {
+        select: "configure",
+        ...(reading.conversation === undefined ? {} : { conversation: reading.conversation }),
+      },
+      styleOf("navigate"),
+      { here: view.focused, ...(claim === "sidekick:configure" ? { focus: true } : {}) },
+    ),
+  );
+  const question = reading.question;
+  if (question !== undefined) {
+    items.push(
+      row(
+        "sidekick:answer",
+        "[answer sidekick]",
+        { select: "sidekick-question", question: question.key },
+        styleOf("waiting"),
+        { here: view.focused, ...(claim === "sidekick:answer" ? { focus: true } : {}) },
+      ),
+    );
+  }
+  for (const tray of ["todo", "queue"] as const) {
+    const here = workspace.tray === tray;
+    items.push(
+      row(
+        `tray:${tray}`,
+        tray.toUpperCase(),
+        {},
+        styleOf(here ? "pane-heading" : "metadata", { selected: here }),
+        {
+          here: view.focused,
+        },
+      ),
+    );
+  }
+  items.push(
+    row("follow", `[${workspace.follow ? "x" : " "}] Follow`, {}, styleOf("action"), {
+      here: view.focused,
+    }),
+  );
+  items.push(
+    reading.busy
+      ? row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
+          here: view.focused,
+        })
+      : row("sidekick:send", "[send]", { select: "send-message" }, styleOf("action"), {
+          here: view.focused,
+        }),
+  );
+  if (workspace.tray === "queue") {
+    const fitted = context.queue;
+    for (const message of workspace.queued) {
+      const mark = originMark(message.origin);
+      // Before the queue is fitted each message is one blank row: the count is
+      // the geometry question, and its text would be fitted to nothing.
+      const pieces =
+        fitted === undefined
+          ? [{ text: "", indent: 0 }]
+          : fitted.filter((piece) => piece.line === `queue:${message.key}`);
+      for (const [at, piece] of pieces.entries()) {
+        const text = `${" ".repeat(piece.indent)}${piece.text}`;
+        const first = at === 0 && text.startsWith(MARKER_ROOM);
+        const said = first ? `${mark.text}${text.slice(MARKER_ROOM.length)}` : text;
+        items.push(
+          line(
+            `queue:${message.key}:row:${at}`,
+            said,
+            styleOf("queued"),
+            first ? markedRuns(mark, said, "queued") : undefined,
+          ),
+        );
+      }
+      items.push(
+        row(`queue:${message.key}:remove`, "X", { name: "Remove message" }, styleOf("metadata"), {
+          here: view.focused,
+        }),
+      );
+    }
+  }
+  const claiming = claim === "sidekick:message";
+  items.push(
+    field(
+      "sidekick:message",
+      " › message the sidekick",
+      state.message,
+      "message",
+      styleOf("draft"),
+      {
+        field: MESSAGE_FIELD,
+        here: view.focused,
+        block: true,
+        ...(claiming ? { focus: true } : {}),
+      },
+    ),
+  );
+  for (const [at, own] of messageValueRows(context).entries()) {
+    items.push(line(`sidekick:message:value:${at}`, own, styleOf("draft")));
+  }
+  return items;
+}
+
+/**
+ * The selected work's Draft: one field whose heading carries its own Send, or
+ * Stop while an entry is running, and whose value takes the rows beneath it.
+ *
+ * Send and Stop here are mounted controls that ask the root for nothing: Enter
+ * in the field still submits, and Entry Stop's interrupted finality is the
+ * accepted contract, not something this composition performs.
+ */
+function workspaceDraft(
+  view: ReplView,
+  context: ReplPresentationContext,
+  claiming: boolean,
+): readonly Described[] {
+  const items: Described[] = [];
+  items.push(
+    field("footer:input", " DRAFT", view.state.draft, "draft", styleOf("field-label"), {
+      here: view.focused,
+      block: true,
+      ...(claiming ? { focus: true } : {}),
+    }),
+  );
+  items.push(
+    view.live.running && view.state.route.at === undefined
+      ? row("draft:stop", "[stop]", {}, styleOf("failed-outcome"), { here: view.focused })
+      : row("draft:send", "[send]", {}, styleOf("action"), { here: view.focused }),
+  );
+  const rows = context.draft ?? ["", "", ""];
+  for (const [at, own] of rows.entries()) {
+    items.push(line(`draft:value:${at}`, own, styleOf("draft"), sourceRuns(own)));
+  }
+  return items;
+}
+
+/** The text column of the staged queue's first message, which its width is read from. */
+export const QUEUE_TEXT = "box:queue:text:0";
+
+/** The staged guidance row's inside, which the guidance is fitted to. */
+export const GUIDANCE_ROW = "box:guidance:body";
+
+/** The staged History row's map, which is drawn rather than mounted. */
+const HISTORY_MAP = "box:history:map";
+
+/**
+ * The staged composition's identity row: what this is and which execution.
+ *
+ * Read from the route, so it names nothing this reading does not hold.
+ */
+function identityRuns(view: ReplView): readonly ReplTokenRun[] {
+  return tokenRuns([
+    { text: " XMD REPL", token: "output" },
+    { text: "  session ", token: "field-label" },
+    { text: view.state.route.execution, token: "source" },
+  ]);
+}
+
+/**
+ * The compact History map: one mark per entry, in admission order, then the head.
+ *
+ * Built from the whole-file navigation, so it shows positions after the
+ * selection too — but only that they exist. An entry inside the selected prefix
+ * carries the outcome that prefix holds; a later one carries its number alone.
+ * Every exact position, an entry's and every minor one, is reached through the
+ * History drawer, which is what the action beside this map opens.
+ */
+function compactHistoryRuns(view: ReplView): readonly ReplTokenRun[] {
+  const runs: { text: string; token: ReplPresentationRole }[] = [
+    { text: " HISTORY", token: "history-title" },
+  ];
+  const points = numbered(view.navigation);
+  const at = view.state.route.at;
+  const selectedOrdinal =
+    at === undefined ? undefined : points.find((one) => one.point.marker === at)?.ordinal;
+  const selectedEntry =
+    selectedOrdinal === undefined
+      ? undefined
+      : points.filter((one) => one.ordinal <= selectedOrdinal).pop()?.entry;
+  for (const one of points) {
+    if (one.point.kind !== "entry") {
+      continue;
+    }
+    const entry = view.model.entries.find((candidate) => candidate.order === one.entry);
+    const chosen = selectedEntry === one.entry;
+    runs.push({ text: "  ", token: "history" });
+    runs.push({
+      text: String(one.entry),
+      token: chosen
+        ? "history-selected"
+        : entry === undefined
+          ? "history-entry-later"
+          : "history-entry-earlier",
+    });
+    if (entry === undefined) {
+      continue;
+    }
+    const state = workState(entry, view.model, view.live);
+    runs.push({ text: ` ${state.word.slice(0, 1)}`, token: state.style.role });
+  }
+  const head = view.navigation.head;
+  runs.push({ text: "  ── ", token: "history-rail" });
+  runs.push({
+    text: at === undefined ? HEAD_LABELS[head] : `${HEAD_LABELS[head]} · reading earlier`,
+    token: head === "live" ? "history-head-live" : "history-head",
+  });
+  return tokenRuns(runs);
+}
+
+/**
+ * The staged workspace composition's boxes, from the same classified rows.
+ *
+ * One identity row, three columns — the Transcript of agent work, the selected
+ * work with its Draft, and Bindings/Sidekick with the tray above its composer —
+ * and below them one compact History row carrying the contextual actions, and
+ * one guidance row. The same measured bodies and windows the ordinary
+ * composition publishes, so preparation, admission and fitting read them by the
+ * same names.
+ */
+function workspacePresentation(input: {
+  readonly view: ReplView;
+  readonly context: ReplPresentationContext;
+  readonly descriptions: readonly ReplDescription<ReplAction>[];
+  readonly candidates: readonly ReplCandidate[];
+  readonly rail: ReplPreparedRail | undefined;
+  readonly listColumn: (
+    region: ReplRegion,
+    fixedSlot: ReplSlot,
+    rowSlot: ReplSlot,
+    window: string,
+    rows?: number,
+  ) => readonly ReplBox[];
+  readonly chatColumn: (region: ReplRegion) => readonly ReplBox[];
+  readonly viewports: ReplViewportSlot[];
+  readonly regions: { region: ReplRegion; id: string }[];
+  readonly contents: { region: ReplRegion; id: string; kind: "pane" | "body" }[];
+}): ReplPresentation {
+  const { view, context, descriptions, candidates, rail, viewports, regions, contents } = input;
+  const size = view.size;
+  const of = (slot: ReplSlot): readonly ReplCandidate[] =>
+    candidates.filter((candidate) => candidate.slot === slot);
+  const byKey = (key: string): readonly ReplCandidate[] =>
+    candidates.filter((candidate) => candidate.key === key);
+  const startingWith = (prefix: string): readonly ReplCandidate[] =>
+    candidates.filter((candidate) => candidate.key.startsWith(prefix));
+  /** One part of a row, exactly as wide as what it says. */
+  const part = (candidate: ReplCandidate, region: ReplRegion, surface?: number): ReplBox =>
+    box({
+      id: `box:${region}:${candidate.key}`,
+      key: candidate.key,
+      region,
+      props: fittedPartProps(surface),
+      text: candidate.text,
+      control: candidate.control,
+      style: candidate.style,
+      runs: candidate.runs,
+    });
+  const spacer = (id: string, region: ReplRegion): ReplBox =>
+    box({ id, region, props: SPACER_PROPS });
+  const header = REPL_PALETTE.paneHeaderSurface;
+
+  regions.push(
+    { region: "sidebar", id: "box:sidebar" },
+    { region: "transcript", id: "box:transcript" },
+    { region: "inspection", id: "box:inspection" },
+  );
+
+  contents.push({ region: "sidebar", id: SIDEBAR_BODY, kind: "body" });
+  const left = box({
+    id: "box:sidebar",
+    region: "sidebar",
+    props: workspaceColumnProps(
+      WORKSPACE_TRANSCRIPT_COLUMNS,
+      REPL_PALETTE.transcriptPaneSurface,
+      false,
+    ),
+    children: [
+      box({
+        id: "box:sidebar:header",
+        region: "sidebar",
+        props: workspaceHeaderProps(header),
+        children: [
+          ...byKey("transcript:title").map((one) => part(one, "sidebar", header)),
+          spacer("box:sidebar:header:space", "sidebar"),
+          ...byKey("transcript:selector").map((one) => part(one, "sidebar", header)),
+        ],
+      }),
+      box({
+        id: `${SIDEBAR_BODY}:gutter`,
+        region: "sidebar",
+        props: workspaceBodyProps(WORKSPACE_LIST_GUTTER, 1),
+        children: [
+          box({
+            id: SIDEBAR_BODY,
+            region: "sidebar",
+            props: paneContentProps(),
+            children: input.listColumn("sidebar", "sessions-fixed", "sessions", SESSIONS_WINDOW),
+          }),
+        ],
+      }),
+    ],
+  });
+
+  contents.push({ region: "transcript", id: "box:transcript:content", kind: "pane" });
+  contents.push({ region: "transcript", id: TRANSCRIPT_BODY, kind: "body" });
+  const surfaceBody = context.widths?.surfaceBody;
+  const centre = box({
+    id: "box:transcript",
+    region: "transcript",
+    props: workspaceColumnProps(undefined, REPL_PALETTE.applicationSurface, true),
+    children: [
+      box({
+        id: "box:transcript:content",
+        region: "transcript",
+        props: paneContentProps(),
+        children: [
+          box({
+            id: "box:transcript:header",
+            region: "transcript",
+            props: workspaceHeaderProps(header, 1),
+            children: [
+              ...byKey("entries:heading").map((one) => part(one, "transcript", header)),
+              ...byKey("work:crumbs").map((one) => part(one, "transcript", header)),
+              spacer("box:transcript:header:space", "transcript"),
+              ...byKey("work:state").map((one) => part(one, "transcript", header)),
+            ],
+          }),
+          box({
+            id: `${TRANSCRIPT_BODY}:gutter`,
+            region: "transcript",
+            props: workspaceBodyProps(BODY_GUTTER, 1),
+            children: [
+              box({
+                id: TRANSCRIPT_BODY,
+                region: "transcript",
+                props: paneContentProps(),
+                children: input.listColumn(
+                  "transcript",
+                  "reading-fixed",
+                  "reading",
+                  READING_WINDOW,
+                ),
+              }),
+            ],
+          }),
+          box({
+            id: "box:draft",
+            region: "transcript",
+            props: workspaceBlockProps(
+              WORKSPACE_DRAFT_ROWS,
+              REPL_PALETTE.draftSurface,
+              BODY_GUTTER,
+            ),
+            children: [
+              box({
+                id: "box:draft:heading",
+                region: "transcript",
+                props: partsRowProps(1, 1),
+                children: [
+                  ...of("draft").map((one) =>
+                    box({
+                      id: `box:transcript:${one.key}`,
+                      key: one.key,
+                      region: "transcript",
+                      props: SPACER_PROPS,
+                      text: one.text,
+                      control: one.control,
+                      style: one.style,
+                      runs: one.runs,
+                    }),
+                  ),
+                  ...byKey("draft:stop").map((one) => part(one, "transcript")),
+                  ...byKey("draft:send").map((one) => part(one, "transcript")),
+                ],
+              }),
+              ...startingWith("draft:value:").map((one) => rowBox(one, "transcript", surfaceBody)),
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+
+  contents.push({ region: "inspection", id: "box:inspection:content", kind: "pane" });
+  const showing = showingSidekick(view);
+  if (showing) {
+    contents.push({ region: "inspection", id: SIDEKICK_BODY, kind: "body" });
+  }
+  const body = context.widths?.body;
+  const tray = [
+    ...startingWith("tray:"),
+    ...byKey("follow"),
+    ...byKey("sidekick:stop"),
+    ...byKey("sidekick:send"),
+  ];
+  const queued = staged(view)?.tray === "queue" ? (staged(view)?.queued ?? []) : [];
+  const queueRows = queued.map((message, at) => {
+    const text = `box:queue:text:${at}`;
+    if (at === 0) {
+      contents.push({ region: "inspection", id: text, kind: "body" });
+    }
+    return box({
+      id: `box:queue:${message.key}`,
+      region: "inspection",
+      props: partsRowProps("fit", 1),
+      children: [
+        box({
+          id: text,
+          region: "inspection",
+          props: GROWING_STACK_PROPS,
+          children: startingWith(`queue:${message.key}:row:`).map((one) =>
+            rowBox(one, "inspection", context.widths?.queue),
+          ),
+        }),
+        ...byKey(`queue:${message.key}:remove`).map((one) => part(one, "inspection")),
+      ],
+    });
+  });
+  const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
+  const right = box({
+    id: "box:inspection",
+    region: "inspection",
+    props: workspaceColumnProps(
+      WORKSPACE_CONVERSATION_COLUMNS,
+      REPL_PALETTE.conversationSurface,
+      true,
+    ),
+    children: [
+      box({
+        id: "box:inspection:content",
+        region: "inspection",
+        props: paneContentProps(),
+        children: [
+          box({
+            id: TAB_ROW,
+            region: "inspection",
+            props: workspaceHeaderProps(header),
+            children: [
+              ...of("inspection-above").map((one) => part(one, "inspection", header)),
+              spacer("box:inspection:header:space", "inspection"),
+              ...byKey("sidekick:configure").map((one) => part(one, "inspection", header)),
+            ],
+          }),
+          box({
+            id: showing ? `${SIDEKICK_BODY}:gutter` : "box:inspection:reading:gutter",
+            region: "inspection",
+            props: workspaceBodyProps(WORKSPACE_LIST_GUTTER, 1),
+            children: [
+              box({
+                id: showing ? SIDEKICK_BODY : "box:inspection:reading",
+                region: "inspection",
+                props: paneContentProps(),
+                children: [
+                  ...input.chatColumn("inspection"),
+                  ...byKey("sidekick:back").map((one) => rowBox(one, "inspection", body)),
+                  ...byKey("sidekick:answer").map((one) => rowBox(one, "inspection", body)),
+                ],
+              }),
+            ],
+          }),
+          ...(tray.length === 0 && composer.length === 0
+            ? []
+            : [
+                box({
+                  id: "box:tray",
+                  region: "inspection",
+                  props: workspaceBlockProps(
+                    "fit",
+                    REPL_PALETTE.composerSurface,
+                    WORKSPACE_LIST_GUTTER,
+                  ),
+                  children: [
+                    box({
+                      id: "box:tray:controls",
+                      region: "inspection",
+                      props: partsRowProps(1, 2),
+                      children: [
+                        ...startingWith("tray:").map((one) => part(one, "inspection")),
+                        spacer("box:tray:space", "inspection"),
+                        ...tray
+                          .filter((one) => !one.key.startsWith("tray:"))
+                          .map((one) => part(one, "inspection")),
+                      ],
+                    }),
+                    ...queueRows,
+                    ...composer.map((one) => rowBox(one, "inspection", body)),
+                  ],
+                }),
+              ]),
+        ],
+      }),
+    ],
+  });
+
+  const offered = [...of("action"), ...of("status")];
+  const placed = offered.filter(
+    (candidate) => context.measuring || context.admission.actions.has(candidate.key),
+  );
+  const map = compactHistoryRuns(view);
+  const inspected = view.state.route.at !== undefined;
+  regions.push({ region: "footer", id: "box:footer" });
+  return {
+    descriptions,
+    manifest: Object.freeze({
+      profile: profileFor(size),
+      size: Object.freeze({ ...size }),
+      root: box({
+        id: "box:root",
+        props: rootProps(size),
+        children: [
+          box({
+            id: "box:identity",
+            props: bandRowProps(REPL_PALETTE.chromeSurface),
+            children: [
+              box({
+                id: "box:identity:text",
+                props: fittedPartProps(),
+                text: runText(identityRuns(view)),
+                runs: identityRuns(view),
+                style: styleOf("metadata"),
+              }),
+            ],
+          }),
+          box({ id: "box:body", props: bodyProps(false), children: [left, centre, right] }),
+          box({
+            id: "box:footer",
+            region: "footer",
+            props: stackProps("fit"),
+            children: [
+              box({
+                id: "box:history",
+                region: "footer",
+                props: bandRowProps(REPL_PALETTE.historySurface),
+                children: [
+                  box({
+                    id: HISTORY_MAP,
+                    region: "footer",
+                    props: fittedPartProps(),
+                    text: runText(map),
+                    runs: map,
+                    style: styleOf("history", { inspected }),
+                  }),
+                  spacer("box:history:space", "footer"),
+                  box({
+                    id: ACTION_ROW,
+                    region: "footer",
+                    props: actionRowProps(),
+                    children: placed.map((candidate) =>
+                      box({
+                        id: `box:action:${candidate.key}`,
+                        key: candidate.key,
+                        region: "footer",
+                        props: CONTROL_PROPS,
+                        text: candidate.text,
+                        control: candidate.control,
+                        style: candidate.style,
+                        runs: candidate.runs,
+                      }),
+                    ),
+                  }),
+                ],
+              }),
+              box({
+                id: "box:guidance",
+                region: "footer",
+                props: workspaceBlockProps(
+                  "fit",
+                  REPL_PALETTE.chromeSurface,
+                  WORKSPACE_LIST_GUTTER,
+                ),
+                children: [
+                  box({
+                    id: GUIDANCE_ROW,
+                    region: "footer",
+                    props: GROWING_STACK_PROPS,
+                    children: of("located").map((one) =>
+                      rowBox(one, "footer", context.widths?.guidance),
+                    ),
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+      viewports: Object.freeze(viewports),
+      actions: Object.freeze({
+        id: ACTION_ROW,
+        controls: Object.freeze(
+          offered.map((candidate) => ({
+            key: candidate.key,
+            id: `box:action:${candidate.key}`,
+            control: candidate.control,
+          })),
+        ),
+      }),
+      regions: Object.freeze(regions.map((region) => Object.freeze(region))),
+      contents: Object.freeze(contents.map((content) => Object.freeze(content))),
+      history: rail ?? EMPTY_BAND,
+    }),
+  };
+}
+
+/** How many rows of the draft's own value the staged Draft shows. */
+const DRAFT_VALUE_ROWS = WORKSPACE_DRAFT_ROWS - 1;
+
+/** The chat lines this view's frame fits, the staged composition's included. */
+export function chatLinesFor(
+  view: ReplView,
+): readonly { readonly key: string; readonly text: string }[] {
+  return sidekickChatLines(view.live.sidekick, chatStagingOf(view));
+}
+
+/** The staged queue's messages as the lines its text column fits, or none. */
+export function queueLinesOf(
+  view: ReplView,
+): readonly { readonly key: string; readonly text: string }[] | undefined {
+  const workspace = staged(view);
+  if (workspace === undefined || workspace.tray !== "queue" || !showingSidekick(view)) {
+    return undefined;
+  }
+  return workspace.queued.map((message) => ({
+    key: `queue:${message.key}`,
+    text: `${MARKER_ROOM}${message.text}`,
+  }));
+}
+
+/** The draft's own lines as the staged Draft fits them, or none. */
+export function draftLinesOf(view: ReplView):
+  | readonly {
+      readonly key: string;
+      readonly text: string;
+      readonly runs: readonly ReplTokenRun[];
+    }[]
+  | undefined {
+  if (staged(view) === undefined) {
+    return undefined;
+  }
+  return view.state.draft
+    .split("\n")
+    .map((text, at) => ({ key: `draft:${at}`, text, runs: sourceRuns(text) }));
+}
+
+/**
+ * The Draft's rows this frame draws: the newest that fit, then blank rows.
+ *
+ * The newest, because the end is where somebody is typing. Always exactly as
+ * many rows as the Draft has, so the block's height is the same whatever the
+ * draft holds.
+ */
+export function draftRowsOf(fitted: readonly ReplFittedLine[]): readonly string[] {
+  const drawn = fitted.map((one) => `${" ".repeat(one.indent)}${one.text}`);
+  const newest = drawn.slice(Math.max(0, drawn.length - DRAFT_VALUE_ROWS));
+  return Object.freeze([
+    ...newest,
+    ...Array.from({ length: DRAFT_VALUE_ROWS - newest.length }, () => ""),
+  ]);
+}
 export type { ReplDrawerRef };

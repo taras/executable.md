@@ -109,7 +109,21 @@ export type ReplPresentationRole =
   | "history-minor-later"
   | "history-selected"
   | "history-head-live"
-  | "history-head";
+  | "history-head"
+  /**
+   * Who a message or a row of agent work came from, as its marker says.
+   *
+   * A person at this screen, the Sidekick, an entry's agent, an attached client
+   * and the REPL's own entry work. The marker spells the origin as well, so the
+   * colour is never the only thing saying it.
+   */
+  | "origin-person"
+  | "origin-sidekick"
+  | "origin-agent"
+  | "origin-attachment"
+  | "origin-repl"
+  /** A message waiting behind the active exchange. */
+  | "queued";
 
 /**
  * One row's presentation facts, as the reading settles them.
@@ -265,6 +279,34 @@ export const REPL_PALETTE = Object.freeze({
   historyHeadLive: 0x7fd3e8,
   /** Every other head state, `SELECTED · HEAD`, and the empty message. */
   historyHead: 0x7b858d,
+
+  /**
+   * The staged workspace composition's own grounds, from the #971 reference.
+   *
+   * Separate members rather than new values for the ones above, because the
+   * ordinary composition keeps its accepted surfaces while this one is under
+   * image review.
+   */
+  /** The identity row and the guidance row. */
+  chromeSurface: 0x11171b,
+  /** The Transcript column. */
+  transcriptPaneSurface: 0x0c1014,
+  /** The Bindings/Sidekick column. */
+  conversationSurface: 0x0a0c0e,
+  /** A column's own header row. */
+  paneHeaderSurface: 0x0e1215,
+  /** The tray and the Sidekick's composer. */
+  composerSurface: 0x0d1215,
+  /** The one-cell rule between two columns. */
+  paneDivider: 0x1c252b,
+  /** A message waiting behind the active exchange. */
+  queued: 0xa4aeb6,
+  /** The origin markers, converted from the reference's OKLCH to sRGB. */
+  originPerson: 0xe1e9ed,
+  originSidekick: 0x8dceee,
+  originAgent: 0xebb890,
+  originAttachment: 0xd4b6eb,
+  originRepl: 0x9fd3a9,
 });
 
 /**
@@ -451,6 +493,18 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
       return REPL_PALETTE.historyHeadLive;
     case "history-head":
       return REPL_PALETTE.historyHead;
+    case "origin-person":
+      return REPL_PALETTE.originPerson;
+    case "origin-sidekick":
+      return REPL_PALETTE.originSidekick;
+    case "origin-agent":
+      return REPL_PALETTE.originAgent;
+    case "origin-attachment":
+      return REPL_PALETTE.originAttachment;
+    case "origin-repl":
+      return REPL_PALETTE.originRepl;
+    case "queued":
+      return REPL_PALETTE.queued;
     case "source":
     case "status":
     case "draft":

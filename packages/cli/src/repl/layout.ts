@@ -1035,3 +1035,134 @@ export function box(input: {
     children: Object.freeze(input.children === undefined ? [] : [...input.children]),
   });
 }
+
+/**
+ * The staged workspace composition's column allocations at the wide profile.
+ *
+ * Each includes the one-cell divider that starts its column, and the centre
+ * takes what the two leave — 66 at 160 columns. These are the #971 reference's
+ * proportions, proposed for the Product Owner's image review rather than
+ * accepted geometry.
+ */
+export const WORKSPACE_TRANSCRIPT_COLUMNS = 36;
+export const WORKSPACE_CONVERSATION_COLUMNS = 58;
+
+/** The selected work's Draft: its heading row and three value rows. */
+export const WORKSPACE_DRAFT_ROWS = 4;
+
+/**
+ * How far a staged list sits in from its column's edges.
+ *
+ * The reference insets the Transcript and the conversation by one cell and the
+ * selected work and its Draft by two, which is {@link BODY_GUTTER}.
+ */
+export const WORKSPACE_LIST_GUTTER = 1;
+
+/**
+ * One full-width row above or below the body, on its own ground.
+ *
+ * Not clipped, here or in the rows below: a clipping parent resolves a growing
+ * child against its content rather than against the row, so each part states
+ * its own width instead.
+ */
+export function bandRowProps(surface: number): ReplBoxProps {
+  return {
+    layout: { width: grow(), height: fixed(1), direction: "ltr" },
+    bg: terminalColour(surface),
+  };
+}
+
+/**
+ * A staged column: its width, its ground and the rule that starts it.
+ *
+ * `width` undefined grows into what the other two columns leave. The rule is
+ * the reference's own column edge, drawn as one cell rather than a pixel line.
+ */
+export function workspaceColumnProps(
+  width: number | undefined,
+  surface: number,
+  divided: boolean,
+): ReplBoxProps {
+  return {
+    ...columnProps(width),
+    bg: terminalColour(surface),
+    ...(divided ? { border: { color: terminalColour(REPL_PALETTE.paneDivider), left: 1 } } : {}),
+  };
+}
+
+/** One header row of a staged column: parts left and right with room between. */
+export function workspaceHeaderProps(surface: number, gap = 2): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: fixed(1),
+      direction: "ltr",
+      gap,
+      padding: { left: WORKSPACE_LIST_GUTTER, right: WORKSPACE_LIST_GUTTER },
+    },
+    bg: terminalColour(surface),
+  };
+}
+
+/** What takes the room between the left and right parts of one row. */
+export const SPACER_PROPS: ReplBoxProps = Object.freeze({
+  layout: Object.freeze({ width: grow(), height: fixed(1) }),
+});
+
+/** One part of a row that is exactly as wide as its own text. */
+export function fittedPartProps(surface?: number): ReplBoxProps {
+  return {
+    layout: { width: fit(), height: fixed(1) },
+    ...(surface === undefined ? {} : { bg: terminalColour(surface) }),
+  };
+}
+
+/**
+ * A staged column's body, inset by `gutter` cells on each side.
+ *
+ * `top` blank rows above it stand for the reference's twenty-pixel padding.
+ */
+export function workspaceBodyProps(gutter: number, top = 0): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: grow(),
+      direction: "ttb",
+      padding: { left: gutter, right: gutter, top },
+    },
+  };
+}
+
+/** A block of `rows` rows on its own ground, inset by `gutter`. */
+export function workspaceBlockProps(
+  rows: number | "fit",
+  surface: number,
+  gutter: number,
+): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: rows === "fit" ? fit() : fixed(rows),
+      direction: "ttb",
+      padding: { left: gutter, right: gutter },
+    },
+    bg: terminalColour(surface),
+  };
+}
+
+/** Parts side by side, as wide as their region, `height` rows tall. */
+export function partsRowProps(height: number | "fit" = 1, gap = 1): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: height === "fit" ? fit() : fixed(height),
+      direction: "ltr",
+      gap,
+    },
+  };
+}
+
+/** A part that grows into a row's remaining width and stacks its own rows. */
+export const GROWING_STACK_PROPS: ReplBoxProps = Object.freeze({
+  layout: Object.freeze({ width: grow(), height: fit(), direction: "ttb" as const }),
+});

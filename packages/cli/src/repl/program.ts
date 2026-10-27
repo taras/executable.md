@@ -73,7 +73,12 @@ import {
   SIDEBAR_BODY,
   SIDEKICK_BODY,
   SIDEKICK_WINDOW,
-  sidekickChatLines,
+  chatLinesFor,
+  draftLinesOf,
+  draftRowsOf,
+  GUIDANCE_ROW,
+  QUEUE_TEXT,
+  queueLinesOf,
   readsGeometry,
   reduceRepl,
   refusedView,
@@ -3430,6 +3435,10 @@ function guidanceBottomOf(
     if (box.key !== "guidance" && !box.key.startsWith("guidance:row:")) {
       continue;
     }
+    // Guidance drawn below the body is in no drawer's way.
+    if (box.region === "footer") {
+      continue;
+    }
     const bounds = measured.boundsOf(box.id);
     if (bounds === undefined) {
       continue;
@@ -3503,9 +3512,23 @@ export function* prepareFrame(
   }
   const widths = widthsOf(probe.manifest, first.value);
 
+  // The staged queue, fitted to the text column its first message measured.
+  // Before every pass below, because each message is as many rows as its text
+  // needs and the chat above it is what is left.
+  const queueLines = queueLinesOf(view);
+  const queued =
+    queueLines === undefined || (widths.queue ?? 0) < 1
+      ? Ok(undefined)
+      : yield* fitPlain(renderer, view.size, queueLines, widths.queue ?? 0);
+  if (!queued.ok) {
+    return queued;
+  }
+  const queuing = (context: ReplPresentationContext): ReplPresentationContext =>
+    queued.value === undefined ? context : { ...context, queue: queued.value };
+
   // The catalog without its controls: if it fits, it keeps its natural footprint
   // and the column keeps the rows those controls would have taken.
-  const trial = presentationFor(view, measuringAt(widths, false, undefined));
+  const trial = presentationFor(view, queuing(measuringAt(widths, false, undefined)));
   const second = yield* renderer.measure(skeletonOps(trial.manifest.root), view.size);
   if (!second.ok) {
     return second;
@@ -3517,14 +3540,15 @@ export function* prepareFrame(
   // The directions, fitted to the surface they are drawn on. Before the frame
   // below, because they are fixed content: the room the composer may grow into
   // is what is left once they have taken theirs.
+  const guidanceRoom = widths.guidance ?? widths.surfaceBody;
   const guidance =
-    widths.surfaceBody < 1
+    widths.surfaceBody < 1 || guidanceRoom < 1
       ? Ok(undefined)
       : yield* fitPlain(
           renderer,
           view.size,
           [{ key: "guidance", text: guidanceSentence(view) }],
-          widths.surfaceBody,
+          guidanceRoom,
           guidanceStore,
         );
   if (!guidance.ok) {
@@ -3556,7 +3580,7 @@ export function* prepareFrame(
       : Object.freeze(refused.value.map((own) => `${" ".repeat(own.indent)}${own.text}`));
   const probed = presentationFor(
     view,
-    measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1),
+    queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1)),
   );
   const fitted = yield* renderer.measure(skeletonOps(probed.manifest.root), view.size);
   if (!fitted.ok) {
@@ -3577,7 +3601,7 @@ export function* prepareFrame(
     ? probed
     : presentationFor(
         view,
-        measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, 1, envelope),
+        queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, 1, envelope)),
       );
   const third = settled
     ? fitted
@@ -3647,8 +3671,7 @@ export function* prepareFrame(
   // every keystroke. Showing or revealing the chat publishes that window again,
   // and this is the pass that fits it against the geometry it has now.
   const presentsChat = measured.manifest.viewports.some((slot) => slot.window === SIDEKICK_WINDOW);
-  const chatLines =
-    chatRoom < 1 || !presentsChat ? undefined : sidekickChatLines(view.live.sidekick);
+  const chatLines = chatRoom < 1 || !presentsChat ? undefined : chatLinesFor(view);
   const chat =
     chatLines === undefined
       ? Ok(undefined)
@@ -3704,13 +3727,15 @@ export function* prepareFrame(
           skeletonOps(
             presentationFor(
               view,
-              measuringAt(
-                widths,
-                windowed,
-                entriesRows,
-                guidanceRows?.length ?? 1,
-                shown.length,
-                envelope,
+              queuing(
+                measuringAt(
+                  widths,
+                  windowed,
+                  entriesRows,
+                  guidanceRows?.length ?? 1,
+                  shown.length,
+                  envelope,
+                ),
               ),
             ).manifest.root,
           ),
@@ -3724,13 +3749,15 @@ export function* prepareFrame(
       ? measured
       : presentationFor(
           view,
-          measuringAt(
-            widths,
-            windowed,
-            entriesRows,
-            guidanceRows?.length ?? 1,
-            shown.length,
-            envelope,
+          queuing(
+            measuringAt(
+              widths,
+              windowed,
+              entriesRows,
+              guidanceRows?.length ?? 1,
+              shown.length,
+              envelope,
+            ),
           ),
         );
   // The History band, measured against the terminal's own width. Prepared
@@ -3753,6 +3780,16 @@ export function* prepareFrame(
         );
   if (!rail.ok) {
     return rail;
+  }
+  // The staged Draft's own value, fitted to the selected work it sits in. A
+  // fixed number of rows, so no measurement above depends on it.
+  const draftLines = draftLinesOf(view);
+  const drafted =
+    draftLines === undefined || widths.surfaceBody < 1
+      ? Ok(undefined)
+      : yield* fitPlain(renderer, view.size, draftLines, widths.surfaceBody);
+  if (!drafted.ok) {
+    return drafted;
   }
   const admission = admissionFor({
     view,
@@ -3778,6 +3815,8 @@ export function* prepareFrame(
     refusal: refusalRows,
     rail: rail.value,
     drawer: envelope,
+    draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
+    queue: queued.value,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }
@@ -3835,7 +3874,19 @@ function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMea
     listBody: bodyOf(SIDEBAR_BODY, "sidebar", "content"),
     body: bodyOf(SIDEKICK_BODY, "inspection", "content"),
     drawer: widthOf(measured, manifest.viewports.find((slot) => slot.region === "drawer")?.id),
+    queue: widthOf(measured, manifest.contents.find((content) => content.id === QUEUE_TEXT)?.id),
+    guidance: guidanceWidthOf(manifest, measured),
   };
+}
+
+/**
+ * The guidance row's own width, where a frame draws the guidance below the body.
+ *
+ * None otherwise, so the guidance is fitted to the selected work it is part of.
+ */
+function guidanceWidthOf(manifest: ReplLayoutManifest, measured: ReplMeasured): number | undefined {
+  const drawn = flatten(manifest.root).some((box) => box.id === GUIDANCE_ROW);
+  return drawn ? widthOf(measured, GUIDANCE_ROW) : undefined;
 }
 
 function widthOf(measured: ReplMeasured, id: string | undefined): number {
