@@ -8,10 +8,11 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { spawn, withResolvers, type Operation } from "effection";
+import { spawn, suspend, withResolvers, type Operation } from "effection";
 import {
   type DurableEvent,
   DurablePersistenceError,
+  TerminalDivergenceError,
   type DurableStream,
   InMemoryStream,
   type Json,
@@ -584,6 +585,170 @@ describe("durableRun: the cancelled ending, asked for through its own control", 
     }
     expect(only.result.status).toBe("ok");
     expect(control.settled()).toBe("ok");
+  });
+});
+
+/**
+ * What an accepted request owns, and what it must not swallow.
+ *
+ * A Stop that reaches an open root takes its ending: the ordinary paths may
+ * not acknowledge an ok or err terminal around it afterwards. But holding a
+ * root is not a licence to end quietly — one whose durability already failed,
+ * or whose retained history this definition did not align with, has an outcome
+ * of its own, and whoever asked it to stop has to learn which one.
+ */
+describe("durableRun: what an accepted request owns, and what it refuses", () => {
+  it("a request accepted while open beats a later ordinary return", function* () {
+    const stream = new InMemoryStream();
+    const started = withResolvers<void>();
+    const release = withResolvers<void>();
+    let control: DurableRootControl | undefined;
+    const task = yield* spawn(function* () {
+      return yield* durableRun(
+        function* () {
+          started.resolve();
+          yield* release.operation;
+          return "returned after the claim";
+        },
+        { stream, control: (own) => (control = own) },
+      );
+    });
+    yield* started.operation;
+    if (control === undefined) {
+      throw new Error("this run handed out no control");
+    }
+    expect(control.requestInterruption()).toBe(true);
+
+    // The workflow runs to its own end afterwards. That does not undo what
+    // was accepted: the value still reaches its caller, and the record says
+    // this root was stopped.
+    release.resolve();
+    expect(yield* task).toBe("returned after the claim");
+    expect(control.settled()).toBe("cancelled");
+
+    const closes = stream.snapshot().filter((event) => event.type === "close");
+    expect(closes.length).toBe(1);
+    const only = closes[0];
+    if (only === undefined || only.type !== "close") {
+      throw new Error("this run recorded no close");
+    }
+    expect(only.result.status).toBe("cancelled");
+  });
+
+  it("a request over an unaligned prefix raises divergence and records nothing", function* () {
+    const stream = new InMemoryStream([
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "action", name: "retained-not-consumed" },
+        result: { status: "ok", value: "retained" },
+      },
+    ]);
+    const started = withResolvers<void>();
+    let control: DurableRootControl | undefined;
+    const task = yield* spawn(function* () {
+      yield* durableRun(
+        function* () {
+          started.resolve();
+          yield* suspend();
+        },
+        { stream, control: (own) => (control = own) },
+      );
+    });
+    yield* started.operation;
+    if (control === undefined) {
+      throw new Error("this run handed out no control");
+    }
+    expect(control.requestInterruption()).toBe(true);
+
+    let failure: unknown;
+    try {
+      yield* task.halt();
+    } catch (error) {
+      failure = error;
+    }
+    // Retained history this definition did not reach is divergence, not a
+    // stopped run, and it is not papered over with a cancelled close.
+    expect(failure).toBeInstanceOf(TerminalDivergenceError);
+    expect(stream.snapshot().some((event) => event.type === "close")).toBe(false);
+    expect(control.settled()).toBe(undefined);
+    // And the root has ended, so it accepts nothing further.
+    expect(control.requestInterruption()).toBe(false);
+  });
+
+  it("a request after a sticky append failure escapes by identity", function* () {
+    const cause = new Error("the stream refused this append");
+    const stream: DurableStream = {
+      *readAll(): Operation<DurableEvent[]> {
+        return [];
+      },
+      *append(): Operation<void> {
+        throw cause;
+      },
+    };
+    const started = withResolvers<void>();
+    let original: unknown;
+    let control: DurableRootControl | undefined;
+    const task = yield* spawn(function* () {
+      yield* durableRun(
+        function* () {
+          try {
+            yield* durableAction("rejected", (resolve) => {
+              resolve("value");
+              return () => {};
+            });
+          } catch (error) {
+            original = error;
+          }
+          started.resolve();
+          yield* suspend();
+        },
+        { stream, control: (own) => (control = own) },
+      );
+    });
+    yield* started.operation;
+    if (control === undefined) {
+      throw new Error("this run handed out no control");
+    }
+    expect(original).toBeInstanceOf(DurablePersistenceError);
+    expect(control.requestInterruption()).toBe(true);
+
+    let failure: unknown;
+    try {
+      yield* task.halt();
+    } catch (error) {
+      failure = error;
+    }
+    // The same failure, not a copy and not a silence: a caller that asked
+    // this root to stop learns what actually ended it.
+    expect(Object.is(failure, original)).toBe(true);
+    expect(control.settled()).toBe(undefined);
+  });
+
+  it("an owner that ended unrequested takes no later request", function* () {
+    const stream = new InMemoryStream();
+    const started = withResolvers<void>();
+    let control: DurableRootControl | undefined;
+    const task = yield* spawn(function* () {
+      yield* durableRun(
+        function* () {
+          started.resolve();
+          yield* suspend();
+        },
+        { stream, control: (own) => (control = own) },
+      );
+    });
+    yield* started.operation;
+    if (control === undefined) {
+      throw new Error("this run handed out no control");
+    }
+    yield* task.halt();
+
+    // Nothing was asked for, so nothing was recorded — and the control is
+    // retired rather than left accepting a claim on an owner that has gone.
+    expect(stream.snapshot().some((event) => event.type === "close")).toBe(false);
+    expect(control.requestInterruption()).toBe(false);
+    expect(control.settled()).toBe(undefined);
   });
 });
 

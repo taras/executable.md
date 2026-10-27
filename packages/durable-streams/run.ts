@@ -86,6 +86,9 @@ export interface DurableRunOptions {
  * run's decision and nobody else's — a root whose terminal append has already
  * begun keeps the terminal it was writing.
  */
+/** Where this root stands, and what it will still answer for. */
+type RootPhase = "open" | "claimed" | "appending" | "settled" | "ended";
+
 export interface DurableRootControl {
   /**
    * Ask this root to end as cancelled, and say whether it will.
@@ -130,13 +133,19 @@ export function* durableRun<T extends WorkflowValue>(
   options: DurableRunOptions,
 ): Operation<T> {
   const { stream, coroutineId = "root", control } = options;
-  // This root's own terminal phase, read and written only here. `open` is the
-  // only phase a cancellation may claim: once an append has begun, the record
-  // being written is the one this root ends with, and a request that arrived
-  // during it joins that ending rather than replacing it.
-  let phase: "open" | "appending" | "settled" = "open";
+  // This root's own terminal phase, read and written only here.
+  //
+  // `open` is the only phase a cancellation may claim, and claiming is
+  // exclusive: once a Stop holds the open root, the ordinary paths may no
+  // longer acknowledge an ok or err terminal as though no claim existed, and
+  // once an append has begun the record being written is the one this root
+  // ends with. `ended` is where a root stops answering at all — a request
+  // after its owner has gone is refused rather than accepted into nothing.
+  let phase: RootPhase = "open";
   let retained: "ok" | "err" | "cancelled" | undefined;
-  let interrupting = false;
+  // Read through a call rather than directly: the control below moves this
+  // while the workflow is suspended, which narrowing by assignment cannot see.
+  const phaseNow = (): RootPhase => phase;
 
   const events = yield* stream.readAll();
   const replayIndex = new ReplayIndex(events);
@@ -195,41 +204,48 @@ export function* durableRun<T extends WorkflowValue>(
   }
   replayIndex.claim(coroutineId);
 
-  if (control !== undefined) {
-    control({
-      requestInterruption(): boolean {
-        if (phase !== "open") {
-          return interrupting;
-        }
-        interrupting = true;
-        return true;
-      },
-      settled: () => retained,
-    });
-  }
+  // Retirement, registered first so it unwinds last: whatever ends this root —
+  // its own terminal, an ordinary halt, a failure — it stops answering
+  // requests afterwards. What it retained stays readable; what it will no
+  // longer do is accept a new claim on an owner that has gone.
+  yield* ensure(() => {
+    if (phaseNow() !== "settled") {
+      phase = "ended";
+    }
+  });
 
-  // The other ending, and only where it was asked for. Registered before the
-  // workflow so it unwinds after everything the workflow owns, and inert
-  // unless this root accepted a request while it was still open: an ordinary
-  // halt reaches here with `interrupting` false and appends nothing, which is
-  // what every caller without a control has always seen.
+  // The other ending, and only where it was asked for. Registered after the
+  // retirement above so it runs before it, and before the workflow so it
+  // unwinds after everything the workflow owns. Inert unless this root
+  // accepted a claim while it was still open: an ordinary halt reaches here
+  // unclaimed and appends nothing, which is what every caller without a
+  // control has always seen.
   yield* ensure(function* () {
-    if (!interrupting || phase !== "open") {
+    if (phaseNow() !== "claimed") {
       return;
+    }
+    // The same refusals the ordinary terminals make, and made the same way.
+    // A sticky durability failure is already this root's outcome and retained
+    // history the definition did not align with is divergence rather than a
+    // stopped run: neither is papered over with a cancelled close, and
+    // neither is swallowed — the holder of this control has to learn which
+    // failure ended the root it asked to stop.
+    const durabilityFailure = activeDurabilityFailure(ctx);
+    if (durabilityFailure !== undefined) {
+      phase = "ended";
+      throw durabilityFailure;
+    }
+    const unconsumed = unalignedReplay(replayIndex, coroutineId);
+    if (unconsumed !== undefined) {
+      phase = "ended";
+      throw new TerminalDivergenceError(
+        unconsumed.coroutineId,
+        unconsumed.cursor,
+        unconsumed.totalYields,
+        { unconsumed: unconsumed.entry },
+      );
     }
     phase = "appending";
-    // The same refusals the ordinary terminals make. A sticky durability
-    // failure is already this root's outcome, and retained history the
-    // definition did not align with is divergence rather than a stopped run —
-    // neither may be papered over with a cancelled close.
-    if (activeDurabilityFailure(ctx) !== undefined) {
-      phase = "open";
-      return;
-    }
-    if (unalignedReplay(replayIndex, coroutineId) !== undefined) {
-      phase = "open";
-      return;
-    }
     const closeEvent: Close = {
       type: "close",
       coroutineId,
@@ -239,6 +255,23 @@ export function* durableRun<T extends WorkflowValue>(
     phase = "settled";
     retained = "cancelled";
   });
+
+  if (control !== undefined) {
+    control({
+      requestInterruption(): boolean {
+        if (phaseNow() === "claimed") {
+          // The same ask, answered the same way.
+          return true;
+        }
+        if (phaseNow() !== "open") {
+          return false;
+        }
+        phase = "claimed";
+        return true;
+      },
+      settled: () => retained,
+    });
+  }
 
   try {
     const result: T = yield* workflow();
@@ -270,6 +303,14 @@ export function* durableRun<T extends WorkflowValue>(
     // would make that append wait forever. A boundary around the attempt
     // returns the turn as part of the outcome.
     //
+    // A Stop that claimed this root while it was open owns its ending, and
+    // the workflow returning afterwards does not undo that claim: no ok close
+    // is acknowledged here, and the cancellation finalizer is what settles
+    // this root. The value the workflow computed still comes back to its
+    // caller — what it may not do is become this root's recorded ending.
+    if (phaseNow() === "claimed") {
+      return result;
+    }
     // The phase moves first, so a cancellation asked for from here on joins
     // this ending rather than cancelling the write and compensating over a
     // backend that may already hold it.
@@ -304,6 +345,11 @@ export function* durableRun<T extends WorkflowValue>(
       },
     };
 
+    // The same claim rule as the ordinary return: a Stop that holds this open
+    // root is its ending, and this failure does not acknowledge one around it.
+    if (phaseNow() === "claimed") {
+      throw primary;
+    }
     try {
       phase = "appending";
       yield* scoped(() => appendDurableEvent(ctx, closeEvent));
