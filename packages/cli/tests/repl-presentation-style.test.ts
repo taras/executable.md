@@ -108,7 +108,8 @@ import {
 import { referenceEvents } from "./fixtures/repl/reference.ts";
 import {
   CHECKPOINT_SIZE,
-  checkpointView,
+  checkpointScopes,
+  commitCheckpoint,
   RUNNING_SOURCE,
   WRAPPING_LINE,
   WRAPPING_QUEUED,
@@ -4390,10 +4391,10 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
   beforeAll(() => useTempFileCompiler());
 
   it("C1/C2: every surface is placed whole, wraps inside its region and keeps its styles", function* () {
-    const view = yield* checkpointView();
     expect(RUNNING_SOURCE.includes(WRAPPING_LINE)).toBe(true);
     const presenter = yield* usePresenter(CHECKPOINT_SIZE);
-    const observed = yield* presenter.commit(view);
+    const committed = yield* commitCheckpoint(presenter);
+    const { model, view, observed } = committed;
     const { grid } = presenter;
     const region = (id: string): ReplBounds => {
       const found = observed.regionOf(id);
@@ -4418,6 +4419,27 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
     expect(draft.y + draft.height).toBe(34);
     expect(draft.x).toBeGreaterThanOrEqual(36);
     expect(draft.x + draft.width).toBeLessThanOrEqual(102);
+
+    // C1: a real nested scope is selected, and the breadcrumb beside Entries
+    // says the ancestry it actually resolved to.
+    const entry = model.entries[model.entries.length - 1];
+    const scopes = checkpointScopes(model);
+    expect(scopes.length).toBe(2);
+    expect(scopes[0]).toBe(entry.key);
+    expect(view.state.route.scopes).toEqual(scopes);
+    const ancestry = view.selection.ancestry;
+    expect(ancestry.map((one) => one.key)).toEqual(scopes);
+    expect(view.selection.scope?.key).toBe(scopes[1]);
+    expect(view.selection.scope?.key).not.toBe(entry.scope.key);
+    expect(view.selection.scope?.kind).toBe("component");
+    const crumbs = observed.cells.get("work:crumbs") ?? "";
+    expect(crumbs).toContain(`Entry ${entry.order}`);
+    expect(crumbs).toContain(ancestry[1].name);
+    expect(crumbs.indexOf(`Entry ${entry.order}`)).toBeLessThan(crumbs.indexOf(ancestry[1].name));
+    const crumbRow = placed(observed, "work:crumbs");
+    const entries = placed(observed, "entries:heading");
+    expect(crumbRow.y).toBe(entries.y);
+    expect(entries.x).toBeLessThan(crumbRow.x);
 
     // The old composition's surfaces are not on this screen at all.
     for (const key of observed.keys) {
@@ -4537,7 +4559,12 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
       const row = placed(observed, key);
       expect(grid.styleAt(row.x + row.width - 1, row.y).background).toBe(drafted);
     }
-    // Focus is on the Draft: its marker is bold and its source keeps its colours.
+    // C2: the Draft is the control the mounted tree holds focus on, and the
+    // cue is drawn on that same control. A cue for a control that does not hold
+    // focus would say the next keystroke lands somewhere it does not.
+    expect(committed.focused).toBe("footer:input");
+    expect(focusKeyOf(presenter)).toBe("footer:input");
+    expect(view.focused).toBe("footer:input");
     const marker = grid.styleAt(input.x, input.y);
     expect(grid.at(input.x, input.y)).toBe(">");
     expect(marker.attrs.includes(BOLD)).toBe(true);

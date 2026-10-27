@@ -16,6 +16,7 @@ import { collect, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
+import { fileURLToPath } from "node:url";
 import type { Operation } from "effection";
 
 import { entryInitialBindings, projectRepl } from "../../../src/repl/model.ts";
@@ -33,12 +34,22 @@ import type {
 import { NO_LIFECYCLE } from "../../../src/repl/lifecycle.ts";
 import { navigationOf } from "../../../src/repl/navigation.ts";
 import type { ReplTerminalSize } from "../../../src/repl/terminal.ts";
+import type { Observed, Presenter } from "./presentation.ts";
 
 /** The size the checkpoint is reviewed at. */
 export const CHECKPOINT_SIZE: ReplTerminalSize = Object.freeze({ columns: 160, rows: 36 });
 
 /** The execution the reading belongs to, which the identity row names. */
 export const CHECKPOINT_EXECUTION = "checkout-repair";
+
+/**
+ * Where the component the running entry invokes is read from.
+ *
+ * This directory: `Checklist.md` beside this file is an existing fixture
+ * component, so the nested scope the screen selects is admitted by a real
+ * import of a real file rather than by a record written by hand.
+ */
+const CHECKPOINT_DIRECTORY = fileURLToPath(new URL("./", import.meta.url));
 
 /** The completed entry: it binds a value and renders output of its own. */
 const COMPLETED = [
@@ -54,8 +65,10 @@ const COMPLETED = [
 /**
  * The running entry's exact source.
  *
- * One line longer than the selected work's pane, so it wraps at a measured word
- * boundary, and a run of spaces inside it that the reading must keep.
+ * It invokes one component, so the entry admits a nested scope the screen can
+ * select and show as a breadcrumb. One line is longer than the selected work's
+ * pane, so it wraps at a measured word boundary, and a run of spaces inside it
+ * must survive the reading.
  */
 export const RUNNING_SOURCE = [
   "# Review the checkout total",
@@ -63,6 +76,8 @@ export const RUNNING_SOURCE = [
   "```js eval",
   'output("Reading checkout.md and architecture.md");',
   "```",
+  "",
+  '<Checklist title="Checkout total" steps={3} />',
   "",
   "Compute the total once,    after the items are summed, so that checkout.md and cart.md can never disagree about what the customer pays.",
   "",
@@ -249,9 +264,11 @@ function* runEntry(
 ): Operation<void> {
   const view = new EntrySegmentStream(physical);
   try {
-    const execution = yield* executeInstalled({ ...inlineSource(source), stream: view }, [], {
-      initialBindings,
-    });
+    const execution = yield* executeInstalled(
+      { ...inlineSource(source), stream: view, includes: [CHECKPOINT_DIRECTORY] },
+      [],
+      { initialBindings },
+    );
     yield* collect(execution);
   } catch {
     // How far an entry got is the record the catalog reads.
@@ -286,8 +303,27 @@ export function* checkpointModel(): Operation<ReplModel> {
   return projected(whole.slice(0, last.at));
 }
 
-/** The state the checkpoint reads: the running entry selected, both texts typed. */
-export function checkpointState(): ReplState {
+/**
+ * The entry and the nested scope this screen selects, read from the model.
+ *
+ * The running entry and the first scope its own import admitted — real keys
+ * from the projected history, so a fixture that stopped admitting that scope
+ * fails here instead of quietly selecting the entry's root.
+ */
+export function checkpointScopes(model: ReplModel): readonly string[] {
+  const entry = model.entries[model.entries.length - 1];
+  if (entry === undefined) {
+    throw new Error("this checkpoint model admitted no entry");
+  }
+  const nested = entry.scope.scopes[0];
+  if (nested === undefined) {
+    throw new Error(`${entry.key} admitted no nested scope for this checkpoint to select`);
+  }
+  return Object.freeze([entry.key, nested.key]);
+}
+
+/** The state the checkpoint reads: the nested scope selected, both texts typed. */
+export function checkpointState(model: ReplModel): ReplState {
   const base = initialState(CHECKPOINT_EXECUTION);
   return Object.freeze({
     ...base,
@@ -296,24 +332,60 @@ export function checkpointState(): ReplState {
     route: Object.freeze({
       ...base.route,
       right: "sidekick" as const,
-      scopes: Object.freeze(["entry-2"]),
+      scopes: checkpointScopes(model),
     }),
   });
 }
 
-/** The whole checkpoint view, with the Draft holding focus. */
-export function* checkpointView(): Operation<ReplView> {
-  const model = yield* checkpointModel();
+/**
+ * The checkpoint view of one model, as the control named by `focused` holds it.
+ *
+ * `focused` is the key the *mounted tree* answered with, never a label chosen
+ * here: a view says which control the cue is drawn on, and the tree is what
+ * decides where a keystroke lands.
+ */
+export function checkpointViewOf(model: ReplModel, focused: string | undefined): ReplView {
   const resolved = viewFor(
-    checkpointState(),
+    checkpointState(model),
     model,
     CHECKPOINT_LIVE,
     CHECKPOINT_SIZE,
-    "footer:input",
+    focused,
     navigationOf(model.checkpoints, "live"),
   );
   if (!resolved.ok) {
     throw resolved.error;
   }
   return withWorkspace(resolved.value, CHECKPOINT_WORKSPACE);
+}
+
+/** One committed checkpoint screen, and the facts it was committed from. */
+export interface CheckpointFrame {
+  readonly model: ReplModel;
+  readonly view: ReplView;
+  /** The key the mounted tree holds focus on, as the tree answered. */
+  readonly focused: string | undefined;
+  readonly observed: Observed;
+}
+
+/**
+ * Commit the checkpoint screen, in the two frames the product itself takes.
+ *
+ * The first frame carries no focused key, so the Draft's own claim takes focus
+ * exactly as it does when a command opens. The tree is then asked where focus
+ * actually ended up, and the frame under review is composed with that answer —
+ * so the cue drawn on the Draft is the cue of the control a keystroke reaches,
+ * rather than a label a fixture asserted into the view.
+ *
+ * One presenter, one tree and one grid throughout, because this renderer writes
+ * diffs: the screen is what the frames have left in the grid together.
+ */
+export function* commitCheckpoint(presenter: Presenter): Operation<CheckpointFrame> {
+  const model = yield* checkpointModel();
+  yield* presenter.commit(checkpointViewOf(model, undefined));
+  const node = presenter.tree.focused();
+  const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+  const view = checkpointViewOf(model, focused);
+  const observed = yield* presenter.commit(view);
+  return { model, view, focused, observed };
 }
