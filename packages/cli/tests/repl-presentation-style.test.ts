@@ -137,6 +137,13 @@ import { ACCEPTED_160 } from "./fixtures/repl/accepted-160.ts";
 import { chatLinesFor, QUEUE_WINDOW } from "../src/repl/application.ts";
 import { readDescription } from "../src/repl/description.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
+import {
+  appearanceModel,
+  appearanceRecord,
+  differences,
+  screenOf,
+  sizeOf,
+} from "./fixtures/repl/appearance.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import { createFitStore, createPlainFitStore, fitPlain } from "../src/repl/fitting.ts";
 import type { ReplFittedLine } from "../src/repl/fitting.ts";
@@ -585,6 +592,47 @@ function* focusOn(presenter: Presenter, key: string, limit = 400): Operation<voi
   }
   throw new Error(`Tab never reached ${key}; it visited ${visited.join(", ")}`);
 }
+
+/**
+ * What the three accepted profiles look like, and nothing else.
+ *
+ * One recorded input, three stored records, and a comparison that reports rows
+ * and style runs a person can read. No route, ancestry, target list or box id
+ * is asserted here: those are the behaviour tiers' own subject, and a screen
+ * that drew the accepted words in the accepted inks over the wrong tree is a
+ * failure those tiers catch, in their own language.
+ */
+describe("REPL appearance - reviewed shipping profiles", () => {
+  for (const profile of ["160x36", "120x30", "72x20"] as const) {
+    it(`${profile}: every row and style run is the reviewed record's`, function* () {
+      const record = yield* appearanceRecord(profile);
+      const model = yield* appearanceModel();
+      const size = sizeOf(record);
+      yield* scoped(function* (): Operation<void> {
+        const presenter = yield* usePresenter(size);
+        const frame = yield* commitCheckpoint(presenter, {
+          model,
+          size,
+          workspace: workspaceOf(model, CHECKPOINT_SIDEKICK),
+        });
+        const screen = screenOf(presenter.grid, size);
+        const found = differences(record, screen.rows, screen.runs);
+        if (found.length > 0) {
+          throw new Error(
+            [
+              `${profile}: ${found.length} difference(s) from the reviewed record`,
+              `expected data ${record.expectedSha256}, input ${record.input.journalSha256}`,
+              ...found.slice(0, 12),
+            ].join("\n"),
+          );
+        }
+        // The record describes a screen whose Draft took focus on its own.
+        expect([profile, frame.focused]).toEqual([profile, record.input.focused]);
+        expect([profile, screen.rows.length]).toEqual([profile, record.size.rows]);
+      });
+    });
+  }
+});
 
 describe("REPL presentation: what one row's cells say it is", () => {
   beforeAll(() => useTempFileCompiler());
