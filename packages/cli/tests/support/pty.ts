@@ -487,27 +487,34 @@ function* showing(pty: Pty, what: string, within: number): Operation<void> {
  * right one for a label, a control or a status, and it is the wrong one here.
  *
  * What it proves: every non-space character of the expected text, in order,
- * within four adjacent rows. What it gives up: the spacing between words, since
- * a wrap consumes the space it happened at and the rails between columns are
- * removed to rejoin a cut token. It does not give up completeness — an elided
+ * within four adjacent rows of one column. What it gives up: the spacing
+ * between words, since a wrap consumes the space it happened at. The rows are
+ * rejoined inside their own column — a divider is where one reading ends and
+ * the next begins, and joining across one would splice the pane alongside into
+ * the middle of the text. It does not give up completeness — an elided
  * row keeps its `…`, so a truncated token still fails here, which is the whole
  * point of asking about a long one.
  */
 function* showingAcross(pty: Pty, what: string, within: number): Operation<void> {
-  /** The same text with every space and column rail taken out of it. */
-  const bare = (line: string): string => line.replaceAll("\u2502", "").replace(/\s+/g, "");
+  /** The same text with every space taken out of it. */
+  const bare = (line: string): string => line.replace(/\s+/g, "");
   const wanted = bare(what);
   const deadline = Date.now() + within;
   while (true) {
     const screen = yield* pty.shows();
-    // Four, because a token this long is cut at most once in a column this
-    // wide and the label before it may sit on its own row above.
-    const joined = screen.map((_, at) =>
-      screen
-        .slice(at, at + 4)
-        .map(bare)
-        .join(""),
-    );
+    // Column by column, because a divider is where one reading ends and the
+    // next begins: rejoining a block's rows across the whole width would
+    // splice the pane beside it into the middle of the text being looked for.
+    const columns = Math.max(...screen.map((line) => line.split("\u2502").length), 1);
+    const joined: string[] = [];
+    for (let column = 0; column < columns; column += 1) {
+      const own = screen.map((line) => bare(line.split("\u2502")[column] ?? ""));
+      // Four, because a token this long is cut at most once in a column this
+      // wide and the label before it may sit on its own row above.
+      for (let at = 0; at < own.length; at += 1) {
+        joined.push(own.slice(at, at + 4).join(""));
+      }
+    }
     if (joined.some((rows) => rows.includes(wanted))) {
       return;
     }
@@ -522,5 +529,52 @@ function* showingAcross(pty: Pty, what: string, within: number): Operation<void>
   }
 }
 
+/** How this suite names an outcome, and the mark the History rail gives it. */
+const RAIL_MARKS: Readonly<Record<string, string>> = Object.freeze({
+  ok: "\u2713",
+  err: "\u00d7",
+  cancelled: "\u002d",
+  unfinished: "\u25cf",
+});
+
+/**
+ * Wait until the History rail says this entry reached this outcome.
+ *
+ * The rail rather than the Entries catalog. `N. [ok] entry-N` is a row of that
+ * catalog, and the catalog is a drawer on this screen — so a journey waiting
+ * for one of its rows is waiting for a drawer nobody opened. What every frame
+ * draws instead is the compact History band, which carries one mark per entry.
+ *
+ * Read up to the rule, which is where the rail ends and the sentence beside it
+ * begins: a number past that belongs to the sentence and not to an entry.
+ */
+function* settledEntry(
+  pty: Pty,
+  order: number,
+  outcome: keyof typeof RAIL_MARKS,
+  within: number,
+): Operation<void> {
+  const mark = RAIL_MARKS[outcome];
+  const found = new RegExp(`(?:^|\\s)${order}\\s*${mark}`);
+  const deadline = Date.now() + within;
+  while (true) {
+    const screen = yield* pty.shows();
+    const railed = screen.some((line) => {
+      const at = line.indexOf("HISTORY");
+      return at === -1 ? false : found.test(line.slice(at + 7).split("\u2500\u2500")[0] ?? "");
+    });
+    if (railed) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the History rail never marked entry ${order} as ${outcome} within ${within}ms. screen=` +
+          JSON.stringify(screen.map((line) => line.trimEnd()).filter((line) => line.length > 0)),
+      );
+    }
+    yield* sleep(150);
+  }
+}
+
 export type { Pty };
-export { allocate, showing, showingAcross };
+export { allocate, settledEntry, showing, showingAcross };

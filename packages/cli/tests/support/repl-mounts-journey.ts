@@ -88,6 +88,10 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       yield* third.type("\r");
       yield* showing(third, "Ready for Entry 3", 30_000);
       yield* holding(join(selected, "fresh.md"), selected === old ? "changed" : "current");
+      // The catalog is a drawer on this screen: `Entries` opens it, and the
+      // row that selects the second entry is inside it.
+      yield* click(third, "Entries");
+      yield* showing(third, "2. [ok]", 30_000);
       yield* click(third, "2. [ok]");
       yield* showing(third, selected === old ? "fresh is changed" : "fresh is current", 30_000);
       yield* reach(third, "[exit]");

@@ -64,6 +64,8 @@ import {
   screenOf,
   sendMessage,
   settled,
+  saidBySidekick,
+  saysAcross,
   shows,
   typing,
   useMountedRepl,
@@ -1497,7 +1499,10 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     yield* awaiting(repl.terminal, "the drawer over a working Sidekick", (one) =>
       shows(one, "[apply]"),
     );
-    expect(shows(repl.terminal, "already working")).toBe(true);
+    // Read across the column's rows: the drawer is the Sidekick's own pane, 30
+    // cells of interior at this size, and a sentence that long is wrapped prose
+    // there rather than one row.
+    expect(saysAcross(repl.terminal, "already working")).toBe(true);
     yield* closing();
     // The drawer is gone, the turn is not: nothing stopped it, and it finishes
     // on its own when the provider is released.
@@ -2364,6 +2369,9 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     const read = yield* mountedReading(repl);
     expect(read.model.entries).toHaveLength(1);
     expect(read.model.entries[0]?.terminal?.output).toContain(ANSWERED);
-    expect(shows(repl.terminal, `${OTHER_MOUNTED_AGENT}: Sidekick here.`)).toBe(true);
+    // Read by the attribution mark this pane spells its origins with: the
+    // staged chat is one list of utterances, so who said a row is a mark in
+    // front of it rather than a name prefix inside the words.
+    expect(saidBySidekick(repl.terminal, "Sidekick here.")).toBe(true);
   });
 });

@@ -646,6 +646,15 @@ interface ReplEntryTask {
   supplyStop(stop: ReplEntryStop): void;
   /** Say this startup will never publish one, so a waiting Stop stops waiting. */
   failStop(error: Error): void;
+  /**
+   * Name the failure this task is about to be halted for.
+   *
+   * Called before the halt, so the settlement the unwind falls back to answers
+   * with the failure that caused it rather than with the general fact that the
+   * task reached no outcome of its own. The halt still runs, and the answer
+   * still comes after it — this only decides which error the answer carries.
+   */
+  failing(error: Error): void;
 }
 
 function* start(
@@ -1437,6 +1446,19 @@ function* start(
       let admitted = false;
       let settled = false;
       /**
+       * The failure this task is being halted for, where it is being halted
+       * for one.
+       *
+       * A session failure halts the entry it was running before it answers the
+       * submission, and the unwind of that halt reaches the settlement below
+       * first. Without this the fallback would be the one that settled, and
+       * the first failure — the one that actually ended the session — would
+       * arrive at a submission that already had an answer. Named rather than
+       * guessed: a task that simply never finished has no such error, and that
+       * is the case the fallback is for.
+       */
+      let halting: Error | undefined;
+      /**
        * Whether the history holds this exact entry.
        *
        * The one fact that distinguishes an entry from a startup. A task is
@@ -1516,9 +1538,10 @@ function* start(
         yield* ensure(() => {
           settle(
             Err(
-              new ReplLifecycleError(
-                `this execution's ${key} did not reach an outcome of its own.`,
-              ),
+              halting ??
+                new ReplLifecycleError(
+                  `this execution's ${key} did not reach an outcome of its own.`,
+                ),
             ),
           );
         });
@@ -1611,6 +1634,9 @@ function* start(
         arm,
         supplyStop,
         failStop,
+        failing: (error: Error) => {
+          halting = error;
+        },
         place: () => {
           placed = true;
         },
@@ -1885,6 +1911,10 @@ function* start(
       open();
       const held = running;
       if (held !== undefined) {
+        // Named before the halt, because the halt is what unwinds the task and
+        // the unwind is what settles it. The settlement below is still the one
+        // that answers where the halt did not reach one.
+        held.failing(error);
         yield* held.task.halt();
         held.settle(Err(error));
       }

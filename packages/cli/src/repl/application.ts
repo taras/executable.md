@@ -2468,6 +2468,14 @@ export function reduceRepl(
         model,
         {
           ...state.route,
+          // The surface this drawer belongs to, taken by the act of selecting
+          // the request. The grammar answers a permission on Sessions, and the
+          // ordinary composition only offers this control there — but the
+          // staged composition draws that same list as its Transcript column,
+          // so an activation from it would otherwise be refused for standing
+          // where the screen put it. Selecting a request is a statement about
+          // going to the request, so the location says so.
+          surface: "sessions",
           drawers: Object.freeze([...state.route.drawers, opening]),
         },
         live,
@@ -3652,7 +3660,7 @@ function sidekickComposedRows(
     reading.refusal === undefined &&
     (reading.setup === undefined || reading.setup.phase === "activated")
   ) {
-    return workspaceChatComposed(reading, staging);
+    return workspaceChatComposed(reading, staging, focused);
   }
   const items: ReplChatComposed[] = [];
   /** One row of readable text, which a width still has to cut into rows. */
@@ -4611,7 +4619,12 @@ function statePhrase(readiness: ReplReadiness, narrow: boolean): string {
  * nothing here, because a row explaining every state at every moment is one
  * nobody reads.
  */
-function stateAdvice(readiness: ReplReadiness, narrow: boolean): string | undefined {
+function stateAdvice(
+  readiness: ReplReadiness,
+  narrow: boolean,
+  /** Whether the list a request is answered from is drawn on this frame. */
+  shown: boolean,
+): string | undefined {
   switch (readiness.kind) {
     case "history":
       // Named without its brackets: a bracketed label in prose reads as a
@@ -4628,9 +4641,13 @@ function stateAdvice(readiness: ReplReadiness, narrow: boolean): string | undefi
     case "answer":
       return "activate answer";
     case "permission":
-      // Named, not routed to. The request belongs to Sessions and the control
-      // that answers it is there; saying so is not the same as going.
-      return "open Sessions";
+      // Named, not routed to: saying where a request is answered is not the
+      // same as going there. Where this frame already draws that list — the
+      // staged composition gives it a column of its own — the request is in
+      // front of the person and the name of a surface to open would name a
+      // control this screen does not have. What is left to say is that the row
+      // is a thing to act on.
+      return shown ? "activate the request" : "open Sessions";
     case "unfinished":
       return narrow ? "no successor" : "no successor can start";
     case "settling":
@@ -4866,7 +4883,7 @@ function guidanceParts(
       { text: compact ? "Tab to draft" : "Tab to the draft to type", required: true },
     ];
   }
-  const advice = stateAdvice(readiness, compact);
+  const advice = stateAdvice(readiness, compact, staged(view) !== undefined && !narrow);
   const said: GuidancePart[] =
     advice === undefined ? [state] : [state, { text: advice, required: true }];
   if (readiness.kind === "history") {
@@ -7072,14 +7089,9 @@ function configureContent(view: ReplView, held: ReplConfiguring, width: number):
     ),
   });
   if (held.refusal !== undefined) {
-    content.push({
-      described: drawerLine(
-        "drawer:configure:refusal",
-        `  ${held.refusal}`,
-        width,
-        styleOf("failed-outcome"),
-      ),
-    });
+    content.push(
+      ...noticeRows("drawer:configure:refusal", held.refusal, width, styleOf("failed-outcome")),
+    );
   }
   // A different agent is a different conversation, and these choices were read
   // from the agent this one is with: they cannot be applied to another. So they
@@ -7092,48 +7104,48 @@ function configureContent(view: ReplView, held: ReplConfiguring, width: number):
     // Said beside what is already in hand rather than instead of it. A refresh
     // that hid the list would take away the choices a person is looking at,
     // and already advertised choices stay usable while another read runs.
-    content.push({
-      described: drawerLine(
+    content.push(
+      ...noticeRows(
         "drawer:configure:asking",
-        "  Reading what this agent offers...",
+        "Reading what this agent offers...",
         width,
         styleOf("waiting"),
       ),
-    });
+    );
   }
   if (replacing) {
     // Said, so a reader knows why the choices went rather than wondering.
-    content.push({
-      described: drawerLine(
+    content.push(
+      ...noticeRows(
         "drawer:configure:replacing",
-        `  ${held.agent} has its own settings.`,
+        `${held.agent} has its own settings.`,
         width,
         styleOf("metadata"),
       ),
-    });
+    );
   } else if (offered === undefined) {
     // Nothing read, and nothing invented to stand in for it. While the Sidekick
     // is working an inspection is one of the things its conversation cannot do,
     // so this says so rather than offering a list from somewhere else.
-    content.push({
-      described: drawerLine(
+    content.push(
+      ...noticeRows(
         "drawer:configure:unread",
-        "  What this agent offers has not been read yet.",
+        "What this agent offers has not been read yet.",
         width,
         styleOf("metadata"),
       ),
-    });
+    );
   } else if (offered.models.length === 0) {
     // `null` from the provider: an agent that offers no model choice at all,
     // which is a different answer from offering choices none of which is yours.
-    content.push({
-      described: drawerLine(
+    content.push(
+      ...noticeRows(
         "drawer:configure:no-models",
-        "  This agent offers no model choice.",
+        "This agent offers no model choice.",
         width,
         styleOf("metadata"),
       ),
-    });
+    );
   } else {
     content.push({
       described: drawerLine("drawer:configure:models", "  Model", width, styleOf("field-label")),
@@ -7582,6 +7594,62 @@ function requiredNow(
 /** One value, as the lines a drawer shows it on. */
 function detail(value: Json): readonly string[] {
   return (JSON.stringify(value, undefined, 2) ?? "null").split("\n");
+}
+
+/**
+ * One sentence, as the rows a drawer has room to say it on.
+ *
+ * A drawer row is one row, and the engine clips a label longer than the
+ * drawer's interior at the last word that fit — so the rest of the sentence is
+ * simply gone. Measured, a 30-cell drawer turned "the Sidekick is already
+ * working on a message. One conversation takes one turn at a time." into "the
+ * Sidekick is already", and a reader had no way to know the rest existed.
+ *
+ * Broken here, where the width the frame measured is known, rather than left to
+ * a clip that keeps no remainder. Every row carries the indent the one row had,
+ * so a wrapped notice still reads as one thing set in from the drawer's edge. A
+ * word wider than the room keeps its own row rather than being cut inside
+ * itself: there is no break to use, and half a word says less than a word that
+ * runs to the edge.
+ */
+function sentenceRows(text: string, width: number, indent = "  "): readonly string[] {
+  const room = width - indent.length;
+  if (room < 1) {
+    return [`${indent}${text}`];
+  }
+  const rows: string[] = [];
+  let held = "";
+  for (const word of text.split(/\s+/)) {
+    if (word.length === 0) {
+      continue;
+    }
+    if (held.length === 0) {
+      held = word;
+      continue;
+    }
+    if (held.length + 1 + word.length <= room) {
+      held = `${held} ${word}`;
+      continue;
+    }
+    rows.push(`${indent}${held}`);
+    held = word;
+  }
+  if (held.length > 0 || rows.length === 0) {
+    rows.push(`${indent}${held}`);
+  }
+  return rows;
+}
+
+/** Say one sentence in a drawer, on as many of its rows as the sentence needs. */
+function noticeRows(
+  key: string,
+  text: string,
+  width: number,
+  style: ReplRowStyle,
+): readonly DrawerRow[] {
+  return sentenceRows(text, width).map((row, offset) => ({
+    described: drawerLine(offset === 0 ? key : `${key}:${offset}`, row, width, style),
+  }));
 }
 
 /** Every nested scope beneath one, with the key path that selects it. */
@@ -9554,6 +9622,8 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
 function workspaceChatComposed(
   reading: ReplSidekickReading,
   staging: ReplChatStaging,
+  /** The key of whatever holds focus, for the one row that wears the marker. */
+  focused: string | undefined,
 ): readonly ReplChatComposed[] {
   const items: ReplChatComposed[] = [];
   const text = (
@@ -9621,6 +9691,30 @@ function workspaceChatComposed(
           SIDEKICK_MARK,
         ),
       );
+      // And the way to ask for the same thing again, which is the one thing a
+      // reader can do about an attempt that did not finish. The ordinary pane
+      // offers it on the same condition — a request this history can name, in
+      // the conversation it is still continuing — and a staged pane that said
+      // the turn failed and then offered nothing would be the same reading
+      // with its one action taken away.
+      if (item.kind === "incomplete" && item.retry !== undefined && reading.current) {
+        items.push(
+          Object.freeze({
+            kind: "control" as const,
+            described: row(
+              `sidekick:retry:${item.retry.message}`,
+              `${MARKER_ROOM}[retry]`,
+              {
+                select: "retry-message",
+                conversation: item.retry.conversation,
+                message: item.retry.message,
+              },
+              styleOf("action"),
+              { here: focused },
+            ),
+          }),
+        );
+      }
     } else if (item.hasOutput) {
       items.push(text(key, item.text, styleOf("output"), SIDEKICK_MARK));
     }
@@ -9851,17 +9945,23 @@ function compactTurn(
   }
   const request = turn.request;
   if (request !== undefined) {
+    // Focusable, because this list is where the request is drawn. The ordinary
+    // composition makes it a plain fact off the Sessions surface and a control
+    // on it — the surface being the one place a permission is answered. This
+    // composition has no second surface: the Transcript is the one list, and a
+    // request announced here with no way to reach it would be a screen that
+    // said somebody was waiting and offered nothing to do about it.
+    const asks: readonly ReplLabelPart[] = [
+      { text: `${CONTROL_ROOM}${MARKER_ROOM}asks: ` },
+      { text: headline(request.title ?? request.toolCallId), elide: true },
+    ];
     rows.push(
-      line(
+      row(
         `sessions:request:${request.key}`,
-        fitLine(
-          [
-            { text: `${CONTROL_ROOM}${MARKER_ROOM}asks: ` },
-            { text: headline(request.title ?? request.toolCallId), elide: true },
-          ],
-          width,
-        ),
+        fitControl(asks, width),
+        { select: "permission", request: request.key },
         styleOf("waiting"),
+        { here: focused },
       ),
     );
   }

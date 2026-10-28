@@ -58,7 +58,7 @@ import {
 } from "@executablemd/git";
 import type { GitHostReconciliationRecord } from "@executablemd/git";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { allocate, showing, showingAcross, terminalDataHome } from "./pty.ts";
+import { allocate, settledEntry, showing, showingAcross, terminalDataHome } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 import {
   ACT_MS,
@@ -413,7 +413,9 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     // opened.md and evidence.md, written from the same bindings.
     yield* showingAcross(second, ASKED, ACT_MS);
     yield* click(second, "( ) continue");
-    yield* showing(second, "[ok] entry-1", ACT_MS);
+    // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
+    // Entries catalog, which this screen keeps in a drawer.
+    yield* settledEntry(second, 1, "ok", ACT_MS);
 
     // The suffix executed for the first time on the answer: the write landed,
     // and the read written after the question is a new occurrence, so it

@@ -980,10 +980,10 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* untilDrawn(first.terminal);
 
       yield* typed(first.terminal, promptEntry("ask-one"));
-      yield* showing(first.terminal, "1. [ok] entry-1");
+      yield* settledOn(first.terminal, 1);
       yield* focusDraft(first.terminal);
       yield* typed(first.terminal, promptEntry("ask-two"));
-      yield* showing(first.terminal, "2. [ok] entry-2");
+      yield* settledOn(first.terminal, 2);
 
       // Both turns are on the Sessions reading, in one conversation, before
       // anything is read back: this is the reading a cold process has to
@@ -995,7 +995,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // surface is offering a conversation to filter by at all. Which key it
       // is, is a fact about the record and is asserted of the record below —
       // a provider session key is longer than this column and is drawn cut.
-      expect(shows(first.terminal, "All conversations")).toBe(true);
+      expect(shows(first.terminal, "All sessions")).toBe(true);
       turnRows = promptRows(first.terminal);
       expect(turnRows).toHaveLength(2);
       expect(turnRows.some((row) => shownPrompt(row, "ask-one"))).toBe(true);
@@ -1061,8 +1061,8 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* untilDrawn(second.terminal);
 
       // The catalog the file holds, in admission order with its outcomes.
-      yield* showing(second.terminal, "1. [ok] entry-1");
-      yield* showing(second.terminal, "2. [ok] entry-2");
+      yield* settledOn(second.terminal, 1);
+      yield* settledOn(second.terminal, 2);
       expect(selectedEntryOn(second.terminal) ?? "").toContain(selected.key);
 
       // The global Sessions chronology, row for row and conversation for
@@ -1070,7 +1070,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // under the one conversation, with the selection narrowing none of it.
       yield* showing(second.terminal, "ONE-DONE");
       yield* showing(second.terminal, "TWO-DONE");
-      expect(shows(second.terminal, "All conversations")).toBe(true);
+      expect(shows(second.terminal, "All sessions")).toBe(true);
       expect(promptRows(second.terminal)).toEqual(turnRows);
 
       // The selected entry's own transcript, read off the transcript column
@@ -1356,7 +1356,7 @@ describe("J2 — three conversations at once, through the terminal", () => {
           ] as const
         ).every(([asked, state]) => rows.some((line) => saying(line, asked, state)));
       });
-      yield* showing(terminal, "All conversations");
+      yield* showing(terminal, "All sessions");
 
       // With the implementer's turn recorded too, a conversation control is
       // there to filter by while the planner has still not been taken.
@@ -1420,7 +1420,7 @@ describe("J2 — three conversations at once, through the terminal", () => {
       // Cleared back to All, the whole chronology is there again — all three
       // children, each with the state its own turn ended in, and one more
       // conversation to filter by than before.
-      yield* click(terminal, "All conversations");
+      yield* click(terminal, "All sessions");
       yield* settled(40);
       expect(sessionOf(terminal)).toBeUndefined();
       expect(childrenShown(terminal)).toEqual([PLAN_IT, REVIEW_IT, BUILD_IT]);
@@ -2745,8 +2745,13 @@ function* untilDrawn(terminal: Terminal): Operation<void> {
   yield* until(() => usable(terminal), "the screen never drew its first frame");
 }
 
-/** What the draft row is called, which is how this suite finds it. */
-const DRAFT_PROMPT = "Draft: ";
+/**
+ * What the draft row is called, which is how this suite finds it.
+ *
+ * The draft is a block now: its name and focus marker are one row, and what
+ * somebody typed is fitted into rows of its own beneath them.
+ */
+const DRAFT_PROMPT = " DRAFT";
 
 /**
  * Whether a frame a person could actually use has been drawn.
@@ -2765,12 +2770,41 @@ function usable(terminal: Terminal): boolean {
   );
 }
 
-/** Exactly what the draft row is holding, after its marker and its prompt. */
+/**
+ * Exactly what the draft is holding, beneath the row that names it.
+ *
+ * Bounded by the column its name is drawn in and by the control beside that
+ * name: the draft is a block in a column now, and a row read to the end of the
+ * screen carries the pane alongside it as well.
+ */
 function draftTextOn(terminal: Terminal): string | undefined {
-  const row = screenOf(terminal).find((line) => line.includes(DRAFT_PROMPT));
-  return row === undefined
-    ? undefined
-    : row.slice(row.indexOf(DRAFT_PROMPT) + DRAFT_PROMPT.length).trimEnd();
+  const rows = screenOf(terminal);
+  const at = rows.findIndex((line) => line.includes(DRAFT_PROMPT));
+  if (at === -1) {
+    return undefined;
+  }
+  const named = rows[at] ?? "";
+  const from = Math.max(0, named.indexOf(DRAFT_PROMPT) - 1);
+  const beside = /\s\[[^\]]*\]/.exec(named.slice(from));
+  const allocated = beside === null ? undefined : beside.index;
+  const value: string[] = [];
+  for (const line of rows.slice(at + 1)) {
+    if (line.includes("HISTORY") || line.includes("[exit]") || line.includes("Tab/Shift+Tab")) {
+      break;
+    }
+    const within = line.slice(from);
+    const edge = within.indexOf("\u2502");
+    const bounded = edge === -1 ? within : within.slice(0, edge);
+    const own = (allocated === undefined ? bounded : bounded.slice(0, allocated)).trimEnd();
+    if (own.trim().startsWith("[")) {
+      break;
+    }
+    value.push(own);
+  }
+  while (value.length > 0 && (value[value.length - 1] ?? "").trim() === "") {
+    value.pop();
+  }
+  return value.join("\n").trim();
 }
 
 /**
@@ -2789,7 +2823,42 @@ function entriesOn(terminal: Terminal): string[] {
       found.push(`${match[1]}. ${match[3]}`);
     }
   }
-  return found;
+  return found.length > 0 ? found : railOn(terminal);
+}
+
+/** Wait until the History rail marks this entry as settled well. */
+function* settledOn(terminal: Terminal, order: number): Operation<void> {
+  yield* until(
+    () => railOn(terminal).includes(`${order}. \u2713`),
+    `the rail never marked entry ${order} as settled`,
+  );
+}
+
+/**
+ * The entries the compact History rail is marking, as `order. mark`.
+ *
+ * The catalog that spells `N. [ok] entry-N` is a drawer on this screen, so a
+ * reading of it is a reading of something nobody opened. The rail is what every
+ * frame draws, and it carries one mark per entry — which is the same two facts
+ * this suite asks for: how many entries there are and what each came to.
+ *
+ * Read up to the rule, which is where the rail ends and the sentence beside it
+ * begins: a number past that belongs to the sentence and not to an entry.
+ */
+function railOn(terminal: Terminal): string[] {
+  for (const line of screenOf(terminal)) {
+    const at = line.indexOf("HISTORY");
+    if (at === -1) {
+      continue;
+    }
+    const rail = line.slice(at + "HISTORY".length).split("\u2500\u2500")[0] ?? "";
+    const found: string[] = [];
+    for (const match of rail.matchAll(/(\d+)\s*([\u2713\u00d7\u25cf\u002d])/g)) {
+      found.push(`${match[1]}. ${match[2]}`);
+    }
+    return found;
+  }
+  return [];
 }
 
 /** The catalog row this reading has selected, if it is showing one. */

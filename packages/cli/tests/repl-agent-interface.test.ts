@@ -780,8 +780,14 @@ function draftRowIn(rows: readonly string[]): string {
   return found;
 }
 
-/** What the draft row is called, which is how this suite finds it. */
-const DRAFT_PROMPT = "Draft: ";
+/**
+ * What the draft row is called, which is how this suite finds it.
+ *
+ * The draft is a block now: its name and focus marker are one row, and what
+ * somebody typed is fitted into rows of its own beneath them. So this names the
+ * row, and {@link draftOn} reads the rows under it.
+ */
+const DRAFT_PROMPT = " DRAFT";
 
 /** The keys this view describes with one `select`, which is what a row asks for. */
 function* keysSelecting(view: ReplView, select: string): Operation<string[]> {
@@ -1970,14 +1976,10 @@ describe("U2 — the program performs a permission, end to end", () => {
       // drawer is up to answer it with.
       expect(shows(terminal, "[Allow once]")).toBe(false);
 
-      // A permission is answered on the Sessions surface, so that is where a
-      // person goes first — through the ordinary control, not a shortcut.
-      yield* pressUntil(terminal, "Sessions");
-      terminal.feed("\r");
-      yield* settled(40);
-
       // Activate the request fact, then choose one offered option — Tab and Enter,
-      // through the ordinary normalized boundary.
+      // through the ordinary normalized boundary. The fact is reached where the
+      // screen draws it: this frame gives the Transcript a column of its own and
+      // the request stands in it, so there is no surface to open first.
       yield* pressUntil(terminal, "asks: Write");
       terminal.feed("\r");
       yield* settled(40);
@@ -2039,11 +2041,8 @@ describe("U2 — the program performs a permission, end to end", () => {
       yield* settled(40);
       yield* showing(terminal, "asks: Write");
 
-      // Open it the way a person does, from the surface a permission is answered
-      // on.
-      yield* pressUntil(terminal, "Sessions");
-      terminal.feed("\r");
-      yield* settled(40);
+      // Open it the way a person does: the request stands in the Transcript's
+      // own column at this size, and activating that row is what opens it.
       yield* pressUntil(terminal, "asks: Write");
       terminal.feed("\r");
       yield* settled(40);
@@ -3219,12 +3218,15 @@ function usableFrame(terminal: Terminal): boolean {
 function focusedOn(terminal: Terminal, label: string): boolean {
   for (const line of screenOf(terminal)) {
     for (let at = line.indexOf(">"); at !== -1; at = line.indexOf(">", at + 1)) {
-      if (
-        line
-          .slice(at + 1)
-          .trimStart()
-          .startsWith(label)
-      ) {
+      // Past the origin mark, where the row wears one. This list attributes
+      // every row it holds — an entry agent's work, a person's message, the
+      // Sidekick's reply, the work a reply started — and the mark stands
+      // between the focus marker and the row's own words.
+      const after = line
+        .slice(at + 1)
+        .trimStart()
+        .replace(/^\[[A-Z]\]\s*/, "");
+      if (after.startsWith(label)) {
         return true;
       }
     }
@@ -3235,6 +3237,27 @@ function focusedOn(terminal: Terminal, label: string): boolean {
 /** Whether any row of the screen contains this text. */
 function shows(terminal: Terminal, expected: string): boolean {
   return screenOf(terminal).some((line) => line.includes(expected));
+}
+
+/**
+ * Whether the compact History rail holds a mark for this entry.
+ *
+ * The rail is where this screen states what each entry came to, at every size.
+ * Up to the rule, which is where the rail ends and the sentence beside it
+ * begins — a number past that is part of the sentence, not an entry.
+ */
+function railHas(terminal: Terminal, order: number, mark = "\u2713\u00d7\u25cf\u002d"): boolean {
+  for (const line of screenOf(terminal)) {
+    const at = line.indexOf("HISTORY");
+    if (at === -1) {
+      continue;
+    }
+    const rail = line.slice(at + "HISTORY".length).split("\u2500\u2500")[0] ?? "";
+    if (new RegExp(`(?:^|\\s)${order}\\s*[${mark}]`).test(rail)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -3854,7 +3877,7 @@ function* focusTheDraft(terminal: Terminal, limit = 240): Operation<void> {
     // destinations now — the draft and `Message Sidekick` (#883 section 5) — and
     // both wear the same focus marker, so a helper looking for the marker alone
     // stops at whichever it reaches first and types an entry into a chat box.
-    if (screenOf(terminal).some((line) => line.includes(`>> ${DRAFT_PROMPT}`))) {
+    if (screenOf(terminal).some((line) => line.includes(`>${DRAFT_PROMPT}`))) {
       return;
     }
     terminal.feed("\t");
@@ -3903,23 +3926,68 @@ function* admittedSources(hostRoot: string): Operation<readonly string[]> {
 }
 
 /**
- * Exactly what the draft row is holding (#870 C3).
+ * Exactly what the draft is holding (#870 C3).
  *
- * Read off the bottom-most row that carries the draft's own prompt, because the
- * draft owns the last footer row at every size and shares it with nothing. Exact
- * rather than a containment check: the requirement is that what somebody typed survived
- * byte for byte, and `contains` would pass on a draft that had grown a character.
+ * Read from the rows beneath the row that names it, because the draft draws its
+ * name and its value apart now, and bounded by the column the name is drawn in
+ * so a neighbouring pane's rows are not read as the draft's. Exact rather than
+ * a containment check: the requirement is that what
+ * somebody typed survived byte for byte, and `contains` would pass on a draft
+ * that had grown a character.
  */
 function draftOn(terminal: Terminal): string {
   const rows = screenOf(terminal);
-  for (let row = rows.length - 1; row >= 0; row -= 1) {
-    const line = rows[row] ?? "";
-    const at = line.lastIndexOf(DRAFT_PROMPT);
-    if (at !== -1) {
-      return line.slice(at + DRAFT_PROMPT.length).trimEnd();
-    }
+  const at = rows.findIndex((line) => line.includes(DRAFT_PROMPT));
+  if (at === -1) {
+    return "";
   }
-  return "";
+  // Where this field's own content begins: the column its name starts at, one
+  // past the marker in front of it. And where its room ends: the Draft's name
+  // shares a row with the control that acts on the draft, and the column that
+  // control starts at is where the value stops. Without that bound the rows
+  // below run into whatever the pane beside this one drew on them.
+  const named = rows[at] ?? "";
+  const from = Math.max(0, named.indexOf(DRAFT_PROMPT) - 1);
+  const borders = bordersBefore(named, from);
+  const beside = /\s\[[^\]]*\]/.exec(named.slice(from));
+  const allocated = beside === null ? undefined : beside.index;
+  const value: string[] = [];
+  for (const line of rows.slice(at + 1)) {
+    // This column's own rows only. The rows below the pane run the whole width
+    // and are nobody's column, so a reader that walked into them would read a
+    // rail or a direction as the end of somebody's draft.
+    if (bordersBefore(line, from) < borders || footerRow(line)) {
+      break;
+    }
+    const within = line.slice(from);
+    const edge = within.indexOf("\u2502");
+    const bounded = edge === -1 ? within : within.slice(0, edge);
+    const own = (allocated === undefined ? bounded : bounded.slice(0, allocated)).trimEnd();
+    if (own.trim().startsWith("[")) {
+      break;
+    }
+    value.push(own);
+  }
+  while (value.length > 0 && (value[value.length - 1] ?? "").trim() === "") {
+    value.pop();
+  }
+  return value.join("\n").trim();
+}
+
+/** How many of this screen's column borders stand before this column. */
+function bordersBefore(line: string, column: number): number {
+  return line.slice(0, column).split("\u2502").length - 1;
+}
+
+/**
+ * Whether this row belongs to the screen's footer rather than to any pane.
+ *
+ * The compact History band and the guidance below it run the whole width and
+ * are nobody's column. Recognised by what they say, because a count of rows
+ * from the bottom is the layout's business and not a reader's.
+ */
+function footerRow(line: string): boolean {
+  return line.includes("HISTORY") || line.includes("[exit]") || line.includes("Tab/Shift+Tab");
 }
 
 /**
@@ -3977,15 +4045,13 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         // That a request is waiting is read from the one row that says what the
         // execution is doing, because that row is on the screen at both sizes —
         // the chronology the request lives on is not: a narrow frame mounts one
-        // routed outlet, and this one is routed to Entries.
-        // Read from the one row that says what the execution is doing, because
-        // that row is on the screen at both sizes — the chronology the request
-        // lives on is not: a narrow frame mounts one routed outlet and this route
-        // selects Entries. Matched on the instruction rather than on the state
-        // phrase, because the narrow state is the compact `Entry 1 permission`
-        // and the wide one is `Entry 1 waiting for permission`.
+        // routed outlet and this route selects Entries. Matched on the word both
+        // spellings of that state share: the narrow one is `Entry 1 permission`
+        // and the wide one `Entry 1 waiting for permission`, and what each says
+        // to do differs too — a frame that draws the list says to activate the
+        // request and one that does not says where to open it.
         yield* untilScreen(terminal, "the request being announced", (one) =>
-          shows(one, "open Sessions"),
+          shows(one, "permission"),
         );
         // Arrival opened nothing, which is the row before this one's claim. Read
         // off the screen rather than the location: at 72 columns the location is
@@ -4003,9 +4069,14 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         expect(draftOn(terminal)).toBe(TYPED);
 
         // 2. Answered once, through the ordinary controls and the one authority.
-        yield* pressUntil(terminal, "Sessions");
-        terminal.feed("\r");
-        yield* settled(40);
+        // Where one outlet is routed the chronology is behind its own tab and a
+        // person opens it first; where the Transcript has a column the request
+        // already stands in it, and there is no surface to cross to.
+        if (shows(terminal, "Sessions")) {
+          yield* pressUntil(terminal, "Sessions");
+          terminal.feed("\r");
+          yield* settled(40);
+        }
         yield* pressUntil(terminal, "asks: Write");
         terminal.feed("\r");
         yield* settled(40);
@@ -4016,7 +4087,23 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         expect(stub.answers.get("call-1")).toBe(1);
         yield* settled(40);
 
-        // 3. Byte for byte what was typed, and on the screen.
+        // 3. Byte for byte what was typed, and on the screen. A narrow frame
+        // routes one outlet, and the chronology this request was answered on is
+        // not the outlet the draft is drawn on — so the way back is taken
+        // first, through the control that is on the screen at every size.
+        if (!shows(terminal, DRAFT_PROMPT)) {
+          yield* pressUntil(terminal, "Entries");
+          terminal.feed("\r");
+          yield* settled(40);
+          // That control both routes the outlet and opens the catalog over it.
+          // Put the catalog away again, as the row itself says to: a modal left
+          // up is a modal the rows below would be reading through.
+          if (shows(terminal, "[close]")) {
+            yield* pressUntil(terminal, "[close]");
+            terminal.feed("\r");
+            yield* settled(40);
+          }
+        }
         expect(draftOn(terminal)).toBe(TYPED);
         expect(shows(terminal, TYPED)).toBe(true);
 
@@ -4030,11 +4117,6 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
 
         // 5. And it is the thing that becomes the next entry, once the one that
         // asked for the permission has finished and been joined.
-        // Back to Entries to read its catalog, which a narrow frame only mounts
-        // when the route selects it.
-        yield* pressUntil(terminal, "Entries");
-        terminal.feed("\r");
-        yield* settled(40);
         // Not `[ok]`, which is the retained close: a close is recorded while the
         // task that wrote it is still coming down, and a submission taken in that
         // window has nowhere to go. The row that says the next entry may start is
@@ -4042,10 +4124,17 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         yield* untilScreen(terminal, "the next entry becoming startable", (one) =>
           shows(one, "Ready for Entry 2"),
         );
-        expect(shows(terminal, "1. [ok] entry-1")).toBe(true);
+        // And what the first entry came to, read where this screen states it.
+        // `1. [ok] entry-1` is a row of the Entries catalog, and the catalog is
+        // a drawer over the reading at this size — opening one here would put a
+        // modal over the draft the rows below go on to read.
+        expect(railHas(terminal, 1, "\u2713")).toBe(true);
         yield* focusTheDraft(terminal);
         terminal.feed("\r");
-        yield* untilScreen(terminal, "the second entry", (one) => shows(one, "2. "));
+        // The History rail's own mark for the second entry, which every size
+        // draws: the catalog that spells `2.` is a drawer now, and one opened
+        // here would be a drawer over the draft this row goes on to read.
+        yield* untilScreen(terminal, "the second entry", (one) => railHas(one, 2));
         // Submitted means consumed: the draft is the *next* entry's, and there is
         // no next one typed yet.
         yield* untilScreen(terminal, "the draft being spent", (one) => draftOn(one) === "");

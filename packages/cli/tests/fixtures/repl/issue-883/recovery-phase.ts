@@ -685,9 +685,10 @@ function* phases(): Operation<unknown> {
         records: yield* until(readFile(location.entries, "utf8")),
       };
     }
-    yield* mounted.awaiting(repl.terminal, "the resumed workspace suffix", (one) =>
-      mounted.shows(one, "1. [ok] entry-1"),
-    );
+    // The History rail's own mark for the first entry. `1. [ok] entry-1` is a
+    // row of the Entries catalog, which this screen keeps in a drawer — so the
+    // settled state is read where the screen states it.
+    yield* mounted.settledEntry(repl.terminal, 1, "ok");
     const read = yield* mounted.mountedReading(repl);
     return {
       execution: id,
