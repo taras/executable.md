@@ -1243,13 +1243,21 @@ describe("Tier EP — the execution protocol", () => {
    * entrypoint a trusted host has.
    *
    * No session, no entry and no CLI: `executeInstalled` is the whole of the
-   * seam, and what is proved is the stop itself. The document has already
-   * printed something and is waiting on a real operation; its own installation
-   * holds a cleanup gate, so the Stop cannot answer until that teardown has
-   * been joined. What the journal keeps is the protocol's existing cancelled
-   * Close — one of them, carrying a status and nothing else — and the
-   * completion is not a success. Nothing is invented to stand in for the
-   * answer the document never gave.
+   * seam, and what is proved is the stop itself. The document really has
+   * printed something — a prefix this row reads off `execution.output` before
+   * it asks for anything — and is then waiting on a real operation; its own
+   * installation holds a cleanup gate, so the Stop cannot answer until that
+   * teardown has been joined.
+   *
+   * What a stop owes that partial text is the discriminating part: the output
+   * channel closes with exactly what was emitted before the document stopped.
+   * A stop that threw the prefix away, or that closed the channel empty,
+   * passes every other assertion here and fails that one.
+   *
+   * What the journal keeps is the protocol's existing cancelled Close — one of
+   * them, carrying a status and nothing else — and the completion is not a
+   * success. Nothing is invented to stand in for the answer the document never
+   * gave, and asking again adds neither output nor terminal.
    */
   it("EP30: a host Stop reaches a running document, joins its cleanup and retains one cancelled close", function* () {
     const stream = new InMemoryStream();
@@ -1257,34 +1265,63 @@ describe("Tier EP — the execution protocol", () => {
     const waiting = withResolvers<void>();
     const releaseCleanup = withResolvers<void>();
     const order: string[] = [];
+    /** Body text the document renders before it reaches anything that blocks. */
+    const PREFIX = "PARTIAL-OUTPUT-BEFORE-STOP";
 
     yield* scoped(function* () {
-      const execution = yield* executeInstalled({ ...inlineSource("<Waiting />\n"), stream }, [
-        {
-          *install(): Operation<void> {
-            // Registered first, so it unwinds last: the Stop below cannot
-            // answer until this has been released and joined.
-            yield* ensure(function* (): Operation<void> {
-              order.push("cleanup:begin");
-              yield* releaseCleanup.operation;
-              order.push("cleanup:end");
-            });
-            yield* registerComponents([
-              {
-                name: "Waiting",
-                origin: "execution-protocol",
-                props: { type: "object", properties: {}, additionalProperties: false },
-                *fn(): Operation<string> {
-                  reached.resolve();
-                  yield* waiting.operation;
-                  return "unreachable";
+      const execution = yield* executeInstalled(
+        { ...inlineSource(`${PREFIX}\n\n<Waiting />\n`), stream },
+        [
+          {
+            *install(): Operation<void> {
+              // Registered first, so it unwinds last: the Stop below cannot
+              // answer until this has been released and joined.
+              yield* ensure(function* (): Operation<void> {
+                order.push("cleanup:begin");
+                yield* releaseCleanup.operation;
+                order.push("cleanup:end");
+              });
+              yield* registerComponents([
+                {
+                  name: "Waiting",
+                  origin: "execution-protocol",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  *fn(): Operation<string> {
+                    reached.resolve();
+                    yield* waiting.operation;
+                    return "unreachable";
+                  },
                 },
-              },
-            ]);
+              ]);
+            },
           },
-        },
-      ]);
+        ],
+      );
+
+      // Drained from the moment the execution exists, so what is read is what
+      // the document emitted rather than whatever was left in a buffer. The
+      // close value of this channel is the whole of it — full for a document
+      // that finished, partial for one that did not.
+      const chunks: string[] = [];
+      const closed = withResolvers<string>();
+      yield* spawn(function* () {
+        const subscription = yield* execution.output;
+        let next = yield* subscription.next();
+        while (!next.done) {
+          chunks.push(next.value);
+          next = yield* subscription.next();
+        }
+        closed.resolve(next.value);
+      });
+
+      // The document has printed and is now blocked. Both are waited for, so
+      // the stop below happens at a known point rather than a timed one.
       yield* reached.operation;
+      for (let round = 0; round < 200 && !chunks.join("").includes(PREFIX); round += 1) {
+        yield* sleep(1);
+      }
+      const observed = chunks.join("");
+      expect(observed).toContain(PREFIX);
 
       const stopped = withResolvers<Result<void>>();
       const asking = withResolvers<void>();
@@ -1317,6 +1354,13 @@ describe("Tier EP — the execution protocol", () => {
       const completion = yield* execution;
       expect(completion.ok).toBe(false);
 
+      // And the text it had already printed is exactly what its output channel
+      // closed with. This is the assertion a stop that dropped the prefix, or
+      // closed the channel empty, does not survive.
+      const closure = yield* closed.operation;
+      expect(closure).toContain(PREFIX);
+      expect(closure).toBe(observed);
+
       // One cancelled root Close, carrying a status and nothing else.
       const closes = stream.snapshot().filter((event) => event.type === "close");
       const roots = closes.filter(
@@ -1330,7 +1374,8 @@ describe("Tier EP — the execution protocol", () => {
       expect(only.result.status).toBe("cancelled");
       expect(Object.keys(only.result)).toEqual(["status"]);
 
-      // Asked again, and read again: neither writes a second ending.
+      // Asked again, and read again: neither writes a second ending, and
+      // neither adds a byte to what was printed.
       const again = yield* execution.stop();
       expect(again.ok).toBe(true);
       expect(yield* execution).toEqual(completion);
@@ -1338,6 +1383,8 @@ describe("Tier EP — the execution protocol", () => {
         stream.snapshot().filter((event) => event.type === "close" && event.coroutineId === "root")
           .length,
       ).toBe(1);
+      expect(chunks.join("")).toBe(observed);
+      expect(yield* closed.operation).toBe(closure);
     });
   });
 
@@ -1406,7 +1453,7 @@ describe("Tier EP — the execution protocol", () => {
       // refusal as its cause: the identity that matters is the run's, and the
       // reason it gives is the reason the backend gave.
       expect(refused).toBeInstanceOf(DurablePersistenceError);
-      expect((refused as Error | undefined)?.cause).toBe(appendCause);
+      expect(refused?.cause).toBe(appendCause);
 
       // The cleanup was attempted and joined even though the ending was not
       // written, and nothing stood in for the terminal that was refused.
