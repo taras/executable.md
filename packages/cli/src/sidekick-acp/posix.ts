@@ -78,6 +78,22 @@ function closeSocket(socket: Socket): Operation<void> {
 function same(a: Stats, b: Stats): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 }
+/**
+ * Refuse a second reading that is not of the same file as the first.
+ *
+ * Each identity below is read again once this owner has finished changing the
+ * object it names — the times it was created with are not the times it has.
+ * What may not change between the two readings is which file it is, and that
+ * is what this says: a device and inode that moved means somebody replaced the
+ * name while it was being published, and publishing it would be publishing
+ * theirs.
+ */
+function sameNode(before: Stats | undefined, after: Stats, what: string): void {
+  if (before !== undefined && (before.dev !== after.dev || before.ino !== after.ino)) {
+    throw new Error(`${what} was replaced while it was being published.`);
+  }
+}
+
 function* removeOwned(path: string, identity: Stats | undefined): Operation<void> {
   if (identity === undefined) {
     return;
@@ -349,12 +365,23 @@ export function* usePosixSidekickTransport(
             yield* removeOwned(stage, stageIdentity);
           }
           if (directory !== undefined) {
+            // Asked before the socket is taken out of it, because taking a
+            // child out of a directory changes the directory. The question is
+            // whether this is still the directory this owner made, and the
+            // answer has to be read while that is still a fair question.
+            let ours = false;
+            try {
+              ours =
+                directoryIdentity !== undefined &&
+                same(directoryIdentity, yield* until(lstat(directory)));
+            } catch (error) {
+              if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+                throw error;
+              }
+            }
             yield* removeOwned(join(directory, "s"), socketIdentity);
             try {
-              if (
-                directoryIdentity !== undefined &&
-                same(directoryIdentity, yield* until(lstat(directory)))
-              ) {
+              if (ours) {
                 yield* until(rmdir(directory));
               }
             } catch (error) {
@@ -407,6 +434,15 @@ export function* usePosixSidekickTransport(
           socketIdentity = yield* retain(lstat(socketPath), (value) => {
             socketIdentity = value;
           });
+          // The directory, read again now that this owner has finished changing
+          // it. Creating the socket inside it changed its times, and so did the
+          // `chmod` before that — so a reading taken when it was created is a
+          // reading of a directory this owner then modified twice. The first
+          // reading stays until this one replaces it, because a cancellation
+          // between the two still has to know which directory is ours.
+          directoryIdentity = yield* retain(lstat(directory), (value) => {
+            directoryIdentity = value;
+          });
           stage = join(dirname(path), ".sidekick-" + randomUUID());
           const stagingPath = stage;
           yield* scoped(function* () {
@@ -419,8 +455,24 @@ export function* usePosixSidekickTransport(
           yield* retain(link(stage, path), () => {
             descriptorIdentity = stageIdentity;
           });
+          // One inode under two names now. Reading it again is what makes the
+          // removal below answer about the file this owner linked: the write
+          // and the link each changed its times, and a reading taken before
+          // them is a reading of what it was.
+          const linked = yield* retain(lstat(stagingPath), (value) => {
+            stageIdentity = value;
+          });
+          sameNode(stageIdentity, linked, "the staged descriptor");
+          stageIdentity = linked;
           yield* removeOwned(stage, stageIdentity);
           stageIdentity = undefined;
+          // And the published name, read after the last thing this owner does
+          // to that inode. Unlinking the stage name changed its times too, so
+          // this is the only reading that is still the file's at exit.
+          descriptorIdentity = yield* retain(lstat(path), (value) => {
+            descriptorIdentity = value;
+          });
+          sameNode(linked, descriptorIdentity, "the published descriptor");
           yield* provide({
             descriptor,
             *accept() {

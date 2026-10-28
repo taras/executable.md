@@ -3974,15 +3974,11 @@ function reconcileExpansion(
   const canonical = settlement.status === "raised" ? settlement.raised : undefined;
   const raised = policy?.raised;
 
-  const durable =
-    (canonical === undefined ? undefined : durabilityFailure(canonical)) ??
-    (raised === undefined ? undefined : durabilityFailure(raised));
+  const durable = fromEach(durabilityFailure, canonical, raised);
   if (durable !== undefined) {
     throw durable;
   }
-  const files =
-    (canonical === undefined ? undefined : filesFatalFailure(canonical)) ??
-    (raised === undefined ? undefined : filesFatalFailure(raised));
+  const files = fromEach(filesFatalFailure, canonical, raised);
   if (files !== undefined) {
     throw files;
   }
@@ -4019,7 +4015,7 @@ function fatalOf(error: unknown): Error | undefined {
  */
 function fromEach<T>(
   classify: (error: unknown) => T | undefined,
-  ...failures: readonly (Error | undefined)[]
+  ...failures: readonly unknown[]
 ): T | undefined {
   for (const failure of failures) {
     if (failure === undefined) {
@@ -4062,17 +4058,11 @@ function reconcile(
 
   // Kind first, then occurrence *within* that kind — by identity, because the
   // engine's fences match the exact object rather than a rebuilt one.
-  const durable =
-    (evaluation === undefined ? undefined : durabilityFailure(evaluation)) ??
-    (failed === undefined ? undefined : durabilityFailure(failed)) ??
-    (teardown === undefined ? undefined : durabilityFailure(teardown));
+  const durable = fromEach(durabilityFailure, evaluation, failed, teardown);
   if (durable !== undefined) {
     return Err(durable);
   }
-  const files =
-    (evaluation === undefined ? undefined : filesFatalFailure(evaluation)) ??
-    (failed === undefined ? undefined : filesFatalFailure(failed)) ??
-    (teardown === undefined ? undefined : filesFatalFailure(teardown));
+  const files = fromEach(filesFatalFailure, evaluation, failed, teardown);
   if (files !== undefined) {
     return Err(files);
   }
