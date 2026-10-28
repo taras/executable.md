@@ -7609,8 +7609,13 @@ function detail(value: Json): readonly string[] {
  * a clip that keeps no remainder. Every row carries the indent the one row had,
  * so a wrapped notice still reads as one thing set in from the drawer's edge. A
  * word wider than the room keeps its own row rather than being cut inside
- * itself: there is no break to use, and half a word says less than a word that
- * runs to the edge.
+ * itself: there is no break to use, half a word says less than a word that runs
+ * to the edge — and because nothing is ever cut inside a word, no grapheme is
+ * divided here at all.
+ *
+ * Budgeted the way the rest of this module budgets a row: `fitLabel` and
+ * `fitLine` beside it count the same units, and the engine-measured, grapheme
+ * cutting pass is an Operation that a pure row builder has no way to ask.
  */
 function sentenceRows(text: string, width: number, indent = "  "): readonly string[] {
   const room = width - indent.length;

@@ -771,15 +771,6 @@ function* painted(
   return (yield* drawn(tree, view, renderer)).bytes;
 }
 
-/** The row this screen is drawing the draft on. */
-function draftRowIn(rows: readonly string[]): string {
-  const found = rows.find((row) => row.includes(DRAFT_PROMPT));
-  if (found === undefined) {
-    throw new Error("the screen is drawing no draft row");
-  }
-  return found;
-}
-
 /**
  * What the draft row is called, which is how this suite finds it.
  *
@@ -2445,71 +2436,125 @@ describe("U6 — the Sessions reading is windowed", () => {
     yield* until(session, "all three Prompts being observed", () => observed(session) === 3);
     yield* until(session, "one turn being recorded", () => recorded(session) === 1);
 
-    // Two drafts whose line counts have different numbers of digits, so the row
-    // that says how many lines are hidden gets shorter as the draft does. The
-    // draft is the row of this screen whose length changes, and these are two
-    // separate facts about it: what the terminal ends up showing, and what this
-    // application described for it to show.
+    // Two drafts whose newest visible text really shrinks. Two that differed
+    // only in how many identical lines they hide would leave the drawn row
+    // nearly unchanged and prove no erasure of anything a reader can see: the
+    // long tail here is thirty cells the short draft has to take back.
     const standing = onSessions(session);
-    const longer = withDraft(standing, "x\n".repeat(1200));
-    const shorter = withDraft(standing, "x\n".repeat(999));
+    const LONGER = `${"x\n".repeat(1200)}longer text with removable tail`;
+    const SHORTER = `${"x\n".repeat(999)}y`;
+    const longer = withDraft(standing, LONGER);
+    const shorter = withDraft(standing, SHORTER);
 
+    // One renderer and one mounted tree for both commits, with nothing
+    // clearing, resetting or resizing between them: the second frame is the
+    // diff that the first one is the ground for.
     const tree = yield* useReplTree<ReplAction>();
     const renderer = yield* useReplRenderer(NARROW);
     /** Everything written to this one terminal, in order. */
     const written: Uint8Array[] = [];
 
     const first = reading(longer, session, NARROW);
-    written.push(yield* painted(renderer, tree, first));
-    expect(draftRowIn(screenFrom(written))).toContain("[1200 lines]");
+    const longFrame = yield* drawn(tree, first, renderer);
+    written.push(longFrame.bytes);
+    // Read now rather than later: this is the cell the tree is holding, and the
+    // next commit replaces it.
+    const before = longFrame.cell("footer:input") ?? "";
+    expect(before).toContain("[1200 lines]");
+    expect(before).toContain("longer text with removable tail");
+    const longScreen = screenFrom(written);
 
     // The same terminal, drawn again, with nothing clearing it between the two.
-    // What comes back is the shorter count and nothing of the longer one.
     const second = reading(shorter, session, NARROW);
-    written.push(yield* painted(renderer, tree, second));
-
-    const after = draftRowIn(screenFrom(written));
+    const shortFrame = yield* drawn(tree, second, renderer);
+    written.push(shortFrame.bytes);
+    const after = shortFrame.cell("footer:input") ?? "";
     expect(after).toContain("[999 lines]");
     expect(after).not.toContain("1200");
+    expect(after).not.toContain("removable tail");
+
+    const shortScreen = screenFrom(written);
+    // The two screens really differ, which is what makes the comparison below
+    // an assertion about erasure rather than a tautology.
+    expect(shortScreen).not.toEqual(longScreen);
 
     // Cell for cell, what a renderer that had never drawn the longer reading
     // produces for the shorter one — blanks and all. This is the assertion that
-    // discriminates: a row that kept the tail of the count it used to carry
-    // reads the same as this one until the two screens are compared.
+    // discriminates: a row that kept the tail of what it used to carry reads
+    // the same as this one until the two screens are compared.
     const fresh = yield* scoped(function* (): Operation<readonly string[]> {
       const other = yield* useReplRenderer(NARROW);
       const otherTree = yield* useReplTree<ReplAction>();
       return screenFrom([yield* painted(other, otherTree, reading(shorter, session, NARROW))]);
     });
-    expect(screenFrom(written)).toEqual(fresh);
+    expect(shortScreen).toEqual(fresh);
 
-    // And the row this application described is itself a complete row, as wide
-    // as the ones around it — the full-width contract the draft shares with
-    // every other row of its region, rather than one inherited from whatever
-    // draws it.
-    const drafted = (yield* describedBy(second)).find((one) => one.key === "footer:input");
-    expect(drafted).toBeDefined();
-    expect((drafted?.label ?? "").length).toBeGreaterThanOrEqual(NARROW.columns - 2);
+    // And the row this application described occupies the whole rectangle the
+    // frame gave it. Read from the committed manifest and the copied map rather
+    // than from the length of a padded label: what a label says about itself is
+    // not where it was placed, and the cells past the text are exactly where a
+    // shorter draft would leave old glyphs behind.
+    const placed = flatten(shortFrame.committed.manifest.root).filter(
+      (box) => box.key === "footer:input",
+    );
+    // One box for this row in the whole committed tree, so the rectangle below
+    // is the row's own allocation and not one of two.
+    expect(placed).toHaveLength(1);
+    const bounds = shortFrame.boundsOf("footer:input");
+    expect(bounds).toBeDefined();
+    const box = bounds ?? { x: 0, y: 0, width: 0, height: 0 };
+    // Whole cells, which is the only geometry this product draws at all.
+    for (const measure of [box.x, box.y, box.width, box.height]) {
+      expect(Number.isInteger(measure)).toBe(true);
+    }
+    expect(box.height).toBe(1);
+    const footer = shortFrame.region("footer");
+    expect(footer).toBeDefined();
+    const inside = footer ?? { x: 0, y: 0, width: 0, height: 0 };
+    expect(box.x).toBeGreaterThanOrEqual(inside.x);
+    expect(box.y).toBeGreaterThanOrEqual(inside.y);
+    expect(box.x + box.width).toBeLessThanOrEqual(inside.x + inside.width);
+    expect(box.y + box.height).toBeLessThanOrEqual(inside.y + inside.height);
+    /** The cells of this row's own allocation, text and padding alike. */
+    const allocated = (rows: readonly string[]): string =>
+      (rows[box.y] ?? "").padEnd(box.x + box.width, " ").slice(box.x, box.x + box.width);
+    expect(allocated(shortScreen)).toBe(allocated(fresh));
+    expect(allocated(shortScreen)).not.toContain("removable tail");
+    expect(allocated(longScreen)).not.toBe(allocated(shortScreen));
+    // One target for this row, and it is the field itself.
+    expect(shortFrame.targetable("footer:input")).toBe(true);
+    expect(shortFrame.keys.filter((key) => key === "footer:input")).toHaveLength(1);
 
     // The dedicated location is drawn nowhere, and reserves nothing: a draft
     // this long would otherwise be the longest thing on the screen.
     expect((yield* describedBy(second)).filter((one) => one.key.startsWith("location:"))).toEqual(
       [],
     );
-    expect(screenFrom(written).some((row) => row.includes("xmd://"))).toBe(false);
-    // And the route itself is unchanged: hidden is not dropped.
+    expect(shortScreen.some((row) => row.includes("xmd://"))).toBe(false);
+    // And the route itself is unchanged: hidden is not dropped, and the whole
+    // multiline draft with its authored blank lines is still what it was.
     expect(second.location).toBe(encodeLocation(second.state.route));
+    expect(second.state.draft).toBe(SHORTER);
+    expect(second.state.route.draft).toBe(SHORTER);
 
     // And the screen is still one a person can use: both ways off it, and a
     // control of the reading itself.
-    const usable = yield* drawn(tree, second);
     for (const key of ["sessions:heading", "entries:heading"]) {
-      expect(usable.targetable(key)).toBe(true);
+      expect(shortFrame.targetable(key)).toBe(true);
     }
-    const outlet = usable.keys.filter(
-      (key) => key.startsWith("sessions:turn:") && usable.targetable(key),
+    const outlet = shortFrame.keys.filter(
+      (key) => key.startsWith("sessions:turn:") && shortFrame.targetable(key),
     );
     expect(outlet.length).toBeGreaterThan(0);
+
+    // That control is the one it says it is. A pointer and the keyboard reach
+    // the same mounted node, so the two answer with the same action — the same
+    // turn, not merely the same kind of act.
+    const turn = outlet[0] ?? "";
+    const pointer = yield* pointed(tree, shortFrame, turn);
+    yield* focusTo(tree, turn);
+    expect(keyed(tree)).toBe(turn);
+    expect(yield* activate(tree)).toEqual(pointer);
   });
 
   it("U6: the first press after a resize moves the window, not the stored number", function* () {

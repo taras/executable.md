@@ -1365,6 +1365,10 @@ describe("J2 — three conversations at once, through the terminal", () => {
       // recognized as a conversation control on a sidebar too narrow for a key.
       const digest = (fake.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
       expect(digest).not.toBe("");
+      // The conversations are behind the Transcript's own selector now: one
+      // list, and the choices that filter it are shown when the control saying
+      // so is activated. Opening it is how a person reaches them.
+      yield* click(terminal, "All sessions");
       yield* awaiting("no conversation was ever offered", function* () {
         yield* settled(10);
         return conversationRows(terminal, digest).length > 0;
@@ -1518,6 +1522,10 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       // 1. A conversation filter, chosen by pointing at the row it is drawn in.
       const digest = (live.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
       expect(digest).not.toBe("");
+      // The conversations are behind the Transcript's own selector now: one
+      // list, and the choices that filter it are shown when the control saying
+      // so is activated. Opening it is how a person reaches them.
+      yield* click(terminal, "All sessions");
       yield* awaiting("no conversation was ever offered", function* () {
         yield* settled(10);
         return conversationRows(terminal, digest).length > 0;
@@ -1699,6 +1707,10 @@ describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => 
 
       const digest = (fake.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
       expect(digest).not.toBe("");
+      // The conversations are behind the Transcript's own selector now: one
+      // list, and the choices that filter it are shown when the control saying
+      // so is activated. Opening it is how a person reaches them.
+      yield* click(terminal, "All sessions");
       yield* awaiting("no conversation was ever offered", function* () {
         yield* settled(10);
         return conversationRows(terminal, digest).length > 0;
@@ -2587,21 +2599,34 @@ const SIDEBAR = sidebarWidth({ columns: 160, rows: 36 }) ?? 0;
 
 /** The conversation this screen is filtered by, as the route states it. */
 function sessionOf(terminal: Terminal): string | undefined {
-  // The conversation the reading is filtered to is the one its own row marks:
-  // two columns of focus cue, the list's indent, then the filter's own `>`.
-  //
-  // Read from inside the sidebar's body, past the accepted two-cell gutter: the
-  // gutter is layout that holds no text, so the row begins where the body does
-  // rather than where the column does.
+  // The conversation this reading is filtered to is what the Transcript's own
+  // selector says. There is one list now, and the control that opens its
+  // choices carries the name of whichever was chosen — so the filter is read
+  // where the screen states it rather than from a marked row of a column this
+  // composition does not draw. `All sessions` is the unfiltered reading, which
+  // is no conversation at all.
+  // Found by the mark that says it opens rather than by the row it is on: a
+  // name too long for the title's remaining room is given a row of its own
+  // beneath it, and the selector is the only thing in this column wearing that
+  // mark either way.
   for (const line of screenOf(terminal)) {
-    const column = (line.split("\u2502")[0] ?? "").slice(BODY_GUTTER);
-    const match = /^[>\s]\s {2}>\s(\S.*?)\s*$/.exec(column);
-    if (match !== null) {
-      return match[1];
+    const column = (line.split("\u2502")[0] ?? "").trimEnd();
+    if (!column.endsWith(SELECTOR_MARK)) {
+      continue;
     }
+    const label = column
+      .slice(0, column.length - SELECTOR_MARK.length)
+      .replace(new RegExp(`^\\s*${TRANSCRIPT_TITLE}`), "")
+      .trim();
+    return label === "" || label === ALL_SESSIONS ? undefined : label;
   }
   return undefined;
 }
+
+/** What the staged Transcript calls itself, its selector's mark, and no filter. */
+const TRANSCRIPT_TITLE = "TRANSCRIPT";
+const SELECTOR_MARK = "\u25be";
+const ALL_SESSIONS = "All sessions";
 
 /**
  * The conversation rows the Sessions surface offers to filter by, in order.

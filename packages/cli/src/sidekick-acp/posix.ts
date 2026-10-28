@@ -69,9 +69,11 @@ function closeSocket(socket: Socket): Operation<void> {
  * host saw it and the other did not.
  *
  * So the moment the file came into existence is part of its identity. An
- * unchanged file keeps it, and a file created after another was unlinked
- * cannot share it. Where a filesystem reports no creation time both readings
- * carry the same substitute and this is the pair it always was.
+ * unchanged file keeps it — measured, two readings of one untouched file agree
+ * — and a file created after another was unlinked cannot share it. Stricter
+ * rather than looser: it can only ever leave a name alone, never remove one
+ * this owner did not publish. Where a filesystem reports no creation time both
+ * readings carry the same substitute and this is the pair it always was.
  */
 function same(a: Stats, b: Stats): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
