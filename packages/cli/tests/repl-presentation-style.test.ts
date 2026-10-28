@@ -697,7 +697,11 @@ describe("REPL appearance - the recorded input", () => {
    * type written over it and fail later as a row that did not match.
    */
   it("a malformed record is refused by name rather than read as one", function* () {
-    const sound = JSON.parse(
+    // Read through the reader itself, so the seed every counterexample is built
+    // from is a record rather than whatever JSON.parse returned — and so the
+    // callbacks below know what a style line and a run are without being told.
+    const sound = readAppearanceRecord(
+      "72x20",
       yield* readTextFile(
         fileURLToPath(new URL("./fixtures/repl/appearance/72x20.json", import.meta.url)),
       ),
@@ -725,12 +729,9 @@ describe("REPL appearance - the recorded input", () => {
         what: "a run missing its width",
         make: () => ({
           ...sound,
-          styleRuns: sound.styleRuns.map((line: { y: number; runs: unknown[] }, at: number) =>
+          styleRuns: sound.styleRuns.map((line, at) =>
             at === 0
-              ? {
-                  y: line.y,
-                  runs: line.runs.map((run) => ({ ...(run as object), width: undefined })),
-                }
+              ? { y: line.y, runs: line.runs.map((run) => ({ ...run, width: undefined })) }
               : line,
           ),
         }),
