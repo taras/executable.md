@@ -20,6 +20,7 @@ import {
   ensure,
   resource,
   scoped,
+  sleep,
   spawn,
   suspend,
   until,
@@ -1234,6 +1235,186 @@ describe("Tier EP — the execution protocol", () => {
       const answer = yield* execution.stop();
       expect(answer.ok).toBe(false);
       expect(answer.ok ? undefined : answer.error).toBe(cleanupCause);
+    });
+  });
+
+  /**
+   * EP30: a host Stop that reaches a document still running, through the one
+   * entrypoint a trusted host has.
+   *
+   * No session, no entry and no CLI: `executeInstalled` is the whole of the
+   * seam, and what is proved is the stop itself. The document has already
+   * printed something and is waiting on a real operation; its own installation
+   * holds a cleanup gate, so the Stop cannot answer until that teardown has
+   * been joined. What the journal keeps is the protocol's existing cancelled
+   * Close — one of them, carrying a status and nothing else — and the
+   * completion is not a success. Nothing is invented to stand in for the
+   * answer the document never gave.
+   */
+  it("EP30: a host Stop reaches a running document, joins its cleanup and retains one cancelled close", function* () {
+    const stream = new InMemoryStream();
+    const reached = withResolvers<void>();
+    const waiting = withResolvers<void>();
+    const releaseCleanup = withResolvers<void>();
+    const order: string[] = [];
+
+    yield* scoped(function* () {
+      const execution = yield* executeInstalled({ ...inlineSource("<Waiting />\n"), stream }, [
+        {
+          *install(): Operation<void> {
+            // Registered first, so it unwinds last: the Stop below cannot
+            // answer until this has been released and joined.
+            yield* ensure(function* (): Operation<void> {
+              order.push("cleanup:begin");
+              yield* releaseCleanup.operation;
+              order.push("cleanup:end");
+            });
+            yield* registerComponents([
+              {
+                name: "Waiting",
+                origin: "execution-protocol",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                *fn(): Operation<string> {
+                  reached.resolve();
+                  yield* waiting.operation;
+                  return "unreachable";
+                },
+              },
+            ]);
+          },
+        },
+      ]);
+      yield* reached.operation;
+
+      const stopped = withResolvers<Result<void>>();
+      const asking = withResolvers<void>();
+      yield* spawn(function* () {
+        asking.resolve();
+        order.push("stop:asked");
+        const answer = yield* execution.stop();
+        order.push("stop:answered");
+        stopped.resolve(answer);
+      });
+      yield* asking.operation;
+
+      // Held: the cleanup this execution owns has begun and has not finished,
+      // so the stop has nothing to answer with yet.
+      for (let round = 0; round < 200 && !order.includes("cleanup:begin"); round += 1) {
+        yield* sleep(1);
+      }
+      if (!order.includes("cleanup:begin")) {
+        throw new Error("the owned cleanup never began");
+      }
+      expect(order).not.toContain("stop:answered");
+
+      releaseCleanup.resolve();
+      const answer = yield* stopped.operation;
+      expect(answer.ok).toBe(true);
+      // Joined before answered, which is the whole of the gate.
+      expect(order.indexOf("cleanup:end")).toBeLessThan(order.indexOf("stop:answered"));
+
+      // The document did not succeed, and nothing was fabricated for it.
+      const completion = yield* execution;
+      expect(completion.ok).toBe(false);
+
+      // One cancelled root Close, carrying a status and nothing else.
+      const closes = stream.snapshot().filter((event) => event.type === "close");
+      const roots = closes.filter(
+        (event) => event.type === "close" && event.coroutineId === "root",
+      );
+      expect(roots.length).toBe(1);
+      const only = roots[0];
+      if (only === undefined || only.type !== "close") {
+        throw new Error("this execution recorded no root close");
+      }
+      expect(only.result.status).toBe("cancelled");
+      expect(Object.keys(only.result)).toEqual(["status"]);
+
+      // Asked again, and read again: neither writes a second ending.
+      const again = yield* execution.stop();
+      expect(again.ok).toBe(true);
+      expect(yield* execution).toEqual(completion);
+      expect(
+        stream.snapshot().filter((event) => event.type === "close" && event.coroutineId === "root")
+          .length,
+      ).toBe(1);
+    });
+  });
+
+  /**
+   * EP31: the journal refuses the cancelled ending that Stop was writing.
+   *
+   * The refusal is the run's own failure, by identity, and it stays that
+   * failure: the stop answers `Err` with it, the cleanup this execution owns is
+   * still attempted and joined, and nothing compensating is appended in its
+   * place. A persistence failure is not an ending.
+   */
+  it("EP31: a refused cancelled close keeps its own failure and appends no compensating terminal", function* () {
+    const inner = new InMemoryStream();
+    const appendCause = new Error("this journal refused the cancelled close");
+    const reached = withResolvers<void>();
+    const waiting = withResolvers<void>();
+    const order: string[] = [];
+    const refusing = {
+      readAll: () => inner.readAll(),
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type === "close" && event.coroutineId === "root") {
+          order.push("append:refused");
+          throw appendCause;
+        }
+        yield* inner.append(event);
+      },
+    };
+
+    yield* scoped(function* () {
+      const execution = yield* executeInstalled(
+        { ...inlineSource("<Waiting />\n"), stream: refusing },
+        [
+          {
+            *install(): Operation<void> {
+              yield* ensure(() => {
+                order.push("cleanup");
+              });
+              yield* registerComponents([
+                {
+                  name: "Waiting",
+                  origin: "execution-protocol",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  *fn(): Operation<string> {
+                    reached.resolve();
+                    yield* waiting.operation;
+                    return "unreachable";
+                  },
+                },
+              ]);
+            },
+          },
+        ],
+      );
+      yield* reached.operation;
+
+      const answer = yield* execution.stop();
+      const completion = yield* execution;
+
+      // The refusal, not a description of it, and the same one the run carries.
+      expect(answer.ok).toBe(false);
+      expect(completion.ok).toBe(false);
+      const refused = answer.ok ? undefined : answer.error;
+      const failed = completion.ok ? undefined : completion.error;
+      expect(refused).toBe(failed);
+      // The persistence failure this layer raises, carrying the journal's own
+      // refusal as its cause: the identity that matters is the run's, and the
+      // reason it gives is the reason the backend gave.
+      expect(refused).toBeInstanceOf(DurablePersistenceError);
+      expect((refused as Error | undefined)?.cause).toBe(appendCause);
+
+      // The cleanup was attempted and joined even though the ending was not
+      // written, and nothing stood in for the terminal that was refused.
+      expect(order).toContain("append:refused");
+      expect(order).toContain("cleanup");
+      expect(
+        inner.snapshot().filter((event) => event.type === "close" && event.coroutineId === "root"),
+      ).toEqual([]);
     });
   });
 
