@@ -346,6 +346,15 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "session-filter") {
     return { kind: "toggle-session-filter" };
   }
+  if (select === "submit-draft") {
+    return { kind: "submit" };
+  }
+  if (select === "catalog") {
+    return { kind: "open-catalog" };
+  }
+  if (select === "catalog-close") {
+    return { kind: "close-catalog" };
+  }
   if (select === "stop-entry") {
     // The entry this control was drawn against, and only a real one: a row
     // with no entry to name is a row that stops nothing.

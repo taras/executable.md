@@ -55,6 +55,17 @@ export type ReplAction =
    * retains is the root's to write, through the journal that root owns.
    */
   | { readonly kind: "stop-entry"; readonly entry: string }
+  /**
+   * Open the Entries catalog over this reading.
+   *
+   * Presentation and a selection of the Entries reading, and nothing else: no
+   * scope, marker, conversation filter or draft moves, and nothing is
+   * submitted, appended or asked of a provider. What changes a destination is
+   * activating a row inside it.
+   */
+  | { readonly kind: "open-catalog" }
+  /** Put the Entries catalog away, leaving the reading exactly as it stands. */
+  | { readonly kind: "close-catalog" }
   | { readonly kind: "select-surface"; readonly surface: ReplSurface }
   /**
    * Read one of the two right-hand panes.

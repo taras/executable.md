@@ -67,6 +67,7 @@ import {
   presentedDrawer,
   previewedMessage,
   MESSAGE_VALUE_ROWS,
+  footerSentence,
   guidanceSentence,
   readinessOf,
   readingOf,
@@ -78,6 +79,8 @@ import {
   draftLinesOf,
   historyGapWidth,
   historyMapWidth,
+  historyProbeOf,
+  historySplitOf,
   queueTextWidth,
   draftRowsOf,
   GUIDANCE_ROW,
@@ -93,6 +96,8 @@ import {
   TRANSCRIPT_BODY,
   unavailable,
   viewFor,
+  withWorkspace,
+  workspaceOf,
   withoutAbsentEntry,
   withoutLiveDrawers,
 } from "./application.ts";
@@ -2468,7 +2473,12 @@ function* build(
     focused,
     reading.navigation,
   );
-  return view.ok ? view.value : refusedView(state, view.error.message, size);
+  // The staged composition, on the screen a person is actually working in.
+  // What it shows is read from this execution rather than supplied: see
+  // `workspaceOf`.
+  return view.ok
+    ? withWorkspace(view.value, workspaceOf())
+    : refusedView(state, view.error.message, size);
 }
 
 /** Wake the loop whenever this session's history or overlay moves. */
@@ -3588,6 +3598,16 @@ export function* prepareFrame(
   let messageText: number | undefined;
   let historyRoom: number | undefined;
   let historySpace: number | undefined;
+  /**
+   * How the non-wide History row divides itself, in whole cells.
+   *
+   * Copied out of one bounded measurement of the row's two parts asked on their
+   * own, before anything is admitted, and then stated in every pass after it.
+   * A `fit` child answers about the room its parent was given, so a map fitted
+   * beside the controls takes the room first and every control comes back on
+   * part of a cell; measuring them apart is what makes the split whole.
+   */
+  let historyParts: { readonly map: number; readonly actions: number } | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
@@ -3596,6 +3616,7 @@ export function* prepareFrame(
     ...(field === undefined ? {} : { draftField: field }),
     ...(messageText === undefined ? {} : { queueText: messageText }),
     ...(historyRoom === undefined ? {} : { historyMap: historyRoom }),
+    ...(historyParts === undefined ? {} : { historySplit: historyParts }),
   });
 
   // The catalog without its controls: if it fits, it keeps its natural footprint
@@ -3619,7 +3640,7 @@ export function* prepareFrame(
       : yield* fitPlain(
           renderer,
           view.size,
-          [{ key: "guidance", text: guidanceSentence(view) }],
+          [{ key: "guidance", text: footerSentence(view) }],
           guidanceRoom,
           guidanceStore,
         );
@@ -3677,6 +3698,26 @@ export function* prepareFrame(
     (id) => fitted.value.boundsOf(id)?.width,
     view.size.columns,
   );
+  // And how the non-wide row divides itself, from its two parts asked on their
+  // own. One bounded measurement of a tree that mounts nothing and publishes no
+  // target: a fitted row holding exactly the offered control nodes with their
+  // own labels and gap, and a fitted row holding the map's own runs. What is
+  // copied out is two whole widths, before the next engine call takes the
+  // engine's memory of this one.
+  //
+  // Not a loop, and not derived from the row that was compressed: the question
+  // is what these things need, and a rectangle one of them was squeezed into is
+  // the answer this replaces.
+  if (profileFor(view.size) !== "wide") {
+    const parts = historyProbeOf(probed.manifest, view.size);
+    if (parts !== undefined) {
+      const apart = yield* renderer.measure(skeletonOps(parts), view.size);
+      if (!apart.ok) {
+        return apart;
+      }
+      historyParts = historySplitOf((id) => apart.value.boundsOf(id)?.width, view.size.columns);
+    }
+  }
   // Where a route drawer goes, now that the block it must stay clear of has
   // been fitted and placed. The guidance is as many rows as its words need, so
   // this is read from the rows the frame published rather than counted here.
@@ -3918,6 +3959,7 @@ export function* prepareFrame(
     queueText: messageText,
     historyMap: historyRoom,
     historyGap: historySpace,
+    historySplit: historyParts,
     draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
     queue: queued.value,
     headers: wrapped.size === 0 ? undefined : wrapped,

@@ -56,11 +56,13 @@ import {
   bandRowProps,
   BODY_GUTTER,
   fittedPartProps,
+  fittedRowProps,
   flatten,
   GROWING_STACK_PROPS,
   inlineActionRowProps,
   partsRowProps,
   SPACER_PROPS,
+  statedActionRowProps,
   statedPartProps,
   WORKSPACE_DRAFT_GAP,
   WORKSPACE_DRAFT_ROWS,
@@ -70,6 +72,7 @@ import {
   workspaceBodyRows,
   TAB_GAP,
   workspaceBlockProps,
+  bandBlockProps,
   workspaceBodyProps,
   workspaceColumnProps,
   workspaceConversationWidth,
@@ -1039,6 +1042,20 @@ export interface ReplState {
    * {@link ReplRoute.session}, and closing the chooser leaves it alone.
    */
   readonly filtering: boolean;
+  /**
+   * Whether the Entries catalog is open over this reading.
+   *
+   * Process-local, beside the question form and the conversation chooser, and
+   * for the same reason: a drawer somebody has open is a fact about them
+   * standing in front of this terminal, not part of the location. A printed
+   * location carries which entry and which scope are being read — the
+   * destinations — and never the overlay somebody reached them through.
+   *
+   * It is a presentation and nothing more. Opening it selects the Entries
+   * reading and changes no scope, no marker, no filter and neither draft; what
+   * changes a destination is activating a row in it.
+   */
+  readonly catalog: boolean;
 }
 
 /** What the root must perform, because a component cannot. */
@@ -1257,7 +1274,23 @@ interface ReplAssociatedWork {
 
 /** What the staged workspace composition shows that no reading holds yet. */
 export interface ReplWorkspace {
-  readonly follow: boolean;
+  /**
+   * Whether this execution offers Follow at all, and how it stands.
+   *
+   * Absent is a build that does not have the continuation Follow would govern.
+   * Its control is then not drawn: a checkbox for behaviour that is not here
+   * would be a choice somebody could make and nothing would happen, and
+   * drawing it unchecked would say this execution had turned something off.
+   */
+  readonly follow?: boolean;
+  /**
+   * Which trays this execution offers, in the order they are named.
+   *
+   * Absent is TODO alone, which is what a build without the shared queue
+   * holds. A tab for a queue that does not exist is a tab a reader can select
+   * and find nothing behind.
+   */
+  readonly trays?: readonly ("todo" | "queue")[];
   readonly tray: "todo" | "queue";
   readonly queued: readonly ReplQueuedMessage[];
   readonly work: readonly ReplAssociatedWork[];
@@ -1293,19 +1326,33 @@ export function withWorkspace(view: ReplView, workspace: ReplWorkspace): ReplVie
  * - **Queued messages** are the shared queue's, and there is no shared queue
  *   here. An empty tray is what this execution holds; a populated one would be
  *   a fiction in a screen somebody is working from.
- * - **Follow** is drawn unchecked and does nothing, because what it would
- *   continue does not exist yet.
+ * - **Follow** is not offered. What it governs — a reply that evaluates and
+ *   admits a round, and the continuation after it — is a later delivery, and
+ *   a checkbox for behaviour this build does not have would be a choice that
+ *   does nothing however it was drawn. Its accepted setting is kept in the
+ *   delivery record, not advertised here.
+ * - **QUEUE** is not offered either, and for the same reason: there is no
+ *   shared queue in this build, and a tab a reader can select and find nothing
+ *   behind is worse than no tab.
  *
- * The tray opens on QUEUE because that is the tab whose emptiness is a true
- * statement about this execution; TODO is the placeholder it has always been.
+ * So the tray is TODO, which is the inactive placeholder it has always been.
  */
 export function workspaceOf(): ReplWorkspace {
   return Object.freeze({
-    follow: false,
-    tray: "queue" as const,
+    tray: "todo" as const,
     queued: Object.freeze([]),
     work: Object.freeze([]),
   });
+}
+
+/** The trays one execution offers, which is TODO alone unless it says more. */
+function traysOf(workspace: ReplWorkspace): readonly ("todo" | "queue")[] {
+  return workspace.trays ?? ["todo"];
+}
+
+/** Whether this execution offers the shared queue's tray at all. */
+function offersQueue(workspace: ReplWorkspace): boolean {
+  return traysOf(workspace).includes("queue");
 }
 
 /**
@@ -1505,6 +1552,7 @@ export function initialState(execution: string): ReplState {
     revisions: initialRevisions(),
     takenOver: false,
     filtering: false,
+    catalog: false,
   });
 }
 
@@ -1541,6 +1589,9 @@ export function stateFor(location: string): Result<ReplState> {
       // Closed, for the same reason: a reader arriving at a location is shown
       // the conversation it names, not somebody else's open chooser.
       filtering: false,
+      // And closed for the same reason again: a location names where somebody
+      // got to, never the overlay they opened on the way.
+      catalog: false,
     }),
   );
 }
@@ -1937,7 +1988,7 @@ export function reduceRepl(
         : moved;
     }
     case "select-scope": {
-      return navigate(
+      const chosen = navigate(
         state,
         model,
         {
@@ -1950,6 +2001,36 @@ export function reduceRepl(
         },
         live,
       );
+      // A choice that was accepted is what the catalog was open for, so it
+      // closes behind it and the reading it chose is what a reader is left
+      // looking at. A refused one changes nothing, the catalog included: the
+      // row they pressed is still there to press again.
+      return chosen.state.refusal === undefined
+        ? { ...chosen, state: Object.freeze({ ...chosen.state, catalog: false }) }
+        : chosen;
+    }
+    case "open-catalog": {
+      // The Entries reading, selected explicitly, and then the overlay over it.
+      // Everything else this location names stands: the scope path, the history
+      // marker, the conversation filter, the saved chat, both drafts and
+      // whatever is running. Resolved through the same navigation every other
+      // destination goes through, so a reading this history cannot answer for
+      // refuses here rather than opening a catalog over nothing.
+      const opened = navigate(
+        atFirstEntry(state),
+        model,
+        { ...state.route, surface: "entries", view: undefined },
+        live,
+      );
+      return opened.state.refusal === undefined
+        ? { ...opened, state: Object.freeze({ ...opened.state, catalog: true }) }
+        : opened;
+    }
+    case "close-catalog": {
+      // Put away, and nothing else put away with it. The scope being read, the
+      // marker, the filter and both drafts are exactly as they were: dismissing
+      // a catalog is not choosing anything in it.
+      return settled(Object.freeze({ ...state, catalog: false }));
     }
     case "open-drawer": {
       if (action.drawer.kind === "live-elicit") {
@@ -2178,8 +2259,14 @@ export function reduceRepl(
       });
     }
     case "scroll-entries": {
-      // The same rule over the catalog's own measured window.
-      const window = admission.windows.get(ENTRIES_WINDOW);
+      // The same rule over the catalog's own measured window — whichever
+      // window this frame actually measured it in. While the catalog is open
+      // over a staged composition the rows are the drawer's, and clamping
+      // against a permanent Entries column that screen does not draw would
+      // clamp against a capacity nobody measured.
+      const window =
+        admission.windows.get(state.catalog ? DRAWER_WINDOW : ENTRIES_WINDOW) ??
+        admission.windows.get(ENTRIES_WINDOW);
       if (window === undefined) {
         return settled({ ...state, refusal: undefined });
       }
@@ -3258,6 +3345,17 @@ function revealedAt(
   capacity: number,
   /** The rows this frame fitted, so a reveal lands on a row that is drawn. */
   fitted: readonly ReplFittedLine[] | undefined,
+  /**
+   * What this process is holding for the chat being read.
+   *
+   * The same staging the description pass gives the builder. Without it the row
+   * list this searches is a *different* list from the one the window counts
+   * rows of — measured, a twelve-turn chat the frame drew as 47 rows came back
+   * from here as 24, and the index found in the short list named a row the long
+   * one has somewhere else. A reveal is an index into the drawn list or it is
+   * nothing.
+   */
+  staging: ReplChatStaging | undefined,
 ): number | undefined {
   if (capacity < 1 || reading === undefined) {
     return undefined;
@@ -3289,6 +3387,7 @@ function revealedAt(
     Object.freeze({ ...reading, reading: reveal.conversation }),
     undefined,
     fitted,
+    staging,
   );
   // The first candidate this frame actually draws, at its *first* row, which is
   // the one its key is on: a message cut into three rows is revealed from its
@@ -3311,6 +3410,14 @@ function revealedAt(
  */
 function chosen(state: ReplState): ReplState {
   return state.filtering ? Object.freeze({ ...state, filtering: false }) : state;
+}
+
+/** The same state with the catalog's own window back at its first row. */
+function atFirstEntry(state: ReplState): ReplState {
+  return Object.freeze({
+    ...state,
+    viewports: Object.freeze({ ...state.viewports, entries: 0 }),
+  });
 }
 
 /** The same state with the Sessions reading back at its first row. */
@@ -4528,6 +4635,35 @@ function requiredLength(parts: readonly GuidancePart[]): number {
  * The vocabulary is the profile's: the long phrases where there is a Transcript
  * column, and the short ones a narrow frame already says. There is no third.
  */
+/**
+ * Whether this frame says its refusal in the footer's own band.
+ *
+ * The staged composition keeps every footer control on one compact History row,
+ * which leaves a reason a handful of cells and an ellipsis — and a refusal
+ * truncated before its meaning is a keystroke that appeared to do nothing. The
+ * band below it is the full width of the frame and already pays a sentence out
+ * over as many rows as its words need, so that is where the reason goes.
+ *
+ * The standing hint waits while it does. A hint describes what a person could
+ * do; a refusal answers what they just did, and only one of those is news.
+ */
+function refusalInBand(view: ReplView): boolean {
+  return view.state.refusal !== undefined && staged(view) !== undefined;
+}
+
+/**
+ * What the footer's own sentence says on this frame: the refusal, or the hint.
+ *
+ * One function for both, asked by the pass that fits the words and by the pass
+ * that describes the rows — a second answer is how a band comes to be measured
+ * for one sentence and drawn with another.
+ */
+export function footerSentence(view: ReplView): string {
+  return refusalInBand(view)
+    ? `! ${(view.state.refusal ?? "").split("\n").join(" ")}`
+    : guidanceSentence(view);
+}
+
 export function guidanceSentence(view: ReplView): string {
   const narrow = view.size.columns <= NARROW.columns;
   return guidanceParts(view, readinessOf(view), narrow)
@@ -4829,10 +4965,13 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     styleOf("pane-heading", { selected: routed === "sessions" }),
     { here: view.focused },
   );
+  // The staged screen has no permanent catalog column, so its way to the
+  // catalog opens one over the reading. The ordinary composition still routes
+  // to its own Entries surface, where the column is already drawn.
   const toEntries = row(
     "entries:heading",
     `${selected(routed === "entries")}Entries`,
-    { select: "surface", surface: "entries" },
+    workspace === undefined ? { select: "surface", surface: "entries" } : { select: "catalog" },
     styleOf("pane-heading", { selected: routed === "entries" }),
     { here: view.focused },
   );
@@ -4906,7 +5045,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // only the one its route is showing: a heading for an outlet this frame has
     // no region for would be a row mounted nowhere.
     items.push(
-      ...workspaceHeadings(view, {
+      ...workspaceHeadings(view, selectorRoomOf(context.widths), {
         transcript: !narrow || routed === "sessions",
         work: !narrow || (routed === "entries" && !showSidekick),
         entries: !narrow,
@@ -5279,17 +5418,23 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // One inert block, in the rows this frame fitted its words into. Without a
     // fitted list — the pass still asking how wide the surface is — it is the
     // one row that pass describes, so its own geometry question stays askable.
-    const said = context.guidance ?? [guidanceSentence(view)];
+    const said = context.guidance ?? [footerSentence(view)];
+    // A refusal in this band reads as the refusal it is, not as a hint.
+    const refusing = refusalInBand(view);
     for (const [at, own] of said.entries()) {
       items.push(
-        line(at === 0 ? "guidance" : `guidance:row:${at}`, own, styleOf("status", { inspected })),
+        line(
+          at === 0 ? "guidance" : `guidance:row:${at}`,
+          own,
+          refusing ? styleOf("failed-outcome", { inspected }) : styleOf("status", { inspected }),
+        ),
       );
     }
   }
 
   // Why the last thing asked for changed nothing. Shown rather than swallowed: a
   // refusal nobody can read is a keystroke that appeared to do nothing.
-  if (state.refusal !== undefined && offering("footer:refused")) {
+  if (state.refusal !== undefined && !refusalInBand(view) && offering("footer:refused")) {
     // One line: the footer is seven rows and the controls live in them, so a
     // refusal that wrapped would push the draft off the screen it is about.
     //
@@ -6095,6 +6240,22 @@ function presentedConfiguring(view: ReplView): ReplConfiguring | undefined {
   return held.open && showingSidekick(view) && currentChat(view) ? held : undefined;
 }
 
+/**
+ * Whether the Entries catalog is the thing presented over this reading.
+ *
+ * Three conditions, like the Sidekick's own drawers: no route drawer on top of
+ * it, the catalog actually open, and a staged composition to float it over.
+ * The ordinary composition keeps its permanent Entries column, so there is
+ * nothing for an overlay to stand in for there.
+ *
+ * It takes precedence over the Sidekick's pane-local form and Configure
+ * without answering or discarding either: both keep what is in them, and
+ * closing this gives them the screen back.
+ */
+function presentedCatalog(view: ReplView): boolean {
+  return view.selection.drawers.length === 0 && view.state.catalog && staged(view) !== undefined;
+}
+
 /** Whether this view's Sidekick pane is the one being drawn. */
 function showingSidekick(view: ReplView): boolean {
   return profileFor(view.size) === "narrow"
@@ -6113,6 +6274,7 @@ function showingSidekick(view: ReplView): boolean {
 function modalOpen(view: ReplView): boolean {
   return (
     view.selection.drawers.length > 0 ||
+    presentedCatalog(view) ||
     presentedAsking(view) !== undefined ||
     presentedConfiguring(view) !== undefined
   );
@@ -6140,7 +6302,10 @@ function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBo
   // around its body where the ordinary one keeps seven, so a rectangle derived
   // from the other budget would hang off the bottom of this screen.
   const workspace = staged(view) !== undefined;
-  if (view.selection.drawers.length > 0) {
+  // The catalog floats over the body, exactly where a route drawer does: it is
+  // a reading of the whole execution rather than of one pane, so a pane-local
+  // rectangle would put the list of every entry inside the Sidekick's column.
+  if (view.selection.drawers.length > 0 || presentedCatalog(view)) {
     return context.drawer ?? drawerRect(view.size, workspace);
   }
   return presentedAsking(view) === undefined && presentedConfiguring(view) === undefined
@@ -6181,6 +6346,10 @@ function drawerFor(
   // so this is also what says the Sidekick's own is the one on screen.
   const asking = presentedAsking(view)?.question.key;
   const configuring = presentedConfiguring(view) !== undefined;
+  // The catalog's window is the entries window somebody is already scrolling,
+  // so its controls carry that reading's own scroll rather than the generic
+  // one — the clamp is this drawer's measured capacity either way.
+  const catalog = presentedCatalog(view);
   const rows: Described[] = [];
   rows.push(
     row(
@@ -6192,7 +6361,9 @@ function drawerFor(
         ? { select: "sidekick-scroll", delta: -1 }
         : configuring
           ? { select: "configure-scroll", delta: -1 }
-          : { select: "scroll", delta: -1 },
+          : catalog
+            ? { select: "scroll-entries", delta: -1 }
+            : { select: "scroll", delta: -1 },
       styleOf("action"),
       { here: view.focused },
     ),
@@ -6208,7 +6379,9 @@ function drawerFor(
         ? { select: "sidekick-scroll", delta: 1 }
         : configuring
           ? { select: "configure-scroll", delta: 1 }
-          : { select: "scroll", delta: 1 },
+          : catalog
+            ? { select: "scroll-entries", delta: 1 }
+            : { select: "scroll", delta: 1 },
       styleOf("action"),
       { here: view.focused },
     ),
@@ -6256,9 +6429,13 @@ function drawerFor(
           // changes nothing.
           configuring
           ? { select: "configure-close" }
-          : asking === undefined
-            ? { select: "close" }
-            : { select: "sidekick-question-close" },
+          : catalog
+            ? // Putting the catalog away chooses nothing: the scope being
+              // read, the marker, the filter and both drafts stand.
+              { select: "catalog-close" }
+            : asking === undefined
+              ? { select: "close" }
+              : { select: "sidekick-question-close" },
       styleOf("action"),
       { here: view.focused },
     ),
@@ -6330,6 +6507,9 @@ function drawerContent(
   preview?: readonly ReplFittedLine[] | undefined,
 ): DrawerContent | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
+  if (open === undefined && presentedCatalog(view)) {
+    return catalogContent(view, width);
+  }
   if (open === undefined) {
     // No route drawer, so this is one of the Sidekick's own two drawers if
     // anything is. Configure first: opening it hides the question form's
@@ -6671,6 +6851,43 @@ function settingLine(settings: SessionConfiguration | undefined): string {
  * Where there is no saved verification this says so rather than borrowing the
  * request to stand in for it.
  */
+/**
+ * The Entries catalog, as the rows one drawer window shows.
+ *
+ * The same rows the permanent column draws, built by the same function from
+ * the same reading: immutable admission order, each entry's own key and
+ * retained outcome, each nested scope under the entry that holds it, and the
+ * exact scope path on every row. The catalog is a *reading* of the selected
+ * acknowledged prefix, so an earlier marker shows what that prefix held and
+ * nothing of what came after it.
+ *
+ * An execution with no entry says so once, inertly. A placeholder is not a
+ * control: there is nothing to go to.
+ */
+function catalogContent(view: ReplView, width: number): DrawerContent {
+  const rows = entryContent(view.model, view.focused, view.selection.entry?.key, width);
+  const content: DrawerRow[] =
+    rows.length > 0
+      ? rows.map((described) => ({ described }))
+      : [
+          {
+            described: drawerLine(
+              "drawer:catalog:none",
+              "1. (not submitted)",
+              width,
+              styleOf("metadata"),
+            ),
+          },
+        ];
+  return {
+    title: drawerTitle("Entries", undefined, width),
+    titleStyle: styleOf("drawer-title"),
+    dismissing: undefined,
+    entering: false,
+    content: Object.freeze(content),
+  };
+}
+
 function configureContent(view: ReplView, held: ReplConfiguring, width: number): DrawerContent {
   const content: DrawerRow[] = [];
   const focused = view.focused;
@@ -7702,6 +7919,16 @@ export interface ReplPresentationContext {
    */
   readonly queueProbe?: boolean | undefined;
   /**
+   * How the non-wide History row divides itself, in whole cells.
+   *
+   * Measured once per preparation, from the two parts asked on their own, and
+   * then stated in every pass that follows — the empty capacity skeleton, the
+   * pass anything is admitted from and the committed description alike. A
+   * constraint one pass states and another does not is a control measured where
+   * it is not drawn.
+   */
+  readonly historySplit?: { readonly map: number; readonly actions: number } | undefined;
+  /**
    * How wide the History row's map is, once its controls have been measured.
    *
    * Derived the way the Draft's field is, and for the same reason: the row
@@ -7782,6 +8009,13 @@ export function readingKeyOf(state: ReplState, open: ReplDrawerRef): string | un
  */
 export function drawerOffsetOf(state: ReplState, open: ReplDrawerRef | undefined): number {
   if (open === undefined) {
+    // The catalog's own, and before the Sidekick's two: it takes the screen
+    // from them while it is open, so the window being moved is this one. It
+    // keeps the entries viewport it has always been scrolled by, so a reader
+    // who scrolls, closes and opens again is where they left off.
+    if (state.catalog) {
+      return state.viewports.entries;
+    }
     // No route drawer, so one of the Sidekick's own drawers is being read if
     // any is. Its own offset, because each window is its own.
     if (state.configuring.open) {
@@ -7958,6 +8192,7 @@ function slotOf(key: string): ReplSlot | undefined {
     key === "transcript:title" ||
     key === "transcript:selector" ||
     key === "work:crumbs" ||
+    key.startsWith("work:crumb:") ||
     key === "work:state" ||
     key === "draft:stop" ||
     key === "draft:send" ||
@@ -8012,11 +8247,21 @@ function candidatesOf(
    * from the string would be classifying text it had already lost the facts for.
    */
   runs: ReadonlyMap<string, readonly ReplTokenRun[]>,
+  /**
+   * The keys this frame described inside the catalog drawer, where it drew one.
+   *
+   * The catalog shows the same rows the permanent Entries column shows, under
+   * the same keys, so that an entry is one identity however a reader reached
+   * it. Where the key cannot say which region a row landed in, the composition
+   * says — and it says it here rather than by renaming the rows, because a row
+   * renamed for the overlay would be a second identity for the same entry.
+   */
+  catalogRows?: ReadonlySet<string> | undefined,
 ): readonly ReplCandidate[] {
   const found: ReplCandidate[] = [];
   const walk = (description: ReplDescription<ReplAction>): void => {
     const read = readDescription(description);
-    const slot = slotOf(read.key);
+    const slot = catalogRows?.has(read.key) === true ? "drawer" : slotOf(read.key);
     if (slot !== undefined) {
       found.push({
         key: read.key,
@@ -8176,7 +8421,20 @@ export function presentationFor(
     };
   }
 
-  const candidates = candidatesOf(descriptions, styles, runs);
+  // Which keys this frame described *inside* the catalog drawer. The catalog
+  // reuses the permanent column's rows so that an entry is the same row with
+  // the same identity wherever it is read from — which means the key alone no
+  // longer says where it lands. While the catalog is open those same nodes
+  // belong to the drawer's window, and the permanent column they would
+  // otherwise classify into is a region this screen does not draw.
+  const catalogRows = presentedCatalog(view)
+    ? new Set(
+        entryContent(view.model, view.focused, view.selection.entry?.key, undefined).map(
+          (one) => one.key,
+        ),
+      )
+    : undefined;
+  const candidates = candidatesOf(descriptions, styles, runs, catalogRows);
   const viewports: ReplViewportSlot[] = [];
   const regions: { region: ReplRegion; id: string }[] = [];
   /** The border-free inside of each pane that has edges. */
@@ -8884,7 +9142,7 @@ function offsetFor(
     // asked for that turn and not for whatever arrived since.
     const reveal = view.state.revealing;
     if (reveal !== undefined) {
-      const at = revealedAt(reveal, view.live.sidekick, capacity, chat);
+      const at = revealedAt(reveal, view.live.sidekick, capacity, chat, chatStagingOf(view));
       if (at !== undefined) {
         return at;
       }
@@ -9159,7 +9417,20 @@ function workspaceChatComposed(
     if (item.kind === "person") {
       items.push(text(key, item.text, styleOf("source"), originMark(item.origin)));
     } else if (item.kind === "preview") {
-      items.push(text(key, item.text, styleOf("waiting"), SIDEKICK_MARK));
+      // Said as the attempt it is. Nothing has been evaluated, no control has
+      // run and no turn is acknowledged, so this is not a reply yet — and a
+      // row that differed from one only by its colour would tell a reader
+      // nothing they could read. `(unfinished)` below is the other ending.
+      items.push(
+        text(
+          key,
+          item.incomplete === true
+            ? `${reading.agent} (unfinished): ${item.text}`
+            : `${reading.agent} (preview): ${item.text}`,
+          item.incomplete === true ? styleOf("failed-outcome") : styleOf("waiting"),
+          SIDEKICK_MARK,
+        ),
+      );
     } else if (item.kind === "saved") {
       items.push(
         text(
@@ -9170,10 +9441,16 @@ function workspaceChatComposed(
         ),
       );
     } else if (item.kind === "incomplete" || item.failure !== undefined) {
+      // Said the way the preview above it is said, and the way the ordinary
+      // pane says it: who answered, how far it got, then the reason. The mark
+      // in front already says this row is the Sidekick's, and the name is what
+      // says *which* agent answered in this chat — a conversation does not
+      // change agent in place, so a row that left it out would make two chats
+      // by two agents read identically.
       items.push(
         text(
           key,
-          `(${item.kind === "incomplete" ? "unfinished" : "failed"}) ${
+          `${reading.agent} (${item.kind === "incomplete" ? "unfinished" : "failed"}): ${
             item.failure ?? "this turn did not complete"
           }`,
           styleOf("failed-outcome"),
@@ -9232,6 +9509,15 @@ function workspaceChatComposed(
  */
 function workspaceHeadings(
   view: ReplView,
+  /**
+   * How wide the frame measured the Transcript's own rows.
+   *
+   * The selector is a control in that column and says a name nothing in this
+   * product bounds, so it is fitted to the same room its rows are. None before
+   * the frame has asked — a pass still measuring has no width to give, and a
+   * label that gave up columns against no width would be shortened for nothing.
+   */
+  width: number | undefined,
   /** Which of the two headings this frame has a region for. */
   shown: {
     readonly transcript: boolean;
@@ -9246,7 +9532,27 @@ function workspaceHeadings(
     items.push(
       row(
         "transcript:selector",
-        `${view.state.route.session === undefined ? "All sessions" : headline(view.state.route.session)} ▾`,
+        // Fitted to the column it is drawn in. What this says once a
+        // conversation has been chosen is that conversation's name, and a
+        // provider's session key is a name nothing here bounds — measured, one
+        // of them made this control 58 cells wide in a 34-cell column, which
+        // overflowed the row and left the engine placing it on a fraction of a
+        // cell, and a frame placed on fractions is one this product refuses to
+        // draw at all. The chevron stays whatever the name costs: a selector
+        // that gave up the mark saying it opens is one nobody can tell is one.
+        fitControl(
+          [
+            {
+              text:
+                view.state.route.session === undefined
+                  ? "All sessions"
+                  : headline(view.state.route.session),
+              elide: true,
+            },
+            { text: " ▾", keep: true },
+          ],
+          width,
+        ),
         { select: "session-filter" },
         styleOf("field-label", { selected: view.state.filtering }),
         { here: view.focused },
@@ -9261,7 +9567,10 @@ function workspaceHeadings(
       row(
         "entries:heading",
         "Entries",
-        { select: "surface", surface: "entries" },
+        // The catalog, over this reading. The staged composition keeps no
+        // permanent column for it, so routing to a surface would be routing to
+        // a screen with nothing new on it.
+        { select: "catalog" },
         styleOf("navigate"),
         { here: view.focused },
       ),
@@ -9280,13 +9589,40 @@ function workspaceHeadings(
     ...view.selection.ancestry.slice(1).map((one) => one.name),
   ];
   const separator = " › ";
-  const said = `› ${names.join(separator)}`;
-  const runs: ReplTokenRun[] = [];
-  for (const [at, name] of names.entries()) {
-    runs.push({ text: at === 0 ? "› " : separator, token: "punctuation" });
-    runs.push({ text: name, token: at === names.length - 1 ? "xmd-tag" : "metadata" });
+  // Each name with the separator that leads to it. The separator is stated once,
+  // on the part it leads to, and the single space after it is the one this row
+  // already puts between its parts — so the names drawn in order are the one
+  // string this row has always said, and nothing of it is spelled twice.
+  const spelled = (at: number): { text: string; runs: readonly ReplTokenRun[] } => {
+    const last = at === names.length - 1;
+    return {
+      text: `${separator.trimStart()}${names[at]}`,
+      runs: tokenRuns([
+        { text: separator.trimStart(), token: "punctuation" },
+        { text: names[at], token: last ? "xmd-tag" : "metadata" },
+      ]),
+    };
+  };
+  // Every name but the innermost is somewhere to go: the reading is already at
+  // the last one, and a control that selected where you are would be a control
+  // that does nothing. Each ancestor selects the prefix of the path that ends
+  // at it, which is the same scope path the catalog's own rows select — so
+  // reaching one from the trail and reaching it from the catalog are the same
+  // act, and the route that comes out says so.
+  for (let at = 0; at < names.length - 1; at += 1) {
+    const part = spelled(at);
+    items.push(
+      row(
+        `work:crumb:${at}`,
+        part.text,
+        { select: "scope", scopes: view.state.route.scopes.slice(0, at + 1) },
+        styleOf("metadata"),
+        { here: view.focused, runs: part.runs },
+      ),
+    );
   }
-  items.push(line("work:crumbs", said, styleOf("metadata"), tokenRuns(runs)));
+  const innermost = spelled(names.length - 1);
+  items.push(line("work:crumbs", innermost.text, styleOf("metadata"), innermost.runs));
   const state = workState(entry, view.model, view.live);
   items.push(line("work:state", state.word, state.style));
   return items;
@@ -9523,7 +9859,11 @@ function workspaceControls(
       ),
     );
   }
-  for (const tray of ["todo", "queue"] as const) {
+  // Only the trays this execution actually offers, and Follow only where it is
+  // offered at all. A build without the shared queue draws no QUEUE tab and no
+  // Follow checkbox: a control for behaviour that is not here is a choice
+  // somebody can make and nothing happens, however it is drawn.
+  for (const tray of traysOf(workspace)) {
     const here = workspace.tray === tray;
     items.push(
       row(
@@ -9537,11 +9877,13 @@ function workspaceControls(
       ),
     );
   }
-  items.push(
-    row("follow", `[${workspace.follow ? "x" : " "}] Follow`, {}, styleOf("action"), {
-      here: view.focused,
-    }),
-  );
+  if (workspace.follow !== undefined) {
+    items.push(
+      row("follow", `[${workspace.follow ? "x" : " "}] Follow`, {}, styleOf("action"), {
+        here: view.focused,
+      }),
+    );
+  }
   items.push(
     reading.busy
       ? row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
@@ -9551,7 +9893,7 @@ function workspaceControls(
           here: view.focused,
         }),
   );
-  if (workspace.tray === "queue") {
+  if (workspace.tray === "queue" && offersQueue(workspace)) {
     const window = context.admission.windows.get(QUEUE_WINDOW);
     // Rows rather than messages. The window counts fitted rows, so the
     // description selects the same fitted rows: a slice of messages would put
@@ -9652,12 +9994,13 @@ function workspaceControls(
  * The selected work's Draft: one field whose heading carries its own Send, or
  * Stop while an entry is running, and whose value takes the rows beneath it.
  *
- * Send is a mounted control that asks the root for nothing: Enter in the field
- * still submits. Stop does ask: it carries the key of the entry this frame is
- * actually drawing it for, so what it stops is that entry and not whatever is
- * running by the time the key is pressed. It is offered only at the live head —
- * a frozen reading is of an entry this process may no longer be running, and a
- * Stop there would be aimed at history.
+ * Send asks for exactly what Enter in the field asks for — the same submission
+ * action, through the same gate, against the same draft revision — so the two
+ * ways of submitting one text are one decision rather than two. Stop carries
+ * the key of the entry this frame is actually drawing it for, so what it stops
+ * is that entry and not whatever is running by the time the key is pressed. It
+ * is offered only at the live head — a frozen reading is of an entry this
+ * process may no longer be running, and a Stop there would be aimed at history.
  */
 function workspaceDraft(
   view: ReplView,
@@ -9688,7 +10031,9 @@ function workspaceDraft(
           styleOf("failed-outcome"),
           { here: view.focused },
         )
-      : row("draft:send", "[send]", {}, styleOf("action"), { here: view.focused }),
+      : row("draft:send", "[send]", { select: "submit-draft" }, styleOf("action"), {
+          here: view.focused,
+        }),
   );
   const rows = context.draft ?? ["", "", ""];
   for (const [at, own] of rows.entries()) {
@@ -9763,6 +10108,113 @@ const HISTORY_ROW = "box:history";
 const HISTORY_SPACE = "box:history:space";
 
 /**
+ * What the compact History rail calls itself.
+ *
+ * Shorter than the drawer's own title, because this is one row shared with the
+ * footer's controls: the drawer has room to say what its list is ordered by and
+ * this has room to say which reading it belongs to.
+ */
+export const COMPACT_HISTORY_TITLE = "HISTORY";
+
+/** The probe row the offered action group's own intrinsic width is read from. */
+export const HISTORY_PROBE_ACTIONS = "box:probe:history:actions";
+
+/** The probe row the History map's own natural width is read from. */
+export const HISTORY_PROBE_MAP = "box:probe:history:map";
+
+/**
+ * The History row's two parts, measured without each other's pressure.
+ *
+ * The non-wide row holds the map and the controls side by side, and the engine
+ * answers a *fit* child's width under whatever room its parent was given: a map
+ * fitted to its own long text takes the room first, the controls are left with
+ * less than they need, and what comes back for each of them is a compressed
+ * answer on part of a cell. Measured, a 72-cell row gave the map 29 and the
+ * controls 43 — and the controls, asked on their own, need 51.
+ *
+ * So they are asked on their own. One fitted row holding exactly the offered
+ * control nodes, their own labels, their own gap and the same leading spacer
+ * declared at zero; one fitted row holding the map's own runs. Both carry
+ * structural ids, mount nothing and publish no target: the question is how wide
+ * these things are, and the answer is the engine's rather than a count of
+ * characters.
+ *
+ * Built from the boxes the real composite built, so the labels measured here
+ * are the labels drawn there. What is copied is each child's own text and
+ * props — never the rectangle it was squeezed into, which is the number this
+ * exists to replace.
+ */
+export function historyProbeOf(
+  manifest: ReplLayoutManifest,
+  size: ReplTerminalSize,
+): ReplBox | undefined {
+  const boxes = flatten(manifest.root);
+  const actions = boxes.find((one) => one.id === ACTION_ROW);
+  const map = boxes.find((one) => one.id === HISTORY_MAP);
+  if (actions === undefined || map === undefined) {
+    return undefined;
+  }
+  const children = actions.children.map((child) =>
+    child.id === HISTORY_SPACE
+      ? // The leading spacer grows into whatever the row has spare. Declared at
+        // zero here, because what is being asked is the minimum the controls
+        // need and a growing child would answer with the whole row.
+        box({ id: `${HISTORY_PROBE_ACTIONS}:space`, props: statedPartProps(0) })
+      : box({
+          id: `${HISTORY_PROBE_ACTIONS}:${child.id}`,
+          props: child.props,
+          text: child.text,
+          ...(child.style === undefined ? {} : { style: child.style }),
+          ...(child.runs === undefined ? {} : { runs: child.runs }),
+        }),
+  );
+  return box({
+    id: "box:probe:history",
+    props: rootProps(size),
+    children: [
+      box({ id: HISTORY_PROBE_ACTIONS, props: fittedRowProps(1), children }),
+      box({
+        id: HISTORY_PROBE_MAP,
+        props: fittedPartProps(),
+        text: map.text,
+        ...(map.style === undefined ? {} : { style: map.style }),
+        ...(map.runs === undefined ? {} : { runs: map.runs }),
+      }),
+    ],
+  });
+}
+
+/**
+ * How the non-wide History row divides itself, in whole cells.
+ *
+ * The map yields first and the controls keep what they need: `M` is the map's
+ * own natural width, or what the row has left once the controls have theirs,
+ * whichever is smaller; `A` is the rest. Both are whole, because both come from
+ * whole measurements of complete labels — and the row states them rather than
+ * letting two fit children compete, which is what put a control on part of a
+ * cell.
+ *
+ * None where either measurement is missing or came back fractional. A frame
+ * that cannot be measured is refused by the existing path rather than drawn
+ * from a guess.
+ */
+export function historySplitOf(
+  widthOf: (id: string) => number | undefined,
+  room: number,
+): { readonly map: number; readonly actions: number } | undefined {
+  const needed = widthOf(HISTORY_PROBE_ACTIONS);
+  const natural = widthOf(HISTORY_PROBE_MAP);
+  if (needed === undefined || natural === undefined || room < 1) {
+    return undefined;
+  }
+  if (!Number.isInteger(needed) || !Number.isInteger(natural)) {
+    return undefined;
+  }
+  const map = Math.min(natural, Math.max(0, room - needed));
+  return { map, actions: room - map };
+}
+
+/**
  * How wide the accepted wide row's gap is, for this exact measured frame.
  *
  * That row is a fitted map, this gap, and the controls — and the gap and the
@@ -9820,7 +10272,13 @@ export function historyMapWidth(
   if (actions === undefined || room === undefined || room < 1) {
     return undefined;
   }
-  return Math.max(0, room - actions);
+  // Whole cells, and the odd one to the controls. A measured remainder is not
+  // always integral — two growing siblings split what is left fractionally —
+  // and a map stated at a fraction leaves its controls sharing a fraction,
+  // which the renderer refuses rather than rounding. Rounding *down* here is
+  // what gives the controls the whole cell: the band loses a column of map
+  // before a control loses part of itself.
+  return Math.max(0, Math.floor(room - actions));
 }
 
 /**
@@ -9847,7 +10305,7 @@ function identityRuns(view: ReplView): readonly ReplTokenRun[] {
  */
 function compactHistoryRuns(view: ReplView): readonly ReplTokenRun[] {
   const runs: { text: string; token: ReplPresentationRole }[] = [
-    { text: " HISTORY", token: "history-title" },
+    { text: ` ${COMPACT_HISTORY_TITLE}`, token: "history-title" },
   ];
   const points = numbered(view.navigation);
   const at = view.state.route.at;
@@ -9920,7 +10378,7 @@ function trayAllocation(
   extras: number,
 ): { readonly tray: number; readonly queue: number } | undefined {
   const workspace = staged(view);
-  if (workspace === undefined || workspace.tray !== "queue") {
+  if (workspace === undefined || workspace.tray !== "queue" || !offersQueue(workspace)) {
     return undefined;
   }
   const wrapped = (id: string): number => (context.headers?.has(`header:${id}`) === true ? 2 : 1);
@@ -10005,9 +10463,11 @@ const WORKSPACE_HEADERS: readonly {
     gap: 1,
     // The Entries control where this heading owns it. A narrow frame's surface
     // bar holds that control instead, and one key is one mounted node — so the
-    // outlet's own heading is the breadcrumb alone.
-    left: Object.freeze(["entries:heading", "work:crumbs"]),
-    outletLeft: Object.freeze(["work:crumbs"]),
+    // outlet's own heading is the breadcrumb alone. The breadcrumb itself is a
+    // group rather than a key: every name but the innermost is a control that
+    // goes to it.
+    left: Object.freeze(["entries:heading", "work:crumb:*", "work:crumbs"]),
+    outletLeft: Object.freeze(["work:crumb:*", "work:crumbs"]),
     right: Object.freeze(["work:state"]),
   }),
   Object.freeze({
@@ -10019,6 +10479,10 @@ const WORKSPACE_HEADERS: readonly {
   Object.freeze({
     id: "tray",
     gap: TAB_GAP,
+    // Every key this row can hold, in its order. A key the composition did not
+    // describe — a tray this execution does not offer, a Follow it does not
+    // have — contributes no part, so the row is built from what is actually
+    // there rather than from what a wider build would have put there.
     left: Object.freeze(["tray:todo", "tray:queue"]),
     right: Object.freeze(["follow", "sidekick:stop", "sidekick:send"]),
   }),
@@ -10040,6 +10504,52 @@ function headerGroupsOf(
     left: outlet ? (spec.outletLeft ?? spec.left) : spec.left,
     right: spec.right,
   };
+}
+
+/**
+ * How many cells the Transcript's selector has to say its name in.
+ *
+ * Its own row's room, less the one gap the engine puts between that row's
+ * growing spacer and it. The header is two rows exactly when its two groups
+ * cannot share one, and on a row of its own the selector is the only thing
+ * beside that spacer — so this is the width it is given whichever of the two
+ * the frame draws: at a shared width the one-row case arises only when the
+ * label is short enough to fit beside the title as well.
+ *
+ * None before the frame has measured, which is the pass that fits nothing.
+ */
+function selectorRoomOf(widths: ReplMeasuredWidths | undefined): number | undefined {
+  return widths === undefined
+    ? undefined
+    : Math.max(0, headerRoomOf("transcript", widths) - TAB_GAP);
+}
+
+/**
+ * Every key one header group names, with a trailing `*` standing for a run.
+ *
+ * The breadcrumb's ancestors are as many as the scopes somebody selected, so
+ * the trail cannot be a fixed list of keys. A `*` names the run instead, and it
+ * expands in the order the rows were described — which is the order the trail
+ * reads in. Asked of what is actually there, so a reading with no nested scope
+ * contributes no ancestor and the row is the row it has always been.
+ */
+function headerKeysOf(
+  keys: readonly string[],
+  described: readonly { readonly key: string }[],
+): readonly string[] {
+  return keys.flatMap((key) => {
+    if (!key.endsWith("*")) {
+      return [key];
+    }
+    const prefix = key.slice(0, -1);
+    const found: string[] = [];
+    for (const one of described) {
+      if (one.key.startsWith(prefix) && !found.includes(one.key)) {
+        found.push(one.key);
+      }
+    }
+    return found;
+  });
 }
 
 /** Which measured width one staged header's row is built to. */
@@ -10084,6 +10594,7 @@ export function workspaceHeaderLines(
       .map((key) => text.get(key))
       .filter((one): one is string => one !== undefined && one !== "")
       .join(" ".repeat(gap));
+
   const outlet = profileFor(view.size) === "narrow";
   const lines: { key: string; text: string; room: number }[] = [];
   for (const header of WORKSPACE_HEADERS) {
@@ -10091,8 +10602,8 @@ export function workspaceHeaderLines(
     if (groups === undefined) {
       continue;
     }
-    const left = said(groups.left, header.gap);
-    const right = said(groups.right, header.gap);
+    const left = said(headerKeysOf(groups.left, screen.rows), header.gap);
+    const right = said(headerKeysOf(groups.right, screen.rows), header.gap);
     if (left === "" || right === "") {
       continue;
     }
@@ -10174,8 +10685,36 @@ function workspacePresentation(input: {
   const spacer = (id: string, region: ReplRegion): ReplBox =>
     box({ id, region, props: SPACER_PROPS });
   const header = REPL_PALETTE.paneHeaderSurface;
+  /**
+   * The header parts whose width is stated rather than measured.
+   *
+   * A fitted part asks the engine how wide its own text is, and that answer is
+   * not always whole: measured, this selector holding a provider's session key
+   * came back 58.005859375 cells wide, and shortened to its column it came back
+   * 32.0078125 — a fraction either way, and a frame placed on fractions is one
+   * this product refuses to draw. Its label is already fitted to a width this
+   * frame measured, so the cells it needs is a number the label itself states.
+   */
+  const stated = new Set(["transcript:selector"]);
   const parts = (keys: readonly string[], region: ReplRegion, surface?: number): ReplBox[] =>
-    keys.flatMap((key) => byKey(key).map((one) => part(one, region, surface)));
+    keys.flatMap((key) =>
+      byKey(key).map((one) =>
+        stated.has(one.key)
+          ? box({
+              id: `box:${region}:${one.key}`,
+              key: one.key,
+              region,
+              // The label's own cells, marker room included — what a candidate
+              // carries is what the row draws.
+              props: statedPartProps(one.text.length),
+              text: one.text,
+              control: one.control,
+              style: one.style,
+              runs: one.runs,
+            })
+          : part(one, region, surface),
+      ),
+    );
 
   /**
    * One staged header, in the one row it fits or the two rows it needs.
@@ -10191,8 +10730,8 @@ function workspacePresentation(input: {
     if (spec === undefined) {
       return [];
     }
-    const left = parts(spec.left, region, surface);
-    const right = parts(spec.right, region, surface);
+    const left = parts(headerKeysOf(spec.left, candidates), region, surface);
+    const right = parts(headerKeysOf(spec.right, candidates), region, surface);
     if (left.length === 0 && right.length === 0) {
       return [];
     }
@@ -10425,7 +10964,12 @@ function workspacePresentation(input: {
     // The rows this body draws besides its chat and that chat's two controls.
     const extras = byKey("sidekick:back").length + byKey("sidekick:answer").length;
     const allocation = trayAllocation(view, context, extras);
-    if (held?.tray === "queue" && allocation !== undefined) {
+    if (
+      held !== undefined &&
+      held.tray === "queue" &&
+      offersQueue(held) &&
+      allocation !== undefined
+    ) {
       viewports.push(Object.freeze({ id: queueViewport, region, window: QUEUE_WINDOW }));
     }
     const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
@@ -10466,7 +11010,7 @@ function workspacePresentation(input: {
                 // A tray whose rows fit places them where the accepted screen
                 // has them. One that does not is a window of the rows it was
                 // allocated, whose room the engine measures like any other.
-                ...(held?.tray === "queue" && allocation !== undefined
+                ...(held?.tray === "queue" && offersQueue(held) && allocation !== undefined
                   ? [
                       box({
                         id: queueViewport,
@@ -10662,14 +11206,19 @@ function workspacePresentation(input: {
                   box({
                     id: HISTORY_MAP,
                     region: "footer",
-                    // The accepted wide row fits this map to its own text, and
-                    // that row has room for it. Elsewhere it takes what the
-                    // measured controls leave, because a map longer than its
-                    // row is squeezed onto a fraction of a cell.
+                    // The accepted wide row fits this map to its own text and
+                    // has room for it. Every other profile states it, at the
+                    // width this frame measured the row's two parts to need —
+                    // the map's own natural width, or what the controls leave,
+                    // whichever is smaller. Fitting it there instead makes its
+                    // text a minimum that competes with complete control
+                    // labels: measured, a 72-cell row gave a 29-cell map its
+                    // whole text and left the controls 43 where they need 51,
+                    // and every one of them came back on part of a cell.
                     props:
-                      accepted || context.historyMap === undefined
+                      accepted || context.historySplit === undefined
                         ? fittedPartProps()
-                        : statedPartProps(context.historyMap),
+                        : statedPartProps(context.historySplit.map),
                     text: runText(map),
                     runs: map,
                     style: styleOf("history", { inspected }),
@@ -10697,7 +11246,16 @@ function workspacePresentation(input: {
                   box({
                     id: ACTION_ROW,
                     region: "footer",
-                    props: accepted ? actionRowProps() : inlineActionRowProps(),
+                    // Stated at what the offered controls actually need, so the
+                    // engine is dividing a row that is big enough rather than
+                    // compressing fitted children into one that is not. The
+                    // leading spacer inside it absorbs whatever is genuinely
+                    // spare, and every control stays fitted to its own label.
+                    props: accepted
+                      ? actionRowProps()
+                      : context.historySplit === undefined
+                        ? inlineActionRowProps()
+                        : statedActionRowProps(context.historySplit.actions),
                     children: [
                       ...(accepted ? [] : [spacer(HISTORY_SPACE, "footer")]),
                       ...placed.map((candidate) =>
@@ -10719,11 +11277,7 @@ function workspacePresentation(input: {
               box({
                 id: "box:guidance",
                 region: "footer",
-                props: workspaceBlockProps(
-                  "fit",
-                  REPL_PALETTE.chromeSurface,
-                  WORKSPACE_LIST_GUTTER,
-                ),
+                props: bandBlockProps(REPL_PALETTE.chromeSurface, WORKSPACE_LIST_GUTTER),
                 children: [
                   box({
                     id: GUIDANCE_ROW,
@@ -10776,7 +11330,12 @@ export function queueLinesOf(
   view: ReplView,
 ): readonly { readonly key: string; readonly text: string }[] | undefined {
   const workspace = staged(view);
-  if (workspace === undefined || workspace.tray !== "queue" || !showingSidekick(view)) {
+  if (
+    workspace === undefined ||
+    workspace.tray !== "queue" ||
+    !offersQueue(workspace) ||
+    !showingSidekick(view)
+  ) {
     return undefined;
   }
   return workspace.queued.map((message) => ({

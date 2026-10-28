@@ -44,6 +44,7 @@ import {
   initialState,
   NO_AGENT,
   reduceRepl,
+  workspaceOf,
   viewFor,
 } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
@@ -4450,12 +4451,35 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
     expect(view.selection.scope?.key).toBe(scopes[1]);
     expect(view.selection.scope?.key).not.toBe(entry.scope.key);
     expect(view.selection.scope?.kind).toBe("component");
-    const crumbs = observed.cells.get("work:crumbs") ?? "";
-    expect(crumbs).toContain(`Entry ${entry.order}`);
-    expect(crumbs).toContain(ancestry[1].name);
-    expect(crumbs.indexOf(`Entry ${entry.order}`)).toBeLessThan(crumbs.indexOf(ancestry[1].name));
+    // The breadcrumb, as the parts it is drawn in. Every name but the innermost
+    // is a control that goes to it — the reading is already at the last one —
+    // so the trail is one node per ancestor and one row for where the reading
+    // is, each on the same row as the Entries control and in the order the
+    // scopes were selected.
+    const ancestors = observed.keys
+      .filter((key) => key.startsWith("work:crumb:"))
+      .sort((left, right) => placed(observed, left).x - placed(observed, right).x);
+    expect(ancestors).toHaveLength(ancestry.length - 1);
     const crumbRow = placed(observed, "work:crumbs");
     const entries = placed(observed, "entries:heading");
+    const crumbText = (key: string): string => observed.cells.get(key) ?? "";
+    const targeted = (key: string): boolean => {
+      const node = observed.nodeOf(key);
+      return node !== undefined && observed.targets.some((one) => one.node === node);
+    };
+    // The entry is the one ancestor here, and it is where this trail starts.
+    expect(crumbText(ancestors[0])).toContain(`Entry ${entry.order}`);
+    // The innermost is the reading itself, and it is not a way to anywhere.
+    expect(crumbText("work:crumbs")).toContain(ancestry[1].name);
+    expect(targeted("work:crumbs")).toBe(false);
+    // And each ancestor is reachable: it publishes a target of its own, inside
+    // the row, in front of the reading it leads to.
+    for (const key of ancestors) {
+      const at = placed(observed, key);
+      expect([key, at.y]).toEqual([key, entries.y]);
+      expect([key, at.x > entries.x && at.x < crumbRow.x]).toEqual([key, true]);
+      expect([key, targeted(key)]).toEqual([key, true]);
+    }
     expect(crumbRow.y).toBe(entries.y);
     expect(entries.x).toBeLessThan(crumbRow.x);
 
@@ -4619,6 +4643,153 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
    * and their own recorded order — this asserts what a reader sees and what the
    * selector does to it, and nothing about merging the two histories.
    */
+  /**
+   * #971 B1: the Entries catalog, opened over the reading it navigates.
+   *
+   * The staged screen keeps no permanent catalog column — its three columns are
+   * the Transcript, the selected work and Bindings/Sidekick — so Entries opens
+   * the catalog as a drawer over the body, the way every other whole-execution
+   * reading is opened. What this holds it to is that the overlay is a
+   * *presentation*: it selects nothing by existing, it changes nothing by
+   * closing, and the rows in it are the same rows, under the same keys, that
+   * the permanent column draws.
+   */
+  it("A6: Entries opens a catalog over the reading, and only a row in it navigates", function* () {
+    const model = yield* checkpointModel();
+    for (const size of CHECKPOINT_SIZES) {
+      const where = `${size.columns}x${size.rows}`;
+      yield* scoped(function* (): Operation<void> {
+        const presenter = yield* usePresenter(size);
+        // The shipping root's own presentation, not the staged fixture's.
+        const shipping = { model, size, workspace: workspaceOf() };
+        const base = yield* commitCheckpoint(presenter, shipping);
+
+        // Closed, there is no catalog on the screen and no drawer layer.
+        expect([where, base.observed.keys.includes("drawer:open")]).toEqual([where, false]);
+        expect([where, base.observed.keys.some((key) => key.startsWith("entry:"))]).toEqual([
+          where,
+          false,
+        ]);
+
+        // The control a person actually presses asks for the catalog. Reached
+        // through the mounted tree at the cell it was drawn in, so what this
+        // asserts is the control on the screen rather than a description.
+        const opener = placed(base.observed, "entries:heading");
+        const pressed = yield* presenter.tree.dispatch({
+          kind: "pointer",
+          target: base.observed.committed.rendered.map.at(opener.x, opener.y) ?? "",
+          frame: base.observed.committed.rendered.tree,
+        });
+        if (!pressed.ok) {
+          throw new Error(`${where}: the Entries control refused its own activation`);
+        }
+        expect([where, asked(pressed.value)]).toEqual([where, { kind: "open-catalog" }]);
+
+        const next = reduceRepl(base.view.state, { kind: "open-catalog" }, model, base.view.live);
+        // Opening is navigation and nothing else: no provider work, no append,
+        // no submission.
+        expect([where, next.intent]).toEqual([where, { kind: "none" }]);
+        const open = yield* presenter.commit(
+          checkpointViewOf(model, base.focused, { ...shipping, state: next.state }),
+        );
+
+        // A floating layer over the body, whole-celled, inside the frame and
+        // clear of the footer the identity and History rows keep.
+        const layer = open.regionOf("box:drawer:layer");
+        if (layer === undefined) {
+          throw new Error(`${where}: the catalog drew no drawer layer`);
+        }
+        for (const edge of [layer.x, layer.y, layer.width, layer.height]) {
+          expect([where, Number.isInteger(edge)]).toEqual([where, true]);
+        }
+        expect([where, layer.x + layer.width <= size.columns]).toEqual([where, true]);
+        expect([where, layer.y + layer.height < size.rows - 1]).toEqual([where, true]);
+
+        // The same rows the permanent column builds, under the same keys: an
+        // entry is one identity however a reader reached it. Every entry this
+        // prefix retained, in admission order, with its own nested scope.
+        const rows = open.keys.filter(
+          (key) => key.startsWith("entry:") || key.startsWith("scope:"),
+        );
+        expect([where, rows]).toEqual([
+          where,
+          ["entry:entry-1", "entry:entry-2", "scope:entry-2/Checklist-1"],
+        ]);
+        // And they are inside the drawer, not mounted somewhere nothing drew
+        // them: each one has a box, and each box is inside that layer.
+        for (const key of rows) {
+          const at = open.boundsOf(key);
+          if (at === undefined) {
+            throw new Error(`${where}: the catalog mounted ${key} and drew it nowhere`);
+          }
+          expect([where, key, at.x >= layer.x && at.x + at.width <= layer.x + layer.width]).toEqual(
+            [where, key, true],
+          );
+          expect([
+            where,
+            key,
+            at.y >= layer.y && at.y + at.height <= layer.y + layer.height,
+          ]).toEqual([where, key, true]);
+        }
+        // Its own window controls and its way out, outside the moving rows.
+        for (const key of ["drawer:scroll:up", "drawer:scroll:down", "drawer:close"]) {
+          expect([where, key, open.boundsOf(key) !== undefined]).toEqual([where, key, true]);
+        }
+
+        // A nested scope, by its exact path. The reading moves to that exact
+        // entry and child, and the catalog closes behind the choice it was
+        // opened to make.
+        const chose = reduceRepl(
+          next.state,
+          { kind: "select-scope", scopes: ["entry-2", "Checklist-1"] },
+          model,
+          base.view.live,
+        );
+        expect([where, chose.intent]).toEqual([where, { kind: "none" }]);
+        expect([where, chose.state.route.scopes]).toEqual([where, ["entry-2", "Checklist-1"]]);
+        expect([where, chose.state.catalog]).toEqual([where, false]);
+
+        // An older entry, by its own key, from the same open catalog.
+        const older = reduceRepl(
+          next.state,
+          { kind: "select-scope", scopes: ["entry-1"] },
+          model,
+          base.view.live,
+        );
+        expect([where, older.state.route.scopes]).toEqual([where, ["entry-1"]]);
+        expect([where, older.state.catalog]).toEqual([where, false]);
+
+        // Nothing a person was holding moved, by either route: both texts, the
+        // conversation filter, the history marker and the saved chat stand.
+        for (const after of [chose.state, older.state, next.state]) {
+          expect([where, after.draft]).toEqual([where, base.view.state.draft]);
+          expect([where, after.message]).toEqual([where, base.view.state.message]);
+          expect([where, after.route.session]).toEqual([where, base.view.state.route.session]);
+          expect([where, after.route.at]).toEqual([where, base.view.state.route.at]);
+          expect([where, after.route.sidekick]).toEqual([where, base.view.state.route.sidekick]);
+        }
+
+        // And closing chooses nothing. The scope being read is the one that was
+        // being read before the catalog opened.
+        const shut = reduceRepl(next.state, { kind: "close-catalog" }, model, base.view.live);
+        expect([where, shut.state.catalog]).toEqual([where, false]);
+        expect([where, shut.state.route.scopes]).toEqual([where, base.view.state.route.scopes]);
+        expect([where, shut.state.draft]).toEqual([where, base.view.state.draft]);
+
+        // The catalog survives a resize: it is a reading somebody opened, not a
+        // property of the frame that drew it.
+        const grown = yield* presenter.commit(
+          checkpointViewOf(model, base.focused, {
+            ...shipping,
+            size: CHECKPOINT_SIZE,
+            state: next.state,
+          }),
+        );
+        expect([where, grown.keys.includes("drawer:open")]).toEqual([where, true]);
+      });
+    }
+  });
+
   it("A5: one Transcript list, with the conversations as its filter", function* () {
     const entryTurn = CHECKPOINT_LIVE.agent.turns[0];
     const chatTurn = CHECKPOINT_SIDEKICK.turns[0];

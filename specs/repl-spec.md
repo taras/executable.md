@@ -1051,20 +1051,33 @@ activating the selector a second time, and putting them away chooses nothing.
 
 The **selected work** in the centre names the entry and the scopes you are
 reading as breadcrumbs, with the way to the Entries catalog in front of them, and
-shows that entry's exact source, its execution state and its results. Below it is
+shows that entry's exact source, its execution state and its results. Every name
+in that trail except the last one is a way back out to it: the reading is already
+at the last, and choosing an outer name leaves the reading there with the scopes
+beneath it no longer selected — the same thing choosing that scope's row in the
+catalog does. Below it is
 the **Draft**: one field whose heading row carries its own Send — or Stop, while
 an entry is running — and whose value takes the rows beneath. The Draft is always
 the next entry's text, and a blank row in it is a row.
 
 **Bindings** and **Sidekick** share the right column as two tabs. Above the
-Sidekick's composer, **TODO** and **QUEUE** sit on the left and **Follow** and the
-Sidekick's own Send — or Stop, while a Send is active — on the right. QUEUE lists
-the messages waiting behind the active exchange: each row shows where it came
-from, its text and an `X` whose accessible name is *Remove message*. Its place in
-the list is its order, so the rows carry no numbers and no routine
-acknowledgement. What you are typing in the composer is not one of them until you
-send it. How the queue admits, orders and holds those messages is the queue
-contract (#964); what TODO holds is the shared TODO (#901).
+Sidekick's composer, the trays this build offers sit on the left and the
+Sidekick's own Send — or Stop, while a Send is active — on the right.
+
+What a build offers there is what it has. **This build ships the layout and the
+two Stops, and offers neither the shared queue nor Follow**, so it draws no
+QUEUE tab and no Follow control: a tab a reader can select and find nothing
+behind, or a checkbox that changes nothing however it is drawn, is worse than no
+control at all. **TODO** is drawn, inactive, as the placeholder for the shared
+TODO (#901). The settings those deferred controls will carry are recorded in the
+delivery record rather than advertised on a screen that cannot honour them.
+
+When the queue ships, QUEUE lists the messages waiting behind the active
+exchange: each row shows where it came from, its text and an `X` whose
+accessible name is *Remove message*. Its place in the list is its order, so the
+rows carry no numbers and no routine acknowledgement. What you are typing in the
+composer is not one of them until you send it. How the queue admits, orders and
+holds those messages is the queue contract (#964).
 
 At `160x36` the first composition gives the columns 36, 66 and 58 cells, dividers
 included, the body 33 rows and the Draft four of the centre's. That geometry and
@@ -2607,9 +2620,13 @@ are distinct from the final exchange result.
 
 Follow is about execution, not scrolling: it decides whether a Sidekick Send
 goes on after the entry it submitted settles, and has nothing to do with whether
-a reading keeps its newest rows in view. It is on when the REPL starts, stays as
-you set it across rounds and navigation, and is not saved — the next REPL starts
-with it on again. Only an entry the Sidekick submitted during Send is a round;
+a reading keeps its newest rows in view. **It is not in this build.** The
+continuation it governs ships with the shared queue, and until then no screen
+offers the choice and nothing watches an entry to start a turn after it. What
+follows describes the behaviour that delivery brings, and is the contract it is
+held to — not a description of what this command does today. When it ships it is
+on when the REPL starts, stays as you set it across rounds and navigation, and
+is not saved — the next REPL starts with it on again. Only an entry the Sidekick submitted during Send is a round;
 a Draft Send is not, and a round is one admitted entry rather than one provider
 turn. The evaluation the Sidekick invokes during Send creates and owns the
 continuation, so nothing else watches entries and starts turns.

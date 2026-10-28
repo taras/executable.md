@@ -8628,6 +8628,13 @@ state Stop leaves.
 
 #### Follow and the two Stops
 
+**Follow is not in the shipped build.** The layout and the two Stops ship
+first; the continuation Follow governs ships with the shared queue, so no screen
+offers the choice today and nothing watches an entry to start a turn after it.
+What this section states about Follow is the contract that delivery is held to
+rather than behaviour a reader can exercise now. **The two Stops below are
+implemented**: an entry's and the Sidekick's, each owning exactly what it says.
+
 Follow continues a Sidekick Send through the evaluation that Send invokes. It is
 a setting of the running REPL: on when the REPL starts, kept across rounds and
 navigation, and saved nowhere, so no preference, history or configuration record

@@ -654,7 +654,14 @@ export const ACCEPTED_160 = Object.freeze({
   textRows: [
     {
       y: 1,
-      text: " TRANSCRIPT          All sessions ▾ │   Entries › Entry 2 › Checklist                        ● ACTIVE │   BINDINGS    SIDEKICK               [configure claude] ",
+      // #971 B3: the breadcrumb's ancestors are controls now, and a control on
+      // this screen is drawn with the two cells its focus marker is written in
+      // — so `› Entry 2` begins two cells further along than it did when the
+      // whole trail was one inert line. Every other cell of this row, and every
+      // bound this fixture holds, is the accepted one. The two cells are a
+      // visible change to a screen a person accepted, and it is listed for
+      // their visual review rather than taken as reviewed.
+      text: " TRANSCRIPT          All sessions ▾ │   Entries   › Entry 2 › Checklist                      ● ACTIVE │   BINDINGS    SIDEKICK               [configure claude] ",
     },
     {
       y: 2,

@@ -67,8 +67,13 @@ import {
   MESSAGE_PROMPT,
   messageText,
   MOUNTED_AGENT,
+  blockSays,
   mountedReading,
+  saidByPerson,
+  saidBySidekick,
   screenOf,
+  rowsShow,
+  sidekickColumn,
   sendMessage,
   settled,
   shows,
@@ -1212,13 +1217,20 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(during.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(during.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(during.model.entries).toEqual([]);
-    expect(shows(repl.terminal, "(not submitted)")).toBe(true);
+    // The screen says the same thing by what it is showing: the catalog holds
+    // no entry, and the draft is still a draft somebody is holding rather than
+    // work that has been admitted.
+    expect(shows(repl.terminal, "No entry yet")).toBe(true);
     // Both composers still hold what was typed into them, and the Sidekick is
     // working — so Stop is the control, not Send.
     expect(draftText(repl.terminal)).toBe("mine");
     expect(messageText(repl.terminal)).toBe("later");
     expect(shows(repl.terminal, "[stop]")).toBe(true);
-    expect(shows(repl.terminal, "[send]")).toBe(false);
+    // The Sidekick's own control is Stop while it works. The entry draft keeps
+    // its own Send beside it — they are two destinations with two controls —
+    // so this asks the pane rather than the whole screen.
+    const pane = screenOf(repl.terminal).map((line) => line.slice(sidekickColumn(repl.terminal)));
+    expect(rowsShow(pane, "[send]")).toBe(false);
 
     // The rest of the text arrives, and the entry the reply submits is held
     // open: generation is over and the response is running its controls.
@@ -1243,7 +1255,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(complete.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(complete.model.entries).toEqual([]);
     expect(draftText(repl.terminal)).toBe("mine");
-    expect(shows(repl.terminal, "(not submitted)")).toBe(true);
+    expect(shows(repl.terminal, "No entry yet")).toBe(true);
     expect(repl.terminal.fed).toBe(fed);
 
     repl.fake.releaseDeltas();
@@ -1258,7 +1270,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // becomes the reply — the preview is gone, not joined by an answer.
     closing.release();
     yield* awaiting(repl.terminal, "the evaluated reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Half a thought.`),
+      saidBySidekick(one, "Half a thought."),
     );
     yield* settled(40);
     expect(shows(repl.terminal, "(preview)")).toBe(false);
@@ -1373,7 +1385,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
 
     repl.fake.releaseDeltas();
     yield* awaiting(repl.terminal, "the evaluated reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Half a thought.`),
+      saidBySidekick(one, "Half a thought."),
     );
     const after = (yield* mountedReading(repl)).chat;
     const answered = after.flatMap((record) =>
@@ -1488,7 +1500,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // ER2 — and the follow-up that *did* say something says it, in its own row,
     // exactly as it always has: removing the silent reply's notice removes a
     // sentence nobody wrote and nothing else.
-    expect(shows(repl.terminal, `${MOUNTED_AGENT}: Read it.`)).toBe(true);
+    expect(saidBySidekick(repl.terminal, "Read it.")).toBe(true);
     expect(shows(repl.terminal, "(preview)")).toBe(false);
     // And the reply that selected no chat contributed no utterance at all. The
     // superseded form of this row asserted a sentence about the absence; what
@@ -1525,7 +1537,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     yield* settled(40);
 
     // What a person asked for is still there, and nothing of the two replies is.
-    expect(shows(repl.terminal, "you: look")).toBe(true);
+    expect(saidByPerson(repl.terminal, "look")).toBe(true);
     expect(shows(repl.terminal, "answered without saying")).toBe(false);
     expect(shows(repl.terminal, "(preview)")).toBe(false);
     expect(shows(repl.terminal, "REPL.Bindings")).toBe(false);
@@ -1604,7 +1616,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // And the correction it was given, which answered: the failure stands in
     // the chat beside the reply that followed it, in that order.
     yield* awaiting(repl.terminal, "the corrected reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Fixed it.`),
+      saidBySidekick(one, "Fixed it."),
     );
     expect(yield* composedChat(repl)).toEqual([
       "  you: remove it",
@@ -1653,9 +1665,9 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
 
     // And the chat is the person's message and the two replies' own Output —
     // not a response body, not the entry's source, not the feedback envelope.
-    expect(shows(repl.terminal, "you: greet")).toBe(true);
-    expect(shows(repl.terminal, `${MOUNTED_AGENT}: Submitted it.`)).toBe(true);
-    expect(shows(repl.terminal, `${MOUNTED_AGENT}: Thanks for the receipt.`)).toBe(true);
+    expect(saidByPerson(repl.terminal, "greet")).toBe(true);
+    expect(saidBySidekick(repl.terminal, "Submitted it.")).toBe(true);
+    expect(saidBySidekick(repl.terminal, "Thanks for the receipt.")).toBe(true);
     expect(shows(repl.terminal, "REPL.EntryInput")).toBe(false);
 
     // A second message, in the same conversation: one conversation per
@@ -1884,7 +1896,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
 
     // Held at the transport with the draft filled: the program is there, byte
     // for byte, and the seed is still the only entry that has run.
-    expect(ran.heldDraft).toBe(GREETINGS);
+    expect(blockSays(ran.heldDraft, GREETINGS)).toBe(true);
     expect(ran.heldEntries).toEqual(["entry-1"]);
 
     // The entry that ran is the draft that was held, and its output is the
@@ -1923,7 +1935,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     const ran = yield* arm(SECOND);
 
     expect(ran.published).toEqual({ names: SECOND });
-    expect(ran.heldDraft).toBe(GREETINGS);
+    expect(blockSays(ran.heldDraft, GREETINGS)).toBe(true);
 
     // The program is the same program. What changed is the binding it reads,
     // and that is what the output has to show.
@@ -3028,10 +3040,16 @@ describe("975 — the shipped session component journey", () => {
       yield* focusDraft(repl.terminal);
       yield* typing(repl.terminal, '<File path="manual.md">project manual</File>');
       repl.terminal.feed("\r");
-      yield* awaiting(repl.terminal, "the manual successor", () => {
-        const output = screenOf(repl.terminal).join("\n");
-        return output.includes("entry-4") && output.includes("[ok]");
-      });
+      yield* awaiting(repl.terminal, "the manual successor", () =>
+        screenOf(repl.terminal).some((line) => {
+          // The same fact the catalog used to spell as `entry-4 [ok]`: the fourth
+          // entry is the one being read, and it completed. The staged screen says
+          // it in the selected work's own heading — both on that one row, because
+          // a chat row naming an entry and a breadcrumb naming an outcome are two
+          // different rows saying two different things.
+          return line.includes("Entry 4") && line.includes("\u2713 COMPLETED");
+        }),
+      );
       expect(yield* until(readFile(join(project, "manual.md"), "utf8"))).toBe("project manual");
       beforeEntries = yield* until(readFile(location.entries, "utf8"));
       beforeChat = yield* until(readFile(location.sidekick, "utf8"));

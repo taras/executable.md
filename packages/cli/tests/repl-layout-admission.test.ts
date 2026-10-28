@@ -23,6 +23,15 @@ import { projectRepl } from "../src/repl/model.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
+import type { ReplLive } from "../src/repl/application.ts";
+
+/**
+ * The two cells in front of a control's label that its focus marker draws in.
+ *
+ * Every control is measured with them, because a control measured without its
+ * marker comes out two columns narrower than the one drawn in its place.
+ */
+const CONTROL_ROOM = "  ";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { prepareFrame } from "../src/repl/program.ts";
@@ -685,6 +694,143 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
   // accepted fixture's map happens to leave an even remainder, so nothing said
   // the arrangement only worked for even ones. An ordinary empty root leaves an
   // odd one, and every control after the gap landed on half a cell.
+  /**
+   * #971: the paused narrow History row gives its controls whole cells.
+   *
+   * The row holds the compact map and the footer's controls side by side. A
+   * paused entry offers four of them — History, Exit, Pause and Continue — with
+   * the phase stated between them, and that is the widest this row ever gets.
+   *
+   * What this holds the row to is that none of them is compressed. Measured
+   * before the correction, a 72-cell row gave its map the 29 cells its own text
+   * wanted and left the controls 43 where they need 51, and the engine answered
+   * every one of them with part of a cell — which the renderer then refused.
+   * The map yields first now, and the split is stated from a measurement of the
+   * two parts taken apart rather than of each under the other's pressure.
+   */
+  it("A3: a paused narrow History row admits every control on whole cells", function* () {
+    const empty = projectRepl([]);
+    if (!empty.ok) {
+      throw empty.error;
+    }
+    const model = empty.value;
+    // Paused, and stably so: `pausable` with expansion `paused` is the one
+    // state that offers Pause, the phase and Continue at once, and it is held
+    // fixed so every preparation pass sees the same four controls.
+    const paused: ReplLive = {
+      output: "",
+      question: undefined,
+      expansion: "paused" as const,
+      pausable: true,
+      running: true,
+      agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
+    };
+    for (const size of [CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
+      const where = `${size.columns}x${size.rows}`;
+      yield* scoped(function* (): Operation<void> {
+        const view = viewFor(
+          initialState("paused-root"),
+          model,
+          paused,
+          size,
+          undefined,
+          navigationOf(model.checkpoints, "live"),
+        );
+        if (!view.ok) {
+          throw view.error;
+        }
+        const presenter = yield* usePresenter(size);
+        const staged = withWorkspace(view.value, workspaceOf());
+        // Committing is itself part of the assertion: the renderer refuses a
+        // control on part of a cell rather than rounding it, so a frame that
+        // drew at all drew on whole ones. Said again below over every
+        // published rectangle, because "it did not throw" is not the claim.
+        const first = yield* presenter.commit(staged);
+        const node = presenter.tree.focused();
+        const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+        const committed = yield* presenter.commit({ ...staged, focused });
+
+        // Every control this state offers is admitted — Continue included, by
+        // being measured rather than appended after the fact — and each is
+        // drawn whole, inside the row, with its own complete label.
+        const labels: Readonly<Record<string, string>> = {
+          "footer:history": "[history]",
+          "footer:exit": "[exit]",
+          "footer:pause": "[pause]",
+          "footer:continue": "[continue]",
+        };
+        const row = committed.regionOf("box:history");
+        const map = committed.regionOf("box:history:map");
+        const actions = committed.regionOf(ACTION_ROW);
+        if (row === undefined || map === undefined || actions === undefined) {
+          throw new Error(`${where} drew no History row to divide`);
+        }
+        for (const [key, label] of Object.entries(labels)) {
+          const bounds = committed.boundsOf(key);
+          if (bounds === undefined) {
+            throw new Error(
+              `${where} drew no ${key}; its controls are ${JSON.stringify(
+                committed.keys.filter((one) => one.startsWith("footer:")),
+              )}`,
+            );
+          }
+          expect([
+            where,
+            key,
+            Number.isInteger(bounds.x) && Number.isInteger(bounds.width),
+          ]).toEqual([where, key, true]);
+          // The whole label, inside the target that owns it: a control shown
+          // short is a control a reader cannot read, and a label wider than its
+          // own box is one drawn over its neighbour. Every control is measured
+          // with the two cells its focus marker draws in, which is why its box
+          // is its label and that room — a control measured without it comes
+          // out two columns narrower than the one drawn in its place.
+          expect([where, key, bounds.width]).toEqual([
+            where,
+            key,
+            label.length + CONTROL_ROOM.length,
+          ]);
+          expect([where, key, (committed.cells.get(key) ?? "").includes(label)]).toEqual([
+            where,
+            key,
+            true,
+          ]);
+          expect([where, key, bounds.x >= actions.x]).toEqual([where, key, true]);
+          expect([where, key, bounds.x + bounds.width <= actions.x + actions.width]).toEqual([
+            where,
+            key,
+            true,
+          ]);
+        }
+        // The phase is stated beside them, as text rather than as part of a
+        // control's name.
+        expect([where, committed.keys.includes("footer:pause-state")]).toEqual([where, true]);
+
+        // The split itself: whole, exhaustive, and the map is what yielded.
+        expect([where, Number.isInteger(map.width) && Number.isInteger(actions.width)]).toEqual([
+          where,
+          true,
+        ]);
+        expect([where, map.width + actions.width]).toEqual([where, row.width]);
+        expect([where, actions.width >= 0]).toEqual([where, true]);
+
+        // And the control a keystroke reaches is one the frame actually drew.
+        const holding = presenter.tree.focused();
+        const held = holding === undefined ? undefined : presenter.tree.keyOf(holding);
+        expect([where, held === undefined || committed.boundsOf(held) !== undefined]).toEqual([
+          where,
+          true,
+        ]);
+        // The first frame drew the same row whole, before focus was carried in.
+        expect([where, Number.isInteger(first.regionOf(ACTION_ROW)?.width ?? 0.5)]).toEqual([
+          where,
+          true,
+        ]);
+      });
+    }
+  });
+
   it("A2: the wide History row divides an odd remainder into whole cells", function* () {
     const empty = projectRepl([]);
     if (!empty.ok) {

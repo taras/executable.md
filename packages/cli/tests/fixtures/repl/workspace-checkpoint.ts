@@ -122,7 +122,11 @@ export const WRAPPING_QUEUED =
 
 /** The staged workspace presentation the checkpoint shows. */
 export const CHECKPOINT_WORKSPACE: ReplWorkspace = Object.freeze({
+  // The checkpoint stages a build that offers both — it exists to exercise the
+  // tray's own window and Follow's control, which are a later delivery's. The
+  // shipping root offers neither and says so by not naming them.
   follow: true,
+  trays: Object.freeze(["todo", "queue"] as const),
   tray: "queue",
   queued: Object.freeze([
     Object.freeze({
