@@ -7,7 +7,17 @@ import { Agent, Execution } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { chmod, lstat, mkdtemp, readdir, realpath, rmdir, symlink, unlink } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdtemp,
+  readdir,
+  realpath,
+  rename,
+  rmdir,
+  symlink,
+  unlink,
+} from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
@@ -15,6 +25,7 @@ import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createConnection } from "node:net";
 import type { Socket } from "node:net";
+import type { Stats } from "node:fs";
 import { once } from "@effectionx/node/events";
 import { Writable } from "node:stream";
 import {
@@ -216,6 +227,32 @@ function sdk(
 function* deadline(what: string): Operation<never> {
   yield* sleep(5000);
   throw new Error(what);
+}
+/**
+ * Put a file somebody else owns where this one is, and be sure it is somebody
+ * else's.
+ *
+ * Unlinking the original and writing in its place is not a replacement on
+ * every filesystem. Where the published name is the inode's last link, Linux
+ * frees that inode at the unlink and hands its number straight back to the
+ * next file created — so the "replacement" arrives wearing the identity of the
+ * file it replaced, and nothing that compares device and inode can tell them
+ * apart. CI showed exactly that: the publication under test accepted the
+ * stranger as its own.
+ *
+ * So the stranger is written under its own name first, while the original
+ * still holds the one under test — which is what makes its inode necessarily a
+ * different one — checked to be different, and then moved onto the name in a
+ * single step that never leaves the name empty.
+ */
+function* replaceFile(path: string, contents: string): Operation<Stats> {
+  const ours = yield* until(lstat(path));
+  const theirs = path + ".theirs";
+  yield* writeTextFile(theirs, contents);
+  const written = yield* until(lstat(theirs));
+  expect(written.dev === ours.dev && written.ino === ours.ino).toBe(false);
+  yield* until(rename(theirs, path));
+  return yield* until(lstat(path));
 }
 function errorOf(value: unknown): Error {
   if (!(value instanceof Error)) {
@@ -1663,15 +1700,12 @@ describe("ACP81: a replacement inside a refreshed identity window", () => {
         try {
           yield* host.publish(file, { ...binding("published-replaced"), cwd: home });
           published = true;
-          yield* suspend();
         } catch (error) {
           failure = error;
         }
       });
       yield* reached.operation;
-      yield* until(unlink(file));
-      yield* writeTextFile(file, "someone else's attachment");
-      foreignIdentity = yield* until(lstat(file));
+      foreignIdentity = yield* replaceFile(file, "someone else's attachment");
       release();
       yield* owner;
     } finally {
@@ -1734,9 +1768,7 @@ describe("ACP81: a replacement inside a refreshed identity window", () => {
         yield* suspend();
       });
       yield* reached.operation;
-      yield* until(unlink(file));
-      yield* writeTextFile(file, "someone else's attachment");
-      foreignIdentity = yield* until(lstat(file));
+      foreignIdentity = yield* replaceFile(file, "someone else's attachment");
       const stopping = yield* spawn(function* () {
         cancelling.resolve();
         yield* owner.halt();
