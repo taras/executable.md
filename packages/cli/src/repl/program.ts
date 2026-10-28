@@ -2036,6 +2036,8 @@ function sidekickReadingOf(
           ordinal: one.ordinal,
           entry: one.entry,
           source: one.source,
+          settled: one.settled,
+          admitted: one.admitted,
         }),
       ),
     ),

@@ -343,6 +343,22 @@ export interface SidekickSubmitIntent {
   readonly retained: RetainedPrefix;
   /** Whether its own outcome was retained. */
   readonly settled: boolean;
+  /**
+   * Whether that outcome retained an observation of the entry this admitted.
+   *
+   * A Submit writes one once there is an entry to observe — the submission is
+   * joined, and what that entry came to is carried beside the outcome's status.
+   * A submission refused before any entry started has nothing to observe and
+   * writes none, and a late reconciliation writes the entry it found or nothing
+   * where it found the slot was never taken.
+   *
+   * So this is the history's own answer to whether this control admitted an
+   * entry at all, separate from whether what it admitted then succeeded: an
+   * entry that ran and failed was still admitted by the control that submitted
+   * it. False while nothing is settled, which is the unresolved state rather
+   * than an answer.
+   */
+  readonly admitted: boolean;
 }
 
 /** The model and effort this history last asked for. */
@@ -936,6 +952,18 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
   const intents = new Map<string, { record: ControlRecord; index: number }>();
   const operations: SidekickOperation[] = [];
   const settled = new Set<string>();
+  /**
+   * The controls whose outcome retained an observation of its own.
+   *
+   * A Submit writes one once it has an entry to observe: the submission is
+   * joined and what that entry came to is what the outcome carries beside its
+   * status. A submission refused before any entry started has nothing to
+   * observe and carries none — and a late reconciliation of a reservation
+   * nobody resolved writes the entry it found, or `null` where it found that
+   * the slot was never taken. So this is the history's own answer to "did this
+   * control actually admit an entry", written by the only thing that knew.
+   */
+  const observed = new Set<string>();
   let preferences: SidekickPreferences | undefined;
   const delivered = new Map<string, number>();
   const unestablished: { conversation: string; turn: number | null }[] = [];
@@ -1177,6 +1205,9 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
           );
         }
         settled.add(key);
+        if (typeof record.observed === "string") {
+          observed.add(key);
+        }
         operations.push({
           conversation: record.conversation,
           response: record.response,
@@ -1408,6 +1439,9 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
               retained: Object.freeze({ ...reserved.record.submit!.retained }),
               ...(reserved.record.submit!.workspace === true ? { workspace: true } : {}),
               settled: false,
+              // Unresolved by definition: this is the one reservation with no
+              // outcome at all, so nothing has observed anything of it yet.
+              admitted: false,
             }),
       submits: Object.freeze(
         [...intents.entries()].flatMap(([key, held]) => {
@@ -1422,6 +1456,7 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
                   ...submit,
                   retained: Object.freeze({ ...submit.retained }),
                   settled: settled.has(key),
+                  admitted: observed.has(key),
                 }),
               ];
         }),

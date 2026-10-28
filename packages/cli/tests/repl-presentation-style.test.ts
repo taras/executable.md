@@ -4963,6 +4963,13 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
       { what: "wide", key: "\u754c".repeat(25) },
       { what: "combining", key: "e\u0301".repeat(25) },
       { what: "joined", key: "\u{1f469}\u200d\u{1f4bb}".repeat(12) },
+      // One grapheme, and longer in code units than any cut this product used
+      // to make before the fitter saw it: an `e` under a hundred combining
+      // accents is 101 units and one cell. Measured, the old cut at
+      // fifty-nine units handed the fitter a name missing forty-two of those
+      // accents, so what was drawn was an alteration of somebody's name that
+      // the fitter then reported an honest width for.
+      { what: "one long grapheme", key: `e${"\u0301".repeat(100)}` },
     ];
     const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
     const graphemes = (text: string): readonly string[] =>
@@ -5054,7 +5061,8 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
           graphemes(one.key).slice(0, graphemes(shown).length),
         ]);
         // A key longer than its column gives columns up; one that fits keeps
-        // every grapheme it had.
+        // every grapheme it had. Either way what is drawn is a whole prefix of
+        // the *original* name — nothing shortened it on the way to the fitter.
         expect([where, shown.length > 0]).toEqual([where, true]);
       }
     }

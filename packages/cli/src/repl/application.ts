@@ -406,6 +406,21 @@ export interface ReplSidekickSubmit {
   readonly ordinal: number;
   readonly entry: string;
   readonly source: string;
+  /** Whether this history retained what became of it. */
+  readonly settled: boolean;
+  /**
+   * Whether that retained outcome observed an entry this control admitted.
+   *
+   * The history's own answer, written by the only thing that knew: a Submit
+   * observes its entry once it has one to observe, a submission refused before
+   * any entry started observes nothing, and a late reconciliation of a
+   * reservation nobody resolved writes the entry it found or nothing where it
+   * found the slot was never taken.
+   *
+   * Separate from whether what was admitted then succeeded. An entry that ran
+   * and failed was still admitted by the control that submitted it.
+   */
+  readonly admitted: boolean;
 }
 
 export interface ReplSidekickReading {
@@ -1416,9 +1431,14 @@ export function workspaceOf(
  * - the **source** alone is not an identity at all — two entries may hold the
  *   same source, and often do.
  *
- * So a reservation nobody honoured, a startup that never admitted, and an
- * entry outside the selected prefix each produce no row, which is the truthful
- * answer in all three cases.
+ * And the three of them together are still not enough, because a person may
+ * type the very source a refused reply reserved and run it themselves at the
+ * same slot. So what the control itself came to is asked first, from the
+ * observation its own outcome retained.
+ *
+ * So a reservation nobody honoured, a refusal whose slot was later reused, a
+ * startup that never admitted, and an entry outside the selected prefix each
+ * produce no row, which is the truthful answer in all four cases.
  *
  * Nothing here reads a receipt's prose, infers from the latest entry, its order
  * or its title, or supplies an entry for a reply that admitted none. What the
@@ -1435,6 +1455,23 @@ function associatedWork(
   }
   const found: ReplAssociatedWork[] = [];
   for (const submit of sidekick.submits) {
+    // What this history says became of the control itself, before anything is
+    // asked about the slot. A settled Submit that observed no entry admitted
+    // none — it was refused before one started, or a reopening found the slot
+    // it reserved was never taken — and the slot being occupied afterwards is
+    // not an account of what this control did. Measured: a Submit refused in
+    // preflight, whose exact reserved source was then typed in and run by hand
+    // at the same slot under the same key, was credited with that person's
+    // entry and its output.
+    //
+    // An *unsettled* one is the other state and not the same one: this process
+    // is still in the submission, so what it admitted is the entry it reserved
+    // and the row says what that entry is doing. A reopening never reads one —
+    // the cold path resolves a reservation nobody answered, and what it finds
+    // is retained as the outcome this reads.
+    if (submit.settled && !submit.admitted) {
+      continue;
+    }
     const admitted = model.entries[submit.ordinal];
     if (
       admitted === undefined ||
@@ -10657,9 +10694,20 @@ export const SELECTOR_MARK = " \u25be";
  * pass has not established.
  */
 export function selectorName(view: ReplView): string {
-  return view.state.route.session === undefined
-    ? "All sessions"
-    : headline(view.state.route.session);
+  if (view.state.route.session === undefined) {
+    return "All sessions";
+  }
+  // The first line of it, and the whole of that line. A name is one row here,
+  // so a name holding a break is read to its first break — but nothing cuts it
+  // by length on the way to the fitter. `headline` does, at fifty-nine UTF-16
+  // units, and that is a cut in the wrong units made in the wrong place:
+  // measured, a key that is one grapheme — an `e` under a hundred combining
+  // accents — arrived at the fitter already missing forty-two of them, so the
+  // fitter segmented a name this product had altered and reported an honest
+  // width for the wrong string. Fitting is where a name gives up columns, and
+  // it gives them up at grapheme boundaries against cells the engine measured.
+  const [first = ""] = view.state.route.session.split("\n");
+  return first;
 }
 
 export function selectorRoomOf(widths: ReplMeasuredWidths | undefined): number | undefined {

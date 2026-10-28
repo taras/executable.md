@@ -30,7 +30,7 @@ import { initialState } from "../src/repl/application.ts";
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Ok, spawn, suspend, until, useScope, withResolvers } from "effection";
+import { ensure, Ok, spawn, suspend, until, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -1627,6 +1627,24 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
   });
 });
 
+/**
+ * A reply that prepares an entry whose preflight suspends, and submits it.
+ *
+ * Its one element is a component read from a file the row below gates, so the
+ * preflight has somewhere to wait — between the slot being reserved and the
+ * entry starting, which is the window the start check exists for.
+ */
+const GATED_ENTRY_REPLY = [
+  '<Let as="entry" select="code">',
+  "```md",
+  "<GateThing />",
+  "```",
+  "</Let>",
+  "<REPL.EntryInput>{entry}</REPL.EntryInput>",
+  "<REPL.Submit />",
+  "",
+].join("\n");
+
 describe("Tier R5 — a mounted message prepares and submits a real entry", () => {
   it("M3: the message a person sends runs its entry, and is answered about it", function* () {
     const repl = yield* useMountedRepl();
@@ -1722,7 +1740,27 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
    * other.
    */
   it("M3: each reply's rows carry the entry it admitted, and nothing it did not", function* () {
-    const host = yield* useMountedHost();
+    // A component the entry below reads, so its preflight has somewhere to
+    // wait: between the slot being reserved and the entry actually starting,
+    // which is the window the start check exists for.
+    const directory = yield* useTemporary("xmd-971-refused-reservation-");
+    yield* until(writeFile(join(directory, "GateThing.md"), "The manual entry ran.\n"));
+    const reached = withResolvers<void>();
+    const allow = withResolvers<void>();
+    // Released at the end whatever happened, so a failing row leaves no latch.
+    yield* ensure(() => allow.resolve());
+    let holding = false;
+    yield* API.Fs.around({
+      *readTextFile([path], next): Operation<string> {
+        if (holding && path.endsWith("GateThing.md")) {
+          holding = false;
+          reached.resolve();
+          yield* allow.operation;
+        }
+        return yield* next(path);
+      },
+    });
+    const host = yield* useMountedHost({ includes: [directory] });
     let execution = "";
     /** A position holding the first entry and not the second. */
     let earlier = "";
@@ -1789,6 +1827,77 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // composer and the pane's own controls.
       expect(after3.slice(said + 1).some((row) => /Entry \d+ \u00b7/.test(row))).toBe(false);
 
+      // And a reply whose reservation *was* retained and then refused, whose
+      // exact reserved source somebody then runs themselves at the same slot.
+      // This is the one the record's slot, key and source cannot tell apart on
+      // their own: all three match, and the entry is still not that reply's.
+      holding = true;
+      repl.fake.script({ reply: GATED_ENTRY_REPLY });
+      repl.fake.script({ reply: "<Output>I did not admit an entry.</Output>\n" });
+      yield* sendMessage(repl, "run the gated one");
+      yield* reached.operation;
+      // The draft moves while the submission is being prepared, which is what
+      // the start check refuses on: the prepared text is not the text anybody
+      // is asking for any more.
+      yield* focusDraft(repl.terminal);
+      yield* typing(repl.terminal, "!");
+      allow.resolve();
+      yield* awaiting(repl.terminal, "the refused submission going back", (one) =>
+        shows(one, "I did not admit an entry."),
+      );
+
+      // Retained, and retained as refused: an intent with a reservation, and
+      // an outcome saying it ended without one. Nothing was admitted.
+      const held = yield* mountedReading(repl);
+      expect(held.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      // The reservation this message took, which is the last one written: the
+      // two before it are the entries that really ran.
+      const intent = held.chat
+        .filter(
+          (record) =>
+            record.kind === "control" && record.component === "REPL.Submit" && record.submit,
+        )
+        .at(-1);
+      if (intent?.kind !== "control" || intent.submit === undefined) {
+        throw new Error("this history retained no Submit reservation to refuse");
+      }
+      const answered = held.chat.find(
+        (record) =>
+          record.kind === "control-outcome" &&
+          record.conversation === intent.conversation &&
+          record.response === intent.response &&
+          record.order === intent.order,
+      );
+      if (answered?.kind !== "control-outcome" || answered.outcome.status !== "err") {
+        throw new Error("that reservation was not retained as refused");
+      }
+
+      // Exactly the source it reserved, typed back in and run by hand. The
+      // backspace takes off the character that moved the draft, which leaves
+      // the reserved text itself.
+      yield* focusDraft(repl.terminal);
+      repl.terminal.feed("\x7f");
+      yield* awaiting(repl.terminal, "the reserved source restored", (one) =>
+        blockSays(draftText(one), intent.submit?.source ?? ""),
+      );
+      repl.terminal.feed("\r");
+      yield* awaiting(repl.terminal, "the manual entry running", (one) =>
+        shows(one, "The manual entry ran."),
+      );
+      const manual = yield* mountedReading(repl);
+      // The same slot, the same key and the same source — every coordinate the
+      // reservation named.
+      const took = manual.model.entries[intent.submit.ordinal];
+      expect([took?.key, took?.source]).toEqual([intent.submit.entry, intent.submit.source]);
+      // And the refused reply is credited with none of it: no work row, no
+      // state and no output of that entry anywhere after it.
+      const paneNow = sidekickPaneIn(screenOf(repl.terminal));
+      const refusedAt = paneNow.findIndex((row) => row.includes("I did not admit an entry."));
+      expect(refusedAt).toBeGreaterThan(0);
+      expect(paneNow.slice(refusedAt + 1).some((row) => /Entry \d+ \u00b7/.test(row))).toBe(false);
+      expect(paneNow.some((row) => row.includes("The manual entry ran."))).toBe(false);
+      expect(paneNow.filter((row) => /Entry \d+ \u00b7/.test(row))).toHaveLength(2);
+
       entries = yield* until(readFile(pairedLocation(host.root, execution).entries, "utf8"));
       chat = yield* until(readFile(pairedLocation(host.root, execution).sidekick, "utf8"));
       repl.terminal.end();
@@ -1821,6 +1930,35 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       yield* awaiting(
         repl.terminal,
         "the cold command leaving",
+        () => repl.outcome() !== undefined,
+      );
+    });
+
+    // And cold at the head, where every entry this execution admitted is in
+    // the reading. The refusal is still a refusal: reopening reconciles what a
+    // dead process left and retains what it finds, and what it finds here is
+    // an answer already written — so nothing resurrects an association out of
+    // a slot that was later filled by hand.
+    yield* scoped(function* (): Operation<void> {
+      const repl = yield* useMountedRepl({
+        host,
+        location: encodeLocation(initialState(execution).route),
+      });
+      yield* awaiting(repl.terminal, "the cold chat at the head", (one) =>
+        shows(one, "I did not admit an entry."),
+      );
+      const pane = sidekickPaneIn(screenOf(repl.terminal));
+      const refusedAt = pane.findIndex((row) => row.includes("I did not admit an entry."));
+      expect(refusedAt).toBeGreaterThan(0);
+      expect(pane.slice(refusedAt + 1).some((row) => /Entry \d+ \u00b7/.test(row))).toBe(false);
+      expect(pane.some((row) => row.includes("The manual entry ran."))).toBe(false);
+      // The two replies that really did admit still carry theirs, which is
+      // what makes the absence above an answer rather than an empty pane.
+      expect(pane.filter((row) => /Entry \d+ \u00b7/.test(row))).toHaveLength(2);
+      repl.terminal.end();
+      yield* awaiting(
+        repl.terminal,
+        "the second cold command leaving",
         () => repl.outcome() !== undefined,
       );
     });
