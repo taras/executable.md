@@ -1527,3 +1527,297 @@ describe("ACP startup bootstrap", () => {
     });
   }
 });
+
+function* publishingHome(prefix: string): Operation<string> {
+  const home = yield* until(realpath(yield* useTemporary(prefix)));
+  yield* until(chmod(home, 0o700));
+  return home;
+}
+function* stageNameIn(home: string): Operation<string> {
+  const staged = (yield* until(readdir(home))).filter((name) => name.startsWith(".sidekick-"));
+  expect(staged).toHaveLength(1);
+  return join(home, staged[0]);
+}
+function binding(owner: string) {
+  return {
+    owner,
+    execution: owner + "-execution",
+    conversation: owner + "-conversation",
+  };
+}
+
+describe("ACP81: a replacement inside a refreshed identity window", () => {
+  it("ACP81: a stage name replaced under its refresh is refused and left where it is", function* () {
+    const home = yield* publishingHome("xmd-stage-replaced-");
+    const file = join(home, "attachment.json");
+    const reached = withResolvers<void>();
+    // A raw promise, because the hold below is a plain callback the
+    // publication calls outside this operation: it cannot await an operation,
+    // and this test has to let go of it from its own `finally`.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let directory: string | undefined;
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        holdIdentityRefresh: (window) => {
+          if (window !== "stage") {
+            return Promise.resolve();
+          }
+          reached.resolve();
+          return held;
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let failure: unknown;
+    let published = false;
+    let foreign: string | undefined;
+    let foreignIdentity: Awaited<ReturnType<typeof lstat>> | undefined;
+    try {
+      const owner = yield* spawn(function* () {
+        try {
+          yield* host.publish(file, { ...binding("stage-replaced"), cwd: home });
+          published = true;
+          yield* suspend();
+        } catch (error) {
+          failure = error;
+        }
+      });
+      yield* reached.operation;
+      foreign = yield* stageNameIn(home);
+      yield* until(unlink(foreign));
+      yield* writeTextFile(foreign, "someone else's file");
+      foreignIdentity = yield* until(lstat(foreign));
+      release();
+      yield* owner;
+    } finally {
+      release();
+    }
+    console.log(
+      JSON.stringify({
+        kind: "stage-window-replacement",
+        refused: failure instanceof Error ? failure.message : null,
+        published,
+      }),
+    );
+    expect(published).toBe(false);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(
+      "the staged descriptor was replaced while it was being published.",
+    );
+    expect(yield* readTextFile(foreign!)).toBe("someone else's file");
+    expect((yield* until(lstat(foreign!))).ino).toBe(foreignIdentity!.ino);
+    expect(yield* until(readdir(home))).toEqual([foreign!.slice(home.length + 1)]);
+    yield* refused(until(lstat(file)));
+    yield* refused(until(lstat(directory!)));
+  });
+
+  it("ACP81: a published name replaced under its refresh is refused and never unlinked", function* () {
+    const home = yield* publishingHome("xmd-published-replaced-");
+    const file = join(home, "attachment.json");
+    const reached = withResolvers<void>();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let directory: string | undefined;
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        holdIdentityRefresh: (window) => {
+          if (window !== "published") {
+            return Promise.resolve();
+          }
+          reached.resolve();
+          return held;
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let failure: unknown;
+    let published = false;
+    let foreignIdentity: Awaited<ReturnType<typeof lstat>> | undefined;
+    try {
+      const owner = yield* spawn(function* () {
+        try {
+          yield* host.publish(file, { ...binding("published-replaced"), cwd: home });
+          published = true;
+          yield* suspend();
+        } catch (error) {
+          failure = error;
+        }
+      });
+      yield* reached.operation;
+      yield* until(unlink(file));
+      yield* writeTextFile(file, "someone else's attachment");
+      foreignIdentity = yield* until(lstat(file));
+      release();
+      yield* owner;
+    } finally {
+      release();
+    }
+    console.log(
+      JSON.stringify({
+        kind: "published-window-replacement",
+        refused: failure instanceof Error ? failure.message : null,
+        published,
+      }),
+    );
+    expect(published).toBe(false);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(
+      "the published descriptor was replaced while it was being published.",
+    );
+    expect(yield* readTextFile(file)).toBe("someone else's attachment");
+    expect((yield* until(lstat(file))).ino).toBe(foreignIdentity!.ino);
+    expect(yield* until(readdir(home))).toEqual(["attachment.json"]);
+    yield* refused(until(lstat(directory!)));
+  });
+
+  it("ACP81: cancellation while a refresh is in flight adopts nothing and still joins", function* () {
+    const home = yield* publishingHome("xmd-refresh-cancelled-");
+    const file = join(home, "attachment.json");
+    const reached = withResolvers<void>();
+    const cancelling = withResolvers<void>();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let directory: string | undefined;
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        holdIdentityRefresh: (window) => {
+          if (window !== "published") {
+            return Promise.resolve();
+          }
+          reached.resolve();
+          return held;
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let published = false;
+    let joined = false;
+    let foreignIdentity: Awaited<ReturnType<typeof lstat>> | undefined;
+    try {
+      const owner = yield* spawn(function* () {
+        yield* host.publish(file, { ...binding("refresh-cancelled"), cwd: home });
+        published = true;
+        yield* suspend();
+      });
+      yield* reached.operation;
+      yield* until(unlink(file));
+      yield* writeTextFile(file, "someone else's attachment");
+      foreignIdentity = yield* until(lstat(file));
+      const stopping = yield* spawn(function* () {
+        cancelling.resolve();
+        yield* owner.halt();
+        joined = true;
+      });
+      yield* cancelling.operation;
+      expect(joined).toBe(false);
+      release();
+      yield* stopping;
+    } finally {
+      release();
+    }
+    console.log(JSON.stringify({ kind: "refresh-cancellation", joined, published, directory }));
+    expect(joined).toBe(true);
+    expect(published).toBe(false);
+    expect(yield* readTextFile(file)).toBe("someone else's attachment");
+    expect((yield* until(lstat(file))).ino).toBe(foreignIdentity!.ino);
+    expect(yield* until(readdir(home))).toEqual(["attachment.json"]);
+    yield* refused(until(lstat(directory!)));
+  });
+
+  it("ACP81: the directory is judged while its socket is still in it, and still removed", function* () {
+    const home = yield* publishingHome("xmd-ctime-directory-");
+    const file = join(home, "attachment.json");
+    let directory: string | undefined;
+    // Whether the socket was still a child of the directory at each reading of
+    // the directory's own identity. A reading taken after the listener close
+    // has unlinked it is a reading of a directory this teardown has already
+    // changed, which is what the identity substitute below cannot survive.
+    const socketPresent: boolean[] = [];
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        // The documented libuv fallback, which this filesystem will not do:
+        // no creation time to read, so `birthtime` is the `ctime`. Deno's own
+        // `ctime` is truncated to the second, so the leak this would cause is
+        // not observable here — the ordering above it is, and that is what the
+        // sequence below pins.
+        readDirectoryIdentity: (path) => {
+          const asked = directory;
+          const observed =
+            asked === undefined
+              ? Promise.resolve()
+              : lstat(join(asked, "s")).then(
+                  () => {
+                    socketPresent.push(true);
+                  },
+                  () => {
+                    socketPresent.push(false);
+                  },
+                );
+          return observed
+            .then(() => lstat(path))
+            .then((stat) =>
+              Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+                birthtimeMs: stat.ctimeMs,
+                birthtime: new Date(stat.ctimeMs),
+              }),
+            );
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let socketPath: string | undefined;
+    yield* scoped(function* () {
+      const attachment = yield* host.publish(file, {
+        ...binding("ctime-directory"),
+        cwd: home,
+      });
+      socketPath = attachment.descriptor.socket;
+      expect(dirname(socketPath)).toBe(directory);
+      expect((yield* until(lstat(socketPath))).isSocket()).toBe(true);
+      expect(socketPresent).toEqual([false, true]);
+    });
+    console.log(JSON.stringify({ kind: "ctime-substitute-directory", directory, socketPresent }));
+    // Created (no socket yet), refreshed once the socket existed, and judged at
+    // teardown while it still did.
+    expect(socketPresent).toEqual([false, true, true]);
+    yield* refused(until(lstat(file)));
+    yield* refused(until(lstat(socketPath!)));
+    yield* refused(until(lstat(directory!)));
+    expect(yield* until(readdir(home))).toEqual([]);
+  });
+});
