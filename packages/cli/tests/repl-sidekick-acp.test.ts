@@ -25,7 +25,8 @@ import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createConnection } from "node:net";
 import type { Socket } from "node:net";
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { once } from "@effectionx/node/events";
 import { Writable } from "node:stream";
 import {
@@ -253,6 +254,100 @@ function* replaceFile(path: string, contents: string): Operation<Stats> {
   expect(written.dev === ours.dev && written.ino === ours.ino).toBe(false);
   yield* until(rename(theirs, path));
   return yield* until(lstat(path));
+}
+/**
+ * The one allocator outcome this publication used to be exposed to, described
+ * rather than waited for.
+ *
+ * No host can be asked to hand a new file the number of an old one, so the
+ * only honest way to put that case in front of the publisher is to say it
+ * happened. Saying it is only honest where it could have happened: after the
+ * original's last name is gone *and* its handle is closed. While the handle is
+ * open the original still exists, its number is not free, and a stranger keeps
+ * its own -- so this reader reports the truth in that branch and records which
+ * branch it took, and the fixture asserts the branch rather than trusting it.
+ */
+function recycledIdentity(file: string) {
+  let handle: FileHandle | undefined;
+  let original: Promise<BigIntStats> | undefined;
+  let replaced = false;
+  const observed: { branch: string; links: string }[] = [];
+  const order: string[] = [];
+  async function stillOpen(): Promise<BigIntStats | undefined> {
+    if (handle === undefined) {
+      return undefined;
+    }
+    try {
+      return await handle.stat({ bigint: true });
+    } catch {
+      return undefined;
+    }
+  }
+  return {
+    observed,
+    order,
+    held: () => handle,
+    replace() {
+      replaced = true;
+    },
+    probe: {
+      acquired(value: FileHandle) {
+        handle = value;
+        original = value.stat({ bigint: true });
+      },
+      async readName(name: string): Promise<BigIntStats> {
+        const reading = await lstat(name, { bigint: true });
+        order.push("read " + (name === file ? "published" : "staged"));
+        if (!replaced || name !== file || original === undefined) {
+          return reading;
+        }
+        const ours = await original;
+        const live = await stillOpen();
+        if (live !== undefined) {
+          observed.push({ branch: "live", links: String(live.nlink) });
+          return reading;
+        }
+        observed.push({ branch: "recycled", links: "freed" });
+        return Object.assign(Object.create(Object.getPrototypeOf(reading)), reading, {
+          dev: ours.dev,
+          ino: ours.ino,
+          atimeMs: ours.atimeMs,
+          mtimeMs: ours.mtimeMs,
+          ctimeMs: ours.ctimeMs,
+          birthtimeMs: ours.birthtimeMs,
+          atimeNs: ours.atimeNs,
+          mtimeNs: ours.mtimeNs,
+          ctimeNs: ours.ctimeNs,
+          birthtimeNs: ours.birthtimeNs,
+        });
+      },
+    },
+  };
+}
+/**
+ * Watch -- and when asked, hold or fail -- the publication's own close, from
+ * the real handle it was handed.
+ */
+function watchClose(
+  handle: FileHandle,
+  order: string[],
+  options: { hold?: Promise<void>; started?: () => void; fail?: Error } = {},
+) {
+  const real = handle.close.bind(handle);
+  let closes = 0;
+  handle.close = async () => {
+    closes += 1;
+    order.push("close");
+    options.started?.();
+    if (options.hold !== undefined) {
+      await options.hold;
+    }
+    await real();
+    if (options.fail !== undefined) {
+      throw options.fail;
+    }
+  };
+  return { count: () => closes };
 }
 function errorOf(value: unknown): Error {
   if (!(value instanceof Error)) {
@@ -2116,5 +2211,432 @@ describe("ACP81: a replacement inside a refreshed identity window", () => {
     yield* refused(until(lstat(socketPath!)));
     yield* refused(until(lstat(directory!)));
     expect(yield* until(readdir(home))).toEqual([]);
+  });
+});
+
+describe("ACP82: the file this publication keeps open", () => {
+  it("ACP82: a stranger wearing the original's number is refused while the original is open", function* () {
+    const home = yield* publishingHome("xmd-recycled-live-");
+    const file = join(home, "attachment.json");
+    const collision = recycledIdentity(file);
+    const reached = withResolvers<void>();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let directory: string | undefined;
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        holdIdentityRefresh: (window) => {
+          if (window !== "published") {
+            return Promise.resolve();
+          }
+          reached.resolve();
+          return held;
+        },
+        pin: collision.probe,
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let failure: unknown;
+    let published = false;
+    let stranger: BigIntStats | undefined;
+    try {
+      const owner = yield* spawn(function* () {
+        try {
+          yield* host.publish(file, { ...binding("recycled-live"), cwd: home });
+          published = true;
+        } catch (error) {
+          failure = error;
+        }
+      });
+      yield* reached.operation;
+      // The original's last name goes -- the staged one was already removed --
+      // and a real file of somebody else's, with somebody else's bytes, takes
+      // it. From here the reader is asked to describe the number as recycled.
+      yield* until(unlink(file));
+      yield* writeTextFile(file, "someone else's attachment");
+      stranger = yield* until(lstat(file, { bigint: true }));
+      collision.replace();
+      release();
+      yield* owner;
+    } finally {
+      release();
+    }
+    const handle = collision.held();
+    if (handle === undefined) {
+      throw new Error("The publication never opened a file of its own.");
+    }
+    console.log(
+      JSON.stringify({
+        kind: "recycled-identity-live",
+        observed: collision.observed,
+        published,
+        refused: failure instanceof Error ? failure.message : null,
+      }),
+    );
+    // The premise the model rests on: the original was still open and had no
+    // names left, so its number was not free and the stranger kept its own.
+    expect(collision.observed.length).toBeGreaterThan(0);
+    expect(collision.observed.every((one) => one.branch === "live")).toBe(true);
+    expect(collision.observed.every((one) => one.links === "0")).toBe(true);
+    expect(published).toBe(false);
+    expect(errorOf(failure).message).toBe(
+      "the published descriptor was replaced while it was being published.",
+    );
+    expect(yield* readTextFile(file)).toBe("someone else's attachment");
+    expect((yield* until(lstat(file, { bigint: true }))).ino).toBe(stranger!.ino);
+    expect(yield* until(readdir(home))).toEqual(["attachment.json"]);
+    yield* refused(until(lstat(directory!)));
+    // And the handle this all rested on is let go of at the end, not before.
+    expect(collision.order[collision.order.length - 1]).toBe("read published");
+    yield* refused(until(handle.stat()));
+  });
+
+  it("ACP82: cancelled in that window, the close waits for every name decision", function* () {
+    const home = yield* publishingHome("xmd-recycled-cancelled-");
+    const file = join(home, "attachment.json");
+    const collision = recycledIdentity(file);
+    const reached = withResolvers<void>();
+    const cancelling = withResolvers<void>();
+    const closeStarted = withResolvers<void>();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let releaseClose!: () => void;
+    const closeHeld = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    let directory: string | undefined;
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        holdIdentityRefresh: (window) => {
+          if (window !== "published") {
+            return Promise.resolve();
+          }
+          reached.resolve();
+          return held;
+        },
+        pin: collision.probe,
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let published = false;
+    let joined = false;
+    let stranger: BigIntStats | undefined;
+    yield* ensure(function* () {
+      release();
+      releaseClose();
+    });
+    const owner = yield* spawn(function* () {
+      yield* host.publish(file, { ...binding("recycled-cancelled"), cwd: home });
+      published = true;
+      yield* suspend();
+    });
+    yield* reached.operation;
+    const handle = collision.held();
+    if (handle === undefined) {
+      throw new Error("The publication never opened a file of its own.");
+    }
+    const closes = watchClose(handle, collision.order, {
+      hold: closeHeld,
+      started: () => closeStarted.resolve(),
+    });
+    yield* until(unlink(file));
+    yield* writeTextFile(file, "someone else's attachment");
+    stranger = yield* until(lstat(file, { bigint: true }));
+    collision.replace();
+    const stopping = yield* spawn(function* () {
+      cancelling.resolve();
+      yield* owner.halt();
+      joined = true;
+    });
+    yield* cancelling.operation;
+    expect(joined).toBe(false);
+    release();
+    // Deterministic: cleanup has reached its last stage, and is waiting there.
+    yield* closeStarted.operation;
+    expect(joined).toBe(false);
+    expect(yield* readTextFile(file)).toBe("someone else's attachment");
+    expect(collision.order.filter((one) => one === "close")).toHaveLength(1);
+    expect(collision.order[collision.order.length - 1]).toBe("close");
+    expect(collision.order.filter((one) => one.startsWith("read")).length).toBeGreaterThan(0);
+    releaseClose();
+    yield* stopping;
+    console.log(
+      JSON.stringify({
+        kind: "recycled-identity-cancelled",
+        observed: collision.observed,
+        order: collision.order,
+        joined,
+        published,
+        closes: closes.count(),
+      }),
+    );
+    expect(joined).toBe(true);
+    expect(published).toBe(false);
+    expect(closes.count()).toBe(1);
+    expect(collision.observed.length).toBeGreaterThan(0);
+    expect(collision.observed.every((one) => one.branch === "live")).toBe(true);
+    expect(yield* readTextFile(file)).toBe("someone else's attachment");
+    expect((yield* until(lstat(file, { bigint: true }))).ino).toBe(stranger!.ino);
+    expect(yield* until(readdir(home))).toEqual(["attachment.json"]);
+    yield* refused(until(lstat(directory!)));
+    yield* refused(until(handle.stat()));
+  });
+
+  it("ACP82: timestamps that all read the same refuse nothing on this publication's own file", function* () {
+    const home = yield* publishingHome("xmd-coarsened-self-");
+    const file = join(home, "attachment.json");
+    let reads = 0;
+    let directory: string | undefined;
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        // Every time this publication reads one of its own names, every time
+        // on it is the same time: the write, the link and the unlink leave no
+        // trace a reading can see. The node is what it has, and the node has
+        // not moved.
+        pin: {
+          readName: (name) =>
+            lstat(name, { bigint: true }).then((reading) => {
+              reads += 1;
+              return Object.assign(Object.create(Object.getPrototypeOf(reading)), reading, {
+                atimeMs: 0,
+                mtimeMs: 0,
+                ctimeMs: 0,
+                birthtimeMs: 0,
+                atimeNs: 0n,
+                mtimeNs: 0n,
+                ctimeNs: 0n,
+                birthtimeNs: 0n,
+              });
+            }),
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let descriptor: z.infer<typeof Descriptor> | undefined;
+    yield* scoped(function* () {
+      const attachment = yield* host.publish(file, {
+        ...binding("coarsened-self"),
+        cwd: home,
+      });
+      descriptor = attachment.descriptor;
+      expect((yield* until(lstat(file))).isFile()).toBe(true);
+      expect(JSON.parse(yield* readTextFile(file)).socket).toBe(descriptor.socket);
+    });
+    console.log(JSON.stringify({ kind: "coarsened-self-refresh", reads }));
+    expect(reads).toBeGreaterThan(0);
+    yield* refused(until(lstat(file)));
+    yield* refused(until(lstat(directory!)));
+    expect(yield* until(readdir(home))).toEqual([]);
+  });
+
+  it("ACP82: an open delivered after cancellation is still owned, cleaned up and closed", function* () {
+    const home = yield* publishingHome("xmd-held-open-");
+    const file = join(home, "attachment.json");
+    const opening = withResolvers<void>();
+    const cancelling = withResolvers<void>();
+    let releaseOpen!: () => void;
+    const openHeld = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    let handle: FileHandle | undefined;
+    let directory: string | undefined;
+    yield* ensure(function* () {
+      releaseOpen();
+    });
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        pin: {
+          acquired: (value) => {
+            handle = value;
+          },
+          holdAcquisition: () => {
+            opening.resolve();
+            return openHeld;
+          },
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let published = false;
+    let joined = false;
+    const owner = yield* spawn(function* () {
+      yield* host.publish(file, { ...binding("held-open"), cwd: home });
+      published = true;
+      yield* suspend();
+    });
+    // The file exists and is open, and nothing owns it yet.
+    yield* opening.operation;
+    expect(handle).toBeUndefined();
+    const stage = yield* stageNameIn(home);
+    const stagedNode = yield* until(lstat(stage, { bigint: true }));
+    const stopping = yield* spawn(function* () {
+      cancelling.resolve();
+      yield* owner.halt();
+      joined = true;
+    });
+    yield* cancelling.operation;
+    expect(joined).toBe(false);
+    releaseOpen();
+    yield* stopping;
+    console.log(
+      JSON.stringify({
+        kind: "held-open-cancellation",
+        joined,
+        published,
+        owned: handle !== undefined,
+      }),
+    );
+    expect(joined).toBe(true);
+    expect(published).toBe(false);
+    if (handle === undefined) {
+      throw new Error("A completed open was never adopted.");
+    }
+    // Adopted after the cancellation, identified from the handle rather than
+    // from the name, removed, and closed.
+    expect(stagedNode.ino).toBeGreaterThan(0n);
+    expect(yield* until(readdir(home))).toEqual([]);
+    yield* refused(until(lstat(directory!)));
+    yield* refused(until(handle.stat()));
+  });
+
+  it("ACP82: a close that fails joins the other failures in its turn", function* () {
+    const home = yield* publishingHome("xmd-close-failed-");
+    const file = join(home, "attachment.json");
+    const reached = withResolvers<void>();
+    const cancelling = withResolvers<void>();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let directory: string | undefined;
+    let reads = 0;
+    let handle: FileHandle | undefined;
+    const order: string[] = [];
+    const unreadable = Object.assign(new Error("simulated directory read failure"), {
+      code: "EIO",
+    });
+    const unclosable = new Error("simulated close failure");
+    yield* ensure(function* () {
+      release();
+      yield* until(chmod(home, 0o700));
+    });
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        holdIdentityRefresh: (window) => {
+          if (window !== "stage") {
+            return Promise.resolve();
+          }
+          reached.resolve();
+          return held;
+        },
+        readDirectoryIdentity: (path) => {
+          reads += 1;
+          return reads === 3 ? Promise.reject(unreadable) : lstat(path);
+        },
+        pin: {
+          acquired: (value) => {
+            handle = value;
+          },
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let published = false;
+    let joined = false;
+    let failure: unknown;
+    const owner = yield* spawn(function* () {
+      try {
+        yield* host.publish(file, { ...binding("close-failed"), cwd: home });
+        published = true;
+        yield* suspend();
+      } catch (error) {
+        failure = error;
+      }
+    });
+    yield* reached.operation;
+    if (handle === undefined) {
+      throw new Error("The publication never opened a file of its own.");
+    }
+    watchClose(handle, order, { fail: unclosable });
+    const stagePath = yield* stageNameIn(home);
+    yield* until(chmod(home, 0o500));
+    const stopping = yield* spawn(function* () {
+      cancelling.resolve();
+      try {
+        yield* owner.halt();
+      } catch (error) {
+        failure = error;
+      }
+      joined = true;
+    });
+    yield* cancelling.operation;
+    expect(joined).toBe(false);
+    release();
+    yield* stopping;
+    yield* until(chmod(home, 0o700));
+    const carried = failure instanceof AggregateError ? failure.errors : [];
+    console.log(
+      JSON.stringify({
+        kind: "close-failure-order",
+        joined,
+        published,
+        order,
+        carried: carried.map((one: unknown) => errorOf(one).message),
+      }),
+    );
+    expect(joined).toBe(true);
+    expect(published).toBe(false);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(carried).toHaveLength(4);
+    expect(carried[0]).toBe(unreadable);
+    expect(errorOf(carried[1]).message).toContain("attachment.json");
+    expect(errorOf(carried[2]).message).toContain(".sidekick-");
+    // Last, and kept rather than dropped because earlier stages already failed.
+    expect(carried[3]).toBe(unclosable);
+    expect(order).toEqual(["close"]);
+    expect((yield* until(lstat(file))).isFile()).toBe(true);
+    expect((yield* until(lstat(stagePath))).isFile()).toBe(true);
+    yield* until(unlink(file));
+    yield* until(unlink(stagePath));
+    yield* until(rmdir(directory!));
   });
 });
