@@ -37,9 +37,11 @@ import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { prepareFrame } from "../src/repl/program.ts";
 import {
   ACTION_ROW,
+  DRAWER_WINDOW,
   initialState,
   NO_AGENT,
   QUEUE_WINDOW,
+  reduceRepl,
   viewFor,
   withWorkspace,
   workspaceOf,
@@ -50,14 +52,17 @@ import { createGrid, useCommitter, usePresenter, windowOf } from "./fixtures/rep
 import { useTempFileCompiler } from "@executablemd/core";
 import {
   CHECKPOINT_ASKING,
+  CHECKPOINT_CURRENT_WORKSPACE,
+  CHECKPOINT_LIVE,
   CHECKPOINT_MEDIUM,
   CHECKPOINT_NARROW,
   CHECKPOINT_SIZE,
+  checkpointCatalogModel,
   checkpointModel,
+  checkpointState,
   checkpointStateModel,
   checkpointViewOf,
   commitCheckpoint,
-  OVERFLOW_WORKSPACE,
 } from "./fixtures/repl/workspace-checkpoint.ts";
 import type { Committer, Drawn, TerminalGrid } from "./fixtures/repl/presentation.ts";
 import {
@@ -546,7 +551,7 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
       const committed = yield* commitCheckpoint(presenter, {
         model,
         size,
-        workspace: OVERFLOW_WORKSPACE,
+        workspace: CHECKPOINT_CURRENT_WORKSPACE,
       });
       const { admission, manifest } = committed.observed.committed;
 
@@ -597,33 +602,50 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
     }
   });
 
-  // The capacity a window is admitted against has to be the capacity of the
-  // region the frame will draw. A scrolling viewport stretched by its own rows
-  // reports the room its contents wanted, and one measured before the controls
-  // that sit around it reports a rectangle that is about to move — so what the
-  // preparation measured last and what it finally describes would be two
-  // different regions that happen to agree.
-  //
-  // Read by watching the preparation's own measurements go past. Nothing here
-  // changes an operation or a returned rectangle; the same production
-  // `prepareFrame` runs against the same real engine.
-  it("A2: the measurement the queue is admitted from is empty, with its controls around it", function* () {
+  // The queue-specific form of this measurement — an empty moving tray with
+  // its own controls around it — is DQ2 in
+  // `fixtures/repl/deferred-presentation.json`. The obligation it carried is
+  // the case below, over the catalog this build actually offers.
+
+  /**
+   * The same question, about the catalog this build actually offers.
+   *
+   * A window is admitted against the room the frame will draw, and the only way
+   * to know the room was the right one is to watch the preparation measure it:
+   * a viewport still holding its own rows reports the space its contents wanted,
+   * and one measured before the controls around it reports a rectangle that is
+   * about to move. Nothing here changes an operation or a returned rectangle —
+   * the production `prepareFrame` runs against the same real engine, and this
+   * reads what went past.
+   */
+  it("A2: an overflowing Entries catalog is admitted from its last empty coherent measurement", function* () {
     yield* useTempFileCompiler();
-    const model = yield* checkpointStateModel();
-    const size = CHECKPOINT_MEDIUM;
+    const model = yield* checkpointCatalogModel(9);
+    const size = CHECKPOINT_NARROW;
     const presenter = yield* usePresenter(size);
-    const view = checkpointViewOf(model, undefined, {
-      size,
-      live: CHECKPOINT_ASKING,
-      workspace: OVERFLOW_WORKSPACE,
+    // The closed screen first, so the catalog is opened from a frame whose
+    // focus the mounted tree actually answered for — the drawer is a modal, and
+    // only what it contains may hold focus while it is open.
+    const shipping = { model, size, workspace: workspaceOf(model) } as const;
+    const before = yield* commitCheckpoint(presenter, {
+      ...shipping,
+      state: checkpointState(model, { size, surface: "entries" }),
     });
-    const viewport = `box:${QUEUE_WINDOW}:viewport`;
-    const row = /^box:inspection:queue:.*:row:\d+:row$/;
+    const opened = reduceRepl(
+      before.view.state,
+      { kind: "open-catalog" },
+      model,
+      before.view.live,
+    ).state;
+    const view = checkpointViewOf(model, before.focused, { ...shipping, state: opened });
+    const viewport = `box:${DRAWER_WINDOW}:viewport`;
+    const row = /^box:drawer:.*:row:\d+:row$/;
     const seen: {
       bounds: ReplBounds | undefined;
       rows: number;
       earlier: boolean;
       later: boolean;
+      chrome: boolean;
     }[] = [];
     const delegate = presenter.renderer;
     const watching: ReplRenderer = {
@@ -634,8 +656,10 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
           seen.push({
             bounds: result.value.boundsOf(viewport),
             rows: ids.filter((id) => row.test(id)).length,
-            earlier: ids.includes("box:inspection:queue:earlier"),
-            later: ids.includes("box:inspection:queue:later"),
+            earlier: ids.includes("box:drawer:drawer:scroll:up"),
+            later: ids.includes("box:drawer:drawer:scroll:down"),
+            chrome:
+              ids.includes("box:drawer:drawer:open") && ids.includes("box:drawer:drawer:close"),
           });
         }
         return result;
@@ -649,25 +673,34 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
     if (!prepared.ok) {
       throw prepared.error;
     }
-    // This tray holds more rows than its column allocated it, which is the
-    // case the viewport exists for at all.
-    const window = windowOf(prepared.value.admission, QUEUE_WINDOW);
+    // More rows than the drawer was given, which is the case a moving window
+    // exists for at all.
+    const window = windowOf(prepared.value.admission, DRAWER_WINDOW);
     expect({ beyond: window.total > window.capacity }).toEqual({ beyond: true });
 
-    // The last measurement that held the viewport is the one the admission
-    // above came from.
+    // The last measurement that held the viewport is the one that admission
+    // came from: no rows of its own inside it, both of its own controls and
+    // the drawer's fixed chrome around it.
     const last = seen[seen.length - 1];
-    if (last === undefined) {
-      throw new Error("this preparation measured no queue viewport");
+    if (last === undefined || last.bounds === undefined) {
+      throw new Error("this preparation measured no catalog viewport");
     }
-    expect({ rows: last.rows, earlier: last.earlier, later: last.later }).toEqual({
-      rows: 0,
-      earlier: true,
-      later: true,
-    });
+    expect({
+      rows: last.rows,
+      earlier: last.earlier,
+      later: last.later,
+      chrome: last.chrome,
+    }).toEqual({ rows: 0, earlier: true, later: true, chrome: true });
+    // And it is a region with room in it. A window admitted against nothing
+    // would satisfy every rule below and show no reading at all.
+    expect({
+      width: last.bounds.width > 0,
+      height: last.bounds.height > 0,
+      whole: Number.isInteger(last.bounds.width) && Number.isInteger(last.bounds.height),
+    }).toEqual({ width: true, height: true, whole: true });
 
-    // And it is the region the frame describes: the same rectangle the final
-    // manifest places that viewport at, measured by the same engine.
+    // The same rectangle the finished frame places that viewport at, measured
+    // by the same engine from the manifest it published.
     const final = yield* delegate.measure(
       skeletonOps(prepared.value.presentation.manifest.root),
       size,
@@ -676,16 +709,52 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
       throw final.error;
     }
     expect(last.bounds).toEqual(final.value.boundsOf(viewport));
-    // Both controls are outside it, which is why it starts where it does.
-    const above = final.value.boundsOf("box:inspection:queue:earlier");
-    const below = final.value.boundsOf("box:inspection:queue:later");
-    if (above === undefined || below === undefined || last.bounds === undefined) {
-      throw new Error("this frame drew the queue without its own controls");
+    const above = final.value.boundsOf("box:drawer:drawer:scroll:up");
+    const below = final.value.boundsOf("box:drawer:drawer:scroll:down");
+    if (above === undefined || below === undefined) {
+      throw new Error("this frame drew the catalog without its own controls");
     }
     expect({
       above: above.y + above.height <= last.bounds.y,
       below: below.y >= last.bounds.y + last.bounds.height,
     }).toEqual({ above: true, below: true });
+
+    // And a row the first frame does not show is reached by the control that
+    // moves the window, with a whole target of its own inside that viewport.
+    const first = yield* presenter.commit(view);
+    const shown = (observed: typeof first) =>
+      observed.keys.filter((key) => key.startsWith("entry:")).sort();
+    const moved = reduceRepl(
+      opened,
+      { kind: "scroll-entries", delta: 1 },
+      model,
+      before.view.live,
+      prepared.value.admission,
+    ).state;
+    const after = yield* presenter.commit(
+      checkpointViewOf(model, before.focused, { ...shipping, state: moved }),
+    );
+    const reached = shown(after).filter((key) => !shown(first).includes(key));
+    expect({ hidden: shown(first).length < window.total, reached: reached.length > 0 }).toEqual({
+      hidden: true,
+      reached: true,
+    });
+    const node = after.nodeOf(reached[0]);
+    const target = node === undefined ? undefined : after.targets.find((one) => one.node === node);
+    const bounds = after.boundsOf(reached[0]);
+    if (target === undefined || bounds === undefined) {
+      throw new Error(`${reached[0]} was drawn with no target of its own`);
+    }
+    expect({ target: target.bounds }).toEqual({ target: bounds });
+    expect({
+      whole:
+        Number.isInteger(bounds.x) &&
+        Number.isInteger(bounds.width) &&
+        Number.isInteger(bounds.y) &&
+        Number.isInteger(bounds.height),
+      inside:
+        bounds.y >= last.bounds.y && bounds.y + bounds.height <= last.bounds.y + last.bounds.height,
+    }).toEqual({ whole: true, inside: true });
   });
 
   // The accepted wide row is a fitted map, a gap and the controls. The gap and

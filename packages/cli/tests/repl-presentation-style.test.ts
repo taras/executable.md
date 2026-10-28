@@ -114,6 +114,7 @@ import {
   CHECKPOINT_MEDIUM,
   CHECKPOINT_MESSAGE,
   CHECKPOINT_NARROW,
+  CHECKPOINT_CURRENT_WORKSPACE,
   CHECKPOINT_SIDEKICK,
   CHECKPOINT_SIZE,
   CHECKPOINT_SIZES,
@@ -122,18 +123,12 @@ import {
   checkpointModel,
   checkpointState,
   checkpointViewOf,
-  crowdedQueue,
   checkpointScopes,
   checkpointStateModel,
-  lastQueued,
-  OVERFLOW_WORKSPACE,
-  queueAt,
   commitCheckpoint,
   RUNNING_SOURCE,
   WRAPPING_LINE,
-  WRAPPING_QUEUED,
 } from "./fixtures/repl/workspace-checkpoint.ts";
-import { ACCEPTED_160 } from "./fixtures/repl/accepted-160.ts";
 import { chatLinesFor, QUEUE_WINDOW } from "../src/repl/application.ts";
 import { readDescription } from "../src/repl/description.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
@@ -1226,7 +1221,7 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
     }
   });
 
-  it("P2: the footer keeps seven rows, and the draft says what it is", function* () {
+  it("P2 kernel: the footer keeps seven rows, and the draft says what it is", function* () {
     const model = yield* settledAndFailed();
     for (const size of [WIDE, MEDIUM, NARROW]) {
       const presenter = yield* usePresenter(size);
@@ -1266,7 +1261,7 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
     }
   });
 
-  it("P2: the draft is marked unfocused when focus is elsewhere", function* () {
+  it("P2 kernel: the draft is marked unfocused when focus is elsewhere", function* () {
     const model = yield* settledAndFailed();
     const presenter = yield* usePresenter(WIDE);
     const state = selecting(stateWith({ draft: "typed" }), "entry-1");
@@ -2725,7 +2720,7 @@ describe("REPL responsiveness: a complete frame after a keystroke", () => {
 });
 
 /**
- * Tier TE — the accepted columns, headers and edges, in production cells (#883).
+ * Tier TE — the accepted roles, in ordinary kernel cells (#883).
  *
  * Every expected value here comes from `issue-883/reference-style.ts`, which
  * transcribes the refinement the Product Owner accepted. Nothing is read back
@@ -2736,8 +2731,15 @@ describe("REPL responsiveness: a complete frame after a keystroke", () => {
  * purpose. A vertical column divider and the rule between the body and the
  * footer are different readings of the screen, so a product drawing both from
  * one value cannot satisfy both of these rows at once.
+ *
+ * **Ordinary kernel.** These frames are `reading()`, which is `viewFor` with no
+ * workspace: the production renderer draws them, but the composition is the
+ * kernel's rather than the staged screen a person is offered. That is why the
+ * three shipping appearance records do not stand in for any of it — they hold
+ * one input with one tab selected, and this asks about roles under both tabs
+ * and about outlets they never route.
  */
-describe("Tier TE — the accepted columns, headers and edges in production cells", () => {
+describe("Tier TE kernel — pane roles, edges and routed outlets", () => {
   /** The two sizes that draw three columns. */
   const COLUMNED: readonly { readonly name: string; readonly size: ReplTerminalSize }[] =
     Object.freeze([
@@ -2760,7 +2762,7 @@ describe("Tier TE — the accepted columns, headers and edges in production cell
     return grid.styleAt(bounds.x + bounds.width - 1, bounds.y).background;
   }
 
-  it("TE4: each pane, header, divider and edge is the accepted value in its own cells", function* () {
+  it("TE4 kernel: pane roles survive both tab selections", function* () {
     const model = yield* settledAndFailed();
     for (const { name, size } of COLUMNED) {
       for (const tab of TABS) {
@@ -2924,7 +2926,7 @@ describe("Tier TE — the accepted columns, headers and edges in production cell
     }
   });
 
-  it("TE4: a narrow frame routes one body, keeps seven rows and draws no wide chrome", function* () {
+  it("TE4 kernel: each routed outlet omits wide chrome and targets", function* () {
     const model = yield* settledAndFailed();
     // Each outlet reached by the action that reaches it, rather than by a route
     // written here: what a narrow frame draws is decided by the surface a
@@ -3438,8 +3440,15 @@ describe("REPL responsiveness: a chat the keystroke did not change", () => {
  * Every expected number here is the accepted table's. Nothing asks
  * `inspectionWidth` what it thinks: a test that did would agree with the
  * product however it drifted.
+ *
+ * **Ordinary kernel.** This is `reading()` again — `viewFor` with no workspace —
+ * so what it pins is the column primitive, not the screen a person is offered.
+ * The shipping appearance of the three accepted profiles is the appearance
+ * records' subject; this one also asks about an odd 161 column, which is not a
+ * profile and not the odd History remainder, and about the Bindings body, which
+ * those records never select.
  */
-describe("Tier PW — the accepted column shares, in the frame that was committed", () => {
+describe("REPL kernel — ordinary column shares and pane bodies", () => {
   // The fixture entry publishes its binding from an eval block, and the
   // Bindings reading below measures the row that binding draws. Without the
   // compiler that block refuses and the pane has nothing in it to measure.
@@ -3496,7 +3505,7 @@ describe("Tier PW — the accepted column shares, in the frame that was committe
     },
   ]);
 
-  it("PW1: each column is the accepted share, and the three of them are disjoint", function* () {
+  it("PW1 kernel: ordinary shares and pane bodies remain whole under both tabs", function* () {
     const model = yield* settledAndFailed();
     for (const share of SHARES) {
       for (const tab of [
@@ -4548,54 +4557,29 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
     expect(draftStop.x).toBeGreaterThan(input.x);
     expect(draftStop.x + draftStop.width).toBeLessThanOrEqual(draft.x + draft.width);
 
-    // TODO then QUEUE on the left, checked Follow then the Sidekick's Stop on the
-    // right, on one row above the composer.
+    // The inactive TODO tray on the left and the Sidekick's own Stop on the
+    // right, on one row above the composer. QUEUE and the Follow checkbox that
+    // used to sit between them are DQ0 and DF1 in
+    // `fixtures/repl/deferred-presentation.json`: this build offers neither, so
+    // neither is drawn, measured or mounted.
     const todo = placed(observed, "tray:todo");
-    const queue = placed(observed, "tray:queue");
-    const follow = placed(observed, "follow");
     const sidekickStop = placed(observed, "sidekick:stop");
-    for (const one of [queue, follow, sidekickStop]) {
-      expect(one.y).toBe(todo.y);
-    }
-    expect(todo.x).toBeLessThan(queue.x);
-    expect(queue.x).toBeLessThan(follow.x);
-    expect(follow.x).toBeLessThan(sidekickStop.x);
+    expect(sidekickStop.y).toBe(todo.y);
+    expect(todo.x).toBeLessThan(sidekickStop.x);
     expect(sidekickStop.x + sidekickStop.width).toBeGreaterThan(155);
-    expect(observed.cells.get("follow")?.includes("[x] Follow")).toBe(true);
+    for (const key of ["tray:queue", "follow"]) {
+      expect({ key, mounted: observed.nodeOf(key) !== undefined }).toEqual({
+        key,
+        mounted: false,
+      });
+    }
     expect(placed(observed, "sidekick:message").y).toBeGreaterThan(todo.y);
 
-    // Three pending messages, in order, each with one remove control on its
-    // first row whose accessible name is Remove message.
-    const prepared = yield* prepareFrame(presenter.renderer, view);
-    if (!prepared.ok) {
-      throw prepared.error;
-    }
-    const inputs = new Map(
-      prepared.value.presentation.descriptions.map((one) => {
-        const read = readDescription(one);
-        return [read.key, read.input] as const;
-      }),
-    );
-    let previous = todo.y;
-    for (const key of ["q1", "q2", "q3"]) {
-      const first = placed(observed, `queue:${key}:row:0`);
-      const remove = placed(observed, `queue:${key}:remove`);
-      expect(first.y).toBeGreaterThan(previous);
-      expect(remove.y).toBe(first.y);
-      expect(remove.x).toBeGreaterThan(first.x + first.width - 1);
-      expect(inputs.get(`queue:${key}:remove`)).toEqual({ label: "X", name: "Remove message" });
-      previous = first.y;
-    }
-    // The long message wraps between its origin and its X, its continuation
-    // set in to its text, and its rows spell exactly the message.
-    const wrapped = observed.keys.filter((key) => key.startsWith("queue:q2:row:"));
-    expect(wrapped.length).toBeGreaterThan(1);
-    const said = wrapped.map((key) => observed.cells.get(key) ?? "");
-    expect(said[0].startsWith("[C] ")).toBe(true);
-    expect(said.slice(1).every((one) => one.startsWith("    "))).toBe(true);
-    expect(said.map((one) => one.slice(4)).join("")).toBe(WRAPPING_QUEUED);
-    // The unsent composer text is not one of them.
-    expect(said.join("").includes("empty cart renders")).toBe(false);
+    // The pending-message rows this screen used to draw beside the composer —
+    // their order, their origin marks, each row's own withdrawal control and
+    // the way a long one wrapped between its origin and its X — are DQ1 in
+    // `fixtures/repl/deferred-presentation.json`. This build offers no shared
+    // queue, so there is nothing here to place them against.
 
     // Mounted controls are whole, inside the screen, and never overlap.
     const targets = observed.targets.map((one) => one.bounds);
@@ -4664,15 +4648,19 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
     expect(grid.styleAt(value.x, value.y).foreground).not.toBe(
       grid.styleAt(value.x + 1, value.y).foreground,
     );
-    // Origins, queued text, the composer and execution state read differently.
-    const firstQueued = placed(observed, "queue:q2:row:0");
-    const origin = grid.styleAt(firstQueued.x, firstQueued.y).foreground;
-    const queuedText = grid.styleAt(firstQueued.x + 5, firstQueued.y).foreground;
-    expect(origin).not.toBe(queuedText);
+    // What a person asked, what the agent replied, what this execution is doing
+    // and what is still being typed all read differently from one another. The
+    // queued rows and their origin marks this used to compare are DQ1 in
+    // `fixtures/repl/deferred-presentation.json`.
+    const asked = placed(observed, "sidekick:chat:message:1");
+    const replied = placed(observed, "sidekick:chat:response:1");
+    const askedInk = grid.styleAt(asked.x, asked.y).foreground;
+    const repliedInk = grid.styleAt(replied.x, replied.y).foreground;
+    expect(askedInk).not.toBe(repliedInk);
     const composer = placed(observed, "sidekick:message:value:0");
-    expect(grid.styleAt(composer.x, composer.y).foreground).not.toBe(queuedText);
-    const person = placed(observed, "queue:q1:row:0");
-    expect(grid.styleAt(person.x, person.y).foreground).not.toBe(origin);
+    expect(grid.styleAt(composer.x, composer.y).foreground).not.toBe(askedInk);
+    const working = placed(observed, "sidekick:work:entry-1");
+    expect(grid.styleAt(working.x, working.y).foreground).not.toBe(askedInk);
     const state = placed(observed, "work:state");
     expect(grid.styleAt(state.x, state.y).foreground).not.toBe(
       grid.styleAt(placed(observed, "work:crumbs").x, state.y).foreground,
@@ -5118,91 +5106,19 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
 });
 
 /**
- * #971 A1: the accepted 160x36 screen, held to what was accepted.
+ * #971 A1 is now read in the places each of its fields belongs.
  *
- * Every expectation comes from `accepted-160.ts`, which is a transcript of the
- * capture the Product Owner accepted — not from the palette and layout
- * constants that produced it. A change that moves this screen fails here even
- * where production still agrees with itself, which is the whole point of
- * pinning a reviewed appearance.
- */
-describe("Checkpoint #971 A1 — the accepted screen stays accepted", () => {
-  beforeAll(() => useTempFileCompiler());
-
-  it("A1: bounds, targets, selection, focus, cells and rows are the accepted ones", function* () {
-    expect(ACCEPTED_160.size).toEqual({ columns: 160, rows: 36 });
-    const presenter = yield* usePresenter(CHECKPOINT_SIZE);
-    const committed = yield* commitCheckpoint(presenter);
-    const { view, observed } = committed;
-    const { grid } = presenter;
-
-    // Where the frame put every region, pane body and named box.
-    for (const one of [...ACCEPTED_160.regions, ...ACCEPTED_160.named, ...ACCEPTED_160.contents]) {
-      expect({ id: one.id, bounds: observed.regionOf(one.id) }).toEqual({
-        id: one.id,
-        bounds: one.bounds,
-      });
-    }
-
-    // Every control the accepted capture pinned, still mounted and still at the
-    // box it was accepted at. The pinned set is a reading of that capture
-    // rather than the whole of it, so this says each of them is where it was —
-    // a control that moved or went fails, and the frame's own completeness is
-    // the neighbouring case's to assert.
-    const targets = new Map(
-      observed.targets.map((one) => [presenter.tree.keyOf(one.node), one.bounds]),
-    );
-    expect(ACCEPTED_160.targets.length).toBeGreaterThan(0);
-    for (const one of ACCEPTED_160.targets) {
-      expect({ key: one.key, bounds: targets.get(one.key) }).toEqual({
-        key: one.key,
-        bounds: one.bounds,
-      });
-    }
-
-    // The reading it is a reading of, and the control a keystroke reaches.
-    expect(view.state.route.scopes).toEqual(ACCEPTED_160.ancestry.scopes);
-    expect(
-      view.selection.ancestry.map((one) => ({ key: one.key, kind: one.kind, name: one.name })),
-    ).toEqual(ACCEPTED_160.ancestry.ancestry);
-    expect(view.model.entries.map((one) => ({ key: one.key, order: one.order }))).toEqual(
-      ACCEPTED_160.ancestry.entries,
-    );
-    expect(committed.focused).toBe(ACCEPTED_160.focus);
-    expect(focusKeyOf(presenter)).toBe(ACCEPTED_160.focus);
-
-    // What the cells hold, including the blank ones a surface paints.
-    for (const probe of ACCEPTED_160.cellProbes) {
-      const style = grid.styleAt(probe.x, probe.y);
-      expect({
-        x: probe.x,
-        y: probe.y,
-        c: grid.at(probe.x, probe.y),
-        fg: style.foreground ?? null,
-        bg: style.background ?? null,
-        attrs: [...style.attrs],
-      }).toEqual({ ...probe, attrs: [...probe.attrs] });
-    }
-
-    // And the rows themselves, which is the corrected wrapping, the real
-    // ancestry and the utterance gaps read as one.
-    for (const row of ACCEPTED_160.textRows) {
-      expect({
-        y: row.y,
-        text: grid.textIn({ x: 0, y: row.y, width: 160, height: 1 })[0],
-      }).toEqual({ y: row.y, text: row.text });
-    }
-  });
-});
-
-/**
- * #971 A2: the same controlled reading at 120x30 and 72x20.
+ * What the screen looks like — every row of text, every style run under it and
+ * the blank backgrounds a surface paints — is the three appearance records and
+ * the cases above them. Where the frame put its regions, pane bodies and whole
+ * contained targets is A2 and the admission boundary. Which reading it is of,
+ * which scope is selected and which control a keystroke reaches are A6 and the
+ * mounted-focus cases. The accepted capture itself stays in the history at
+ * `accepted-160.ts`, blob 83dd9453 at f0232b3e, recoverable with `git show`.
  *
- * The geometry here is the plan's proposal — 36/34/50 at medium, one routed
- * outlet at narrow — and is under image review rather than accepted. What the
- * assertions hold to is what cannot be a proposal: whole measured controls
- * inside the frame, nothing mounted where it is not drawn, every surface still
- * reachable, and text that wraps rather than being clipped or dropped.
+ * It was one case asserting six different kinds of thing about a composition
+ * this build no longer draws — the staged screen it pinned still had the shared
+ * queue in it.
  */
 describe("Checkpoint #971 A2 — the staged screen at the two smaller sizes", () => {
   beforeAll(() => useTempFileCompiler());
@@ -5388,8 +5304,12 @@ describe("Checkpoint #971 A2 — the staged screen at the two smaller sizes", ()
       model,
       sidekick: true,
     })).observed;
-    for (const key of ["tray:todo", "tray:queue", "follow", "sidekick:stop", "sidekick:message"]) {
+    for (const key of ["tray:todo", "sidekick:stop", "sidekick:message"]) {
       expect({ key, drawn: talking.boundsOf(key) !== undefined }).toEqual({ key, drawn: true });
+    }
+    // Neither offer this build does not have reaches a narrow outlet either.
+    for (const key of ["tray:queue", "follow"]) {
+      expect({ key, drawn: talking.boundsOf(key) !== undefined }).toEqual({ key, drawn: false });
     }
     expect(talking.keys.includes("tab:bindings")).toBe(false);
     expect(talking.keys.includes("footer:input")).toBe(false);
@@ -5408,13 +5328,13 @@ describe("Checkpoint #971 A2 — the staged screen at the two smaller sizes", ()
  * that they read differently, and that nothing the window holds is unreachable.
  * Whether it looks right is the image review's answer, not a test's.
  */
-describe("Checkpoint #971 A4 — states and overflow at every size", () => {
+describe("Checkpoint #971 A4 — current outcomes, work and the waiting question", () => {
   beforeAll(() => useTempFileCompiler());
 
   /** The four outcomes this reading holds, as the words the screen says. */
   const OUTCOMES = ["✓ COMPLETED", "× FAILED", "- INTERRUPTED", "● ACTIVE"] as const;
 
-  it("A4: four outcomes, a waiting question and an overflowing queue", function* () {
+  it("A4: every outcome, work identity and the waiting question read from the current screen", function* () {
     const model = yield* checkpointStateModel();
     expect(model.entries.map((one) => one.terminal?.status ?? "unfinished")).toEqual([
       "ok",
@@ -5427,11 +5347,14 @@ describe("Checkpoint #971 A4 — states and overflow at every size", () => {
       const where = `${size.columns}x${size.rows}`;
       const narrow = size.columns === CHECKPOINT_NARROW.columns;
       const presenter = yield* usePresenter(size);
+      // The composition this build offers: the same staged work rows and
+      // conversation, with no shared queue tray, no queued rows and no Follow.
+      const workspace = CHECKPOINT_CURRENT_WORKSPACE;
       const committed = yield* commitCheckpoint(presenter, {
         model,
         size,
         live: CHECKPOINT_ASKING,
-        workspace: OVERFLOW_WORKSPACE,
+        workspace,
         // A narrow frame routes one outlet, and the conversation is the outlet
         // these readings are in.
         ...(narrow ? { sidekick: true } : {}),
@@ -5485,175 +5408,89 @@ describe("Checkpoint #971 A4 — states and overflow at every size", () => {
         });
       }
 
-      // And the queue is longer than this tray shows, with every pending
-      // message still a row this reading holds.
-      expect({ where, queued: OVERFLOW_WORKSPACE.queued.length }).toEqual({ where, queued: 6 });
-      const drawn = OVERFLOW_WORKSPACE.queued.filter(
-        (one) => observed.boundsOf(`queue:${one.key}:row:0`) !== undefined,
-      );
-      const removable = OVERFLOW_WORKSPACE.queued.filter(
-        (one) => observed.boundsOf(`queue:${one.key}:remove`) !== undefined,
-      );
-      // Each message the frame drew has its own withdrawal control beside it.
-      expect({ where, rows: drawn.length, removes: removable.length }).toEqual({
+      // Each work row this screen carries is an identity this history already
+      // holds: a message this conversation acknowledged, paired with the entry
+      // that message admitted. Nothing is shown for an entry this reading does
+      // not hold.
+      expect({ where, work: workspace.work.length > 0 }).toEqual({ where, work: true });
+      for (const one of workspace.work) {
+        expect({
+          where,
+          message: CHECKPOINT_SIDEKICK.chat.some((row) => row.key === one.message),
+          entry: model.entries.some((entry) => entry.key === one.entry),
+        }).toEqual({ where, message: true, entry: true });
+      }
+      // And the tray this build offers is the inactive one, with no shared
+      // queue behind it.
+      expect({
         where,
-        rows: drawn.length,
-        removes: drawn.length,
-      });
+        todo: observed.nodeOf("tray:todo") !== undefined || narrow,
+        queue: observed.nodeOf("tray:queue") !== undefined,
+      }).toEqual({ where, todo: true, queue: false });
     }
   });
 });
 
 /**
- * #971 R2: both windows this screen holds, traversed rather than described.
+ * #971 R2: the chat window this screen holds, traversed rather than described.
  *
- * The tray and the chat each hold more than they can show, and the question
- * either answers is the same one: is what the window is not showing reachable,
- * and is what it *is* showing something a person can act on? So this walks
- * them — the tray to a message its first window hides, the chat to the
+ * The chat holds more than it can show, and the question is the same one a
+ * window always asks: is what it is not showing reachable, and is what it *is*
+ * showing something a person can act on? So this walks it — down to the
  * outcomes its first window cuts off — and reads the answers off the committed
  * frame rather than off the description that produced it.
  *
  * One presenter, one tree and one grid throughout: the screen under test is
  * what the frames have left in the grid together, which is also the only way a
  * row that stopped being drawn can be told from a row that is still there.
+ *
+ * The shared message queue this case used to traverse beside the chat is not
+ * offered by this build. Its rows, its withdrawal controls and its own window
+ * are recorded in `fixtures/repl/deferred-presentation.json` under DQ1, with
+ * the case they came from and what has to exist before they come back.
  */
-describe("Checkpoint #971 R2 — the tray's window and the chat's", () => {
+describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
   beforeAll(() => useTempFileCompiler());
 
   /** The four outcomes this reading holds, as the words the screen says. */
   const OUTCOMES = ["✓ COMPLETED", "× FAILED", "- INTERRUPTED", "● ACTIVE"] as const;
 
-  /** Every queue row key this tray drew, in the order the tray drew them. */
-  function drawnRows(observed: Observed, key: string): readonly string[] {
-    const rows: string[] = [];
-    for (let at = 0; ; at += 1) {
-      const row = `queue:${key}:row:${at}`;
-      if (observed.boundsOf(row) === undefined) {
-        return rows;
-      }
-      rows.push(row);
-    }
-  }
-
-  it("R2: a hidden message is reached with its own control, and all four outcomes read", function* () {
+  it("R2: current chat traversal reads every outcome and keeps its composer", function* () {
     const model = yield* checkpointStateModel();
-    const size = CHECKPOINT_SIZE;
+    // The size whose conversation still holds more than it shows. Without the
+    // shared queue's tray the widest screen has room for the whole chat, and a
+    // window with nothing outside it is not a traversal.
+    const size = CHECKPOINT_MEDIUM;
     const presenter = yield* usePresenter(size);
-    const asking = { model, size, live: CHECKPOINT_ASKING } as const;
+    const asking = {
+      model,
+      size,
+      live: CHECKPOINT_ASKING,
+      workspace: CHECKPOINT_CURRENT_WORKSPACE,
+    } as const;
 
-    // The tray that fits keeps the appearance it was reviewed with: no window,
-    // and neither of the controls that would move one. A control that scrolls
-    // nothing is chrome over a reading that is already whole.
-    const fitting = yield* commitCheckpoint(presenter, asking);
-    expect(fitting.observed.committed.admission.windows.get(QUEUE_WINDOW)).toBe(undefined);
-    for (const key of ["queue:earlier", "queue:later"]) {
-      expect({ key, mounted: fitting.observed.nodeOf(key) !== undefined }).toEqual({
+    const opening = yield* commitCheckpoint(presenter, asking);
+
+    // No shared queue is offered here, so nothing of it is measured, mounted or
+    // drawn: a window over rows this build has none of would be chrome over a
+    // reading that does not exist.
+    expect(opening.observed.committed.admission.windows.get(QUEUE_WINDOW)).toBe(undefined);
+    for (const key of ["queue:earlier", "queue:later", "tray:queue"]) {
+      expect({ key, mounted: opening.observed.nodeOf(key) !== undefined }).toEqual({
         key,
         mounted: false,
       });
     }
 
-    // The controlled tray holds more rows than its measured window admits.
-    const first = yield* commitCheckpoint(presenter, {
-      ...asking,
-      workspace: OVERFLOW_WORKSPACE,
-    });
-    const window = windowOf(first.observed.committed.admission, QUEUE_WINDOW);
-    expect({ beyond: window.total > window.capacity }).toEqual({
-      beyond: true,
-    });
-    // So now both controls are there, and each is a target of its own.
-    for (const key of ["queue:earlier", "queue:later"]) {
-      const node = first.observed.nodeOf(key);
-      expect({ key, mounted: node !== undefined }).toEqual({
-        key,
-        mounted: true,
-      });
-      expect({
-        key,
-        target: first.observed.targets.some((one) => one.node === node),
-      }).toEqual({ key, target: true });
-    }
-
-    // The last message is not on this screen at all: not a row, not a control,
-    // not a mounted node. It is in the tray, which is what the window's own
-    // total says, and it is reached by moving the window rather than by
-    // shrinking the message that is there.
-    const hidden = lastQueued();
-    expect(drawnRows(first.observed, hidden.key)).toEqual([]);
-    expect(first.observed.nodeOf(`queue:${hidden.key}:remove`)).toBe(undefined);
-
-    // Moved to the end of the tray, that same message is drawn with its own
-    // withdrawal control beside it.
-    const moved = yield* commitCheckpoint(presenter, {
-      ...asking,
-      workspace: queueAt(window.total - window.capacity),
-      focused: first.focused,
-    });
-    const after = windowOf(moved.observed.committed.admission, QUEUE_WINDOW);
-    expect({ from: after.from, less: after.less, more: after.more }).toEqual({
-      from: window.total - window.capacity,
-      less: true,
-      more: false,
-    });
-    const reached = drawnRows(moved.observed, hidden.key);
-    expect({ rows: reached.length > 0 }).toEqual({ rows: true });
-    const withdraw = moved.observed.boundsOf(`queue:${hidden.key}:remove`);
-    if (withdraw === undefined) {
-      throw new Error("the message this window moved to drew no control");
-    }
-    // Its exact control, on the row that message begins on, inside the window
-    // that admitted it.
-    const viewport = viewportBounds(moved.observed, QUEUE_WINDOW);
-    const begins = moved.observed.boundsOf(`queue:${hidden.key}:row:0`);
-    if (begins === undefined || viewport === undefined) {
-      throw new Error("this window published no bounds to check against");
-    }
-    expect({ y: withdraw.y }).toEqual({ y: begins.y });
-    expect({
-      inside:
-        withdraw.y >= viewport.y && withdraw.y + withdraw.height <= viewport.y + viewport.height,
-    }).toEqual({ inside: true });
-
-    // And every row this tray drew owns its own targets: a message whose first
-    // row is drawn has exactly one control, a continuation drawn without its
-    // beginning has none, and nothing is drawn outside the window.
-    for (const message of OVERFLOW_WORKSPACE.queued) {
-      const rows = drawnRows(moved.observed, message.key);
-      const control = moved.observed.nodeOf(`queue:${message.key}:remove`);
-      expect({ key: message.key, control: control !== undefined }).toEqual({
-        key: message.key,
-        control: rows.length > 0,
-      });
-      for (const row of rows) {
-        const bounds = moved.observed.boundsOf(row);
-        if (bounds === undefined) {
-          throw new Error(`${row} stopped reporting its own bounds`);
-        }
-        expect({
-          row,
-          inside:
-            bounds.y >= viewport.y && bounds.y + bounds.height <= viewport.y + viewport.height,
-        }).toEqual({ row, inside: true });
-      }
-    }
-
-    // The rest of the column is still there to come back to: the toolbar, the
-    // composer, the controls that move the chat, and at least one chat row.
-    for (const key of [
-      "tray:todo",
-      "tray:queue",
-      "sidekick:message",
-      "sidekick:earlier",
-      "sidekick:later",
-    ]) {
-      expect({ key, drawn: moved.observed.boundsOf(key) !== undefined }).toEqual({
+    // What the column does offer is all there: the inactive tray, the
+    // conversation's own composer, and the controls that move the chat.
+    for (const key of ["tray:todo", "sidekick:message", "sidekick:earlier", "sidekick:later"]) {
+      expect({ key, drawn: opening.observed.boundsOf(key) !== undefined }).toEqual({
         key,
         drawn: true,
       });
     }
-    const chat = windowOf(moved.observed.committed.admission, SIDEKICK_WINDOW);
+    const chat = windowOf(opening.observed.committed.admission, SIDEKICK_WINDOW);
     expect({ rows: chat.count >= 1 }).toEqual({ rows: true });
 
     // One traversal of the chat's own window, which holds more rows than it
@@ -5666,9 +5503,8 @@ describe("Checkpoint #971 R2 — the tray's window and the chat's", () => {
     for (let offset = 0; offset <= chat.total && inks.size < OUTCOMES.length; offset += 1) {
       const at = yield* commitCheckpoint(presenter, {
         ...asking,
-        workspace: queueAt(window.total - window.capacity),
         state: chatAt(model, offset),
-        focused: moved.focused,
+        focused: opening.focused,
       });
       visited.add(windowOf(at.observed.committed.admission, SIDEKICK_WINDOW).from);
       const said = presenter.grid
@@ -5694,78 +5530,16 @@ describe("Checkpoint #971 R2 — the tray's window and the chat's", () => {
     expect({ distinct: new Set(inks.values()).size }).toEqual({
       distinct: OUTCOMES.length,
     });
-  });
 
-  // The other way a tray overflows, and the one that decides where the width
-  // its text is fitted to comes from. The case above overflows because six
-  // messages wrap into twenty rows — before anything is fitted it is six rows,
-  // which the tray has room for. These nine are over the budget in the pass
-  // that is still asking how wide a queued message's text may be, and a queue
-  // measured at no width has no fitted rows for anything to admit: the tray
-  // drew nothing at all while reporting a capacity of eight.
-  it("R2: a tray already over its budget before fitting still measures, fits and draws", function* () {
-    const model = yield* checkpointStateModel();
-    const size = CHECKPOINT_MEDIUM;
-    const presenter = yield* usePresenter(size);
-    const crowded = crowdedQueue(9);
-    const asking = { model, size, live: CHECKPOINT_ASKING } as const;
-    const committed = yield* commitCheckpoint(presenter, { ...asking, workspace: crowded });
-    const prepared = yield* prepareFrame(presenter.renderer, committed.view);
-    if (!prepared.ok) {
-      throw prepared.error;
-    }
-
-    // Its unfitted sequence is already longer than the tray's own budget.
-    const window = windowOf(committed.observed.committed.admission, QUEUE_WINDOW);
+    // The composer the conversation is answered in is still there afterwards,
+    // and the chat's own offset moved without the source or the saved reading
+    // following it.
     expect({
-      crowded: crowded.queued.length > window.capacity,
-      total: window.total,
-      count: window.count,
-    }).toEqual({ crowded: true, total: crowded.queued.length, count: window.capacity });
-
-    // The engine still measured a width for its text, and the queue was still
-    // fitted to it.
-    expect({ measured: (prepared.value.context.widths?.queue ?? 0) > 0 }).toEqual({
-      measured: true,
+      composer: opening.observed.boundsOf("sidekick:message") !== undefined,
+      source: opening.observed.committed.admission.windows.get(READING_WINDOW)?.from,
+    }).toEqual({
+      composer: true,
+      source: windowOf(opening.observed.committed.admission, READING_WINDOW).from,
     });
-    expect({ fitted: prepared.value.context.queue?.length }).toEqual({
-      fitted: crowded.queued.length,
-    });
-
-    // The rows this window admitted are on the screen, saying what they say,
-    // each with its own withdrawal control.
-    const said = presenter.grid
-      .textIn({ x: 0, y: 0, width: size.columns, height: size.rows })
-      .join("\n");
-    const shown = crowded.queued.slice(0, window.count);
-    for (const message of shown) {
-      expect({ key: message.key, drawn: said.includes(message.text) }).toEqual({
-        key: message.key,
-        drawn: true,
-      });
-      expect({
-        key: message.key,
-        control: committed.observed.boundsOf(`queue:${message.key}:remove`) !== undefined,
-      }).toEqual({ key: message.key, control: true });
-    }
-
-    // And the one past the window is reached by moving it, rather than gone.
-    const hidden = crowded.queued[crowded.queued.length - 1];
-    if (hidden === undefined) {
-      throw new Error("this tray holds no message to hide");
-    }
-    expect(committed.observed.nodeOf(`queue:${hidden.key}:remove`)).toBe(undefined);
-    const moved = yield* commitCheckpoint(presenter, {
-      ...asking,
-      workspace: crowdedQueue(9, window.total - window.capacity),
-      focused: committed.focused,
-    });
-    const after = presenter.grid
-      .textIn({ x: 0, y: 0, width: size.columns, height: size.rows })
-      .join("\n");
-    expect({ drawn: after.includes(hidden.text) }).toEqual({ drawn: true });
-    expect({
-      control: moved.observed.boundsOf(`queue:${hidden.key}:remove`) !== undefined,
-    }).toEqual({ control: true });
   });
 });

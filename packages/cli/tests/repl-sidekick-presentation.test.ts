@@ -5757,10 +5757,20 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
     expect(recovered.focused).toBe("footer:input");
     expect(recovered.observed.boundsOf("footer:input")).not.toBe(undefined);
     expect(banded(recovered)).toContain("reading earlier");
-    for (const key of ["tray:queue", "follow", "sidekick:stop"]) {
+    for (const key of ["tray:todo", "sidekick:stop"]) {
       expect({ key, drawn: recovered.observed.boundsOf(key) !== undefined }).toEqual({
         key,
         drawn: true,
+      });
+    }
+    // The shared queue's tray and the Follow control a recovered frame used to
+    // bring back with it are DQ0 and DF1 in
+    // `fixtures/repl/deferred-presentation.json`: this build offers neither, at
+    // any size, before or after a refusal.
+    for (const key of ["tray:queue", "follow"]) {
+      expect({ key, drawn: recovered.observed.boundsOf(key) !== undefined }).toEqual({
+        key,
+        drawn: false,
       });
     }
   });

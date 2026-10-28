@@ -1,6 +1,6 @@
 {
   "schema": "repl-deferred-presentation.v1",
-  "note": "Presentation that leaves active input because the build does not offer what it draws. Nothing here is skipped or excluded: each row names the case it came from, where that source still is, the boundary that holds its generic obligation today, and what has to exist before it comes back. This file is data a reader opens; no test imports or executes it.",
+  "note": "Presentation that leaves active input because the build does not offer what it draws. Nothing here is skipped or excluded: each row names the case it came from, where that source still is, the boundary that holds its generic obligation today, and what has to exist before it comes back. This file is data a reader opens; no test imports or executes it. Each activeEquivalent below names the case that holds the obligation today and the command result that selected it.",
   "recoverFrom": {
     "commit": "a410786aa93e5e746d57b98ed7240c5adbbd75c2",
     "how": "git show a410786aa93e5e746d57b98ed7240c5adbbd75c2:<path>"
@@ -11,9 +11,7 @@
       "whatLeaves": "The populated queued rows, Follow and tray choices of the staged workspace: CHECKPOINT_WORKSPACE's queued messages, WRAPPING_QUEUED, OVERFLOW_WORKSPACE, queueAt, crowdedQueue, lastQueued and the prototype queue/Follow probes that read them.",
       "owner": "Assignment C presentation, consuming #964",
       "prerequisite": "An actual shared queue offer exists in the shipped build",
-      "originalCases": [
-        "A4: four outcomes, a waiting question and an overflowing queue"
-      ],
+      "originalCases": ["A4: four outcomes, a waiting question and an overflowing queue"],
       "source": {
         "path": "packages/cli/tests/fixtures/repl/workspace-checkpoint.ts",
         "blob": "6e73495287fd7dd8dfb7fe9797a4479a21041577",
@@ -30,13 +28,15 @@
         "review/planner-7/image-index.md",
         "discovery/planner-8/deferred-ledger.md"
       ],
-      "activeEquivalent": "The current chat, question and outcome data stay in active input and are read through the rendered chat window; the appearance records draw the inactive TODO tray the build actually offers.",
+      "activeEquivalent": "The staged workspace's work rows and the conversation beside them stay in active input as CHECKPOINT_CURRENT_WORKSPACE, read by \"A4: every outcome, work identity and the waiting question read from the current screen\" and \"R2: current chat traversal reads every outcome and keeps its composer\" in packages/cli/tests/repl-presentation-style.test.ts. The inactive TODO tray and the absence of a queue tray are asserted there and in \"A2: narrow routes one outlet, keeps both surface controls and the Draft\".",
       "activeBoundary": "P",
       "reactivation": {
         "condition": "Restore only when actual queue offers exist, and compare against the profile evidence current at that time rather than these pixels.",
         "command": "deno task test packages/cli/tests/repl-presentation-style.test.ts --filter \"/^Deferred presentation - shared queue$/\"",
         "status": "deferred"
-      }
+      },
+      "activeEquivalentReceipt": "P: ok | 27 passed (67 steps) | 0 failed",
+      "retiredAt": "the layout test cleanup on agent/repl-layout-971-20261027; the original source stays recoverable at the commit and blob above"
     },
     {
       "key": "DQ1",
@@ -51,16 +51,24 @@
         "path": "packages/cli/tests/repl-presentation-style.test.ts",
         "blob": "47f70755a8308e41788f674dc0022916b6444dd0",
         "sha256": "45518d1f78fae7590293ed818c39cc9909b36148bae1f3ed06889f007c58586c",
-        "lines": { "C1/C2": [4414, 4632], "R2 mixed": [5491, 5649] }
+        "lines": {
+          "C1/C2": [4414, 4632],
+          "R2 mixed": [5491, 5649]
+        }
       },
-      "historical": ["discovery/planner-8/obligations.md", "discovery/planner-8/deferred-ledger.md"],
-      "activeEquivalent": "The rendered chat traversal and its four outcomes, the current controls and composer, and the independent source/chat/current/saved offsets all stay active in the same cases; only the shared-queue rows, their X, continuation target and window assertions leave.",
+      "historical": [
+        "discovery/planner-8/obligations.md",
+        "discovery/planner-8/deferred-ledger.md"
+      ],
+      "activeEquivalent": "The rendered chat traversal, its four outcome words and inks, the exact work identities, the waiting question's control and the composer are read by \"A4: every outcome, work identity and the waiting question read from the current screen\" and \"R2: current chat traversal reads every outcome and keeps its composer\". The surfaces, source, graphemes and whole contained targets stay in \"C1/C2: every surface is placed whole, wraps inside its region and keeps its styles\", where the ink comparison now reads a person's message, a reply, a work row and the composer.",
       "activeBoundary": "P/S/M",
       "reactivation": {
         "condition": "Reactivate the queue-specific mounted, input and window cases against actual shared queue ownership, keeping the chat-window equivalent active throughout.",
         "command": "deno task test packages/cli/tests/repl-presentation-style.test.ts --filter \"/^Deferred presentation - shared queue$/\"",
         "status": "deferred"
-      }
+      },
+      "activeEquivalentReceipt": "P: ok | 27 passed (67 steps) | 0 failed",
+      "retiredAt": "the layout test cleanup on agent/repl-layout-971-20261027; the original source stays recoverable at the commit and blob above"
     },
     {
       "key": "DQ2",
@@ -87,8 +95,11 @@
       },
       "firstFailureRevisions": ["0c3d2e49", "878ab666", "cbd8a613"],
       "fixedEvidenceRevision": "a410786aa93e5e746d57b98ed7240c5adbbd75c2",
-      "historical": ["discovery/planner-8/deferred-ledger.md", "discovery/planner-8/obligations.md"],
-      "activeEquivalent": "The generic obligation — nonzero width before admission, and a coherent tree measured before rows are admitted — is carried by an overflowing Entries catalog in the admission boundary, which is tested now.",
+      "historical": [
+        "discovery/planner-8/deferred-ledger.md",
+        "discovery/planner-8/obligations.md"
+      ],
+      "activeEquivalent": "\"A2: an overflowing Entries catalog is admitted from its last empty coherent measurement\" in packages/cli/tests/repl-layout-admission.test.ts: real prepareFrame and renderer.measure, nonzero measured viewport before admission, no moving rows in the admission-producing measurement, both window controls and the drawer's fixed chrome around it, the copied rectangle equal to the final viewport, controls outside it, and a row the first frame hides reached with its own whole target.",
       "activeBoundary": "A",
       "reactivation": {
         "condition": "Reinstate the queue-specific counterexamples when a queue is offered; the generic boundary stays active either way.",
@@ -97,7 +108,9 @@
           "deno task test packages/cli/tests/repl-layout-admission.test.ts --filter \"/^Deferred presentation - queue measurement$/\""
         ],
         "status": "deferred"
-      }
+      },
+      "activeEquivalentReceipt": "A: ok | 6 passed (17 steps) | 0 failed",
+      "retiredAt": "the layout test cleanup on agent/repl-layout-971-20261027; the original source stays recoverable at the commit and blob above"
     },
     {
       "key": "DF1",
@@ -112,19 +125,24 @@
         "path": "packages/cli/tests/repl-presentation-style.test.ts",
         "blob": "47f70755a8308e41788f674dc0022916b6444dd0",
         "sha256": "45518d1f78fae7590293ed818c39cc9909b36148bae1f3ed06889f007c58586c",
-        "lines": { "C1/C2": [4414, 4632], "TE4 narrow": [2879, 2972] }
+        "lines": {
+          "C1/C2": [4414, 4632],
+          "TE4 narrow": [2879, 2972]
+        }
       },
       "historical": [
         "discovery/planner-8/deferred-ledger.md",
         "implementation/implementor-31/image-index.md"
       ],
-      "activeEquivalent": "The current Sidekick composer and its own Stop, both surface controls and the absent Follow/QUEUE offers are what the appearance records and the behaviour tiers assert today.",
+      "activeEquivalent": "The current Sidekick composer and its own Stop are asserted in \"C1/C2: every surface is placed whole, wraps inside its region and keeps its styles\", \"A2: narrow routes one outlet, keeps both surface controls and the Draft\" and \"A3: 160 to 120 to 72, below the minimum, and back\" in packages/cli/tests/repl-sidekick-presentation.test.ts, each of which also asserts that no Follow control is drawn at any size, before or after a refusal.",
       "activeBoundary": "V/P/A/S",
       "reactivation": {
         "condition": "Reactivate against evaluation-owned Sidekick Send continuation, the default-on runtime-local setting, actual outcome and output, and joined exchanges with queued-eligible-message precedence. A Draft Send starts no continuation and no scheduler or persistence is introduced.",
         "command": "deno task test packages/cli/tests/repl-presentation-style.test.ts --filter \"/^Deferred presentation - Follow offers$/\"",
         "status": "deferred"
-      }
+      },
+      "activeEquivalentReceipt": "P: ok | 27 passed (67 steps) | 0 failed; S: ok | 24 passed (77 steps) | 0 failed",
+      "retiredAt": "the layout test cleanup on agent/repl-layout-971-20261027; the original source stays recoverable at the commit and blob above"
     }
   ],
   "neverDeferred": "Current Agent queued-provider, streaming and recorded turns, three concurrent conversations, M3's exact admission and refusal, pre-admission cancellation, admitted-entry independence, both Stops, exact Elicit and permission ownership, and joined cleanup all stay active."

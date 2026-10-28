@@ -116,38 +116,41 @@ export const CHECKPOINT_DRAFT = [
 /** What is typed in the Sidekick's composer and has not been sent. */
 export const CHECKPOINT_MESSAGE = "Also say what an empty cart renders.";
 
-/** The queued message long enough to wrap between its origin and its X. */
-export const WRAPPING_QUEUED =
-  "Post the Architect's requested changes as a review comment on PR #212, quoting each one in full.";
-
 /** The staged workspace presentation the checkpoint shows. */
 export const CHECKPOINT_WORKSPACE: ReplWorkspace = Object.freeze({
-  // The checkpoint stages a build that offers both — it exists to exercise the
-  // tray's own window and Follow's control, which are a later delivery's. The
-  // shipping root offers neither and says so by not naming them.
-  follow: true,
-  trays: Object.freeze(["todo", "queue"] as const),
-  tray: "queue",
-  queued: Object.freeze([
-    Object.freeze({
-      key: "q1",
-      origin: Object.freeze({ kind: "ui" as const }),
-      text: "When that finishes, explain the requested changes.",
-    }),
-    Object.freeze({
-      key: "q2",
-      origin: Object.freeze({ kind: "acp" as const, attachment: "ci-bot" }),
-      text: WRAPPING_QUEUED,
-    }),
-    Object.freeze({
-      key: "q3",
-      origin: Object.freeze({ kind: "ui" as const }),
-      text: "Then put a fix for the empty-cart case in the draft.",
-    }),
-  ]),
+  // What this build offers: the inactive tray, no shared queue behind it and
+  // no Follow control over it. The populated queue this fixture used to stage —
+  // its three rows, their origins, the wrapping one, the queue tray and the
+  // Follow flag — is DQ0 and DF1 in `deferred-presentation.json`, with the
+  // commit and blob it can be read back from.
+  tray: "todo",
+  queued: Object.freeze([]),
   work: Object.freeze([
     Object.freeze({ message: "chat:response:1", entry: "entry-1" }),
     Object.freeze({ message: "chat:response:2", entry: "entry-2" }),
+  ]),
+});
+
+/**
+ * The same staged screen, as this build actually offers it.
+ *
+ * The work rows and the conversation beside them are what a person is looking
+ * at today. The shared message queue is not: no tray for it, no rows in it and
+ * no Follow control over it, because this build has none of those and a screen
+ * that drew them would be drawing a promise. What left is recorded in
+ * `deferred-presentation.json` under DQ0 and DF1, with the fixture it came
+ * from.
+ */
+export const CHECKPOINT_CURRENT_WORKSPACE: ReplWorkspace = Object.freeze({
+  tray: "todo",
+  queued: Object.freeze([]),
+  // One row per entry this conversation admitted, which is where the four
+  // outcomes a reading can hold are read from.
+  work: Object.freeze([
+    Object.freeze({ message: "chat:response:1", entry: "entry-1" }),
+    Object.freeze({ message: "chat:response:1", entry: "entry-2" }),
+    Object.freeze({ message: "chat:response:2", entry: "entry-3" }),
+    Object.freeze({ message: "chat:response:2", entry: "entry-4" }),
   ]),
 });
 
@@ -348,6 +351,28 @@ export function* checkpointModel(): Operation<ReplModel> {
  * admitted: the reading this screen shows is that entry and that scope, so a
  * prefix that stopped before the scope would be a reading of something else.
  */
+/**
+ * A catalog with more entries in it than a window can show at once.
+ *
+ * Every one of them really ran: this is the same `runEntry` the rest of this
+ * fixture builds with, over a source small enough that a row of the catalog is
+ * all there is to say about it. What the count is for is the window — a
+ * catalog that fits needs no admission decision, and the measurement this
+ * feeds is about the one that does not.
+ */
+export function* checkpointCatalogModel(count: number): Operation<ReplModel> {
+  const physical = new InMemoryStream();
+  for (let at = 1; at <= count; at += 1) {
+    const settled = yield* physical.readAll();
+    yield* runEntry(
+      physical,
+      `# Entry ${at}\n\nThe ${at}\u202fth reading of this history.\n`,
+      settled.length === 0 ? {} : entryInitialBindings(projected(settled)),
+    );
+  }
+  return projected(yield* physical.readAll());
+}
+
 export function* checkpointSelected(): Operation<{
   readonly model: ReplModel;
   readonly at: string;
@@ -509,84 +534,6 @@ export const CHECKPOINT_ASKING: ReplLive = Object.freeze({
     }),
   }),
 });
-
-/**
- * More pending messages than the tray can show at once, and every outcome a
- * reading can hold associated with the conversation.
- *
- * Two entries behind each exchange, which is what lets one screen show a
- * completed, a failed, an interrupted and a running association together
- * rather than asking for four screens of one outcome each.
- */
-export const OVERFLOW_WORKSPACE: ReplWorkspace = Object.freeze({
-  queueOffset: 0,
-  ...CHECKPOINT_WORKSPACE,
-  work: Object.freeze([
-    Object.freeze({ message: "chat:response:1", entry: "entry-1" }),
-    Object.freeze({ message: "chat:response:1", entry: "entry-2" }),
-    Object.freeze({ message: "chat:response:2", entry: "entry-3" }),
-    Object.freeze({ message: "chat:response:2", entry: "entry-4" }),
-  ]),
-  queued: Object.freeze([
-    ...CHECKPOINT_WORKSPACE.queued,
-    Object.freeze({
-      key: "q4",
-      origin: Object.freeze({ kind: "ui" as const }),
-      text: "Re-run the checkout tests once the draft is submitted.",
-    }),
-    Object.freeze({
-      key: "q5",
-      origin: Object.freeze({ kind: "acp" as const, attachment: "ci-bot" }),
-      text: "Summarize what changed in checkout.md for the release notes.",
-    }),
-    Object.freeze({
-      key: "q6",
-      origin: Object.freeze({ kind: "ui" as const }),
-      text: "Then say what an empty cart renders.",
-    }),
-  ]),
-});
-
-/** The same tray, moved so a message the first window hid is the one shown. */
-export function queueAt(offset: number): ReplWorkspace {
-  return Object.freeze({ ...OVERFLOW_WORKSPACE, queueOffset: offset });
-}
-
-/**
- * More queued messages than the tray's budget, each short enough to be one row.
- *
- * The other way a tray overflows, and the one that decides where its width
- * comes from. `OVERFLOW_WORKSPACE` overflows because six messages wrap into
- * twenty rows: before anything is fitted it is six rows, which the tray has
- * room for. These nine are nine rows before fitting and nine after, so the
- * tray is already over its budget in the pass that is still asking how wide a
- * queued message's text may be — and a queue measured at no width is a queue
- * with no fitted rows for any later pass to admit.
- */
-export function crowdedQueue(count: number, offset = 0): ReplWorkspace {
-  const first = OVERFLOW_WORKSPACE.queued[0];
-  if (first === undefined) {
-    throw new Error("this tray holds no message to crowd");
-  }
-  return Object.freeze({
-    ...OVERFLOW_WORKSPACE,
-    queueOffset: offset,
-    queued: Object.freeze(
-      Array.from({ length: count }, (_, at) =>
-        Object.freeze({ ...first, key: `crowd-${at}`, text: `queued note ${at}` }),
-      ),
-    ),
-  });
-}
-
-/** The last queued message, which no window at any review size shows first. */
-export function lastQueued(): ReplQueuedMessage {
-  const last = OVERFLOW_WORKSPACE.queued[OVERFLOW_WORKSPACE.queued.length - 1];
-  if (last === undefined) {
-    throw new Error("this tray holds no messages");
-  }
-  return last;
-}
 
 /**
  * The same reading with its conversation held at one position.
