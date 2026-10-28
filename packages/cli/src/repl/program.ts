@@ -98,6 +98,10 @@ import {
   viewFor,
   withWorkspace,
   workspaceOf,
+  FOCUS_MARKER,
+  selectorName,
+  selectorRoomOf,
+  SELECTOR_MARK,
   withoutAbsentEntry,
   withoutLiveDrawers,
 } from "./application.ts";
@@ -163,8 +167,14 @@ import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
-import { createFitStore, createPlainFitStore, fitPlain, prepareReading } from "./fitting.ts";
-import type { ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
+import {
+  createFitStore,
+  createPlainFitStore,
+  fitCells,
+  fitPlain,
+  prepareReading,
+} from "./fitting.ts";
+import type { ReplFittedLabel, ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
 import { prepareRail } from "./history-rail.ts";
 import { readingLines } from "./source-reading.ts";
 import { sourceRuns } from "./presentation-text.ts";
@@ -2014,6 +2024,21 @@ function sidekickReadingOf(
   const reading = selected ?? active;
   return Object.freeze({
     chat: sidekickChatRows(read.value, owner.previewing),
+    // What the replies of this history actually did to this execution's
+    // entries, as the coordinates their records hold. Detached from the chat
+    // beside it: a row is what a conversation said, and these are what one of
+    // them admitted.
+    submits: Object.freeze(
+      read.value.submits.map((one) =>
+        Object.freeze({
+          conversation: one.conversation,
+          response: one.response,
+          ordinal: one.ordinal,
+          entry: one.entry,
+          source: one.source,
+        }),
+      ),
+    ),
     turns: sidekickTurnRows(read.value, owner.live),
     busy: owner.busy,
     // The agent of the chat being read, which is that chat's own: a
@@ -2474,10 +2499,11 @@ function* build(
     reading.navigation,
   );
   // The staged composition, on the screen a person is actually working in.
-  // What it shows is read from this execution rather than supplied: see
-  // `workspaceOf`.
+  // What it shows is read from this execution rather than supplied — the
+  // reading this frame was resolved at, and what this execution's Sidekick
+  // acknowledged doing to it: see `workspaceOf`.
   return view.ok
-    ? withWorkspace(view.value, workspaceOf())
+    ? withWorkspace(view.value, workspaceOf(reading.model, sidekick))
     : refusedView(state, view.error.message, size);
 }
 
@@ -3569,11 +3595,44 @@ export function* prepareFrame(
   if (!queued.ok) {
     return queued;
   }
+  // The Transcript's selector, fitted once. Before the header rows below,
+  // because what this answers is how wide that control is and the wrap decision
+  // is made against it — and before every pass after that, because a label one
+  // pass measured and another spelled differently is a control drawn where
+  // nothing measured it.
+  //
+  // Through the engine and at grapheme boundaries. The name is a provider's
+  // session key, which nothing in this product bounds and whose cells are not
+  // its code units in either direction: measured, twenty-five wide characters
+  // declared twenty-nine cells and needed fifty-four, and combining accents
+  // declared more than they used and published a target over the column beside
+  // them.
+  const selectorRoom = selectorRoomOf(widths);
+  let selector: ReplFittedLabel | undefined;
+  if (selectorRoom !== undefined && selectorRoom > 0) {
+    const fitted = yield* fitCells(
+      renderer,
+      view.size,
+      selectorName(view),
+      SELECTOR_MARK,
+      // What is left once this screen's own marker room in front of every
+      // control's label has had its two cells.
+      Math.max(0, selectorRoom - FOCUS_MARKER),
+    );
+    if (!fitted.ok) {
+      return fitted;
+    }
+    selector = fitted.value;
+  }
   // Which staged headers need two rows, asked of the engine rather than
   // counted: each header's one-row text is fitted to the width the engine
   // measured for it, and a header whose text needs more than one row is drawn
   // as two rows of its own pane's body.
-  const headerLines = workspaceHeaderLines(view, measuringAt(widths, false, undefined), widths);
+  const headerLines = workspaceHeaderLines(
+    view,
+    { ...measuringAt(widths, false, undefined), ...(selector === undefined ? {} : { selector }) },
+    widths,
+  );
   const wrapped = new Set<string>();
   for (const line of headerLines) {
     const fitted = yield* fitPlain(
@@ -3617,6 +3676,7 @@ export function* prepareFrame(
     ...(messageText === undefined ? {} : { queueText: messageText }),
     ...(historyRoom === undefined ? {} : { historyMap: historyRoom }),
     ...(historyParts === undefined ? {} : { historySplit: historyParts }),
+    ...(selector === undefined ? {} : { selector }),
   });
 
   // The catalog without its controls: if it fits, it keeps its natural footprint
@@ -3960,6 +4020,7 @@ export function* prepareFrame(
     historyMap: historyRoom,
     historyGap: historySpace,
     historySplit: historyParts,
+    selector,
     draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
     queue: queued.value,
     headers: wrapped.size === 0 ? undefined : wrapped,

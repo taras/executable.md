@@ -1085,10 +1085,11 @@ the terminal adaptations it makes of the reference — cell rules for pixel edge
 fixed-cell glyphs, origin colours converted to truecolor, and source wrapped at
 measured word boundaries rather than clipped — are under the Product Owner's image
 review. Until that review accepts an image they are not a regression target, and
-the `120x30` and `72x20` compositions follow it. The running command still draws
-the earlier composition: a Sessions/Entries sidebar beside the entry's
-Transcript, the Bindings/Sidekick pane, and a seven-row footer of contextual
-actions, five History rows and the draft.
+the `120x30` and `72x20` compositions follow it. This is the composition the
+running command draws: the Transcript of agent work, the selected work with its
+Draft, and the Bindings/Sidekick pane, under one identity row and above one
+compact History row and one row of directions. The earlier Sessions/Entries
+sidebar and seven-row footer are gone.
 
 Resizing the window is ordinary. Dragging a corner produces a stream of sizes,
 and each one redraws the screen for the size that is actually there: the

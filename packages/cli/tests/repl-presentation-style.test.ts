@@ -21,6 +21,7 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { close, fit, open, text } from "@bomb.sh/tty";
 import {
   collect,
   Elicitation,
@@ -119,6 +120,7 @@ import {
   CHECKPOINT_ASKING,
   chatAt,
   checkpointModel,
+  checkpointState,
   checkpointViewOf,
   crowdedQueue,
   checkpointScopes,
@@ -4935,6 +4937,127 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
     expect(closed.observed.keys).not.toContain(entryRow);
     expect(closed.state.draft).toBe(CHECKPOINT_DRAFT);
     expect(closed.state.message).toBe(CHECKPOINT_MESSAGE);
+  });
+
+  /**
+   * #971: the Transcript's selector says a name in cells, not in code units.
+   *
+   * What that control says once a conversation has been chosen is the
+   * conversation's name, and a provider's session key is a name nothing in this
+   * product bounds. Counting its code units gets its width wrong in both
+   * directions — a wide character occupies two cells and counts as one unit, a
+   * base character with combining marks occupies one and counts as several —
+   * and slicing by them cuts an emoji sequence in half. All three were
+   * measured: twenty-five `\u754c` declared twenty-nine cells and needed
+   * fifty-four, so the engine drew none of it; combining accents declared more
+   * cells than they used and published a target reaching past the column's own
+   * divider; and a joined sequence came back as two glyphs where its author
+   * wrote one.
+   *
+   * The ASCII key is here beside them because it passed throughout: a row that
+   * only held ASCII is what let the other three through.
+   */
+  it("A5 selector: the name is fitted in cells, whole graphemes, inside its column", function* () {
+    const named: readonly { readonly what: string; readonly key: string }[] = [
+      { what: "ascii", key: "x".repeat(50) },
+      { what: "wide", key: "\u754c".repeat(25) },
+      { what: "combining", key: "e\u0301".repeat(25) },
+      { what: "joined", key: "\u{1f469}\u200d\u{1f4bb}".repeat(12) },
+    ];
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+    const graphemes = (text: string): readonly string[] =>
+      [...segmenter.segment(text)].map((one) => one.segment);
+
+    for (const size of [CHECKPOINT_SIZE, { columns: 120, rows: 30 }]) {
+      for (const one of named) {
+        const where = `${one.what} at ${size.columns}`;
+        const presenter = yield* usePresenter(size);
+        const model = yield* checkpointModel();
+        // A key this reading can actually be filtered by: the live turns name
+        // it, which is what makes it a conversation this route may select.
+        const live: ReplLive = Object.freeze({
+          ...CHECKPOINT_LIVE,
+          agent: Object.freeze({
+            ...CHECKPOINT_LIVE.agent,
+            turns: Object.freeze(
+              CHECKPOINT_LIVE.agent.turns.map((turn) =>
+                Object.freeze({ ...turn, sessionKey: one.key }),
+              ),
+            ),
+          }),
+        });
+        const base = checkpointState(model, { size });
+        const committed = yield* commitCheckpoint(presenter, {
+          size,
+          model,
+          live,
+          state: Object.freeze({
+            ...base,
+            route: Object.freeze({ ...base.route, session: one.key }),
+          }),
+        });
+        const observed = committed.observed;
+        const label = observed.cells.get("transcript:selector") ?? "";
+        const target = observed.boundsOf("transcript:selector");
+        if (target === undefined) {
+          throw new Error(`${where}: the selector published no target`);
+        }
+
+        // Whole cells, which is what this product draws in: a fractional
+        // rectangle is a frame it refuses rather than rounds.
+        expect([where, Number.isInteger(target.x) && Number.isInteger(target.width)]).toEqual([
+          where,
+          true,
+        ]);
+
+        // The engine's own answer for the label it is given, against the target
+        // that label was published in. Equal, not merely "no exception": a
+        // label wider than its box is drawn over the column beside it, and a
+        // box wider than its label publishes cells nothing wrote.
+        const natural = yield* presenter.renderer.measure(
+          [
+            open("selector:probe", { layout: { width: fit(), height: fit() } }),
+            text(label),
+            close(),
+          ],
+          size,
+        );
+        if (!natural.ok) {
+          throw natural.error;
+        }
+        expect([where, natural.value.boundsOf("selector:probe")?.width]).toEqual([
+          where,
+          target.width,
+        ]);
+
+        // Inside the Transcript's own column, whole. A target reaching past
+        // that divider is a pointer target over somebody else's reading.
+        const column = observed.regionOf("box:sidebar");
+        if (column === undefined) {
+          throw new Error(`${where}: this frame drew no Transcript column`);
+        }
+        expect([
+          where,
+          target.x >= column.x && target.x + target.width <= column.x + column.width,
+        ]).toEqual([where, true]);
+
+        // The mark that says it opens survives whatever the name costs.
+        expect([where, label.endsWith(" \u25be")]).toEqual([where, true]);
+
+        // And the name itself is whole graphemes of the key, in order: a cut
+        // inside a sequence is a glyph its author never wrote. The marker room
+        // in front and the mark behind are the row's, not the name's.
+        const said = label.slice(2, label.length - 2);
+        const shown = said.endsWith("\u2026") ? said.slice(0, -1) : said;
+        expect([where, graphemes(shown)]).toEqual([
+          where,
+          graphemes(one.key).slice(0, graphemes(shown).length),
+        ]);
+        // A key longer than its column gives columns up; one that fits keeps
+        // every grapheme it had.
+        expect([where, shown.length > 0]).toEqual([where, true]);
+      }
+    }
   });
 });
 

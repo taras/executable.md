@@ -450,6 +450,92 @@ function* batchWidths(
   return Ok(answers);
 }
 
+/** The mark a name wears where it gave up columns. */
+const ELISION = "\u2026";
+
+/** One label fitted to a cell budget, with the cells the engine measured for it. */
+export interface ReplFittedLabel {
+  readonly text: string;
+  /** What the engine says it occupies, which is what a caller states. */
+  readonly cells: number;
+}
+
+/**
+ * One name fitted into a cell budget at grapheme boundaries, and its own width.
+ *
+ * The engine answers how wide text is and `Intl.Segmenter` decides where it may
+ * be cut. Those are the two facts a count of code units gets wrong, and it gets
+ * them wrong in opposite directions: a wide character occupies two cells and
+ * counts as one unit, and a base character with its combining marks occupies
+ * one cell and counts as several. Measured, a selector holding twenty-five
+ * `\u754c` declared twenty-nine cells and needed fifty-four — so nothing of it
+ * was drawn — and one holding combining accents declared more cells than it
+ * used and published a target reaching into the column beside it. A third cut
+ * an emoji sequence in half and drew two glyphs where its author wrote one.
+ *
+ * `keep` is the tail that never gives up its cells: the mark that says a
+ * control opens is not a detail of the name in front of it. `room` is the
+ * budget the two of them share.
+ *
+ * The answer carries the cells the engine measured for the whole of it, so the
+ * caller states a width rather than counting one — and the text and that width
+ * are one answer, which is what keeps a label and the box it is drawn in from
+ * disagreeing about how much room it needs.
+ */
+export function* fitCells(
+  renderer: ReplRenderer,
+  size: ReplTerminalSize,
+  name: string,
+  keep: string,
+  room: number,
+): Operation<Result<ReplFittedLabel>> {
+  if (room < 1) {
+    return Ok(Object.freeze({ text: "", cells: 0 }));
+  }
+  const whole = `${name}${keep}`;
+  const measured = yield* widths(renderer, size, [whole, keep, ELISION]);
+  if (!measured.ok) {
+    return measured;
+  }
+  const [wholeCells, keepCells, markCells] = measured.value;
+  if (wholeCells <= room) {
+    return Ok(Object.freeze({ text: whole, cells: wholeCells }));
+  }
+  // What the name may take once the tail and the mark saying it was cut have
+  // had theirs. Where that leaves nothing, the name gives up every column it
+  // had and what the row says is the tail alone — the same rule the row's own
+  // vocabulary already follows, which is that what was named survives whole.
+  const budget = room - keepCells - markCells;
+  if (budget < 1) {
+    return Ok(
+      Object.freeze({ text: keepCells <= room ? keep : "", cells: Math.min(keepCells, room) }),
+    );
+  }
+  // Narrow by halves over grapheme boundaries, asking the engine for one batch
+  // of candidates per round rather than one render per candidate.
+  const stops = graphemeStops(name);
+  let low = 0;
+  let high = stops.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const answer = yield* widths(renderer, size, [name.slice(0, stops[middle])]);
+    if (!answer.ok) {
+      return answer;
+    }
+    if (answer.value[0] <= budget) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const text = `${name.slice(0, stops[low])}${ELISION}${keep}`;
+  const final = yield* widths(renderer, size, [text]);
+  if (!final.ok) {
+    return final;
+  }
+  return Ok(Object.freeze({ text, cells: final.value[0] }));
+}
+
 /**
  * What a reading reserves before any of its text is fitted.
  *

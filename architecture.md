@@ -7040,17 +7040,17 @@ of 160 in the staged one below. A geometry change that narrows the left column
 is a change to what the product can say.
 
 **One staged composition is under image review.** The screen the root draws is
-the ordinary composition: a Sessions/Entries sidebar, a Transcript, the
-Bindings/Sidekick pane and a seven-row footer of contextual actions, five History
-rows and the draft. The v2 composition is the wide screen #971 accepted: a
-Transcript of agent work on the left, the selected work with its breadcrumbs,
-exact source, state, results and its own multi-row Draft in the centre, and
-Bindings/Sidekick on the right with TODO and QUEUE above the composer and Follow
-and the Sidekick's Send/Stop beside them, under one identity row and above one
-compact History row and one guidance row. It is selected only by a view carrying
-the private, inert workspace presentation — Follow's state, the selected tray and
-the pending rows — which the root never supplies, so the ordinary screen draws
-none of those controls and nothing in it dispatches them. It is not a second
+the v2 composition, which is the wide screen #971 accepted: a Transcript of agent
+work on the left, the selected work with its breadcrumbs, exact source, state,
+results and its own multi-row Draft in the centre, and Bindings/Sidekick on the
+right with the trays this build offers above the composer and the Sidekick's
+Send/Stop beside them, under one identity row and above one compact History row
+and one guidance row. It is selected by a view carrying the inert workspace
+presentation, and the root supplies that presentation from what this execution
+actually holds: the selected tray, no queued rows because this build has no
+shared queue, and the entries its Sidekick's acknowledged Submits admitted. A
+build without the continuation Follow governs offers neither Follow nor a QUEUE
+tab, so neither is drawn and nothing dispatches them. It is not a second
 pipeline: it is the same reading, prepared, measured, admitted, reconciled into
 the one mounted tree and drawn by the same renderer pair, and every rule in this
 section holds for it unchanged. Its first geometry at 160x36 — columns of 36, 66

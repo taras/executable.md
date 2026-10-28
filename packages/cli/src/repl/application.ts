@@ -107,7 +107,12 @@ import type { ReplPreparedRail } from "./history-rail.ts";
 import { entryReading, NO_READING } from "./source-reading.ts";
 import type { ReplReading } from "./source-reading.ts";
 import { readingRuns } from "./fitting.ts";
-import type { ReplFittedLine, ReplPreparedReading, ReplPreparedRow } from "./fitting.ts";
+import type {
+  ReplFittedLabel,
+  ReplFittedLine,
+  ReplPreparedReading,
+  ReplPreparedRow,
+} from "./fitting.ts";
 // The one gate, reached from here as well as from the root. A pure decision
 // module: no session, no repository, no resolver and no authority crosses it,
 // so the reduction stays a reduction while still refusing on exactly the terms
@@ -378,7 +383,42 @@ export interface ReplSidekickSetup {
   readonly failure: string | undefined;
 }
 
+/**
+ * One acknowledged Submit, as the coordinates that identify what it admitted.
+ *
+ * A detached reading of a record this history already holds, carrying no
+ * handle, no source to re-run and nothing a caller could reach a writer
+ * through: which chat and which response performed the control, which entry
+ * slot it reserved, which entry key it named and the exact source it reserved
+ * that slot with.
+ *
+ * All five, because a retained intent is not by itself an admission. The slot
+ * says where in this history the reservation was taken, the key says what it
+ * named, and the source says what it reserved — an entry that is not the one
+ * this reservation named, or not at the slot it took, or not holding the source
+ * it reserved, is a different entry and this Submit admitted nothing a reader
+ * may be shown.
+ */
+export interface ReplSidekickSubmit {
+  readonly conversation: string;
+  readonly response: string;
+  /** How many entries preceded the reservation, which names the slot. */
+  readonly ordinal: number;
+  readonly entry: string;
+  readonly source: string;
+}
+
 export interface ReplSidekickReading {
+  /**
+   * Every Submit this history acknowledged, in its own record order.
+   *
+   * Beside the chat rather than inside it, because they answer different
+   * questions: a chat row is what a conversation said, and this is what a reply
+   * of that conversation actually did to this execution's entries. Absent is a
+   * reading that establishes none — not a reading that establishes there were
+   * none, which is why nothing reads its absence as an empty list of facts.
+   */
+  readonly submits?: readonly ReplSidekickSubmit[];
   /**
    * Every chat's acknowledged rows, oldest first, each naming its own chat.
    *
@@ -1318,11 +1358,11 @@ export function withWorkspace(view: ReplView, workspace: ReplWorkspace): ReplVie
  * something to point at:
  *
  * - **Associated work** is the association between a chat row and the entry
- *   that row's evaluation admitted. Nothing creates one yet: that association
- *   is made when a Sidekick reply evaluates and admits a round, which is the
- *   continuation work this screen is still waiting on. So an ordinary root
- *   has none, and the pane shows the reading without association rows rather
- *   than inventing an entry for a message.
+ *   that row's evaluation admitted. It is read out of the acknowledged
+ *   Submits this history already holds — see {@link associatedWork} — so a
+ *   reply that really admitted an entry shows that entry's own state and
+ *   output after it, and a reply that admitted nothing shows nothing. No
+ *   message is given an entry it did not submit.
  * - **Queued messages** are the shared queue's, and there is no shared queue
  *   here. An empty tray is what this execution holds; a populated one would be
  *   a fiction in a screen somebody is working from.
@@ -1337,12 +1377,85 @@ export function withWorkspace(view: ReplView, workspace: ReplWorkspace): ReplVie
  *
  * So the tray is TODO, which is the inactive placeholder it has always been.
  */
-export function workspaceOf(): ReplWorkspace {
+export function workspaceOf(
+  /**
+   * The reading this frame is drawn from, which is the selected prefix.
+   *
+   * An association is only ever shown for an entry this reading holds: a
+   * person standing at an earlier position is reading a history in which the
+   * later entry was never admitted, and a row for it there would be a row
+   * about something that has not happened in the history they are looking at.
+   */
+  model?: ReplModel,
+  /** What this execution's Sidekick acknowledged, where the frame has one. */
+  sidekick?: ReplSidekickReading,
+): ReplWorkspace {
   return Object.freeze({
     tray: "todo" as const,
     queued: Object.freeze([]),
-    work: Object.freeze([]),
+    work: associatedWork(model, sidekick),
   });
+}
+
+/**
+ * The entries this reading's own acknowledged Submits admitted, by the row
+ * that performed each one.
+ *
+ * Every association is an identity this history already holds, matched whole.
+ * A reply names the chat and the response it was, which is the row's own key;
+ * a Submit record names the slot it reserved, the entry key it named and the
+ * exact source it reserved that slot with. An entry is this Submit's work when
+ * the reading holds one at that slot, under that key, with that source — all
+ * three, because any one of them alone would hand a reply somebody else's
+ * entry:
+ *
+ * - the **slot** alone would follow admission order, so a Submit whose
+ *   reservation was never honoured would take whatever landed there next;
+ * - the **key** alone would survive a prefix that admitted a different entry
+ *   under the same ordinal name;
+ * - the **source** alone is not an identity at all — two entries may hold the
+ *   same source, and often do.
+ *
+ * So a reservation nobody honoured, a startup that never admitted, and an
+ * entry outside the selected prefix each produce no row, which is the truthful
+ * answer in all three cases.
+ *
+ * Nothing here reads a receipt's prose, infers from the latest entry, its order
+ * or its title, or supplies an entry for a reply that admitted none. What the
+ * row then *says* — running, completed, failed, interrupted, and whatever that
+ * entry actually printed — is read from the model where it is drawn, never from
+ * a reply's wording.
+ */
+function associatedWork(
+  model: ReplModel | undefined,
+  sidekick: ReplSidekickReading | undefined,
+): readonly ReplAssociatedWork[] {
+  if (model === undefined || sidekick === undefined || sidekick.submits === undefined) {
+    return Object.freeze([]);
+  }
+  const found: ReplAssociatedWork[] = [];
+  for (const submit of sidekick.submits) {
+    const admitted = model.entries[submit.ordinal];
+    if (
+      admitted === undefined ||
+      admitted.key !== submit.entry ||
+      admitted.source !== submit.source
+    ) {
+      continue;
+    }
+    // The row that performed it, by the identity a reply is drawn under. A
+    // response this reading composed no row for is a response nothing on this
+    // screen could put the work after.
+    const message = `chat:${submit.conversation}:${submit.response}`;
+    if (!sidekick.chat.some((row) => row.key === message)) {
+      continue;
+    }
+    if (found.some((one) => one.message === message && one.entry === admitted.key)) {
+      continue;
+    }
+    found.push(Object.freeze({ message, entry: admitted.key }));
+  }
+  return Object.freeze(found);
 }
 
 /** The trays one execution offers, which is TODO alone unless it says more. */
@@ -5045,7 +5158,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // only the one its route is showing: a heading for an outlet this frame has
     // no region for would be a row mounted nowhere.
     items.push(
-      ...workspaceHeadings(view, selectorRoomOf(context.widths), {
+      ...workspaceHeadings(view, context.selector, {
         transcript: !narrow || routed === "sessions",
         work: !narrow || (routed === "entries" && !showSidekick),
         entries: !narrow,
@@ -7405,7 +7518,7 @@ function padControl(label: string, width: number): string {
 }
 
 /** The two columns `marked()` puts in front of a control's label. */
-const FOCUS_MARKER = 2;
+export const FOCUS_MARKER = 2;
 
 /**
  * Whether this field is required as the form currently stands.
@@ -7928,6 +8041,20 @@ export interface ReplPresentationContext {
    * it is not drawn.
    */
   readonly historySplit?: { readonly map: number; readonly actions: number } | undefined;
+  /**
+   * The Transcript selector's own label and the cells the engine gave it.
+   *
+   * One answer for both, settled once per preparation and stated in every pass
+   * after it — the pass that decides whether this header wraps, the pass
+   * anything is admitted from and the committed description alike. The label
+   * says a conversation's name, which is a provider's session key and so a
+   * name nothing in this product bounds, and neither its length in code units
+   * nor a guess at a code point's width is how many cells it takes.
+   *
+   * None before the frame has measured, which is the pass that establishes the
+   * room this is fitted to and fits nothing itself.
+   */
+  readonly selector?: ReplFittedLabel | undefined;
   /**
    * How wide the History row's map is, once its controls have been measured.
    *
@@ -9510,14 +9637,20 @@ function workspaceChatComposed(
 function workspaceHeadings(
   view: ReplView,
   /**
-   * How wide the frame measured the Transcript's own rows.
+   * The Transcript selector's label, as this frame fitted it.
    *
-   * The selector is a control in that column and says a name nothing in this
-   * product bounds, so it is fitted to the same room its rows are. None before
-   * the frame has asked — a pass still measuring has no width to give, and a
-   * label that gave up columns against no width would be shortened for nothing.
+   * Given rather than computed, because fitting it is measurement: the name it
+   * says is a provider's session key, and how many cells that takes is an
+   * engine answer about graphemes rather than a count of code units. The same
+   * answer is given to every pass, so the row that is measured and the row that
+   * is drawn are one row.
+   *
+   * None before the frame has measured — that pass establishes the room this is
+   * fitted to, and a label shortened against no room would be shortened for
+   * nothing. It then says the whole name, which is the longest this can be and
+   * so the honest thing for a pass asking how much room a column wants.
    */
-  width: number | undefined,
+  selector: ReplFittedLabel | undefined,
   /** Which of the two headings this frame has a region for. */
   shown: {
     readonly transcript: boolean;
@@ -9532,27 +9665,16 @@ function workspaceHeadings(
     items.push(
       row(
         "transcript:selector",
-        // Fitted to the column it is drawn in. What this says once a
-        // conversation has been chosen is that conversation's name, and a
-        // provider's session key is a name nothing here bounds — measured, one
-        // of them made this control 58 cells wide in a 34-cell column, which
-        // overflowed the row and left the engine placing it on a fraction of a
-        // cell, and a frame placed on fractions is one this product refuses to
-        // draw at all. The chevron stays whatever the name costs: a selector
-        // that gave up the mark saying it opens is one nobody can tell is one.
-        fitControl(
-          [
-            {
-              text:
-                view.state.route.session === undefined
-                  ? "All sessions"
-                  : headline(view.state.route.session),
-              elide: true,
-            },
-            { text: " ▾", keep: true },
-          ],
-          width,
-        ),
+        // The label this frame fitted, or the whole name where nothing has
+        // measured yet. What this says once a conversation has been chosen is
+        // that conversation's name, and a provider's session key is a name
+        // nothing here bounds — measured, one of them made this control 58
+        // cells wide in a 34-cell column, which overflowed the row and left the
+        // engine placing it on a fraction of a cell, and a frame placed on
+        // fractions is one this product refuses to draw at all. The chevron
+        // stays whatever the name costs: a selector that gave up the mark
+        // saying it opens is one nobody can tell is one.
+        selector?.text ?? `${selectorName(view)}${SELECTOR_MARK}`,
         { select: "session-filter" },
         styleOf("field-label", { selected: view.state.filtering }),
         { here: view.focused },
@@ -10518,7 +10640,29 @@ function headerGroupsOf(
  *
  * None before the frame has measured, which is the pass that fits nothing.
  */
-function selectorRoomOf(widths: ReplMeasuredWidths | undefined): number | undefined {
+/**
+ * The mark on the Transcript selector that says it opens.
+ *
+ * Kept whatever the name in front of it costs, because it is the only thing on
+ * that row saying the row is a way to something rather than a label.
+ */
+export const SELECTOR_MARK = " \u25be";
+
+/**
+ * Which conversation the Transcript selector names, before anything fits it.
+ *
+ * The whole name, which is what a frame still measuring should be told: it is
+ * the longest this control can be, and a pass asking how much room the column
+ * wants should not be answered with a name already given up for a width that
+ * pass has not established.
+ */
+export function selectorName(view: ReplView): string {
+  return view.state.route.session === undefined
+    ? "All sessions"
+    : headline(view.state.route.session);
+}
+
+export function selectorRoomOf(widths: ReplMeasuredWidths | undefined): number | undefined {
   return widths === undefined
     ? undefined
     : Math.max(0, headerRoomOf("transcript", widths) - TAB_GAP);
@@ -10686,34 +10830,42 @@ function workspacePresentation(input: {
     box({ id, region, props: SPACER_PROPS });
   const header = REPL_PALETTE.paneHeaderSurface;
   /**
-   * The header parts whose width is stated rather than measured.
+   * How wide this header part is stated to be, or none to let it be measured.
    *
+   * The Transcript's selector alone, and for two reasons that are really one.
    * A fitted part asks the engine how wide its own text is, and that answer is
-   * not always whole: measured, this selector holding a provider's session key
-   * came back 58.005859375 cells wide, and shortened to its column it came back
-   * 32.0078125 — a fraction either way, and a frame placed on fractions is one
-   * this product refuses to draw. Its label is already fitted to a width this
-   * frame measured, so the cells it needs is a number the label itself states.
+   * not always whole: measured, this selector came back 58.005859375 cells wide
+   * and, shortened to its column, 32.0078125 — a fraction either way, and a
+   * frame placed on fractions is one this product refuses to draw. And the
+   * number it should be is already known, because fitting the label is what
+   * produced it: {@link ReplFittedLabel} carries the text and the cells the
+   * engine gave that text as one answer.
+   *
+   * Marker room is added here rather than measured. It is this screen's own
+   * two cells in front of every control's label, drawn by `row` and not part of
+   * the name — the label is fitted to what is left once they have theirs.
    */
-  const stated = new Set(["transcript:selector"]);
+  const statedCells = (one: ReplCandidate): number | undefined =>
+    one.key === "transcript:selector" && context.selector !== undefined
+      ? context.selector.cells + FOCUS_MARKER
+      : undefined;
   const parts = (keys: readonly string[], region: ReplRegion, surface?: number): ReplBox[] =>
     keys.flatMap((key) =>
-      byKey(key).map((one) =>
-        stated.has(one.key)
-          ? box({
+      byKey(key).map((one) => {
+        const cells = statedCells(one);
+        return cells === undefined
+          ? part(one, region, surface)
+          : box({
               id: `box:${region}:${one.key}`,
               key: one.key,
               region,
-              // The label's own cells, marker room included — what a candidate
-              // carries is what the row draws.
-              props: statedPartProps(one.text.length),
+              props: statedPartProps(cells),
               text: one.text,
               control: one.control,
               style: one.style,
               runs: one.runs,
-            })
-          : part(one, region, surface),
-      ),
+            });
+      }),
     );
 
   /**

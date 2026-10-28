@@ -81,6 +81,7 @@ import {
   useMountedRepl,
   useMountedHost,
   mountedExecution,
+  sidekickPaneIn,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
 import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
 
@@ -1704,6 +1705,133 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     expect(second.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
     expect(second.model.entries[1]?.terminal?.output).toContain("| a | b |");
     expect(repl.fake.prompts[4] ?? "").toContain("Entry entry-2 completed.");
+  });
+
+  /**
+   * #971 B1: the Sidekick's own rows carry the entry each reply admitted.
+   *
+   * The association is read out of the Submit records this history already
+   * holds — which chat and which response performed the control, the slot it
+   * reserved, the entry key it named and the exact source it reserved — so a
+   * reply that really admitted an entry is followed by that entry's own state
+   * and output, and a reply that admitted nothing is followed by nothing.
+   *
+   * What the row *says* is read from the model where it is drawn and nowhere
+   * else: a reply's wording is not an account of what its entry did, and the
+   * two are deliberately different strings here so that one cannot pass for the
+   * other.
+   */
+  it("M3: each reply's rows carry the entry it admitted, and nothing it did not", function* () {
+    const host = yield* useMountedHost();
+    let execution = "";
+    /** A position holding the first entry and not the second. */
+    let earlier = "";
+    let entries = "";
+    let chat = "";
+
+    yield* scoped(function* (): Operation<void> {
+      const repl = yield* useMountedRepl({ host });
+      repl.fake.script({ reply: entrySource("first", "the first entry ran", "{first}") });
+      repl.fake.script({ reply: "<Output>That is one.</Output>\n" });
+      yield* sendMessage(repl, "run one");
+      yield* awaiting(repl.terminal, "the first receipt", (one) => shows(one, "That is one."));
+
+      const after = yield* mountedReading(repl);
+      execution = after.execution;
+      expect(after.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      // The position as it stands with one entry admitted, for the prefix arm
+      // below. Taken now, because what makes it a prefix is what came after it.
+      earlier = after.model.checkpoints[after.model.checkpoints.length - 1]?.marker ?? "";
+      expect(earlier).not.toBe("");
+
+      repl.fake.script({ reply: entrySource("second", "the second entry ran", "{second}") });
+      repl.fake.script({ reply: "<Output>That is two.</Output>\n" });
+      yield* sendMessage(repl, "run two");
+      yield* awaiting(repl.terminal, "the second receipt", (one) => shows(one, "That is two."));
+
+      // Each reply's work, after the reply that admitted it: the entry the
+      // record names, the state the model holds it in, and what it actually
+      // printed. The entry's own words and the reply's are different strings,
+      // so a row carrying the reply's wording could not pass for either.
+      const live = yield* mountedReading(repl);
+      expect(live.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      const pane = sidekickPaneIn(screenOf(repl.terminal));
+      const at = (said: string): number => pane.findIndex((row) => row.includes(said));
+      expect(at("Entry 1 \u00b7 \u2713 COMPLETED")).toBeGreaterThan(at("Submitted it."));
+      expect(at("the first entry ran")).toBe(at("Entry 1 \u00b7 \u2713 COMPLETED") + 1);
+      expect(at("That is one.")).toBeGreaterThan(at("the first entry ran"));
+      expect(at("Entry 2 \u00b7 \u2713 COMPLETED")).toBeGreaterThan(at("That is one."));
+      expect(at("the second entry ran")).toBe(at("Entry 2 \u00b7 \u2713 COMPLETED") + 1);
+      // One row each: a reply is followed by the entry it submitted, not by
+      // every entry this execution has admitted.
+      for (const said of ["Entry 1 \u00b7", "Entry 2 \u00b7"]) {
+        expect([said, pane.filter((row) => row.includes(said)).length]).toEqual([said, 1]);
+      }
+      // The state is the model's own, not a word from the reply.
+      expect(live.model.entries[0]?.terminal?.status).toBe("ok");
+      expect(live.model.entries[0]?.terminal?.output).toContain("the first entry ran");
+
+      // A reply that admits nothing is followed by nothing. The draft an
+      // admission finished is empty, so this Submit is refused before any slot
+      // is taken — no control record, and so no association to read.
+      repl.fake.script({ reply: "<REPL.Submit />\n" });
+      repl.fake.script({ reply: "<Output>I will prepare source first.</Output>\n" });
+      yield* sendMessage(repl, "submit it");
+      yield* awaiting(repl.terminal, "the refusal going back", (one) =>
+        shows(one, "I will prepare source first."),
+      );
+      const refused = yield* mountedReading(repl);
+      expect(refused.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      const after3 = sidekickPaneIn(screenOf(repl.terminal));
+      const said = after3.findIndex((row) => row.includes("I will prepare source first."));
+      expect(said).toBeGreaterThan(0);
+      // Nothing after that reply says an entry: the rows below it are the
+      // composer and the pane's own controls.
+      expect(after3.slice(said + 1).some((row) => /Entry \d+ \u00b7/.test(row))).toBe(false);
+
+      entries = yield* until(readFile(pairedLocation(host.root, execution).entries, "utf8"));
+      chat = yield* until(readFile(pairedLocation(host.root, execution).sidekick, "utf8"));
+      repl.terminal.end();
+      yield* awaiting(repl.terminal, "the command leaving", () => repl.outcome() !== undefined);
+    });
+
+    // Cold, at a position that holds the first entry and not the second. The
+    // association is read again from the same records, and the second reply's
+    // work is not shown — an entry this prefix never admitted is not work this
+    // reading can show.
+    const calls = host.fake.prompts.length;
+    yield* scoped(function* (): Operation<void> {
+      const base = initialState(execution);
+      const repl = yield* useMountedRepl({
+        host,
+        location: encodeLocation({ ...base.route, at: earlier }),
+      });
+      yield* awaiting(repl.terminal, "the cold chat", (one) => shows(one, "That is one."));
+      const pane = sidekickPaneIn(screenOf(repl.terminal));
+      const counted = (said: string): number => pane.filter((row) => row.includes(said)).length;
+      // Once, after the one reply that admitted it. Twice would be an entry
+      // handed to a reply that did not submit it — which is what following the
+      // latest entry rather than the record's own coordinates would do here,
+      // because this prefix holds exactly one.
+      expect(counted("Entry 1 \u00b7 \u2713 COMPLETED")).toBe(1);
+      expect(counted("the first entry ran")).toBe(1);
+      expect(counted("Entry 2 \u00b7")).toBe(0);
+      expect(counted("the second entry ran")).toBe(0);
+      repl.terminal.end();
+      yield* awaiting(
+        repl.terminal,
+        "the cold command leaving",
+        () => repl.outcome() !== undefined,
+      );
+    });
+    // And reading it asked nobody anything and wrote nothing.
+    expect(host.fake.prompts).toHaveLength(calls);
+    expect(yield* until(readFile(pairedLocation(host.root, execution).entries, "utf8"))).toBe(
+      entries,
+    );
+    expect(yield* until(readFile(pairedLocation(host.root, execution).sidekick, "utf8"))).toBe(
+      chat,
+    );
   });
 });
 
