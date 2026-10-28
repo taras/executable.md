@@ -6,21 +6,21 @@
   },
   "input": {
     "journal": "journal.jsonl",
-    "journalSha256": "98bd0fdacbda23ec7447058a54315b2b1d34a8340eb68ff7178a85bd6aa26a66",
+    "journalSha256": "9d6e73ff3728849b931eebac177cb30de8f1dc0db11abdb9c2391f950b18c33f",
     "workspace": "workspaceOf(model, CHECKPOINT_SIDEKICK)",
-    "initialFocus": "the Draft takes focus on its own; the committed frame is composed with the tree’s answer",
+    "initialFocus": "the Draft takes focus on its own; the committed frame is composed with the tree's answer",
     "focused": "footer:input"
   },
   "authority": {
-    "chrome160": "packages/cli/tests/fixtures/repl/accepted-160.ts (ACCEPTED_160, accepted attempt 4 at c5626b3bc306fea4c19fbeae36494abe8fa5317e)",
-    "geometry": "the direct corrected-size acceptance at 84092725 and its named 120/72 images",
-    "amendments": "one-list Transcript amendment; shipping-scope omission of Follow/QUEUE; human-breadcrumb-acceptance-20261028.json (chevron 48→50, bounds unchanged)",
-    "shippingCapture": "implementation/implementor-31/shipping/72x20/candidate-cells.json at 0c37c8344fd872c200c7ea7534b1fef5d9668b44"
+    "acceptedScreen": "packages/cli/tests/fixtures/repl/accepted-160.ts blob 83dd94534ecb70f7736b0d4f71d1b42ad3d414c3 at f0232b3e2611edb0edd2b7fd4de45cfae905d575, sha256 a8e16e57b770f5aec619e4074d0ea89f216c6560a235ec069c4ce5b9541b2459",
+    "reviewedCapture": "implementation/implementor-31/shipping/72x20/candidate-cells.json at 0c37c8344fd872c200c7ea7534b1fef5d9668b44, sha256 c9a72408086ea03ed21d4f5baa8a5d94bfb6e4d762d3d7578851381b5b729b7c",
+    "amendments": "one-list Transcript; corrected sizes at 84092725; human-breadcrumb-acceptance-20261028.json sha256 24fab680a332abd8540a56ed2be4082a35c4a1bf31d2e1378e64a6c9a345233f; Follow and QUEUE omitted, TODO inactive",
+    "correspondence": "implementation/implementor-49/authority-map.json records every row's authority, role and style-run correspondence"
   },
   "rows": [
     " XMD REPL  session checkout-repair                                      ",
     "     Sessions    * Entries                                              ",
-    " › Entry 2                                                     ● ACTIVE ",
+    "   › Entry 2 › Checklist                                       ● ACTIVE ",
     "                                                                        ",
     "      [↑ earlier]                                                       ",
     "  │  Output · live                                                      ",
@@ -36,7 +36,7 @@
     "  <Checkout cart={cart} />                                              ",
     "                                                                        ",
     "  <PriceSummary items={cart.items} currency=\"USD\" />                    ",
-    " HISTORY  1 ×  2 ●  ── HEAD · LIVE          [history]   [exit]   [pause]",
+    " HISTORY  1 ✓  2 ●  ── HEAD · LIVE          [history]   [exit]   [pause]",
     " Entry 2 running · Enter unavailable · Type here · Tab/Shift+Tab move   "
   ],
   "styleRuns": [
@@ -126,20 +126,48 @@
         {
           "x": 1,
           "width": 2,
-          "fg": "7c868d",
+          "fg": "7b858d",
           "bg": "0e1215",
           "attrs": ""
         },
         {
           "x": 3,
+          "width": 2,
+          "fg": "7c868d",
+          "bg": "0e1215",
+          "attrs": ""
+        },
+        {
+          "x": 5,
           "width": 7,
+          "fg": "7b858d",
+          "bg": "0e1215",
+          "attrs": ""
+        },
+        {
+          "x": 12,
+          "width": 1,
+          "fg": "-",
+          "bg": "0e1215",
+          "attrs": ""
+        },
+        {
+          "x": 13,
+          "width": 2,
+          "fg": "7c868d",
+          "bg": "0e1215",
+          "attrs": ""
+        },
+        {
+          "x": 15,
+          "width": 9,
           "fg": "7fd3e8",
           "bg": "0e1215",
           "attrs": ""
         },
         {
-          "x": 10,
-          "width": 53,
+          "x": 24,
+          "width": 39,
           "fg": "-",
           "bg": "0e1215",
           "attrs": ""
@@ -871,7 +899,7 @@
         {
           "x": 11,
           "width": 2,
-          "fg": "c2766e",
+          "fg": "5aa87c",
           "bg": "08090b",
           "attrs": ""
         },
@@ -981,5 +1009,5 @@
       ]
     }
   ],
-  "expectedSha256": "2e4c0721ef3b08e0f5953e51198e618604d4798dda971a475cac44fdff765147"
+  "expectedSha256": "715de6ef2dc63c061774cb87c62da8b24827aadb1040de8a9d5250c60fd5b333"
 }

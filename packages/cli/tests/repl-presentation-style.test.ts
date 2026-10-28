@@ -133,6 +133,7 @@ import { chatLinesFor, QUEUE_WINDOW } from "../src/repl/application.ts";
 import { readDescription } from "../src/repl/description.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import {
+  appearanceJournal,
   appearanceModel,
   appearanceRecord,
   differences,
@@ -601,6 +602,11 @@ describe("REPL appearance - reviewed shipping profiles", () => {
   for (const profile of ["160x36", "120x30", "72x20"] as const) {
     it(`${profile}: every row and style run is the reviewed record's`, function* () {
       const record = yield* appearanceRecord(profile);
+      const journal = yield* appearanceJournal();
+      // The record says which input it describes, and this is that input. A
+      // record left behind by a re-recording fails here, on the digest, rather
+      // than further down as a row that stopped matching.
+      expect([profile, record.input.journalSha256]).toEqual([profile, journal.sha256]);
       const model = yield* appearanceModel();
       const size = sizeOf(record);
       yield* scoped(function* (): Operation<void> {
@@ -627,6 +633,58 @@ describe("REPL appearance - reviewed shipping profiles", () => {
       });
     });
   }
+});
+
+/**
+ * What the recorded input actually is, before anything is drawn from it.
+ *
+ * The first recording of this journal was taken without the compiler
+ * installed: every eval closed `err` with "compiler not installed", the first
+ * entry settled nothing, and the nested child was never imported. The records
+ * drawn from it were a consistent description of a broken reading. This says
+ * what the reading has to be — a first entry that completed, a second still
+ * running, and the nested scope the second one admits — so a journal that
+ * loses it fails here, where the message is about the input.
+ */
+describe("REPL appearance - the recorded input", () => {
+  it("the journal parses, settles its first entry and admits the nested Checklist", function* () {
+    const journal = yield* appearanceJournal();
+    expect(journal.events.length).toBeGreaterThan(0);
+    const model = yield* appearanceModel();
+
+    // Two entries: the first completed, the second has not closed.
+    expect(model.entries.map((one) => one.terminal?.status ?? "unfinished")).toEqual([
+      "ok",
+      "unfinished",
+    ]);
+    // The first one's own output is there, which is what it closed `ok` with.
+    const settled = model.entries[0];
+    expect({ key: settled.key, outcome: settled.terminal?.status }).toEqual({
+      key: settled.key,
+      outcome: "ok",
+    });
+    // And the running entry admitted its nested child: one scope checkpoint,
+    // belonging to the second entry, from a component this journal really
+    // imported. Recorded without the compiler, that import never happened and
+    // there was no scope to select.
+    const scopes = model.checkpoints.filter((one) => one.kind === "scope");
+    expect({
+      scopes: scopes.length,
+      of: scopes.every((one) => one.marker.startsWith(`${model.entries[1].key}:`)),
+      imported: journal.events.some(
+        (event) =>
+          event.type === "yield" &&
+          event.description.type === "import_component" &&
+          event.description.name === "Checklist",
+      ),
+    }).toEqual({ scopes: 1, of: true, imported: true });
+
+    // Every record describes this journal and no other.
+    for (const profile of ["160x36", "120x30", "72x20"] as const) {
+      const record = yield* appearanceRecord(profile);
+      expect([profile, record.input.journalSha256]).toEqual([profile, journal.sha256]);
+    }
+  });
 });
 
 describe("REPL presentation: what one row's cells say it is", () => {
