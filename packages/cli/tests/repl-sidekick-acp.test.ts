@@ -217,6 +217,12 @@ function* deadline(what: string): Operation<never> {
   yield* sleep(5000);
   throw new Error(what);
 }
+function errorOf(value: unknown): Error {
+  if (!(value instanceof Error)) {
+    throw new Error("Expected an Error, and got " + String(value) + ".");
+  }
+  return value;
+}
 function* refused(operation: Operation<unknown>): Operation<void> {
   let error: unknown;
   try {
@@ -1611,7 +1617,7 @@ describe("ACP81: a replacement inside a refreshed identity window", () => {
     );
     expect(published).toBe(false);
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toBe(
+    expect(errorOf(failure).message).toBe(
       "the staged descriptor was replaced while it was being published.",
     );
     expect(yield* readTextFile(foreign!)).toBe("someone else's file");
@@ -1680,7 +1686,7 @@ describe("ACP81: a replacement inside a refreshed identity window", () => {
     );
     expect(published).toBe(false);
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toBe(
+    expect(errorOf(failure).message).toBe(
       "the published descriptor was replaced while it was being published.",
     );
     expect(yield* readTextFile(file)).toBe("someone else's attachment");
@@ -1750,6 +1756,150 @@ describe("ACP81: a replacement inside a refreshed identity window", () => {
     expect((yield* until(lstat(file))).ino).toBe(foreignIdentity!.ino);
     expect(yield* until(readdir(home))).toEqual(["attachment.json"]);
     yield* refused(until(lstat(directory!)));
+  });
+
+  it("ACP81: a directory read that fails at teardown still finishes the cleanup it can", function* () {
+    const home = yield* publishingHome("xmd-directory-unreadable-");
+    const file = join(home, "attachment.json");
+    let directory: string | undefined;
+    let reads = 0;
+    // The read this teardown takes before anything else, failing the way a
+    // filesystem fails: not absent, unreadable.
+    const unreadable = Object.assign(new Error("simulated directory read failure"), {
+      code: "EIO",
+    });
+    let accepted = 0;
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      // Counted, not held: this runs in the accepted connection's own cleanup,
+      // so seeing it once is seeing that cleanup joined.
+      function* () {
+        accepted += 1;
+      },
+      {
+        readDirectoryIdentity: (path) => {
+          reads += 1;
+          return reads === 3 ? Promise.reject(unreadable) : lstat(path);
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let socketPath: string | undefined;
+    let peer: Socket | undefined;
+    let failure: unknown;
+    try {
+      yield* scoped(function* () {
+        const attachment = yield* host.publish(file, {
+          ...binding("directory-unreadable"),
+          cwd: home,
+        });
+        socketPath = attachment.descriptor.socket;
+        peer = createConnection(socketPath);
+        yield* once(peer, "connect");
+      });
+    } catch (error) {
+      failure = error;
+    } finally {
+      peer?.destroy();
+    }
+    console.log(
+      JSON.stringify({
+        kind: "directory-read-failure",
+        reads,
+        same: failure === unreadable,
+        message: failure === undefined ? null : errorOf(failure).message,
+        accepted,
+      }),
+    );
+    // The failure this teardown ended with is the one it was handed.
+    expect(failure).toBe(unreadable);
+    expect(errorOf(failure).message).toBe("simulated directory read failure");
+    expect(reads).toBe(3);
+    // And everything that did not depend on that question is finished: the
+    // accepted connection's own close was reached, and the listener closed —
+    // which is what took its socket out of the directory.
+    expect(accepted).toBe(1);
+    yield* refused(until(lstat(file)));
+    yield* refused(until(lstat(socketPath!)));
+    expect(yield* until(readdir(home))).toEqual([]);
+    // The directory it could not identify is still there, which is the
+    // fail-safe direction: it is never removed on an unconfirmed reading.
+    expect((yield* until(lstat(directory!))).isDirectory()).toBe(true);
+    expect(yield* until(readdir(directory!))).toEqual([]);
+    yield* until(rmdir(directory!));
+  });
+
+  it("ACP81: a second cleanup failure is reported with the first, not instead of it", function* () {
+    const home = yield* publishingHome("xmd-directory-and-name-");
+    const file = join(home, "attachment.json");
+    let directory: string | undefined;
+    let reads = 0;
+    const unreadable = Object.assign(new Error("simulated directory read failure"), {
+      code: "EIO",
+    });
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        readDirectoryIdentity: (path) => {
+          reads += 1;
+          return reads === 3 ? Promise.reject(unreadable) : lstat(path);
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let socketPath: string | undefined;
+    let failure: unknown;
+    try {
+      yield* scoped(function* () {
+        const attachment = yield* host.publish(file, {
+          ...binding("directory-and-name"),
+          cwd: home,
+        });
+        socketPath = attachment.descriptor.socket;
+        // The published name cannot be unlinked from a directory this owner
+        // may no longer write to, so the stage after the failed reading fails
+        // as well.
+        yield* until(chmod(home, 0o500));
+      });
+    } catch (error) {
+      failure = error;
+    }
+    yield* until(chmod(home, 0o700));
+    const carried = failure instanceof AggregateError ? failure.errors : [];
+    console.log(
+      JSON.stringify({
+        kind: "directory-read-and-removal-failure",
+        aggregate: failure instanceof AggregateError,
+        message: failure === undefined ? null : errorOf(failure).message,
+        carried: carried.map((one: unknown) => errorOf(one).message),
+      }),
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(errorOf(failure).message).toBe(
+      "The attachment could not finish removing what it published.",
+    );
+    // The first failure is carried by identity, not described.
+    expect(carried[0]).toBe(unreadable);
+    expect(carried).toHaveLength(2);
+    expect(errorOf(carried[1]).message).toContain("attachment.json");
+    // The listener still closed its own socket, and the name it could not
+    // remove is still there to be seen rather than silently forgotten.
+    yield* refused(until(lstat(socketPath!)));
+    expect((yield* until(lstat(file))).isFile()).toBe(true);
+    expect((yield* until(lstat(directory!))).isDirectory()).toBe(true);
+    yield* until(unlink(file));
+    yield* until(rmdir(directory!));
   });
 
   it("ACP81: the directory is judged while its socket is still in it, and still removed", function* () {
