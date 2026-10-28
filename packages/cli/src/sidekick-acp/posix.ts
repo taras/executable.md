@@ -57,8 +57,26 @@ function closeSocket(socket: Socket): Operation<void> {
     return () => socket.off("close", closed);
   });
 }
+/**
+ * Whether these two readings are of the same file, and not merely of the same
+ * name and number.
+ *
+ * An inode number is reused. A file this owner published, unlinked by somebody
+ * else, and a new file created in its place can be handed the number the first
+ * one had — on Linux commonly, and ext4 in CI did exactly that: the owner's
+ * exit removed a replacement it had never published, and the name it was asked
+ * to leave alone was gone. macOS does not reuse as eagerly, which is why one
+ * host saw it and the other did not.
+ *
+ * So the moment the file came into existence is part of its identity. An
+ * unchanged file keeps it — measured, two readings of one untouched file agree
+ * — and a file created after another was unlinked cannot share it. Stricter
+ * rather than looser: it can only ever leave a name alone, never remove one
+ * this owner did not publish. Where a filesystem reports no creation time both
+ * readings carry the same substitute and this is the pair it always was.
+ */
 function same(a: Stats, b: Stats): boolean {
-  return a.dev === b.dev && a.ino === b.ino;
+  return a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
 }
 function* removeOwned(path: string, identity: Stats | undefined): Operation<void> {
   if (identity === undefined) {

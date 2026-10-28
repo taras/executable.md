@@ -325,7 +325,11 @@ describe("Session ownership command", () => {
     ).join();
     expect(plugin.code).toBe(1);
     expect((yield* until(readdir(work))).sort()).toEqual(["poison.cjs", "poison.ts", "session"]);
-    expect(yield* until(readdir(join(home, ".acpx")))).toEqual([
+    // Sorted, like the directory above it: what this asserts is exactly which
+    // names are there, and a directory does not promise the order it hands
+    // them back in. Measured, one runner enumerated these two the other way
+    // round and the membership was the membership either way.
+    expect((yield* until(readdir(join(home, ".acpx")))).sort()).toEqual([
       "config.json",
       "xmd-native-sessions",
     ]);
