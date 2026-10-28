@@ -424,27 +424,57 @@ export function* usePosixSidekickTransport(
               }
             }
           }
-          try {
-            for (const socket of sockets.keys()) {
-              yield* closeSocket(socket);
+          const failures: unknown[] = [];
+          if (unidentified !== undefined) {
+            failures.push(unidentified);
+          }
+          // Each of these is this owner's, and none of them is any of the
+          // others: a peer that will not close says nothing about a name that
+          // can still be unlinked, and a descriptor that will not go says
+          // nothing about the staged name beside it. So a stage that fails is
+          // kept and the next one is still attempted, in the order they
+          // happened — and what this teardown ends with is all of it rather
+          // than the first of it.
+          function* attempt(stage: () => Operation<void>): Operation<void> {
+            try {
+              yield* stage();
+            } catch (error) {
+              failures.push(error);
             }
-            if (server !== undefined) {
-              server.off("connection", connected);
-              const held = server;
+          }
+          for (const socket of sockets.keys()) {
+            yield* attempt(function* () {
+              yield* closeSocket(socket);
+            });
+          }
+          if (server !== undefined) {
+            server.off("connection", connected);
+            const held = server;
+            yield* attempt(function* () {
               yield* action<void>((resolve) => {
                 held.close(() => resolve());
                 return () => {};
               });
-            }
+            });
+          }
+          yield* attempt(function* () {
             yield* removeOwned(path, descriptorIdentity);
-            if (stage !== undefined) {
-              yield* removeOwned(stage, stageIdentity);
-            }
-            if (directory !== undefined) {
-              yield* removeOwned(join(directory, "s"), socketIdentity);
+          });
+          if (stage !== undefined) {
+            const staged = stage;
+            yield* attempt(function* () {
+              yield* removeOwned(staged, stageIdentity);
+            });
+          }
+          if (directory !== undefined) {
+            const made = directory;
+            yield* attempt(function* () {
+              yield* removeOwned(join(made, "s"), socketIdentity);
+            });
+            yield* attempt(function* () {
               try {
                 if (ours) {
-                  yield* until(rmdir(directory));
+                  yield* until(rmdir(made));
                 }
               } catch (error) {
                 if (
@@ -457,21 +487,19 @@ export function* usePosixSidekickTransport(
                   throw error;
                 }
               }
-            }
-          } catch (failure) {
-            // Both, when there are both: the one that stopped this teardown
-            // knowing which directory was its own, and the one that stopped it
-            // finishing. Neither stands in for the other.
-            if (unidentified === undefined) {
-              throw failure;
-            }
+            });
+          }
+          // One failure leaves as itself, because the caller's own fence may
+          // be looking for that exact object. More than one travel together,
+          // in the order they were met; neither stands in for the other.
+          if (failures.length === 1) {
+            throw failures[0];
+          }
+          if (failures.length > 1) {
             throw new AggregateError(
-              [unidentified, failure],
+              failures,
               "The attachment could not finish removing what it published.",
             );
-          }
-          if (unidentified !== undefined) {
-            throw unidentified;
           }
         });
         try {
