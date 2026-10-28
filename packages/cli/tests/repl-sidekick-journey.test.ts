@@ -59,6 +59,7 @@ import {
 } from "./fixtures/repl/issue-932/history.ts";
 import {
   appendGate,
+  awaitedFact,
   awaiting,
   awaited,
   draftText,
@@ -1388,6 +1389,15 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     yield* awaiting(repl.terminal, "the evaluated reply", (one) =>
       saidBySidekick(one, "Half a thought."),
     );
+    // The screen says the Sidekick's words as soon as it has said them, and
+    // this reply carries an entry: the response is published once that entry
+    // has been evaluated, which is after the row is drawn. Caught on a loaded
+    // runner as a published chat whose last record was still the control the
+    // evaluation had just taken. So the fact this row goes on to read is the
+    // one it waits for.
+    yield* awaitedFact("the reply reaching the published chat", function* () {
+      return (yield* mountedReading(repl)).chat.some((record) => record.kind === "response");
+    });
     const after = (yield* mountedReading(repl)).chat;
     const answered = after.flatMap((record) =>
       record.kind === "response"

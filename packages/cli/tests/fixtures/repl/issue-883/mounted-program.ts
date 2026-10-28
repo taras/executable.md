@@ -1049,6 +1049,28 @@ export function* awaited(what: string, settled_: () => boolean): Operation<void>
   throw new Error(`${what} never happened within ${MOUNTED_DEADLINE_MS}ms`);
 }
 
+/**
+ * The same wait again, for a fact only an operation can read.
+ *
+ * What is on disk is the case in point. A row drawn on the screen and a record
+ * published in the history are two different moments: the Sidekick's words are
+ * shown as soon as it has said them, and the reply they belong to is saved
+ * after the entry it carries has been evaluated. A row that waited for the
+ * screen and then read the file would be asking about the second moment having
+ * waited for the first.
+ */
+export function* awaitedFact(what: string, held: () => Operation<boolean>): Operation<void> {
+  const deadline = Date.now() + MOUNTED_DEADLINE_MS;
+  while (Date.now() < deadline) {
+    if (yield* held()) {
+      return;
+    }
+    yield* sleep(10);
+    yield* settled(20);
+  }
+  throw new Error(`${what} never happened within ${MOUNTED_DEADLINE_MS}ms`);
+}
+
 /** Where this text is on the screen, if it is anywhere. */
 export function coordinateOf(
   terminal: Terminal,
