@@ -21,6 +21,7 @@
 import { readTextFile } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { z } from "zod";
 import type { Operation } from "effection";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { parseDurableEvent } from "@executablemd/durable-streams";
@@ -29,37 +30,52 @@ import { projectRepl } from "../../../src/repl/model.ts";
 import type { ReplTerminalSize } from "../../../src/repl/terminal.ts";
 import type { TerminalGrid } from "./presentation.ts";
 
+/**
+ * What a stored record has to be, as a schema the record is parsed through.
+ *
+ * Parsed rather than asserted: a record whose size lost a number, whose
+ * authority holds something other than a string, or whose runs are missing a
+ * width fails here, naming the member, instead of being handed on as a shape
+ * the type said it had.
+ */
+const RUN = z
+  .object({
+    x: z.number(),
+    width: z.number(),
+    fg: z.string(),
+    bg: z.string(),
+    attrs: z.string(),
+  })
+  .strict();
+
+const RECORD = z
+  .object({
+    profile: z.string().min(1),
+    size: z.object({ columns: z.number(), rows: z.number() }).strict(),
+    input: z
+      .object({
+        journal: z.string().min(1),
+        journalSha256: z.string().min(1),
+        workspace: z.string().min(1),
+        initialFocus: z.string().min(1),
+        focused: z.string().optional(),
+      })
+      .strict(),
+    authority: z.record(z.string(), z.string()),
+    rows: z.array(z.string()),
+    styleRuns: z.array(z.object({ y: z.number(), runs: z.array(RUN) }).strict()),
+    expectedSha256: z.string().min(1),
+  })
+  .strict();
+
 /** One run of cells drawn in one style. */
-export interface AppearanceRun {
-  readonly x: number;
-  readonly width: number;
-  readonly fg: string;
-  readonly bg: string;
-  readonly attrs: string;
-}
+export type AppearanceRun = z.infer<typeof RUN>;
 
 /** One row's runs, as a record stores them. */
-export interface AppearanceLine {
-  readonly y: number;
-  readonly runs: readonly AppearanceRun[];
-}
+export type AppearanceLine = z.infer<typeof RECORD>["styleRuns"][number];
 
 /** What one profile is expected to look like. */
-export interface AppearanceRecord {
-  readonly profile: string;
-  readonly size: { readonly columns: number; readonly rows: number };
-  readonly input: {
-    readonly journal: string;
-    readonly journalSha256: string;
-    readonly workspace: string;
-    readonly initialFocus: string;
-    readonly focused: string | undefined;
-  };
-  readonly authority: Readonly<Record<string, string>>;
-  readonly rows: readonly string[];
-  readonly styleRuns: readonly AppearanceLine[];
-  readonly expectedSha256: string;
-}
+export type AppearanceRecord = z.infer<typeof RECORD>;
 
 function at(name: string): string {
   return fileURLToPath(new URL(`./appearance/${name}`, import.meta.url));
@@ -73,7 +89,7 @@ export function* appearanceJournal(): Operation<{
 }> {
   const text = yield* readTextFile(at("journal.jsonl"));
   const events: DurableEvent[] = [];
-  for (const [at, line] of text.split("\n").entries()) {
+  for (const [order, line] of text.split("\n").entries()) {
     if (line.trim().length === 0) {
       continue;
     }
@@ -82,7 +98,7 @@ export function* appearanceJournal(): Operation<{
     // describing a screen drawn from something else.
     const parsed = parseDurableEvent(line);
     if (!parsed.ok) {
-      throw new Error(`appearance journal line ${at + 1} is not a durable event`, {
+      throw new Error(`appearance journal line ${order + 1} is not a durable event`, {
         cause: parsed.error,
       });
     }
@@ -104,96 +120,27 @@ export function* appearanceModel(): Operation<ReplModel> {
   return projected.value;
 }
 
-function runOf(value: unknown, where: string): AppearanceRun {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${where} is not a style run`);
+/** One stored record, parsed into the structure it is supposed to be. */
+export function readAppearanceRecord(profile: string, text: string): AppearanceRecord {
+  const parsed = RECORD.safeParse(JSON.parse(text));
+  if (!parsed.success) {
+    throw new Error(`the ${profile} appearance record is not one: ${parsed.error.message}`);
   }
-  const { x, width, fg, bg, attrs } = value as Record<string, unknown>;
-  if (
-    typeof x !== "number" ||
-    typeof width !== "number" ||
-    typeof fg !== "string" ||
-    typeof bg !== "string" ||
-    typeof attrs !== "string"
-  ) {
-    throw new Error(`${where} is not a style run`);
+  const record = parsed.data;
+  if (record.profile !== profile) {
+    throw new Error(`the ${profile} record says it is ${record.profile}`);
   }
-  return Object.freeze({ x, width, fg, bg, attrs });
+  if (record.rows.length !== record.size.rows) {
+    throw new Error(
+      `the ${profile} record holds ${record.rows.length} rows for a screen of ${record.size.rows}`,
+    );
+  }
+  return record;
 }
 
-/**
- * One stored record, read as the structure it is supposed to be.
- *
- * Checked field by field rather than asserted into shape: a record that lost
- * its rows, its runs or the digest binding it to an input says so here, where
- * the message is about the record, instead of failing later as a row that did
- * not match.
- */
+/** That record, read from the repository data beside this module. */
 export function* appearanceRecord(profile: string): Operation<AppearanceRecord> {
-  const text = yield* readTextFile(at(`${profile}.json`));
-  const value: unknown = JSON.parse(text);
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`the ${profile} record is not an object`);
-  }
-  const record = value as Record<string, unknown>;
-  const size = record.size as Record<string, unknown> | undefined;
-  const input = record.input as Record<string, unknown> | undefined;
-  if (
-    record.profile !== profile ||
-    size === undefined ||
-    typeof size.columns !== "number" ||
-    typeof size.rows !== "number"
-  ) {
-    throw new Error(`the ${profile} record does not say which profile and size it is`);
-  }
-  if (
-    input === undefined ||
-    typeof input.journal !== "string" ||
-    typeof input.journalSha256 !== "string" ||
-    typeof input.workspace !== "string" ||
-    typeof input.initialFocus !== "string"
-  ) {
-    throw new Error(`the ${profile} record does not name the input it describes`);
-  }
-  if (!Array.isArray(record.rows) || !record.rows.every((row) => typeof row === "string")) {
-    throw new Error(`the ${profile} record has no rows of text`);
-  }
-  if (record.rows.length !== size.rows) {
-    throw new Error(`the ${profile} record holds ${record.rows.length} rows for ${size.rows}`);
-  }
-  if (!Array.isArray(record.styleRuns)) {
-    throw new Error(`the ${profile} record has no style runs`);
-  }
-  const styleRuns = record.styleRuns.map((line, order) => {
-    const held = line as Record<string, unknown>;
-    if (typeof held.y !== "number" || !Array.isArray(held.runs)) {
-      throw new Error(`the ${profile} record's style line ${order} has no rows or runs`);
-    }
-    return Object.freeze({
-      y: held.y,
-      runs: Object.freeze(
-        held.runs.map((run, index) => runOf(run, `${profile} line ${held.y} run ${index}`)),
-      ),
-    });
-  });
-  if (typeof record.expectedSha256 !== "string" || typeof record.authority !== "object") {
-    throw new Error(`the ${profile} record carries no digest or authority`);
-  }
-  return Object.freeze({
-    profile,
-    size: Object.freeze({ columns: size.columns, rows: size.rows }),
-    input: Object.freeze({
-      journal: input.journal,
-      journalSha256: input.journalSha256,
-      workspace: input.workspace,
-      initialFocus: input.initialFocus,
-      focused: typeof input.focused === "string" ? input.focused : undefined,
-    }),
-    authority: Object.freeze({ ...(record.authority as Record<string, string>) }),
-    rows: Object.freeze([...record.rows]),
-    styleRuns: Object.freeze(styleRuns),
-    expectedSha256: record.expectedSha256,
-  });
+  return readAppearanceRecord(profile, yield* readTextFile(at(`${profile}.json`)));
 }
 
 /** The size one record is of. */

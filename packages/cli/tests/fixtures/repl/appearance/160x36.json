@@ -15,7 +15,7 @@
     "acceptedScreen": "packages/cli/tests/fixtures/repl/accepted-160.ts blob 83dd94534ecb70f7736b0d4f71d1b42ad3d414c3 at f0232b3e2611edb0edd2b7fd4de45cfae905d575, sha256 a8e16e57b770f5aec619e4074d0ea89f216c6560a235ec069c4ce5b9541b2459",
     "reviewedCapture": "implementation/implementor-31/shipping/160x36/candidate-cells.json at 0c37c8344fd872c200c7ea7534b1fef5d9668b44, sha256 068318b5f162526f9d9f8be5c96a0ae1c240e9b85c879d6068a65864bdc132c8",
     "amendments": "one-list Transcript; corrected sizes at 84092725; human-breadcrumb-acceptance-20261028.json sha256 24fab680a332abd8540a56ed2be4082a35c4a1bf31d2e1378e64a6c9a345233f; Follow and QUEUE omitted, TODO inactive",
-    "correspondence": "implementation/implementor-49/authority-map.json records every row's authority, role and style-run correspondence"
+    "correspondence": "implementation/implementor-50/authority-map.json: every cell the capture also holds is compared at its own coordinate, run position and width included"
   },
   "rows": [
     " XMD REPL  session checkout-repair                                                                                                                              ",
@@ -3079,5 +3079,5 @@
       ]
     }
   ],
-  "expectedSha256": "dee610a3c1d2f88a55b5871c2a4af5deff594626e364b5d64f7440de5ab6b383"
+  "expectedSha256": "d445738504751a81f01e0e408cae4dbb9024d971c3d5468f7d31f103b2d31be0"
 }

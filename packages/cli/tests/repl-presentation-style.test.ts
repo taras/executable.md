@@ -32,6 +32,7 @@ import {
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { fileURLToPath } from "node:url";
+import { readTextFile } from "@effectionx/fs";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { scoped, sleep, spawn } from "effection";
 import type { Operation } from "effection";
@@ -136,6 +137,7 @@ import {
   appearanceJournal,
   appearanceModel,
   appearanceRecord,
+  readAppearanceRecord,
   differences,
   screenOf,
   sizeOf,
@@ -684,6 +686,72 @@ describe("REPL appearance - the recorded input", () => {
       const record = yield* appearanceRecord(profile);
       expect([profile, record.input.journalSha256]).toEqual([profile, journal.sha256]);
     }
+  });
+
+  /**
+   * A record is parsed, so the shapes it could have lost are refused.
+   *
+   * The members a reader reaches for are the ones worth naming: a null where a
+   * member should be, a number where a string should be, a run missing its
+   * width. Each of these is a record that would otherwise be handed on with a
+   * type written over it and fail later as a row that did not match.
+   */
+  it("a malformed record is refused by name rather than read as one", function* () {
+    const sound = JSON.parse(
+      yield* readTextFile(
+        fileURLToPath(new URL("./fixtures/repl/appearance/72x20.json", import.meta.url)),
+      ),
+    );
+    const broken: readonly { readonly what: string; readonly make: () => unknown }[] = [
+      { what: "a null input", make: () => ({ ...sound, input: null }) },
+      {
+        what: "a null member of the input",
+        make: () => ({ ...sound, input: { ...sound.input, journalSha256: null } }),
+      },
+      {
+        what: "an authority value that is not a string",
+        make: () => ({ ...sound, authority: { ...sound.authority, reviewedCapture: 7 } }),
+      },
+      { what: "a null size", make: () => ({ ...sound, size: null }) },
+      {
+        what: "a size whose columns went missing",
+        make: () => ({ ...sound, size: { rows: sound.size.rows } }),
+      },
+      {
+        what: "a style line that is not an object",
+        make: () => ({ ...sound, styleRuns: [...sound.styleRuns.slice(1), "line"] }),
+      },
+      {
+        what: "a run missing its width",
+        make: () => ({
+          ...sound,
+          styleRuns: sound.styleRuns.map((line: { y: number; runs: unknown[] }, at: number) =>
+            at === 0
+              ? {
+                  y: line.y,
+                  runs: line.runs.map((run) => ({ ...(run as object), width: undefined })),
+                }
+              : line,
+          ),
+        }),
+      },
+      { what: "rows that are not strings", make: () => ({ ...sound, rows: [1, 2, 3] }) },
+      { what: "a row count the size does not agree with", make: () => ({ ...sound, rows: [] }) },
+    ];
+    for (const one of broken) {
+      let refused: unknown;
+      try {
+        readAppearanceRecord("72x20", JSON.stringify(one.make()));
+      } catch (error) {
+        refused = error;
+      }
+      expect({ what: one.what, refused: refused instanceof Error }).toEqual({
+        what: one.what,
+        refused: true,
+      });
+    }
+    // And the record on disk is read without complaint.
+    expect(readAppearanceRecord("72x20", JSON.stringify(sound)).profile).toBe("72x20");
   });
 });
 
