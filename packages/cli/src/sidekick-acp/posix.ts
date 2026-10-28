@@ -2,7 +2,7 @@ import { action, createSignal, ensure, resource, scoped, until, useScope } from 
 import type { Operation } from "effection";
 import { constants } from "node:fs";
 import { chmod, link, lstat, mkdtemp, open, realpath, rmdir, unlink } from "node:fs/promises";
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import type { Server, Socket } from "node:net";
@@ -96,6 +96,31 @@ function sameNode(before: Stats | undefined, after: Stats, what: string): void {
 
 /** Which identity a refresh is about, for the test seam that holds one. */
 type IdentityWindow = "directory" | "stage" | "published";
+
+/**
+ * The regular file this publication created, still open, and which node it is.
+ *
+ * A device and inode read from a name is a reading of history: the file it
+ * described may be gone, and an inode number is handed back to the next file
+ * created once its last link goes. An open handle is not history. While this
+ * one is held the original cannot be freed, so its number cannot be given to
+ * anybody else — which is what makes it safe to say, of a name, that it still
+ * holds *this* file.
+ *
+ * So the handle is the authority and the two numbers below come from it, read
+ * as bigints because an inode number is one and rounding it to a double would
+ * put a second ambiguity where this is removing the first. A name's own
+ * reading answers one question only: is it this node. It never becomes the
+ * authority itself.
+ */
+interface Pinned {
+  handle: FileHandle;
+  dev: bigint;
+  ino: bigint;
+}
+function isPinned(pinned: Pinned, reading: BigIntStats): boolean {
+  return reading.dev === pinned.dev && reading.ino === pinned.ino;
+}
 
 function* removeOwned(path: string, identity: Stats | undefined): Operation<void> {
   if (identity === undefined) {
@@ -276,10 +301,34 @@ export function* usePosixSidekickTransport(
   probes?: {
     holdIdentityRefresh?: (window: IdentityWindow) => Promise<void>;
     readDirectoryIdentity?: (path: string) => Promise<Stats>;
+    /**
+     * The publication's own open file, as a test can see it: `acquired` is
+     * handed the handle the moment this publication owns it, and `readName`
+     * stands in for every reading of a regular name this publication owns,
+     * including the ones its cleanup takes.
+     *
+     * A host cannot be asked to hand one file the number of another, so a test
+     * that needs that outcome has to describe it. Describing it is only
+     * honest while the original is gone — which is why `acquired` exists: the
+     * fixture decides from the real handle, not from a flag.
+     */
+    pin?: {
+      acquired?: (handle: FileHandle) => void;
+      readName?: (name: string) => Promise<BigIntStats>;
+      /**
+       * Held between a completed open and this publication taking the handle
+       * it produced, so a test can cancel in a window no host can be asked to
+       * provide: the file exists and is open, and nothing owns it yet.
+       */
+      holdAcquisition?: () => Promise<void>;
+    };
   },
 ): Operation<void> {
   const uid = process.getuid?.();
   const readDirectoryIdentity = probes?.readDirectoryIdentity ?? lstat;
+  const readName =
+    probes?.pin?.readName ??
+    ((name: string): Promise<BigIntStats> => lstat(name, { bigint: true }));
   yield* SidekickTransport.set({
     supported: () => platform !== "win32" && uid !== undefined,
     identify: randomUUID,
@@ -336,6 +385,55 @@ export function* usePosixSidekickTransport(
             install(value);
           });
         }
+        /**
+         * What this publication owns, and the handle that keeps owning it.
+         *
+         * `pinnedFile` is the handle the moment it exists, so a cancellation that
+         * lands between opening and anything else still has something to
+         * close. `pin` only exists once the node behind it is known, because
+         * an identity this publication could not read is not one it may act
+         * on: without it, no name is removed at all.
+         */
+        let pinnedFile: FileHandle | undefined;
+        let pin: Pinned | undefined;
+        /**
+         * Is this name the file this publication opened — asked of the live
+         * handle, and asked again every time it matters.
+         */
+        function pinnedRefresh(
+          name: string,
+          window: IdentityWindow,
+          what: string,
+        ): Operation<BigIntStats> {
+          const waiting = probes?.holdIdentityRefresh?.(window);
+          const read = () => readName(name);
+          return retain(waiting === undefined ? read() : waiting.then(read), (value) => {
+            const owned = pin;
+            if (owned === undefined || !isPinned(owned, value)) {
+              throw new Error(`${what} was replaced while it was being published.`);
+            }
+          });
+        }
+        /**
+         * Remove a name only while it still holds the pinned file. Somebody
+         * else's file under that name is left where it is, and a name that is
+         * already gone is nothing to do.
+         */
+        function* removePinnedName(name: string): Operation<void> {
+          const owned = pin;
+          if (owned === undefined) {
+            return;
+          }
+          try {
+            if (isPinned(owned, yield* until(readName(name)))) {
+              yield* until(unlink(name));
+            }
+          } catch (error) {
+            if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+              throw error;
+            }
+          }
+        }
         let directory: string | undefined;
         let directoryAcquisition: Promise<string> | undefined;
         let directoryIdentity: Stats | undefined;
@@ -343,9 +441,7 @@ export function* usePosixSidekickTransport(
         // refresh: it is what a refreshed reading has to still be.
         let directoryOwned: Stats | undefined;
         let socketIdentity: Stats | undefined;
-        let descriptorIdentity: Stats | undefined;
         let stage: string | undefined;
-        let stageIdentity: Stats | undefined;
         let server: Server | undefined;
         const sockets = new Set<Socket>();
         const connections = yield* useScope();
@@ -442,6 +538,19 @@ export function* usePosixSidekickTransport(
               failures.push(error);
             }
           }
+          // Cancelled between opening the file and reading what it is, this
+          // publication owns a handle and no identity — and a name it may not
+          // touch without one. The handle itself can still say which node it
+          // is, which is not the same as asking the name: it is the authority
+          // being read directly. If even that fails, the failure is kept and
+          // the names are left alone.
+          if (pin === undefined && pinnedFile !== undefined) {
+            const owned = pinnedFile;
+            yield* attempt(function* () {
+              const value = yield* until(owned.stat({ bigint: true }));
+              pin = { handle: owned, dev: value.dev, ino: value.ino };
+            });
+          }
           for (const socket of sockets.keys()) {
             yield* attempt(function* () {
               yield* closeSocket(socket);
@@ -458,12 +567,12 @@ export function* usePosixSidekickTransport(
             });
           }
           yield* attempt(function* () {
-            yield* removeOwned(path, descriptorIdentity);
+            yield* removePinnedName(path);
           });
           if (stage !== undefined) {
             const staged = stage;
             yield* attempt(function* () {
-              yield* removeOwned(staged, stageIdentity);
+              yield* removePinnedName(staged);
             });
           }
           if (directory !== undefined) {
@@ -487,6 +596,18 @@ export function* usePosixSidekickTransport(
                   throw error;
                 }
               }
+            });
+          }
+          // Last, and after every name this publication might still have had
+          // to remove: the handle is what made those decisions answerable, so
+          // letting go of it is the final thing released rather than the first.
+          // A close that fails joins the others in its turn; nothing is
+          // removed on an unpinned reading afterwards, because there is no
+          // afterwards.
+          if (pinnedFile !== undefined) {
+            const owned = pinnedFile;
+            yield* attempt(function* () {
+              yield* until(owned.close());
             });
           }
           // One failure leaves as itself, because the caller's own fence may
@@ -558,46 +679,33 @@ export function* usePosixSidekickTransport(
           );
           stage = join(dirname(path), ".sidekick-" + randomUUID());
           const stagingPath = stage;
-          yield* scoped(function* () {
-            const file = yield* useFile(stagingPath, "wx", 0o600, (value) => {
-              stageIdentity = value;
-            });
-            stageIdentity = yield* until(file.stat());
-            yield* until(file.writeFile(JSON.stringify(descriptor)));
-          });
-          // The reading this owner created the stage file with, kept aside for
-          // the same reason the directory's is.
-          const staged = stageIdentity;
-          yield* retain(link(stage, path), () => {
-            descriptorIdentity = stageIdentity;
-          });
-          // One inode under two names now. Reading it again is what makes the
-          // removal below answer about the file this owner linked: the write
-          // and the link each changed its times, and a reading taken before
-          // them is a reading of what it was.
-          const linked = yield* refresh(
-            () => lstat(stagingPath),
-            staged,
-            "stage",
-            "the staged descriptor",
+          // Opened here and held until this publication is over. Every
+          // question below about which file a name holds is answered against
+          // this handle, and it stays open through all of them — including
+          // the ones cleanup asks, where a closed original is exactly what
+          // would let somebody else's file wear its number.
+          const holdAcquisition = probes?.pin?.holdAcquisition;
+          const opening = open(stagingPath, "wx", 0o600);
+          const opened = yield* retain(
+            holdAcquisition === undefined
+              ? opening
+              : opening.then((value) => holdAcquisition().then(() => value)),
             (value) => {
-              stageIdentity = value;
+              pinnedFile = value;
+              probes?.pin?.acquired?.(value);
             },
           );
-          yield* removeOwned(stage, linked);
-          stageIdentity = undefined;
-          // And the published name, read after the last thing this owner does
-          // to that inode. Unlinking the stage name changed its times too, so
-          // this is the only reading that is still the file's at exit.
-          descriptorIdentity = yield* refresh(
-            () => lstat(path),
-            linked,
-            "published",
-            "the published descriptor",
-            (value) => {
-              descriptorIdentity = value;
-            },
-          );
+          yield* retain(opened.stat({ bigint: true }), (value) => {
+            pin = { handle: opened, dev: value.dev, ino: value.ino };
+          });
+          yield* retain(opened.writeFile(JSON.stringify(descriptor)), () => {});
+          yield* retain(link(stagingPath, path), () => {});
+          // One node under two names now, and then under one. Each reading is
+          // checked against the open file rather than against the reading
+          // before it, so nothing it reports can promote a different file.
+          yield* pinnedRefresh(stagingPath, "stage", "the staged descriptor");
+          yield* removePinnedName(stagingPath);
+          yield* pinnedRefresh(path, "published", "the published descriptor");
           yield* provide({
             descriptor,
             *accept() {
