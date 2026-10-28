@@ -4640,6 +4640,24 @@ callbacks, documentation capture and public execution policy. Setup receives no
 installation array, request, entry identifier or receipt and creates no second
 execution owner.
 
+A host may also **stop** the execution it owns. `HostExecution.stop()` is the
+same seam's opt-in: it answers for the stop and the join, never for the
+document. It reaches a document that is still running, unwinds it, and joins
+every teardown the execution owns before it answers — a stop that returned
+while an owned cleanup was still running would be reporting an ending that had
+not happened. What the journal keeps is the terminal representation the
+protocol already has: one cancelled `Close` for the root, carrying a status and
+nothing else. No answer, outcome or successful payload is invented for work the
+document never finished, and asking again or reading the completion again
+writes no second ending.
+
+It creates no second execution owner. Initialization and invocation
+installations stay execution-owned, whole-document failure ranking is
+unchanged, and a persistence failure raised while that ending is being written
+stays the run's own failure by identity — the stop answers with it, the owned
+teardown is still attempted and joined, and nothing compensating is appended in
+its place.
+
 Which middleware a command installs on that seam is the host's own selection,
 made once by the runtime entrypoint. The bundled Plugin a run-profile command
 begins with is read from one CLI-private Context whose default is the

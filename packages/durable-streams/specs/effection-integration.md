@@ -926,6 +926,17 @@ closure, and emits `Close(err)` only for an ordinary workflow failure after the
 whole retained coroutine tree is aligned. Durability and persistence failures
 never become terminal events.
 
+A root may additionally be handed a **control** by its caller
+(`control: (own) => …`). Asking it to interrupt is answerable only while the
+root is open, repeated asks are the same ask, and asking retains nothing by
+itself — what the journal records is written when the root actually unwinds,
+and it is the existing cancelled `Close`: a status and nothing else, one of
+them, for the root. The control reports what was retained rather than what was
+asked. This adds no event family, no field and no inference that a terminal
+means success; terminal replay short-circuiting and subtree alignment are
+unchanged, and a backing persistence failure raised while that ending is being
+written is still never turned into a workflow terminal.
+
 The entry point creates a scope, builds the replay index, sets up the
 durable context, and runs the workflow:
 

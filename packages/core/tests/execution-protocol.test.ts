@@ -20,6 +20,7 @@ import {
   ensure,
   resource,
   scoped,
+  sleep,
   spawn,
   suspend,
   until,
@@ -1072,6 +1073,349 @@ describe("Tier EP — the execution protocol", () => {
       expect(finalized).toEqual(["cleanup"]);
       expect(observed).toEqual([1]);
     }
+  });
+
+  /**
+   * EP29: what an explicit host Stop answers for, and what it leaves alone.
+   *
+   * `HostExecution.stop()` answers for the stop and the join — never for the
+   * document. These four are the boundaries that distinction is decided at, and
+   * each is reached by a real gate rather than by timing: a normal terminal
+   * whose append began first, a durability failure, that same failure beside an
+   * ordinary cleanup error, and an ordinary document failure on its own.
+   */
+  it("EP29: Stop joins a terminal already being written and keeps fatal identity", function* () {
+    // A normal root Close whose append is held open. Stop arrives while it is
+    // in flight, which is the one moment a stop could cancel an ending the
+    // backend may already hold.
+    const inner = new InMemoryStream();
+    const appending = withResolvers<void>();
+    const release = withResolvers<void>();
+    let appendCancelled = false;
+    const held = {
+      readAll: () => inner.readAll(),
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type !== "close") {
+          yield* inner.append(event);
+          return;
+        }
+        let acknowledged = false;
+        try {
+          appending.resolve();
+          yield* release.operation;
+          yield* inner.append(event);
+          acknowledged = true;
+        } finally {
+          appendCancelled = !acknowledged;
+        }
+      },
+    };
+
+    yield* scoped(function* () {
+      const execution = yield* executeInstalled(
+        { ...inlineSource("# a normal ending\n"), stream: held },
+        [],
+      );
+      yield* appending.operation;
+      const stopped = withResolvers<Result<void>>();
+      const asking = withResolvers<void>();
+      yield* spawn(function* () {
+        asking.resolve();
+        stopped.resolve(yield* execution.stop());
+      });
+      yield* asking.operation;
+      release.resolve();
+
+      // The ending it was writing is the ending it has. The append was not
+      // cancelled, the retained close says `ok`, the completion is that same
+      // success, and the stop is `Ok` because the stop and the join both
+      // completed — not because the document was stopped.
+      const answer = yield* stopped.operation;
+      const completion = yield* execution;
+      expect(answer.ok).toBe(true);
+      expect(completion.ok).toBe(true);
+      expect(appendCancelled).toBe(false);
+      const closes = inner.snapshot().filter((event) => event.type === "close");
+      expect(closes.length).toBe(1);
+      expect(closes[0]?.type === "close" ? closes[0].result.status : undefined).toBe("ok");
+    });
+
+    // A durability failure, alone and then beside an ordinary cleanup error.
+    // Both times the run's own failure is the stop's answer, by identity: a
+    // fatal failure belongs to the run whichever layer raised it, and it cannot
+    // be reported as a successful stop or lose to a later ordinary error.
+    for (const alsoFailCleanup of [false, true]) {
+      const refusing = new InMemoryStream();
+      const appendCause = new Error("this journal refused the root close");
+      const cleanupCause = new Error("ORDINARY-CLEANUP");
+      const stream = {
+        readAll: () => refusing.readAll(),
+        *append(event: DurableEvent): Operation<void> {
+          if (event.type === "close") {
+            throw appendCause;
+          }
+          yield* refusing.append(event);
+        },
+      };
+      yield* scoped(function* () {
+        const execution = yield* executeInstalled(
+          { ...inlineSource("# a refused ending\n"), stream },
+          alsoFailCleanup
+            ? [
+                {
+                  *install(): Operation<void> {
+                    yield* ensure(() => {
+                      throw cleanupCause;
+                    });
+                  },
+                },
+              ]
+            : [],
+        );
+        const completion = yield* execution;
+        const answer = yield* execution.stop();
+        expect(completion.ok).toBe(false);
+        expect(answer.ok).toBe(false);
+        const failed = completion.ok ? undefined : completion.error;
+        const refused = answer.ok ? undefined : answer.error;
+        expect(failed).toBeInstanceOf(DurablePersistenceError);
+        expect(refused).toBeInstanceOf(DurablePersistenceError);
+        // The same object, not a second description of it.
+        expect(refused).toBe(failed);
+        expect(String(refused?.message)).not.toContain("ORDINARY-CLEANUP");
+      });
+    }
+
+    // An ordinary document failure with a clean teardown is still a successful
+    // stop: the failure is the completion's to carry, and the stop did stop.
+    yield* scoped(function* () {
+      const execution = yield* executeInstalled(
+        { ...inlineSource("<OrdinaryFailure />\n"), stream: new InMemoryStream() },
+        [
+          {
+            *install(): Operation<void> {
+              yield* registerComponents([
+                {
+                  name: "OrdinaryFailure",
+                  origin: "execution-protocol",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  // deno-lint-ignore require-yield
+                  *fn(): Operation<string> {
+                    throw new Error("AUTHORED-FAILURE");
+                  },
+                },
+              ]);
+            },
+          },
+        ],
+      );
+      const completion = yield* execution;
+      const answer = yield* execution.stop();
+      expect(completion.ok).toBe(false);
+      expect(String(completion.ok ? "" : completion.error.message)).toContain("AUTHORED-FAILURE");
+      expect(answer.ok).toBe(true);
+    });
+
+    // And a cleanup that could not finish is not a successful stop, even though
+    // the document itself ended perfectly well.
+    yield* scoped(function* () {
+      const cleanupCause = new Error("CLEANUP-REFUSED");
+      const execution = yield* executeInstalled(
+        { ...inlineSource("# a clean document\n"), stream: new InMemoryStream() },
+        [
+          {
+            *install(): Operation<void> {
+              yield* ensure(() => {
+                throw cleanupCause;
+              });
+            },
+          },
+        ],
+      );
+      const answer = yield* execution.stop();
+      expect(answer.ok).toBe(false);
+      expect(answer.ok ? undefined : answer.error).toBe(cleanupCause);
+    });
+  });
+
+  /**
+   * EP30: a host Stop that reaches a document still running, through the one
+   * entrypoint a trusted host has.
+   *
+   * No session, no entry and no CLI: `executeInstalled` is the whole of the
+   * seam, and what is proved is the stop itself. The document has already
+   * printed something and is waiting on a real operation; its own installation
+   * holds a cleanup gate, so the Stop cannot answer until that teardown has
+   * been joined. What the journal keeps is the protocol's existing cancelled
+   * Close — one of them, carrying a status and nothing else — and the
+   * completion is not a success. Nothing is invented to stand in for the
+   * answer the document never gave.
+   */
+  it("EP30: a host Stop reaches a running document, joins its cleanup and retains one cancelled close", function* () {
+    const stream = new InMemoryStream();
+    const reached = withResolvers<void>();
+    const waiting = withResolvers<void>();
+    const releaseCleanup = withResolvers<void>();
+    const order: string[] = [];
+
+    yield* scoped(function* () {
+      const execution = yield* executeInstalled({ ...inlineSource("<Waiting />\n"), stream }, [
+        {
+          *install(): Operation<void> {
+            // Registered first, so it unwinds last: the Stop below cannot
+            // answer until this has been released and joined.
+            yield* ensure(function* (): Operation<void> {
+              order.push("cleanup:begin");
+              yield* releaseCleanup.operation;
+              order.push("cleanup:end");
+            });
+            yield* registerComponents([
+              {
+                name: "Waiting",
+                origin: "execution-protocol",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                *fn(): Operation<string> {
+                  reached.resolve();
+                  yield* waiting.operation;
+                  return "unreachable";
+                },
+              },
+            ]);
+          },
+        },
+      ]);
+      yield* reached.operation;
+
+      const stopped = withResolvers<Result<void>>();
+      const asking = withResolvers<void>();
+      yield* spawn(function* () {
+        asking.resolve();
+        order.push("stop:asked");
+        const answer = yield* execution.stop();
+        order.push("stop:answered");
+        stopped.resolve(answer);
+      });
+      yield* asking.operation;
+
+      // Held: the cleanup this execution owns has begun and has not finished,
+      // so the stop has nothing to answer with yet.
+      for (let round = 0; round < 200 && !order.includes("cleanup:begin"); round += 1) {
+        yield* sleep(1);
+      }
+      if (!order.includes("cleanup:begin")) {
+        throw new Error("the owned cleanup never began");
+      }
+      expect(order).not.toContain("stop:answered");
+
+      releaseCleanup.resolve();
+      const answer = yield* stopped.operation;
+      expect(answer.ok).toBe(true);
+      // Joined before answered, which is the whole of the gate.
+      expect(order.indexOf("cleanup:end")).toBeLessThan(order.indexOf("stop:answered"));
+
+      // The document did not succeed, and nothing was fabricated for it.
+      const completion = yield* execution;
+      expect(completion.ok).toBe(false);
+
+      // One cancelled root Close, carrying a status and nothing else.
+      const closes = stream.snapshot().filter((event) => event.type === "close");
+      const roots = closes.filter(
+        (event) => event.type === "close" && event.coroutineId === "root",
+      );
+      expect(roots.length).toBe(1);
+      const only = roots[0];
+      if (only === undefined || only.type !== "close") {
+        throw new Error("this execution recorded no root close");
+      }
+      expect(only.result.status).toBe("cancelled");
+      expect(Object.keys(only.result)).toEqual(["status"]);
+
+      // Asked again, and read again: neither writes a second ending.
+      const again = yield* execution.stop();
+      expect(again.ok).toBe(true);
+      expect(yield* execution).toEqual(completion);
+      expect(
+        stream.snapshot().filter((event) => event.type === "close" && event.coroutineId === "root")
+          .length,
+      ).toBe(1);
+    });
+  });
+
+  /**
+   * EP31: the journal refuses the cancelled ending that Stop was writing.
+   *
+   * The refusal is the run's own failure, by identity, and it stays that
+   * failure: the stop answers `Err` with it, the cleanup this execution owns is
+   * still attempted and joined, and nothing compensating is appended in its
+   * place. A persistence failure is not an ending.
+   */
+  it("EP31: a refused cancelled close keeps its own failure and appends no compensating terminal", function* () {
+    const inner = new InMemoryStream();
+    const appendCause = new Error("this journal refused the cancelled close");
+    const reached = withResolvers<void>();
+    const waiting = withResolvers<void>();
+    const order: string[] = [];
+    const refusing = {
+      readAll: () => inner.readAll(),
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type === "close" && event.coroutineId === "root") {
+          order.push("append:refused");
+          throw appendCause;
+        }
+        yield* inner.append(event);
+      },
+    };
+
+    yield* scoped(function* () {
+      const execution = yield* executeInstalled(
+        { ...inlineSource("<Waiting />\n"), stream: refusing },
+        [
+          {
+            *install(): Operation<void> {
+              yield* ensure(() => {
+                order.push("cleanup");
+              });
+              yield* registerComponents([
+                {
+                  name: "Waiting",
+                  origin: "execution-protocol",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  *fn(): Operation<string> {
+                    reached.resolve();
+                    yield* waiting.operation;
+                    return "unreachable";
+                  },
+                },
+              ]);
+            },
+          },
+        ],
+      );
+      yield* reached.operation;
+
+      const answer = yield* execution.stop();
+      const completion = yield* execution;
+
+      // The refusal, not a description of it, and the same one the run carries.
+      expect(answer.ok).toBe(false);
+      expect(completion.ok).toBe(false);
+      const refused = answer.ok ? undefined : answer.error;
+      const failed = completion.ok ? undefined : completion.error;
+      expect(refused).toBe(failed);
+      // The persistence failure this layer raises, carrying the journal's own
+      // refusal as its cause: the identity that matters is the run's, and the
+      // reason it gives is the reason the backend gave.
+      expect(refused).toBeInstanceOf(DurablePersistenceError);
+      expect((refused as Error | undefined)?.cause).toBe(appendCause);
+
+      // The cleanup was attempted and joined even though the ending was not
+      // written, and nothing stood in for the terminal that was refused.
+      expect(order).toContain("append:refused");
+      expect(order).toContain("cleanup");
+      expect(
+        inner.snapshot().filter((event) => event.type === "close" && event.coroutineId === "root"),
+      ).toEqual([]);
+    });
   });
 
   // EP28: an observer belongs to the invocation it watches. Two executions run
