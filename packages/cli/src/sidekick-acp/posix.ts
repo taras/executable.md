@@ -407,48 +407,71 @@ export function* usePosixSidekickTransport(
           // already modified; asked here, it is still a fair one. Every join
           // below still happens before the directory is removed.
           let ours = false;
+          // Kept, not raised here. Failing to read the directory says nothing
+          // about the listener, the peers or the two names this owner knows it
+          // published, and every one of those is still this cleanup's to
+          // finish. So the failure waits below, where it is what this teardown
+          // ends with — and `ours` stays false, because a directory this owner
+          // could not identify is not one it may remove.
+          let unidentified: unknown;
           if (directory !== undefined && directoryIdentity !== undefined) {
             const owned = directoryIdentity;
             try {
               ours = same(owned, yield* until(readDirectoryIdentity(directory)));
             } catch (error) {
               if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-                throw error;
+                unidentified = error;
               }
             }
           }
-          for (const socket of sockets.keys()) {
-            yield* closeSocket(socket);
-          }
-          if (server !== undefined) {
-            server.off("connection", connected);
-            const held = server;
-            yield* action<void>((resolve) => {
-              held.close(() => resolve());
-              return () => {};
-            });
-          }
-          yield* removeOwned(path, descriptorIdentity);
-          if (stage !== undefined) {
-            yield* removeOwned(stage, stageIdentity);
-          }
-          if (directory !== undefined) {
-            yield* removeOwned(join(directory, "s"), socketIdentity);
-            try {
-              if (ours) {
-                yield* until(rmdir(directory));
-              }
-            } catch (error) {
-              if (
-                !(
-                  error instanceof Error &&
-                  "code" in error &&
-                  (error.code === "ENOENT" || error.code === "ENOTEMPTY")
-                )
-              ) {
-                throw error;
+          try {
+            for (const socket of sockets.keys()) {
+              yield* closeSocket(socket);
+            }
+            if (server !== undefined) {
+              server.off("connection", connected);
+              const held = server;
+              yield* action<void>((resolve) => {
+                held.close(() => resolve());
+                return () => {};
+              });
+            }
+            yield* removeOwned(path, descriptorIdentity);
+            if (stage !== undefined) {
+              yield* removeOwned(stage, stageIdentity);
+            }
+            if (directory !== undefined) {
+              yield* removeOwned(join(directory, "s"), socketIdentity);
+              try {
+                if (ours) {
+                  yield* until(rmdir(directory));
+                }
+              } catch (error) {
+                if (
+                  !(
+                    error instanceof Error &&
+                    "code" in error &&
+                    (error.code === "ENOENT" || error.code === "ENOTEMPTY")
+                  )
+                ) {
+                  throw error;
+                }
               }
             }
+          } catch (failure) {
+            // Both, when there are both: the one that stopped this teardown
+            // knowing which directory was its own, and the one that stopped it
+            // finishing. Neither stands in for the other.
+            if (unidentified === undefined) {
+              throw failure;
+            }
+            throw new AggregateError(
+              [unidentified, failure],
+              "The attachment could not finish removing what it published.",
+            );
+          }
+          if (unidentified !== undefined) {
+            throw unidentified;
           }
         });
         try {
