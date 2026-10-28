@@ -9933,6 +9933,27 @@ function compactTurn(
       ),
     );
   }
+  if (turn.stopReason !== undefined) {
+    // What the provider said ended this turn, which is its own fact and not the
+    // same answer as the state beside the prompt: `completed, recorded` says
+    // this process saw the turn through and retained it, and the reason says
+    // why the provider stopped producing. The ordinary list states both; a
+    // staged one that kept only the first would drop the provider's own word
+    // for what happened.
+    rows.push(
+      line(
+        `sessions:turn:${turn.key}:stop`,
+        fitLine(
+          [
+            { text: `${CONTROL_ROOM}${MARKER_ROOM}stopped: ` },
+            { text: turn.stopReason, elide: true },
+          ],
+          width,
+        ),
+        styleOf("metadata"),
+      ),
+    );
+  }
   if (turn.failure !== undefined) {
     rows.push(
       line(
