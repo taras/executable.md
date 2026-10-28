@@ -83,20 +83,13 @@ export interface DurableRunOptions {
 }
 
 /**
- * One run's own authority to end its root as cancelled.
- *
- * It carries no stream, no append and no event: what a holder may do is ask,
- * and read back what actually settled. Whether the ask is accepted is this
- * run's decision and nobody else's — a root whose terminal append has already
- * begun keeps the terminal it was writing.
- */
-/**
  * This root ending because a Stop owned it, rather than because of a fault.
  *
- * Never seen outside this module's own frames: the catch lets it past without
- * writing a terminal around it, and the cancellation finalizer records what
- * actually happened. It exists so an interrupted root stops *being* a
- * successful completion without a fault being invented to carry it out.
+ * It is thrown to the caller on the return path by design, and the catch lets
+ * it past without writing a terminal around it; the cancellation finalizer
+ * records what actually happened. It exists so an interrupted root stops
+ * *being* a successful completion without a fault being invented to carry it
+ * out.
  *
  * The bypass is keyed to the exact object one run minted, never to this class:
  * which root was stopped is not something the type of an error can answer, and
@@ -113,6 +106,14 @@ class RootInterrupted extends Error {
 /** Where this root stands, and what it will still answer for. */
 type RootPhase = "open" | "claimed" | "appending" | "settled" | "ended";
 
+/**
+ * One run's own authority to end its root as cancelled.
+ *
+ * It carries no stream, no append and no event: what a holder may do is ask,
+ * and read back what actually settled. Whether the ask is accepted is this
+ * run's decision and nobody else's — a root whose terminal append has already
+ * begun keeps the terminal it was writing.
+ */
 export interface DurableRootControl {
   /**
    * Ask this root to end as cancelled, and say whether it will.
