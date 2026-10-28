@@ -77,6 +77,30 @@ export function statusOn(terminal: Terminal): string | undefined {
  * smaller terminal no longer has. The engine redraws completely after a size
  * change, so the presentations from the resize onward are a whole screen.
  */
+/**
+ * How many cells one character occupies.
+ *
+ * A terminal advances two columns for an East Asian wide or fullwidth
+ * character and one for everything else. A replay that advanced one for all of
+ * them left the second cell of every wide glyph holding whatever was there
+ * before — measured, a drawer row of wide words came back as `界g界n 界o界f`,
+ * with letters from the frame underneath showing between them. Replaying the
+ * same bytes with this advance gives the row the product actually wrote.
+ */
+function cellsOf(character: string): number {
+  return WIDE_CHARACTERS.test(character) ? 2 : 1;
+}
+
+/**
+ * The ranges a terminal gives two columns to.
+ *
+ * East Asian Wide and Fullwidth, as the Unicode property names them. Written
+ * out rather than asked of an API because no runtime this suite runs on
+ * answers the question directly.
+ */
+const WIDE_CHARACTERS =
+  /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]|[\u{1F300}-\u{1F64F}]|[\u{1F900}-\u{1F9FF}]|[\u{20000}-\u{3FFFD}]/u;
+
 export function replay(written: readonly Uint8Array[]): string[] {
   const rows: string[][] = [];
   let row = 0;
@@ -91,7 +115,14 @@ export function replay(written: readonly Uint8Array[]): string[] {
       line.push(" ");
     }
     line[column] = character;
-    column += 1;
+    // The cells this character actually takes. A wide glyph owns the column
+    // after it as well, and that column is the glyph's rather than whatever
+    // the frame beneath it last wrote there.
+    const cells = cellsOf(character);
+    for (let after = 1; after < cells; after += 1) {
+      line[column + after] = "";
+    }
+    column += cells;
   };
 
   const text = written.map((bytes) => TEXT.decode(bytes)).join("");

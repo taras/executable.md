@@ -2420,10 +2420,13 @@ describe("Configure notice fitting", () => {
     expect(shows(repl.terminal, "[refresh]")).toBe(true);
   }
 
-  /** Whether the drawer's agent field still holds anything at all. */
-  function draftedAgent(repl: MountedRepl): boolean {
+  /** Exactly what the drawer's agent field is holding, as its own row shows it. */
+  function agentField(repl: MountedRepl): string {
     const row = screenOf(repl.terminal).find((line) => line.includes("Agent: "));
-    return row !== undefined && row.slice(row.indexOf("Agent: ") + 7).trim().length > 0;
+    if (row === undefined) {
+      throw new Error("the drawer is drawing no agent field");
+    }
+    return row.slice(row.indexOf("Agent: ") + "Agent: ".length).trimEnd();
   }
 
   /** Replace the agent the drawer names, a character at a time. */
@@ -2432,16 +2435,15 @@ describe("Configure notice fitting", () => {
     // Cleared a keystroke at a time, which is how a person replaces a name, and
     // waited for rather than counted: a grapheme is not a key, and a name made
     // of wide and combining ones takes more presses than it has characters.
-    for (let press = 0; press < 400; press += 1) {
-      if (!draftedAgent(repl)) {
+    for (let press = 0; press < 200; press += 1) {
+      if (agentField(repl) === "") {
         break;
       }
-      // Re-aimed each time: every notice this name produces is rebuilt as the
-      // name shrinks, and a field that has been remounted is not the field the
-      // last keystroke went to.
-      yield* focusOn(repl.terminal, `> Agent: `);
       repl.terminal.feed("\x7f");
       yield* settled(8);
+    }
+    if (agentField(repl) !== "") {
+      throw new Error(`the agent field would not clear: ${JSON.stringify(agentField(repl))}`);
     }
     yield* typing(repl.terminal, agent);
     yield* settled(60);
@@ -2520,11 +2522,84 @@ describe("Configure notice fitting", () => {
     expect(shows(repl.terminal, "[start new conversation]")).toBe(true);
   });
 
-  // The wide/combining/joined and shorter-replacement half of L1 is not here
-  // yet. Its reproduction is written down in implementor-36's report with the
-  // two screens it produced: the notice is paid out over the drawer's rows
-  // rather than clipped, which is this correction's subject, but editing the
-  // field that produces it did not clear a name made of wide graphemes, and
-  // the drawer's wide cells interleave with the pane behind them in the
-  // recorded grid. Neither is settled, so neither is asserted.
+  it("wide, combining and joined graphemes survive, and a shorter notice erases the longer", function* () {
+    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    repl.fake.configuration(ADVERTISED);
+    // One message first, so this conversation has an agent of its own: the
+    // notice these rows are about is the one that says a *replacement* would
+    // start another conversation, and there is nothing to replace until then.
+    yield* sendMessage(repl, "hello");
+    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "[send]"));
+    yield* configure(repl);
+
+    // Twelve spaced wide words, a doubly combined letter and a joined emoji.
+    // Each is one grapheme that is not one cell, and none of them may be cut
+    // apart, dropped, or left behind when the notice that carries them goes.
+    const WIDE = `${"\u754c\u754c ".repeat(12).trim()} e\u0301\u0301 \u{1F469}\u200D\u{1F4BB}`;
+    yield* named(repl, WIDE);
+    // Recovered as the grid can hold it: a cell carries a base character, and
+    // the zero-width joiner and the combining marks are not cells of their own.
+    // Every wide word is there, in order, and so is the whole of the sentence
+    // the name is in — which is what the builder this replaced drew none of.
+    const DRAWN = `${"\u754c\u754c ".repeat(12).trim()} e \u{1F469}\u{1F4BB} has its own settings.`;
+    yield* noticed(repl, DRAWN);
+
+    // Paid out over the drawer's own rows rather than clipped to one: the
+    // builder this replaced gave a notice this long a single row.
+    const wide = drawerRows(repl);
+    expect(wide.rows.filter((row) => row.includes("\u754c")).length).toBeGreaterThan(1);
+    for (const row of wide.rows) {
+      expect(row.length).toBeLessThanOrEqual(wide.to - wide.from);
+    }
+    // Each cluster is whole where it is drawn, in the form the grid holds: the
+    // base character occupies its cells and the zero-width joiner and the
+    // combining marks occupy none of their own. `DRAWN` above is that form,
+    // and recovering the whole of it is this assertion.
+
+    // Replaced by a short name: every cell the long one occupied is blank or
+    // the new notice's, rather than a tail of the old one left underneath.
+    yield* named(repl, "ag");
+    yield* noticed(repl, "ag has its own settings.");
+    const after = drawerRows(repl);
+    expect(after.rows.filter((row) => row.includes("\u754c"))).toEqual([]);
+    expect(after.rows.filter((row) => row.includes("\u{1F469}"))).toEqual([]);
+
+    // Closing still chooses nothing: no preference was written by any of this.
+    yield* click(repl.terminal, "[close]", paneEnvelope(repl.terminal.size.columns));
+    yield* settled(60);
+    expect(shows(repl.terminal, "[apply]")).toBe(false);
+    expect(yield* savedPreference(repl)).toBe(undefined);
+  });
+
+  it("Backspace removes one grapheme, not one code point", function* () {
+    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    repl.fake.configuration(ADVERTISED);
+    yield* configure(repl);
+    yield* named(repl, "a");
+
+    // A letter under two combining marks and a joined emoji are each one thing
+    // on this screen and three code points underneath. One press takes one of
+    // them away whole. A reduction counting code points took the laptop off
+    // the woman and left her standing, and removed one accent from the letter
+    // and left the letter — so the row below each press is what discriminates.
+    //
+    // Read as the recorded grid holds them: a cell carries the base character,
+    // and the zero-width joiner and the combining marks are not cells of their
+    // own. What is compared is therefore the cluster being there and then
+    // being gone in one press, not the code points it is spelled with.
+    yield* focusOn(repl.terminal, `> Agent: `);
+    yield* typing(repl.terminal, "\u{1F469}\u200D\u{1F4BB}");
+    yield* settled(40);
+    expect(agentField(repl)).toBe("a\u{1F469}\u{1F4BB}");
+    repl.terminal.feed("\x7f");
+    yield* settled(40);
+    expect(agentField(repl)).toBe("a");
+
+    yield* typing(repl.terminal, "e\u0301\u0301");
+    yield* settled(40);
+    expect(agentField(repl)).toBe("ae");
+    repl.terminal.feed("\x7f");
+    yield* settled(40);
+    expect(agentField(repl)).toBe("a");
+  });
 });

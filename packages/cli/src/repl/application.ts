@@ -4132,10 +4132,22 @@ function navigate(
 
 /** One text unit shorter, counted in scalar values rather than code units. */
 function shortened(text: string): string {
-  const units = [...text];
-  units.pop();
-  return units.join("");
+  // One grapheme, which is what a person pressed Backspace to remove. Code
+  // points are not it: `e` with two combining marks is one thing on the screen
+  // and three of them, so a reduction counting code points took three presses
+  // to remove one character and left two readings of it on the way — and a
+  // joined emoji came apart into the two it is joined from. `Intl.Segmenter` is
+  // the same boundary the fitter breaks rows on, so what a person deletes and
+  // what a row is cut at are one answer.
+  let last = 0;
+  for (const { index } of GRAPHEMES.segment(text)) {
+    last = index;
+  }
+  return text.slice(0, last);
 }
+
+/** Where one grapheme ends and the next begins, for text somebody is editing. */
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** How a value reads in one line of a list. */
 function summarize(value: Json): string {
