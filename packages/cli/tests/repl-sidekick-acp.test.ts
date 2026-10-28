@@ -1902,6 +1902,121 @@ describe("ACP81: a replacement inside a refreshed identity window", () => {
     yield* until(rmdir(directory!));
   });
 
+  it("ACP81: a publication cancelled part-way still tries both of the names it owns", function* () {
+    const home = yield* publishingHome("xmd-partial-publication-");
+    const file = join(home, "attachment.json");
+    const reached = withResolvers<void>();
+    const cancelling = withResolvers<void>();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let directory: string | undefined;
+    let reads = 0;
+    const unreadable = Object.assign(new Error("simulated directory read failure"), {
+      code: "EIO",
+    });
+    yield* usePosixSidekickTransport(
+      process.platform,
+      (prefix) =>
+        mkdtemp(prefix).then((created) => {
+          directory = created;
+          return created;
+        }),
+      undefined,
+      {
+        holdIdentityRefresh: (window) => {
+          if (window !== "stage") {
+            return Promise.resolve();
+          }
+          reached.resolve();
+          return held;
+        },
+        readDirectoryIdentity: (path) => {
+          reads += 1;
+          return reads === 3 ? Promise.reject(unreadable) : lstat(path);
+        },
+      },
+    );
+    const host = yield* SidekickTransport.expect();
+    let published = false;
+    let joined = false;
+    let failure: unknown;
+    let stagePath: string | undefined;
+    // Established before the mode below is narrowed, so an assertion that
+    // throws still leaves this directory writable for its own removal.
+    yield* ensure(function* () {
+      release();
+      yield* until(chmod(home, 0o700));
+    });
+    {
+      const owner = yield* spawn(function* () {
+        try {
+          yield* host.publish(file, { ...binding("partial-publication"), cwd: home });
+          published = true;
+          yield* suspend();
+        } catch (error) {
+          failure = error;
+        }
+      });
+      yield* reached.operation;
+      // Held here, the publication owns two names for one inode: the staged
+      // file and the link it has just published.
+      stagePath = yield* stageNameIn(home);
+      expect((yield* until(lstat(file))).ino).toBe((yield* until(lstat(stagePath))).ino);
+      expect(reads).toBe(2);
+      // Neither of them can be unlinked from a directory this owner may no
+      // longer write to.
+      yield* until(chmod(home, 0o500));
+      const stopping = yield* spawn(function* () {
+        cancelling.resolve();
+        try {
+          yield* owner.halt();
+        } catch (error) {
+          failure = error;
+        }
+        joined = true;
+      });
+      yield* cancelling.operation;
+      expect(joined).toBe(false);
+      release();
+      yield* stopping;
+    }
+    yield* until(chmod(home, 0o700));
+    const carried = failure instanceof AggregateError ? failure.errors : [];
+    console.log(
+      JSON.stringify({
+        kind: "partial-publication-cleanup",
+        reads,
+        joined,
+        published,
+        aggregate: failure instanceof AggregateError,
+        carried: carried.map((one: unknown) => errorOf(one).message),
+      }),
+    );
+    expect(joined).toBe(true);
+    expect(published).toBe(false);
+    expect(reads).toBe(3);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(errorOf(failure).message).toBe(
+      "The attachment could not finish removing what it published.",
+    );
+    // Both removals were attempted, and all three failures came back: the
+    // reading, and then each name in the order it was tried.
+    expect(carried).toHaveLength(3);
+    expect(carried[0]).toBe(unreadable);
+    expect(errorOf(carried[1]).message).toContain("attachment.json");
+    expect(errorOf(carried[2]).message).toContain(".sidekick-");
+    expect((yield* until(lstat(file))).isFile()).toBe(true);
+    expect((yield* until(lstat(stagePath!))).isFile()).toBe(true);
+    yield* until(unlink(file));
+    yield* until(unlink(stagePath!));
+    expect(yield* until(readdir(home))).toEqual([]);
+    // Still fail-safe about the directory it could not identify.
+    expect((yield* until(lstat(directory!))).isDirectory()).toBe(true);
+    yield* until(rmdir(directory!));
+  });
+
   it("ACP81: the directory is judged while its socket is still in it, and still removed", function* () {
     const home = yield* publishingHome("xmd-ctime-directory-");
     const file = join(home, "attachment.json");
