@@ -76,7 +76,9 @@ import {
   SIDEKICK_WINDOW,
   chatLinesFor,
   draftFieldWidth,
+  configureNoticesOf,
   draftLinesOf,
+  NOTICE_INDENT,
   historyGapWidth,
   historyMapWidth,
   historyProbeOf,
@@ -116,6 +118,7 @@ import type {
   ReplMeasuredWidths,
   ReplPreparing,
   ReplPresentation,
+  ReplPreparedNotices,
   ReplPresentationContext,
   ReplPresented,
   ReplSidekickChatRow,
@@ -3992,6 +3995,14 @@ export function* prepareFrame(
   if (!drafted.ok) {
     return drafted;
   }
+  // The drawer's own notices, fitted to the interior this frame measured. Here
+  // rather than in the builder that draws them: the engine is what knows how
+  // many cells a grapheme takes, and the same answer has to serve the window's
+  // row count, its admission, its offsets and the rows finally described.
+  const notices = yield* prepareNotices(renderer, view, widths.drawer);
+  if (!notices.ok) {
+    return notices;
+  }
   const admission = admissionFor({
     view,
     manifest: placed.manifest,
@@ -4000,6 +4011,7 @@ export function* prepareFrame(
     preview: preview.value,
     chat: chat.value,
     queue: queued.value,
+    notices: notices.value,
     boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -4024,10 +4036,55 @@ export function* prepareFrame(
     historySplit: historyParts,
     selector,
     draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
+    notices: notices.value,
     queue: queued.value,
     headers: wrapped.size === 0 ? undefined : wrapped,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
+}
+
+/**
+ * Fit each of the drawer's notices onto the rows its interior has room for.
+ *
+ * Through the engine and the original graphemes, which is what the width of a
+ * row actually is: a pure builder counting code units gave a seventy-character
+ * ASCII token a seventy-two cell row inside thirty and drew none of it, and
+ * twelve spaced CJK words a forty-eight cell row inside thirty.
+ *
+ * The declared indent is taken out of the room and put back on every row, so a
+ * wrapped notice still reads as one thing set in from the drawer's edge and the
+ * rows it is paid out over are each as wide as the drawer's own. A room of less
+ * than one cell is a frame that has measured nothing, and prepares nothing.
+ */
+function* prepareNotices(
+  renderer: ReplRenderer,
+  view: ReplView,
+  width: number,
+): Operation<Result<ReplPreparedNotices | undefined>> {
+  const notices = configureNoticesOf(view);
+  const room = width - NOTICE_INDENT.length;
+  if (notices.length === 0 || room < 1) {
+    return Ok(undefined);
+  }
+  const prepared = new Map<string, readonly string[]>();
+  for (const notice of notices) {
+    const fitted = yield* fitPlain(
+      renderer,
+      view.size,
+      [{ key: notice.key, text: notice.text }],
+      room,
+    );
+    if (!fitted.ok) {
+      return fitted;
+    }
+    prepared.set(
+      notice.key,
+      Object.freeze(
+        fitted.value.map((one) => `${NOTICE_INDENT}${" ".repeat(one.indent)}${one.text}`),
+      ),
+    );
+  }
+  return Ok(prepared);
 }
 
 /** Which region's width the text that must fit one is bounded by. */

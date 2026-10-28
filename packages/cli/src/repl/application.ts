@@ -6502,7 +6502,7 @@ function drawerFor(
   exit: Described,
   drawable: boolean,
 ): { readonly drawer: Described; readonly rows: readonly Described[] } | undefined {
-  const held = drawerContent(view, context.widths?.drawer ?? 0, context.preview);
+  const held = drawerContent(view, context.widths?.drawer ?? 0, context.preview, context.notices);
   if (held === undefined) {
     return undefined;
   }
@@ -6672,6 +6672,7 @@ function drawerContent(
   view: ReplView,
   width: number,
   preview?: readonly ReplFittedLine[] | undefined,
+  notices?: ReplPreparedNotices,
 ): DrawerContent | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
   if (open === undefined && presentedCatalog(view)) {
@@ -6683,7 +6684,7 @@ function drawerContent(
     // presentation, so both are never open at once.
     const settings = presentedConfiguring(view);
     if (settings !== undefined) {
-      return configureContent(view, settings, width);
+      return configureContent(view, settings, width, notices);
     }
     const asking = presentedAsking(view);
     return asking === undefined ? undefined : askingContent(view, asking, width, preview);
@@ -7055,7 +7056,74 @@ function catalogContent(view: ReplView, width: number): DrawerContent {
   };
 }
 
-function configureContent(view: ReplView, held: ReplConfiguring, width: number): DrawerContent {
+/**
+ * One notice this Configure drawer says: the row key it is drawn under and the
+ * whole text it says, before anything has decided how many rows that takes.
+ */
+export interface ReplDrawerNotice {
+  readonly key: string;
+  readonly text: string;
+}
+
+/** The indent a drawer notice is set in from the drawer's own edge. */
+export const NOTICE_INDENT = "  ";
+
+/**
+ * The notices this Configure drawer would say, in the order it says them.
+ *
+ * One answer for two readers: the preparation that fits them to the interior
+ * the frame measured, and the builder that draws the rows that fitting
+ * produced. A builder deciding for itself how wide a row may be would be a
+ * second opinion about the same text — and the opinion a pure builder can form
+ * counts code units rather than cells, which is how a seventy-character token
+ * came to be drawn as nothing at all.
+ */
+export function configureNoticesOf(view: ReplView): readonly ReplDrawerNotice[] {
+  const held = presentedConfiguring(view);
+  return held === undefined ? [] : noticesOf(view, held);
+}
+
+/** The same, for a caller that already has the drawer this view is holding. */
+function noticesOf(view: ReplView, held: ReplConfiguring): readonly ReplDrawerNotice[] {
+  const reading = view.live.sidekick;
+  const found: ReplDrawerNotice[] = [];
+  if (held.refusal !== undefined) {
+    found.push({ key: "drawer:configure:refusal", text: held.refusal });
+  }
+  const replacing =
+    held.agent !== "" && reading?.agent !== undefined && held.agent !== reading.agent;
+  const offered = replacing ? undefined : held.offered;
+  if (held.reading) {
+    found.push({
+      key: "drawer:configure:asking",
+      text: "Reading what this agent offers...",
+    });
+  }
+  if (replacing) {
+    found.push({
+      key: "drawer:configure:replacing",
+      text: `${held.agent} has its own settings.`,
+    });
+  } else if (offered === undefined) {
+    found.push({
+      key: "drawer:configure:unread",
+      text: "What this agent offers has not been read yet.",
+    });
+  } else if (offered.models.length === 0) {
+    found.push({
+      key: "drawer:configure:no-models",
+      text: "This agent offers no model choice.",
+    });
+  }
+  return Object.freeze(found);
+}
+
+function configureContent(
+  view: ReplView,
+  held: ReplConfiguring,
+  width: number,
+  notices?: ReplPreparedNotices,
+): DrawerContent {
   const content: DrawerRow[] = [];
   const focused = view.focused;
   const reading = view.live.sidekick;
@@ -7090,7 +7158,13 @@ function configureContent(view: ReplView, held: ReplConfiguring, width: number):
   });
   if (held.refusal !== undefined) {
     content.push(
-      ...noticeRows("drawer:configure:refusal", held.refusal, width, styleOf("failed-outcome")),
+      ...noticeRows(
+        "drawer:configure:refusal",
+        held.refusal,
+        width,
+        styleOf("failed-outcome"),
+        notices,
+      ),
     );
   }
   // A different agent is a different conversation, and these choices were read
@@ -7110,6 +7184,7 @@ function configureContent(view: ReplView, held: ReplConfiguring, width: number):
         "Reading what this agent offers...",
         width,
         styleOf("waiting"),
+        notices,
       ),
     );
   }
@@ -7121,6 +7196,7 @@ function configureContent(view: ReplView, held: ReplConfiguring, width: number):
         `${held.agent} has its own settings.`,
         width,
         styleOf("metadata"),
+        notices,
       ),
     );
   } else if (offered === undefined) {
@@ -7133,6 +7209,7 @@ function configureContent(view: ReplView, held: ReplConfiguring, width: number):
         "What this agent offers has not been read yet.",
         width,
         styleOf("metadata"),
+        notices,
       ),
     );
   } else if (offered.models.length === 0) {
@@ -7144,6 +7221,7 @@ function configureContent(view: ReplView, held: ReplConfiguring, width: number):
         "This agent offers no model choice.",
         width,
         styleOf("metadata"),
+        notices,
       ),
     );
   } else {
@@ -7597,62 +7675,38 @@ function detail(value: Json): readonly string[] {
 }
 
 /**
- * One sentence, as the rows a drawer has room to say it on.
+ * The rows one notice was fitted onto, keyed by the row it is drawn under.
  *
- * A drawer row is one row, and the engine clips a label longer than the
- * drawer's interior at the last word that fit — so the rest of the sentence is
- * simply gone. Measured, a 30-cell drawer turned "the Sidekick is already
- * working on a message. One conversation takes one turn at a time." into "the
- * Sidekick is already", and a reader had no way to know the rest existed.
- *
- * Broken here, where the width the frame measured is known, rather than left to
- * a clip that keeps no remainder. Every row carries the indent the one row had,
- * so a wrapped notice still reads as one thing set in from the drawer's edge. A
- * word wider than the room keeps its own row rather than being cut inside
- * itself: there is no break to use, half a word says less than a word that runs
- * to the edge — and because nothing is ever cut inside a word, no grapheme is
- * divided here at all.
- *
- * Budgeted the way the rest of this module budgets a row: `fitLabel` and
- * `fitLine` beside it count the same units, and the engine-measured, grapheme
- * cutting pass is an Operation that a pure row builder has no way to ask.
+ * Prepared by the pass that has the drawer's measured interior and the engine
+ * to ask about graphemes; consumed here, so row counting, the window's
+ * admission, its scroll offsets and the final descriptions are all the same
+ * answer rather than four.
  */
-function sentenceRows(text: string, width: number, indent = "  "): readonly string[] {
-  const room = width - indent.length;
-  if (room < 1) {
-    return [`${indent}${text}`];
-  }
-  const rows: string[] = [];
-  let held = "";
-  for (const word of text.split(/\s+/)) {
-    if (word.length === 0) {
-      continue;
-    }
-    if (held.length === 0) {
-      held = word;
-      continue;
-    }
-    if (held.length + 1 + word.length <= room) {
-      held = `${held} ${word}`;
-      continue;
-    }
-    rows.push(`${indent}${held}`);
-    held = word;
-  }
-  if (held.length > 0 || rows.length === 0) {
-    rows.push(`${indent}${held}`);
-  }
-  return rows;
-}
+export type ReplPreparedNotices = ReadonlyMap<string, readonly string[]>;
 
-/** Say one sentence in a drawer, on as many of its rows as the sentence needs. */
+/**
+ * Say one notice in a drawer, on the rows the frame fitted it onto.
+ *
+ * A drawer row is one row, so a notice longer than the drawer's interior has
+ * to be broken somewhere. It is broken by the engine, at this frame's measured
+ * width and on the original graphemes — measured, a 30-cell drawer was given a
+ * 72-cell `configuration refused:` notice and drew none of its token, and a
+ * row of twelve spaced CJK words measured 48 cells inside 30.
+ *
+ * Unprepared is the unmeasured pass, which describes no width-dependent text
+ * and bounds nothing: the notice stands as the one line it is, exactly as
+ * every other row of this module stands when no width has been answered yet.
+ */
 function noticeRows(
   key: string,
   text: string,
   width: number,
   style: ReplRowStyle,
+  notices?: ReplPreparedNotices,
 ): readonly DrawerRow[] {
-  return sentenceRows(text, width).map((row, offset) => ({
+  const prepared = notices?.get(key);
+  const rows = prepared === undefined ? [`${NOTICE_INDENT}${text}`] : prepared;
+  return rows.map((row, offset) => ({
     described: drawerLine(offset === 0 ? key : `${key}:${offset}`, row, width, style),
   }));
 }
@@ -8165,6 +8219,11 @@ export interface ReplPresentationContext {
    * room this is fitted to and fits nothing itself.
    */
   readonly selector?: ReplFittedLabel | undefined;
+  /**
+   * The drawer's notices, each fitted onto the rows this frame's measured
+   * interior has room for. None before the frame has measured one.
+   */
+  readonly notices?: ReplPreparedNotices | undefined;
   /**
    * How wide the History row's map is, once its controls have been measured.
    *
@@ -9307,15 +9366,17 @@ export function admissionFor(input: {
   readonly chat?: readonly ReplFittedLine[] | undefined;
   /** The tray's messages, fitted, which its own window admits rows of. */
   readonly queue?: readonly ReplFittedLine[] | undefined;
+  /** The drawer's notices, fitted, which its own window admits rows of. */
+  readonly notices?: ReplPreparedNotices | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
-  const { view, manifest, widths, reading, preview, chat, queue, boundsOf } = input;
+  const { view, manifest, widths, reading, preview, chat, queue, notices, boundsOf } = input;
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
     // The count first, because a window that follows its newest rows needs to
     // know where they end before it can say where it is.
-    const total = totalOf(view, widths, reading, preview, chat, queue, slot.window);
+    const total = totalOf(view, widths, reading, preview, chat, queue, notices, slot.window);
     windows.set(
       slot.window,
       admitRows({
@@ -9458,6 +9519,7 @@ function totalOf(
   preview: readonly ReplFittedLine[] | undefined,
   chat: readonly ReplFittedLine[] | undefined,
   queue: readonly ReplFittedLine[] | undefined,
+  notices: ReplPreparedNotices | undefined,
   window: string,
 ): number {
   if (window === QUEUE_WINDOW) {
@@ -9482,7 +9544,9 @@ function totalOf(
   if (window === READING_WINDOW) {
     return reading?.rows.length ?? 0;
   }
-  return drawerContent(view, widths?.drawer ?? 0, preview)?.content.length ?? 0;
+  // The same prepared rows the drawing pass consumes, so what this window
+  // admits and what it draws cannot disagree about how tall a notice is.
+  return drawerContent(view, widths?.drawer ?? 0, preview, notices)?.content.length ?? 0;
 }
 
 /**

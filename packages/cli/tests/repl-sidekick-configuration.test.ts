@@ -2375,3 +2375,156 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     expect(saidBySidekick(repl.terminal, "Sidekick here.")).toBe(true);
   });
 });
+
+/**
+ * Configure's notices, fitted to the drawer that has to hold them.
+ *
+ * A drawer row is one row, and a notice is a sentence somebody has to be able
+ * to read. What decides how many rows it takes is the engine, at the interior
+ * this frame measured and on the original graphemes — not a count of code
+ * units in a builder that has never seen a cell. Measured before this root
+ * existed: a seventy-character ASCII token inside a thirty-cell drawer was
+ * drawn as nothing at all, and twelve spaced CJK words came back as one
+ * forty-eight cell row in the same thirty.
+ *
+ * The notice a person can actually produce here is the one about replacing an
+ * agent, because the name in it is theirs: it is typed into the drawer's own
+ * field, so these rows drive the width of a notice the way a person does.
+ */
+describe("Configure notice fitting", () => {
+  /** What the agent in these rows advertises, so the drawer has choices to draw. */
+  const ADVERTISED = {
+    model: {
+      selected: "balanced",
+      choices: [
+        { id: "balanced", name: "Balanced", description: "Even-handed." },
+        { id: "fast", name: "Fast", group: { id: "speed", name: "Speed" } },
+      ],
+    },
+    effort: {
+      balanced: { selected: "medium", choices: [{ id: "medium", name: "Medium" }] },
+      fast: {
+        selected: "low",
+        choices: [
+          { id: "low", name: "Low" },
+          { id: "high", name: "High" },
+        ],
+      },
+    },
+  } as const;
+
+  /** Open Configure the way a person does, and wait for the drawer. */
+  function* configure(repl: MountedRepl): Operation<void> {
+    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
+    yield* settled(60);
+    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+  }
+
+  /** Whether the drawer's agent field still holds anything at all. */
+  function draftedAgent(repl: MountedRepl): boolean {
+    const row = screenOf(repl.terminal).find((line) => line.includes("Agent: "));
+    return row !== undefined && row.slice(row.indexOf("Agent: ") + 7).trim().length > 0;
+  }
+
+  /** Replace the agent the drawer names, a character at a time. */
+  function* named(repl: MountedRepl, agent: string): Operation<void> {
+    yield* focusOn(repl.terminal, `> Agent: `);
+    // Cleared a keystroke at a time, which is how a person replaces a name, and
+    // waited for rather than counted: a grapheme is not a key, and a name made
+    // of wide and combining ones takes more presses than it has characters.
+    for (let press = 0; press < 400; press += 1) {
+      if (!draftedAgent(repl)) {
+        break;
+      }
+      // Re-aimed each time: every notice this name produces is rebuilt as the
+      // name shrinks, and a field that has been remounted is not the field the
+      // last keystroke went to.
+      yield* focusOn(repl.terminal, `> Agent: `);
+      repl.terminal.feed("\x7f");
+      yield* settled(8);
+    }
+    yield* typing(repl.terminal, agent);
+    yield* settled(60);
+  }
+
+  /**
+   * The drawer's own rows, and where its rectangle begins and ends.
+   *
+   * Read from the rule it draws across its own top, which is the one row whose
+   * whole width is this drawer's. Everything the drawer draws is inside that
+   * rectangle, so a row of it reaching past the rule is a row written over the
+   * pane behind.
+   */
+  function drawerRows(repl: MountedRepl): { from: number; to: number; rows: string[] } {
+    const screen = screenOf(repl.terminal);
+    const at = screen.findIndex((line) => /\u2500{10,}/.test(line));
+    if (at === -1) {
+      throw new Error(`the drawer is not on this screen: ${JSON.stringify(screen)}`);
+    }
+    const rule = screen[at] ?? "";
+    const from = rule.indexOf("\u2500");
+    const to = rule.lastIndexOf("\u2500") + 1;
+    return {
+      from,
+      to,
+      rows: screen.slice(at + 1).map((line) => line.slice(from, to).trimEnd()),
+    };
+  }
+
+  /** Whether this notice's whole text is recoverable from the drawer's rows. */
+  function saysWhole(repl: MountedRepl, text: string): boolean {
+    const bare = (one: string): string => one.replace(/\s+/g, "");
+    const { rows } = drawerRows(repl);
+    const wanted = bare(text);
+    return rows.some((_, at) => bare(rows.slice(at, at + 8).join("")).includes(wanted));
+  }
+
+  /** Wait until the replacement notice this name produces has been drawn. */
+  function* noticed(repl: MountedRepl, text: string): Operation<void> {
+    yield* awaiting(repl.terminal, "the replacement notice", () => saysWhole(repl, text));
+  }
+
+  it("the whole of a long unbroken token is drawn, inside the drawer's own rows", function* () {
+    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    repl.fake.configuration(ADVERTISED);
+    yield* sendMessage(repl, "hello");
+    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "[send]"));
+    yield* configure(repl);
+    // The drawer as it stands before any of this: its own way out, the way to
+    // apply a choice and the way to read the agent again.
+    expect(shows(repl.terminal, "[close]")).toBe(true);
+    expect(shows(repl.terminal, "[apply]")).toBe(true);
+    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+
+    // Seventy characters with nothing to break on, inside an interior of
+    // thirty: the notice has to be paid out over rows, and every one of its
+    // characters has to be on one of them.
+    const LONG = "x".repeat(70);
+    yield* named(repl, LONG);
+    yield* noticed(repl, `${LONG} has its own settings.`);
+
+    // And none of it is drawn outside the drawer. A row reaching past the
+    // drawer's own width is a row written over the pane behind it.
+    const { from, to, rows } = drawerRows(repl);
+    expect(to).toBeGreaterThan(from);
+    for (const row of rows) {
+      expect(row.length).toBeLessThanOrEqual(to - from);
+    }
+
+    // The way out and the way to read again are where they were, and a name
+    // this long has not moved them: fitting a sentence moves no control. Apply
+    // is deliberately not among them while a replacement is what it would do —
+    // that is this drawer's established semantics, not an effect of fitting.
+    expect(shows(repl.terminal, "[close]")).toBe(true);
+    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+    expect(shows(repl.terminal, "[start new conversation]")).toBe(true);
+  });
+
+  // The wide/combining/joined and shorter-replacement half of L1 is not here
+  // yet. Its reproduction is written down in implementor-36's report with the
+  // two screens it produced: the notice is paid out over the drawer's rows
+  // rather than clipped, which is this correction's subject, but editing the
+  // field that produces it did not clear a name made of wide graphemes, and
+  // the drawer's wide cells interleave with the pane behind them in the
+  // recorded grid. Neither is settled, so neither is asserted.
+});
