@@ -94,6 +94,9 @@ function sameNode(before: Stats | undefined, after: Stats, what: string): void {
   }
 }
 
+/** Which identity a refresh is about, for the test seam that holds one. */
+type IdentityWindow = "directory" | "stage" | "published";
+
 function* removeOwned(path: string, identity: Stats | undefined): Operation<void> {
   if (identity === undefined) {
     return;
@@ -258,8 +261,25 @@ export function* usePosixSidekickTransport(
    * nothing. Omitted everywhere but that test.
    */
   beforeCloseAcceptedSocket?: () => Operation<void>,
+  /**
+   * Seams for the two things a host can do to this publication that this host
+   * cannot be made to do. Omitted everywhere but those tests.
+   *
+   * `holdIdentityRefresh` keeps a refresh's read in flight, so a test can
+   * replace the object under it — or cancel this publication — while the read
+   * this owner's cleanup authority comes from has not resolved yet.
+   *
+   * `readDirectoryIdentity` reads the attachment directory the way a host that
+   * cannot read a creation time reads it: `birthtime` standing in for `ctime`,
+   * which is libuv's documented fallback and not something APFS will do here.
+   */
+  probes?: {
+    holdIdentityRefresh?: (window: IdentityWindow) => Promise<void>;
+    readDirectoryIdentity?: (path: string) => Promise<Stats>;
+  },
 ): Operation<void> {
   const uid = process.getuid?.();
+  const readDirectoryIdentity = probes?.readDirectoryIdentity ?? lstat;
   yield* SidekickTransport.set({
     supported: () => platform !== "win32" && uid !== undefined,
     identify: randomUUID,
@@ -289,9 +309,39 @@ export function* usePosixSidekickTransport(
           acquisitions.push(owned);
           return until(owned);
         }
+        /**
+         * Read what this owner owns again, and adopt the reading only if it is
+         * still the same object.
+         *
+         * `owned` is the identity this owner already has authority over. It is
+         * handed in and never written over here, because the check has to
+         * happen inside the retained callback: that callback is where cleanup's
+         * authority is installed, it still runs when the caller is cancelled
+         * while the read is in flight, and the statement after this one may
+         * never be reached. So a reading of some other device and inode is
+         * refused there, before it can authorize anything, and what this owner
+         * already held stays in place — the replacement is somebody else's file
+         * and keeps being one.
+         */
+        function refresh(
+          read: () => Promise<Stats>,
+          owned: Stats | undefined,
+          window: IdentityWindow,
+          what: string,
+          install: (value: Stats) => void,
+        ): Operation<Stats> {
+          const held = probes?.holdIdentityRefresh?.(window);
+          return retain(held === undefined ? read() : held.then(read), (value) => {
+            sameNode(owned, value, what);
+            install(value);
+          });
+        }
         let directory: string | undefined;
         let directoryAcquisition: Promise<string> | undefined;
         let directoryIdentity: Stats | undefined;
+        // The reading the directory was created with. Never written over by a
+        // refresh: it is what a refreshed reading has to still be.
+        let directoryOwned: Stats | undefined;
         let socketIdentity: Stats | undefined;
         let descriptorIdentity: Stats | undefined;
         let stage: string | undefined;
@@ -349,6 +399,24 @@ export function* usePosixSidekickTransport(
           if (directoryAcquisition !== undefined) {
             yield* until(directoryAcquisition);
           }
+          // Whether the directory is still the one this owner made, asked here
+          // and nowhere later. Closing the listener below unlinks its socket —
+          // Node's own documented behaviour for a Unix socket it bound — and
+          // taking a child out of a directory changes the directory. Asked
+          // after that, the question is about a directory this teardown has
+          // already modified; asked here, it is still a fair one. Every join
+          // below still happens before the directory is removed.
+          let ours = false;
+          if (directory !== undefined && directoryIdentity !== undefined) {
+            const owned = directoryIdentity;
+            try {
+              ours = same(owned, yield* until(readDirectoryIdentity(directory)));
+            } catch (error) {
+              if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+                throw error;
+              }
+            }
+          }
           for (const socket of sockets.keys()) {
             yield* closeSocket(socket);
           }
@@ -365,20 +433,6 @@ export function* usePosixSidekickTransport(
             yield* removeOwned(stage, stageIdentity);
           }
           if (directory !== undefined) {
-            // Asked before the socket is taken out of it, because taking a
-            // child out of a directory changes the directory. The question is
-            // whether this is still the directory this owner made, and the
-            // answer has to be read while that is still a fair question.
-            let ours = false;
-            try {
-              ours =
-                directoryIdentity !== undefined &&
-                same(directoryIdentity, yield* until(lstat(directory)));
-            } catch (error) {
-              if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-                throw error;
-              }
-            }
             yield* removeOwned(join(directory, "s"), socketIdentity);
             try {
               if (ours) {
@@ -402,12 +456,14 @@ export function* usePosixSidekickTransport(
           // Cancellation must join creation and identity before removing the owned directory.
           directoryAcquisition = createDirectory(join(temp, "xsk-")).then((created) => {
             directory = created;
-            return lstat(created).then((identity) => {
+            return readDirectoryIdentity(created).then((identity) => {
               directoryIdentity = identity;
+              directoryOwned = identity;
               return created;
             });
           });
           directory = yield* until(directoryAcquisition);
+          const directoryPath = directory;
           yield* until(chmod(directory, 0o700));
           const socketPath = join(directory, "s");
           if (Buffer.byteLength(socketPath) > 100) {
@@ -440,9 +496,15 @@ export function* usePosixSidekickTransport(
           // reading of a directory this owner then modified twice. The first
           // reading stays until this one replaces it, because a cancellation
           // between the two still has to know which directory is ours.
-          directoryIdentity = yield* retain(lstat(directory), (value) => {
-            directoryIdentity = value;
-          });
+          directoryIdentity = yield* refresh(
+            () => readDirectoryIdentity(directoryPath),
+            directoryOwned,
+            "directory",
+            "the attachment directory",
+            (value) => {
+              directoryIdentity = value;
+            },
+          );
           stage = join(dirname(path), ".sidekick-" + randomUUID());
           const stagingPath = stage;
           yield* scoped(function* () {
@@ -452,6 +514,9 @@ export function* usePosixSidekickTransport(
             stageIdentity = yield* until(file.stat());
             yield* until(file.writeFile(JSON.stringify(descriptor)));
           });
+          // The reading this owner created the stage file with, kept aside for
+          // the same reason the directory's is.
+          const staged = stageIdentity;
           yield* retain(link(stage, path), () => {
             descriptorIdentity = stageIdentity;
           });
@@ -459,20 +524,29 @@ export function* usePosixSidekickTransport(
           // removal below answer about the file this owner linked: the write
           // and the link each changed its times, and a reading taken before
           // them is a reading of what it was.
-          const linked = yield* retain(lstat(stagingPath), (value) => {
-            stageIdentity = value;
-          });
-          sameNode(stageIdentity, linked, "the staged descriptor");
-          stageIdentity = linked;
-          yield* removeOwned(stage, stageIdentity);
+          const linked = yield* refresh(
+            () => lstat(stagingPath),
+            staged,
+            "stage",
+            "the staged descriptor",
+            (value) => {
+              stageIdentity = value;
+            },
+          );
+          yield* removeOwned(stage, linked);
           stageIdentity = undefined;
           // And the published name, read after the last thing this owner does
           // to that inode. Unlinking the stage name changed its times too, so
           // this is the only reading that is still the file's at exit.
-          descriptorIdentity = yield* retain(lstat(path), (value) => {
-            descriptorIdentity = value;
-          });
-          sameNode(linked, descriptorIdentity, "the published descriptor");
+          descriptorIdentity = yield* refresh(
+            () => lstat(path),
+            linked,
+            "published",
+            "the published descriptor",
+            (value) => {
+              descriptorIdentity = value;
+            },
+          );
           yield* provide({
             descriptor,
             *accept() {
