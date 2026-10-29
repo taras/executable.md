@@ -5807,9 +5807,11 @@ describe("Checkpoint #971 A4 — current outcomes, work and the waiting question
       // window has room for: a smaller screen scrolls to them rather than
       // losing them.
       const walk = yield* walkChat(page, inks);
-      expect({ where, words: [...inks.keys()].toSorted() }).toEqual({
+      // Each list is sorted in the copy that was just spread, because the Node
+      // typecheck's `lib` is ES2022 and `toSorted` is ES2023.
+      expect({ where, words: [...inks.keys()].sort() }).toEqual({
         where,
-        words: [...OUTCOMES].toSorted(),
+        words: [...OUTCOMES].sort(),
       });
       // And what this window is not showing is reachable rather than gone.
       const whole = page.frame().windows.get(SIDEKICK_WINDOW);
@@ -5846,7 +5848,7 @@ describe("Checkpoint #971 A4 — current outcomes, work and the waiting question
       // Each work row this screen carries is an entry this history holds, after
       // the message that admitted it. The entry the person submitted from the
       // Draft was admitted by no message and has none.
-      expect({ where, works: [...walk.works].toSorted() }).toEqual({ where, works: [1, 2, 3] });
+      expect({ where, works: [...walk.works].sort() }).toEqual({ where, works: [1, 2, 3] });
       for (const order of walk.works) {
         expect({ where, entry: model.entries.some((one) => one.key === `entry-${order}`) }).toEqual(
           {
@@ -5913,7 +5915,7 @@ describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
     expect({ moved: walk.offsets.size > 1 }).toEqual({ moved: true });
     // All four were rendered, and no two of them in the same ink.
     outcomesNow(page, inks);
-    expect({ read: [...inks.keys()].toSorted() }).toEqual({ read: [...OUTCOMES].toSorted() });
+    expect({ read: [...inks.keys()].sort() }).toEqual({ read: [...OUTCOMES].sort() });
     expect({ distinct: new Set([...inks.values()].map((one) => one.foreground)).size }).toEqual({
       distinct: OUTCOMES.length,
     });

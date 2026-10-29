@@ -407,7 +407,9 @@ describe("REPL terminal: responsive semantic frames", () => {
     const page = yield* useReplPage({ size: WIDE });
     yield* draft(page).type("kept");
     const first = page.frame();
-    const keys = first.keys().toSorted();
+    // `keys()` already answers with a fresh array, so it is sorted in place:
+    // the Node typecheck's `lib` is ES2022 and `toSorted` is ES2023.
+    const keys = first.keys().sort();
     expect(keys.length).toBeGreaterThan(0);
 
     // Across the three drawable profiles, a smaller frame admits fewer rows —
@@ -436,7 +438,7 @@ describe("REPL terminal: responsive semantic frames", () => {
     // And it recovers: growing the window back shows exactly the controls it
     // showed before, with the focus and the text where they were.
     const back = yield* page.resize(WIDE);
-    expect(back.keys().toSorted()).toEqual(keys);
+    expect(back.keys().sort()).toEqual(keys);
     expect(back.focused).toBe("footer:input");
     expect(draft(page).text()).toBe("kept");
     // The same control still means the same thing: Enter on the Draft submits

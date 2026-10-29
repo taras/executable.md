@@ -501,7 +501,9 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
 
     // Pre-assert: the area about to be vacated really had text in it. Without
     // this the assertion below would pass on an empty screen.
-    const kept = after.findLastIndex((line) => line.trim().length > 0) + 1;
+    // Counted rather than read with `findLastIndex`: the Node typecheck's
+    // `lib` is ES2022, and that reader is ES2023. Zero where every row is blank.
+    const kept = after.reduce((last, line, at) => (line.trim().length > 0 ? at + 1 : last), 0);
     expect(kept).toBeGreaterThan(0);
     expect(before.slice(kept).some((line) => line.trim().length > 0)).toBe(true);
 

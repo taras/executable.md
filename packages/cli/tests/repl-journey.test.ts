@@ -590,7 +590,9 @@ function* histories(root: string): Operation<string[]> {
       found.push(execution);
     }
   }
-  return found.toSorted();
+  // Sorted through a copy rather than with `toSorted`: the Node typecheck's
+  // `lib` is ES2022, and `toSorted` is ES2023.
+  return [...found].sort();
 }
 
 /** Where one execution's entry history is, in whichever shape holds it. */
