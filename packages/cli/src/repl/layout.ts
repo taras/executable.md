@@ -470,11 +470,6 @@ export function rowProps(width: number | undefined): ReplBoxProps {
   };
 }
 
-/** One row of a region whose width is not yet known. */
-export const ROW_PROPS: ReplBoxProps = Object.freeze({
-  layout: Object.freeze({ width: grow(), height: fixed(1) }),
-});
-
 /** A control of the action row: as wide as its own label. */
 export const CONTROL_PROPS: ReplBoxProps = Object.freeze({
   layout: Object.freeze({ width: fit(), height: fixed(1) }),
