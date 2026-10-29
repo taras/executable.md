@@ -21,14 +21,13 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, Ok, scoped, spawn } from "effection";
+import { ensure, Ok, scoped, sleep, spawn } from "effection";
 import type { Operation, Result, Task } from "effection";
 
 import { DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { API } from "@executablemd/runtime";
 
 import { resolveAgentStack } from "../src/agent-stack.ts";
-import { SCROLL_DOWN } from "../src/repl/application.ts";
 import { assembleReplProfile } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import { NO_PLUGINS } from "../src/plugin-host.ts";
@@ -40,37 +39,29 @@ import type { SubmitReceipt } from "../src/repl/sidekick/controls.ts";
 import type { PairedChatStorage } from "../src/repl/sidekick/repository.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./support/fake-acp.ts";
 import {
-  activate,
   appendGate,
   awaited,
-  awaiting,
-  click,
-  clickAt,
-  coordinateOf,
-  draftText,
-  focusDraft,
-  focusedField,
-  focusedOn,
-  focusMessage,
-  focusOn,
-  MESSAGE_PROMPT,
-  messageText,
+  awaitedFact,
   MOUNTED_AGENT,
   mountedReading,
   OTHER_MOUNTED_AGENT,
-  replay,
-  resizeTo,
-  panePresented,
-  screenOf,
-  sendMessage,
-  settled,
+} from "./support/mounted-repl.ts";
+import type { MountedRepl } from "./support/mounted-repl.ts";
+import { useReplPage } from "./support/mounted-page.ts";
+import type { PageFrame, ReplPage } from "./support/mounted-page.ts";
+import {
+  configure,
+  draft,
+  entrySettles,
+  paste,
+  saidByPerson,
   saidBySidekick,
-  saysAcross,
+  selectPane,
   shows,
-  typing,
-  useMountedRepl,
-} from "./fixtures/repl/issue-883/mounted-program.ts";
-import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
+  sidekick,
+  sidekickIdle,
+} from "./support/repl-page-adapters.ts";
+import type { PageConfigure } from "./support/repl-page-adapters.ts";
 import {
   PAIRED_DIRECTORY,
   readSidekickRecords,
@@ -79,22 +70,6 @@ import {
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { until } from "effection";
-
-/**
- * The outer envelope of the pane that owns the Sidekick's drawers, by width.
- *
- * Stated from the accepted table rather than asked of the product: the space
- * after the sidebar is shared equally and the spare cell of an odd remainder
- * goes to the Transcript, so the right column begins at 96 of 160 and 74 of
- * 120. A helper that read `inspectionWidth` would agree with the product
- * however it drifted.
- */
-function paneEnvelope(columns: number): number {
-  if (columns >= 160) {
-    return 96;
-  }
-  return columns >= 120 ? 74 : 0;
-}
 
 /** The preference this execution's chat last holds, or none. */
 function* savedPreference(repl: MountedRepl): Operation<Record<string, unknown> | undefined> {
@@ -789,21 +764,6 @@ describe("Tier R7 — the configuration a Sidekick conversation runs under", () 
  * Apply is the control a person presses. Only the terminal and the agent
  * transport are replaced.
  */
-/**
- * Wait for something only the files can answer, within a bound.
- *
- * The screen's own `awaited` takes a predicate it can call; what these rows are
- * waiting for is a record on disk, which is read with an operation.
- */
-function* landed(what: string, check: () => Operation<boolean>): Operation<void> {
-  for (let tries = 0; tries < 200; tries += 1) {
-    if (yield* check()) {
-      return;
-    }
-    yield* settled(20);
-  }
-  throw new Error(`${what} never happened`);
-}
 
 /** A reply that prepares an entry, submits it, and waits for its outcome. */
 const SUBMITS = [
@@ -820,6 +780,97 @@ const SUBMITS = [
   "<REPL.Submit />",
   "",
 ].join("\n");
+
+/**
+ * A window for an assertion that nothing happened.
+ *
+ * Nothing is drawn and no event is published when the thing being asserted
+ * does not occur, so there is nothing to wait for: the assertion is given a
+ * window in which to be wrong.
+ */
+function* lingering(): Operation<void> {
+  yield* sleep(100);
+}
+
+/** One message, its reply drawn, and the Sidekick at rest again. */
+function* conversed(page: ReplPage, text: string, reply: string): Operation<void> {
+  yield* sidekick(page).send(text);
+  yield* page.until(`the reply ${JSON.stringify(reply)}`, (one) => shows(one, reply));
+  yield* page.until("the Sidekick at rest", sidekickIdle);
+}
+
+/** Whether the drawer's Apply control wears this label. */
+function applyReads(frame: PageFrame, label: string): boolean {
+  return frame.control("drawer:configure:apply")?.text.includes(label) ?? false;
+}
+
+/** Whether the pane's header names this agent, which it does once the drawer has gone. */
+function headerNames(frame: PageFrame, agent: string): boolean {
+  return frame.control("sidekick:configure")?.text.includes(`[configure ${agent}]`) ?? false;
+}
+
+/** The control that asks the failed request again, or none where this frame offers none. */
+function retryOf(frame: PageFrame): string | undefined {
+  return frame.keys().find((key) => key.startsWith("sidekick:retry:"));
+}
+
+/**
+ * Read the current chat explicitly, by its own Sessions row.
+ *
+ * Through the mounted control, so what is selected is what a person
+ * selected: the row carries the chat and the turn, and nothing here reaches
+ * the owner or the route.
+ */
+function* readOwnChat(page: ReplPage, title: string): Operation<void> {
+  const rowOf = (frame: PageFrame): string | undefined =>
+    frame
+      .area("box:sessions:viewport")
+      ?.controls()
+      .find((key) => frame.control(key)?.text.includes(title));
+  const seen = yield* page.until(`a Sessions row showing ${title}`, (one) => {
+    return rowOf(one) !== undefined;
+  });
+  const row = rowOf(seen);
+  if (row === undefined) {
+    throw new Error(`no Sessions row shows ${title}. ${page.describe()}`);
+  }
+  yield* page.press(row);
+  yield* page.until("the chat selector standing", (one) => shows(one, "[Back to current chat]"));
+  // The current chat keeps its usual controls even when it is the chat
+  // somebody explicitly selected: it *is* the active association.
+  expect(page.frame().has("sidekick:message")).toBe(true);
+}
+
+/** The text with every space taken out, so wrapped prose compares as it was written. */
+function bare(text: string): string {
+  return text.replace(/\s+/g, "");
+}
+
+/** Whether this notice's whole text is recoverable from the drawer's rows. */
+function saysWhole(config: PageConfigure, text: string): boolean {
+  const rows = config.area().rows();
+  const wanted = bare(text);
+  return rows.some((_, at) => bare(rows.slice(at, at + 8).join("")).includes(wanted));
+}
+
+/** Wait until the replacement notice this name produces has been drawn. */
+function* noticed(page: ReplPage, config: PageConfigure, text: string): Operation<void> {
+  yield* page.until("the replacement notice", () => saysWhole(config, text));
+}
+
+/** The cells of this frame outside the drawer's own rectangle, to its left and to its right. */
+function outside(page: ReplPage, config: PageConfigure): string[] {
+  const frame = page.frame();
+  const layer = config.area().bounds;
+  const { columns, rows } = frame.size;
+  const right = layer.x + layer.width;
+  return [
+    ...frame.within({ x: 0, y: 0, width: layer.x, height: rows }).rows(),
+    ...(right < columns
+      ? frame.within({ x: right, y: 0, width: columns - right, height: rows }).rows()
+      : []),
+  ];
+}
 
 describe("Tier CFG — Configure in the Sidekick's pane", () => {
   /** What this agent offers, and what each of its models offers for effort. */
@@ -843,48 +894,15 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     },
   } as const;
 
-  /**
-   * Open Configure from the pane's own header.
-   *
-   * Waited for in the frames drawn *since* the click rather than anywhere on
-   * the screen: this renderer writes diffs, so a replayed buffer still holds
-   * the cells an earlier opening drew, and a wait on those would be satisfied
-   * before the drawer had reopened at all.
-   */
-  function* configure(repl: MountedRepl): Operation<void> {
-    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
-    // Settled rather than awaited on a cell. Opening the drawer is pure state —
-    // the frame that follows the click draws it — and the inspection it asks
-    // for is separate work that does not gate it. A wait on a drawn cell cannot
-    // tell this opening from the one before it: the renderer writes diffs, so a
-    // row that is already in the right place is not written again.
-    yield* settled(60);
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
-  }
-
-  /** Close whichever of the Sidekick's drawers is open, and wait for its pane. */
-  function* closeDrawer(repl: MountedRepl): Operation<void> {
-    const from = repl.terminal.presented.length;
-    yield* click(repl.terminal, "[close]", paneEnvelope(repl.terminal.size.columns));
-    yield* awaited("the drawer closing", () =>
-      replay(repl.terminal.presented.slice(from)).some(
-        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
-      ),
-    );
-  }
-
   it("CFG1: Configure shows what the agent really offers, and nothing asks before it", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
     // Their own text in both composers first, which none of this may touch.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "mine");
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
-      focusedField(one, MESSAGE_PROMPT),
-    );
-    yield* typing(repl.terminal, "later");
+    yield* draft(page).type("mine");
+    yield* sidekick(page).composer.type("later");
 
     // Before opening it: nothing inspected, nothing established, nothing
     // written. Looking at the pane, changing tabs and resizing all cost
@@ -895,96 +913,82 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // writes" means here is no *chat*: the two publication records and nothing
     // else. A preference or a message would be a third.
     expect((yield* chatKinds(repl)).length).toBe(2);
-    yield* activate(repl.terminal, "Bindings");
-    yield* awaiting(
-      repl.terminal,
-      "Bindings being selected",
-      (one) => panePresented(one) === "bindings",
-    );
-    yield* resizeTo(repl.terminal, { columns: 120, rows: 30 });
-    yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the Sidekick back", (one) => shows(one, "[send]"));
+    yield* selectPane(page, "bindings");
+    yield* page.resize({ columns: 120, rows: 30 });
+    yield* page.resize({ columns: 160, rows: 36 });
+    yield* selectPane(page, "sidekick");
     expect(repl.fake.configCalls).toEqual([]);
     expect(repl.fake.ensured).toEqual([]);
 
     // Opening it is the explicit act that reads, and it reads through the
     // provider rather than from anything remembered.
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the models this agent advertised", (one) =>
-      shows(one, "Balanced"),
-    );
+    yield* config.open();
+    yield* config.offered("balanced");
     // The provider's own words: its names, its descriptions and the heading it
     // filed a choice under.
-    expect(shows(repl.terminal, "Even-handed.")).toBe(true);
-    expect(shows(repl.terminal, "Speed · Fast")).toBe(true);
+    expect(config.shows("Even-handed.")).toBe(true);
+    expect(config.shows("Speed · Fast")).toBe(true);
     // And no turn: an inspection takes a session of its own and sends nothing.
     expect(repl.fake.prompts).toEqual([]);
     // Nothing has been asked for yet, and nothing has been verified.
-    expect(shows(repl.terminal, "Requested: none")).toBe(true);
-    expect(shows(repl.terminal, "Verified: none")).toBe(true);
+    expect(config.shows("Requested: none")).toBe(true);
+    expect(config.shows("Verified: none")).toBe(true);
 
     // Both composers still hold exactly what was typed into them.
-    yield* closeDrawer(repl);
-    expect(draftText(repl.terminal)).toBe("mine");
-    expect(messageText(repl.terminal).includes("later")).toBe(true);
+    yield* config.close();
+    expect(draft(page).text()).toBe("mine");
+    expect(sidekick(page).composer.text().includes("later")).toBe(true);
   });
 
   it("CFG2: a chosen model brings its own effort levels, and Apply saves them", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Under the new settings.</Output>\n" });
 
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
+    yield* config.open();
+    yield* config.offered("balanced");
     // Nothing is selected and nothing is requested, so there is no effort
     // section at all: effort belongs to a model, and none has been chosen.
-    expect(shows(repl.terminal, "Effort")).toBe(false);
+    expect(config.shows("Effort")).toBe(false);
 
     // One model, chosen through its own control.
-    yield* click(repl.terminal, "( ) Speed", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the model being selected", (one) => shows(one, "(x) Speed"));
+    yield* config.chooseModel("fast");
     // Its levels have not been read, and nothing is invented from the model
     // before it: this says so rather than offering another model's list.
-    expect(shows(repl.terminal, "Effort for fast")).toBe(true);
-    expect(shows(repl.terminal, "Medium")).toBe(false);
+    expect(config.shows("Effort for fast")).toBe(true);
+    expect(config.shows("Medium")).toBe(false);
 
     // Read explicitly, for the model selected now.
-    yield* click(repl.terminal, "[refresh]", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "this model's own levels", (one) => shows(one, "High"));
+    yield* config.refresh();
+    yield* page.until("this model's own levels", (one) => one.has("drawer:configure:effort:high"));
     // `fast`'s levels, which `balanced` does not have.
-    expect(shows(repl.terminal, "Low")).toBe(true);
-    expect(shows(repl.terminal, "Medium")).toBe(false);
-    yield* click(repl.terminal, "( ) High", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the level being selected", (one) => shows(one, "(x) High"));
+    expect(config.shows("Low")).toBe(true);
+    expect(config.shows("Medium")).toBe(false);
+    yield* config.chooseEffort("high");
 
     // Closed without applying: nothing was saved, so reopening starts from the
     // saved preference again rather than from what was chosen and abandoned.
-    yield* closeDrawer(repl);
+    yield* config.close();
     expect((yield* chatKinds(repl)).includes("preferences")).toBe(false);
-    yield* configure(repl);
+    yield* config.open();
+    yield* config.offered("fast");
     // Nothing of what was chosen and abandoned: no model marked, and still no
     // request saved.
-    expect(shows(repl.terminal, "(x) Speed")).toBe(false);
-    expect(shows(repl.terminal, "Requested: none")).toBe(true);
+    expect(config.modelMarked("fast")).toBe(false);
+    expect(config.shows("Requested: none")).toBe(true);
 
     // Chosen again and applied, which saves and closes.
-    yield* click(repl.terminal, "( ) Speed", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the model being selected", (one) => shows(one, "(x) Speed"));
-    yield* click(repl.terminal, "[refresh]", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "this model's own levels", (one) => shows(one, "High"));
-    yield* click(repl.terminal, "( ) High", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the level being selected", (one) => shows(one, "(x) High"));
+    yield* config.chooseModel("fast");
+    yield* config.refresh();
+    yield* page.until("this model's own levels", (one) => one.has("drawer:configure:effort:high"));
+    yield* config.chooseEffort("high");
     const askingBefore = repl.fake.configCalls.length;
-    const applying = repl.terminal.presented.length;
-    yield* click(repl.terminal, "[apply]", paneEnvelope(repl.terminal.size.columns));
+    yield* config.apply();
     // Apply closes Configure on success, which is what says the preference was
     // acknowledged: a drawer still open would be one whose save had not landed.
-    yield* awaited("Configure closing on success", () =>
-      replay(repl.terminal.presented.slice(applying)).some(
-        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
-      ),
-    );
+    yield* config.closed();
 
     // Saved, and nothing else: a preference is a record, so Apply asked the
     // agent for nothing and sent no turn.
@@ -994,27 +998,22 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
 
     // Reopening shows what was saved, and says it is a request rather than
     // something an agent has run under.
-    yield* configure(repl);
+    yield* config.open();
     // The label and the model, which is what the pane's width holds: the
     // assertion below reads the whole of what was saved out of the history,
     // where nothing clips it.
-    yield* awaiting(repl.terminal, "the saved request", (one) =>
-      shows(one, "Requested: model=fast"),
-    );
+    yield* page.until("the saved request", () => config.shows("Requested: model=fast"));
     // And the whole of what was saved, read out of the history rather than off
     // a row the pane's width may clip.
     expect(yield* savedPreference(repl)).toMatchObject({ model: "fast", effort: "high" });
-    yield* closeDrawer(repl);
+    yield* config.close();
 
     // And the next real message is what applies it: the model first, read back,
     // then the effort, read back, all before the prompt. Counted from here,
     // because reopening the drawer above read the agent's choices again and
     // that read is not part of applying anything.
     const sending = repl.fake.configCalls.length;
-    yield* sendMessage(repl, "go");
-    yield* awaiting(repl.terminal, "the reply under the new settings", (one) =>
-      shows(one, "Under the new settings."),
-    );
+    yield* conversed(page, "go", "Under the new settings.");
     expect(repl.fake.configCalls.slice(sending)).toEqual([
       "status",
       "set model=fast",
@@ -1026,32 +1025,29 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // What was verified now says the same thing the request did — and it says
     // it because Core saved it against a turn that started, not because this
     // screen remembered asking.
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the verified settings", (one) =>
-      shows(one, "Verified: model=fast"),
-    );
+    yield* config.open();
+    yield* page.until("the verified settings", () => config.shows("Verified: model=fast"));
   });
 
   it("CFG2: a stale inspection cannot replace a newer selection", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-    yield* click(repl.terminal, "( ) Speed", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the model being selected", (one) => shows(one, "(x) Speed"));
+    yield* config.open();
+    yield* config.offered("balanced");
+    yield* config.chooseModel("fast");
 
     // One inspection held open, for `fast`.
     const holding = repl.fake.holdStatus();
-    yield* click(repl.terminal, "[refresh]", paneEnvelope(repl.terminal.size.columns));
+    yield* config.refresh();
     yield* holding.reached;
+    yield* page.until("the read in flight", () => config.shows("Reading what this agent"));
 
     // The selection moves underneath it, to a model whose levels this read is
     // not about.
-    yield* click(repl.terminal, "( ) Balanced", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the other model being selected", (one) =>
-      shows(one, "(x) Balanced"),
-    );
+    yield* config.chooseModel("balanced");
 
     holding.release();
     // Waited for the held read to be *applied*, not for a row that was already
@@ -1059,48 +1055,49 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // away is the moment this result reached the drawer. A predicate about the
     // selection would have been true before the release and would prove
     // nothing about what the answer did.
-    yield* awaiting(
-      repl.terminal,
+    yield* page.until(
       "the stale read being applied",
-      (one) => shows(one, "Effort for balanced") && !shows(one, "Reading what this agent"),
+      () => config.shows("Effort for balanced") && !config.shows("Reading what this agent"),
     );
     // It changed nothing it should not: it is an answer about `fast`, and
     // `fast` is not what is selected any more. No level from it is offered
     // under the model that is, and the drawer is where the person left it.
-    expect(shows(repl.terminal, "High")).toBe(false);
-    expect(shows(repl.terminal, "( ) Low")).toBe(false);
-    expect(shows(repl.terminal, "(x) Balanced")).toBe(true);
+    expect(config.shows("High")).toBe(false);
+    expect(config.shows("( ) Low")).toBe(false);
+    expect(config.modelMarked("balanced")).toBe(true);
   });
 
   it("CFG2: control — a read of the selected model offers that model's own levels", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-    yield* click(repl.terminal, "( ) Speed", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the model being selected", (one) => shows(one, "(x) Speed"));
+    yield* config.open();
+    yield* config.offered("balanced");
+    yield* config.chooseModel("fast");
 
     // The same held read, released with the selection left where it was. This
     // is the discriminating half: the levels do arrive, so the row above is
     // about ownership rather than about reads never being applied at all.
     const holding = repl.fake.holdStatus();
-    yield* click(repl.terminal, "[refresh]", paneEnvelope(repl.terminal.size.columns));
+    yield* config.refresh();
     yield* holding.reached;
     holding.release();
     // Once the levels are known the heading is just "Effort": the "Effort for
     // <model>: not read yet." sentence is what stands in for a list nobody has.
-    yield* awaiting(
-      repl.terminal,
+    yield* page.until(
       "the read being applied",
-      (one) => shows(one, "( ) High") && !shows(one, "Reading what this agent"),
+      (one) => one.has("drawer:configure:effort:high") && !config.shows("Reading what this agent"),
     );
-    expect(shows(repl.terminal, "( ) Low")).toBe(true);
-    expect(shows(repl.terminal, "not read yet")).toBe(false);
+    expect(config.shows("( ) Low")).toBe(true);
+    expect(config.shows("not read yet")).toBe(false);
   });
 
   it("CFG2: an inspection in flight refuses a new message instead of retaining one", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Should never be asked.</Output>\n" });
 
@@ -1108,15 +1105,15 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // again behind it: what stands in the way is the job, not the drawer.
     const holding = repl.fake.holdStatus();
     try {
-      yield* configure(repl);
+      yield* config.open();
       yield* holding.reached;
-      yield* closeDrawer(repl);
+      yield* config.close();
 
       // Send, while that job is still the one thing the Sidekick is doing.
-      yield* focusMessage(repl.terminal);
-      yield* typing(repl.terminal, "during");
-      yield* click(repl.terminal, "[send]", paneEnvelope(repl.terminal.size.columns));
-      yield* awaiting(repl.terminal, "the refusal Send is given", (one) =>
+      yield* sidekick(page).composer.type("during");
+      yield* page.until("the Sidekick offering its own Send", (one) => one.has("sidekick:send"));
+      yield* page.press("sidekick:send");
+      yield* page.until("the refusal Send is given", (one) =>
         shows(one, "already doing something you asked for"),
       );
 
@@ -1126,37 +1123,40 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
       const read = yield* mountedReading(repl);
       expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(0);
       expect(repl.fake.prompts).toEqual([]);
-      expect(messageText(repl.terminal).includes("during")).toBe(true);
+      expect(sidekick(page).composer.text().includes("during")).toBe(true);
     } finally {
       holding.release();
     }
   });
 
   it("CFG2: control — with no job admitted, the same Send is taken", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Asked and answered.</Output>\n" });
 
     // The same opening and closing of Configure, with its read allowed to
     // finish. This is what makes the row above about the admitted job rather
     // than about Configure having been opened at all.
-    yield* configure(repl);
-    yield* awaiting(
-      repl.terminal,
+    yield* config.open();
+    yield* page.until(
       "the read finishing",
-      (one) => shows(one, "Balanced") && !shows(one, "Reading what this agent"),
+      (one) =>
+        one.has("drawer:configure:model:balanced") && !config.shows("Reading what this agent"),
     );
-    yield* closeDrawer(repl);
+    yield* config.close();
 
-    yield* sendMessage(repl, "during");
-    yield* awaiting(repl.terminal, "the reply", (one) => shows(one, "Asked and answered."));
+    yield* conversed(page, "during", "Asked and answered.");
     const read = yield* mountedReading(repl);
     expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(1);
     expect(repl.fake.prompts).toHaveLength(1);
   });
 
   it("CFG2: while a turn runs, effort cannot be refreshed but a model can be saved", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Hello back.</Output>\n" });
     // Generation held open, so the conversation is doing something throughout.
@@ -1164,59 +1164,49 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
 
     // A conversation first, because choices belong to one: read before there is
     // a conversation and they are not this conversation's to keep.
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "Hello back."));
+    yield* conversed(page, "hello", "Hello back.");
 
     // Then one read, so there are advertised choices in hand for this exact
     // conversation when it goes busy.
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-    yield* closeDrawer(repl);
+    yield* config.open();
+    yield* config.offered("balanced");
+    yield* config.close();
 
-    yield* sendMessage(repl, "think");
+    yield* sidekick(page).send("think");
     yield* repl.fake.holdingTurns(1);
     const asking = repl.fake.configCalls.length;
 
     // Opened while busy. The models already advertised for this conversation
     // stay usable, so one of them can still be chosen.
-    yield* configure(repl);
-    yield* click(repl.terminal, "( ) Speed", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the model being selected while busy", (one) =>
-      shows(one, "(x) Speed"),
-    );
+    yield* config.open();
+    yield* config.offered("fast");
+    yield* config.chooseModel("fast");
 
     // Its effort levels have not been read, and they cannot be: an inspection
     // is something this conversation does one at a time, and the root refuses
     // it before the agent is reached. Said rather than filled in from another
     // model's list.
-    expect(shows(repl.terminal, "Effort for fast")).toBe(true);
-    expect(shows(repl.terminal, "Low")).toBe(false);
-    yield* click(repl.terminal, "[refresh]", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(
-      repl.terminal,
-      "the refusal a busy refresh gives",
+    expect(config.shows("Effort for fast")).toBe(true);
+    expect(config.shows("Low")).toBe(false);
+    yield* config.refresh();
+    yield* page.until("the refusal a busy refresh gives", () =>
       // Said in the drawer that was pressed, and the beginning of the reason is
       // what this pane's width holds.
-      (one) => shows(one, "the Sidekick is already working"),
+      config.shows("the Sidekick is already working"),
     );
     // Nothing was asked of the agent by trying.
     expect(repl.fake.configCalls).toHaveLength(asking);
 
     // A model-only preference saves while the turn runs, with no effort
     // requested and no silent choice made for it.
-    const applying = repl.terminal.presented.length;
-    yield* click(repl.terminal, "[apply]", paneEnvelope(repl.terminal.size.columns));
-    yield* awaited("the preference landing and Configure closing", () =>
-      replay(repl.terminal.presented.slice(applying)).some(
-        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[stop]"),
-      ),
-    );
+    yield* config.apply();
+    yield* config.closed();
     expect(yield* savedPreference(repl)).toMatchObject({ model: "fast", effort: null });
     // And the turn in flight was not reconfigured under it.
     expect(repl.fake.configCalls).toHaveLength(asking);
 
     repl.fake.releaseTurn();
-    yield* awaiting(repl.terminal, "the held turn finishing", (one) => shows(one, "Done."));
+    yield* page.until("the held turn finishing", (one) => shows(one, "Done."));
   });
 
   /**
@@ -1229,7 +1219,9 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
    */
   function* heldEntry(changing: boolean): Operation<readonly string[]> {
     const gate = appendGate();
-    const repl = yield* useMountedRepl({ gate });
+    const page = yield* useReplPage({ gate });
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Ready.</Output>\n" });
     repl.fake.script({ reply: SUBMITS });
@@ -1237,37 +1229,29 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
 
     // A conversation, and one read of what it offers, so the drawer has
     // advertised choices for this conversation while it is busy.
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "Ready."));
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-    yield* closeDrawer(repl);
+    yield* conversed(page, "hello", "Ready.");
+    yield* config.open();
+    yield* config.offered("balanced");
+    yield* config.close();
 
     // The entry's own closing record, held open: the entry has run and has not
     // settled, so the reply's Submit is still waiting for its outcome.
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* sendMessage(repl, "run it");
+    yield* sidekick(page).send("run it");
     yield* closing.started();
-    yield* awaiting(repl.terminal, "the entry's output", (one) => shows(one, "the entry ran"));
+    yield* page.until("the entry's output", (one) => shows(one, "the entry ran"));
     const asking = repl.fake.configCalls.length;
 
     if (changing) {
       // Applied while the entry is held. A preference is a record, so this asks
       // the agent for nothing and stops nothing.
-      yield* configure(repl);
-      yield* click(repl.terminal, "( ) Speed", paneEnvelope(repl.terminal.size.columns));
-      yield* awaiting(repl.terminal, "the model being chosen while the entry waits", (one) =>
-        shows(one, "(x) Speed"),
-      );
-      const applying = repl.terminal.presented.length;
-      yield* click(repl.terminal, "[apply]", paneEnvelope(repl.terminal.size.columns));
-      yield* awaited("the preference landing", () =>
-        replay(repl.terminal.presented.slice(applying)).some(
-          (line) => line.includes(MESSAGE_PROMPT) || line.includes("[stop]"),
-        ),
-      );
+      yield* config.open();
+      yield* config.offered("fast");
+      yield* config.chooseModel("fast");
+      yield* config.apply();
+      yield* config.closed();
       expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
       // Nothing of the agent's was touched by saving, and the entry is still
       // held: the save coexists with the work rather than interrupting it.
@@ -1278,9 +1262,7 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // Released: the entry settles, the Submit it was waiting for answers, and
     // the automatic turn that reports it runs.
     closing.release();
-    yield* awaiting(repl.terminal, "the turn that follows the entry", (one) =>
-      shows(one, "Both done."),
-    );
+    yield* page.until("the turn that follows the entry", (one) => shows(one, "Both done."));
     return repl.fake.configCalls.slice(asking);
   }
 
@@ -1306,21 +1288,21 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
   });
 
   it("CFG1: control — an agent that offers no model choice says so", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     // `null` from the provider: no model selector at all, which is a different
     // answer from a selector with nothing in it.
     repl.fake.configuration(undefined);
 
-    yield* configure(repl);
+    yield* config.open();
     // Said in the pane's own width, which clips a longer sentence: what the row
     // asserts is the sentence this screen actually shows.
-    yield* awaiting(repl.terminal, "Configure saying there is no choice", (one) =>
-      shows(one, "offers no model"),
-    );
+    yield* page.until("Configure saying there is no choice", () => config.shows("offers no model"));
     // Nothing fabricated: no empty list of models, and no effort section for a
     // model nobody selected.
-    expect(shows(repl.terminal, "( )")).toBe(false);
-    expect(shows(repl.terminal, "Effort")).toBe(false);
+    expect(config.shows("( )")).toBe(false);
+    expect(config.shows("Effort")).toBe(false);
     expect(repl.fake.prompts).toEqual([]);
   });
 
@@ -1333,52 +1315,35 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
    * back on the opener, and the choice discarded rather than remembered.
    */
   function* exiting(by: "escape" | "close"): Operation<void> {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
     // Their own text in both composers, which closing a drawer may not touch.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "mine");
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
-      focusedField(one, MESSAGE_PROMPT),
-    );
-    yield* typing(repl.terminal, "later");
+    yield* draft(page).type("mine");
+    yield* sidekick(page).composer.type("later");
 
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
+    yield* config.open();
+    yield* config.offered("balanced");
     // A real choice, made and deliberately not applied: this is what the
     // discard rule below is about, and what a close that saved would save.
-    yield* click(repl.terminal, "( ) Speed", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the model being selected", (one) => shows(one, "(x) Speed"));
+    yield* config.chooseModel("fast");
     const asked = repl.fake.configCalls.length;
     const ensured = repl.fake.ensured.length;
     const records = (yield* chatKinds(repl)).length;
 
-    const from = repl.terminal.presented.length;
     if (by === "escape") {
       // One Escape, through the real input path — no action dispatched here.
-      repl.terminal.feed("\x1b");
+      yield* page.key("Escape");
     } else {
       // And the visible control, reached by real traversal and activated with
-      // Enter. Read from the focus marker this screen committed rather than
-      // from a count of presses: what owns Enter is what the frame says holds
-      // focus.
-      let reached = focusedOn(repl.terminal, "[close]");
-      for (let press = 0; press < 48 && !reached; press += 1) {
-        repl.terminal.feed("\t");
-        yield* settled(20);
-        reached = focusedOn(repl.terminal, "[close]");
-      }
-      expect(reached).toBe(true);
-      repl.terminal.feed("\r");
+      // Enter.
+      yield* page.focus("drawer:close");
+      yield* page.key("Enter");
     }
-    yield* awaited("the drawer closing", () =>
-      replay(repl.terminal.presented.slice(from)).some(
-        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
-      ),
-    );
-    expect(shows(repl.terminal, "[refresh]")).toBe(false);
+    yield* config.closed();
+    expect(page.frame().has("drawer:configure:refresh")).toBe(false);
 
     // Nothing was saved and nobody was asked: closing is not applying.
     expect((yield* chatKinds(repl)).length).toBe(records);
@@ -1388,18 +1353,18 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     expect(repl.fake.ensured).toHaveLength(ensured);
     expect(repl.fake.prompts).toEqual([]);
     // Both composers hold exactly what was typed into them.
-    expect(draftText(repl.terminal)).toBe("mine");
-    expect(messageText(repl.terminal).includes("later")).toBe(true);
+    expect(draft(page).text()).toBe("mine");
+    expect(sidekick(page).composer.text().includes("later")).toBe(true);
     // And focus is back on the one control this drawer is about, which is where
     // somebody who closed it is standing.
-    expect(focusedOn(repl.terminal, `[configure ${MOUNTED_AGENT}]`)).toBe(true);
+    expect(page.frame().focused).toBe("sidekick:configure");
 
     // The choice went with the drawer: reopening starts from the saved
     // preference, which is the only thing a next turn would use.
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models again", (one) => shows(one, "Balanced"));
-    expect(shows(repl.terminal, "(x) Speed")).toBe(false);
-    expect(shows(repl.terminal, "Requested: none")).toBe(true);
+    yield* config.open();
+    yield* config.offered("balanced");
+    expect(config.modelMarked("fast")).toBe(false);
+    expect(config.shows("Requested: none")).toBe(true);
   }
 
   it("CX1: one Escape closes Configure, saving nothing and asking nobody", function* () {
@@ -1420,7 +1385,9 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
    * dismissal may end.
    */
   it("CX2: Close stays reachable past an off-window choice, and while a turn runs", function* () {
-    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    const repl = page.repl;
+    const config = configure(page);
     // More models than this drawer draws at once, which is what puts choices
     // and Apply below the window.
     const many = Array.from({ length: 24 }, (_, at) => ({
@@ -1430,89 +1397,58 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     repl.fake.configuration({ model: { selected: "model-1", choices: many }, effort: {} });
     repl.fake.script({ held: true, reply: "<Output>Done at last.</Output>\n" });
 
-    const envelope = paneEnvelope(repl.terminal.size.columns);
-    const scrollTo = function* (label: string): Operation<void> {
-      for (
-        let press = 0;
-        press < 60 && coordinateOf(repl.terminal, label, envelope) === undefined;
-        press += 1
-      ) {
-        yield* click(repl.terminal, SCROLL_DOWN, envelope);
-        yield* settled(20);
-      }
-      expect(coordinateOf(repl.terminal, label, envelope)).toBeDefined();
-    };
-
     // Opened without asserting its controls: with a list this long they are
     // below the window too, which is the state this row is about.
-    const opening = function* (): Operation<void> {
-      yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
-      yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Model 1"));
-    };
-    yield* opening();
-    const last = `( ) Model ${many.length}`;
+    yield* config.open();
+    yield* config.offered("model-1");
+    const last = `model-${many.length}`;
     // Genuinely below the window before it is scrolled to.
-    expect(coordinateOf(repl.terminal, last, envelope)).toBe(undefined);
-    yield* scrollTo(last);
-    yield* click(repl.terminal, last, envelope);
-    yield* awaiting(repl.terminal, "the off-window model being selected", (one) =>
-      shows(one, `(x) Model ${many.length}`),
-    );
+    expect(page.frame().has(`drawer:configure:model:${last}`)).toBe(false);
+    yield* config.scrollTo(`drawer:configure:model:${last}`);
+    yield* config.chooseModel(last);
     // Apply is below the window too, which is the state this is about: the
     // window has been moved a long way, and the way out is still on the screen.
-    yield* scrollTo("[apply]");
-    expect(shows(repl.terminal, "[close]")).toBe(true);
+    yield* config.scrollTo("drawer:configure:apply");
+    expect(page.frame().has("drawer:close")).toBe(true);
 
     // Reached by real traversal from wherever that scrolling left focus.
     const closing = function* (): Operation<void> {
-      const from = repl.terminal.presented.length;
-      let reached = focusedOn(repl.terminal, "[close]");
-      for (let press = 0; press < 64 && !reached; press += 1) {
-        repl.terminal.feed("\t");
-        yield* settled(20);
-        reached = focusedOn(repl.terminal, "[close]");
-      }
-      expect(reached).toBe(true);
-      repl.terminal.feed("\r");
-      yield* awaited("the drawer closing", () =>
-        replay(repl.terminal.presented.slice(from)).some(
-          (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
-        ),
-      );
+      yield* page.focus("drawer:close");
+      yield* page.key("Enter");
+      yield* config.closed();
     };
     yield* closing();
-    expect(shows(repl.terminal, "[apply]")).toBe(false);
+    expect(page.frame().has("drawer:configure:apply")).toBe(false);
     expect((yield* chatKinds(repl)).includes("preferences")).toBe(false);
 
     // Again, with a real message held in flight. Both composers hold their own
     // text across it, and the turn that is running is not what was dismissed.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "kept draft");
-    yield* sendMessage(repl, "work on it");
+    yield* draft(page).type("kept draft");
+    yield* sidekick(page).send("work on it");
     yield* repl.fake.holdingTurns(1);
-    yield* awaiting(repl.terminal, "the Sidekick working", (one) => shows(one, "[stop]"));
+    yield* page.until("the Sidekick working", (one) => one.has("sidekick:stop"));
     // Opened over a working Sidekick, which refuses to inspect while a turn is
     // running — so what is waited for is the drawer, not its choices. That
     // refusal is the established behaviour and is not what this row is about:
     // the question here is whether the way out is still reachable.
-    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
-    yield* awaiting(repl.terminal, "the drawer over a working Sidekick", (one) =>
-      shows(one, "[apply]"),
+    yield* config.open();
+    yield* page.until("the drawer over a working Sidekick", (one) =>
+      one.has("drawer:configure:apply"),
     );
-    // Read across the column's rows: the drawer is the Sidekick's own pane, 30
-    // cells of interior at this size, and a sentence that long is wrapped prose
-    // there rather than one row.
-    expect(saysAcross(repl.terminal, "already working")).toBe(true);
+    // Read across the drawer's rows: it is the Sidekick's own pane, 30 cells of
+    // interior at this size, and a sentence that long is wrapped prose there
+    // rather than one row.
+    yield* page.until("the drawer saying the Sidekick is working", () =>
+      config.area().rows().join(" ").replace(/\s+/g, " ").includes("already working"),
+    );
     yield* closing();
     // The drawer is gone, the turn is not: nothing stopped it, and it finishes
     // on its own when the provider is released.
-    expect(shows(repl.terminal, "[apply]")).toBe(false);
+    expect(page.frame().has("drawer:configure:apply")).toBe(false);
     expect(repl.outcome()).toBe(undefined);
     repl.fake.releaseTurn();
-    yield* awaiting(repl.terminal, "the reply that was never stopped", (one) =>
-      shows(one, "Done at last."),
-    );
-    expect(draftText(repl.terminal)).toBe("kept draft");
+    yield* page.until("the reply that was never stopped", (one) => shows(one, "Done at last."));
+    expect(draft(page).text()).toBe("kept draft");
   });
 });
 
@@ -1536,60 +1472,27 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     effort: { balanced: { selected: "medium", choices: [{ id: "medium", name: "Medium" }] } },
   } as const;
 
-  function* configure(repl: MountedRepl): Operation<void> {
-    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
-    yield* settled(60);
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
-  }
-
-  /** Type a different agent's name into the drawer's own field. */
-  /** Close whichever of the Sidekick's drawers is open, and wait for its pane. */
-  function* closeDrawer(repl: MountedRepl): Operation<void> {
-    const from = repl.terminal.presented.length;
-    yield* click(repl.terminal, "[close]", 96);
-    yield* awaited("the drawer closing", () =>
-      replay(repl.terminal.presented.slice(from)).some(
-        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
-      ),
-    );
-  }
-
-  function* name(repl: MountedRepl, agent: string): Operation<void> {
-    yield* focusOn(repl.terminal, `> Agent: `);
-    // Everything that is there now, removed a character at a time: this is the
-    // field a person edits, and clearing it is how they replace a name.
-    for (let press = 0; press < MOUNTED_AGENT.length; press += 1) {
-      repl.terminal.feed("\x7f");
-      yield* settled(8);
-    }
-    yield* typing(repl.terminal, agent);
-  }
-
   it("CFG4: an idle replacement keeps the old chat and runs the next message under the new agent", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ reply: "<Output>Second agent.</Output>\n" });
 
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "First agent."));
+    yield* conversed(page, "hello", "First agent.");
     const before = repl.fake.prompts.length;
 
-    yield* configure(repl);
-    yield* name(repl, OTHER_MOUNTED_AGENT);
+    yield* config.open();
+    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
     // The control says what it will do, because a different agent is a
     // different conversation and somebody has to know that before pressing it.
-    yield* awaiting(repl.terminal, "the control saying it starts a new conversation", (one) =>
-      shows(one, "[start new conversation]"),
+    yield* page.until("the control saying it starts a new conversation", (one) =>
+      applyReads(one, "[start new conversation]"),
     );
 
-    const applying = repl.terminal.presented.length;
-    yield* click(repl.terminal, "[start new conversation]", 96);
-    yield* awaited("Configure closing on a successful setup", () =>
-      replay(repl.terminal.presented.slice(applying)).some(
-        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
-      ),
-    );
+    yield* config.apply();
+    yield* config.closed();
 
     // Switching sent no turn: a replacement opens a conversation, it does not
     // say anything in it.
@@ -1598,13 +1501,12 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     // empty of it: what a person reads is the conversation they are in, and
     // nothing of the old one is replayed into its successor.
     expect(yield* chatKinds(repl)).toContain("message");
-    yield* awaiting(repl.terminal, "the new conversation starting empty", (one) =>
+    yield* page.until("the new conversation starting empty", (one) =>
       shows(one, "No messages yet."),
     );
 
     // And the next explicit message really runs under the new agent.
-    yield* sendMessage(repl, "and you?");
-    yield* awaiting(repl.terminal, "the new agent's reply", (one) => shows(one, "Second agent."));
+    yield* conversed(page, "and you?", "Second agent.");
     const opened = repl.fake.ensured.map((one) => one.agent);
     expect(opened).toContain(MOUNTED_AGENT);
     expect(opened).toContain(OTHER_MOUNTED_AGENT);
@@ -1620,33 +1522,32 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
    * selection that asked for it.
    */
   function* replacing(saving: boolean): Operation<void> {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
+    yield* config.open();
+    yield* config.offered("balanced");
     if (saving) {
-      yield* click(repl.terminal, "( ) Fast", 96);
-      yield* awaiting(repl.terminal, "the model being chosen", (one) => shows(one, "(x) Fast"));
-      yield* click(repl.terminal, "[apply]", 96);
-      yield* awaiting(repl.terminal, "the save closing Configure", (one) => shows(one, "[send]"));
+      yield* config.chooseModel("fast");
+      yield* config.apply();
+      yield* config.closed();
       expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
       // Reopened deliberately, on the preference that was just saved.
-      yield* configure(repl);
-      yield* awaiting(repl.terminal, "the saved model in the reopened drawer", (one) =>
-        shows(one, "(x) Fast"),
-      );
+      yield* config.open();
+      yield* page.until("the saved model in the reopened drawer", () => config.modelMarked("fast"));
     }
 
-    yield* name(repl, OTHER_MOUNTED_AGENT);
-    yield* awaiting(repl.terminal, "the control saying it starts a new conversation", (one) =>
-      shows(one, "[start new conversation]"),
+    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* page.until("the control saying it starts a new conversation", (one) =>
+      applyReads(one, "[start new conversation]"),
     );
-    yield* click(repl.terminal, "[start new conversation]", 96);
+    yield* config.apply();
 
     // The new conversation was really activated — read from the history rather
     // than inferred from the screen.
-    yield* landed("the new conversation being activated", function* (): Operation<boolean> {
+    yield* awaitedFact("the new conversation being activated", function* (): Operation<boolean> {
       const read = yield* mountedReading(repl);
       return read.chat.some(
         (record) =>
@@ -1657,10 +1558,10 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     });
     // And its success closed the drawer that asked for it, whatever the old
     // conversation's preference happened to be.
-    yield* awaiting(repl.terminal, "Configure closing on the replacement", (one) =>
-      shows(one, `[configure ${OTHER_MOUNTED_AGENT}]`),
+    yield* page.until("Configure closing on the replacement", (one) =>
+      headerNames(one, OTHER_MOUNTED_AGENT),
     );
-    expect(shows(repl.terminal, "[refresh]")).toBe(false);
+    expect(page.frame().has("drawer:configure:refresh")).toBe(false);
   }
 
   it("CFG4: a replacement closes Configure although the old conversation had a preference", function* () {
@@ -1673,82 +1574,85 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
 
   it("CFG4: a save still in flight cannot close a drawer whose agent was edited", function* () {
     const gate = appendGate();
-    const repl = yield* useMountedRepl({ gate });
+    const page = yield* useReplPage({ gate });
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-    yield* click(repl.terminal, "( ) Fast", 96);
-    yield* awaiting(repl.terminal, "the model being chosen", (one) => shows(one, "(x) Fast"));
+    yield* config.open();
+    yield* config.offered("balanced");
+    yield* config.chooseModel("fast");
 
     // The record this save writes, held open inside the host, so the answer
     // arrives after the drawer has moved on.
     const writing = gate.holdNext((_path, record) => record.includes('"kind":"preferences"'));
     try {
-      yield* click(repl.terminal, "[apply]", 96);
+      yield* config.apply();
       yield* writing.started();
 
       // Another agent typed into the field while it is in flight. The model and
       // the effort are untouched, so this is a drawer whose *values* still
       // match the Apply that is running.
-      yield* name(repl, OTHER_MOUNTED_AGENT);
-      yield* awaiting(repl.terminal, "the replacement being chosen", (one) =>
-        shows(one, `Agent: ${OTHER_MOUNTED_AGENT}`),
-      );
+      yield* config.agent.replace(OTHER_MOUNTED_AGENT);
 
       writing.release();
-      yield* landed("the preference landing", function* (): Operation<boolean> {
+      yield* awaitedFact("the preference landing", function* (): Operation<boolean> {
         return (yield* savedPreference(repl)) !== undefined;
       });
-      yield* settled(60);
+      yield* lingering();
 
       // The save stands — this is not a rollback — and the drawer a person is
       // in the middle of is still theirs: still open, still naming the agent
       // they typed, and nothing of it applied by somebody else's answer.
       expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
-      expect(shows(repl.terminal, "[refresh]")).toBe(true);
-      expect(shows(repl.terminal, `Agent: ${OTHER_MOUNTED_AGENT}`)).toBe(true);
+      expect(page.frame().has("drawer:configure:refresh")).toBe(true);
+      expect(config.agent.text()).toBe(OTHER_MOUNTED_AGENT);
       // And no replacement happened: that is still something to press.
       expect(repl.fake.ensured.map((one) => one.agent)).not.toContain(OTHER_MOUNTED_AGENT);
-      expect(shows(repl.terminal, "[start new conversation]")).toBe(true);
+      expect(applyReads(page.frame(), "[start new conversation]")).toBe(true);
     } finally {
       writing.release();
     }
   });
 
   it("CFG4: a busy replacement stops the turn and joins it before the new agent", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     // Generation genuinely in flight, and the cancellation it will be sent held
     // open: this is what makes the join observable rather than inferred.
     repl.fake.script({ held: true, reply: "<Output>Never seen.</Output>\n" });
     repl.fake.script({ reply: "<Output>Second agent.</Output>\n" });
 
-    yield* sendMessage(repl, "held message");
+    yield* sidekick(page).send("held message");
     yield* repl.fake.holdingTurns(1);
     const cancelling = repl.fake.holdCancellation();
     try {
-      yield* configure(repl);
+      yield* config.open();
       // Stop is drawn inside the drawer that covers the pane. The pane's own
       // control is behind a modal, and a way to stop that somebody cannot
       // reach is not one.
-      expect(shows(repl.terminal, "[stop]")).toBe(true);
+      yield* page.until(
+        "Stop drawn inside the drawer",
+        (one) => one.area("box:drawer:layer")?.contains("drawer:sidekick:stop") ?? false,
+      );
 
-      yield* name(repl, OTHER_MOUNTED_AGENT);
+      yield* config.agent.replace(OTHER_MOUNTED_AGENT);
       // The choices read from the agent this conversation is with are not
       // offered for another one, and the drawer says why rather than leaving
       // controls that could do nothing.
-      yield* awaiting(repl.terminal, "the other agent's own settings being said", (one) =>
-        shows(one, "has its own settings"),
+      yield* page.until("the other agent's own settings being said", () =>
+        config.shows("has its own settings"),
       );
-      expect(shows(repl.terminal, "( ) Balanced")).toBe(false);
-      expect(shows(repl.terminal, "Effort for")).toBe(false);
-      yield* awaiting(repl.terminal, "the control saying it stops first", (one) =>
-        shows(one, "[stop and start new conversation"),
+      expect(config.shows("( ) Balanced")).toBe(false);
+      expect(config.shows("Effort for")).toBe(false);
+      yield* page.until("the control saying it stops first", (one) =>
+        applyReads(one, "[stop and start new conversation"),
       );
 
       const before = repl.fake.ensured.length;
-      yield* click(repl.terminal, "[stop and start new conversation", 96);
+      yield* config.apply();
       // It really asked the agent to stop, and it is waiting for that: nothing
       // of the replacement has been started while the cancellation is held.
       yield* cancelling.reached;
@@ -1756,21 +1660,19 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
       // A second activation of the same control while it waits starts no
       // second replacement: one explicit job at a time, reserved before the
       // first one was spawned.
-      yield* click(repl.terminal, "[stop and start new conversation", 96);
-      yield* settled(40);
+      yield* config.apply();
+      yield* lingering();
       expect(repl.fake.ensured).toHaveLength(before);
 
       cancelling.release();
       // Joined, and only then set up: the new agent appears in the pane's own
       // header, and the conversation it opened is empty of the old one.
-      yield* awaiting(repl.terminal, "the new agent after the join", (one) =>
-        shows(one, `[configure ${OTHER_MOUNTED_AGENT}]`),
+      yield* page.until("the new agent after the join", (one) =>
+        headerNames(one, OTHER_MOUNTED_AGENT),
       );
       expect(repl.fake.ensured.map((one) => one.agent)).toContain(OTHER_MOUNTED_AGENT);
-      yield* sendMessage(repl, "and you?");
-      yield* awaiting(repl.terminal, "the new agent answering", (one) =>
-        shows(one, "Second agent."),
-      );
+      yield* page.until("the Sidekick at rest", sidekickIdle);
+      yield* conversed(page, "and you?", "Second agent.");
     } finally {
       cancelling.release();
     }
@@ -1778,7 +1680,9 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
 
   it("CFG4: a replacement leaves the entry the old conversation admitted running", function* () {
     const gate = appendGate();
-    const repl = yield* useMountedRepl({ gate });
+    const page = yield* useReplPage({ gate });
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: SUBMITS });
     // Two scripted replies and no third: the follow-up turn the old
@@ -1791,18 +1695,18 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* sendMessage(repl, "run it");
+    yield* sidekick(page).send("run it");
     yield* closing.started();
-    yield* awaiting(repl.terminal, "the entry's output", (one) => shows(one, "the entry ran"));
+    yield* page.until("the entry's output", (one) => shows(one, "the entry ran"));
 
-    yield* configure(repl);
-    yield* name(repl, OTHER_MOUNTED_AGENT);
-    yield* awaiting(repl.terminal, "the control saying it stops first", (one) =>
-      shows(one, "[stop and start new conversation"),
+    yield* config.open();
+    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* page.until("the control saying it stops first", (one) =>
+      applyReads(one, "[stop and start new conversation"),
     );
-    yield* click(repl.terminal, "[stop and start new conversation", 96);
-    yield* awaiting(repl.terminal, "the new agent after the join", (one) =>
-      shows(one, `[configure ${OTHER_MOUNTED_AGENT}]`),
+    yield* config.apply();
+    yield* page.until("the new agent after the join", (one) =>
+      headerNames(one, OTHER_MOUNTED_AGENT),
     );
     // The entry was not cancelled with the conversation that asked for it: it
     // is the document's work, and it is still waiting to close.
@@ -1815,15 +1719,17 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     yield* awaited("the entry closing", () =>
       gate.reached.some((one) => one.endsWith("entries.jsonl")),
     );
-    yield* settled(40);
-    expect(shows(repl.terminal, "the entry ran")).toBe(true);
+    yield* entrySettles(page, 1, "ok");
+    expect(shows(page.frame(), "the entry ran")).toBe(true);
     // And the new conversation is the one a message now goes to.
-    yield* sendMessage(repl, "and you?");
-    yield* awaiting(repl.terminal, "the new agent answering", (one) => shows(one, "Second agent."));
+    yield* page.until("the Sidekick at rest", sidekickIdle);
+    yield* conversed(page, "and you?", "Second agent.");
   });
 
   it("CFG4: an unreachable agent keeps the old association and says why", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ reply: "<Output>Still the first.</Output>\n" });
@@ -1831,111 +1737,80 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     // agent is.
     repl.fake.unavailable(OTHER_MOUNTED_AGENT, new Error("that agent will not start here"));
 
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "First agent."));
+    yield* conversed(page, "hello", "First agent.");
 
-    yield* configure(repl);
-    yield* name(repl, OTHER_MOUNTED_AGENT);
-    yield* awaiting(repl.terminal, "the control saying it starts a new conversation", (one) =>
-      shows(one, "[start new conversation]"),
+    yield* config.open();
+    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* page.until("the control saying it starts a new conversation", (one) =>
+      applyReads(one, "[start new conversation]"),
     );
-    yield* click(repl.terminal, "[start new conversation]", 96);
+    yield* config.apply();
 
     // The drawer stays open with the reason: a failed setup is something to
     // correct rather than something to be dropped out of.
-    yield* awaiting(repl.terminal, "the reason in the drawer", (one) =>
-      shows(one, "will not start"),
-    );
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+    yield* page.until("the reason in the drawer", () => config.shows("will not start"));
+    expect(page.frame().has("drawer:configure:refresh")).toBe(true);
 
     // And the old conversation is still the active one: it takes a real message.
-    yield* closeDrawer(repl);
-    yield* sendMessage(repl, "still there?");
-    yield* awaiting(repl.terminal, "the old agent answering", (one) =>
-      shows(one, "Still the first."),
-    );
+    yield* config.close();
+    yield* conversed(page, "still there?", "Still the first.");
   });
 
-  /**
-   * Read the current chat explicitly, by its own Sessions row.
-   *
-   * Through the mounted control, so what is selected is what a person
-   * selected: the row carries the chat and the turn, and nothing here reaches
-   * the owner or the route.
-   */
-  function* readOwnChat(repl: MountedRepl, title: string): Operation<void> {
-    const rows = screenOf(repl.terminal).map((line) => line.slice(0, 32));
-    const row = rows.findIndex((line) => line.includes(title));
-    if (row === -1) {
-      throw new Error(`no Sessions row shows ${title}. rows=${JSON.stringify(rows)}`);
-    }
-    yield* clickAt(repl.terminal, { column: rows[row]?.indexOf(title) ?? 0, row });
-    yield* awaiting(repl.terminal, "the chat selector standing", (one) =>
-      shows(one, "[Back to current chat]"),
-    );
-    // The current chat keeps its usual controls even when it is the chat
-    // somebody explicitly selected: it *is* the active association.
-    expect(shows(repl.terminal, MESSAGE_PROMPT)).toBe(true);
-  }
-
   it("SS4: a successful replacement returns to the new current chat", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ reply: "<Output>Second agent.</Output>\n" });
 
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "First agent."));
-    yield* readOwnChat(repl, "hello");
+    yield* conversed(page, "hello", "First agent.");
+    yield* readOwnChat(page, "hello");
 
-    yield* configure(repl);
-    yield* name(repl, OTHER_MOUNTED_AGENT);
-    yield* awaiting(repl.terminal, "the replacement control", (one) =>
-      shows(one, "[start new conversation]"),
+    yield* config.open();
+    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* page.until("the replacement control", (one) =>
+      applyReads(one, "[start new conversation]"),
     );
-    yield* click(repl.terminal, "[start new conversation]", 96);
-    yield* awaiting(repl.terminal, "the new conversation starting empty", (one) =>
+    yield* config.apply();
+    yield* config.closed();
+    yield* page.until("the new conversation starting empty", (one) =>
       shows(one, "No messages yet."),
     );
 
     // The selector is cleared, so the reading is the new current chat — which
     // is the conversation the next message would go to anyway.
-    expect(shows(repl.terminal, "[Back to current chat]")).toBe(false);
-    yield* sendMessage(repl, "and you?");
-    yield* awaiting(repl.terminal, "the new agent's reply", (one) => shows(one, "Second agent."));
+    expect(shows(page.frame(), "[Back to current chat]")).toBe(false);
+    yield* conversed(page, "and you?", "Second agent.");
   });
 
   it("SS4: a failed replacement preserves the reading and the association", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ reply: "<Output>Still the first.</Output>\n" });
     repl.fake.unavailable(OTHER_MOUNTED_AGENT, new Error("that agent will not start here"));
 
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "First agent."));
-    yield* readOwnChat(repl, "hello");
+    yield* conversed(page, "hello", "First agent.");
+    yield* readOwnChat(page, "hello");
 
-    yield* configure(repl);
-    yield* name(repl, OTHER_MOUNTED_AGENT);
-    yield* awaiting(repl.terminal, "the replacement control", (one) =>
-      shows(one, "[start new conversation]"),
+    yield* config.open();
+    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* page.until("the replacement control", (one) =>
+      applyReads(one, "[start new conversation]"),
     );
-    yield* click(repl.terminal, "[start new conversation]", 96);
-    yield* awaiting(repl.terminal, "the reason in the drawer", (one) =>
-      shows(one, "will not start"),
-    );
-    yield* closeDrawer(repl);
+    yield* config.apply();
+    yield* page.until("the reason in the drawer", () => config.shows("will not start"));
+    yield* config.close();
 
     // The reading is exactly where it was, and so is the association: this
     // conversation still takes a real message under the agent it was opened
     // with.
-    expect(shows(repl.terminal, "[Back to current chat]")).toBe(true);
-    expect(shows(repl.terminal, `[configure ${MOUNTED_AGENT}]`)).toBe(true);
-    yield* sendMessage(repl, "still there?");
-    yield* awaiting(repl.terminal, "the old agent answering", (one) =>
-      shows(one, "Still the first."),
-    );
+    expect(shows(page.frame(), "[Back to current chat]")).toBe(true);
+    expect(headerNames(page.frame(), MOUNTED_AGENT)).toBe(true);
+    yield* conversed(page, "still there?", "Still the first.");
   });
 });
 
@@ -1967,51 +1842,20 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     effort: { balanced: { selected: "medium", choices: [{ id: "medium", name: "Medium" }] } },
   } as const;
 
-  function* configure(repl: MountedRepl): Operation<void> {
-    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
-    yield* settled(60);
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
-  }
-
-  /**
-   * Type a name into the drawer's own field, whatever was in it.
-   *
-   * Cleared with more presses than any of these names is long, because this is
-   * used twice in one row: the second time the field holds the *other* agent's
-   * name, and clearing one name's worth of it would leave a prefix behind.
-   */
-  function* name(repl: MountedRepl, agent: string): Operation<void> {
-    yield* focusOn(repl.terminal, `> Agent: `);
-    for (let press = 0; press < 24; press += 1) {
-      repl.terminal.feed("\x7f");
-      yield* settled(4);
-    }
-    yield* typing(repl.terminal, agent);
-  }
-
-  function* closeDrawer(repl: MountedRepl): Operation<void> {
-    const from = repl.terminal.presented.length;
-    yield* click(repl.terminal, "[close]", paneEnvelope(repl.terminal.size.columns));
-    yield* awaited("the drawer closing", () =>
-      replay(repl.terminal.presented.slice(from)).some(
-        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
-      ),
-    );
-  }
-
   it("CFG8: a save queues behind the reply being written, and both land in order", function* () {
     const gate = appendGate();
-    const repl = yield* useMountedRepl({ gate });
+    const page = yield* useReplPage({ gate });
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Written down.</Output>\n" });
 
     // One read first, so the drawer has this conversation's choices while the
     // reply below is being written.
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the reply", (one) => shows(one, "Written down."));
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-    yield* closeDrawer(repl);
+    yield* conversed(page, "hello", "Written down.");
+    yield* config.open();
+    yield* config.offered("balanced");
+    yield* config.close();
 
     // The record the next reply is written as, held open inside the host: the
     // writer is genuinely occupied by somebody else's append.
@@ -2019,27 +1863,25 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"response"'),
     );
     repl.fake.script({ reply: "<Output>And this one.</Output>\n" });
-    yield* sendMessage(repl, "again");
+    yield* sidekick(page).send("again");
     yield* writing.started();
 
     // A preference applied while that write is in flight. It is admitted —
     // a save is a record of this history rather than work the conversation
     // does — and it waits for the writer rather than overtaking it.
-    yield* configure(repl);
-    yield* click(repl.terminal, "( ) Fast", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the model being chosen", (one) => shows(one, "(x) Fast"));
-    yield* click(repl.terminal, "[apply]", paneEnvelope(repl.terminal.size.columns));
-    yield* settled(60);
+    yield* config.open();
+    yield* config.offered("fast");
+    yield* config.chooseModel("fast");
+    yield* config.apply();
+    yield* lingering();
     // Nothing of it reached the file while the other append was inside the
     // host, and the held write is still held.
     expect(yield* savedPreference(repl)).toBe(undefined);
     expect(writing.released).toBe(false);
 
     writing.release();
-    yield* awaiting(repl.terminal, "the reply that was being written", (one) =>
-      shows(one, "And this one."),
-    );
-    yield* landed("the preference landing", function* (): Operation<boolean> {
+    yield* page.until("the reply that was being written", (one) => shows(one, "And this one."));
+    yield* awaitedFact("the preference landing", function* (): Operation<boolean> {
       return (yield* savedPreference(repl)) !== undefined;
     });
 
@@ -2054,7 +1896,9 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
   });
 
   it("CFG8: a replacement owns the drawer while it runs, and rebinds what Apply saves", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ held: true, reply: "<Output>Never seen.</Output>\n" });
@@ -2063,15 +1907,15 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     // One conversation with a preference of its own, saved while it is idle —
     // and read while it is idle, because inspection is something a working
     // conversation cannot do.
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "First agent."));
-    yield* configure(repl);
-    yield* click(repl.terminal, "( ) Fast", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "the model being chosen", (one) => shows(one, "(x) Fast"));
-    yield* click(repl.terminal, "[apply]", paneEnvelope(repl.terminal.size.columns));
-    yield* landed("the first conversation's preference", function* (): Operation<boolean> {
+    yield* conversed(page, "hello", "First agent.");
+    yield* config.open();
+    yield* config.offered("fast");
+    yield* config.chooseModel("fast");
+    yield* config.apply();
+    yield* awaitedFact("the first conversation's preference", function* (): Operation<boolean> {
       return (yield* savedPreference(repl)) !== undefined;
     });
+    yield* config.closed();
     const first = yield* mountedReading(repl);
     const before = first.chat.filter((record) => record.kind === "preferences");
     expect(before).toHaveLength(1);
@@ -2080,30 +1924,30 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
 
     // Then a turn in flight, so the replacement below really has something to
     // stop.
-    yield* sendMessage(repl, "again");
+    yield* sidekick(page).send("again");
     yield* repl.fake.holdingTurns(1);
 
     // A replacement started and held inside its own Stop: this job owns the
     // drawer while it runs.
     const cancelling = repl.fake.holdCancellation();
     try {
-      yield* configure(repl);
-      yield* name(repl, OTHER_MOUNTED_AGENT);
-      yield* awaiting(repl.terminal, "the control saying it stops first", (one) =>
-        shows(one, "[stop and start new conversation"),
+      yield* config.open();
+      yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+      yield* page.until("the control saying it stops first", (one) =>
+        applyReads(one, "[stop and start new conversation"),
       );
-      yield* click(repl.terminal, "[stop and start new conversation", 96);
+      yield* config.apply();
       yield* cancelling.reached;
 
       // The name typed back, so the drawer offers a save again — and that save
       // is refused, in the drawer, because the replacement is the one explicit
       // thing this Sidekick is doing.
-      yield* name(repl, MOUNTED_AGENT);
-      yield* awaiting(repl.terminal, "Apply being offered again", (one) => shows(one, "[apply]"));
-      yield* click(repl.terminal, "[apply]", 96);
-      yield* awaiting(repl.terminal, "the refusal the drawer gives", (one) =>
+      yield* config.agent.replace(MOUNTED_AGENT);
+      yield* page.until("Apply being offered again", (one) => applyReads(one, "[apply]"));
+      yield* config.apply();
+      yield* page.until("the refusal the drawer gives", () =>
         // The beginning of it, which is what this pane's width holds.
-        shows(one, "the Sidekick is already doing"),
+        config.shows("the Sidekick is already doing"),
       );
       const during = yield* mountedReading(repl);
       expect(during.chat.filter((record) => record.kind === "preferences")).toHaveLength(1);
@@ -2112,12 +1956,12 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
       // The replacement finishes, and leaves this drawer open: the name in its
       // field is not the agent that was set up any more, so the outcome is not
       // the one this drawer asked for and it does not close on it.
-      yield* awaiting(repl.terminal, "the new conversation in the drawer", (one) =>
-        shows(one, "Requested: none"),
+      yield* page.until("the new conversation in the drawer", () =>
+        config.shows("Requested: none"),
       );
-      yield* closeDrawer(repl);
-      yield* awaiting(repl.terminal, "the new agent in the pane", (one) =>
-        shows(one, `[configure ${OTHER_MOUNTED_AGENT}]`),
+      yield* config.close();
+      yield* page.until("the new agent in the pane", (one) =>
+        headerNames(one, OTHER_MOUNTED_AGENT),
       );
     } finally {
       cancelling.release();
@@ -2125,15 +1969,13 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
 
     // The new conversation starts with nothing requested — the old agent's
     // preference is not its — and a save made now belongs to it.
-    yield* click(repl.terminal, `[configure ${OTHER_MOUNTED_AGENT}]`);
-    yield* settled(60);
-    expect(shows(repl.terminal, "Requested: none")).toBe(true);
-    yield* click(repl.terminal, "( ) Balanced", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "a model for the new conversation", (one) =>
-      shows(one, "(x) Balanced"),
-    );
-    yield* click(repl.terminal, "[apply]", paneEnvelope(repl.terminal.size.columns));
-    yield* landed("the second conversation's preference", function* (): Operation<boolean> {
+    yield* page.until("the Sidekick at rest", sidekickIdle);
+    yield* config.open();
+    yield* page.until("nothing requested", () => config.shows("Requested: none"));
+    yield* config.offered("balanced");
+    yield* config.chooseModel("balanced");
+    yield* config.apply();
+    yield* awaitedFact("the second conversation's preference", function* (): Operation<boolean> {
       const read = yield* mountedReading(repl);
       return read.chat.filter((record) => record.kind === "preferences").length === 2;
     });
@@ -2155,31 +1997,33 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
 
 describe("Tier CFG — Retry for a request whose turn failed", () => {
   it("CFG5: Retry sends the saved request again, not whatever is in the box", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     // A turn the backend takes and then reports as failed: the request was
     // accepted, so the history knows which turn it became and that it failed.
     repl.fake.script({ reply: "", stopReason: "refusal" });
     repl.fake.script({ reply: "<Output>Second time lucky.</Output>\n" });
 
-    yield* sendMessage(repl, "inspect it");
-    yield* awaiting(repl.terminal, "the failed attempt and its retry", (one) =>
-      shows(one, "[retry]"),
+    yield* sidekick(page).send("inspect it");
+    const failed = yield* page.until(
+      "the failed attempt and its retry",
+      (one) => retryOf(one) !== undefined,
     );
+    const retry = retryOf(failed);
+    if (retry === undefined) {
+      throw new Error(`no retry is offered. ${page.describe()}`);
+    }
 
     // Unrelated newer text in the box, and a newer draft edit: neither is what
     // Retry sends, and neither is consumed by it.
-    yield* focusMessage(repl.terminal);
-    yield* typing(repl.terminal, "something else");
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "mine");
+    yield* sidekick(page).composer.type("something else");
+    yield* draft(page).type("mine");
 
     // Two activations in one burst: the same one cycle a Send reserves, so the
     // second finds it held rather than starting a second turn.
-    const at = coordinateOf(repl.terminal, "[retry]");
-    expect(at).toBeDefined();
-    repl.terminal.feed(`\x1b[<0;${at!.column + 1};${at!.row + 1}M`);
-    repl.terminal.feed(`\x1b[<0;${at!.column + 1};${at!.row + 1}M`);
-    yield* awaiting(repl.terminal, "the retried request being answered", (one) =>
+    yield* page.press(retry);
+    yield* page.press(retry);
+    yield* page.until("the retried request being answered", (one) =>
       shows(one, "Second time lucky."),
     );
 
@@ -2203,34 +2047,35 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
 
     // And the texts a person had typed are still theirs: Retry sent neither and
     // cleared neither.
-    expect(messageText(repl.terminal).includes("something else")).toBe(true);
-    expect(draftText(repl.terminal)).toBe("mine");
+    expect(sidekick(page).composer.text().includes("something else")).toBe(true);
+    expect(draft(page).text()).toBe("mine");
   });
 
   it("CFG5: a message that worked retires the retry an older failure left", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     repl.fake.script({ reply: "", stopReason: "refusal" });
     repl.fake.script({ reply: "<Output>This one worked.</Output>\n" });
 
-    yield* sendMessage(repl, "inspect it");
+    yield* sidekick(page).send("inspect it");
     // Offered first, which is what makes the rest of this row a transition
     // rather than a control that was never there.
-    yield* awaiting(repl.terminal, "the failed attempt and its retry", (one) =>
-      shows(one, "[retry]"),
-    );
+    yield* page.until("the failed attempt and its retry", (one) => retryOf(one) !== undefined);
 
     // Something else asked, and answered. The failure is still in the history
     // and still readable, but it is behind a reply now: resending it would put
     // it out of order with what the agent has already been told.
-    yield* sendMessage(repl, "try this");
-    yield* awaiting(repl.terminal, "the later reply", (one) => shows(one, "This one worked."));
-    yield* settled(40);
-    expect(shows(repl.terminal, "[retry]")).toBe(false);
+    yield* sidekick(page).send("try this");
+    yield* page.until(
+      "the later reply, with the older retry retired",
+      (one) => shows(one, "This one worked.") && sidekickIdle(one) && retryOf(one) === undefined,
+    );
+    expect(shows(page.frame(), "[retry]")).toBe(false);
     // The attempt itself was kept: this is about what is offered, not about
     // rewriting what happened.
     const read = yield* mountedReading(repl);
     expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(2);
-    expect(shows(repl.terminal, "(unfinished)")).toBe(true);
+    expect(shows(page.frame(), "(unfinished)")).toBe(true);
     expect(repl.fake.prompts).toHaveLength(2);
   });
 
@@ -2262,19 +2107,19 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
       const before = yield* until(
         readFile(join(root.repository, PAIRED_DIRECTORY, "chat", SIDEKICK_FILE), "utf8"),
       );
-      const repl = yield* useMountedRepl({
+      const page = yield* useReplPage({
         dataRoot: root.data,
         location: "xmd://repl/chat/entries",
       });
+      const repl = page.repl;
 
       // The request is in the chat, and the attempt nobody finished is said as
       // one — but there is no control to ask it again, because this history
       // cannot say whether the agent already has it. A control that refused
       // when it was pressed would be offering a decision nothing can make.
-      yield* awaiting(repl.terminal, "the chat this history holds", (one) =>
-        shows(one, "inspect it"),
-      );
-      expect(shows(repl.terminal, "[retry]")).toBe(false);
+      yield* page.until("the chat this history holds", (one) => shows(one, "inspect it"));
+      expect(shows(page.frame(), "[retry]")).toBe(false);
+      expect(retryOf(page.frame())).toBeUndefined();
 
       // And reading it cost nothing: no turn, no session, and not one byte
       // added to the file it was read from.
@@ -2289,15 +2134,16 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
   });
 
   it("CFG5: control — with no failed request, nothing offers a retry", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     repl.fake.script({ reply: "<Output>That worked.</Output>\n" });
 
-    yield* sendMessage(repl, "inspect it");
-    yield* awaiting(repl.terminal, "the reply", (one) => shows(one, "That worked."));
+    yield* conversed(page, "inspect it", "That worked.");
 
     // A request that was answered has nothing to ask again, so there is no
     // control for it at all.
-    expect(shows(repl.terminal, "[retry]")).toBe(false);
+    expect(shows(page.frame(), "[retry]")).toBe(false);
+    expect(retryOf(page.frame())).toBeUndefined();
     expect(repl.fake.prompts).toHaveLength(1);
   });
 });
@@ -2327,10 +2173,11 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     // Two selections on one line, settled the way the flags settle them: the
     // entry default through `resolveAgentStack`, the Sidekick's through
     // `assembleReplProfile`.
-    const repl = yield* useMountedRepl({
+    const page = yield* useReplPage({
       defaultAgent: MOUNTED_AGENT,
       sidekickAgent: OTHER_MOUNTED_AGENT,
     });
+    const repl = page.repl;
 
     // Acquiring the screen asks nobody anything. A selection that opened a
     // conversation to prove itself would have sent a prompt no one asked for.
@@ -2340,18 +2187,13 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     // One ordinary entry asking one Agent, with no agent named in it: the
     // default is what is under test, and naming it here would bypass it.
     repl.fake.script({ reply: `${ANSWERED}\n` });
-    yield* focusDraft(repl.terminal);
-    repl.terminal.bytes(new TextEncoder().encode(ASKING));
-    yield* settled(60);
-    repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the entry's own Agent answering", (one) =>
-      shows(one, ANSWERED),
-    );
+    yield* paste(page, draft(page), ASKING);
+    yield* page.key("Enter");
+    yield* page.until("the entry's own Agent answering", (one) => shows(one, ANSWERED));
 
     // Then a Sidekick message, which is the other selection's own turn.
     repl.fake.script({ reply: "<Output>Sidekick here.</Output>\n" });
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the Sidekick replying", (one) => shows(one, "Sidekick here."));
+    yield* conversed(page, "hello", "Sidekick here.");
 
     // Which agent each turn actually reached, in the order the turns happened.
     const agentOf = new Map(repl.fake.ensured.map((one) => [one.sessionKey, one.agent]));
@@ -2366,13 +2208,17 @@ describe("Tier TE — the two configured agents each do their own work", () => {
 
     // And both results really came back: the entry rendered its Agent's answer,
     // and the Sidekick's chat holds its own reply.
+    yield* awaitedFact("the entry's record", function* (): Operation<boolean> {
+      const held = yield* mountedReading(repl);
+      return held.model.entries[0]?.terminal?.output?.includes(ANSWERED) === true;
+    });
     const read = yield* mountedReading(repl);
     expect(read.model.entries).toHaveLength(1);
     expect(read.model.entries[0]?.terminal?.output).toContain(ANSWERED);
     // Read by the attribution mark this pane spells its origins with: the
     // staged chat is one list of utterances, so who said a row is a mark in
     // front of it rather than a name prefix inside the words.
-    expect(saidBySidekick(repl.terminal, "Sidekick here.")).toBe(true);
+    expect(saidBySidekick(page.frame(), "Sidekick here.")).toBe(true);
   });
 });
 
@@ -2413,144 +2259,86 @@ describe("Configure notice fitting", () => {
     },
   } as const;
 
-  /** Open Configure the way a person does, and wait for the drawer. */
-  function* configure(repl: MountedRepl): Operation<void> {
-    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
-    yield* settled(60);
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
-  }
-
-  /** Exactly what the drawer's agent field is holding, as its own row shows it. */
-  function agentField(repl: MountedRepl): string {
-    const row = screenOf(repl.terminal).find((line) => line.includes("Agent: "));
-    if (row === undefined) {
-      throw new Error("the drawer is drawing no agent field");
-    }
-    return row.slice(row.indexOf("Agent: ") + "Agent: ".length).trimEnd();
-  }
-
-  /** Replace the agent the drawer names, a character at a time. */
-  function* named(repl: MountedRepl, agent: string): Operation<void> {
-    yield* focusOn(repl.terminal, `> Agent: `);
-    // Cleared a keystroke at a time, which is how a person replaces a name, and
-    // waited for rather than counted: a grapheme is not a key, and a name made
-    // of wide and combining ones takes more presses than it has characters.
-    for (let press = 0; press < 200; press += 1) {
-      if (agentField(repl) === "") {
-        break;
-      }
-      repl.terminal.feed("\x7f");
-      yield* settled(8);
-    }
-    if (agentField(repl) !== "") {
-      throw new Error(`the agent field would not clear: ${JSON.stringify(agentField(repl))}`);
-    }
-    yield* typing(repl.terminal, agent);
-    yield* settled(60);
-  }
-
-  /**
-   * The drawer's own rows, and where its rectangle begins and ends.
-   *
-   * Read from the rule it draws across its own top, which is the one row whose
-   * whole width is this drawer's. Everything the drawer draws is inside that
-   * rectangle, so a row of it reaching past the rule is a row written over the
-   * pane behind.
-   */
-  function drawerRows(repl: MountedRepl): { from: number; to: number; rows: string[] } {
-    const screen = screenOf(repl.terminal);
-    const at = screen.findIndex((line) => /\u2500{10,}/.test(line));
-    if (at === -1) {
-      throw new Error(`the drawer is not on this screen: ${JSON.stringify(screen)}`);
-    }
-    const rule = screen[at] ?? "";
-    const from = rule.indexOf("\u2500");
-    const to = rule.lastIndexOf("\u2500") + 1;
-    return {
-      from,
-      to,
-      rows: screen.slice(at + 1).map((line) => line.slice(from, to).trimEnd()),
-    };
-  }
-
-  /** Whether this notice's whole text is recoverable from the drawer's rows. */
-  function saysWhole(repl: MountedRepl, text: string): boolean {
-    const bare = (one: string): string => one.replace(/\s+/g, "");
-    const { rows } = drawerRows(repl);
-    const wanted = bare(text);
-    return rows.some((_, at) => bare(rows.slice(at, at + 8).join("")).includes(wanted));
-  }
-
-  /** Wait until the replacement notice this name produces has been drawn. */
-  function* noticed(repl: MountedRepl, text: string): Operation<void> {
-    yield* awaiting(repl.terminal, "the replacement notice", () => saysWhole(repl, text));
-  }
-
   it("the whole of a long unbroken token is drawn, inside the drawer's own rows", function* () {
-    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "[send]"));
-    yield* configure(repl);
+    yield* page.until("the Sidekick at rest", sidekickIdle);
+    yield* sidekick(page).send("hello");
+    yield* page.until(
+      "the first turn over",
+      (one) => saidByPerson(one, "hello") && sidekickIdle(one),
+    );
+    yield* config.open();
     // The drawer as it stands before any of this: its own way out, the way to
     // apply a choice and the way to read the agent again.
-    expect(shows(repl.terminal, "[close]")).toBe(true);
-    expect(shows(repl.terminal, "[apply]")).toBe(true);
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+    expect(page.frame().has("drawer:close")).toBe(true);
+    expect(page.frame().has("drawer:configure:apply")).toBe(true);
+    expect(page.frame().has("drawer:configure:refresh")).toBe(true);
 
     // Seventy characters with nothing to break on, inside an interior of
     // thirty: the notice has to be paid out over rows, and every one of its
     // characters has to be on one of them.
     const LONG = "x".repeat(70);
-    yield* named(repl, LONG);
-    yield* noticed(repl, `${LONG} has its own settings.`);
+    yield* config.agent.clear();
+    yield* config.agent.enter(LONG);
+    yield* noticed(page, config, `${LONG} has its own settings.`);
 
     // And none of it is drawn outside the drawer. A row reaching past the
-    // drawer's own width is a row written over the pane behind it.
-    const { from, to, rows } = drawerRows(repl);
-    expect(to).toBeGreaterThan(from);
-    for (const row of rows) {
-      expect(row.length).toBeLessThanOrEqual(to - from);
+    // drawer's own width is a row written over the pane behind.
+    const { width } = config.area().bounds;
+    expect(width).toBeGreaterThan(0);
+    for (const row of config.area().rows()) {
+      expect(row.length).toBeLessThanOrEqual(width);
     }
+    expect(outside(page, config).filter((row) => row.includes("x".repeat(8)))).toEqual([]);
 
     // The way out and the way to read again are where they were, and a name
     // this long has not moved them: fitting a sentence moves no control. Apply
     // is deliberately not among them while a replacement is what it would do —
     // that is this drawer's established semantics, not an effect of fitting.
-    expect(shows(repl.terminal, "[close]")).toBe(true);
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
-    expect(shows(repl.terminal, "[start new conversation]")).toBe(true);
+    expect(page.frame().has("drawer:close")).toBe(true);
+    expect(page.frame().has("drawer:configure:refresh")).toBe(true);
+    expect(applyReads(page.frame(), "[start new conversation]")).toBe(true);
   });
 
   it("wide, combining and joined graphemes survive, and a shorter notice erases the longer", function* () {
-    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     // One message first, so this conversation has an agent of its own: the
     // notice these rows are about is the one that says a *replacement* would
     // start another conversation, and there is nothing to replace until then.
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "[send]"));
-    yield* configure(repl);
+    yield* sidekick(page).send("hello");
+    yield* page.until(
+      "the first turn over",
+      (one) => saidByPerson(one, "hello") && sidekickIdle(one),
+    );
+    yield* config.open();
 
     // Twelve spaced wide words, a doubly combined letter and a joined emoji.
     // Each is one grapheme that is not one cell, and none of them may be cut
     // apart, dropped, or left behind when the notice that carries them goes.
-    const WIDE = `${"\u754c\u754c ".repeat(12).trim()} e\u0301\u0301 \u{1F469}\u200D\u{1F4BB}`;
-    yield* named(repl, WIDE);
+    const WIDE = `${"界界 ".repeat(12).trim()} é́ \u{1F469}‍\u{1F4BB}`;
+    yield* config.agent.clear();
+    yield* config.agent.enter(WIDE);
     // Recovered as the grid can hold it: a cell carries a base character, and
     // the zero-width joiner and the combining marks are not cells of their own.
     // Every wide word is there, in order, and so is the whole of the sentence
     // the name is in — which is what the builder this replaced drew none of.
-    const DRAWN = `${"\u754c\u754c ".repeat(12).trim()} e \u{1F469}\u{1F4BB} has its own settings.`;
-    yield* noticed(repl, DRAWN);
+    const DRAWN = `${"界界 ".repeat(12).trim()} e \u{1F469}\u{1F4BB} has its own settings.`;
+    yield* noticed(page, config, DRAWN);
 
     // Paid out over the drawer's own rows rather than clipped to one: the
     // builder this replaced gave a notice this long a single row.
-    const wide = drawerRows(repl);
-    expect(wide.rows.filter((row) => row.includes("\u754c")).length).toBeGreaterThan(1);
-    for (const row of wide.rows) {
-      expect(row.length).toBeLessThanOrEqual(wide.to - wide.from);
+    const wide = config.area().rows();
+    expect(wide.filter((row) => row.includes("界")).length).toBeGreaterThan(1);
+    for (const row of wide) {
+      expect(row.length).toBeLessThanOrEqual(config.area().bounds.width);
     }
+    expect(outside(page, config).filter((row) => row.includes("界"))).toEqual([]);
     // Each cluster is whole where it is drawn, in the form the grid holds: the
     // base character occupies its cells and the zero-width joiner and the
     // combining marks occupy none of their own. `DRAWN` above is that form,
@@ -2558,24 +2346,26 @@ describe("Configure notice fitting", () => {
 
     // Replaced by a short name: every cell the long one occupied is blank or
     // the new notice's, rather than a tail of the old one left underneath.
-    yield* named(repl, "ag");
-    yield* noticed(repl, "ag has its own settings.");
-    const after = drawerRows(repl);
-    expect(after.rows.filter((row) => row.includes("\u754c"))).toEqual([]);
-    expect(after.rows.filter((row) => row.includes("\u{1F469}"))).toEqual([]);
+    yield* config.agent.clear();
+    yield* config.agent.enter("ag");
+    yield* noticed(page, config, "ag has its own settings.");
+    const after = config.area().rows();
+    expect(after.filter((row) => row.includes("界"))).toEqual([]);
+    expect(after.filter((row) => row.includes("\u{1F469}"))).toEqual([]);
 
     // Closing still chooses nothing: no preference was written by any of this.
-    yield* click(repl.terminal, "[close]", paneEnvelope(repl.terminal.size.columns));
-    yield* settled(60);
-    expect(shows(repl.terminal, "[apply]")).toBe(false);
+    yield* config.close();
+    expect(page.frame().has("drawer:configure:apply")).toBe(false);
     expect(yield* savedPreference(repl)).toBe(undefined);
   });
 
   it("Backspace removes one grapheme, not one code point", function* () {
-    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    const repl = page.repl;
+    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
-    yield* configure(repl);
-    yield* named(repl, "a");
+    yield* config.open();
+    yield* config.agent.replace("a");
 
     // A letter under two combining marks and a joined emoji are each one thing
     // on this screen and three code points underneath. One press takes one of
@@ -2587,19 +2377,19 @@ describe("Configure notice fitting", () => {
     // and the zero-width joiner and the combining marks are not cells of their
     // own. What is compared is therefore the cluster being there and then
     // being gone in one press, not the code points it is spelled with.
-    yield* focusOn(repl.terminal, `> Agent: `);
-    yield* typing(repl.terminal, "\u{1F469}\u200D\u{1F4BB}");
-    yield* settled(40);
-    expect(agentField(repl)).toBe("a\u{1F469}\u{1F4BB}");
-    repl.terminal.feed("\x7f");
-    yield* settled(40);
-    expect(agentField(repl)).toBe("a");
+    const agent = config.agent;
+    yield* agent.enter("\u{1F469}‍\u{1F4BB}");
+    yield* page.until("the joined emoji typed", () => agent.text() === "a\u{1F469}\u{1F4BB}");
+    expect(agent.text()).toBe("a\u{1F469}\u{1F4BB}");
+    yield* page.key("Backspace");
+    yield* page.until("the joined emoji gone in one press", () => agent.text() === "a");
+    expect(agent.text()).toBe("a");
 
-    yield* typing(repl.terminal, "e\u0301\u0301");
-    yield* settled(40);
-    expect(agentField(repl)).toBe("ae");
-    repl.terminal.feed("\x7f");
-    yield* settled(40);
-    expect(agentField(repl)).toBe("a");
+    yield* agent.enter("é́");
+    yield* page.until("the accented letter typed", () => agent.text() === "ae");
+    expect(agent.text()).toBe("ae");
+    yield* page.key("Backspace");
+    yield* page.until("the accented letter gone in one press", () => agent.text() === "a");
+    expect(agent.text()).toBe("a");
   });
 });

@@ -30,7 +30,7 @@ import { initialState } from "../src/repl/application.ts";
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, Ok, spawn, suspend, until, useScope, withResolvers } from "effection";
+import { ensure, Ok, sleep, spawn, suspend, until, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -60,33 +60,27 @@ import {
 import {
   appendGate,
   awaitedFact,
-  awaiting,
   awaited,
-  draftText,
-  focusDraft,
-  focusMessage,
-  MESSAGE_PROMPT,
-  messageText,
   MOUNTED_AGENT,
-  blockSays,
   mountedReading,
-  saidByPerson,
-  saidBySidekick,
-  screenOf,
-  rowsShow,
-  sidekickColumn,
-  sendMessage,
-  settled,
-  shows,
-  typing,
-  useMountedRepl,
   useMountedHost,
   mountedExecution,
-  sidekickPaneIn,
-  untilShown,
-} from "./fixtures/repl/issue-883/mounted-program.ts";
-import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
-import { send } from "./support/repl-page.ts";
+} from "./support/mounted-repl.ts";
+import type { MountedRepl } from "./support/mounted-repl.ts";
+import { useReplPage } from "./support/mounted-page.ts";
+import type { ReplPage } from "./support/mounted-page.ts";
+import {
+  draft,
+  entrySettles,
+  paste,
+  saidByPerson,
+  saidBySidekick,
+  shows,
+  sidekick,
+  sidekickIdle,
+  sidekickShows,
+  unwrapped,
+} from "./support/repl-page-adapters.ts";
 
 /**
  * The orientation an older build left on a conversation it completed a turn of.
@@ -674,7 +668,10 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     // The literal Output of the first piece, offered by the owner as a preview
     // of the response it is generating. Nothing has been evaluated: no fill has
     // happened, and there is no reply.
-    yield* settled(20);
+    yield* awaited(
+      "the preview of the first piece",
+      () => held.owner.previewing?.output === "Before.",
+    );
     expect(held.owner.previewing?.output).toBe("Before.");
     expect(held.owner.previewing?.incomplete).toBe(false);
     expect(held.state().draft).toBe("");
@@ -1095,6 +1092,26 @@ function* projected(chat: readonly SidekickRecord[]): Operation<SidekickReading>
 }
 
 /**
+ * Real time for an assertion that something did not appear.
+ *
+ * A prefix that changes nothing on the screen, and a reply that has nothing to
+ * preview, publish no frame and no event: there is nothing to wait for, so the
+ * assertion is given a window in which to be wrong.
+ */
+function* lingering(): Operation<void> {
+  yield* sleep(100);
+}
+
+/** The rows of the Sidekick's pane, and nothing beside it. */
+function paneRows(page: ReplPage): string[] {
+  const area = sidekick(page).area();
+  if (area === undefined) {
+    throw new Error(`the Sidekick's pane is not placed. ${page.describe()}`);
+  }
+  return area.rows();
+}
+
+/**
  * Wait until this command's own history holds this many evaluated replies.
  *
  * In the file, because a reply that says nothing to a person reaches no row: a
@@ -1102,14 +1119,10 @@ function* projected(chat: readonly SidekickRecord[]): Operation<SidekickReading>
  * draw.
  */
 function* savedReplies(repl: MountedRepl, count: number): Operation<void> {
-  for (let attempt = 0; attempt < 600; attempt += 1) {
+  yield* awaitedFact(`this chat saving ${count} replies`, function* () {
     const read = yield* mountedReading(repl);
-    if (read.chat.filter((one) => one.kind === "response").length >= count) {
-      return;
-    }
-    yield* settled(20);
-  }
-  throw new Error(`this chat never saved ${count} replies`);
+    return read.chat.filter((one) => one.kind === "response").length >= count;
+  });
 }
 
 /**
@@ -1184,7 +1197,8 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
 
   it("PV1: literal Output arrives as a preview, with nothing pressed and nothing run", function* () {
     const gate = appendGate();
-    const repl = yield* useMountedRepl({ gate });
+    const page = yield* useReplPage({ gate });
+    const repl = page.repl;
     // Held at the boundary between the pieces, so the second one arrives while
     // nothing else is happening: what reaches the screen then reached it
     // because the observation announced itself. And held again once both have
@@ -1199,17 +1213,15 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     repl.fake.script({ reply: "<Output>And the receipt.</Output>\n" });
 
     // Their own text in both composers first, which none of this may touch.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "mine");
-    yield* sendMessage(repl, "think");
-    yield* focusMessage(repl.terminal);
-    yield* typing(repl.terminal, "later");
+    yield* draft(page).type("mine");
+    yield* sidekick(page).send("think");
+    yield* sidekick(page).composer.type("later");
 
     // Generation is in flight with one piece delivered. Nothing is pressed from
     // here: what arrives has to arrive on its own.
     yield* repl.fake.streamingTurns(1);
     const fed = repl.terminal.fed;
-    yield* awaiting(repl.terminal, "the preview of what has been said", (one) =>
+    yield* page.until("the preview of what has been said", (one) =>
       shows(one, `${MOUNTED_AGENT} (preview): Half a thought`),
     );
     expect(repl.terminal.fed).toBe(fed);
@@ -1224,17 +1236,19 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // The screen says the same thing by what it is showing: the catalog holds
     // no entry, and the draft is still a draft somebody is holding rather than
     // work that has been admitted.
-    expect(shows(repl.terminal, "No entry yet")).toBe(true);
+    expect(shows(page.frame(), "No entry yet")).toBe(true);
     // Both composers still hold what was typed into them, and the Sidekick is
     // working — so Stop is the control, not Send.
-    expect(draftText(repl.terminal)).toBe("mine");
-    expect(messageText(repl.terminal)).toBe("later");
-    expect(shows(repl.terminal, "[stop]")).toBe(true);
+    expect(draft(page).text()).toBe("mine");
+    expect(sidekick(page).composer.text()).toBe("later");
+    expect(shows(page.frame(), "[stop]")).toBe(true);
     // The Sidekick's own control is Stop while it works. The entry draft keeps
     // its own Send beside it — they are two destinations with two controls —
     // so this asks the pane rather than the whole screen.
-    const pane = screenOf(repl.terminal).map((line) => line.slice(sidekickColumn(repl.terminal)));
-    expect(rowsShow(pane, "[send]")).toBe(false);
+    expect(sidekick(page).working()).toBe(true);
+    expect(sidekick(page).area()?.shows("[stop]")).toBe(true);
+    expect(sidekick(page).area()?.shows("[send]")).toBe(false);
+    expect(page.frame().has("draft:send")).toBe(true);
 
     // The rest of the text arrives, and the entry the reply submits is held
     // open: generation is over and the response is running its controls.
@@ -1244,7 +1258,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     repl.fake.releaseDeltas();
     // The update, with nothing else going on and still nothing pressed: the
     // sentence is finished by the piece that just arrived.
-    yield* awaiting(repl.terminal, "the finished sentence", (one) =>
+    yield* page.until("the finished sentence", (one) =>
       shows(one, `${MOUNTED_AGENT} (preview): Half a thought.`),
     );
     expect(repl.terminal.fed).toBe(fed);
@@ -1258,26 +1272,24 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(complete.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(complete.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(complete.model.entries).toEqual([]);
-    expect(draftText(repl.terminal)).toBe("mine");
-    expect(shows(repl.terminal, "No entry yet")).toBe(true);
+    expect(draft(page).text()).toBe("mine");
+    expect(shows(page.frame(), "No entry yet")).toBe(true);
     expect(repl.terminal.fed).toBe(fed);
 
     repl.fake.releaseDeltas();
     yield* closing.started();
     // Still a preview while its controls run: nothing has been evaluated into
     // a reply.
-    expect(shows(repl.terminal, `${MOUNTED_AGENT} (preview): Half a thought.`)).toBe(true);
+    expect(shows(page.frame(), `${MOUNTED_AGENT} (preview): Half a thought.`)).toBe(true);
     const running = yield* mountedReading(repl);
     expect(running.chat.filter((record) => record.kind === "response")).toEqual([]);
 
     // Released: the entry settles, the response is evaluated, and the same item
     // becomes the reply — the preview is gone, not joined by an answer.
     closing.release();
-    yield* awaiting(repl.terminal, "the evaluated reply", (one) =>
-      saidBySidekick(one, "Half a thought."),
-    );
-    yield* settled(40);
-    expect(shows(repl.terminal, "(preview)")).toBe(false);
+    yield* page.until("the evaluated reply", (one) => saidBySidekick(one, "Half a thought."));
+    yield* page.until("the Sidekick at rest", sidekickIdle);
+    expect(shows(page.frame(), "(preview)")).toBe(false);
     const after = yield* mountedReading(repl);
     // One response record for the turn that was being previewed, and exactly
     // one: the item a person watched arrive is the item they are reading.
@@ -1289,14 +1301,15 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // The entry really ran, and its feedback went back as the next turn's
     // request rather than as chat.
     expect(after.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
-    yield* awaiting(repl.terminal, "the turn that was told what it did", (one) =>
+    yield* page.until("the turn that was told what it did", (one) =>
       shows(one, "And the receipt."),
     );
     expect(repl.fake.prompts[1] ?? "").toContain("## REPL.Submit");
-    expect(shows(repl.terminal, "REPL.Submit")).toBe(false);
+    expect(shows(page.frame(), "REPL.Submit")).toBe(false);
   });
   it("PV2: what the screen shows a prefix saying is what the pure reader says", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     /**
      * One sequence of prefixes, each the whole of what has arrived.
      *
@@ -1319,23 +1332,24 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // evaluation's own refusal could be what took the body away.
     repl.fake.script({ deltas: pieces, holdsEachPiece: true, holdAfter: pieces.length });
 
-    yield* sendMessage(repl, "stream it");
+    yield* sidekick(page).send("stream it");
     // One step per boundary in the transport: the pieces up to here have
     // arrived, and the next one waits until this prefix has been read.
     for (let at = 0; at < pieces.length - 1; at += 1) {
       yield* repl.fake.streamingTurns(1);
       const whole = pieces.slice(0, at + 1).join("");
       const projected = previewGeneratedXmdRoot(whole);
-      // Settled on the frame, then compared: what is on the screen for this
+      // Compared after a window, because a prefix that changes nothing on the
+      // screen publishes no frame to wait for: what is on the screen for this
       // prefix is what the reader projects from it, and a refusal shows no body
       // at all rather than source.
-      yield* settled(40);
+      yield* lingering();
       if (projected.ok && projected.value.output !== "") {
-        yield* awaiting(repl.terminal, `the projection of prefix ${at + 1}`, (one) =>
+        yield* page.until(`the projection of prefix ${at + 1}`, (one) =>
           shows(one, `${MOUNTED_AGENT} (preview): ${projected.value.output.split("\n")[0]}`),
         );
       } else {
-        expect(shows(repl.terminal, "(preview)")).toBe(false);
+        expect(shows(page.frame(), "(preview)")).toBe(false);
       }
       // Nothing about a prefix is executed, however complete it reads: a
       // syntactically whole region is not permission to run anything.
@@ -1344,8 +1358,8 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
       expect(during.model.entries).toEqual([]);
       // The interpolation waits rather than being guessed at, and a passive
       // example is not a region.
-      expect(shows(repl.terminal, "{computed}")).toBe(false);
-      expect(shows(repl.terminal, "not a region")).toBe(false);
+      expect(shows(page.frame(), "{computed}")).toBe(false);
+      expect(shows(page.frame(), "not a region")).toBe(false);
       repl.fake.releaseDeltas();
     }
 
@@ -1354,32 +1368,29 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // the body is gone now, before anything was evaluated.
     yield* repl.fake.streamingTurns(1);
     expect(previewGeneratedXmdRoot(pieces.join("")).ok).toBe(false);
-    yield* awaiting(repl.terminal, "the body being withdrawn", (one) => !shows(one, "(preview)"));
+    yield* page.until("the body being withdrawn", (one) => !shows(one, "(preview)"));
     const withdrawn = yield* mountedReading(repl);
     expect(withdrawn.chat.filter((record) => record.kind === "response")).toEqual([]);
     // And no source is shown in its place.
-    expect(shows(repl.terminal, "<Output>")).toBe(false);
+    expect(shows(page.frame(), "<Output>")).toBe(false);
     repl.fake.releaseDeltas();
-    // Bounded, and settled on what the files say: the response record is what
-    // ends this turn, and the screen follows it.
-    let answered = false;
-    for (let tries = 0; tries < 200 && !answered; tries += 1) {
-      answered = (yield* mountedReading(repl)).chat.some((record) => record.kind === "response");
-      if (!answered) {
-        yield* settled(20);
-      }
-    }
-    expect(answered).toBe(true);
-    expect(shows(repl.terminal, "(preview)")).toBe(false);
+    // Settled on what the files say: the response record is what ends this
+    // turn, and the screen follows it.
+    yield* awaitedFact("the response record", function* () {
+      return (yield* mountedReading(repl)).chat.some((record) => record.kind === "response");
+    });
+    yield* page.until("the Sidekick at rest", sidekickIdle);
+    expect(shows(page.frame(), "(preview)")).toBe(false);
   });
 
   it("PV1: the preview and the reply that replaces it are one item", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     repl.fake.script({ deltas: STREAMED, holdsEachPiece: true });
 
-    yield* sendMessage(repl, "think");
+    yield* sidekick(page).send("think");
     yield* repl.fake.streamingTurns(1);
-    yield* awaiting(repl.terminal, "the preview", (one) =>
+    yield* page.until("the preview", (one) =>
       shows(one, `${MOUNTED_AGENT} (preview): Half a thought`),
     );
     // The history as it stood while that preview was on the screen: the
@@ -1388,9 +1399,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(during.filter((record) => record.kind === "response")).toEqual([]);
 
     repl.fake.releaseDeltas();
-    yield* awaiting(repl.terminal, "the evaluated reply", (one) =>
-      saidBySidekick(one, "Half a thought."),
-    );
+    yield* page.until("the evaluated reply", (one) => saidBySidekick(one, "Half a thought."));
     // The screen says the Sidekick's words as soon as it has said them, and
     // this reply carries an entry: the response is published once that entry
     // has been evaluated, which is after the row is drawn. Caught on a loaded
@@ -1416,7 +1425,8 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(retained.filter((row) => row.kind === "reply")).toHaveLength(1);
     expect(retained.filter((row) => row.kind === "preview")).toEqual([]);
     // The same is true of what is drawn: one agent row, not two.
-    expect(shows(repl.terminal, "(preview)")).toBe(false);
+    yield* page.until("the Sidekick at rest", sidekickIdle);
+    expect(shows(page.frame(), "(preview)")).toBe(false);
   });
 
   /**
@@ -1489,7 +1499,8 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
   });
 
   it("PV1: a reply that says nothing to the person leaves no preview behind", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     // Controls and no Output at all: a response's own working is not chat, and
     // a preview of it would be a body nobody wrote.
     repl.fake.script({
@@ -1498,28 +1509,27 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     });
     repl.fake.script({ reply: "<Output>Read it.</Output>\n" });
 
-    yield* sendMessage(repl, "look");
+    yield* sidekick(page).send("look");
     yield* repl.fake.streamingTurns(1);
-    yield* settled(40);
+    yield* lingering();
     // Nothing to preview, because nothing was said: a declared control is not
     // literal Output, and the half-written element is not source to show.
-    expect(shows(repl.terminal, "(preview)")).toBe(false);
-    expect(shows(repl.terminal, "REPL.Bindings")).toBe(false);
+    expect(shows(page.frame(), "(preview)")).toBe(false);
+    expect(shows(page.frame(), "REPL.Bindings")).toBe(false);
 
     repl.fake.releaseDeltas();
-    yield* awaiting(repl.terminal, "the turn that was told what it read", (one) =>
-      shows(one, "Read it."),
-    );
+    yield* savedReplies(repl, 2);
+    yield* page.until("the turn that was told what it read", sidekickIdle);
     // ER2 — and the follow-up that *did* say something says it, in its own row,
     // exactly as it always has: removing the silent reply's notice removes a
     // sentence nobody wrote and nothing else.
-    expect(saidBySidekick(repl.terminal, "Read it.")).toBe(true);
-    expect(shows(repl.terminal, "(preview)")).toBe(false);
+    expect(saidBySidekick(page.frame(), "Read it.")).toBe(true);
+    expect(shows(page.frame(), "(preview)")).toBe(false);
     // And the reply that selected no chat contributed no utterance at all. The
     // superseded form of this row asserted a sentence about the absence; what
     // it asserts now is that there is none — and no bare name, no metadata
     // substitute and no empty row standing in for one either.
-    expect(shows(repl.terminal, "answered without saying")).toBe(false);
+    expect(shows(page.frame(), "answered without saying")).toBe(false);
     const composed = yield* composedChat(repl);
     expect(composed).toEqual(["  you: look", `  ${MOUNTED_AGENT}: Read it.`]);
   });
@@ -1534,7 +1544,8 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
    * anything, so neither of them is in the chat.
    */
   it("ER1: a reply that only runs controls leaves the request and nothing else", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     // Two controls and no Output, then a follow-up that adds nothing: source is
     // not Output, so both turns succeeded and said nothing to anybody. Two
     // rather than one so that what came back is a result a reader can tell
@@ -1542,19 +1553,20 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     repl.fake.script({ reply: "<REPL.Bindings />\n<REPL.Environment />\n" });
     repl.fake.script({ reply: "Nothing to add.\n" });
 
-    yield* sendMessage(repl, "look");
+    yield* sidekick(page).send("look");
     // Waited for in the history rather than on the screen, because the chat is
     // exactly where these two replies have nothing to say: there is no row for
-    // either of them to arrive in, so what settles this is the file.
+    // either of them to arrive in, so what settles this is the file, and then
+    // the Sidekick offering Send again.
     yield* savedReplies(repl, 2);
-    yield* settled(40);
+    yield* page.until("the Sidekick at rest", sidekickIdle);
 
     // What a person asked for is still there, and nothing of the two replies is.
-    expect(saidByPerson(repl.terminal, "look")).toBe(true);
-    expect(shows(repl.terminal, "answered without saying")).toBe(false);
-    expect(shows(repl.terminal, "(preview)")).toBe(false);
-    expect(shows(repl.terminal, "REPL.Bindings")).toBe(false);
-    expect(shows(repl.terminal, "Nothing to add.")).toBe(false);
+    expect(saidByPerson(page.frame(), "look")).toBe(true);
+    expect(shows(page.frame(), "answered without saying")).toBe(false);
+    expect(shows(page.frame(), "(preview)")).toBe(false);
+    expect(shows(page.frame(), "REPL.Bindings")).toBe(false);
+    expect(shows(page.frame(), "Nothing to add.")).toBe(false);
     // Asked of the composition rather than of the screen, because this is the
     // question a screen search cannot answer: an empty row, a bare agent name
     // or a metadata sentence would all be *rows*, and the chat has one row.
@@ -1601,17 +1613,16 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
    * anything.
    */
   it("ER3: an evaluated reply that failed keeps its reason, with no Output to show", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     // A name this ceiling does not admit, which refuses the whole reply before
     // any control runs. No Output was selected, so a rule filtering every
     // reply that rendered nothing would take this failure with it.
     repl.fake.script({ reply: "<REPL.Delete />\n" });
     repl.fake.script({ reply: "<Output>Fixed it.</Output>\n" });
 
-    yield* sendMessage(repl, "remove it");
-    yield* awaiting(repl.terminal, "the recorded reason", (one) =>
-      shows(one, `${MOUNTED_AGENT} (failed):`),
-    );
+    yield* sidekick(page).send("remove it");
+    yield* page.until("the recorded reason", (one) => shows(one, `${MOUNTED_AGENT} (failed):`));
     // Its own recorded reason, and not a status this screen composed: what the
     // row says is what the history holds.
     const read = yield* mountedReading(repl);
@@ -1622,15 +1633,13 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     }
     expect(failed.hasOutput).toBe(false);
     expect(failed.failure).not.toBe(undefined);
-    expect(shows(repl.terminal, (failed.failure ?? "").slice(0, 24))).toBe(true);
+    expect(shows(page.frame(), (failed.failure ?? "").slice(0, 24))).toBe(true);
     // The saved outcome says so too, so a fabricated sentence could not pass
     // this row: the turn is recorded as a reply that failed.
     expect(sidekickTurnRows(known, undefined)[0]?.state).toBe("reply failed");
     // And the correction it was given, which answered: the failure stands in
     // the chat beside the reply that followed it, in that order.
-    yield* awaiting(repl.terminal, "the corrected reply", (one) =>
-      saidBySidekick(one, "Fixed it."),
-    );
+    yield* page.until("the corrected reply", (one) => saidBySidekick(one, "Fixed it."));
     expect(yield* composedChat(repl)).toEqual([
       "  you: remove it",
       `  ${MOUNTED_AGENT} (failed): ${failed.failure}`,
@@ -1659,14 +1668,15 @@ const GATED_ENTRY_REPLY = [
 
 describe("Tier R5 — a mounted message prepares and submits a real entry", () => {
   it("M3: the message a person sends runs its entry, and is answered about it", function* () {
-    const repl = yield* useMountedRepl();
-    const { terminal, fake } = repl;
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const { fake } = repl;
     // The reply that prepares and submits, then the turn told what its writes did.
     fake.script({ reply: entrySource("greeting", "Hello from the reply.", "{greeting}") });
     fake.script({ reply: "<Output>Thanks for the receipt.</Output>\n" });
-    yield* send(terminal, "greet");
-    yield* untilShown(terminal, "the reply answering about its own entry", (one) =>
-      shows(one, "Thanks for the receipt."),
+    yield* sidekick(page).send("greet");
+    yield* page.until("the reply answering about its own entry", (one) =>
+      saidBySidekick(one, "Thanks for the receipt."),
     );
 
     // One entry ran, from the source the reply captured with its fence intact.
@@ -1675,8 +1685,8 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     expect(first.model.entries[0]?.source).toContain("```js eval");
     expect(first.model.entries[0]?.source).toContain("Hello from the reply.");
     expect(first.model.entries[0]?.terminal?.output).toContain("Hello from the reply.");
-    expect(shows(terminal, "Hello from the reply.")).toBe(true);
-    expect(draftText(terminal)).toBe("");
+    expect(shows(page.frame(), "Hello from the reply.")).toBe(true);
+    expect(draft(page).text()).toBe("");
 
     // The receipt names this entry, carries no body, and keeps admission order.
     expect(fake.prompts).toHaveLength(2);
@@ -1688,17 +1698,17 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     expect(receipt.indexOf("## REPL.EntryInput")).toBeLessThan(receipt.indexOf("## REPL.Submit"));
 
     // The chat is the message and the replies' own Output, nothing else.
-    expect(saidByPerson(terminal, "greet")).toBe(true);
-    expect(saidBySidekick(terminal, "Submitted it.")).toBe(true);
-    expect(saidBySidekick(terminal, "Thanks for the receipt.")).toBe(true);
-    expect(shows(terminal, "REPL.EntryInput")).toBe(false);
+    expect(saidByPerson(page.frame(), "greet")).toBe(true);
+    expect(saidBySidekick(page.frame(), "Submitted it.")).toBe(true);
+    expect(saidBySidekick(page.frame(), "Thanks for the receipt.")).toBe(true);
+    expect(shows(page.frame(), "REPL.EntryInput")).toBe(false);
 
     // A second message in the same conversation, which is not oriented again.
     fake.script({ reply: "<REPL.Bindings />\n" });
     fake.script({ reply: entrySource("greeting", "| a | b |", "{greeting}") });
     fake.script({ reply: "<Output>Revised it.</Output>\n" });
-    yield* send(terminal, "table");
-    yield* untilShown(terminal, "the revision being answered", (one) => shows(one, "Revised it."));
+    yield* sidekick(page).send("table");
+    yield* page.until("the revision being answered", (one) => saidBySidekick(one, "Revised it."));
 
     const second = yield* mountedReading(repl);
     const conversations = new Set(
@@ -1757,11 +1767,12 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     let chat = "";
 
     yield* scoped(function* (): Operation<void> {
-      const repl = yield* useMountedRepl({ host });
+      const page = yield* useReplPage({ host });
+      const repl = page.repl;
       repl.fake.script({ reply: entrySource("first", "the first entry ran", "{first}") });
       repl.fake.script({ reply: "<Output>That is one.</Output>\n" });
-      yield* sendMessage(repl, "run one");
-      yield* awaiting(repl.terminal, "the first receipt", (one) => shows(one, "That is one."));
+      yield* sidekick(page).send("run one");
+      yield* page.until("the first receipt", (one) => saidBySidekick(one, "That is one."));
 
       const after = yield* mountedReading(repl);
       execution = after.execution;
@@ -1773,8 +1784,11 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
 
       repl.fake.script({ reply: entrySource("second", "the second entry ran", "{second}") });
       repl.fake.script({ reply: "<Output>That is two.</Output>\n" });
-      yield* sendMessage(repl, "run two");
-      yield* awaiting(repl.terminal, "the second receipt", (one) => shows(one, "That is two."));
+      yield* sidekick(page).send("run two");
+      yield* page.until("the second receipt", (one) => saidBySidekick(one, "That is two."));
+      yield* page.until("the Sidekick pane holding the second receipt", (one) =>
+        sidekickShows(one, "That is two."),
+      );
 
       // Each reply's work, after the reply that admitted it: the entry the
       // record names, the state the model holds it in, and what it actually
@@ -1782,7 +1796,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // so a row carrying the reply's wording could not pass for either.
       const live = yield* mountedReading(repl);
       expect(live.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
-      const pane = sidekickPaneIn(screenOf(repl.terminal));
+      const pane = paneRows(page);
       const at = (said: string): number => pane.findIndex((row) => row.includes(said));
       expect(at("Entry 1 \u00b7 \u2713 COMPLETED")).toBeGreaterThan(at("Submitted it."));
       expect(at("the first entry ran")).toBe(at("Entry 1 \u00b7 \u2713 COMPLETED") + 1);
@@ -1803,13 +1817,13 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // is taken — no control record, and so no association to read.
       repl.fake.script({ reply: "<REPL.Submit />\n" });
       repl.fake.script({ reply: "<Output>I will prepare source first.</Output>\n" });
-      yield* sendMessage(repl, "submit it");
-      yield* awaiting(repl.terminal, "the refusal going back", (one) =>
-        shows(one, "I will prepare source first."),
+      yield* sidekick(page).send("submit it");
+      yield* page.until("the refusal going back", (one) =>
+        sidekickShows(one, "I will prepare source first."),
       );
       const refused = yield* mountedReading(repl);
       expect(refused.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
-      const after3 = sidekickPaneIn(screenOf(repl.terminal));
+      const after3 = paneRows(page);
       const said = after3.findIndex((row) => row.includes("I will prepare source first."));
       expect(said).toBeGreaterThan(0);
       // Nothing after that reply says an entry: the rows below it are the
@@ -1823,16 +1837,15 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       holding = true;
       repl.fake.script({ reply: GATED_ENTRY_REPLY });
       repl.fake.script({ reply: "<Output>I did not admit an entry.</Output>\n" });
-      yield* sendMessage(repl, "run the gated one");
+      yield* sidekick(page).send("run the gated one");
       yield* reached.operation;
       // The draft moves while the submission is being prepared, which is what
       // the start check refuses on: the prepared text is not the text anybody
       // is asking for any more.
-      yield* focusDraft(repl.terminal);
-      yield* typing(repl.terminal, "!");
+      yield* draft(page).type("!");
       allow.resolve();
-      yield* awaiting(repl.terminal, "the refused submission going back", (one) =>
-        shows(one, "I did not admit an entry."),
+      yield* page.until("the refused submission going back", (one) =>
+        sidekickShows(one, "I did not admit an entry."),
       );
 
       // Retained, and retained as refused: an intent with a reservation, and
@@ -1864,15 +1877,15 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // Exactly the source it reserved, typed back in and run by hand. The
       // backspace takes off the character that moved the draft, which leaves
       // the reserved text itself.
-      yield* focusDraft(repl.terminal);
-      repl.terminal.feed("\x7f");
-      yield* awaiting(repl.terminal, "the reserved source restored", (one) =>
-        blockSays(draftText(one), intent.submit?.source ?? ""),
+      yield* draft(page).focus();
+      yield* page.key("Backspace");
+      yield* page.until(
+        "the reserved source restored",
+        () => unwrapped(draft(page).text()) === unwrapped(intent.submit?.source ?? ""),
       );
-      repl.terminal.feed("\r");
-      yield* awaiting(repl.terminal, "the manual entry running", (one) =>
-        shows(one, "The manual entry ran."),
-      );
+      yield* page.key("Enter");
+      yield* page.until("the manual entry running", (one) => shows(one, "The manual entry ran."));
+      yield* entrySettles(page, 3, "ok");
       const manual = yield* mountedReading(repl);
       // The same slot, the same key and the same source — every coordinate the
       // reservation named.
@@ -1880,7 +1893,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       expect([took?.key, took?.source]).toEqual([intent.submit.entry, intent.submit.source]);
       // And the refused reply is credited with none of it: no work row, no
       // state and no output of that entry anywhere after it.
-      const paneNow = sidekickPaneIn(screenOf(repl.terminal));
+      const paneNow = paneRows(page);
       const refusedAt = paneNow.findIndex((row) => row.includes("I did not admit an entry."));
       expect(refusedAt).toBeGreaterThan(0);
       expect(paneNow.slice(refusedAt + 1).some((row) => /Entry \d+ \u00b7/.test(row))).toBe(false);
@@ -1890,7 +1903,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       entries = yield* until(readFile(pairedLocation(host.root, execution).entries, "utf8"));
       chat = yield* until(readFile(pairedLocation(host.root, execution).sidekick, "utf8"));
       repl.terminal.end();
-      yield* awaiting(repl.terminal, "the command leaving", () => repl.outcome() !== undefined);
+      yield* awaited("the command leaving", () => repl.outcome() !== undefined);
     });
 
     // Cold, at a position that holds the first entry and not the second. The
@@ -1900,12 +1913,13 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     const calls = host.fake.prompts.length;
     yield* scoped(function* (): Operation<void> {
       const base = initialState(execution);
-      const repl = yield* useMountedRepl({
+      const page = yield* useReplPage({
         host,
         location: encodeLocation({ ...base.route, at: earlier }),
       });
-      yield* awaiting(repl.terminal, "the cold chat", (one) => shows(one, "That is one."));
-      const pane = sidekickPaneIn(screenOf(repl.terminal));
+      const repl = page.repl;
+      yield* page.until("the cold chat", (one) => sidekickShows(one, "That is one."));
+      const pane = paneRows(page);
       const counted = (said: string): number => pane.filter((row) => row.includes(said)).length;
       // Once, after the one reply that admitted it. Twice would be an entry
       // handed to a reply that did not submit it — which is what following the
@@ -1916,11 +1930,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       expect(counted("Entry 2 \u00b7")).toBe(0);
       expect(counted("the second entry ran")).toBe(0);
       repl.terminal.end();
-      yield* awaiting(
-        repl.terminal,
-        "the cold command leaving",
-        () => repl.outcome() !== undefined,
-      );
+      yield* awaited("the cold command leaving", () => repl.outcome() !== undefined);
     });
 
     // And cold at the head, where every entry this execution admitted is in
@@ -1929,14 +1939,15 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     // an answer already written — so nothing resurrects an association out of
     // a slot that was later filled by hand.
     yield* scoped(function* (): Operation<void> {
-      const repl = yield* useMountedRepl({
+      const page = yield* useReplPage({
         host,
         location: encodeLocation(initialState(execution).route),
       });
-      yield* awaiting(repl.terminal, "the cold chat at the head", (one) =>
-        shows(one, "I did not admit an entry."),
+      const repl = page.repl;
+      yield* page.until("the cold chat at the head", (one) =>
+        sidekickShows(one, "I did not admit an entry."),
       );
-      const pane = sidekickPaneIn(screenOf(repl.terminal));
+      const pane = paneRows(page);
       const refusedAt = pane.findIndex((row) => row.includes("I did not admit an entry."));
       expect(refusedAt).toBeGreaterThan(0);
       expect(pane.slice(refusedAt + 1).some((row) => /Entry \d+ \u00b7/.test(row))).toBe(false);
@@ -1945,11 +1956,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // what makes the absence above an answer rather than an empty pane.
       expect(pane.filter((row) => /Entry \d+ \u00b7/.test(row))).toHaveLength(2);
       repl.terminal.end();
-      yield* awaiting(
-        repl.terminal,
-        "the second cold command leaving",
-        () => repl.outcome() !== undefined,
-      );
+      yield* awaited("the second cold command leaving", () => repl.outcome() !== undefined);
     });
     // And reading it asked nobody anything and wrote nothing.
     expect(host.fake.prompts).toHaveLength(calls);
@@ -2063,14 +2070,15 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     readonly conversations: number;
     readonly chatHas: (text: string) => boolean;
   }> {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
 
-    // The seed, as a person's own entry: typed into the draft and run.
-    yield* focusDraft(repl.terminal);
-    repl.terminal.bytes(new TextEncoder().encode(seed(names)));
-    yield* settled(60);
-    repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the seed entry publishing its names", (one) =>
+    // The seed, as a person's own entry: pasted into the draft and run. The
+    // draft shows its own source, so the entry's outcome is what says it ran.
+    yield* paste(page, draft(page), seed(names));
+    yield* page.key("Enter");
+    yield* entrySettles(page, 1, "ok");
+    yield* page.until("the seed entry publishing its names", (one) =>
       shows(one, "Names published."),
     );
 
@@ -2082,20 +2090,20 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     repl.fake.script({ held: true, reply: "<REPL.Submit />\n<Output>Submitted it.</Output>\n" });
     repl.fake.script({ reply: "<Output>Thanks for the receipt.</Output>\n" });
 
-    yield* sendMessage(repl, "greet");
+    yield* sidekick(page).send("greet");
     yield* repl.fake.holdingTurns(1);
-    yield* awaiting(repl.terminal, "the draft holding the prepared greetings", (one) =>
-      draftText(one).includes("<Each in={names}"),
+    yield* page.until("the draft holding the prepared greetings", () =>
+      draft(page).text().includes("<Each in={names}"),
     );
 
     // What the draft is holding, and what has run: a fill alone starts nothing,
     // so the seed is still the only entry there is.
-    const heldDraft = draftText(repl.terminal);
+    const heldDraft = draft(page).text();
     const held = yield* mountedReading(repl);
 
     repl.fake.releaseTurn();
-    yield* awaiting(repl.terminal, "the reply answering about its own entry", (one) =>
-      shows(one, "Thanks for the receipt."),
+    yield* page.until("the reply answering about its own entry", (one) =>
+      saidBySidekick(one, "Thanks for the receipt."),
     );
 
     const after = yield* mountedReading(repl);
@@ -2105,10 +2113,8 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     repl.fake.script({ reply: submits(TABLE, "Revised it as a table.") });
     repl.fake.script({ reply: "<Output>Table receipt.</Output>\n" });
 
-    yield* sendMessage(repl, "table");
-    yield* awaiting(repl.terminal, "the table being answered", (one) =>
-      shows(one, "Table receipt."),
-    );
+    yield* sidekick(page).send("table");
+    yield* page.until("the table being answered", (one) => saidBySidekick(one, "Table receipt."));
 
     const finished = yield* mountedReading(repl);
     const conversations = new Set(
@@ -2116,7 +2122,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
         .filter((record) => record.kind === "message")
         .map((record) => (record.kind === "message" ? record.conversation : "")),
     );
-    const screen = screenOf(repl.terminal).join("\n");
+    const screen = page.frame().rows.join("\n");
 
     const greetingEntry = finished.model.entries[1];
     const tableEntry = finished.model.entries[2];
@@ -2151,7 +2157,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
 
     // Held at the transport with the draft filled: the program is there, byte
     // for byte, and the seed is still the only entry that has run.
-    expect(blockSays(ran.heldDraft, GREETINGS)).toBe(true);
+    expect(unwrapped(ran.heldDraft)).toBe(unwrapped(GREETINGS));
     expect(ran.heldEntries).toEqual(["entry-1"]);
 
     // The entry that ran is the draft that was held, and its output is the
@@ -2190,7 +2196,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     const ran = yield* arm(SECOND);
 
     expect(ran.published).toEqual({ names: SECOND });
-    expect(blockSays(ran.heldDraft, GREETINGS)).toBe(true);
+    expect(unwrapped(ran.heldDraft)).toBe(unwrapped(GREETINGS));
 
     // The program is the same program. What changed is the binding it reads,
     // and that is what the output has to show.
@@ -2218,7 +2224,8 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
  */
 describe("Tier TE — a failed entry is corrected as a new entry", () => {
   it("TE2: the failure goes back to its owner, which submits a corrected entry", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
 
     // The failing entry fixture these rows already use: a real entry that is
     // admitted, runs, and settles badly.
@@ -2240,9 +2247,9 @@ describe("Tier TE — a failed entry is corrected as a new entry", () => {
     repl.fake.script({ reply: entrySource("fixed", "it runs now", "{fixed}") });
     repl.fake.script({ reply: "<Output>Corrected it.</Output>\n" });
 
-    yield* sendMessage(repl, "run this");
-    yield* awaiting(repl.terminal, "the correction being answered", (one) =>
-      shows(one, "Corrected it."),
+    yield* sidekick(page).send("run this");
+    yield* page.until("the correction being answered", (one) =>
+      saidBySidekick(one, "Corrected it."),
     );
 
     const read = yield* mountedReading(repl);
@@ -3224,7 +3231,8 @@ describe("975 — the shipped session component journey", () => {
     let beforeChat = "";
     yield* until(writeFile(join(project, "request.md"), "project input"));
     yield* scoped(function* () {
-      const repl = yield* useMountedRepl({ host });
+      const page = yield* useReplPage({ host });
+      const repl = page.repl;
       execution = yield* mountedExecution(repl);
       const location = pairedLocation(host.root, execution);
       workspace = location.directory;
@@ -3252,9 +3260,9 @@ describe("975 — the shipped session component journey", () => {
       repl.fake.script({ reply: invoke });
       repl.fake.script({ reply: "<REPL.Entry.Output entry={2} />" });
       repl.fake.script({ reply: "<Output>Read the session greeting.</Output>" });
-      yield* sendMessage(repl, "create and use the session greeting");
-      yield* awaiting(repl.terminal, "the taught journey to finish", (one) =>
-        shows(one, "Read the session greeting."),
+      yield* sidekick(page).send("create and use the session greeting");
+      yield* page.until("the taught journey to finish", (one) =>
+        saidBySidekick(one, "Read the session greeting."),
       );
       const read = yield* mountedReading(repl);
       expect(read.model.entries.map((entry) => entry.source)).toEqual([
@@ -3280,10 +3288,8 @@ describe("975 — the shipped session component journey", () => {
         "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />";
       repl.fake.script({ reply: source });
       repl.fake.script({ reply: "<Output>Copied and wrote.</Output>" });
-      yield* sendMessage(repl, "copy the known project input and write notes");
-      yield* awaiting(repl.terminal, "the workspace copy", (one) =>
-        shows(one, "Copied and wrote."),
-      );
+      yield* sidekick(page).send("copy the known project input and write notes");
+      yield* page.until("the workspace copy", (one) => saidBySidekick(one, "Copied and wrote."));
       expect(yield* until(readFile(join(workspace, "inputs", "request.md"), "utf8"))).toBe(
         "project input",
       );
@@ -3292,11 +3298,10 @@ describe("975 — the shipped session component journey", () => {
       expect(yield* cwd()).toBe(project);
       const sibling = yield* spawn(() => cwd());
       expect(yield* sibling).toBe(project);
-      yield* focusDraft(repl.terminal);
-      yield* typing(repl.terminal, '<File path="manual.md">project manual</File>');
-      repl.terminal.feed("\r");
-      yield* awaiting(repl.terminal, "the manual successor", () =>
-        screenOf(repl.terminal).some((line) => {
+      yield* draft(page).type('<File path="manual.md">project manual</File>');
+      yield* page.key("Enter");
+      yield* page.until("the manual successor", (one) =>
+        one.rows.some((line) => {
           // The same fact the catalog used to spell as `entry-4 [ok]`: the fourth
           // entry is the one being read, and it completed. The staged screen says
           // it in the selected work's own heading — both on that one row, because
@@ -3309,19 +3314,16 @@ describe("975 — the shipped session component journey", () => {
       beforeEntries = yield* until(readFile(location.entries, "utf8"));
       beforeChat = yield* until(readFile(location.sidekick, "utf8"));
       repl.terminal.end();
-      yield* awaiting(
-        repl.terminal,
-        "the first command to exit",
-        () => repl.outcome() !== undefined,
-      );
+      yield* awaited("the first command to exit", () => repl.outcome() !== undefined);
     });
     const calls = host.fake.prompts.length;
     yield* until(writeFile(join(workspace, "notes.md"), "external edit"));
     yield* scoped(function* () {
-      const repl = yield* useMountedRepl({
+      const page = yield* useReplPage({
         host,
         location: encodeLocation(initialState(execution).route),
       });
+      const repl = page.repl;
       expect(host.fake.prompts).toHaveLength(calls);
       expect(yield* until(readFile(pairedLocation(host.root, execution).entries, "utf8"))).toBe(
         beforeEntries,
@@ -3334,14 +3336,11 @@ describe("975 — the shipped session component journey", () => {
         "Hello from this session.",
       );
       repl.terminal.end();
-      yield* awaiting(
-        repl.terminal,
-        "the cold command to exit",
-        () => repl.outcome() !== undefined,
-      );
+      yield* awaited("the cold command to exit", () => repl.outcome() !== undefined);
     });
     yield* scoped(function* () {
-      const repl = yield* useMountedRepl({ host });
+      const page = yield* useReplPage({ host });
+      const repl = page.repl;
       const ids = yield* until(readdir(join(host.root, "v1")));
       const other = ids.find((id) => id !== execution);
       expect(other).toBeDefined();
@@ -3349,11 +3348,7 @@ describe("975 — the shipped session component journey", () => {
       expect(location.directory).not.toBe(workspace);
       expect(yield* until(readdir(join(location.directory, "components")))).toEqual([]);
       repl.terminal.end();
-      yield* awaiting(
-        repl.terminal,
-        "the second session to exit",
-        () => repl.outcome() !== undefined,
-      );
+      yield* awaited("the second session to exit", () => repl.outcome() !== undefined);
     });
   });
 });
@@ -3470,19 +3465,20 @@ describe("975 — configured-first lookup and unchanged permissions", () => {
         "---\ndescription: Configured greeting contract.\nprops:\n  type: object\n  properties:\n    selected: { type: string }\n  required: [selected]\n  additionalProperties: false\n---\nConfigured greeting.",
       ),
     );
-    const repl = yield* useMountedRepl({
+    const page = yield* useReplPage({
       projectCwd: project,
       includes: ["configured"],
       hostFiles: true,
     });
+    const repl = page.repl;
     const workspace = pairedLocation(repl.root, yield* mountedExecution(repl)).directory;
     yield* until(writeFile(join(workspace, "components", "Greeting.md"), "Session collision."));
     repl.fake.script({ reply: '<REPL.Syntax />\n<REPL.Syntax names={["Greeting"]} />' });
     repl.fake.script({ reply: submitSource('<Greeting selected="configured" />') });
     repl.fake.script({ reply: "<Output>Configured greeting completed.</Output>" });
-    yield* sendMessage(repl, "inspect and invoke the selected greeting");
-    yield* awaiting(repl.terminal, "the selected greeting", (one) =>
-      shows(one, "Configured greeting completed."),
+    yield* sidekick(page).send("inspect and invoke the selected greeting");
+    yield* page.until("the selected greeting", (one) =>
+      saidBySidekick(one, "Configured greeting completed."),
     );
     const selected = yield* mountedReading(repl);
     expect(selected.model.entries[0]?.terminal?.output).toBe("Configured greeting.");
@@ -3496,9 +3492,9 @@ describe("975 — configured-first lookup and unchanged permissions", () => {
     yield* until(writeFile(join(configured, "Broken.md"), "---\nprops: [\n---\nbroken"));
     repl.fake.script({ reply: submitSource("<Broken />") });
     repl.fake.script({ reply: "<Output>Inspected the malformed definition.</Output>" });
-    yield* sendMessage(repl, "inspect the broken selection");
-    yield* awaiting(repl.terminal, "the selected-definition refusal", (one) =>
-      shows(one, "Inspected the malformed definition."),
+    yield* sidekick(page).send("inspect the broken selection");
+    yield* page.until("the selected-definition refusal", (one) =>
+      saidBySidekick(one, "Inspected the malformed definition."),
     );
     const refused = yield* mountedReading(repl);
     expect(refused.model.entries).toHaveLength(1);
@@ -3510,22 +3506,23 @@ describe("975 — configured-first lookup and unchanged permissions", () => {
     const project = yield* useTemporary("xmd-denied-project-");
     const native = yield* useTemporary("xmd-native-project-");
     yield* Permissions.around({ files: ([operation]) => operation !== "write" });
-    const repl = yield* useMountedRepl({
+    const page = yield* useReplPage({
       projectCwd: project,
       hostFiles: true,
       agentCwd: function* () {
         return native;
       },
     });
+    const repl = page.repl;
     const workspace = pairedLocation(repl.root, yield* mountedExecution(repl)).directory;
     repl.fake.script({
       reply: submitSource('<File path="components/Greeting.md">must not write</File>'),
     });
     repl.fake.script({ reply: "<REPL.Entry.Output entry={1} />" });
     repl.fake.script({ reply: "<Output>Inspected the denied write.</Output>" });
-    yield* sendMessage(repl, "write a component");
-    yield* awaiting(repl.terminal, "the denied-write feedback", (one) =>
-      shows(one, "Inspected the denied write."),
+    yield* sidekick(page).send("write a component");
+    yield* page.until("the denied-write feedback", (one) =>
+      saidBySidekick(one, "Inspected the denied write."),
     );
     expect(yield* until(readdir(join(workspace, "components")))).toEqual([]);
     const read = yield* mountedReading(repl);
