@@ -336,8 +336,8 @@ preparation and starts no work. Pause asks and cancels nothing — neither the
 preparation nor the entry — and asking twice asks for the same thing.
 
 Preparation is not execution. A reserved entry is not running, paused, admitted
-or settled; it adds no history position and no head state, and the footer keeps
-its seven rows throughout.
+or settled; it adds no history position and no head state, and the rows around
+the body keep their count throughout.
 
 When the root settles, its recorded output is what the transcript shows, and the
 screen stops asking for frames.
@@ -461,10 +461,27 @@ entry holds, a value an entry that never settled computed, a value a discarded
 result had. The reserved `props` namespace belongs to each entry's
 own validated root and is never inherited.
 
-An entry interrupted before its root closed is a different thing. The file holds
-no close for it, so it is unfinished, and an unfinished entry permits no
-successor — reopen that execution and it resumes where its records stop, and
-another entry can be submitted once it has settled.
+An entry interrupted before its root closed is a different thing, and there are
+two kinds of it.
+
+**Left unfinished.** Exit, EOF, a terminal failure and the command's own
+teardown end an entry without appending any outcome for it. The file holds no
+close, so the entry is unfinished, and an unfinished entry permits no successor
+— reopen that execution and it resumes where its records stop, without
+repeating the effects it already recorded, and another entry can be submitted
+once it has settled.
+
+**Stopped.** An explicit Entry Stop is the other kind, and it is final. The
+entry's own root retains a cancelled close before the entry is released, so the
+entry has an outcome and is settled: what it had already completed stands, what
+it had already printed stays where it was recorded, the retained exports it
+published are inherited exactly as a settled entry's are, and no answer,
+permission or result it was waiting on is invented for it. It is projected and
+never resumed — reopening that execution reads it and runs nothing — and a
+successor may be submitted once that terminal is retained **and** every
+resource the stopped entry held has been released. A stop whose append or
+cleanup failed is not a stop that succeeded: the session admits no successor
+after one.
 
 ### A history written before captures were retained
 
@@ -556,15 +573,25 @@ instead of being replaced.
 
 ## Sessions: two owners, and which conversation you are reading
 
-The Sessions surface shows the agent work this execution has, in two labelled
-sections: **Entry agents**, then **Sidekick**. Two, because the two histories
-are two files with two owners and no shared scheduling number — one interleaved
-list would have to claim an order neither file establishes. Each section keeps
-its own order, and an empty one says it holds no turns. A Sidekick history this
-version cannot read says why instead, because an empty section for a file that
-holds somebody's conversations is the one answer that cannot be corrected later.
-An execution with no Sidekick installation has one list and says so when it is
-empty.
+The **Sessions surface** shows the agent work this execution has, in two
+labelled sections: **Entry agents**, then **Sidekick**. Two, because the two
+histories are two files with two owners and no shared scheduling number — one
+*interleaved* list would have to claim an order neither file establishes. Each
+section keeps its own order, and an empty one says it holds no turns. A Sidekick
+history this version cannot read says why instead, because an empty section for a
+file that holds somebody's conversations is the one answer that cannot be
+corrected later. An execution with no Sidekick installation has one list and says
+so when it is empty.
+
+The **Transcript column** of the staged workspace — and its narrow outlet —
+shows the same work as **one displayed list**, with no section heading over
+either owner. That is what the person who accepted this screen asked for. It is a
+presentation and nothing more: the two owners keep their separate domains, each
+keeps its own recorded order, each row keeps its own destination, and every row
+says whose work it is and which conversation it was in. The two orders are shown
+one after the other and never interleaved, so this list still claims no order
+across the two files. Everything the sections say below about what each owner
+holds, what a row means and how a conversation filters is true of this list too.
 
 **Entry agents** shows every Agent turn the entries did, in one order: the turns
 the history retains, then the turns this process is watching, by the order they
@@ -598,19 +625,21 @@ never merged, whatever they have in common: they have different owners, so an
 equal provider conversation or an equal turn number leaves two rows.
 
 Conversations are the provider's own session keys, offered in Entry agents order
-and then Sidekick order, each section earliest-observed first and a duplicate
-key offered once. A queued turn belongs to none of them yet, and the name the
-document gave its `<Session>` is not an answer to which conversation a provider
-opened, so a turn without one appears under **All conversations** and nowhere
-else. A Sidekick turn's key is the one its own saved record names — a failed or
+and then Sidekick order, each owner earliest-observed first and a duplicate
+key offered once: above the Sessions surface's own list, and behind the **All
+sessions** selector at the head of the Transcript. A queued turn belongs to none of them yet, and the name the document
+gave its `<Session>` is not an answer to which conversation a provider opened, so
+a turn without one appears under **All sessions** and nowhere else. A Sidekick turn's key is the one its own saved record names — a failed or
 cancelled record included — and an earlier turn's key is never substituted for a
 later one's. The conversation a successful publication names belongs to its own
 live turn before anything is acknowledged, and it still does not make that turn
 saved.
 
-Selecting a conversation filters both sections and changes nothing else: the
+Selecting a conversation filters both owners' rows — both sections on the
+Sessions surface, the one list in the Transcript — and changes nothing else: the
 route gains a session and keeps its surface, its scopes and its history
-position. Clearing it back to All restores both whole. The Sidekick's facts are
+position, and the selected work, the Draft, the composer and focus stay where
+they were. Clearing it back to All restores both whole. The Sidekick's facts are
 applicable beside any entry position, because freezing a prefix freezes *entry*
 facts and a chat has no position in that history — so a Sidekick conversation
 can be selected where the frozen prefix contains no such conversation, while an
@@ -661,8 +690,8 @@ an absence of messages.
 Omitting the chat follows the current one. An explicit identifier pins the
 reading to that chat, and it has the usual controls only while it *is* the
 active association. Every other saved chat is read-only: no composer, no
-`[send]`, no `[retry]`, no Configure, no pending question and no `[stop]`
-addressing it, absent from the screen, its focus order and its target map
+`[send]`, no `[retry]`, no Configure, no pending question, no Follow, TODO or
+QUEUE and no `[stop]` addressing it, absent from the screen, its focus order and its target map
 rather than drawn and refused. A current-chat question or Configure drawer is
 hidden while an older chat is read and keeps every value already typed into it.
 Root actions still check the actual current conversation, so the selector can
@@ -734,8 +763,8 @@ the accent this screen uses for waiting, so the drawer you have to act on says s
 before you have read a word of it.
 
 The title, both window controls and `[close]` stay outside the thing they move,
-and the footer keeps its own seven rows — `[history]` and `[exit]` stay reachable
-from inside an open drawer, where they belong to that drawer.
+and the rows below the body stay where they are — `[history]` and `[exit]` stay
+reachable from inside an open drawer, where they belong to that drawer.
 
 A route drawer begins below the whole contextual guidance block, so the screen
 goes on saying how to close the drawer in front of it. The block is as many rows
@@ -1000,10 +1029,67 @@ selected entry, the conversation filter and the draft.
 
 | terminal | what it shows |
 | --- | --- |
-| `160x36` and larger | a Sessions/Entries sidebar, a Transcript pane and a Bindings pane — each with its own surface and the edge that starts it — the drawer layer, and a fixed full-width footer holding the contextual action row, five History rows and the draft |
-| `120x30` and larger | the same, with a narrower sidebar and inspection column |
-| `72x20` and larger | one routed surface — the one the route selected — under the two surface controls, with the same drawer and footer |
+| `160x36` and larger | an identity row; three columns — the Transcript of agent work, the selected work with its own Draft, and Bindings/Sidekick — each with its own surface and the divider that starts it; the drawer layer; then one compact History row and one row of guidance |
+| `120x30` and larger | the same three columns, narrower |
+| `72x20` and larger | one routed surface — the one the route selected — under the two surface controls, with the same drawer, History and guidance |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
+
+The **Transcript** on the left is the agent work this execution has, read as
+requests and replies, as **one list**: the entry agents' turns and the
+Sidekick's in the same list, neither of them under a heading of its own. Each
+row says whose work it is and which conversation it was in, which is how the two
+owners are told apart here — they keep their own authority and their own
+recorded order, and one displayed list does not merge their histories.
+
+The **All sessions** selector at its head is the filter for that list. It is a
+control: activating it shows the conversations this reading holds — the same
+choices [Sessions](#sessions-two-owners-and-which-conversation-you-are-reading)
+offers, each named by what the provider actually opened — and choosing one
+leaves only that conversation's rows, whichever owner did them. **All sessions**
+brings them all back. The choices are put away again by choosing one or by
+activating the selector a second time, and putting them away chooses nothing.
+
+The **selected work** in the centre names the entry and the scopes you are
+reading as breadcrumbs, with the way to the Entries catalog in front of them, and
+shows that entry's exact source, its execution state and its results. Every name
+in that trail except the last one is a way back out to it: the reading is already
+at the last, and choosing an outer name leaves the reading there with the scopes
+beneath it no longer selected — the same thing choosing that scope's row in the
+catalog does. Below it is
+the **Draft**: one field whose heading row carries its own Send — or Stop, while
+an entry is running — and whose value takes the rows beneath. The Draft is always
+the next entry's text, and a blank row in it is a row.
+
+**Bindings** and **Sidekick** share the right column as two tabs. Above the
+Sidekick's composer, the trays this build offers sit on the left and the
+Sidekick's own Send — or Stop, while a Send is active — on the right.
+
+What a build offers there is what it has. **This build ships the layout and the
+two Stops, and offers neither the shared queue nor Follow**, so it draws no
+QUEUE tab and no Follow control: a tab a reader can select and find nothing
+behind, or a checkbox that changes nothing however it is drawn, is worse than no
+control at all. **TODO** is drawn, inactive, as the placeholder for the shared
+TODO (#901). The settings those deferred controls will carry are recorded in the
+delivery record rather than advertised on a screen that cannot honour them.
+
+When the queue ships, QUEUE lists the messages waiting behind the active
+exchange: each row shows where it came from, its text and an `X` whose
+accessible name is *Remove message*. Its place in the list is its order, so the
+rows carry no numbers and no routine acknowledgement. What you are typing in the
+composer is not one of them until you send it. How the queue admits, orders and
+holds those messages is the queue contract (#964).
+
+At `160x36` the first composition gives the columns 36, 66 and 58 cells, dividers
+included, the body 33 rows and the Draft four of the centre's. That geometry and
+the terminal adaptations it makes of the reference — cell rules for pixel edges,
+fixed-cell glyphs, origin colours converted to truecolor, and source wrapped at
+measured word boundaries rather than clipped — are under the Product Owner's image
+review. Until that review accepts an image they are not a regression target, and
+the `120x30` and `72x20` compositions follow it. This is the composition the
+running command draws: the Transcript of agent work, the selected work with its
+Draft, and the Bindings/Sidekick pane, under one identity row and above one
+compact History row and one row of directions. The earlier Sessions/Entries
+sidebar and seven-row footer are gone.
 
 Resizing the window is ordinary. Dragging a corner produces a stream of sizes,
 and each one redraws the screen for the size that is actually there: the
@@ -1039,66 +1125,40 @@ outside `[A-Za-z0-9-._~:@]` is percent-encoded, so a location can never contain
 the quote that would close it. Source text, provider output and
 an event's own origin are content and are shown as written, URLs included.
 
-The History band is five rows at every size: its own name and the head on the
-first, entry captions and which position is being read on the second, the tall
-marks of entries on the third, the rule itself on the fourth, and the short
-stems of everything else — with the head's own marker — on the fifth.
-
+History is one compact row at every size: its name, one mark for each entry in
+admission order, the head's own state, and the controls that are available now.
 It is a map of the whole recorded order, which is the one thing on this screen
-not read at the selected prefix. The positions after the selected one are
-where a reader can go next, so a rail that stopped at the selection would be a
-map of the part of the file they had already reached. What crosses is a marker
-and a kind per position, and nothing of what any of them holds.
+not read at the selected prefix. The positions after the selected one are where
+a reader can go next, so a map that stopped at the selection would be a map of
+the part of the file they had already reached. What crosses is a marker and a
+kind per position, and nothing of what any of them holds: an entry inside the
+selected prefix shows the outcome it had reached by then, and a later one shows
+only that it exists.
+
+An entry's mark is a way to go to that entry, not a checkpoint. Every exact
+retained position — an entry's and every minor one between them — is still
+reached through the History drawer, so a compact row never costs a reader a
+position, and `[live]` returns from any of them to the head. The selected
+position keeps its own surface and the head its own colour, so the two can sit
+side by side.
 
 The map and the content are one reading, taken from one acknowledged array and
 carried together through the frame. Nothing on this screen pairs a prefix with
-a rail the file no longer has: a record retained while the terminal is being
+a map the file no longer has: a record retained while the terminal is being
 measured changes the next reading, not half of this one. Where that reading
 cannot be built at all, because the file holds a record this process can no
-longer read, the whole screen is the refusal — not a rail standing beside a
+longer read, the whole screen is the refusal — not a map standing beside a
 prefix that still looks plausible.
 
-Where a mark goes is a proportion of the rail's measured columns: the first at
-the start, the last at the end, the rest evenly between, and a lone position
-where the head is. It says where something is in the order and nothing about
-when it happened. Two positions that land on one column are one *visual* group
-and stay two positions — the drawer offers each its own row, so a compact band
-never costs a reader an exact position. An entry keeps its tall mark and a
-minor position its stem even when they share a column.
-
-Everything the band reserves is measured. The right-hand caption is as wide as
-the widest head label and the selection caption together, identically for every
-head state, so a head changing from LIVE to SETTLING moves no mark and re-cuts
-no caption; only the count, the selection or the size can do that. Entry
-captions start one per entry, centred on its mark, and where two would touch
-the leftmost pair becomes the span it actually covers — `Entry 4–7`, never a
-number that is not there. A band that cannot fit its title and its head is the
-frame refusal that already recovers on resize, never a clip.
-
-The selection is amber above the rule and at its junction, with its place in
-the full order beside it; a live reading says `SELECTED · HEAD` instead and has
-no diamond. The head keeps its own colour below the rail's end, so a selection
-on that same column keeps its diamond above and the head its marker below. The
-rail is read, not operated: nothing on it is a control, and every position is
-reached through the drawer.
-
-The footer is seven rows at every size, in one order: the contextual status and
-action row, then the five History rows, then the draft. The draft owns the last of
-them, says `Draft:` so the row below a reading is not read as one more line of it,
-and shares it with nothing — so what a person is typing stays visible however many
-controls a state happens to offer. The drawer layer sits above the footer rather
-than across it, so a question and the draft are readable at once.
-
-The action row holds the controls that are available now, side by side, each as
-wide as its own label so a pointer on one reaches that one. Order is priority: a
-row too narrow for everything keeps the controls and shortens the sentence beside
-them, and a control that will not fit whole is not drawn at all rather than drawn
-half off the row. It is not there in any sense — not a cell, not something a
-pointer can reach, and not a stop Tab visits — because a control you can neither
-see nor hit is worse than one that is honestly absent. The controls it keeps are
-the first ones in that order, without exception: where a wide control will not
-fit, a narrower one after it is left out too, so the row you read at one size is
-a prefix of the row you read at a larger one and nothing moves under your hand.
+The contextual controls sit at the right of the History row, side by side, each
+as wide as its own label so a pointer on one reaches that one. Order is priority:
+a control that will not fit whole is not drawn at all rather than drawn half off
+the row. It is not there in any sense — not a cell, not something a pointer can
+reach, and not a stop Tab visits — because a control you can neither see nor hit
+is worse than one that is honestly absent. The controls it keeps are the first
+ones in that order, without exception: where a wide control will not fit, a
+narrower one after it is left out too, so the row you read at one size is a
+prefix of the row you read at a larger one and nothing moves under your hand.
 
 Every row says what it has room to say. A row is as wide as the region the frame
 measured for it, and so is its text: a name nobody bounded — a prompt, a root, a
@@ -1118,17 +1178,16 @@ described as though it had somewhere to be.
 
 A refusal of one action — a submission the entry ahead of it has not made room
 for, a navigation that selects nothing, a pause this process cannot perform —
-appears on that row beside the control that was refused, shortened with an
-ellipsis when the row is too narrow for all of it. It does not replace the
-screen.
+appears beside the control that was refused, shortened with an ellipsis when the
+row is too narrow for all of it. It does not replace the screen.
 
-Above whatever surface is showing, one row says how to operate what is in front
-of you: where typing goes, what Enter does on the control that has focus, that
-Tab and Shift+Tab move between controls, that a pointer does what Enter does, and
-how to close a drawer when one is open. It is read off what is mounted rather than
-fixed, so it never names an action this screen does not have — and when focus is on
-a control rather than a field it says how to get back to the draft, because that
-is the one moment a person's keystrokes reach nothing.
+The last row says how to operate what is in front of you: where typing goes,
+what Enter does on the control that has focus, that Tab and Shift+Tab move
+between controls, that a pointer does what Enter does, and how to close a drawer
+when one is open. It is read off what is mounted rather than fixed, so it never
+names an action this screen does not have — and when focus is on a control
+rather than a field it says how to get back to the draft, because that is the one
+moment a person's keystrokes reach nothing.
 
 ## What the screen says the execution is doing
 
@@ -1359,6 +1418,13 @@ status column are reserved first, from measurements rather than character
 counts, and the column is wide enough for every reading a badge can hold —
 including a cleanup wait, which says two things at once — so an element
 settling cannot reflow the document beside it.
+
+The Draft's value and a queued message are wrapped the same way. A queued
+message wraps between its origin and its `X`, and its continuation rows line up
+with its text: a wrapped row is the same message, never a new one, and the `X`
+stays one control on its first row. The reference this screen follows clips
+source and scrolls the Draft sideways; this screen does neither, because a clip
+hides somebody's source and a control nobody can see is not one to focus.
 
 A question's own read-only preview is measured the same way, at the width its
 drawer was given. A drawer row is one row, so a line left unwrapped has nowhere
@@ -1895,8 +1961,8 @@ nothing else: exactly the entries admitted by then, each with the outcome it had
 reached by then. It fills nothing from the live head: no live output, no waiting
 question, no pause capability, and it cannot open the question this process is
 asking. What it does not freeze is the draft, which is the next entry's and
-belongs to no position — it stays editable, and `[live]` brings it back to the
-head with the current catalog. Choosing a position from before the selected
+belongs to no position — it stays editable beneath the selected work, and
+`[live]` brings it back to the head with the current catalog. Choosing a position from before the selected
 entry was admitted clears that entry and the scopes beneath it rather than
 guessing another, and keeps the draft, the surface, the conversation filter and
 the position itself. Before the root closes, output this process has produced but the file has
@@ -2188,7 +2254,7 @@ The form is the same bounded form an entry's question is asked through — the
 complete message, the fields in their declared order, an enum's offered values,
 the conditional required markers, what the last attempt was told was wrong, and
 the control that submits — shown through one window inside the pane that owns it,
-above the unchanged seven-row footer. It covers that pane while it is open, so
+above the unchanged rows below the body. It covers that pane while it is open, so
 Stop comes with it: a question a reply is waiting on can be stopped from in
 front of it. The way out of the form is its own close, exactly as an entry's
 drawer is left before anything behind it can be reached.
@@ -2553,13 +2619,53 @@ answered. Its safe error retains that earlier answer as partial evidence. A
 preview, a successful first turn, idle state and a product verdict inside Output
 are distinct from the final exchange result.
 
-Stop ends the asking and nothing else. It cancels the generation in flight, the
-controls of the response being evaluated and the wait for an entry's outcome,
-and it stops any turn that would have followed — and it returns only once all of
+Follow is about execution, not scrolling: it decides whether a Sidekick Send
+goes on after the entry it submitted settles, and has nothing to do with whether
+a reading keeps its newest rows in view. **It is not in this build.** The
+continuation it governs ships with the shared queue, and until then no screen
+offers the choice and nothing watches an entry to start a turn after it. What
+follows describes the behaviour that delivery brings, and is the contract it is
+held to — not a description of what this command does today. When it ships it is
+on when the REPL starts, stays as you set it across rounds and navigation, and
+is not saved — the next REPL starts with it on again. Only an entry the Sidekick submitted during Send is a round;
+a Draft Send is not, and a round is one admitted entry rather than one provider
+turn. The evaluation the Sidekick invokes during Send creates and owns the
+continuation, so nothing else watches entries and starts turns.
+
+When that exact entry settles, and the current exchange and its cleanup have
+joined, the continuation gives the Sidekick the entry's actual outcome —
+completed, failed or interrupted, each its own — and its actual output, as two
+separate facts. The Submit answer is still the receipt described above; the
+output comes through the continuation, never through the receipt's wording. With
+Follow on, the next eligible queued message goes first and another autonomous
+round only after it, under the queue's own rules (#964); no origin is preferred
+and no held queue is restarted by it. Turning Follow off ends automatic
+continuation once the current round is over and does not interrupt that round.
+Fatal storage, disclosure and cleanup failures keep their outcome, feedback
+whose acceptance is unknown is never resent, and only explicit evaluated Output
+becomes the Sidekick's chat: the work associated with a message — its entry, its
+state and its output — is shown beside the conversation as work, not as
+something the Sidekick said.
+
+There are two Stops. The Draft's Stop is Entry Stop: it finishes the running
+entry as interrupted, retains that outcome, and joins the entry's cleanup before
+the next entry may be admitted. The stopped entry cannot be resumed as that
+entry; what it completed stands and what it printed stays partial. Its
+interrupted outcome reaches the Sidekick as the round's result, and Follow stays
+on. Leaving with Exit is different and keeps its recovery: an entry Exit leaves
+running stays unfinished, and reopening the history continues it.
+
+The Sidekick's Stop ends the asking and nothing else. It is there while a reply
+is generating and while the Sidekick's question is waiting, whether or not an
+entry is running. It ends the current Send and the continuation that Send would
+have made, leaves Follow on for the next Send you make, cancels the generation in
+flight, the controls of the response being evaluated and the wait for an entry's
+outcome, and it stops any turn that would have followed — and it returns only once all of
 that has come down, so nobody is told their Sidekick stopped while it is still
 writing to their history. Everything already done stands: the chat, the drafts,
 the records, and an entry that was admitted, which belongs to the session and
-runs on its own terms.
+runs on its own terms — and its later settlement starts nothing for the Send that
+was stopped.
 
 The boundary is the exact entry's durable admission, and nothing else stands in
 for it. A passed validation, a taken slot, a live session and an allocated task
@@ -2574,8 +2680,10 @@ starts no turn.
 
 A cancelled startup leaves nothing behind it — no admission, no terminal, no
 settlement, and no entry for a later reading to find. The slot it held is free,
-because there is no entry for anything to follow; an *entry* that was
-interrupted still occupies it. The Submit intent stands as what it is: a
+because there is no entry for anything to follow. An admitted entry holds the slot
+until it has an outcome and its cleanup has joined: one left unfinished by Exit
+or a lost process keeps holding it, and one finished by Entry Stop releases it
+once its interrupted outcome is retained and its cleanup has joined. The Submit intent stands as what it is: a
 reserved request whose result was never acknowledged, and no completion receipt
 is manufactured for it. The history is re-read before Stop
 answers, because the cycle was writing to it and its own reading never finished;

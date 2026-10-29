@@ -29,7 +29,7 @@ import type { Operation } from "effection";
 import { useIssueTrackerServer } from "../../../git/tests/support/issue-tracker-server.ts";
 import type { IssueTrackerServer } from "../../../git/tests/support/issue-tracker-server.ts";
 import { credential } from "../../../git/tests/support/issue-tracker-server.ts";
-import { allocate, showing, showingAcross } from "./pty.ts";
+import { allocate, settledEntry, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
 /**
@@ -221,7 +221,9 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     yield* second.type("\r");
     yield* showing(second, `Recorded issue: ${TRACKER}/issues/1`, ACT_MS);
     yield* click(second, "( ) continue");
-    yield* showing(second, "[ok] entry-1", ACT_MS);
+    // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
+    // Entries catalog, which this screen keeps in a drawer.
+    yield* settledEntry(second, 1, "ok", ACT_MS);
 
     // One new suffix effect, executed on the answer and nothing before it: the
     // issue is the one issue, with the mark it was filed under untouched.

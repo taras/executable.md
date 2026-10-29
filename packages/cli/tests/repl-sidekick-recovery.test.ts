@@ -78,6 +78,7 @@ import {
   click,
   focusDraft,
   operationGate,
+  settledEntry,
   shows,
   typing,
   useMountedRepl,
@@ -2188,12 +2189,12 @@ describe("Tier HI — a reopening reconciles against the acknowledged history", 
         yield* awaiting(repl.terminal, "the ordinary entry printing", (one) =>
           shows(one, "an ordinary entry"),
         );
-        // Settled, not merely printed: the catalog says so once the entry's
-        // outcome is in the journal, which is the boundary the reads below need.
-        const settledRow = `${row.entriesWhenFound.length + 1}. [ok]`;
-        yield* awaiting(repl.terminal, `the catalog showing ${settledRow}`, (one) =>
-          shows(one, settledRow),
-        );
+        // Settled, not merely printed: the boundary the reads below need is the
+        // entry's outcome being in the journal. Read from the History rail,
+        // which marks every entry this file holds with the state it reached —
+        // the catalog spells the same fact `[ok]`, and the catalog is a drawer
+        // nobody opened here.
+        yield* settledEntry(repl.terminal, row.entriesWhenFound.length + 1, "ok");
 
         // The successor took the next slot with its own source, the finding was
         // not written twice, and the reserved work was neither resubmitted nor
@@ -2605,9 +2606,10 @@ describe("975 — placement survives cold Submit reconciliation", () => {
       yield* scoped(function* () {
         const repl = yield* useMountedRepl({ host, location: coldLocation });
         yield* awaited("the second cold continuation", () => observed.length === 3);
-        yield* awaiting(repl.terminal, "the continued suffix", (one) =>
-          shows(one, "1. [ok] entry-1"),
-        );
+        // The reserved entry ran and settled here, read from the History rail.
+        // `1. [ok] entry-1` is a catalog row, and the catalog is a drawer
+        // nobody opened in this reading.
+        yield* settledEntry(repl.terminal, 1, "ok");
         expect(observed.at(-1)).toBe(where);
         expect(yield* until(readFile(join(where, "suffix.md"), "utf8"))).toBe("continued");
         expect(yield* cwd()).toBe(project);

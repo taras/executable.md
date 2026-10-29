@@ -64,6 +64,8 @@ import {
   screenOf,
   sendMessage,
   settled,
+  saidBySidekick,
+  saysAcross,
   shows,
   typing,
   useMountedRepl,
@@ -1497,7 +1499,10 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     yield* awaiting(repl.terminal, "the drawer over a working Sidekick", (one) =>
       shows(one, "[apply]"),
     );
-    expect(shows(repl.terminal, "already working")).toBe(true);
+    // Read across the column's rows: the drawer is the Sidekick's own pane, 30
+    // cells of interior at this size, and a sentence that long is wrapped prose
+    // there rather than one row.
+    expect(saysAcross(repl.terminal, "already working")).toBe(true);
     yield* closing();
     // The drawer is gone, the turn is not: nothing stopped it, and it finishes
     // on its own when the provider is released.
@@ -2364,6 +2369,237 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     const read = yield* mountedReading(repl);
     expect(read.model.entries).toHaveLength(1);
     expect(read.model.entries[0]?.terminal?.output).toContain(ANSWERED);
-    expect(shows(repl.terminal, `${OTHER_MOUNTED_AGENT}: Sidekick here.`)).toBe(true);
+    // Read by the attribution mark this pane spells its origins with: the
+    // staged chat is one list of utterances, so who said a row is a mark in
+    // front of it rather than a name prefix inside the words.
+    expect(saidBySidekick(repl.terminal, "Sidekick here.")).toBe(true);
+  });
+});
+
+/**
+ * Configure's notices, fitted to the drawer that has to hold them.
+ *
+ * A drawer row is one row, and a notice is a sentence somebody has to be able
+ * to read. What decides how many rows it takes is the engine, at the interior
+ * this frame measured and on the original graphemes — not a count of code
+ * units in a builder that has never seen a cell. Measured before this root
+ * existed: a seventy-character ASCII token inside a thirty-cell drawer was
+ * drawn as nothing at all, and twelve spaced CJK words came back as one
+ * forty-eight cell row in the same thirty.
+ *
+ * The notice a person can actually produce here is the one about replacing an
+ * agent, because the name in it is theirs: it is typed into the drawer's own
+ * field, so these rows drive the width of a notice the way a person does.
+ */
+describe("Configure notice fitting", () => {
+  /** What the agent in these rows advertises, so the drawer has choices to draw. */
+  const ADVERTISED = {
+    model: {
+      selected: "balanced",
+      choices: [
+        { id: "balanced", name: "Balanced", description: "Even-handed." },
+        { id: "fast", name: "Fast", group: { id: "speed", name: "Speed" } },
+      ],
+    },
+    effort: {
+      balanced: { selected: "medium", choices: [{ id: "medium", name: "Medium" }] },
+      fast: {
+        selected: "low",
+        choices: [
+          { id: "low", name: "Low" },
+          { id: "high", name: "High" },
+        ],
+      },
+    },
+  } as const;
+
+  /** Open Configure the way a person does, and wait for the drawer. */
+  function* configure(repl: MountedRepl): Operation<void> {
+    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
+    yield* settled(60);
+    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+  }
+
+  /** Exactly what the drawer's agent field is holding, as its own row shows it. */
+  function agentField(repl: MountedRepl): string {
+    const row = screenOf(repl.terminal).find((line) => line.includes("Agent: "));
+    if (row === undefined) {
+      throw new Error("the drawer is drawing no agent field");
+    }
+    return row.slice(row.indexOf("Agent: ") + "Agent: ".length).trimEnd();
+  }
+
+  /** Replace the agent the drawer names, a character at a time. */
+  function* named(repl: MountedRepl, agent: string): Operation<void> {
+    yield* focusOn(repl.terminal, `> Agent: `);
+    // Cleared a keystroke at a time, which is how a person replaces a name, and
+    // waited for rather than counted: a grapheme is not a key, and a name made
+    // of wide and combining ones takes more presses than it has characters.
+    for (let press = 0; press < 200; press += 1) {
+      if (agentField(repl) === "") {
+        break;
+      }
+      repl.terminal.feed("\x7f");
+      yield* settled(8);
+    }
+    if (agentField(repl) !== "") {
+      throw new Error(`the agent field would not clear: ${JSON.stringify(agentField(repl))}`);
+    }
+    yield* typing(repl.terminal, agent);
+    yield* settled(60);
+  }
+
+  /**
+   * The drawer's own rows, and where its rectangle begins and ends.
+   *
+   * Read from the rule it draws across its own top, which is the one row whose
+   * whole width is this drawer's. Everything the drawer draws is inside that
+   * rectangle, so a row of it reaching past the rule is a row written over the
+   * pane behind.
+   */
+  function drawerRows(repl: MountedRepl): { from: number; to: number; rows: string[] } {
+    const screen = screenOf(repl.terminal);
+    const at = screen.findIndex((line) => /\u2500{10,}/.test(line));
+    if (at === -1) {
+      throw new Error(`the drawer is not on this screen: ${JSON.stringify(screen)}`);
+    }
+    const rule = screen[at] ?? "";
+    const from = rule.indexOf("\u2500");
+    const to = rule.lastIndexOf("\u2500") + 1;
+    return {
+      from,
+      to,
+      rows: screen.slice(at + 1).map((line) => line.slice(from, to).trimEnd()),
+    };
+  }
+
+  /** Whether this notice's whole text is recoverable from the drawer's rows. */
+  function saysWhole(repl: MountedRepl, text: string): boolean {
+    const bare = (one: string): string => one.replace(/\s+/g, "");
+    const { rows } = drawerRows(repl);
+    const wanted = bare(text);
+    return rows.some((_, at) => bare(rows.slice(at, at + 8).join("")).includes(wanted));
+  }
+
+  /** Wait until the replacement notice this name produces has been drawn. */
+  function* noticed(repl: MountedRepl, text: string): Operation<void> {
+    yield* awaiting(repl.terminal, "the replacement notice", () => saysWhole(repl, text));
+  }
+
+  it("the whole of a long unbroken token is drawn, inside the drawer's own rows", function* () {
+    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    repl.fake.configuration(ADVERTISED);
+    yield* sendMessage(repl, "hello");
+    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "[send]"));
+    yield* configure(repl);
+    // The drawer as it stands before any of this: its own way out, the way to
+    // apply a choice and the way to read the agent again.
+    expect(shows(repl.terminal, "[close]")).toBe(true);
+    expect(shows(repl.terminal, "[apply]")).toBe(true);
+    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+
+    // Seventy characters with nothing to break on, inside an interior of
+    // thirty: the notice has to be paid out over rows, and every one of its
+    // characters has to be on one of them.
+    const LONG = "x".repeat(70);
+    yield* named(repl, LONG);
+    yield* noticed(repl, `${LONG} has its own settings.`);
+
+    // And none of it is drawn outside the drawer. A row reaching past the
+    // drawer's own width is a row written over the pane behind it.
+    const { from, to, rows } = drawerRows(repl);
+    expect(to).toBeGreaterThan(from);
+    for (const row of rows) {
+      expect(row.length).toBeLessThanOrEqual(to - from);
+    }
+
+    // The way out and the way to read again are where they were, and a name
+    // this long has not moved them: fitting a sentence moves no control. Apply
+    // is deliberately not among them while a replacement is what it would do —
+    // that is this drawer's established semantics, not an effect of fitting.
+    expect(shows(repl.terminal, "[close]")).toBe(true);
+    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+    expect(shows(repl.terminal, "[start new conversation]")).toBe(true);
+  });
+
+  it("wide, combining and joined graphemes survive, and a shorter notice erases the longer", function* () {
+    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    repl.fake.configuration(ADVERTISED);
+    // One message first, so this conversation has an agent of its own: the
+    // notice these rows are about is the one that says a *replacement* would
+    // start another conversation, and there is nothing to replace until then.
+    yield* sendMessage(repl, "hello");
+    yield* awaiting(repl.terminal, "the first reply", (one) => shows(one, "[send]"));
+    yield* configure(repl);
+
+    // Twelve spaced wide words, a doubly combined letter and a joined emoji.
+    // Each is one grapheme that is not one cell, and none of them may be cut
+    // apart, dropped, or left behind when the notice that carries them goes.
+    const WIDE = `${"\u754c\u754c ".repeat(12).trim()} e\u0301\u0301 \u{1F469}\u200D\u{1F4BB}`;
+    yield* named(repl, WIDE);
+    // Recovered as the grid can hold it: a cell carries a base character, and
+    // the zero-width joiner and the combining marks are not cells of their own.
+    // Every wide word is there, in order, and so is the whole of the sentence
+    // the name is in — which is what the builder this replaced drew none of.
+    const DRAWN = `${"\u754c\u754c ".repeat(12).trim()} e \u{1F469}\u{1F4BB} has its own settings.`;
+    yield* noticed(repl, DRAWN);
+
+    // Paid out over the drawer's own rows rather than clipped to one: the
+    // builder this replaced gave a notice this long a single row.
+    const wide = drawerRows(repl);
+    expect(wide.rows.filter((row) => row.includes("\u754c")).length).toBeGreaterThan(1);
+    for (const row of wide.rows) {
+      expect(row.length).toBeLessThanOrEqual(wide.to - wide.from);
+    }
+    // Each cluster is whole where it is drawn, in the form the grid holds: the
+    // base character occupies its cells and the zero-width joiner and the
+    // combining marks occupy none of their own. `DRAWN` above is that form,
+    // and recovering the whole of it is this assertion.
+
+    // Replaced by a short name: every cell the long one occupied is blank or
+    // the new notice's, rather than a tail of the old one left underneath.
+    yield* named(repl, "ag");
+    yield* noticed(repl, "ag has its own settings.");
+    const after = drawerRows(repl);
+    expect(after.rows.filter((row) => row.includes("\u754c"))).toEqual([]);
+    expect(after.rows.filter((row) => row.includes("\u{1F469}"))).toEqual([]);
+
+    // Closing still chooses nothing: no preference was written by any of this.
+    yield* click(repl.terminal, "[close]", paneEnvelope(repl.terminal.size.columns));
+    yield* settled(60);
+    expect(shows(repl.terminal, "[apply]")).toBe(false);
+    expect(yield* savedPreference(repl)).toBe(undefined);
+  });
+
+  it("Backspace removes one grapheme, not one code point", function* () {
+    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    repl.fake.configuration(ADVERTISED);
+    yield* configure(repl);
+    yield* named(repl, "a");
+
+    // A letter under two combining marks and a joined emoji are each one thing
+    // on this screen and three code points underneath. One press takes one of
+    // them away whole. A reduction counting code points took the laptop off
+    // the woman and left her standing, and removed one accent from the letter
+    // and left the letter — so the row below each press is what discriminates.
+    //
+    // Read as the recorded grid holds them: a cell carries the base character,
+    // and the zero-width joiner and the combining marks are not cells of their
+    // own. What is compared is therefore the cluster being there and then
+    // being gone in one press, not the code points it is spelled with.
+    yield* focusOn(repl.terminal, `> Agent: `);
+    yield* typing(repl.terminal, "\u{1F469}\u200D\u{1F4BB}");
+    yield* settled(40);
+    expect(agentField(repl)).toBe("a\u{1F469}\u{1F4BB}");
+    repl.terminal.feed("\x7f");
+    yield* settled(40);
+    expect(agentField(repl)).toBe("a");
+
+    yield* typing(repl.terminal, "e\u0301\u0301");
+    yield* settled(40);
+    expect(agentField(repl)).toBe("ae");
+    repl.terminal.feed("\x7f");
+    yield* settled(40);
+    expect(agentField(repl)).toBe("a");
   });
 });

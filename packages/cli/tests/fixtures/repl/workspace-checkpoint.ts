@@ -1,0 +1,676 @@
+/**
+ * The one controlled reading the #971 staged workspace screen is reviewed at.
+ *
+ * Two entries run for real over one journal: the first settles `ok` with output
+ * of its own, and the second is truncated before its root closes, which is what
+ * a prefix read while an entry is running holds. Everything else is the inert
+ * view data a frame is handed — a live overlay, a Sidekick reading and the
+ * staged workspace presentation — so the screen is drawn by the production
+ * pipeline from facts rather than from a picture of one.
+ *
+ * Frozen: the same reading every time it is asked for, and no network, native
+ * Agent or filesystem effect is needed to build it.
+ */
+
+import { collect, inlineSource } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
+import { fileURLToPath } from "node:url";
+import type { Operation } from "effection";
+
+import { entryInitialBindings, projectRepl } from "../../../src/repl/model.ts";
+import type { ReplModel } from "../../../src/repl/model.ts";
+import { EntrySegmentStream } from "../../../src/repl/entries.ts";
+import { initialState, NO_AGENT, viewFor, withWorkspace } from "../../../src/repl/application.ts";
+import { readQuestionForm } from "../../../src/repl/elicitation.ts";
+import type { ReplQuestionForm } from "../../../src/repl/elicitation.ts";
+import type {
+  ReplLive,
+  ReplQueuedMessage,
+  ReplSidekickChatRow,
+  ReplSidekickReading,
+  ReplState,
+  ReplView,
+  ReplWorkspace,
+} from "../../../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../../../src/repl/lifecycle.ts";
+import { navigationOf } from "../../../src/repl/navigation.ts";
+import type { ReplTerminalSize } from "../../../src/repl/terminal.ts";
+import type { Observed, Presenter } from "./presentation.ts";
+
+/** The size the accepted checkpoint is reviewed at. */
+export const CHECKPOINT_SIZE: ReplTerminalSize = Object.freeze({ columns: 160, rows: 36 });
+
+/** The medium review size, whose staged proportions are a proposal. */
+export const CHECKPOINT_MEDIUM: ReplTerminalSize = Object.freeze({ columns: 120, rows: 30 });
+
+/** The narrow review size, which routes one outlet. */
+export const CHECKPOINT_NARROW: ReplTerminalSize = Object.freeze({ columns: 72, rows: 20 });
+
+/** One size below the narrow minimum, where the frame refuses and recovers. */
+export const CHECKPOINT_BELOW: ReplTerminalSize = Object.freeze({ columns: 71, rows: 19 });
+
+/** The three named review sizes, largest first. */
+export const CHECKPOINT_SIZES: readonly ReplTerminalSize[] = Object.freeze([
+  CHECKPOINT_SIZE,
+  CHECKPOINT_MEDIUM,
+  CHECKPOINT_NARROW,
+]);
+
+/** The execution the reading belongs to, which the identity row names. */
+export const CHECKPOINT_EXECUTION = "checkout-repair";
+
+/**
+ * Where the component the running entry invokes is read from.
+ *
+ * This directory: `Checklist.md` beside this file is an existing fixture
+ * component, so the nested scope the screen selects is admitted by a real
+ * import of a real file rather than by a record written by hand.
+ */
+const CHECKPOINT_DIRECTORY = fileURLToPath(new URL("./", import.meta.url));
+
+/** The completed entry: it binds a value and renders output of its own. */
+const COMPLETED = [
+  "```js eval",
+  'const subtotal = "40.00";',
+  'output("cart.total is now computed from subtotal and tax.");',
+  "```",
+  "",
+  "Subtotal: {subtotal}",
+  "",
+].join("\n");
+
+/**
+ * The running entry's exact source.
+ *
+ * It invokes one component, so the entry admits a nested scope the screen can
+ * select and show as a breadcrumb. One line is longer than the selected work's
+ * pane, so it wraps at a measured word boundary, and a run of spaces inside it
+ * must survive the reading.
+ */
+export const RUNNING_SOURCE = [
+  "# Review the checkout total",
+  "",
+  "```js eval",
+  'output("Reading checkout.md and architecture.md");',
+  "```",
+  "",
+  '<Checklist title="Checkout total" steps={3} />',
+  "",
+  "Compute the total once,    after the items are summed, so that checkout.md and cart.md can never disagree about what the customer pays.",
+  "",
+].join("\n");
+
+/** The line of {@link RUNNING_SOURCE} that must wrap, exactly as written. */
+export const WRAPPING_LINE =
+  "Compute the total once,    after the items are summed, so that checkout.md and cart.md can never disagree about what the customer pays.";
+
+/** The Draft: three rows of value, the middle one blank. */
+export const CHECKPOINT_DRAFT = [
+  "<Checkout cart={cart} />",
+  "",
+  '<PriceSummary items={cart.items} currency="USD" />',
+].join("\n");
+
+/** What is typed in the Sidekick's composer and has not been sent. */
+export const CHECKPOINT_MESSAGE = "Also say what an empty cart renders.";
+
+/** The staged workspace presentation the checkpoint shows. */
+export const CHECKPOINT_WORKSPACE: ReplWorkspace = Object.freeze({
+  // What this build offers: the inactive tray, no shared queue behind it and
+  // no Follow control over it. The populated queue this fixture used to stage —
+  // its three rows, their origins, the wrapping one, the queue tray and the
+  // Follow flag — is DQ0 and DF1 in `deferred-presentation.json`, with the
+  // commit and blob it can be read back from.
+  tray: "todo",
+  queued: Object.freeze([]),
+  work: Object.freeze([
+    Object.freeze({ message: "chat:response:1", entry: "entry-1" }),
+    Object.freeze({ message: "chat:response:2", entry: "entry-2" }),
+  ]),
+});
+
+/**
+ * The same staged screen, as this build actually offers it.
+ *
+ * The work rows and the conversation beside them are what a person is looking
+ * at today. The shared message queue is not: no tray for it, no rows in it and
+ * no Follow control over it, because this build has none of those and a screen
+ * that drew them would be drawing a promise. What left is recorded in
+ * `deferred-presentation.json` under DQ0 and DF1, with the fixture it came
+ * from.
+ */
+export const CHECKPOINT_CURRENT_WORKSPACE: ReplWorkspace = Object.freeze({
+  tray: "todo",
+  queued: Object.freeze([]),
+  // One row per entry this conversation admitted, which is where the four
+  // outcomes a reading can hold are read from.
+  work: Object.freeze([
+    Object.freeze({ message: "chat:response:1", entry: "entry-1" }),
+    Object.freeze({ message: "chat:response:1", entry: "entry-2" }),
+    Object.freeze({ message: "chat:response:2", entry: "entry-3" }),
+    Object.freeze({ message: "chat:response:2", entry: "entry-4" }),
+  ]),
+});
+
+const CONVERSATION = "chat";
+
+function person(turn: number, text: string, origin: ReplSidekickChatRow["origin"]) {
+  return Object.freeze({
+    key: `${CONVERSATION}:message:${turn}`,
+    conversation: CONVERSATION,
+    turn,
+    kind: "person" as const,
+    text,
+    hasOutput: false,
+    failure: undefined,
+    origin,
+  });
+}
+
+function reply(turn: number, text: string) {
+  return Object.freeze({
+    key: `${CONVERSATION}:response:${turn}`,
+    conversation: CONVERSATION,
+    turn,
+    kind: "reply" as const,
+    text,
+    hasOutput: true,
+    failure: undefined,
+  });
+}
+
+/**
+ * The Sidekick's reading: two exchanges, one from this screen and one from an
+ * attached client, each with explicit evaluated Output, and a Send still active.
+ */
+export const CHECKPOINT_SIDEKICK: ReplSidekickReading = Object.freeze({
+  agent: "claude",
+  busy: true,
+  refusal: undefined,
+  question: undefined,
+  requested: undefined,
+  verified: undefined,
+  conversation: CONVERSATION,
+  reading: CONVERSATION,
+  current: true,
+  availability: Object.freeze({
+    chats: Object.freeze([CONVERSATION]),
+    sessions: Object.freeze(["sess-sidekick-41ab"]),
+    refusal: undefined,
+  }),
+  chat: Object.freeze([
+    person(1, "Checkout fails: cart.total is not bound. Can you fix it?", { kind: "ui" }),
+    reply(
+      1,
+      "The API response has subtotal and tax but no total, so I computed it in checkout.md.",
+    ),
+    person(2, "Ask the Architect to review checkout.md before I merge.", {
+      kind: "acp",
+      attachment: "ci-bot",
+    }),
+    reply(2, "I started the Architect review and will say what it asks for."),
+  ]),
+  turns: Object.freeze([
+    Object.freeze({
+      key: "chat:turn:1",
+      conversation: CONVERSATION,
+      agent: "claude",
+      turn: 1,
+      title: "Checkout fails: cart.total is not bound. Can you fix it?",
+      state: "completed",
+      running: false,
+      failed: false,
+      sessionKey: "sess-sidekick-41ab",
+      text: "The API response has subtotal and tax but no total.",
+      failure: undefined,
+    }),
+    Object.freeze({
+      key: "chat:turn:2",
+      conversation: CONVERSATION,
+      agent: "claude",
+      turn: 2,
+      title: "Ask the Architect to review checkout.md before I merge.",
+      state: "waiting on Entry 2",
+      running: true,
+      failed: false,
+      sessionKey: "sess-sidekick-41ab",
+      text: "I started the Architect review.",
+      failure: undefined,
+    }),
+  ]),
+});
+
+/**
+ * This process running the second entry: partial output on the overlay and one
+ * entry agent turn streaming in its own provider conversation.
+ */
+export const CHECKPOINT_LIVE: ReplLive = Object.freeze({
+  output: "Reading checkout.md and architecture.md",
+  question: undefined,
+  expansion: "playing",
+  pausable: true,
+  running: true,
+  lifecycle: NO_LIFECYCLE,
+  sidekick: CHECKPOINT_SIDEKICK,
+  agent: Object.freeze({
+    ...NO_AGENT,
+    turns: Object.freeze([
+      Object.freeze({
+        key: "turn:architect:1",
+        entry: "entry-2",
+        prompt: "Review checkout.md against architecture.md and list each requested change.",
+        state: "active" as const,
+        text: "Reading checkout.md and architecture.md",
+        agent: "codex",
+        sessionKey: "sess-architect-7f2c",
+        agentSessionId: undefined,
+        status: undefined,
+        stopReason: undefined,
+        failure: undefined,
+      }),
+    ]),
+    slots: Object.freeze([
+      Object.freeze({
+        key: "turn:architect:1",
+        entry: "entry-2",
+        order: 1,
+        durable: undefined,
+        last: undefined,
+      }),
+    ]),
+  }),
+});
+
+function* runEntry(
+  physical: DurableStream,
+  source: string,
+  initialBindings: Readonly<Record<string, Json>> = {},
+): Operation<void> {
+  const view = new EntrySegmentStream(physical);
+  try {
+    const execution = yield* executeInstalled(
+      { ...inlineSource(source), stream: view, includes: [CHECKPOINT_DIRECTORY] },
+      [],
+      { initialBindings },
+    );
+    yield* collect(execution);
+  } catch {
+    // How far an entry got is the record the catalog reads.
+  }
+}
+
+function projected(events: readonly DurableEvent[], selection?: string): ReplModel {
+  const result = projectRepl(events, selection);
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+/**
+ * The journal this screen reads: a completed first entry, then a second that
+ * has not closed.
+ *
+ * The second runs whole in a stream of its own and is cut before its root's
+ * close, so its segment is exactly what a prefix read mid-run holds. Returned
+ * as events rather than as a model, because the same events are projected
+ * twice: once at the present, and once at a position somebody moved to.
+ */
+export function* checkpointEvents(): Operation<readonly DurableEvent[]> {
+  const physical = new InMemoryStream();
+  yield* runEntry(physical, COMPLETED);
+  const settled = yield* physical.readAll();
+  const running = new InMemoryStream([...settled]);
+  yield* runEntry(running, RUNNING_SOURCE, entryInitialBindings(projected(settled)));
+  const whole = yield* running.readAll();
+  const closes = whole
+    .map((event, at) => ({ event, at }))
+    .filter((one) => one.event.type === "close");
+  const last = closes[closes.length - 1];
+  if (last === undefined) {
+    throw new Error("this checkpoint journal closed nothing");
+  }
+  return Object.freeze(whole.slice(0, last.at));
+}
+
+export function* checkpointModel(): Operation<ReplModel> {
+  return projected(yield* checkpointEvents());
+}
+
+/**
+ * The same journal read at a position somebody moved to, and that position.
+ *
+ * A route may only name the position its model was projected at, so a reading
+ * of a retained position is a *different projection* of the same events rather
+ * than a marker set on the model of the present. This returns both halves of
+ * that pair, so a caller cannot hold one without the other.
+ *
+ * The position is the one where the selected entry's own nested scope was
+ * admitted: the reading this screen shows is that entry and that scope, so a
+ * prefix that stopped before the scope would be a reading of something else.
+ */
+/**
+ * A catalog with more entries in it than a window can show at once.
+ *
+ * Every one of them really ran: this is the same `runEntry` the rest of this
+ * fixture builds with, over a source small enough that a row of the catalog is
+ * all there is to say about it. What the count is for is the window — a
+ * catalog that fits needs no admission decision, and the measurement this
+ * feeds is about the one that does not.
+ */
+export function* checkpointCatalogModel(count: number): Operation<ReplModel> {
+  const physical = new InMemoryStream();
+  for (let at = 1; at <= count; at += 1) {
+    const settled = yield* physical.readAll();
+    yield* runEntry(
+      physical,
+      `# Entry ${at}\n\nThe ${at}\u202fth reading of this history.\n`,
+      settled.length === 0 ? {} : entryInitialBindings(projected(settled)),
+    );
+  }
+  return projected(yield* physical.readAll());
+}
+
+export function* checkpointSelected(): Operation<{
+  readonly model: ReplModel;
+  readonly at: string;
+}> {
+  const events = yield* checkpointEvents();
+  const head = projected(events);
+  const scope = head.checkpoints.filter((one) => one.kind === "scope").pop();
+  if (scope === undefined) {
+    throw new Error("this checkpoint journal retained no scope to read at");
+  }
+  return { model: projected(events, scope.marker), at: scope.marker };
+}
+
+/**
+ * The entry and the nested scope this screen selects, read from the model.
+ *
+ * The running entry and the first scope its own import admitted — real keys
+ * from the projected history, so a fixture that stopped admitting that scope
+ * fails here instead of quietly selecting the entry's root.
+ */
+export function checkpointScopes(model: ReplModel): readonly string[] {
+  const entry = model.entries[model.entries.length - 1];
+  if (entry === undefined) {
+    throw new Error("this checkpoint model admitted no entry");
+  }
+  const nested = entry.scope.scopes[0];
+  if (nested === undefined) {
+    // A reading whose final entry admitted none selects that entry alone. The
+    // accepted screen's entry does admit one, and its own case says so.
+    return Object.freeze([entry.key]);
+  }
+  return Object.freeze([entry.key, nested.key]);
+}
+
+/** How one checkpoint reading differs from the accepted 160x36 one. */
+export interface CheckpointOptions {
+  /**
+   * The exact state to read, where a caller is carrying one of its own.
+   *
+   * A resize journey supplies this: it seeds a reading once and then carries it
+   * from size to size, so what the screen keeps is a person's own reading
+   * rather than the default this fixture would build again.
+   */
+  readonly state?: ReplState;
+  /**
+   * The key the mounted tree already holds focus on, where it holds one.
+   *
+   * Supplied after the opening frame, so a later frame composes from the tree's
+   * own answer instead of letting the Draft take focus a second time.
+   */
+  readonly focused?: string;
+  readonly size?: ReplTerminalSize;
+  /** Which surface a narrow frame routes; wider frames show all three columns. */
+  readonly surface?: "sessions" | "entries";
+  /** Set to route a narrow outlet to the Sidekick, as `view=sidekick` does. */
+  readonly sidekick?: true;
+  /** A reading of its own, for the state and overflow screens. */
+  readonly model?: ReplModel;
+  readonly live?: ReplLive;
+  readonly workspace?: ReplWorkspace;
+}
+
+/**
+ * One entry that fails: its root closes `err` having recorded nothing to show.
+ *
+ * A schema outside the REPL's own form language, which is the refusal the
+ * existing style fixtures use for the same purpose.
+ */
+const FAILING = [
+  "# A refused question",
+  "",
+  '<Elicit schema={{ type: "number" }} as="answer">Outside the form language.</Elicit>',
+  "",
+].join("\n");
+
+/** One entry that was stopped part-way, and what it had done by then. */
+const STOPPED = [
+  "```js eval",
+  'output("Rounding tax once, after the items are summed.");',
+  "```",
+  "",
+].join("\n");
+
+/** Where the last root close of one journal is. */
+function lastClose(events: readonly DurableEvent[]): number {
+  const closes = events
+    .map((event, at) => ({ event, at }))
+    .filter((one) => one.event.type === "close");
+  const last = closes[closes.length - 1];
+  if (last === undefined) {
+    throw new Error("this journal holds no close");
+  }
+  return last.at;
+}
+
+/**
+ * Four entries whose outcomes are the four a reading can hold at once, with the
+ * fourth still running.
+ *
+ * Every one of them really executed. The third's root close is rewritten as a
+ * cancelled one — the shape an interrupted entry's record has, and the same
+ * rewrite the entries regressions use — because an entry that stopped is a
+ * record this screen must be able to read, not an execution a fixture can
+ * perform.
+ */
+export function* checkpointStateModel(): Operation<ReplModel> {
+  const first = new InMemoryStream();
+  yield* runEntry(first, COMPLETED);
+  const afterFirst = yield* first.readAll();
+
+  const second = new InMemoryStream([...afterFirst]);
+  yield* runEntry(second, FAILING, entryInitialBindings(projected(afterFirst)));
+  const afterSecond = yield* second.readAll();
+
+  const third = new InMemoryStream([...afterSecond]);
+  yield* runEntry(third, STOPPED, entryInitialBindings(projected(afterSecond)));
+  const ran = yield* third.readAll();
+  const stopped = ran.map((event, at) =>
+    at === lastClose(ran) ? { ...event, result: { status: "cancelled" as const } } : event,
+  );
+
+  const fourth = new InMemoryStream([...stopped]);
+  yield* runEntry(fourth, RUNNING_SOURCE, entryInitialBindings(projected(stopped)));
+  const whole = yield* fourth.readAll();
+  return projected(whole.slice(0, lastClose(whole)));
+}
+
+/** The schema this screen's question is asked through. */
+const QUESTION_SCHEMA: Json = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: ["rule"],
+  properties: Object.freeze({
+    rule: Object.freeze({ type: "string", title: "Rounding rule" }),
+  }),
+});
+
+/** The key the live question and the open form both name. */
+export const CHECKPOINT_QUESTION = "ask-1";
+
+/**
+ * The Sidekick's waiting question, as the product's own parser reads it.
+ *
+ * Compiled from the schema above through `readQuestionForm`, so the form this
+ * screen draws is one the REPL's form language actually supports — a form
+ * asserted into shape would draw fields the parser would have refused.
+ */
+export const CHECKPOINT_QUESTION_FORM: ReplQuestionForm = readQuestionForm(QUESTION_SCHEMA);
+
+/** The same Sidekick, with a question of its own waiting to be answered. */
+export const CHECKPOINT_ASKING: ReplLive = Object.freeze({
+  ...CHECKPOINT_LIVE,
+  sidekick: Object.freeze({
+    ...CHECKPOINT_SIDEKICK,
+    question: Object.freeze({
+      key: CHECKPOINT_QUESTION,
+      message: "Which rounding rule should the tax use?",
+      form: CHECKPOINT_QUESTION_FORM,
+    }),
+  }),
+});
+
+/**
+ * The same reading with its conversation held at one position.
+ *
+ * The chat ordinarily follows its newest rows, so a reader looking at an
+ * earlier outcome has stopped following: this is that reader's own state.
+ */
+export function chatAt(
+  model: ReplModel,
+  offset: number,
+  options: CheckpointOptions = {},
+): ReplState {
+  const base = checkpointState(model, { ...options, state: undefined });
+  const chat = CHECKPOINT_SIDEKICK.reading ?? "";
+  return Object.freeze({
+    ...base,
+    viewports: Object.freeze({
+      ...base.viewports,
+      sidekick: Object.freeze({ ...base.viewports.sidekick, [chat]: offset }),
+      sidekickFollowing: Object.freeze({ ...base.viewports.sidekickFollowing, [chat]: false }),
+    }),
+  });
+}
+
+/** The state the checkpoint reads: the nested scope selected, both texts typed. */
+export function checkpointState(model: ReplModel, options: CheckpointOptions = {}): ReplState {
+  if (options.state !== undefined) {
+    return options.state;
+  }
+  const base = initialState(CHECKPOINT_EXECUTION);
+  return Object.freeze({
+    ...base,
+    draft: CHECKPOINT_DRAFT,
+    message: CHECKPOINT_MESSAGE,
+    route: Object.freeze({
+      ...base.route,
+      right: "sidekick" as const,
+      surface: options.surface ?? base.route.surface,
+      ...(options.sidekick === true ? { view: "sidekick" as const } : {}),
+      scopes: checkpointScopes(model),
+    }),
+  });
+}
+
+/**
+ * The checkpoint view of one model, as the control named by `focused` holds it.
+ *
+ * `focused` is the key the *mounted tree* answered with, never a label chosen
+ * here: a view says which control the cue is drawn on, and the tree is what
+ * decides where a keystroke lands.
+ */
+export function checkpointViewOf(
+  model: ReplModel,
+  focused: string | undefined,
+  options: CheckpointOptions = {},
+): ReplView {
+  const resolved = viewFor(
+    checkpointState(model, options),
+    model,
+    options.live ?? CHECKPOINT_LIVE,
+    options.size ?? CHECKPOINT_SIZE,
+    focused,
+    navigationOf(model.checkpoints, "live"),
+  );
+  if (!resolved.ok) {
+    throw resolved.error;
+  }
+  return withWorkspace(resolved.value, options.workspace ?? CHECKPOINT_WORKSPACE);
+}
+
+/** One committed checkpoint screen, and the facts it was committed from. */
+export interface CheckpointFrame {
+  readonly model: ReplModel;
+  readonly view: ReplView;
+  /** The key the mounted tree holds focus on, as the tree answered. */
+  readonly focused: string | undefined;
+  readonly observed: Observed;
+}
+
+/**
+ * Commit the checkpoint screen, in the two frames the product itself takes.
+ *
+ * The first frame carries no focused key, so the Draft takes focus on its own
+ * exactly as it does when a command opens. The tree is then asked where focus
+ * actually ended up, and the frame under review is composed with that answer —
+ * so the cue drawn on the Draft is the cue of the control a keystroke reaches,
+ * rather than a label a fixture asserted into the view.
+ *
+ * One presenter, one tree and one grid throughout, because this renderer writes
+ * diffs: the screen is what the frames have left in the grid together.
+ */
+export function* commitCheckpoint(
+  presenter: Presenter,
+  options: CheckpointOptions = {},
+): Operation<CheckpointFrame> {
+  const model = options.model ?? (yield* checkpointModel());
+  // The opening frame, where the Draft's own claim takes focus — and only
+  // where nobody is carrying focus already. A caller resizing a screen passes
+  // the tree's current answer instead, because offering the opening claim again
+  // at every size would restore the Draft rather than keep what was focused.
+  if (options.focused === undefined) {
+    yield* presenter.commit(checkpointViewOf(model, undefined, options));
+  }
+  const node = presenter.tree.focused();
+  const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+  const view = checkpointViewOf(model, focused, options);
+  const observed = yield* presenter.commit(view);
+  return { model, view, focused, observed };
+}
+
+/**
+ * One reading a person has actually moved to, seeded once.
+ *
+ * The exact position the given model holds, the entry and nested scope
+ * selected under it, and texts neither composer started with — so a frame that
+ * rebuilt the default reading instead of carrying this one is visibly a
+ * different screen. Given a prefix projection, that position is a real
+ * retained marker; given the present, it is the present.
+ */
+export function seededState(model: ReplModel, options: CheckpointOptions = {}): ReplState {
+  const base = checkpointState(model, { ...options, state: undefined });
+  return Object.freeze({
+    ...base,
+    draft: SEEDED_DRAFT,
+    message: SEEDED_MESSAGE,
+    // The position this model was projected at, which is the only one
+    // resolution accepts: a route naming any other marker is refused until the
+    // prefix it names has been projected. So this is a retained position
+    // exactly when the model it is given is a projection of one —
+    // `checkpointSelected` returns that pair, and `checkpointModel` returns
+    // the present.
+    route: Object.freeze({ ...base.route, at: model.selection }),
+  });
+}
+
+/** The Draft text the seeded reading carries, which no default supplies. */
+export const SEEDED_DRAFT = "<Checkout cart={cart} coupon={coupon} />";
+
+/** The composer text the seeded reading carries. */
+export const SEEDED_MESSAGE = "And say what the coupon does to the total.";

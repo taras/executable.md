@@ -15,6 +15,7 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation, Result } from "effection";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
@@ -25,6 +26,11 @@ import { until } from "effection";
 
 import {
   activate,
+  catalogShowing,
+  closeCatalog,
+  marked,
+  openCatalog,
+  settledEntry,
   appendGate,
   awaited,
   awaiting,
@@ -39,7 +45,13 @@ import {
   focusFormValue,
   focusMessage,
   focusOn,
+  blockSays,
+  draftTextIn,
   MESSAGE_PROMPT,
+  saidByPerson,
+  saidBySidekick,
+  sidekickColumn,
+  sidekickPaneIn,
   messageRows,
   messageText,
   messageTextIn,
@@ -76,6 +88,23 @@ import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { agentReferenceEvents } from "./fixtures/repl/reference.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { usePresenter } from "./fixtures/repl/presentation.ts";
+import type { CheckpointFrame } from "./fixtures/repl/workspace-checkpoint.ts";
+import {
+  CHECKPOINT_ASKING,
+  CHECKPOINT_BELOW,
+  CHECKPOINT_MEDIUM,
+  CHECKPOINT_NARROW,
+  CHECKPOINT_QUESTION,
+  CHECKPOINT_QUESTION_FORM,
+  CHECKPOINT_SIZE,
+  checkpointModel,
+  checkpointSelected,
+  checkpointState,
+  commitCheckpoint,
+  SEEDED_DRAFT,
+  SEEDED_MESSAGE,
+  seededState,
+} from "./fixtures/repl/workspace-checkpoint.ts";
 import { runReplProgram, sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { projectSidekick, SAVED_WITHOUT_REPLY } from "../src/repl/sidekick/model.ts";
@@ -85,6 +114,8 @@ import {
   initialState,
   LATER,
   NO_AGENT,
+  presentedDrawer,
+  reduceRepl,
   SCROLL_DOWN,
   SCROLL_UP,
   viewFor,
@@ -93,9 +124,15 @@ import type {
   ReplLive,
   ReplSidekickChatRow,
   ReplSidekickReading,
+  ReplState,
 } from "../src/repl/application.ts";
+
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
-import { FOOTER_ROWS, inspectionWidth, NARROW, sidebarWidth } from "../src/repl/layout.ts";
+import {
+  NARROW,
+  workspaceConversationWidth,
+  workspaceTranscriptWidth,
+} from "../src/repl/layout.ts";
 import {
   ENTRIES_FILE,
   PAIRED_DIRECTORY,
@@ -137,6 +174,90 @@ function* held(root: string): Operation<string[]> {
   return found.sort();
 }
 
+/**
+ * The conversation pane's own rows at one size.
+ *
+ * Sliced to that column, because a row of a shared width crosses all three and
+ * a control found somewhere on one is usually a different control in a
+ * different column. A narrow frame routes one outlet, so where this reading is
+ * the routed one the pane *is* the frame — and the column slicer that reads a
+ * conversation beside its composer cannot help a read-only chat, which has no
+ * composer to find the column by.
+ */
+function conversationPane(rows: readonly string[], size: ReplTerminalSize): readonly string[] {
+  const width = workspaceConversationWidth(size);
+  return width === undefined ? rows : rows.map((line) => line.slice(size.columns - width));
+}
+
+/**
+ * How the staged panes spell their own two tabs.
+ *
+ * In capitals, which is what a reader sees. A row reaching for one by the name
+ * a person says it by is case-folded by {@link focusOn}; a row *reading* the
+ * screen is not, and found neither.
+ */
+const PANE_TABS = Object.freeze({ bindings: "BINDINGS", sidekick: "SIDEKICK" });
+
+/**
+ * Whether the Transcript is narrowed to one conversation, and to which.
+ *
+ * One list with the conversations as its filter says which one it is narrowed to
+ * on the selector itself — that is the control a person opened to choose it, and
+ * it names the choice afterwards. `All conversations (filtered)` is a row *of*
+ * the chooser, and choosing closes the chooser behind the choice, so it is not
+ * on the screen once a choice has been made.
+ *
+ * Matched against a prefix of the key, because the selector gives up columns
+ * for a name nothing in this product bounds: a provider's session key is longer
+ * than this column, so what it draws is as much of it as fits and an ellipsis.
+ */
+function filteredTo(terminal: Terminal, key: string): boolean {
+  const selector = sessionsColumn(terminal).find((line) => line.includes("\u25be"));
+  if (selector === undefined) {
+    return false;
+  }
+  for (let kept = key.length; kept >= 8; kept -= 1) {
+    const shown = kept === key.length ? key : `${key.slice(0, kept)}\u2026`;
+    if (selector.includes(shown)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Open the Transcript's conversation filter, the way a person does.
+ *
+ * One list with every conversation as its filter is the reading this screen was
+ * asked for, so the choices live behind the selector and are not on the screen
+ * while it is closed. Nothing is chosen by opening it.
+ */
+function* openFilter(terminal: Terminal): Operation<void> {
+  if (columnShows(sessionsColumn(terminal), "All conversations")) {
+    return;
+  }
+  yield* activate(terminal, "All sessions");
+  yield* awaiting(terminal, "the conversations being offered", (one) =>
+    columnShows(sessionsColumn(one), "All conversations"),
+  );
+}
+
+/**
+ * Whether the catalog marks this row as the one being read.
+ *
+ * Asked in the catalog, which is where that marker is. The selection is a
+ * standing fact about the reading and the catalog is a drawer over it, so this
+ * opens the drawer for the marker and puts it away again — and the drawer hands
+ * focus back to the control that opened it, which is why a row asking this asks
+ * it after whatever it has to say about focus.
+ */
+function* markedEntry(terminal: Terminal, label: string): Operation<boolean> {
+  yield* openCatalog(terminal);
+  const found = marked(terminal, label);
+  yield* closeCatalog(terminal);
+  return found;
+}
+
 describe("Tier MP — one Sidekick per command, acquired without working", () => {
   it("M1: a fresh command shows its Sidekick, asks the agent nothing, and still runs entries", function* () {
     const repl = yield* useMountedRepl();
@@ -145,12 +266,12 @@ describe("Tier MP — one Sidekick per command, acquired without working", () =>
     // drawn. Both tabs are named in that column's header either way, so the
     // reading is read from the pane rather than from the label.
     expect(panePresented(repl.terminal)).toBe("sidekick");
-    expect(shows(repl.terminal, "Bindings")).toBe(true);
+    expect(shows(repl.terminal, "BINDINGS")).toBe(true);
     // An execution nobody has said anything in.
     expect(shows(repl.terminal, "No messages yet.")).toBe(true);
     // And the box its messages go in, named so the row says which destination
     // it is.
-    expect(shows(repl.terminal, "Message Sidekick:")).toBe(true);
+    expect(shows(repl.terminal, MESSAGE_PROMPT.trim())).toBe(true);
     expect(shows(repl.terminal, "[send]")).toBe(true);
 
     // Acquiring it did no work: no runtime created, no session established, no
@@ -313,7 +434,10 @@ describe("Tier MP — the first explicit message is what upgrades the history", 
     expect(focusedField(repl.terminal, MESSAGE_PROMPT)).toBe(true);
     yield* typing(repl.terminal, "explain");
     expect(messageText(repl.terminal).includes("explain")).toBe(true);
-    yield* click(repl.terminal, "[send]");
+    // This screen has two Sends — the entry draft's and this composer's — so
+    // the column the Sidekick's own pane begins at is what names which one.
+    // Clicking the leftmost would submit a draft instead of sending a message.
+    yield* click(repl.terminal, "[send]", sidekickColumn(repl.terminal));
     yield* settled(120);
 
     // Nothing has been asked of the provider, because the history it would be
@@ -373,7 +497,7 @@ describe("Tier MP — the first explicit message is what upgrades the history", 
     expect(repl.fake.prompts[0]).not.toContain("explain!");
     // Saved once in the history too, and shown as the person's own message.
     expect(chatMessages(yield* readSidekickRecords(pair.sidekick))).toEqual(["explain"]);
-    expect(shows(repl.terminal, "you: explain")).toBe(true);
+    expect(saidByPerson(repl.terminal, "explain")).toBe(true);
 
     // And that same entry's later record reached the new file and no other: the
     // writer moved, and the object the running entry holds moved with it.
@@ -506,11 +630,15 @@ describe("Tier MP — a working Sidekick, and what reaches the screen while it w
     expect(repl.fake.prompts).toHaveLength(1);
     expect(chatMessages((yield* mountedReading(repl)).chat)).toEqual(["ask"]);
 
-    // Working, and the row beside the box says so. Send is gone — there is no
-    // admitted activation target for a second cycle — and Stop is there.
-    expect(shows(repl.terminal, `${MOUNTED_AGENT} is working...`)).toBe(true);
+    // Working, and the pane says so in its own status row. Send is gone —
+    // there is no admitted activation target for a second cycle — and Stop is
+    // there.
+    expect(saidBySidekick(repl.terminal, "working")).toBe(true);
     expect(shows(repl.terminal, "[stop]")).toBe(true);
-    expect(shows(repl.terminal, "[send]")).toBe(false);
+    // Asked of this pane rather than of the whole screen: the entry draft keeps
+    // its own Send beside it, and the two are two destinations with two
+    // controls. What must be gone is *this* pane's.
+    expect(rowsShow(paneColumn(repl.terminal), "[send]")).toBe(false);
 
     // And the box is still a box: somebody composing their next question while
     // a reply comes back is the ordinary case.
@@ -549,7 +677,7 @@ describe("Tier MP — a working Sidekick, and what reaches the screen while it w
     yield* awaiting(
       repl.terminal,
       "the acknowledged first reply arriving with no keystroke",
-      (one) => shows(one, `${MOUNTED_AGENT}: First answer.`),
+      (one) => saidBySidekick(one, `First answer.`),
     );
     expect(repl.terminal.fed).toBe(fed);
     // Still working, because the turn its read owes has not come back.
@@ -560,7 +688,7 @@ describe("Tier MP — a working Sidekick, and what reaches the screen while it w
 
     repl.fake.releaseTurn();
     yield* awaiting(repl.terminal, "the follow-up answering", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Second answer.`),
+      saidBySidekick(one, `Second answer.`),
     );
     expect(repl.fake.prompts).toHaveLength(2);
     expect(shows(repl.terminal, "[send]")).toBe(true);
@@ -617,21 +745,49 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
 
     for (const size of PROFILES) {
       const rows = yield* readingAt(repl.terminal, size);
-      const at = size.rows - FOOTER_ROWS;
       const drawn = rows();
 
-      // The footer is seven rows of this screen's own: the action row where
-      // this size puts it, and the draft on the last row of the frame.
-      expect(drawn[at] ?? "").toContain("[exit]");
-      expect(drawn[size.rows - 1] ?? "").toContain("Draft: ");
+      // The footer is this screen's own rows at the bottom of the frame: the
+      // way out is in that band wherever this size puts it, and the frame is
+      // exactly as tall as the size asked for.
+      expect(drawn.slice(footerRow(drawn)).some((line) => line.includes("[exit]"))).toBe(true);
       expect(drawn.length).toBe(size.rows);
 
-      // Both texts survived the resize, on both of their own rows.
-      expect(rowsShow(drawn, "Draft: note")).toBe(true);
+      // The Sidekick's own text is in the pane this route is reading, at every
+      // size — one body and one message box, not one per column.
       expect(messageTextIn(drawn).includes("ask")).toBe(true);
-      // One Sidekick body and one message box, not one per column.
-      expect(drawn.filter((line) => line.includes("Message Sidekick: ")).length).toBe(1);
-      expect(drawn.filter((line) => line.includes("[send]")).length).toBe(1);
+      expect(drawn.filter((line) => line.includes(MESSAGE_PROMPT)).length).toBe(1);
+      // And one Send in that pane. The entry draft keeps its own beside it —
+      // two destinations, two controls — so this counts the pane's rather than
+      // the screen's.
+      expect(sidekickPaneIn(drawn).filter((line) => line.includes("[send]")).length).toBe(1);
+
+      if (size.columns > NARROW.columns) {
+        // A shared width draws the selected work beside the chat, so the
+        // entry's own draft is there to read as well.
+        expect(blockSays(draftTextIn(drawn), "note")).toBe(true);
+        continue;
+      }
+      // A narrow frame routes one outlet, and this route is reading the
+      // Sidekick — so the draft is in no cell of it, which is not the same as
+      // lost. Going back to the entries is how a person reaches it, and it is
+      // still holding what they typed; then back here, where the chat's text is
+      // still holding too. Both are facts about the reading rather than about
+      // the frame, which is the whole of this row's claim.
+      expect(drawn.some((line) => line.includes(DRAFT_PROMPT))).toBe(false);
+      yield* openCatalog(repl.terminal);
+      yield* closeCatalog(repl.terminal);
+      yield* awaiting(repl.terminal, "the draft back on the narrow outlet", (one) =>
+        blockSays(draftTextIn(screenOf(one)), "note"),
+      );
+      // And the chat's own text is holding too, read where there is a column
+      // for it. Reaching the entries is what cleared the Sidekick route, and a
+      // narrow frame heads no shared column — so there is no tab on it to ask
+      // for that reading back with, which is the routing this size does rather
+      // than anything happening to the text.
+      const recovered = yield* readingAt(repl.terminal, PROFILES[0]);
+      expect(messageTextIn(recovered()).includes("ask")).toBe(true);
+      expect(blockSays(draftTextIn(recovered()), "note")).toBe(true);
     }
   });
 
@@ -650,10 +806,12 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
     yield* activate(repl.terminal, "Bindings");
     const onBindings = yield* readingAt(repl.terminal, repl.terminal.size);
     expect(paneShown(onBindings())).toBe("bindings");
-    expect(rowsShow(onBindings(), "Message Sidekick: ")).toBe(false);
-    expect(rowsShow(onBindings(), "[send]")).toBe(false);
+    expect(rowsShow(onBindings(), MESSAGE_PROMPT)).toBe(false);
+    // The pane's own Send, not the screen's: the entry draft is in a different
+    // column and keeps the control that belongs to it.
+    expect(rowsShow(paneColumn(repl.terminal), "[send]")).toBe(false);
     // The draft is still the draft, because it is not in that pane.
-    expect(rowsShow(onBindings(), "Draft: my entry")).toBe(true);
+    expect(blockSays(draftTextIn(onBindings()), "my entry")).toBe(true);
 
     // And going back brings the message with it: the text is process-local and
     // is not thrown away by looking at something else.
@@ -672,8 +830,11 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
     // Narrow routes one outlet, and with no explicit view it is Entries.
     const narrow = yield* resizeTo(repl.terminal, { columns: 72, rows: 20 });
     expect(rowsShow(narrow(), "Entries")).toBe(true);
-    expect(rowsShow(narrow(), "Message Sidekick: ")).toBe(false);
-    expect(rowsShow(narrow(), "[send]")).toBe(false);
+    expect(rowsShow(narrow(), MESSAGE_PROMPT)).toBe(false);
+    // The Sidekick's own Send is gone with its pane. The entry draft keeps the
+    // one that belongs to it — this outlet is the Draft's — so this asks about
+    // the pane that was routed away rather than about the screen.
+    expect(paneShown(narrow())).toBe("bindings");
 
     // Back out, and ask for the Sidekick explicitly. That is a route, so it
     // survives the shrink this time.
@@ -701,15 +862,21 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
     repl.terminal.bytes(new TextEncoder().encode(TWO_STEP_ENTRY));
     yield* settled(60);
     repl.terminal.feed("\r");
-    yield* awaiting(
-      repl.terminal,
-      "the first entry settling",
-      (one) => shows(one, "the released step") && shows(one, "[ok]"),
-    );
+    // Settled, read from the rail. The catalog's `[ok]` row is in a drawer
+    // nobody has opened, and what this needs is that the entry is done.
+    yield* awaiting(repl.terminal, "the released step", (one) => shows(one, "the released step"));
+    yield* settledEntry(repl.terminal, 1, "ok");
 
     // Selected, so the reading beside the catalog is that entry's own.
+    // Chosen in the catalog, which is where this screen keeps those rows: a
+    // drawer over the reading, opened to point at one, and the choice closes it.
+    yield* openCatalog(repl.terminal);
     yield* click(repl.terminal, "1.");
-    yield* awaiting(repl.terminal, "the first entry being selected", (one) => shows(one, "* 1."));
+    yield* awaiting(
+      repl.terminal,
+      "the catalog closing behind the choice",
+      (one) => !catalogShowing(one),
+    );
 
     // A reply that runs a second entry. The chat and the catalog both move;
     // the position somebody is reading does not.
@@ -733,11 +900,11 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
 
     yield* sendMessage(repl, "run two");
     yield* awaiting(repl.terminal, "the second entry being reported", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Both ran.`),
+      saidBySidekick(one, `Both ran.`),
     );
 
     // The catalog grew and the chat updated, and the selection is where it was.
-    expect(shows(repl.terminal, "* 1.")).toBe(true);
+    expect(yield* markedEntry(repl.terminal, "1.")).toBe(true);
     expect((yield* mountedReading(repl)).model.entries).toHaveLength(2);
     // The reading is still the first entry's: a current message does not move
     // somebody off the position they were reading.
@@ -750,16 +917,16 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
       "the inspector coming back",
       (one) => panePresented(one) === "bindings",
     );
-    expect(shows(repl.terminal, "* 1.")).toBe(true);
+    expect(yield* markedEntry(repl.terminal, "1.")).toBe(true);
     expect(shows(repl.terminal, "the released step")).toBe(true);
-    expect(shows(repl.terminal, "Message Sidekick: ")).toBe(false);
+    expect(shows(repl.terminal, MESSAGE_PROMPT)).toBe(false);
 
     // And back to the Sidekick, with the chat it had.
     yield* activate(repl.terminal, "Sidekick");
     yield* awaiting(repl.terminal, "the chat coming back", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Both ran.`),
+      saidBySidekick(one, `Both ran.`),
     );
-    expect(shows(repl.terminal, "you: run two")).toBe(true);
+    expect(saidByPerson(repl.terminal, "run two")).toBe(true);
   });
 
   it("M7: a terminal below the minimum refuses, and recovers with both texts", function* () {
@@ -779,12 +946,14 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
       rowsShow(replay(repl.terminal.presented.slice(from)), `${NARROW.columns}x`),
     );
     const refused = replay(repl.terminal.presented.slice(from));
-    expect(rowsShow(refused, "Message Sidekick: ")).toBe(false);
+    expect(rowsShow(refused, MESSAGE_PROMPT)).toBe(false);
+    // A refusal is the whole of its own screen: no control of any pane's is on
+    // it, the draft's own Send included.
     expect(rowsShow(refused, "[send]")).toBe(false);
 
     // And back: nothing about either text was a property of the frame.
     const recovered = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
-    expect(rowsShow(recovered(), "Draft: my entry")).toBe(true);
+    expect(blockSays(draftTextIn(recovered()), "my entry")).toBe(true);
     expect(messageTextIn(recovered()).includes("my question")).toBe(true);
   });
 });
@@ -955,9 +1124,16 @@ describe("Tier MQ — a Sidekick question announces itself and takes nothing ove
     repl.terminal.bytes(new TextEncoder().encode(TWO_STEP_ENTRY));
     yield* settled(60);
     repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the entry settling", (one) => shows(one, "[ok]"));
+    yield* settledEntry(repl.terminal, 1, "ok");
+    // Chosen in the catalog, which is where this screen keeps those rows: a
+    // drawer over the reading, opened to point at one, and the choice closes it.
+    yield* openCatalog(repl.terminal);
     yield* click(repl.terminal, "1.");
-    yield* awaiting(repl.terminal, "the entry being selected", (one) => shows(one, "* 1."));
+    yield* awaiting(
+      repl.terminal,
+      "the catalog closing behind the choice",
+      (one) => !catalogShowing(one),
+    );
 
     // Then the message that will ask, sent from the Sidekick's own box.
     yield* sendMessage(repl, "review it");
@@ -979,7 +1155,7 @@ describe("Tier MQ — a Sidekick question announces itself and takes nothing ove
     const fed = repl.terminal.fed;
     filing.release();
     yield* awaiting(repl.terminal, "the question announcing itself with no keystroke", (one) =>
-      shows(one, "Sidekick (question)"),
+      shows(one, `${PANE_TABS.sidekick} (question)`),
     );
     expect(repl.terminal.fed).toBe(fed);
 
@@ -989,7 +1165,7 @@ describe("Tier MQ — a Sidekick question announces itself and takes nothing ove
     expect(panePresented(repl.terminal)).toBe("bindings");
     expect(focusedField(repl.terminal, DRAFT_PROMPT)).toBe(true);
     expect(draftText(repl.terminal)).toBe("mine");
-    expect(shows(repl.terminal, "* 1.")).toBe(true);
+    expect(yield* markedEntry(repl.terminal, "1.")).toBe(true);
     // And no form is open: arrival opens no drawer.
     expect(shows(repl.terminal, "[submit]")).toBe(false);
 
@@ -997,7 +1173,7 @@ describe("Tier MQ — a Sidekick question announces itself and takes nothing ove
     // nothing — opening is a separate deliberate act.
     yield* activate(repl.terminal, "Sidekick");
     yield* awaiting(repl.terminal, "the notice in the pane", (one) =>
-      shows(one, `${MOUNTED_AGENT} has a question.`),
+      shows(one, "[answer sidekick]"),
     );
     expect(shows(repl.terminal, "[answer sidekick]")).toBe(true);
     expect(shows(repl.terminal, "[submit]")).toBe(false);
@@ -1073,13 +1249,14 @@ const EARLIER_CONTROL = "[\u2191 earlier]";
 
 /** The outer envelope of the pane that owns the Sidekick's form, by width. */
 function paneEnvelope(columns: number): number {
-  // From the accepted table rather than asked of the product: the space after
-  // the sidebar is shared equally and the spare cell of an odd remainder goes
-  // to the Transcript, so the right column begins at 96 of 160 and 74 of 120.
+  // From the accepted table rather than asked of the product: the staged screen
+  // gives the Transcript 36 and the conversation 58 of 160 and 32 of 120, so the
+  // right column begins at 102 and at 88. A narrow frame routes one outlet and
+  // has no column of its own to begin.
   if (columns >= 160) {
-    return 96;
+    return 102;
   }
-  return columns >= 120 ? 74 : 0;
+  return columns >= 120 ? 88 : 0;
 }
 
 /** Where on the screen this text starts, or a failure saying it is not there. */
@@ -1104,8 +1281,11 @@ describe("Tier MQ — the question form lives in the pane that owns it", () => {
     yield* focusMessage(repl.terminal);
     yield* typing(repl.terminal, "later");
 
+    // The notice this screen gives: the control that opens the question, in the
+    // pane that owns it. The prose that named the agent belongs to the screen
+    // this one replaced.
     yield* awaiting(repl.terminal, "the question announcing itself", (one) =>
-      shows(one, `${MOUNTED_AGENT} has a question.`),
+      shows(one, "[answer sidekick]"),
     );
     yield* click(repl.terminal, "[answer sidekick]");
     yield* awaiting(repl.terminal, "the form opening", (one) => shows(one, "Fill this in."));
@@ -1152,16 +1332,27 @@ describe("Tier MQ — the question form lives in the pane that owns it", () => {
         const at = columnOf(repl.terminal, label, envelope);
         expect(at.column).toBeGreaterThanOrEqual(envelope);
         expect(at.column).toBeLessThan(size.columns);
-        // Above the footer's seven rows, which the form never covers.
-        expect(at.row).toBeLessThanOrEqual(size.rows - FOOTER_ROWS - 1);
+        // Above this screen's own footer, which the form never covers. Read
+        // from the row the way out is actually drawn on rather than from a
+        // count: how many rows a footer takes is the layout's, and what this
+        // asserts is that the drawer stays off it.
+        expect(at.row).toBeLessThan(footerRow(drawn));
       }
-      // The footer is still the footer, and the draft still the draft.
+      // The footer is still the footer.
       expect(rowsShow(drawn, "[exit]")).toBe(true);
-      expect(rowsShow(drawn, "Draft: mine")).toBe(true);
       // No entry form is drawn beside it: one question drawer at a time.
       expect(drawn.filter((line) => line.includes("[close]")).length).toBe(1);
       // What was typed is still in it.
       expect(rowsShow(drawn, "one: first")).toBe(true);
+      // And the draft is still the draft, read where it is drawn: a narrow
+      // frame routes one outlet, and this form belongs to the reading that has
+      // it — so the draft is in no cell there, which the resize below proves is
+      // not the same as lost.
+      if (size.columns > NARROW.columns) {
+        expect(blockSays(draftTextIn(drawn), "mine")).toBe(true);
+      } else {
+        expect(drawn.some((line) => line.includes(DRAFT_PROMPT))).toBe(false);
+      }
     }
 
     // Too small to draw: a refusal, and the form is not in it.
@@ -1184,7 +1375,7 @@ describe("Tier MQ — the question form lives in the pane that owns it", () => {
       shows(one, "Fill this in."),
     );
     expect(rowsShow(wide(), "one: first")).toBe(true);
-    expect(rowsShow(wide(), "Draft: mine")).toBe(true);
+    expect(blockSays(draftTextIn(wide()), "mine")).toBe(true);
 
     // The form holds focus while it is open, so the way out of this reading is
     // its own close — which is the same precedence the entry's drawer has.
@@ -1207,7 +1398,7 @@ describe("Tier MQ — the question form lives in the pane that owns it", () => {
 
     yield* activate(repl.terminal, "Sidekick");
     yield* awaiting(repl.terminal, "the notice still in the pane", (one) =>
-      shows(one, `${MOUNTED_AGENT} has a question.`),
+      shows(one, "[answer sidekick]"),
     );
     // Coming back selects the reading and nothing more: the form is not put
     // back on the screen by returning to the pane it was open in.
@@ -1247,10 +1438,13 @@ function* askedAndOpen(explicit: boolean): Operation<MountedRepl> {
   }
   // Traversal rather than activation in the default arm: activating the tab is
   // what would make this a route, and this arm is about the default reading.
-  yield* focusOn(repl.terminal, `> ${MESSAGE_PROMPT}`);
+  // The field's own helper, because a field is focused by its marker and its
+  // prompt together: this prompt begins with a space of its own, so composing
+  // one here would be spelling the row the screen does not draw.
+  yield* focusMessage(repl.terminal);
   expect(focusedField(repl.terminal, MESSAGE_PROMPT)).toBe(true);
   yield* typing(repl.terminal, "ask");
-  yield* click(repl.terminal, "[send]");
+  yield* click(repl.terminal, "[send]", sidekickColumn(repl.terminal));
   yield* awaiting(repl.terminal, "the question opener", (one) => shows(one, "[answer sidekick]"));
   yield* click(repl.terminal, "[answer sidekick]");
   yield* awaiting(repl.terminal, "the form opening", (one) => shows(one, "[submit]"));
@@ -1416,14 +1610,22 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
         const at = columnOf(repl.terminal, label, envelope);
         expect(at.column).toBeGreaterThanOrEqual(envelope);
         expect(at.column).toBeLessThan(size.columns);
-        expect(at.row).toBeLessThanOrEqual(size.rows - FOOTER_ROWS - 1);
+        expect(at.row).toBeLessThan(footerRow(drawn));
       }
       // One presented modal, and the footer still the footer.
       expect(drawn.filter((line) => line.includes("[close]")).length).toBe(1);
       expect(rowsShow(drawn, "[exit]")).toBe(true);
-      expect(rowsShow(drawn, "Draft: note")).toBe(true);
       // The chosen model survived the resize, and nothing was applied by it.
       expect(rowsShow(drawn, "(x) Fast")).toBe(true);
+      // And the draft is read where it is drawn. A narrow frame routes one
+      // outlet and Configure belongs to the pane this route is reading, so the
+      // draft is in no cell there — which the resize back below proves is not
+      // the same as lost.
+      if (size.columns > NARROW.columns) {
+        expect(blockSays(draftTextIn(drawn), "note")).toBe(true);
+      } else {
+        expect(drawn.some((line) => line.includes(DRAFT_PROMPT))).toBe(false);
+      }
     }
 
     // Too small to draw: a refusal, and Configure is not in it.
@@ -1438,7 +1640,7 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
     const wide = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
     yield* awaiting(repl.terminal, "Configure coming back", (one) => shows(one, "[refresh]"));
     expect(rowsShow(wide(), "(x) Fast")).toBe(true);
-    expect(rowsShow(wide(), "Draft: note")).toBe(true);
+    expect(blockSays(draftTextIn(wide()), "note")).toBe(true);
   });
 
   it("CFG6: a choice below the drawer's window is reached by scrolling to it", function* () {
@@ -1446,7 +1648,11 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
     // More models than this drawer can draw at once. A real agent's list is
     // whatever it advertises, so the window has to be something a person can
     // move rather than a limit on what they may choose.
-    const many = Array.from({ length: 24 }, (_, at) => ({
+    // Sixty-four of them. A real agent's list is whatever it advertises, and
+    // the staged pane is taller than the one this row was written against —
+    // twenty-four of these now fit, and a window nothing overflows proves
+    // nothing about reaching past one.
+    const many = Array.from({ length: 64 }, (_, at) => ({
       id: `model-${at + 1}`,
       name: `Model ${at + 1}`,
     }));
@@ -1522,8 +1728,11 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
     yield* awaiting(repl.terminal, "Configure closing", (one) => !shows(one, "[refresh]"));
 
     yield* sendMessage(repl, "review it");
+    // The notice this screen gives: the control that opens the question, in the
+    // pane that owns it. The prose that named the agent belongs to the screen
+    // this one replaced.
     yield* awaiting(repl.terminal, "the question announcing itself", (one) =>
-      shows(one, `${MOUNTED_AGENT} has a question.`),
+      shows(one, "[answer sidekick]"),
     );
     yield* click(repl.terminal, "[answer sidekick]");
     yield* awaiting(repl.terminal, "the form opening", (one) => shows(one, "[submit]"));
@@ -1602,7 +1811,20 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
     yield* awaiting(repl.terminal, "the name being edited at this size", (one) =>
       shows(one, `Agent: ${MOUNTED_AGENT}-two`),
     );
-    expect(draftText(repl.terminal)).toBe("note");
+    // And the draft kept what is in it. Read where it is drawn, which takes two
+    // steps at this size: Configure owns the keyboard while it is open, so it
+    // is closed first, and then this frame's one outlet is routed back to the
+    // entries, which is the reading the draft belongs to.
+    expect(shows(repl.terminal, DRAFT_PROMPT)).toBe(false);
+    yield* click(repl.terminal, "[close]");
+    yield* awaiting(repl.terminal, "Configure closing", (one) => !shows(one, "[refresh]"));
+    yield* openCatalog(repl.terminal);
+    yield* closeCatalog(repl.terminal);
+    yield* awaiting(
+      repl.terminal,
+      "the draft back on the narrow outlet",
+      (one) => draftText(one) === "note",
+    );
   });
 
   it("CFG6: History over Configure closes once, and a hidden Configure takes no keys", function* () {
@@ -1701,7 +1923,11 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
   it("CX4: Configure says scroll, the readings around it still say earlier", function* () {
     // More models than the drawer draws at either size, so its window is real
     // and the controls below are the way through it.
-    const many = Array.from({ length: 24 }, (_, at) => ({
+    // Sixty-four of them. A real agent's list is whatever it advertises, and
+    // the staged pane is taller than the one this row was written against —
+    // twenty-four of these now fit, and a window nothing overflows proves
+    // nothing about reaching past one.
+    const many = Array.from({ length: 64 }, (_, at) => ({
       id: `model-${at + 1}`,
       name: `Model ${at + 1}`,
     }));
@@ -1774,8 +2000,8 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
 /** The wide size every row in this file drives the mounted program at. */
 const MOUNTED_SIZE: ReplTerminalSize = { columns: 160, rows: 36 };
 
-/** How wide the sidebar is at that size, which is where Sessions is. */
-const SIDEBAR_COLUMNS = sidebarWidth(MOUNTED_SIZE) ?? 0;
+/** How wide the Transcript column is at that size, which is where the list is. */
+const SIDEBAR_COLUMNS = workspaceTranscriptWidth(MOUNTED_SIZE) ?? 0;
 
 /**
  * The column the right pane begins at, at the wide size these rows drive.
@@ -1786,12 +2012,12 @@ const SIDEBAR_COLUMNS = sidebarWidth(MOUNTED_SIZE) ?? 0;
  * a wrong width belongs — a slicer that disagreed with the product would quietly
  * read the wrong pane instead of failing.
  */
-const INSPECTION_FROM = MOUNTED_SIZE.columns - (inspectionWidth(MOUNTED_SIZE) ?? 0);
+const INSPECTION_FROM = MOUNTED_SIZE.columns - (workspaceConversationWidth(MOUNTED_SIZE) ?? 0);
 
 /**
- * The Sessions reading, as the sidebar draws it.
+ * The Transcript of agent work, as its own column draws it.
  *
- * Sliced to the sidebar's own columns, because three columns write to the same
+ * Sliced to that column's own cells, because three columns write to the same
  * rows: a label found *somewhere* on a line is usually a different control in
  * a different pane. What a reader sees in this column is the prefix of each row
  * that fits in it.
@@ -1809,6 +2035,18 @@ function sessionsColumn(terminal: Terminal): string[] {
  * whether the message box is drawn at all — and its prompt ends in a space, so
  * a trimmed row would answer "no composer" for a pane that has one.
  */
+/**
+ * The row this screen draws its way out on, which is where its footer begins.
+ *
+ * Read from the screen rather than counted from a layout constant: how many
+ * rows a footer takes is the composition's business, and what a drawer has to
+ * respect is the band it actually drew.
+ */
+function footerRow(rows: readonly string[]): number {
+  const at = rows.findIndex((line) => line.includes("[exit]"));
+  return at === -1 ? rows.length : at;
+}
+
 function paneColumn(terminal: Terminal): string[] {
   return screenOf(terminal)
     .map((line) => line.slice(INSPECTION_FROM))
@@ -2023,24 +2261,21 @@ describe("Tier SS — Sessions shows two owners, each in its own order", () => {
     yield* sendMessage(repl, "ask side");
     yield* repl.fake.streamingTurns(1);
 
-    // Two labelled sections, in the one fixed order, each holding its own
-    // owner's work. The entry turn is in Entry agents and the Sidekick turn is
-    // in Sidekick, and neither list holds the other's row.
-    yield* awaiting(repl.terminal, "both sections holding their own turn", (one) => {
+    // One list, which is the reading the person who accepted this screen asked
+    // for, holding both owners' work. The headings over blocks of rows are
+    // gone, so whose work a row is is said on the row.
+    yield* awaiting(repl.terminal, "both owners' turns in the one list", (one) => {
       const rows = sessionsColumn(one);
-      return columnShows(rows, "Entry agents") && columnShows(rows, "ask side");
+      return columnShows(rows, "ask-entry") && columnShows(rows, "ask side");
     });
     const held = sessionsColumn(repl.terminal);
-    const entries = columnRow(held, "Entry agents");
-    const sidekick = columnRow(held, "Sidekick");
-    expect(entries).toBeGreaterThanOrEqual(0);
-    expect(sidekick).toBeGreaterThan(entries);
-    expect(columnRow(held, "ask-entry")).toBeGreaterThan(entries);
-    expect(columnRow(held, "ask-entry")).toBeLessThan(sidekick);
-    expect(columnRow(held, "ask side")).toBeGreaterThan(sidekick);
-    // The Sidekick row says whose work it is, which chat it is in and which
-    // agent answered there — never whichever agent happens to be selected.
-    expect(columnShows(held, `Sidekick · ${MOUNTED_AGENT}`)).toBe(true);
+    expect(columnShows(held, "Entry agents")).toBe(false);
+    expect(columnRow(held, "ask-entry")).toBeGreaterThanOrEqual(0);
+    expect(columnRow(held, "ask side")).toBeGreaterThanOrEqual(0);
+    // The Sidekick's row says which agent answered and in which conversation —
+    // never whichever agent happens to be selected. Read from the row, because
+    // one list of two owners' work has no other place to say it.
+    expect(columnShows(held, MOUNTED_AGENT)).toBe(true);
 
     // The later-started turn released first. Its evaluated reply is recorded
     // while the entry's turn is still generating, so the two owners settle in
@@ -2100,7 +2335,7 @@ describe("Tier SS — Sessions shows two owners, each in its own order", () => {
     // has nothing queued: from here the only thing that can put the follow-up
     // on the screen is the canonical boundary announcing that it began.
     yield* awaiting(repl.terminal, "the first reply arriving", (one) =>
-      shows(one, `${MOUNTED_AGENT}: First answer.`),
+      saidBySidekick(one, `First answer.`),
     );
     yield* repl.fake.holdingTurns(1);
     const fed = repl.terminal.fed;
@@ -2253,7 +2488,7 @@ describe("Tier SS — an older chat is read, and only read", () => {
       rowsShow(paneColumn(one), "Older answer."),
     );
     expect(rowsShow(paneColumn(repl.terminal), "Newer answer.")).toBe(false);
-    expect(rowsShow(paneColumn(repl.terminal), `${MOUNTED_AGENT}: Older answer.`)).toBe(true);
+    expect(rowsShow(paneColumn(repl.terminal), `[S] Older answer.`)).toBe(true);
 
     // Read-only, and absent rather than refused: no composer, no Send, no
     // Stop, no Configure and no Retry addressing it.
@@ -2291,7 +2526,10 @@ describe("Tier SS — an older chat is read, and only read", () => {
     repl.fake.script({ held: true, reply: "<Output>Arrived later.</Output>\n" });
     yield* focusMessage(repl.terminal);
     yield* typing(repl.terminal, "one more");
-    yield* click(repl.terminal, "[send]");
+    // This screen has two Sends — the entry draft's and this composer's — so
+    // the column the Sidekick's own pane begins at is what names which one.
+    // Clicking the leftmost would submit a draft instead of sending a message.
+    yield* click(repl.terminal, "[send]", sidekickColumn(repl.terminal));
     yield* repl.fake.holdingTurns(1);
 
     // Now read the older chat.
@@ -2331,8 +2569,11 @@ describe("Tier SS — an older chat is read, and only read", () => {
     repl.fake.script({ reply: askingReply("Approve the plan?") });
     repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
     yield* sendMessage(repl, "review it");
+    // The notice this screen gives: the control that opens the question, in the
+    // pane that owns it. The prose that named the agent belongs to the screen
+    // this one replaced.
     yield* awaiting(repl.terminal, "the question announcing itself", (one) =>
-      shows(one, `${OTHER_MOUNTED_AGENT} has a question.`),
+      shows(one, "[answer sidekick]"),
     );
     yield* click(repl.terminal, "[answer sidekick]");
     yield* awaiting(repl.terminal, "the form opening", (one) => shows(one, "Approve the plan?"));
@@ -2368,12 +2609,18 @@ describe("Tier SS — an older chat is read, and only read", () => {
       "decision: appr",
       "[submit]",
       "[answer sidekick]",
-      `${OTHER_MOUNTED_AGENT} has a question.`,
-      "[send]",
       MESSAGE_PROMPT,
-      "[stop]",
     ]) {
       expect([absent, shows(repl.terminal, absent)]).toEqual([absent, false]);
+    }
+    // The controls that would act on the chat are absent from the pane that
+    // reads it. Asked of that pane rather than of the screen: the entry draft
+    // has a Send and a Stop of its own in a different column, and a question
+    // about this chat's controls that found those would be about the wrong
+    // destination.
+    for (const absent of ["[send]", "[stop]"]) {
+      const inside = conversationPane(screenOf(repl.terminal), repl.terminal.size);
+      expect([absent, rowsShow(inside, absent)]).toEqual([absent, false]);
     }
 
     // And nothing is a target at the cell that control occupied: a press there
@@ -2425,7 +2672,10 @@ describe("Tier SS — an older chat is read, and only read", () => {
     });
     yield* focusMessage(repl.terminal);
     yield* typing(repl.terminal, "goes wrong");
-    yield* click(repl.terminal, "[send]");
+    // This screen has two Sends — the entry draft's and this composer's — so
+    // the column the Sidekick's own pane begins at is what names which one.
+    // Clicking the leftmost would submit a draft instead of sending a message.
+    yield* click(repl.terminal, "[send]", sidekickColumn(repl.terminal));
     yield* repl.fake.streamingTurns(1);
 
     // Read the older chat while that failure is in flight.
@@ -2455,9 +2705,28 @@ describe("Tier SS — an older chat is read, and only read", () => {
 
     // The current chat's live failure is not in this reading at all: what it
     // is saying belongs to the conversation it is in.
+    // Named by the message that started it, because the half it streamed was
+    // never evaluated and so is in no row of either reading.
+    expect(rowsShow(paneColumn(repl.terminal), "goes wrong")).toBe(false);
     expect(rowsShow(paneColumn(repl.terminal), "Current half.")).toBe(false);
     expect(rowsShow(paneColumn(repl.terminal), "Older answer.")).toBe(true);
-    expect(rowsShow(paneColumn(repl.terminal), "Older attempt.")).toBe(true);
+    // And this chat's own unfinished attempt is in it too. What the screen says
+    // about an attempt the provider stopped is that it is unfinished and why:
+    // the reply it had begun was never evaluated, so there is no output of it to
+    // show, and the row gives the stop reason rather than inventing one. The
+    // item itself is in `before` above, with an identity of its own.
+    expect(rowsShow(paneColumn(repl.terminal), "(unfinished)")).toBe(true);
+    expect(saysAcross(repl.terminal, "max_tokens")).toBe(true);
+    // What that window is showing now, kept: the failure below is compared
+    // against the reading somebody was actually looking at. The Sidekick's own
+    // working state is the pane's rather than this reading's — it legitimately
+    // stops saying so when the current turn ends — so it is not one of the rows
+    // being compared, and the exact items are compared as records above.
+    const reading = (rows: readonly string[]): readonly string[] =>
+      rows
+        .map((line) => line.replace(/^\s*\u2502/, "").trim())
+        .filter((line) => line !== "" && line !== "[S] working");
+    const looking = reading(paneColumn(repl.terminal));
 
     // Let it fail for real, still reading the older chat.
     repl.fake.releaseDeltas();
@@ -2468,14 +2737,21 @@ describe("Tier SS — an older chat is read, and only read", () => {
     // The older chat's items are exactly the items they were: the current
     // failure took none of their keys, replaced none of them and dropped none.
     expect(yield* olderRows()).toEqual(before);
-    expect(rowsShow(paneColumn(repl.terminal), "Older answer.")).toBe(true);
+    // And the window is still the window: row for row, the reading somebody was
+    // looking at is the reading they are still looking at.
+    expect(reading(paneColumn(repl.terminal))).toEqual(looking);
+    expect(rowsShow(paneColumn(repl.terminal), "goes wrong")).toBe(false);
     expect(rowsShow(paneColumn(repl.terminal), "Current half.")).toBe(false);
 
     // And the current chat's own account of it is there when somebody goes back.
     yield* click(repl.terminal, "[Back to current chat]");
     yield* awaiting(repl.terminal, "the current chat coming back", (one) =>
-      rowsShow(paneColumn(one), "Current half."),
+      rowsShow(paneColumn(one), "goes wrong"),
     );
+    // Its own account of what became of it: the provider stopped this turn, so
+    // the row says that and why. The half it had begun streaming was never
+    // evaluated, and this screen does not show an output nothing produced.
+    expect(saysAcross(repl.terminal, "refusal")).toBe(true);
   });
 });
 
@@ -2538,7 +2814,7 @@ describe("Tier SS — an older chat, from a frame that measures no chat", () => 
     // A real entry, selected, and a partial message left in the composer. Both
     // belong to this screen and neither belongs to the chat about to be read.
     yield* submitEntry(repl, promptEntry("kept-entry"));
-    yield* awaiting(repl.terminal, "the entry settling", (one) => shows(one, "[ok]"));
+    yield* settledEntry(repl.terminal, 1, "ok");
     yield* focusDraft(repl.terminal);
     yield* typing(repl.terminal, "my entry");
     yield* focusMessage(repl.terminal);
@@ -2659,7 +2935,7 @@ describe("Tier ER — a turn that said nothing, selected from Sessions", () => {
 
     // Both texts this screen owns, left partly typed, and a real entry selected.
     yield* submitEntry(repl, promptEntry("kept-entry"));
-    yield* awaiting(repl.terminal, "the entry settling", (one) => shows(one, "[ok]"));
+    yield* settledEntry(repl.terminal, 1, "ok");
     yield* focusDraft(repl.terminal);
     yield* typing(repl.terminal, "my entry");
     yield* focusMessage(repl.terminal);
@@ -2684,7 +2960,7 @@ describe("Tier ER — a turn that said nothing, selected from Sessions", () => {
     expect(columnShows(sessionsColumn(repl.terminal), "run it \u00b7 completed")).toBe(true);
     yield* clickAt(repl.terminal, sessionsCoordinate(repl.terminal, "run it "));
     yield* awaiting(repl.terminal, "the request that turn answered", (one) =>
-      columnShows(paneColumn(one), "you: run it"),
+      columnShows(paneColumn(one), "[U] run it"),
     );
     // The window moved to it. An older chat left to itself follows its newest
     // rows, so the newest reply being absent is what says this one was placed.
@@ -2693,7 +2969,11 @@ describe("Tier ER — a turn that said nothing, selected from Sessions", () => {
     // no empty row, no bare agent name and no sentence about the absence stands
     // between the two turns whose replies said nothing.
     const pane = paneColumn(repl.terminal);
-    expect(columnRow(pane, "you: say it")).toBe(columnRow(pane, "you: run it") + 1);
+    // Asked of the rows that say something. A blank row between items is this
+    // chat's own separator and stands between every pair of them, so counting
+    // it would be counting the chat's spacing as composed content.
+    const said = pane.filter((line) => line.replace(/^\s*\u2502/, "").trim() !== "");
+    expect(columnRow(said, "[U] say it")).toBe(columnRow(said, "[U] run it") + 1);
     expect(rowsShow(pane, "answered without saying")).toBe(false);
     expect(rowsShow(pane, "Nothing to add.")).toBe(false);
     // The chat being read is the one that holds that turn, and not the chat
@@ -2712,7 +2992,7 @@ describe("Tier ER — a turn that said nothing, selected from Sessions", () => {
     yield* reach("Automatic feedback")();
     yield* clickAt(repl.terminal, sessionsCoordinate(repl.terminal, "Automatic fee"));
     yield* awaiting(repl.terminal, "the request that chain began with", (one) =>
-      columnShows(paneColumn(one), "you: run it"),
+      columnShows(paneColumn(one), "[U] run it"),
     );
     expect(columnLacks(paneColumn(repl.terminal), "ANSWER-10")).toBe(true);
     expect(rowsShow(paneColumn(repl.terminal), "answered without saying")).toBe(false);
@@ -2826,13 +3106,13 @@ describe("Tier ER — a turn that said nothing, selected from Sessions", () => {
     yield* reach("run it \u00b7 completed")();
     yield* clickAt(again.terminal, sessionsCoordinate(again.terminal, "run it "));
     yield* awaiting(again.terminal, "the request that turn answered", (one) =>
-      columnShows(paneColumn(one), "you: run it"),
+      columnShows(paneColumn(one), "[U] run it"),
     );
     expect(columnLacks(paneColumn(again.terminal), "ANSWER-8")).toBe(true);
     yield* reach("Automatic feedback")();
     yield* clickAt(again.terminal, sessionsCoordinate(again.terminal, "Automatic fee"));
     yield* awaiting(again.terminal, "the request that chain began with", (one) =>
-      columnShows(paneColumn(one), "you: run it"),
+      columnShows(paneColumn(one), "[U] run it"),
     );
     expect(columnLacks(paneColumn(again.terminal), "ANSWER-8")).toBe(true);
     expect(rowsShow(paneColumn(again.terminal), "answered without saying")).toBe(false);
@@ -2868,9 +3148,7 @@ describe("Tier SS — a real gap, and a turn nothing answered", () => {
     repl = yield* useMountedRepl({ host, location: `xmd://repl/${execution}/entries` });
     repl.fake.script({ reply: "<Output>Saved reply.</Output>\n" });
     yield* sendMessage(repl, "saved ask");
-    yield* awaiting(repl.terminal, "the saved reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Saved reply.`),
-    );
+    yield* awaiting(repl.terminal, "the saved reply", (one) => saidBySidekick(one, `Saved reply.`));
     repl.fake.script({ reply: "<Output>Half said.</Output>\n", stopReason: "max_tokens" });
     yield* sendMessage(repl, "failed ask");
     yield* awaiting(repl.terminal, "the failed turn being accounted for", (one) =>
@@ -2970,11 +3248,16 @@ describe("Tier SS — a real gap, and a turn nothing answered", () => {
     // text, rejoined, is exactly the status.
     // The pane's rows without the column divider they begin at, so rejoining
     // them recovers the sentence rather than the rule beside it.
+    // And without the mark that says who said it. That mark is this pane's own
+    // attribution rather than a word of the sentence — asserted on its own
+    // below, because an anchor nobody is said to have written is a different
+    // claim from this one.
     const anchor = paneColumn(reopened.terminal).map((row) =>
-      (row.startsWith("\u2502") ? row.slice(1) : row).trim(),
+      (row.startsWith("\u2502") ? row.slice(1) : row).replace(/^\s*\[[US]\]\s/, "").trim(),
     );
     const opens = anchor.findIndex((row) => row.includes("Automatic feedback"));
     expect(opens).toBeGreaterThanOrEqual(0);
+    expect(saidBySidekick(reopened.terminal, "Automatic feedback")).toBe(true);
     expect(
       anchor
         .slice(opens, opens + 3)
@@ -3123,9 +3406,12 @@ describe("Tier SS — a copied location reopens the chat it named", () => {
     );
     expect(rowsShow(paneColumn(repl.terminal), "[Back to current chat]")).toBe(true);
 
-    // And the Entries surface, and back.
-    yield* activate(repl.terminal, "Entries");
-    yield* settled(40);
+    // And the Entries catalog, and back. Entries opens a drawer over the
+    // reading rather than routing to a column of its own, so it is put away
+    // before the pane beneath it is reached for — a modal owns the keyboard
+    // while it is up, and Tab through one would be Tab through a modal.
+    yield* openCatalog(repl.terminal);
+    yield* closeCatalog(repl.terminal);
     yield* activate(repl.terminal, "Sidekick");
     yield* awaiting(repl.terminal, "the chat coming back again", (one) =>
       rowsShow(paneColumn(one), "Only answer."),
@@ -3324,7 +3610,7 @@ describe("Tier SS — a copied location reopens the chat it named", () => {
       yield* sendMessage(repl, "only ask");
       yield* awaiting(repl.terminal, "the reply", (one) => shows(one, "Only answer."));
       yield* submitEntry(repl, TWO_STEP_ENTRY);
-      yield* awaiting(repl.terminal, "the entry settling", (one) => shows(one, "[ok]"));
+      yield* settledEntry(repl.terminal, 1, "ok");
       execution = yield* mountedExecution(repl);
       before = yield* pairBytes(host.root, execution);
       yield* click(repl.terminal, "[exit]");
@@ -3441,14 +3727,13 @@ function* stoppedBeforeAppend(stopped: boolean): Operation<void> {
     expect(appending.holding).toBe(true);
 
     // The key is offered and chosen while the turn is still unsaved.
+    yield* openFilter(repl.terminal);
     yield* awaiting(repl.terminal, "the live turn's conversation being offered", (one) =>
       sessionsColumn(one).some((line) => line.includes("xmd:v1:")),
     );
     const offered = sessionsColumn(repl.terminal).find((line) => line.includes("xmd:v1:"));
     yield* click(repl.terminal, (offered ?? "").trim());
-    yield* awaiting(repl.terminal, "the filter being applied", (one) =>
-      columnShows(sessionsColumn(one), "All conversations (filtered)"),
-    );
+    yield* awaiting(repl.terminal, "the filter being applied", (one) => filteredTo(one, observed));
 
     if (stopped) {
       // Stop, with that append's own operation still suspended. This is the
@@ -3500,7 +3785,7 @@ function* stoppedBeforeAppend(stopped: boolean): Operation<void> {
     // The filter the person selected is still a filter either way: the key was
     // genuinely observed by this process, so it does not become guessed
     // emptiness because nothing was saved under it.
-    expect(columnShows(sessionsColumn(repl.terminal), "All conversations (filtered)")).toBe(true);
+    expect(filteredTo(repl.terminal, observed)).toBe(true);
     expect(sessionsColumn(repl.terminal).some((line) => line.includes("xmd:v1:"))).toBe(true);
 
     execution = yield* mountedExecution(repl);
@@ -3520,7 +3805,7 @@ function* stoppedBeforeAppend(stopped: boolean): Operation<void> {
   } else {
     const reopened = yield* useMountedRepl({ host: cold, location });
     yield* awaiting(reopened.terminal, "the saved conversation filtering cold", (one) =>
-      columnShows(sessionsColumn(one), "All conversations (filtered)"),
+      filteredTo(one, observed),
     );
   }
   expect(cold.fake.created).toEqual([]);
@@ -3604,14 +3889,15 @@ describe("Tier SS — the filter both sections share", () => {
       focusedField(one, MESSAGE_PROMPT),
     );
     yield* typing(repl.terminal, "say it");
-    yield* click(repl.terminal, "[send]");
+    // This screen has two Sends — the entry draft's and this composer's — so
+    // the column the Sidekick's own pane begins at is what names which one.
+    // Clicking the leftmost would submit a draft instead of sending a message.
+    yield* click(repl.terminal, "[send]", sidekickColumn(repl.terminal));
     yield* appended.started();
 
     // The key its own publication named is offered as a filter, and the live
     // row it belongs to is shown under it — while that row is still unsaved.
-    yield* awaiting(repl.terminal, "the live turn's own conversation being offered", (one) =>
-      columnShows(sessionsColumn(one), "All conversations"),
-    );
+    yield* openFilter(repl.terminal);
     const offered = sessionsColumn(repl.terminal).find((line) => line.includes("xmd:v1:"));
     if (offered === undefined) {
       throw new Error(
@@ -3619,10 +3905,12 @@ describe("Tier SS — the filter both sections share", () => {
       );
     }
     const key = offered.trim();
+    // The row's own text is the key's headline, shortened to the column it is
+    // drawn in; the key itself is what the selector names afterwards.
+    const named = /xmd:v1:[0-9a-f:]+/.exec(offered)?.[0] ?? "";
+    expect(named).not.toBe("");
     yield* click(repl.terminal, key);
-    yield* awaiting(repl.terminal, "the filter being applied", (one) =>
-      columnShows(sessionsColumn(one), "All conversations (filtered)"),
-    );
+    yield* awaiting(repl.terminal, "the filter being applied", (one) => filteredTo(one, named));
     // The turn is still there under it: a key an exact publication established
     // is membership for its own live row, acknowledged or not.
     expect(columnShows(sessionsColumn(repl.terminal), "say it")).toBe(true);
@@ -3640,7 +3928,7 @@ describe("Tier SS — the filter both sections share", () => {
     // The filter the person selected is still a filter — the key was genuinely
     // observed, so it does not become guessed emptiness — and the conversation
     // is still offered.
-    expect(columnShows(sessionsColumn(repl.terminal), "All conversations (filtered)")).toBe(true);
+    expect(filteredTo(repl.terminal, named)).toBe(true);
     expect(sessionsColumn(repl.terminal).some((line) => line.includes("xmd:v1:"))).toBe(true);
   });
 
@@ -3668,7 +3956,7 @@ describe("Tier SS — the filter both sections share", () => {
       // One entry with no Agent work of its own, which settles and leaves a
       // recorded checkpoint behind it.
       yield* submitEntry(repl, TWO_STEP_ENTRY);
-      yield* awaiting(repl.terminal, "the first entry settling", (one) => shows(one, "[ok]"));
+      yield* settledEntry(repl.terminal, 1, "ok");
       const first = yield* mountedReading(repl);
       marker = first.model.checkpoints[first.model.checkpoints.length - 1]?.marker ?? "";
       expect(marker).not.toBe("");
@@ -3713,9 +4001,7 @@ describe("Tier SS — the filter both sections share", () => {
         `xmd://repl/${execution}/sessions?at=${encodeURIComponent(marker)}` +
         `&inspect&session=${encodeURIComponent(chatKey)}`,
     });
-    expect(columnShows(sessionsColumn(reopened.terminal), "All conversations (filtered)")).toBe(
-      true,
-    );
+    expect(filteredTo(reopened.terminal, chatKey)).toBe(true);
     expect(columnShows(sessionsColumn(reopened.terminal), "chat ask")).toBe(true);
     // The entry prefix really is frozen there: the entry whose turn carries
     // the other key was admitted after this position, so it is not in the
@@ -3749,7 +4035,10 @@ describe("Tier SS — what reaches the screen, and at every size", () => {
       focusedField(one, MESSAGE_PROMPT),
     );
     yield* typing(repl.terminal, "hold it");
-    yield* click(repl.terminal, "[send]");
+    // This screen has two Sends — the entry draft's and this composer's — so
+    // the column the Sidekick's own pane begins at is what names which one.
+    // Clicking the leftmost would submit a draft instead of sending a message.
+    yield* click(repl.terminal, "[send]", sidekickColumn(repl.terminal));
     yield* repl.fake.streamingTurns(1);
 
     // From here nothing is typed, clicked or submitted, and this is what says
@@ -3773,7 +4062,7 @@ describe("Tier SS — what reaches the screen, and at every size", () => {
       columnShows(sessionsColumn(one), "hold it · completed"),
     );
     expect(repl.terminal.fed).toBe(fed);
-    expect(shows(repl.terminal, `${MOUNTED_AGENT}: Half said.`)).toBe(true);
+    expect(saidBySidekick(repl.terminal, `Half said.`)).toBe(true);
   });
 
   it("SS7: a saved Prompt and a reply still being evaluated are two facts, unpressed", function* () {
@@ -3839,9 +4128,14 @@ describe("Tier SS — what reaches the screen, and at every size", () => {
       columnShows(sessionsColumn(one), "control-ask · completed, recorded"),
     );
     expect(repl.terminal.fed).toBe(fed);
-    // And it is in its own section, with nothing of the Sidekick's in it.
-    expect(columnShows(sessionsColumn(repl.terminal), "Entry agents")).toBe(true);
-    expect(columnShows(sessionsColumn(repl.terminal), "No Sidekick turns.")).toBe(true);
+    // One list, and this turn is the entry's own: the row says whose work it is
+    // and which conversation it was in, which is where that fact lives now —
+    // the headings over blocks of rows were taken away deliberately. Nothing of
+    // the Sidekick's is in it, because the Sidekick has done none.
+    const listed = sessionsColumn(repl.terminal);
+    expect(columnShows(listed, "Entry agents")).toBe(false);
+    expect(columnShows(listed, MOUNTED_AGENT)).toBe(true);
+    expect(columnCount(listed, "control-ask")).toBe(1);
   });
 
   it("SS7: three profiles keep a populated older reading, its window and the way home", function* () {
@@ -3900,25 +4194,40 @@ describe("Tier SS — what reaches the screen, and at every size", () => {
 
     for (const size of PROFILES) {
       const rows = yield* readingAt(repl.terminal, size);
-      // The footer keeps its own seven rows at every size.
-      expect((rows()[Math.max(0, size.rows - FOOTER_ROWS)] ?? "").includes("[exit]")).toBe(true);
-      // The entry draft is this screen's and survives every size.
-      expect(rowsShow(rows(), "Draft: my entry")).toBe(true);
-      // The chat being read is the older one, at the turn that was chosen, and
-      // the way home is reachable at every size that draws it.
+      // The way out is in the footer at every size, found by the row it is
+      // actually on. How many rows a footer takes is the composition's
+      // business, and this one says what it has to say in one compact History
+      // row and one of directions below it.
+      expect((rows()[footerRow(rows())] ?? "").includes("[exit]")).toBe(true);
+      // The chat being read is the older one, opened at the turn that was
+      // chosen — the window is placed on it rather than left at whichever end
+      // it happened to be — and the way home is reachable at every size.
       expect(rowsShow(rows(), `OLD-${TURNS}`)).toBe(true);
       expect(rowsShow(rows(), "[Back to current chat]")).toBe(true);
       // Read-only: no composer, no Send and no Configure for a chat nobody may
-      // continue — and so the partial message is not drawn either.
-      expect(rowsShow(rows(), "[send]")).toBe(false);
+      // continue — and so the partial message is not drawn either. Asked of
+      // that pane rather than of the screen: the entry draft has a Send of its
+      // own in a different column, and a question about this chat's controls
+      // that found that one would answer about the wrong destination.
+      expect(rowsShow(conversationPane(rows(), size), "[send]")).toBe(false);
       expect(rowsShow(rows(), `[configure `)).toBe(false);
       if (size.columns >= 120) {
-        // Both sections, and both window controls, where the frame has columns.
-        expect(rowsShow(rows(), "Entry agents")).toBe(true);
-        expect(rowsShow(rows(), "Sidekick")).toBe(true);
+        // The one Transcript list, the pane's own tab, and both window
+        // controls, where the frame has columns for them. Whose work a row is
+        // is said on the row — the headings over blocks of them are gone.
+        expect(rowsShow(rows(), "Entry agents")).toBe(false);
+        expect(rowsShow(rows(), "TRANSCRIPT")).toBe(true);
+        expect(rowsShow(rows(), PANE_TABS.sidekick)).toBe(true);
         expect(rowsShow(rows(), EARLIER)).toBe(true);
         expect(rowsShow(rows(), LATER)).toBe(true);
+        // The entry draft is this screen's and is drawn beside this reading.
+        expect(blockSays(draftTextIn(rows()), "my entry")).toBe(true);
+        continue;
       }
+      // A narrow frame routes one outlet and this route is reading the chat, so
+      // the draft is in no cell of it. It is read where it is drawn, which is
+      // what the widest size above has already done.
+      expect(rows().some((line) => line.includes(DRAFT_PROMPT))).toBe(false);
     }
 
     // Home again, at the widest size: the current chat, its controls and the
@@ -3944,19 +4253,38 @@ describe("Tier SS — what reaches the screen, and at every size", () => {
 
     for (const size of PROFILES) {
       const rows = yield* readingAt(repl.terminal, size);
-      // The footer keeps its own seven rows at every size.
-      expect((rows()[Math.max(0, size.rows - FOOTER_ROWS)] ?? "").includes("[exit]")).toBe(true);
-      // Both texts survive every size: neither is a property of the frame.
-      expect(rowsShow(rows(), "Draft: my entry")).toBe(true);
+      // The way out is in the footer at every size, found by the row it is
+      // actually on. How many rows a footer takes is the composition's
+      // business, and this one says what it has to say in one compact History
+      // row and one of directions below it.
+      expect((rows()[footerRow(rows())] ?? "").includes("[exit]")).toBe(true);
       if (size.columns >= 120) {
-        // Both sections and the Sessions window controls are where the frame
-        // places them, and the chat has its own window controls too.
-        expect(rowsShow(rows(), "Entry agents")).toBe(true);
-        expect(rowsShow(rows(), "Sidekick")).toBe(true);
+        // Both texts survive every size: neither is a property of the frame.
+        // Both are drawn here, each in its own destination's block, with the
+        // one Transcript list, the pane's own tab and the window controls where
+        // the frame places them — and no headings over blocks of rows, because
+        // whose work a row is is said on the row.
+        expect(blockSays(draftTextIn(rows()), "my entry")).toBe(true);
         expect(messageTextIn(rows()).includes("my q")).toBe(true);
+        expect(rowsShow(rows(), "Entry agents")).toBe(false);
+        expect(rowsShow(rows(), "TRANSCRIPT")).toBe(true);
+        expect(rowsShow(rows(), PANE_TABS.sidekick)).toBe(true);
         expect(rowsShow(rows(), EARLIER)).toBe(true);
         expect(rowsShow(rows(), LATER)).toBe(true);
+        continue;
       }
+      // A narrow frame routes one outlet, and the Sidekick is the one this
+      // reading asked for — so the chat's text is drawn and the draft is in no
+      // cell. Neither is lost: the draft is read by going back to the entries,
+      // which is the outlet that has it, and the chat is still holding its own
+      // when the frame is wide enough to draw both again.
+      expect(messageTextIn(rows()).includes("my q")).toBe(true);
+      expect(rows().some((line) => line.includes(DRAFT_PROMPT))).toBe(false);
+      yield* openCatalog(repl.terminal);
+      yield* closeCatalog(repl.terminal);
+      yield* awaiting(repl.terminal, "the draft back on the narrow outlet", (one) =>
+        blockSays(draftTextIn(screenOf(one)), "my entry"),
+      );
     }
 
     // Back at the widest size, read the older chat and prove the read-only
@@ -3974,7 +4302,7 @@ describe("Tier SS — what reaches the screen, and at every size", () => {
         // controls — and Back is reachable beside them, outside the window.
         expect(rowsShow(rows(), "[Back to current chat]")).toBe(true);
       }
-      expect((rows()[Math.max(0, size.rows - FOOTER_ROWS)] ?? "").includes("[exit]")).toBe(true);
+      expect((rows()[footerRow(rows())] ?? "").includes("[exit]")).toBe(true);
     }
   });
 });
@@ -4110,17 +4438,17 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     // The newest reply, with nothing pressed to bring it into view.
     const fed = repl.terminal.fed;
     yield* awaiting(repl.terminal, "the newest reply at 160x36", (one) =>
-      shows(one, `${MOUNTED_AGENT}: ANSWER-12`),
+      saidBySidekick(one, `ANSWER-12`),
     );
     expect(repl.terminal.fed).toBe(fed);
     // The first exchange has moved up out of the window, and that is following
     // rather than loss: it is still in the history that was just read.
-    expect(chatRows(repl.terminal)).not.toContain(`${MOUNTED_AGENT}: ANSWER-1`);
+    expect(chatRows(repl.terminal)).not.toContain(`[S] ANSWER-1`);
     expect(JSON.stringify(read.chat)).toContain("ANSWER-1");
 
     // The same at the medium size.
     const medium = yield* resizeTo(repl.terminal, { columns: 120, rows: 30 });
-    expect(rowsShow(medium(), `${MOUNTED_AGENT}: ANSWER-12`)).toBe(true);
+    expect(rowsShow(medium(), `[S] ANSWER-12`)).toBe(true);
 
     // And in the narrow outlet, asked for explicitly: a narrow frame has no
     // tab to activate, so the route is taken while there is one and survives
@@ -4130,20 +4458,20 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
       focusedField(one, MESSAGE_PROMPT),
     );
     const narrow = yield* resizeTo(repl.terminal, { columns: 72, rows: 20 });
-    expect(rowsShow(narrow(), `${MOUNTED_AGENT}: ANSWER-12`)).toBe(true);
+    expect(rowsShow(narrow(), `[S] ANSWER-12`)).toBe(true);
 
     // Back at the wide size, the earlier messages are reachable by the chat's
     // own control, which is what "they moved up" has to mean: they went up,
     // they did not go away.
     yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
     yield* awaiting(repl.terminal, "the wide chat again", (one) =>
-      rowsShow(paneColumn(one), `${MOUNTED_AGENT}: ANSWER-12`),
+      rowsShow(paneColumn(one), `[S] ANSWER-12`),
     );
     let reached = false;
     for (let press = 0; press < 40 && !reached; press += 1) {
       yield* clickAt(repl.terminal, paneCoordinate(repl.terminal, EARLIER_CONTROL));
       yield* settled(12);
-      reached = chatRows(repl.terminal).includes(`${MOUNTED_AGENT}: ANSWER-1`);
+      reached = chatRows(repl.terminal).includes(`[S] ANSWER-1`);
     }
     expect(reached).toBe(true);
   });
@@ -4168,7 +4496,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
       yield* sendMessage(repl, `old-${number}`);
     }
     yield* awaiting(repl.terminal, "the older chat's last reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: OLD-${each}`),
+      saidBySidekick(one, `OLD-${each}`),
     );
 
     yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
@@ -4187,7 +4515,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
       yield* sendMessage(repl, `new-${number}`);
     }
     yield* awaiting(repl.terminal, "the current chat's last reply", (one) =>
-      shows(one, `${OTHER_MOUNTED_AGENT}: NEW-${each}`),
+      saidBySidekick(one, `NEW-${each}`),
     );
   }
 
@@ -4209,19 +4537,19 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     yield* twoLongChats(repl, 10);
 
     // The current chat is at its tail, which is where following put it.
-    expect(chatRows(repl.terminal)).toContain(`${OTHER_MOUNTED_AGENT}: NEW-10`);
+    expect(chatRows(repl.terminal)).toContain(`[S] NEW-10`);
 
     // An older chat, opened read-only and then scrolled: a position taken in a
     // chat somebody is only reading.
     yield* readOlder(repl, "old-1 ");
     yield* awaiting(repl.terminal, "the older chat opening", (one) =>
-      rowsShow(paneColumn(one), `${MOUNTED_AGENT}: OLD-`),
+      rowsShow(paneColumn(one), `[S] OLD-`),
     );
     let moved = false;
     for (let press = 0; press < 40 && !moved; press += 1) {
       yield* clickAt(repl.terminal, paneCoordinate(repl.terminal, EARLIER_CONTROL));
       yield* settled(12);
-      moved = !chatRows(repl.terminal).includes(`${MOUNTED_AGENT}: OLD-10`);
+      moved = !chatRows(repl.terminal).includes(`[S] OLD-10`);
     }
     expect(moved).toBe(true);
 
@@ -4230,9 +4558,9 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     // somebody else's.
     yield* click(repl.terminal, "[Back to current chat]", 96);
     yield* awaiting(repl.terminal, "the current chat returning", (one) =>
-      rowsShow(paneColumn(one), `${OTHER_MOUNTED_AGENT}: NEW-`),
+      rowsShow(paneColumn(one), `[S] NEW-`),
     );
-    expect(chatRows(repl.terminal)).toContain(`${OTHER_MOUNTED_AGENT}: NEW-10`);
+    expect(chatRows(repl.terminal)).toContain(`[S] NEW-10`);
   });
 
   it("CF-P1: control — a deliberate current reading also survives the visit", function* () {
@@ -4244,7 +4572,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     for (let press = 0; press < 40 && !scrolled; press += 1) {
       yield* clickAt(repl.terminal, paneCoordinate(repl.terminal, EARLIER_CONTROL));
       yield* settled(12);
-      scrolled = !chatRows(repl.terminal).includes(`${OTHER_MOUNTED_AGENT}: NEW-10`);
+      scrolled = !chatRows(repl.terminal).includes(`[S] NEW-10`);
     }
     expect(scrolled).toBe(true);
     const held = chatBody(repl.terminal);
@@ -4253,11 +4581,11 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     // reading they return to, neither re-followed nor moved by the visit.
     yield* readOlder(repl, "old-1 ");
     yield* awaiting(repl.terminal, "the older chat opening", (one) =>
-      rowsShow(paneColumn(one), `${MOUNTED_AGENT}: OLD-`),
+      rowsShow(paneColumn(one), `[S] OLD-`),
     );
     yield* click(repl.terminal, "[Back to current chat]", 96);
     yield* awaiting(repl.terminal, "the current chat returning", (one) =>
-      rowsShow(paneColumn(one), `${OTHER_MOUNTED_AGENT}: NEW-`),
+      rowsShow(paneColumn(one), `[S] NEW-`),
     );
     expect(chatBody(repl.terminal)).toEqual(held);
   });
@@ -4308,7 +4636,21 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     // Released, it settles as the same item: one response, still showing its
     // own final row, with both composers exactly as they were left.
     repl.fake.releaseDeltas();
-    yield* awaiting(repl.terminal, "the evaluated reply settling", (one) => shows(one, "[send]"));
+    // The Sidekick's own control, in the Sidekick's own pane. This screen has
+    // two Sends — the entry draft's is beside its field and is there whatever
+    // the Sidekick is doing — so a `[send]` found anywhere says nothing about
+    // whether this turn has finished, and a row that waited on one went on to
+    // count a reply the provider had not acknowledged yet.
+    yield* awaiting(
+      repl.terminal,
+      "the Sidekick's own control going back to Send",
+      (one) =>
+        rowsShow(sidekickPaneIn(screenOf(one)), "[send]") &&
+        !rowsShow(sidekickPaneIn(screenOf(one)), "[stop]"),
+    );
+    // And the reply itself, acknowledged: the control coming back is the pane
+    // saying it is idle, and the record is what says the turn was kept.
+    yield* repliesSaved(repl, 1);
     const read = yield* mountedReading(repl);
     const responses = read.chat.filter((one) => one.kind === "response");
     expect(responses).toHaveLength(1);
@@ -4325,9 +4667,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
       repl.fake.script({ reply: `<Output>ANSWER-${number}</Output>\n` });
       yield* sendMessage(repl, `ask-${number}`);
     }
-    yield* awaiting(repl.terminal, "the newest reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: ANSWER-12`),
-    );
+    yield* awaiting(repl.terminal, "the newest reply", (one) => saidBySidekick(one, `ANSWER-12`));
 
     // Deliberately reading further back, until the newest reply is no longer
     // the one in view. Counted by what the pane holds rather than by presses:
@@ -4336,7 +4676,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     for (let press = 0; press < 40 && !scrolled; press += 1) {
       yield* clickAt(repl.terminal, paneCoordinate(repl.terminal, EARLIER_CONTROL));
       yield* settled(12);
-      scrolled = !chatRows(repl.terminal).includes(`${MOUNTED_AGENT}: ANSWER-12`);
+      scrolled = !chatRows(repl.terminal).includes(`[S] ANSWER-12`);
     }
     expect(scrolled).toBe(true);
     const held = chatRows(repl.terminal);
@@ -4352,7 +4692,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     // Saved, and this reading did not jump to it.
     const read = yield* mountedReading(repl);
     expect(JSON.stringify(read.chat)).toContain("ANSWER-13");
-    expect(chatRows(repl.terminal)).not.toContain(`${MOUNTED_AGENT}: ANSWER-13`);
+    expect(chatRows(repl.terminal)).not.toContain(`[S] ANSWER-13`);
     expect(chatRows(repl.terminal)).toEqual(held);
 
     // Reaching the end again resumes following, so the arrival after it is
@@ -4361,14 +4701,14 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     for (let press = 0; press < 60 && !back; press += 1) {
       yield* clickAt(repl.terminal, paneCoordinate(repl.terminal, LATER_CONTROL));
       yield* settled(12);
-      back = chatRows(repl.terminal).includes(`${MOUNTED_AGENT}: ANSWER-13`);
+      back = chatRows(repl.terminal).includes(`[S] ANSWER-13`);
     }
     expect(back).toBe(true);
 
     repl.fake.script({ reply: "<Output>ANSWER-14</Output>\n" });
     yield* sendMessage(repl, "ask-14");
     yield* awaiting(repl.terminal, "following having resumed", (one) =>
-      shows(one, `${MOUNTED_AGENT}: ANSWER-14`),
+      saidBySidekick(one, `ANSWER-14`),
     );
   });
 });
@@ -4393,7 +4733,11 @@ describe("Tier MC — the message composer wraps and grows", () => {
 
   /** How many rows of chat this frame is drawing, between its two controls. */
   function chatCapacity(terminal: Terminal): number {
-    const rows = paneColumn(terminal).map((line) =>
+    // The pane this size draws the chat in, which at a narrow frame is the
+    // routed outlet and so the whole of it: a slicer that always cut at the
+    // right column of a shared width read nothing at all there, and answered
+    // that the chat had no rows when it had the screen.
+    const rows = conversationPane(screenOf(terminal), terminal.size).map((line) =>
       (line.startsWith("│") ? line.slice(1) : line).trim(),
     );
     const from = rows.indexOf(EARLIER_CONTROL);
@@ -4408,7 +4752,7 @@ describe("Tier MC — the message composer wraps and grows", () => {
       yield* sendMessage(repl, `ask-${number}`);
     }
     yield* awaiting(repl.terminal, "the newest reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: SAID-${exchanges}`),
+      saidBySidekick(one, `SAID-${exchanges}`),
     );
   }
 
@@ -4454,7 +4798,7 @@ describe("Tier MC — the message composer wraps and grows", () => {
     const after = chatCapacity(repl.terminal);
     expect(after).toBeLessThan(before);
     expect(after).toBeGreaterThanOrEqual(1);
-    expect(shows(repl.terminal, `${MOUNTED_AGENT}: SAID-10`)).toBe(true);
+    expect(saidBySidekick(repl.terminal, `SAID-10`)).toBe(true);
 
     // The name, the controls and the footer are all where they were.
     expect(shows(repl.terminal, MESSAGE_PROMPT)).toBe(true);
@@ -4554,7 +4898,10 @@ describe("Tier MC — the message composer wraps and grows", () => {
     expect(atMedium).toBeLessThanOrEqual(6);
 
     // Narrow, asked for explicitly: the cap is what this screen can leave the
-    // chat, which at twenty rows is fewer than six.
+    // chat. How many rows that is belongs to the composition — this outlet
+    // keeps three rows of chrome where the one this row was written against
+    // kept seven, so twenty rows now allow the whole cap — and what the cap is
+    // *for* is that the chat keeps a row of its own, which is asserted below.
     yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
     yield* activate(repl.terminal, "Sidekick");
     yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
@@ -4564,7 +4911,7 @@ describe("Tier MC — the message composer wraps and grows", () => {
     expect(messageTextIn(narrow())).toContain("ROW-8");
     const atNarrow = composer(repl.terminal).length;
     expect(atNarrow).toBeGreaterThanOrEqual(1);
-    expect(atNarrow).toBeLessThan(6);
+    expect(atNarrow).toBeLessThanOrEqual(6);
     // Send and at least one chat row are still there to reach.
     expect(rowsShow(narrow(), "[send]")).toBe(true);
     expect(chatCapacity(repl.terminal)).toBeGreaterThanOrEqual(1);
@@ -4575,8 +4922,16 @@ describe("Tier MC — the message composer wraps and grows", () => {
     if (label === undefined) {
       throw new Error("the narrow outlet drew no message box");
     }
-    expect(label.indexOf(MESSAGE_PROMPT) - 3).toBe(2);
-    expect(label.slice(0, 2)).toBe("  ");
+    // Measured from the prompt rather than from a marker's room. The field
+    // wears one `>` now, drawn in the first of its own cells, where the row
+    // this was written against reserved three cells in front of the prompt for
+    // `>> ` — so the body begins where the inset ends whether or not it has
+    // focus, and the gutter beside it holds nothing either way.
+    const begins = label.indexOf(MESSAGE_PROMPT);
+    expect(begins).toBe(2);
+    // And nothing of any other control is in front of it: what is there is the
+    // field's own marker, which it wears only while it has focus.
+    expect([">", ""]).toContain(label.slice(0, begins).trim());
 
     // Below the minimum, and back. Resized rather than waited on a whole
     // frame: a refused size draws one sentence and no frame to wait for.
@@ -4862,7 +5217,7 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
 
       repl.fake.script({ reply: submitting(FAILING) });
       yield* sendMessage(repl, "run one that fails");
-      yield* awaiting(repl.terminal, "the third entry failing", (one) => shows(one, "3. [err]"));
+      yield* settledEntry(repl.terminal, 3, "err");
 
       const read = yield* mountedReading(repl);
       const intent = lastSubmit(read.chat);
@@ -5061,9 +5416,10 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
     yield* typing(repl.terminal, "my question");
 
     // The Sidekick is the default reading, and both names are on the screen
-    // whichever one that is.
+    // whichever one that is. Spelled the way the staged panes spell their own
+    // tabs — in capitals — rather than the way a person says them.
     expect(panePresented(repl.terminal)).toBe("sidekick");
-    for (const label of ["Bindings", "Sidekick"]) {
+    for (const label of [PANE_TABS.bindings, PANE_TABS.sidekick]) {
       expect([label, shows(repl.terminal, label)]).toEqual([label, true]);
     }
     expect(shows(repl.terminal, "[selected]")).toBe(false);
@@ -5076,26 +5432,26 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
       "Bindings being selected",
       (one) => panePresented(one) === "bindings",
     );
-    expect(focusedOn(repl.terminal, "Bindings")).toBe(true);
+    expect(focusedOn(repl.terminal, PANE_TABS.bindings)).toBe(true);
     // Focus on a tab is not selection of it: the other tab can hold focus
     // without the reading changing under it.
-    yield* focusOn(repl.terminal, "Sidekick");
-    expect(focusedOn(repl.terminal, "Sidekick")).toBe(true);
+    yield* focusOn(repl.terminal, PANE_TABS.sidekick);
+    expect(focusedOn(repl.terminal, PANE_TABS.sidekick)).toBe(true);
     expect(panePresented(repl.terminal)).toBe("bindings");
 
     // By pointer: the same control, reached at its own cell. Its box is its own
     // label now, so a click on the name is a click on the tab bearing it.
-    yield* click(repl.terminal, "Sidekick");
+    yield* click(repl.terminal, PANE_TABS.sidekick);
     yield* awaiting(
       repl.terminal,
       "the chat coming back",
       (one) => panePresented(one) === "sidekick",
     );
-    yield* click(repl.terminal, "Bindings");
+    yield* click(repl.terminal, PANE_TABS.bindings);
     yield* awaiting(repl.terminal, "Bindings again", (one) => panePresented(one) === "bindings");
 
     // And neither composer was edited by any of it.
-    yield* click(repl.terminal, "Sidekick");
+    yield* click(repl.terminal, PANE_TABS.sidekick);
     yield* awaiting(
       repl.terminal,
       "the chat once more",
@@ -5142,9 +5498,16 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
     // A real entry first, so the Transcript has a reading with controls around
     // it — submitting consumes the draft, so the texts below are typed after.
     yield* submitEntry(repl, promptEntry("read-entry"));
-    yield* awaiting(repl.terminal, "the entry settling", (one) => shows(one, "[ok]"));
+    yield* settledEntry(repl.terminal, 1, "ok");
+    // Chosen in the catalog, which is where this screen keeps those rows: a
+    // drawer over the reading, opened to point at one, and the choice closes it.
+    yield* openCatalog(repl.terminal);
     yield* click(repl.terminal, "1.");
-    yield* awaiting(repl.terminal, "the entry being selected", (one) => shows(one, "* 1."));
+    yield* awaiting(
+      repl.terminal,
+      "the catalog closing behind the choice",
+      (one) => !catalogShowing(one),
+    );
 
     // Then text in both destinations, so the round trip below has something of
     // each to preserve.
@@ -5156,21 +5519,40 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
     // The Sessions reading is reached by its own control, in the column the
     // inset narrowed: a row built to the pane instead of the body would have
     // published a target reaching into the gutter.
-    yield* click(repl.terminal, "All conversations");
-    yield* settled(30);
-    expect(shows(repl.terminal, "All conversations")).toBe(true);
+    // Behind the selector, which is where one list with the conversations as its
+    // filter keeps them: opening it is what puts the choices on the screen.
+    yield* openFilter(repl.terminal);
+    const choice = coordinateOf(repl.terminal, "All conversations");
+    if (choice === undefined) {
+      throw new Error("the filter offered no way back to every conversation");
+    }
+    // Inside the Transcript's own column, which is this row's claim: a row
+    // built to the pane instead of the body would have published a target
+    // reaching into the gutter.
+    expect(choice.column).toBeLessThan(workspaceTranscriptWidth(repl.terminal.size) ?? 0);
+    yield* clickAt(repl.terminal, choice);
+    // And the press landed. Choosing is the whole of what the chooser is for,
+    // so it closes behind the choice rather than staying open over the reading
+    // it just changed.
+    yield* awaiting(
+      repl.terminal,
+      "the chooser closing behind the choice",
+      (one) => !columnShows(sessionsColumn(one), "All conversations"),
+    );
 
     // And the Transcript scrolls by its *own* control at both shared sizes. The
     // reading is narrower than it was, so its later rows are reached rather than
     // drawn — which is what these two controls are for. Found by the column it
-    // is in, because the sidebar's two readings each draw one of their own.
+    // is in: each of the three readings on this screen draws a pair of its own.
     for (const size of [
       { columns: 120, rows: 30 },
       { columns: 160, rows: 36 },
     ]) {
       yield* resizeTo(repl.terminal, size);
-      const left = sidebarWidth(size) ?? 0;
-      const right = size.columns - (inspectionWidth(size) ?? 0);
+      // The Transcript is the leftmost column of the staged screen, so its own
+      // controls are the ones inside its width.
+      const left = 0;
+      const right = workspaceTranscriptWidth(size) ?? 0;
       const at = screenOf(repl.terminal).flatMap((line, row) => {
         const column = line.indexOf(LATER);
         return column >= left && column < right ? [{ column, row }] : [];
@@ -5189,7 +5571,7 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
         size.columns,
         true,
       ]);
-      expect([size.columns, shows(repl.terminal, "* 1.")]).toEqual([size.columns, true]);
+      expect([size.columns, yield* markedEntry(repl.terminal, "1.")]).toEqual([size.columns, true]);
     }
 
     // Narrow routes one outlet and is given no inset of its own, so its own
@@ -5201,7 +5583,7 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
     const wide = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
     expect(paneShown(wide())).toBe("sidekick");
     expect(messageTextIn(wide())).toContain("kept question");
-    expect(rowsShow(wide(), "Draft: kept entry")).toBe(true);
+    expect(blockSays(draftTextIn(wide()), "kept entry")).toBe(true);
   });
 
   it("UH4: resizing through narrow and back keeps both texts, and narrow grows no tabs", function* () {
@@ -5213,7 +5595,7 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
 
     // Medium keeps the three columns and the one header row.
     const medium = yield* resizeTo(repl.terminal, { columns: 120, rows: 30 });
-    for (const label of ["Bindings", "Sidekick"]) {
+    for (const label of [PANE_TABS.bindings, PANE_TABS.sidekick]) {
       expect([label, rowsShow(medium(), label)]).toEqual([label, true]);
     }
     expect(rowsShow(medium(), "[selected]")).toBe(false);
@@ -5226,8 +5608,277 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
 
     // And back, with both texts where they were left.
     const wide = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
-    expect(rowsShow(wide(), "Bindings")).toBe(true);
+    expect(rowsShow(wide(), PANE_TABS.bindings)).toBe(true);
     expect(messageTextIn(wide())).toContain("kept question");
-    expect(rowsShow(wide(), "Draft: kept entry")).toBe(true);
+    expect(blockSays(draftTextIn(wide()), "kept entry")).toBe(true);
+  });
+});
+
+/**
+ * #971 A3: one mounted screen carried through every supported size and back.
+ *
+ * One presenter, one tree and one grid throughout, because what is under test
+ * is what survives a resize rather than what a fresh frame can draw: the
+ * reading, the selection, both texts, and the control a keystroke reaches.
+ *
+ * The sizes below the minimum are part of the journey. That frame draws one
+ * sentence and places no control at all, and the one after it has to bring the
+ * reading back — a screen that recovered into something else would be a resize
+ * that lost somebody's work.
+ */
+describe("Tier A3 — the staged screen resized, and recovered", () => {
+  it("A3: 160 to 120 to 72, below the minimum, and back", function* () {
+    // The fixture's entries compile their own eval blocks, which is what this
+    // file's other rows get from the program they run.
+    yield* useTempFileCompiler();
+    // The journal read at a position somebody moved to, rather than at its
+    // head. Both halves come from one call, because a route may only name the
+    // position its own model was projected at: a marker set on the model of
+    // the present is a route resolution refuses.
+    const { model, at: selected } = yield* checkpointSelected();
+    // Seeded once, and the only reading in this journey: that retained
+    // position, the entry and nested scope it holds, and two texts no default
+    // supplies. A frame that rebuilt the fixture's own state instead of
+    // carrying this one would be visibly a different screen.
+    const state = seededState(model);
+    const presenter = yield* usePresenter(CHECKPOINT_SIZE);
+    const first = yield* commitCheckpoint(presenter, { model, state });
+    expect(first.focused).toBe("footer:input");
+    const scopes = state.route.scopes;
+    const at = state.route.at;
+    expect(scopes.length).toBe(2);
+
+    // The position is a real one: a marker this journal retained, named by the
+    // route, and the one its model was projected at. All three, because any
+    // two of them agreeing on `undefined` would say only that this reading is
+    // of the present.
+    expect(typeof at).toBe("string");
+    expect(at).toBe(selected);
+    expect(at).toBe(model.selection);
+    expect(model.checkpoints.map((one) => one.marker)).toContain(selected);
+    expect(selected.length).toBeGreaterThan(0);
+
+    // And the screen says which reading it is showing: a position behind HEAD
+    // marks the History band, which a reading of the present does not.
+    const banded = (frame: CheckpointFrame): string => {
+      const bounds = frame.observed.regionOf("box:history");
+      if (bounds === undefined) {
+        throw new Error("this frame published no History band");
+      }
+      return presenter.grid.textIn(bounds).join(" ");
+    };
+    expect(banded(first)).toContain("reading earlier");
+
+    // The key the tree answered with, carried from size to size. Passing it is
+    // what tells the fixture not to let the Draft take focus again:
+    // re-offering it at every size would be restoring focus rather than
+    // keeping whatever a resize left focused.
+    let held = first.focused;
+
+    /** The same reading at one more size, committed into the same tree. */
+    const resized = function* (size: ReplTerminalSize) {
+      presenter.resize(size);
+      const committed = yield* commitCheckpoint(presenter, {
+        model,
+        state,
+        size,
+        ...(held === undefined ? {} : { focused: held }),
+      });
+      held = committed.focused;
+      return committed;
+    };
+
+    for (const size of [CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
+      const where = `${size.columns}x${size.rows}`;
+      const committed = yield* resized(size);
+      // The reading is the same reading: same entry, same nested scope, same
+      // recorded position, and both texts exactly as they were typed.
+      expect({ where, scopes: committed.view.state.route.scopes }).toEqual({ where, scopes });
+      expect({ where, at: committed.view.state.route.at }).toEqual({ where, at });
+      expect({ where, draft: committed.view.state.draft }).toEqual({
+        where,
+        draft: SEEDED_DRAFT,
+      });
+      expect({ where, message: committed.view.state.message }).toEqual({
+        where,
+        message: SEEDED_MESSAGE,
+      });
+      // And it is still showing the retained reading rather than the present,
+      // wherever the row has the cells to say so. The band is content, so it
+      // is cut at the room its own measured controls leave it; at 72 columns
+      // this reading's band is longer than that room, and what falls off is
+      // the phrase below. That the row cannot hold it is an appearance
+      // question for the image review these sizes are already waiting on —
+      // what this journey holds is that the reading itself does not change.
+      const band = banded(committed);
+      expect({ where, drawn: band.length > 0 }).toEqual({ where, drawn: true });
+      if (size.columns >= CHECKPOINT_MEDIUM.columns) {
+        expect({ where, banded: band.includes("reading earlier") }).toEqual({
+          where,
+          banded: true,
+        });
+      }
+      // The Draft is still on this screen, so focus is still on it.
+      expect({ where, focused: committed.focused }).toEqual({ where, focused: "footer:input" });
+      expect({
+        where,
+        drawn: committed.observed.boundsOf("footer:input") !== undefined,
+      }).toEqual({ where, drawn: true });
+    }
+
+    // A control narrowing removed is not merely hidden: it is in no cell, no
+    // frame map and no mounted node, so nothing can activate it.
+    const narrow = presenter.last();
+    if (narrow === undefined) {
+      throw new Error("this journey committed no narrow frame");
+    }
+    for (const key of ["tray:queue", "follow", "sidekick:stop"]) {
+      expect({ key, mounted: narrow.keys.includes(key) }).toEqual({ key, mounted: false });
+      expect({ key, drawn: narrow.boundsOf(key) !== undefined }).toEqual({ key, drawn: false });
+    }
+
+    // Below the minimum the frame is its own refusal: one sentence, and not one
+    // control anywhere on it.
+    const refused = yield* resized(CHECKPOINT_BELOW);
+    expect(refused.observed.committed.manifest.profile).toBe("too-small");
+    expect(refused.observed.targets.length).toBe(0);
+    expect(refused.observed.committed.manifest.actions).toBe(undefined);
+    const said = presenter.grid
+      .textIn({ x: 0, y: 0, width: CHECKPOINT_BELOW.columns, height: CHECKPOINT_BELOW.rows })
+      .join(" ");
+    expect(said).toContain(`${NARROW.columns}x${NARROW.rows}`);
+
+    // And growing the window brings the same reading back.
+    const recovered = yield* resized(CHECKPOINT_SIZE);
+    expect(recovered.view.state.route.scopes).toEqual(scopes);
+    expect(recovered.view.state.route.at).toEqual(at);
+    expect(recovered.view.state.draft).toBe(SEEDED_DRAFT);
+    expect(recovered.view.state.message).toBe(SEEDED_MESSAGE);
+    expect(recovered.focused).toBe("footer:input");
+    expect(recovered.observed.boundsOf("footer:input")).not.toBe(undefined);
+    expect(banded(recovered)).toContain("reading earlier");
+    for (const key of ["tray:todo", "sidekick:stop"]) {
+      expect({ key, drawn: recovered.observed.boundsOf(key) !== undefined }).toEqual({
+        key,
+        drawn: true,
+      });
+    }
+    // The shared queue's tray and the Follow control a recovered frame used to
+    // bring back with it are DQ0 and DF1 in
+    // `fixtures/repl/deferred-presentation.json`: this build offers neither, at
+    // any size, before or after a refusal.
+    for (const key of ["tray:queue", "follow"]) {
+      expect({ key, drawn: recovered.observed.boundsOf(key) !== undefined }).toEqual({
+        key,
+        drawn: false,
+      });
+    }
+  });
+});
+
+/**
+ * #971 R3: the Sidekick's question, opened and typed into at a new size.
+ *
+ * The question is compiled from a closed object schema by the product's own
+ * parser, so the form this screen draws is one the REPL's form language
+ * actually supports — a form asserted into shape would draw fields the parser
+ * would have refused.
+ *
+ * And it is opened the way a person opens it: the action the control carries,
+ * through the reducer, against what the frame measured. A test that set
+ * `asking` itself would be asserting the drawer rather than reaching it, and
+ * would not notice a control that stopped being able to.
+ */
+describe("Tier R3 — the Sidekick's parsed question at a constrained size", () => {
+  it("R3: the drawer opens through its own action and its field takes text", function* () {
+    yield* useTempFileCompiler();
+    const model = yield* checkpointModel();
+    // The narrowest size this screen supports, with the conversation routed to
+    // the one outlet it has: the drawer has least to work with here.
+    const size = CHECKPOINT_NARROW;
+    const presenter = yield* usePresenter(size);
+    const routed = {
+      model,
+      size,
+      live: CHECKPOINT_ASKING,
+      sidekick: true,
+    } as const;
+
+    // One ordinary string field, as the parser read it.
+    expect(CHECKPOINT_QUESTION_FORM.fields.map((one) => one.name)).toEqual(["rule"]);
+    const field = "rule";
+
+    // The question is announced where it can be answered.
+    const asked = yield* commitCheckpoint(presenter, routed);
+    expect(asked.observed.boundsOf("sidekick:answer")).not.toBe(undefined);
+    expect(asked.view.live.sidekick?.question?.key).toBe(CHECKPOINT_QUESTION);
+
+    /**
+     * The same reducer the keystroke reaches, against what this frame measured
+     * and which of the Sidekick's drawers it presented. Both are the frame's
+     * own answers: a form held open in state while the screen shows something
+     * else owns no keystroke, so a field action reduced without the frame that
+     * drew the field is refused.
+     */
+    const act = (
+      state: ReplState,
+      action: Parameters<typeof reduceRepl>[1],
+      frame: CheckpointFrame,
+    ) =>
+      reduceRepl(
+        state,
+        action,
+        model,
+        CHECKPOINT_ASKING,
+        frame.observed.committed.admission,
+        presentedDrawer(frame.view),
+      ).state;
+
+    // Opened by the action its own control carries, not by a fixture.
+    const opened = act(
+      checkpointState(model, routed),
+      { kind: "open-sidekick-question", question: CHECKPOINT_QUESTION },
+      asked,
+    );
+    expect({ key: opened.asking?.key, open: opened.asking?.open }).toEqual({
+      key: CHECKPOINT_QUESTION,
+      open: true,
+    });
+
+    // Drawn, the drawer carries that one field.
+    const drawn = yield* commitCheckpoint(presenter, {
+      ...routed,
+      state: opened,
+      focused: asked.focused,
+    });
+    expect(drawn.observed.boundsOf("drawer:open")).not.toBe(undefined);
+    expect(drawn.observed.boundsOf(`drawer:field:${field}`)).not.toBe(undefined);
+
+    // The field takes the focus text acts on, and then the text.
+    const answered = "half up, to the cent";
+    const selected = act(
+      opened,
+      { kind: "select-sidekick-field", question: CHECKPOINT_QUESTION, field },
+      drawn,
+    );
+    expect(selected.asking?.form.field).toBe(field);
+    const typed = act(selected, { kind: "type", text: answered, field }, drawn);
+    // The question this is an answer to is still the question that was asked.
+    expect({
+      key: typed.asking?.key,
+      value: typed.asking?.form.values[field],
+    }).toEqual({ key: CHECKPOINT_QUESTION, value: answered });
+
+    // And the screen says so, in the row the value belongs to.
+    const held = yield* commitCheckpoint(presenter, {
+      ...routed,
+      state: typed,
+      focused: drawn.focused,
+    });
+    const row = held.observed.boundsOf(`drawer:field:${field}`);
+    if (row === undefined) {
+      throw new Error("the field that took the text is no longer drawn");
+    }
+    expect(presenter.grid.textIn(row).join(" ")).toContain("half up");
   });
 });

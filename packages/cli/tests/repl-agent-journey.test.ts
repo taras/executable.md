@@ -337,6 +337,10 @@ describe("J1 — the Story, from one entry to one README", () => {
         "agent_prompt",
       ]);
       expect(occurrences(terminal, "completed, recorded")).toBe(2);
+      // Read inside the catalog, which is where an entry's scopes are listed
+      // now. The rows above are read before it is opened, because the drawer is
+      // over the reading they are in.
+      yield* openCatalog(terminal);
       expect(shows(terminal, "component Plan")).toBe(true);
       expect(shows(terminal, "generated generated")).toBe(true);
       // And both Plan reviews are retained where they were asked, which is
@@ -905,8 +909,6 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // forms that were answered, the preview the program rendered and the
       // write it reported.
       for (const line of [
-        "component Plan",
-        "generated generated",
         "# A first draft",
         "Proposed README.md:",
         '"project": "Ledger"',
@@ -915,15 +917,24 @@ describe("J3 — durable truth, and a cold process over it", () => {
       ]) {
         yield* showing(second.terminal, line);
       }
-      // Both turns are recorded rows rather than a live process's readings, and
-      // both Plan reviews are retained where they were asked.
+      // Both turns are recorded rows rather than a live process's readings.
+      // Counted before the catalog is opened, because the drawer is over the
+      // reading these rows are in.
       expect(occurrences(second.terminal, "completed, recorded")).toBe(2);
+      // The packaged Plan's own scope and the program it produced, read where
+      // an entry's scopes are listed: inside its catalog.
+      yield* openCatalog(second.terminal);
+      for (const line of ["component Plan", "generated generated"]) {
+        yield* showing(second.terminal, line);
+      }
+      // And both Plan reviews are retained where they were asked.
       expect(
         yield* answeredUnder(second.terminal, "component Plan", "answered @executablemd/cli/Plan"),
       ).toBe(2);
       // The program's own two questions are retained with the answers they
       // took. Their positions carry no path — generated source is not a file —
       // so they are shown under the fragment that produced them.
+      yield* openCatalog(second.terminal);
       yield* click(second.terminal, "generated generated");
       yield* settled(40);
       // The answers themselves are read from the reading above, which shows
@@ -980,10 +991,10 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* untilDrawn(first.terminal);
 
       yield* typed(first.terminal, promptEntry("ask-one"));
-      yield* showing(first.terminal, "1. [ok] entry-1");
+      yield* settledOn(first.terminal, 1);
       yield* focusDraft(first.terminal);
       yield* typed(first.terminal, promptEntry("ask-two"));
-      yield* showing(first.terminal, "2. [ok] entry-2");
+      yield* settledOn(first.terminal, 2);
 
       // Both turns are on the Sessions reading, in one conversation, before
       // anything is read back: this is the reading a cold process has to
@@ -995,7 +1006,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // surface is offering a conversation to filter by at all. Which key it
       // is, is a fact about the record and is asserted of the record below —
       // a provider session key is longer than this column and is drawn cut.
-      expect(shows(first.terminal, "All conversations")).toBe(true);
+      expect(shows(first.terminal, "All sessions")).toBe(true);
       turnRows = promptRows(first.terminal);
       expect(turnRows).toHaveLength(2);
       expect(turnRows.some((row) => shownPrompt(row, "ask-one"))).toBe(true);
@@ -1061,16 +1072,21 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* untilDrawn(second.terminal);
 
       // The catalog the file holds, in admission order with its outcomes.
-      yield* showing(second.terminal, "1. [ok] entry-1");
-      yield* showing(second.terminal, "2. [ok] entry-2");
+      yield* settledOn(second.terminal, 1);
+      yield* settledOn(second.terminal, 2);
+      // Which entry this location selected, read from the catalog that marks
+      // it. The catalog is a drawer over the reading now, so it is opened to be
+      // read and put away again before the rows below read what is underneath.
+      yield* openCatalog(second.terminal);
       expect(selectedEntryOn(second.terminal) ?? "").toContain(selected.key);
+      yield* closeCatalog(second.terminal);
 
       // The global Sessions chronology, row for row and conversation for
       // conversation, is the one the live process showed — both entries' turns
       // under the one conversation, with the selection narrowing none of it.
       yield* showing(second.terminal, "ONE-DONE");
       yield* showing(second.terminal, "TWO-DONE");
-      expect(shows(second.terminal, "All conversations")).toBe(true);
+      expect(shows(second.terminal, "All sessions")).toBe(true);
       expect(promptRows(second.terminal)).toEqual(turnRows);
 
       // The selected entry's own transcript, read off the transcript column
@@ -1356,7 +1372,7 @@ describe("J2 — three conversations at once, through the terminal", () => {
           ] as const
         ).every(([asked, state]) => rows.some((line) => saying(line, asked, state)));
       });
-      yield* showing(terminal, "All conversations");
+      yield* showing(terminal, "All sessions");
 
       // With the implementer's turn recorded too, a conversation control is
       // there to filter by while the planner has still not been taken.
@@ -1365,6 +1381,10 @@ describe("J2 — three conversations at once, through the terminal", () => {
       // recognized as a conversation control on a sidebar too narrow for a key.
       const digest = (fake.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
       expect(digest).not.toBe("");
+      // The conversations are behind the Transcript's own selector now: one
+      // list, and the choices that filter it are shown when the control saying
+      // so is activated. Opening it is how a person reaches them.
+      yield* click(terminal, "All sessions");
       yield* awaiting("no conversation was ever offered", function* () {
         yield* settled(10);
         return conversationRows(terminal, digest).length > 0;
@@ -1394,12 +1414,20 @@ describe("J2 — three conversations at once, through the terminal", () => {
       // standing on is the entry it is standing on.
       expect(unfiltered).toBeUndefined();
       expect(sessionOf(terminal)).toBeDefined();
-      // Its row, whatever it has settled to: what this asserts is that the
-      // catalog holds the entry, not what became of it.
-      expect(shows(terminal, "] entry-1")).toBe(true);
       const standing = sessionOf(terminal);
       // Where the person is standing now: on the control they just chose.
       const focused = focusedRow(terminal);
+      // Its row, whatever it has settled to: what this asserts is that the
+      // catalog holds the entry, not what became of it. The catalog is a drawer
+      // over the reading now, so it is opened for that fact and put away by its
+      // own control — and then the focus the person had is walked back to
+      // through the ordinary ring, because opening a drawer is a real move and
+      // the rows below compare where somebody is standing.
+      yield* openCatalog(terminal);
+      expect(shows(terminal, "] entry-1")).toBe(true);
+      yield* closeCatalog(terminal);
+      yield* focusBackTo(terminal, focused);
+      expect(focusedRow(terminal)).toBe(focused);
 
       // Background work in another conversation: the planner's turn is taken,
       // streams and is recorded, while the route, the history position and the
@@ -1420,7 +1448,12 @@ describe("J2 — three conversations at once, through the terminal", () => {
       // Cleared back to All, the whole chronology is there again — all three
       // children, each with the state its own turn ended in, and one more
       // conversation to filter by than before.
-      yield* click(terminal, "All conversations");
+      // Cleared through the selector, which is what the filter is chosen in:
+      // the control carries the name of whichever conversation was chosen, so
+      // it is opened by what it currently says and the unfiltered reading is a
+      // row inside it.
+      yield* openSelector(terminal);
+      yield* click(terminal, EVERY_CONVERSATION);
       yield* settled(40);
       expect(sessionOf(terminal)).toBeUndefined();
       expect(childrenShown(terminal)).toEqual([PLAN_IT, REVIEW_IT, BUILD_IT]);
@@ -1432,7 +1465,9 @@ describe("J2 — three conversations at once, through the terminal", () => {
       }
       // And one more conversation to filter by than there was, because the
       // third one has now been seen.
+      yield* openSelector(terminal);
       expect(conversationRows(terminal, digest).length).toBeGreaterThan(offered);
+      yield* closeSelector(terminal);
 
       // Three turns, three records, one per conversation.
       yield* awaiting("the three turns were never all retained", function* () {
@@ -1518,6 +1553,10 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       // 1. A conversation filter, chosen by pointing at the row it is drawn in.
       const digest = (live.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
       expect(digest).not.toBe("");
+      // The conversations are behind the Transcript's own selector now: one
+      // list, and the choices that filter it are shown when the control saying
+      // so is activated. Opening it is how a person reaches them.
+      yield* click(terminal, "All sessions");
       yield* awaiting("no conversation was ever offered", function* () {
         yield* settled(10);
         return conversationRows(terminal, digest).length > 0;
@@ -1544,7 +1583,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       // 2. A non-empty draft, typed into the field Tab reaches.
       yield* drafting(terminal, DRAFT);
       expect(sessionOf(terminal)).toBe(filtered);
-      expect(shows(terminal, `>> Draft: ${DRAFT}`)).toBe(true);
+      expect(draftTextOn(terminal)).toBe(DRAFT);
       expect(childrenShown(terminal)).toHaveLength(1);
 
       // 3. Narrow. What is read here is the draft row and the reading itself.
@@ -1561,7 +1600,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       });
       const narrow = replay(terminal.presented.slice(from));
       expect(narrow.length).toBe(20);
-      expect(narrow.some((line) => line.includes(`>> Draft: ${DRAFT}`))).toBe(true);
+      expect(draftTextIn(narrow)).toBe(DRAFT);
       expect(narrow.filter((line) => line.trimEnd().length > 72)).toEqual([]);
       // A narrow frame draws one routed surface, and choosing a conversation
       // chooses a filter rather than a surface — so the Sessions reading is not
@@ -1581,7 +1620,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
         );
       });
       expect(sessionOf(terminal)).toBe(filtered);
-      expect(shows(terminal, `>> Draft: ${DRAFT}`)).toBe(true);
+      expect(draftTextOn(terminal)).toBe(DRAFT);
       expect(childrenShown(terminal)).toHaveLength(1);
 
       terminal.end();
@@ -1620,7 +1659,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
         yield* settled(10);
         return sessionOf(second.terminal) === filtered;
       });
-      expect(shows(second.terminal, `>> Draft: ${DRAFT}`)).toBe(true);
+      expect(draftTextOn(second.terminal)).toBe(DRAFT);
       expect(childrenShown(second.terminal)).toHaveLength(1);
 
       // Nobody was asked, nothing was started, created or ensured.
@@ -1699,6 +1738,10 @@ describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => 
 
       const digest = (fake.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
       expect(digest).not.toBe("");
+      // The conversations are behind the Transcript's own selector now: one
+      // list, and the choices that filter it are shown when the control saying
+      // so is activated. Opening it is how a person reaches them.
+      yield* click(terminal, "All sessions");
       yield* awaiting("no conversation was ever offered", function* () {
         yield* settled(10);
         return conversationRows(terminal, digest).length > 0;
@@ -2587,21 +2630,43 @@ const SIDEBAR = sidebarWidth({ columns: 160, rows: 36 }) ?? 0;
 
 /** The conversation this screen is filtered by, as the route states it. */
 function sessionOf(terminal: Terminal): string | undefined {
-  // The conversation the reading is filtered to is the one its own row marks:
-  // two columns of focus cue, the list's indent, then the filter's own `>`.
-  //
-  // Read from inside the sidebar's body, past the accepted two-cell gutter: the
-  // gutter is layout that holds no text, so the row begins where the body does
-  // rather than where the column does.
+  // The conversation this reading is filtered to is what the Transcript's own
+  // selector says. There is one list now, and the control that opens its
+  // choices carries the name of whichever was chosen — so the filter is read
+  // where the screen states it rather than from a marked row of a column this
+  // composition does not draw. `All sessions` is the unfiltered reading, which
+  // is no conversation at all.
+  // Found by the mark that says it opens rather than by the row it is on: a
+  // name too long for the title's remaining room is given a row of its own
+  // beneath it, and the selector is the only thing in this column wearing that
+  // mark either way.
   for (const line of screenOf(terminal)) {
-    const column = (line.split("\u2502")[0] ?? "").slice(BODY_GUTTER);
-    const match = /^[>\s]\s {2}>\s(\S.*?)\s*$/.exec(column);
-    if (match !== null) {
-      return match[1];
+    const column = (line.split("\u2502")[0] ?? "").trimEnd();
+    if (!column.endsWith(SELECTOR_MARK)) {
+      continue;
     }
+    const label = column
+      .slice(0, column.length - SELECTOR_MARK.length)
+      .replace(new RegExp(`^\\s*${TRANSCRIPT_TITLE}`), "")
+      .trim();
+    return label === "" || label === ALL_SESSIONS ? undefined : label;
   }
   return undefined;
 }
+
+/**
+ * The row inside the selector that stands for no filter at all.
+ *
+ * Not the same words the control itself carries: the control says which
+ * conversation a reading is filtered to, and the list says which readings are
+ * on offer — the unfiltered one among them.
+ */
+const EVERY_CONVERSATION = "All conversations";
+
+/** What the staged Transcript calls itself, its selector's mark, and no filter. */
+const TRANSCRIPT_TITLE = "TRANSCRIPT";
+const SELECTOR_MARK = "\u25be";
+const ALL_SESSIONS = "All sessions";
 
 /**
  * The conversation rows the Sessions surface offers to filter by, in order.
@@ -2670,6 +2735,40 @@ function occurrences(terminal: Terminal, text: string): number {
  * they were asked. Selection is the behavior being tested: a row counted under the wrong scope
  * would be an answer attributed to somewhere it never happened.
  */
+/**
+ * Open the Entries catalog, which is a drawer over the reading.
+ *
+ * An entry's own scopes are rows of that catalog, under the entry they belong
+ * to. The catalog is not a column any more, so reaching one of its rows begins
+ * with the control that opens it; a catalog already open is left alone.
+ */
+function* openCatalog(terminal: Terminal): Operation<void> {
+  if (catalogShowing(terminal)) {
+    return;
+  }
+  yield* click(terminal, "Entries");
+  yield* until(() => catalogShowing(terminal), "the Entries catalog never opened");
+}
+
+/**
+ * Put the Entries catalog away again, which chooses nothing.
+ *
+ * Its own control rather than a key, because this screen states the way out on
+ * the drawer itself and a key would be a second answer to the same question.
+ */
+function* closeCatalog(terminal: Terminal): Operation<void> {
+  if (!catalogShowing(terminal)) {
+    return;
+  }
+  yield* click(terminal, "[close]");
+  yield* until(() => !catalogShowing(terminal), "the Entries catalog never closed");
+}
+
+/** Whether the catalog's own rows are on the screen. */
+function catalogShowing(terminal: Terminal): boolean {
+  return screenOf(terminal).some((line) => /(?:^|\s)1\. \[/.test(line));
+}
+
 function* answeredUnder(terminal: Terminal, scope: string, text: string): Operation<number> {
   // Bindings first, where the command is showing the Sidekick. A scope's own
   // rows are the inspector's, and the right pane now defaults to the Sidekick
@@ -2678,12 +2777,18 @@ function* answeredUnder(terminal: Terminal, scope: string, text: string): Operat
   // Which pane is showing, read from the body it draws: both tabs are named in
   // that column's header on every frame, so a label would answer yes whichever
   // reading was selected and this would stop asking for Bindings at all.
-  if (panePresented(terminal) === "sidekick") {
-    yield* click(terminal, "Bindings");
-    yield* settled(40);
-  }
+  // The scope first, because it is a row of the entry's catalog and the catalog
+  // is a drawer over the reading: choosing a row closes it again, which is what
+  // leaves the reading below showing what that scope retains. Then the
+  // inspector, because selecting a scope is a reading and the right column
+  // defaults to the Sidekick.
+  yield* openCatalog(terminal);
   yield* click(terminal, scope);
   yield* settled(40);
+  if (panePresented(terminal) === "sidekick") {
+    yield* click(terminal, BINDINGS_TAB);
+    yield* settled(40);
+  }
   const found = occurrences(terminal, text);
   if (found === 0) {
     throw new Error(
@@ -2724,6 +2829,50 @@ function focusedRow(terminal: Terminal): string | undefined {
     .find((line) => line.trimStart().startsWith(">"));
 }
 
+/**
+ * Open the Transcript's conversation selector, whatever it currently says.
+ *
+ * The control carries the name of the conversation this reading is filtered to,
+ * and `All sessions` when it is filtered to none — so what opens it is read off
+ * the screen rather than spelled, and the choices it offers are its rows.
+ */
+function* openSelector(terminal: Terminal): Operation<void> {
+  yield* click(terminal, sessionOf(terminal) ?? ALL_SESSIONS);
+  yield* settled(40);
+}
+
+/**
+ * Put the selector's choices away again, which chooses nothing.
+ *
+ * The same control: activating it shows the conversations and activating it
+ * again puts them away, which is what this screen says it does.
+ */
+function* closeSelector(terminal: Terminal): Operation<void> {
+  yield* click(terminal, sessionOf(terminal) ?? ALL_SESSIONS);
+  yield* settled(40);
+}
+
+/**
+ * Walk the focus ring until this row holds focus again.
+ *
+ * Through the mounted tree's own traversal, which is how a person comes back to
+ * a control after a drawer took the focus: nothing here writes a focus store or
+ * names a node the screen is not offering.
+ */
+function* focusBackTo(terminal: Terminal, row: string | undefined): Operation<void> {
+  if (row === undefined) {
+    return;
+  }
+  for (let press = 0; press <= 240; press += 1) {
+    if (focusedRow(terminal) === row) {
+      return;
+    }
+    terminal.feed("\t");
+    yield* settled(12);
+  }
+  throw new Error(`focus never came back to ${JSON.stringify(row)}`);
+}
+
 /** Whether any row of the screen contains this text. */
 function shows(terminal: Terminal, expected: string): boolean {
   return screenOf(terminal).some((line) => line.includes(expected));
@@ -2737,16 +2886,27 @@ function shows(terminal: Terminal, expected: string): boolean {
  * way. The Sidekick's body is the box its messages are typed into.
  */
 function panePresented(terminal: Terminal): "sidekick" | "bindings" {
-  return shows(terminal, "Message Sidekick: ") ? "sidekick" : "bindings";
+  return shows(terminal, MESSAGE_PROMPT) ? "sidekick" : "bindings";
 }
+
+/** The box the Sidekick's messages are typed into, as this screen names it. */
+const MESSAGE_PROMPT = "\u203a message the sidekick";
+
+/** What the inspection column calls its two readings, as this screen names them. */
+const BINDINGS_TAB = "BINDINGS";
 
 /** Wait until the first frame has been drawn. */
 function* untilDrawn(terminal: Terminal): Operation<void> {
   yield* until(() => usable(terminal), "the screen never drew its first frame");
 }
 
-/** What the draft row is called, which is how this suite finds it. */
-const DRAFT_PROMPT = "Draft: ";
+/**
+ * What the draft row is called, which is how this suite finds it.
+ *
+ * The draft is a block now: its name and focus marker are one row, and what
+ * somebody typed is fitted into rows of its own beneath them.
+ */
+const DRAFT_PROMPT = " DRAFT";
 
 /**
  * Whether a frame a person could actually use has been drawn.
@@ -2765,12 +2925,45 @@ function usable(terminal: Terminal): boolean {
   );
 }
 
-/** Exactly what the draft row is holding, after its marker and its prompt. */
+/**
+ * Exactly what the draft is holding, beneath the row that names it.
+ *
+ * Bounded by the column its name is drawn in and by the control beside that
+ * name: the draft is a block in a column now, and a row read to the end of the
+ * screen carries the pane alongside it as well.
+ */
 function draftTextOn(terminal: Terminal): string | undefined {
-  const row = screenOf(terminal).find((line) => line.includes(DRAFT_PROMPT));
-  return row === undefined
-    ? undefined
-    : row.slice(row.indexOf(DRAFT_PROMPT) + DRAFT_PROMPT.length).trimEnd();
+  return draftTextIn(screenOf(terminal));
+}
+
+/** The same, out of rows a caller already has — a replay of one size's frames. */
+function draftTextIn(rows: readonly string[]): string | undefined {
+  const at = rows.findIndex((line) => line.includes(DRAFT_PROMPT));
+  if (at === -1) {
+    return undefined;
+  }
+  const named = rows[at] ?? "";
+  const from = Math.max(0, named.indexOf(DRAFT_PROMPT) - 1);
+  const beside = /\s\[[^\]]*\]/.exec(named.slice(from));
+  const allocated = beside === null ? undefined : beside.index;
+  const value: string[] = [];
+  for (const line of rows.slice(at + 1)) {
+    if (line.includes("HISTORY") || line.includes("[exit]") || line.includes("Tab/Shift+Tab")) {
+      break;
+    }
+    const within = line.slice(from);
+    const edge = within.indexOf("\u2502");
+    const bounded = edge === -1 ? within : within.slice(0, edge);
+    const own = (allocated === undefined ? bounded : bounded.slice(0, allocated)).trimEnd();
+    if (own.trim().startsWith("[")) {
+      break;
+    }
+    value.push(own);
+  }
+  while (value.length > 0 && (value[value.length - 1] ?? "").trim() === "") {
+    value.pop();
+  }
+  return value.join("\n").trim();
 }
 
 /**
@@ -2789,7 +2982,42 @@ function entriesOn(terminal: Terminal): string[] {
       found.push(`${match[1]}. ${match[3]}`);
     }
   }
-  return found;
+  return found.length > 0 ? found : railOn(terminal);
+}
+
+/** Wait until the History rail marks this entry as settled well. */
+function* settledOn(terminal: Terminal, order: number): Operation<void> {
+  yield* until(
+    () => railOn(terminal).includes(`${order}. \u2713`),
+    `the rail never marked entry ${order} as settled`,
+  );
+}
+
+/**
+ * The entries the compact History rail is marking, as `order. mark`.
+ *
+ * The catalog that spells `N. [ok] entry-N` is a drawer on this screen, so a
+ * reading of it is a reading of something nobody opened. The rail is what every
+ * frame draws, and it carries one mark per entry — which is the same two facts
+ * this suite asks for: how many entries there are and what each came to.
+ *
+ * Read up to the rule, which is where the rail ends and the sentence beside it
+ * begins: a number past that belongs to the sentence and not to an entry.
+ */
+function railOn(terminal: Terminal): string[] {
+  for (const line of screenOf(terminal)) {
+    const at = line.indexOf("HISTORY");
+    if (at === -1) {
+      continue;
+    }
+    const rail = line.slice(at + "HISTORY".length).split("\u2500\u2500")[0] ?? "";
+    const found: string[] = [];
+    for (const match of rail.matchAll(/(\d+)\s*([\u2713\u00d7\u25cf\u002d])/g)) {
+      found.push(`${match[1]}. ${match[2]}`);
+    }
+    return found;
+  }
+  return [];
 }
 
 /** The catalog row this reading has selected, if it is showing one. */
@@ -3058,7 +3286,12 @@ function promptEntry(text: string): string {
  */
 function* focusDraft(terminal: Terminal): Operation<void> {
   for (let press = 0; press <= 240; press += 1) {
-    if (screenOf(terminal).some((line) => line.includes(">> "))) {
+    // The draft's own row, by its marker and its name together. The draft is a
+    // block now: one marker, then the name it is known by, with what somebody
+    // typed on rows of its own beneath — and this screen has a second field
+    // wearing the same marker, so the marker alone would stop at whichever
+    // came first and type an entry into the Sidekick's box.
+    if (screenOf(terminal).some((line) => line.includes(`>${DRAFT_PROMPT}`))) {
       return;
     }
     terminal.feed("\t");

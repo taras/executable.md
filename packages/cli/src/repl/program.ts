@@ -67,13 +67,29 @@ import {
   presentedDrawer,
   previewedMessage,
   MESSAGE_VALUE_ROWS,
+  footerSentence,
   guidanceSentence,
   readinessOf,
   readingOf,
   SIDEBAR_BODY,
   SIDEKICK_BODY,
   SIDEKICK_WINDOW,
-  sidekickChatLines,
+  chatLinesFor,
+  draftFieldWidth,
+  configureNoticesOf,
+  draftLinesOf,
+  NOTICE_INDENT,
+  historyGapWidth,
+  historyMapWidth,
+  historyProbeOf,
+  historySplitOf,
+  queueTextWidth,
+  draftRowsOf,
+  GUIDANCE_ROW,
+  QUEUE_TEXT,
+  queueLinesOf,
+  stagedWorkspace,
+  workspaceHeaderLines,
   readsGeometry,
   reduceRepl,
   refusedView,
@@ -82,6 +98,12 @@ import {
   TRANSCRIPT_BODY,
   unavailable,
   viewFor,
+  withWorkspace,
+  workspaceOf,
+  FOCUS_MARKER,
+  selectorName,
+  selectorRoomOf,
+  SELECTOR_MARK,
   withoutAbsentEntry,
   withoutLiveDrawers,
 } from "./application.ts";
@@ -96,6 +118,7 @@ import type {
   ReplMeasuredWidths,
   ReplPreparing,
   ReplPresentation,
+  ReplPreparedNotices,
   ReplPresentationContext,
   ReplPresented,
   ReplSidekickChatRow,
@@ -146,16 +169,15 @@ import { lifecycleRefusal, openReplSession } from "./session.ts";
 import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
+import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
 import {
-  committedOps,
-  drawerRect,
-  flatten,
-  profileFor,
-  routeDrawerRect,
-  skeletonOps,
-} from "./layout.ts";
-import { createFitStore, createPlainFitStore, fitPlain, prepareReading } from "./fitting.ts";
-import type { ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
+  createFitStore,
+  createPlainFitStore,
+  fitCells,
+  fitPlain,
+  prepareReading,
+} from "./fitting.ts";
+import type { ReplFittedLabel, ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
 import { prepareRail } from "./history-rail.ts";
 import { readingLines } from "./source-reading.ts";
 import { sourceRuns } from "./presentation-text.ts";
@@ -670,6 +692,10 @@ function* drive(
   const messageFits = createPlainFitStore();
   // And the directions', which change when focus or readiness does.
   const guidanceFits = createPlainFitStore();
+  // And the staged Draft's, for the third time: a key typed into the Draft is
+  // not a key typed into the composer, and one store for both would evict the
+  // other's lines on every keystroke.
+  const draftFits = createPlainFitStore();
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
     const screen = yield* useReplScreen();
@@ -1295,6 +1321,7 @@ function* drive(
         chatFits,
         messageFits,
         guidanceFits,
+        draftFits,
       );
       if (!ready.ok) {
         throw ready.error;
@@ -1358,6 +1385,7 @@ function* drive(
           chatFits,
           messageFits,
           guidanceFits,
+          draftFits,
         );
         if (!ready.ok) {
           throw ready.error;
@@ -1466,6 +1494,9 @@ function* drive(
             return Ok({ text: saved.value, held });
           },
         },
+        (refusal: string): void => {
+          sidekickReports.push({ kind: "refused", refusal });
+        },
       );
       if (performed.answered !== undefined) {
         // The question took it, so the drawer that was asking is over. The model
@@ -1560,6 +1591,7 @@ function* drive(
       chatFits,
       messageFits,
       guidanceFits,
+      draftFits,
     );
     rendered = first.rendered;
     presenting = presentedDrawer(first.view);
@@ -1578,6 +1610,7 @@ function* drive(
         chatFits,
         messageFits,
         guidanceFits,
+        draftFits,
       );
       rendered = marked.rendered;
       presenting = presentedDrawer(marked.view);
@@ -1804,6 +1837,7 @@ function* drive(
         chatFits,
         messageFits,
         guidanceFits,
+        draftFits,
       );
       rendered = painted.rendered;
       presenting = presentedDrawer(painted.view);
@@ -1832,6 +1866,7 @@ function* drive(
           chatFits,
           messageFits,
           guidanceFits,
+          draftFits,
         );
         rendered = again.rendered;
         presenting = presentedDrawer(again.view);
@@ -2002,6 +2037,23 @@ function sidekickReadingOf(
   const reading = selected ?? active;
   return Object.freeze({
     chat: sidekickChatRows(read.value, owner.previewing),
+    // What the replies of this history actually did to this execution's
+    // entries, as the coordinates their records hold. Detached from the chat
+    // beside it: a row is what a conversation said, and these are what one of
+    // them admitted.
+    submits: Object.freeze(
+      read.value.submits.map((one) =>
+        Object.freeze({
+          conversation: one.conversation,
+          response: one.response,
+          ordinal: one.ordinal,
+          entry: one.entry,
+          source: one.source,
+          settled: one.settled,
+          admitted: one.admitted,
+        }),
+      ),
+    ),
     turns: sidekickTurnRows(read.value, owner.live),
     busy: owner.busy,
     // The agent of the chat being read, which is that chat's own: a
@@ -2461,7 +2513,13 @@ function* build(
     focused,
     reading.navigation,
   );
-  return view.ok ? view.value : refusedView(state, view.error.message, size);
+  // The staged composition, on the screen a person is actually working in.
+  // What it shows is read from this execution rather than supplied — the
+  // reading this frame was resolved at, and what this execution's Sidekick
+  // acknowledged doing to it: see `workspaceOf`.
+  return view.ok
+    ? withWorkspace(view.value, workspaceOf(reading.model, sidekick))
+    : refusedView(state, view.error.message, size);
 }
 
 /** Wake the loop whenever this session's history or overlay moves. */
@@ -2714,6 +2772,14 @@ function* perform(
      */
     retrying(conversation: string, message: number): Result<{ text: string; held: Instruction }>;
   },
+  /**
+   * Say why something this performed refused, on the next pass of the loop.
+   *
+   * For the work that is spawned and answers later: the record a person reads
+   * is the screen's, and a refusal decided after this returned has no
+   * `Performed` left to travel on.
+   */
+  refuse: (refusal: string) => void,
 ): Operation<Performed> {
   switch (intent.kind) {
     case "none":
@@ -2781,6 +2847,30 @@ function* perform(
         }
         wakes.send({ kind: "session" });
       });
+      return { remounted: true };
+    }
+    case "stop-entry": {
+      // Spawned, for the reason the Sidekick's Stop is: this joins everything
+      // that entry owned — its root's own cancelled ending, its outcome, its
+      // output consumer, its Agent attachment — and answers only once all of
+      // it has come down. A person who pressed it keeps a usable keyboard
+      // while it does, and the screen wakes when it is over.
+      //
+      // The key is the one the frame drew the control against. Whether that is
+      // still the entry running, whether the history has acknowledged it and
+      // whether a stop may start at all are the session's answers, not this
+      // branch's: a refusal comes back and is shown rather than guessed at
+      // here.
+      const stopping = intent.entry;
+      yield* spawn(function* (): Operation<void> {
+        const stopped = yield* session.stopEntry(stopping);
+        if (!stopped.ok) {
+          refuse(stopped.error.message);
+        }
+        wakes.send({ kind: "session" });
+      });
+      // The row beside the field is what this frame left mounted; the next
+      // event in this burst is dispatched against that.
       return { remounted: true };
     }
     case "answer": {
@@ -3042,6 +3132,7 @@ function* paint(
   chat?: ReplPlainFitStore,
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
+  draft?: ReplPlainFitStore,
 ): Operation<ReplPainted> {
   while (true) {
     const painted = yield* prepared(
@@ -3054,6 +3145,7 @@ function* paint(
       chat,
       message,
       guidance,
+      draft,
     );
     if (painted !== undefined) {
       return painted;
@@ -3081,6 +3173,7 @@ function* prepared(
   chat?: ReplPlainFitStore,
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
+  draft?: ReplPlainFitStore,
 ): Operation<ReplPainted | undefined> {
   return yield* scoped(function* (): Operation<ReplPainted | undefined> {
     const held = yield* frames.subscribe({ owner: "repl", participants: [["repl"]] });
@@ -3113,6 +3206,7 @@ function* prepared(
         chat,
         message,
         guidance,
+        draft,
       );
       if (committed.ok) {
         // 5. Present the copied bytes. 6. The caller retains the returned map.
@@ -3238,11 +3332,12 @@ export function* commitReplFrame(
   chat?: ReplPlainFitStore,
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
+  draft?: ReplPlainFitStore,
 ): Operation<Result<ReplCommitted>> {
   // Measure before anything is mounted: this asks the engine how much room each
   // region has, so what a window shows is the frame's answer rather than this
   // boundary's guess. It mounts nothing and publishes nothing.
-  const prepared = yield* prepareFrame(renderer, view, store, chat, message, guidance);
+  const prepared = yield* prepareFrame(renderer, view, store, chat, message, guidance, draft);
   if (!prepared.ok) {
     return prepared;
   }
@@ -3398,14 +3493,6 @@ function measuringAt(
   };
 }
 
-/** Whether these two rectangles are the same one, or both absent. */
-function sameBounds(one: ReplBounds | undefined, two: ReplBounds | undefined): boolean {
-  if (one === undefined || two === undefined) {
-    return one === two;
-  }
-  return one.x === two.x && one.y === two.y && one.width === two.width && one.height === two.height;
-}
-
 /**
  * The row below the whole fitted guidance block, as the engine placed it.
  *
@@ -3428,6 +3515,10 @@ function guidanceBottomOf(
       continue;
     }
     if (box.key !== "guidance" && !box.key.startsWith("guidance:row:")) {
+      continue;
+    }
+    // Guidance drawn below the body is in no drawer's way.
+    if (box.region === "footer") {
       continue;
     }
     const bounds = measured.boundsOf(box.id);
@@ -3490,22 +3581,135 @@ export function* prepareFrame(
    * store for both would evict the chat every time a reader moved.
    */
   guidanceStore?: ReplPlainFitStore,
+  /**
+   * Where this command is holding the staged Draft's own cuts.
+   *
+   * Its own storage for the third time. The Draft is somebody's next entry and
+   * the composer is their next message: typing in one changes nothing about the
+   * other, and a shared store would evict whichever was not being typed into.
+   */
+  draftStore?: ReplPlainFitStore,
 ): Operation<Result<ReplPrepared>> {
   // No widths at all for the pass that answers what the widths are. Every row
   // whose text has to fit a region is left out of it, because a growing column
   // takes its minimum from its widest child: one unbounded row would make the
   // column wider than its share and squeeze the column beside it, and the number
   // this pass reports would be the number that row caused.
-  const probe = presentationFor(view, measuringAt(undefined, false, undefined));
+  //
+  // The tray's own row is the exception, and it is the reason this pass says
+  // so: the width this pass reports for a queued message's text is read off
+  // that row's box, and a tray already holding more rows than its column
+  // allocated it would otherwise describe none — leaving the queue no width to
+  // fit against, and so no fitted rows for any later pass to admit. It is a
+  // blank row until something has been fitted, so it makes no column wider.
+  const probe = presentationFor(view, {
+    ...measuringAt(undefined, false, undefined),
+    queueProbe: true,
+  });
   const first = yield* renderer.measure(skeletonOps(probe.manifest.root), view.size);
   if (!first.ok) {
     return first;
   }
   const widths = widthsOf(probe.manifest, first.value);
 
+  // The staged queue, fitted to the text column its first message measured.
+  // Before every pass below, because each message is as many rows as its text
+  // needs and the chat above it is what is left.
+  const queueLines = queueLinesOf(view);
+  const queued =
+    queueLines === undefined || (widths.queue ?? 0) < 1
+      ? Ok(undefined)
+      : yield* fitPlain(renderer, view.size, queueLines, widths.queue ?? 0);
+  if (!queued.ok) {
+    return queued;
+  }
+  // The Transcript's selector, fitted once. Before the header rows below,
+  // because what this answers is how wide that control is and the wrap decision
+  // is made against it — and before every pass after that, because a label one
+  // pass measured and another spelled differently is a control drawn where
+  // nothing measured it.
+  //
+  // Through the engine and at grapheme boundaries. The name is a provider's
+  // session key, which nothing in this product bounds and whose cells are not
+  // its code units in either direction: measured, twenty-five wide characters
+  // declared twenty-nine cells and needed fifty-four, and combining accents
+  // declared more than they used and published a target over the column beside
+  // them.
+  const selectorRoom = selectorRoomOf(widths);
+  let selector: ReplFittedLabel | undefined;
+  if (selectorRoom !== undefined && selectorRoom > 0) {
+    const fitted = yield* fitCells(
+      renderer,
+      view.size,
+      selectorName(view),
+      SELECTOR_MARK,
+      // What is left once this screen's own marker room in front of every
+      // control's label has had its two cells.
+      Math.max(0, selectorRoom - FOCUS_MARKER),
+    );
+    if (!fitted.ok) {
+      return fitted;
+    }
+    selector = fitted.value;
+  }
+  // Which staged headers need two rows, asked of the engine rather than
+  // counted: each header's one-row text is fitted to the width the engine
+  // measured for it, and a header whose text needs more than one row is drawn
+  // as two rows of its own pane's body.
+  const headerLines = workspaceHeaderLines(
+    view,
+    { ...measuringAt(widths, false, undefined), ...(selector === undefined ? {} : { selector }) },
+    widths,
+  );
+  const wrapped = new Set<string>();
+  for (const line of headerLines) {
+    const fitted = yield* fitPlain(
+      renderer,
+      view.size,
+      [{ key: line.key, text: line.text }],
+      line.room,
+    );
+    if (!fitted.ok) {
+      return fitted;
+    }
+    if (fitted.value.length > 1) {
+      wrapped.add(line.key);
+    }
+  }
+  // What the Draft's field has left, once this frame's own heading row and the
+  // control beside it have been measured. Settled here, before anything is
+  // mounted, and carried into every pass after it — the field is stated in the
+  // measuring ops and in the committed ops alike, because a width the two
+  // passes disagreed about is a control drawn where nothing measured it.
+  let field: number | undefined;
+  let messageText: number | undefined;
+  let historyRoom: number | undefined;
+  let historySpace: number | undefined;
+  /**
+   * How the non-wide History row divides itself, in whole cells.
+   *
+   * Copied out of one bounded measurement of the row's two parts asked on their
+   * own, before anything is admitted, and then stated in every pass after it.
+   * A `fit` child answers about the room its parent was given, so a map fitted
+   * beside the controls takes the room first and every control comes back on
+   * part of a cell; measuring them apart is what makes the split whole.
+   */
+  let historyParts: { readonly map: number; readonly actions: number } | undefined;
+  const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
+    ...context,
+    ...(queued.value === undefined ? {} : { queue: queued.value }),
+    ...(wrapped.size === 0 ? {} : { headers: wrapped }),
+    ...(historySpace === undefined ? {} : { historyGap: historySpace }),
+    ...(field === undefined ? {} : { draftField: field }),
+    ...(messageText === undefined ? {} : { queueText: messageText }),
+    ...(historyRoom === undefined ? {} : { historyMap: historyRoom }),
+    ...(historyParts === undefined ? {} : { historySplit: historyParts }),
+    ...(selector === undefined ? {} : { selector }),
+  });
+
   // The catalog without its controls: if it fits, it keeps its natural footprint
   // and the column keeps the rows those controls would have taken.
-  const trial = presentationFor(view, measuringAt(widths, false, undefined));
+  const trial = presentationFor(view, queuing(measuringAt(widths, false, undefined)));
   const second = yield* renderer.measure(skeletonOps(trial.manifest.root), view.size);
   if (!second.ok) {
     return second;
@@ -3517,14 +3721,15 @@ export function* prepareFrame(
   // The directions, fitted to the surface they are drawn on. Before the frame
   // below, because they are fixed content: the room the composer may grow into
   // is what is left once they have taken theirs.
+  const guidanceRoom = widths.guidance ?? widths.surfaceBody;
   const guidance =
-    widths.surfaceBody < 1
+    widths.surfaceBody < 1 || guidanceRoom < 1
       ? Ok(undefined)
       : yield* fitPlain(
           renderer,
           view.size,
-          [{ key: "guidance", text: guidanceSentence(view) }],
-          widths.surfaceBody,
+          [{ key: "guidance", text: footerSentence(view) }],
+          guidanceRoom,
           guidanceStore,
         );
   if (!guidance.ok) {
@@ -3554,13 +3759,52 @@ export function* prepareFrame(
     refused.value === undefined
       ? undefined
       : Object.freeze(refused.value.map((own) => `${" ".repeat(own.indent)}${own.text}`));
-  const probed = presentationFor(
-    view,
-    measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1),
-  );
+  // The width probe. Its only question is how wide a fitted control is, so it
+  // is the one pass that puts a queued row in the tray — and it is deliberately
+  // not the pass anything is admitted from.
+  const probed = presentationFor(view, {
+    ...queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1)),
+    queueProbe: true,
+  });
   const fitted = yield* renderer.measure(skeletonOps(probed.manifest.root), view.size);
   if (!fitted.ok) {
     return fitted;
+  }
+  field = draftFieldWidth(probed.manifest, (id) => fitted.value.boundsOf(id)?.width);
+  messageText = queueTextWidth(
+    probed.manifest,
+    (id) => fitted.value.boundsOf(id)?.width,
+    widths.body,
+  );
+  // What the accepted wide row's gap is, from the row and the map this frame
+  // measured. Taken here, from the pass that already holds a fitted map and
+  // the whole footer, and before anything is admitted: the question is how to
+  // divide the room the map leaves, which no admitted set changes.
+  historySpace = historyGapWidth((id) => fitted.value.boundsOf(id)?.width);
+  historyRoom = historyMapWidth(
+    probed.manifest,
+    (id) => fitted.value.boundsOf(id)?.width,
+    view.size.columns,
+  );
+  // And how the non-wide row divides itself, from its two parts asked on their
+  // own. One bounded measurement of a tree that mounts nothing and publishes no
+  // target: a fitted row holding exactly the offered control nodes with their
+  // own labels and gap, and a fitted row holding the map's own runs. What is
+  // copied out is two whole widths, before the next engine call takes the
+  // engine's memory of this one.
+  //
+  // Not a loop, and not derived from the row that was compressed: the question
+  // is what these things need, and a rectangle one of them was squeezed into is
+  // the answer this replaces.
+  if (profileFor(view.size) !== "wide") {
+    const parts = historyProbeOf(probed.manifest, view.size);
+    if (parts !== undefined) {
+      const apart = yield* renderer.measure(skeletonOps(parts), view.size);
+      if (!apart.ok) {
+        return apart;
+      }
+      historyParts = historySplitOf((id) => apart.value.boundsOf(id)?.width, view.size.columns);
+    }
   }
   // Where a route drawer goes, now that the block it must stay clear of has
   // been fitted and placed. The guidance is as many rows as its words need, so
@@ -3571,17 +3815,24 @@ export function* prepareFrame(
   // that counts them has to be a pass that knows where it starts. Bounded, not
   // a loop — a floating layer takes no row out of any column's flow, so the
   // guidance it was moved clear of cannot move because it moved.
-  const envelope = routeDrawerRect(view.size, guidanceBottomOf(probed.manifest, fitted.value));
-  const settled = sameBounds(envelope, drawerRect(view.size));
-  const measured = settled
-    ? probed
-    : presentationFor(
-        view,
-        measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, 1, envelope),
-      );
-  const third = settled
-    ? fitted
-    : yield* renderer.measure(skeletonOps(measured.manifest.root), view.size);
+  const workspace = stagedWorkspace(view) !== undefined;
+  const envelope = routeDrawerRect(
+    view.size,
+    guidanceBottomOf(probed.manifest, fitted.value),
+    workspace,
+  );
+  // The structural skeleton, under that envelope: every scrolling viewport
+  // empty, with the controls that sit around it already in place. This is the
+  // measurement an admission may be derived from, which is why it is measured
+  // again rather than reusing the probe above — the probe was holding a row
+  // inside the tray's viewport so the engine would size that row's control,
+  // and a viewport stretched by its own contents reports the room its contents
+  // wanted. Bounded: one pass, never a loop.
+  const measured = presentationFor(
+    view,
+    queuing(measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, 1, envelope)),
+  );
+  const third = yield* renderer.measure(skeletonOps(measured.manifest.root), view.size);
   if (!third.ok) {
     return third;
   }
@@ -3647,8 +3898,7 @@ export function* prepareFrame(
   // every keystroke. Showing or revealing the chat publishes that window again,
   // and this is the pass that fits it against the geometry it has now.
   const presentsChat = measured.manifest.viewports.some((slot) => slot.window === SIDEKICK_WINDOW);
-  const chatLines =
-    chatRoom < 1 || !presentsChat ? undefined : sidekickChatLines(view.live.sidekick);
+  const chatLines = chatRoom < 1 || !presentsChat ? undefined : chatLinesFor(view);
   const chat =
     chatLines === undefined
       ? Ok(undefined)
@@ -3704,13 +3954,15 @@ export function* prepareFrame(
           skeletonOps(
             presentationFor(
               view,
-              measuringAt(
-                widths,
-                windowed,
-                entriesRows,
-                guidanceRows?.length ?? 1,
-                shown.length,
-                envelope,
+              queuing(
+                measuringAt(
+                  widths,
+                  windowed,
+                  entriesRows,
+                  guidanceRows?.length ?? 1,
+                  shown.length,
+                  envelope,
+                ),
               ),
             ).manifest.root,
           ),
@@ -3724,13 +3976,15 @@ export function* prepareFrame(
       ? measured
       : presentationFor(
           view,
-          measuringAt(
-            widths,
-            windowed,
-            entriesRows,
-            guidanceRows?.length ?? 1,
-            shown.length,
-            envelope,
+          queuing(
+            measuringAt(
+              widths,
+              windowed,
+              entriesRows,
+              guidanceRows?.length ?? 1,
+              shown.length,
+              envelope,
+            ),
           ),
         );
   // The History band, measured against the terminal's own width. Prepared
@@ -3741,8 +3995,13 @@ export function* prepareFrame(
   // sentence and publishes no footer at all, so preparing a rail for it
   // would turn a refusal the product already handles into a measurement
   // failure.
+  // And the staged composition has no band either: its footer carries one
+  // compact row built from the navigation itself, and nothing it draws reads a
+  // prepared rail. Measuring five rows for it is an engine render a frame
+  // spent on a band that is never drawn — 65ms over a sixteen-second typing
+  // workload.
   const rail =
-    profileFor(view.size) === "too-small"
+    workspace || profileFor(view.size) === "too-small"
       ? Ok(undefined)
       : yield* prepareRail(
           renderer,
@@ -3754,6 +4013,29 @@ export function* prepareFrame(
   if (!rail.ok) {
     return rail;
   }
+  // The staged Draft's own value, fitted to the selected work it sits in. A
+  // fixed number of rows, so no measurement above depends on it.
+  //
+  // Through a store of its own, and over the lines that are drawn rather than
+  // over the whole draft: a key typed into a long draft was re-measuring every
+  // line of it through the engine, and the rows above the block were cut only
+  // to be dropped.
+  const draftLines = draftLinesOf(view);
+  const drafted =
+    draftLines === undefined || widths.surfaceBody < 1
+      ? Ok(undefined)
+      : yield* fitPlain(renderer, view.size, draftLines, widths.surfaceBody, draftStore);
+  if (!drafted.ok) {
+    return drafted;
+  }
+  // The drawer's own notices, fitted to the interior this frame measured. Here
+  // rather than in the builder that draws them: the engine is what knows how
+  // many cells a grapheme takes, and the same answer has to serve the window's
+  // row count, its admission, its offsets and the rows finally described.
+  const notices = yield* prepareNotices(renderer, view, widths.drawer);
+  if (!notices.ok) {
+    return notices;
+  }
   const admission = admissionFor({
     view,
     manifest: placed.manifest,
@@ -3761,6 +4043,8 @@ export function* prepareFrame(
     reading: reading.value,
     preview: preview.value,
     chat: chat.value,
+    queue: queued.value,
+    notices: notices.value,
     boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -3778,8 +4062,62 @@ export function* prepareFrame(
     refusal: refusalRows,
     rail: rail.value,
     drawer: envelope,
+    draftField: field,
+    queueText: messageText,
+    historyMap: historyRoom,
+    historyGap: historySpace,
+    historySplit: historyParts,
+    selector,
+    draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
+    notices: notices.value,
+    queue: queued.value,
+    headers: wrapped.size === 0 ? undefined : wrapped,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
+}
+
+/**
+ * Fit each of the drawer's notices onto the rows its interior has room for.
+ *
+ * Through the engine and the original graphemes, which is what the width of a
+ * row actually is: a pure builder counting code units gave a seventy-character
+ * ASCII token a seventy-two cell row inside thirty and drew none of it, and
+ * twelve spaced CJK words a forty-eight cell row inside thirty.
+ *
+ * The declared indent is taken out of the room and put back on every row, so a
+ * wrapped notice still reads as one thing set in from the drawer's edge and the
+ * rows it is paid out over are each as wide as the drawer's own. A room of less
+ * than one cell is a frame that has measured nothing, and prepares nothing.
+ */
+function* prepareNotices(
+  renderer: ReplRenderer,
+  view: ReplView,
+  width: number,
+): Operation<Result<ReplPreparedNotices | undefined>> {
+  const notices = configureNoticesOf(view);
+  const room = width - NOTICE_INDENT.length;
+  if (notices.length === 0 || room < 1) {
+    return Ok(undefined);
+  }
+  const prepared = new Map<string, readonly string[]>();
+  for (const notice of notices) {
+    const fitted = yield* fitPlain(
+      renderer,
+      view.size,
+      [{ key: notice.key, text: notice.text }],
+      room,
+    );
+    if (!fitted.ok) {
+      return fitted;
+    }
+    prepared.set(
+      notice.key,
+      Object.freeze(
+        fitted.value.map((one) => `${NOTICE_INDENT}${" ".repeat(one.indent)}${one.text}`),
+      ),
+    );
+  }
+  return Ok(prepared);
 }
 
 /** Which region's width the text that must fit one is bounded by. */
@@ -3835,7 +4173,19 @@ function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMea
     listBody: bodyOf(SIDEBAR_BODY, "sidebar", "content"),
     body: bodyOf(SIDEKICK_BODY, "inspection", "content"),
     drawer: widthOf(measured, manifest.viewports.find((slot) => slot.region === "drawer")?.id),
+    queue: widthOf(measured, manifest.contents.find((content) => content.id === QUEUE_TEXT)?.id),
+    guidance: guidanceWidthOf(manifest, measured),
   };
+}
+
+/**
+ * The guidance row's own width, where a frame draws the guidance below the body.
+ *
+ * None otherwise, so the guidance is fitted to the selected work it is part of.
+ */
+function guidanceWidthOf(manifest: ReplLayoutManifest, measured: ReplMeasured): number | undefined {
+  const drawn = flatten(manifest.root).some((box) => box.id === GUIDANCE_ROW);
+  return drawn ? widthOf(measured, GUIDANCE_ROW) : undefined;
 }
 
 function widthOf(measured: ReplMeasured, id: string | undefined): number {

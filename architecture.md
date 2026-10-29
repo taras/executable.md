@@ -6686,6 +6686,19 @@ pending one from starting rather than appending on its behalf. Settled segments
 are projected and never replayed; only an unfinished final segment is given back
 to Core to continue.
 
+Entry Stop is the one way a running entry ends as interrupted. It cancels that
+entry's task, retains a final interrupted outcome in the entry's own segment and
+joins the task's cleanup, and only then do both facts above hold for a
+successor. The outcome is an interruption, never a success inferred from
+cancellation: effects the entry completed stand, output it produced stays
+partial, and the segment is settled — projected like any other and never handed
+back to Core, so the stopped entry cannot resume as that same entry. Exit is
+different and keeps its recovery. It appends no outcome, so an entry it leaves
+running is still the unfinished final segment, and reopening the history
+continues it. Entry Stop belongs to the session that owns the entry; the
+Sidekick's own Stop and its Follow setting are the response owner's, described
+under [Follow and the two Stops](#follow-and-the-two-stops).
+
 A location is resolved against the retained history before a session opens.
 Opening one starts or resumes the execution, and replay past the retained prefix
 appends — so a route naming a scope or drawer the file never held is answered
@@ -7030,18 +7043,39 @@ one resolved reading → candidate rows + a layout manifest
 ```
 
 **The engine places; this boundary only states constraints.** Profiles, column
-widths, the drawer's integer rectangle and the footer's seven rows are product
-facts declared once; where a row lands and how many rows a region holds are
+widths, the drawer's integer rectangle and the fixed rows a composition keeps
+above and below its body are product facts declared once; where a row lands and how many rows a region holds are
 answers the engine gives. Nothing computes a cell coordinate or a capacity
 twice, because a question asked in two places is a question answered two ways.
 
 **A column's width can be a legibility requirement rather than a share.** The
-sidebar is a fixed thirty-six columns at both shared profiles, because the rows
-in it are text whose meaning is lost when it is cut: the fitter keeps a turn's
-state whole and degrades to a hard cut only when even that does not fit, so the
-column has to be wide enough that it never does. The Transcript and the right
-pane divide what is left. A geometry change that narrows this column is a change
-to what the product can say.
+left column is a fixed thirty-six columns at both shared profiles, because the
+rows in it are text whose meaning is lost when it is cut: the fitter keeps a
+turn's state whole and degrades to a hard cut only when even that does not fit,
+so the column has to be wide enough that it never does. The centre and right
+columns divide what is left — halved in the ordinary composition, and 66 and 58
+of 160 in the staged one below. A geometry change that narrows the left column
+is a change to what the product can say.
+
+**One staged composition is under image review.** The screen the root draws is
+the v2 composition, which is the wide screen #971 accepted: a Transcript of agent
+work on the left, the selected work with its breadcrumbs, exact source, state,
+results and its own multi-row Draft in the centre, and Bindings/Sidekick on the
+right with the trays this build offers above the composer and the Sidekick's
+Send/Stop beside them, under one identity row and above one compact History row
+and one guidance row. It is selected by a view carrying the inert workspace
+presentation, and the root supplies that presentation from what this execution
+actually holds: the selected tray, no queued rows because this build has no
+shared queue, and the entries its Sidekick's acknowledged Submits admitted. A
+build without the continuation Follow governs offers neither Follow nor a QUEUE
+tab, so neither is drawn and nothing dispatches them. It is not a second
+pipeline: it is the same reading, prepared, measured, admitted, reconciled into
+the one mounted tree and drawn by the same renderer pair, and every rule in this
+section holds for it unchanged. Its first geometry at 160x36 — columns of 36, 66
+and 58 cells with their dividers, 33 body rows, a four-row Draft — and its cell
+adaptations of the reference await the Product Owner's image acceptance; no
+capture of it is a regression target until then, and the 120x30 and 72x20
+compositions follow that review.
 
 **A row's surface comes from its semantic role, never from its key or its
 label.** `surfaceOf()` maps roles to backgrounds, and a window's two navigation
@@ -7803,8 +7837,8 @@ accepted separation rules out. A pane's title sits in a band with a surface of
 its own, and that band's bottom border is the header's accepted edge: the engine
 takes that row out of the band, so the rows below are built to what it leaves and
 the two passes account for the same decoration. A titled column therefore holds
-one row fewer of its reading than an untitled one, and the footer keeps its seven
-rows — the edge belongs to the header, not to the footer. A pane's own edges are not part of the room inside it: a bordered
+one row fewer of its reading than an untitled one, and the rows below the body keep
+their count — the edge belongs to the header, not to the footer. A pane's own edges are not part of the room inside it: a bordered
 pane carries a border-free content box, and rows are built to the width the engine
 reports for that box rather than to the pane's outer bound. A drawer's own
 decoration is held to the same rule: the rule along the top of its rectangle and
@@ -7887,12 +7921,15 @@ The renderer stays
 model-blind — it receives ops and geometry, classifies no row text, and no
 production string carries an escape sequence.
 
-The layout owns where things are, and the footer's seven rows are fixed in one
-order: the contextual status and action row, the five History rows, and the draft.
-Each is stated as geometry rather than inferred from a list's length, because the
-one thing on that screen that is not a mounted cell is the History band — its
-labels come from the model, so nothing else can say where it goes, and a renderer
-left to place it on its own put it at the terminal's origin over the sidebar. A
+The layout owns where things are. The ordinary composition fixes its footer's
+seven rows in one order: the contextual status and action row, the five History
+rows, and the draft. The staged composition fixes one identity row above the body
+and two rows below it — compact History, with the contextual action controls
+right-aligned on it, then the guidance — and draws the draft as a field of the
+selected-work column. Each is stated as geometry rather than inferred from a
+list's length, because History is not a mounted reading — its labels come from
+the model, so nothing else can say where it goes, and a renderer left to place it
+on its own put it at the terminal's origin over the left column. A
 control the row cannot hold whole is left out of the frame entirely, so what a
 pointer can reach and what a person can see are the same set.
 
@@ -8588,7 +8625,7 @@ travels with the results, which is how a correction becomes possible at all,
 together with the statement that what already happened stands — so the reply
 continues rather than repeating effects, and earlier successes are not replayed.
 
-**Stop ends the asking and nothing else.** The cycle runs in a task of its own
+**Sidekick Stop ends the asking and nothing else.** The cycle runs in a task of its own
 precisely so Stop has something to halt: it suspends in three places a person
 may want out of — provider generation, a response's controls, and a Submit
 waiting for its entry — and none of them can be interrupted by a flag read
@@ -8607,6 +8644,50 @@ only the waiting, and the submission's intent stays retained with no outcome —
 an operation that began and whose result nobody knows, which is exactly the
 state Stop leaves.
 
+#### Follow and the two Stops
+
+**Follow is not in the shipped build.** The layout and the two Stops ship
+first; the continuation Follow governs ships with the shared queue, so no screen
+offers the choice today and nothing watches an entry to start a turn after it.
+What this section states about Follow is the contract that delivery is held to
+rather than behaviour a reader can exercise now. **The two Stops below are
+implemented**: an entry's and the Sidekick's, each owning exactly what it says.
+
+Follow continues a Sidekick Send through the evaluation that Send invokes. It is
+a setting of the running REPL: on when the REPL starts, kept across rounds and
+navigation, and saved nowhere, so no preference, history or configuration record
+carries it between sessions. A round is one admitted entry the Sidekick
+submitted during Send, never a provider turn, and only such an entry takes part
+— an entry sent from the Draft has no continuation. The continuation is created
+and owned by that evaluation, so no observer, orchestration loop or scheduler
+watches entry outcomes and starts turns on its own.
+
+When the exact submitted entry settles, and the current exchange and its cleanup
+have joined, the continuation supplies two separate facts: the entry's actual
+outcome — completed, failed or interrupted, each distinct — and its actual
+output. The Submit answer itself stays the receipt above, the outcome and the
+read instruction, so output never reaches the reply through status prose. With
+Follow on, the next eligible queued message is served before another autonomous
+round, under the queue's own ordering, holds and refusals (#964); nothing here
+grants one origin priority over another or restarts a held queue. Turning Follow
+off ends automatic continuation after the current round and does not interrupt
+it. The authority of the surrounding contract is unchanged: fatal storage,
+disclosure and cleanup failures keep their outcome, feedback whose acceptance is
+unknown is never resent, and only explicit evaluated Output becomes the
+assistant's chat — the facts of associated work are shown beside the
+conversation as work, not as something the Sidekick said.
+
+There are two Stops, with two owners. Sidekick Stop is the response owner's: it
+ends the current Send and its continuation, joins both, and leaves Follow on for
+the next explicit Send. It is available while the reply is generating and while
+the Sidekick's question is waiting, with or without an entry. An admitted entry
+keeps running on its own terms, and its later settlement cannot restart the
+continuation that was stopped. Entry Stop is the session's: it finishes the
+running entry as interrupted, as [sequential entries](#sequential-entries-over-one-physical-journal)
+states, and that interrupted outcome reaches the Sidekick as the round's result
+while Follow stays on. Shared TODO context is not part of either: it belongs to
+the shared TODO work (#901).
+
 **The boundary is the exact entry's acknowledged admission, and an allocated
 task is not it.** A submission's task is started *before* the record that gives
 its entry a position, and that interval is real: the execution installs its
@@ -8622,9 +8703,11 @@ does nothing at all, which is what keeps an admitted entry independent.
 
 Two consequences follow. A cancelled startup frees the slot it held, because it
 admitted nothing and there is no entry for anything to follow — whereas an
-*entry* that was interrupted still occupies it, since nothing may follow an
-entry without an outcome; the two are told apart by that same acknowledgement
-and by nothing else. And the reservation withdraws itself as its submission
+admitted *entry* holds it until it has an outcome and its cleanup has joined,
+since nothing may follow an entry without one. An entry left unfinished by Exit
+or by a lost process keeps holding it; one finished by Entry Stop releases it
+once its interrupted outcome is retained and its cleanup has joined. The startup
+and the entry are told apart by that same acknowledgement and by nothing else. And the reservation withdraws itself as its submission
 unwinds: `live` means the asker still wants this, and a cancelled submission is
 the asker not wanting it, so the reservation answers for itself instead of being
 revoked by a separate call that would have to be sequenced correctly.

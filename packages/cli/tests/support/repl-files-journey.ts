@@ -26,7 +26,7 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
-import { allocate, showing, showingAcross } from "./pty.ts";
+import { allocate, settledEntry, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
 /**
@@ -262,7 +262,9 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     yield* showing(second, "Recorded value: first", ACT_MS);
     yield* showing(second, "Continue this experiment?", ACT_MS);
     yield* click(second, "( ) continue");
-    yield* showing(second, "[ok] entry-1", ACT_MS);
+    // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
+    // Entries catalog, which this screen keeps in a drawer.
+    yield* settledEntry(second, 1, "ok", ACT_MS);
 
     // The suffix write executed, for the first time, on the answer.
     yield* holding(join(checkout, "after.md"), "continued");
@@ -503,7 +505,9 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     yield* showing(second, "Recorded value: first", ACT_MS);
     yield* showing(second, "Continue this experiment?", ACT_MS);
     yield* click(second, "( ) continue");
-    yield* showing(second, "[ok] entry-1", ACT_MS);
+    // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
+    // Entries catalog, which this screen keeps in a drawer.
+    yield* settledEntry(second, 1, "ok", ACT_MS);
 
     // The suffix write executed, for the first time, on the answer — in the
     // checkout the restored placement named.
@@ -867,7 +871,9 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     // today's HEAD.
     yield* showing(second, `Recorded commit: ${recorded}`, ACT_MS);
     yield* click(second, "( ) continue");
-    yield* showing(second, "[ok] entry-1", ACT_MS);
+    // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
+    // Entries catalog, which this screen keeps in a drawer.
+    yield* settledEntry(second, 1, "ok", ACT_MS);
 
     // The suffix write executed, for the first time, on the answer.
     yield* holding(join(working, "after.md"), "continued");

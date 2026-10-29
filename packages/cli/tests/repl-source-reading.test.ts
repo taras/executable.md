@@ -29,7 +29,13 @@ import type { Operation } from "effection";
 
 import { entryReading, NO_READING, READING_STATUSES } from "../src/repl/source-reading.ts";
 import type { ReplReadingLine } from "../src/repl/source-reading.ts";
-import { createFitStore, prepareReading, readingRuns, reserveFor } from "../src/repl/fitting.ts";
+import {
+  createFitStore,
+  fitPlain,
+  prepareReading,
+  readingRuns,
+  reserveFor,
+} from "../src/repl/fitting.ts";
 import type { ReplPreparedReading } from "../src/repl/fitting.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import type { ReplCountingRenderer } from "./fixtures/repl/presentation.ts";
@@ -490,6 +496,99 @@ describe("the reading one entry is shown as", () => {
           return;
         }
         expect(prepared.value.rows.map((one) => one.text)).toEqual(["界é", "🙂"]);
+      }));
+
+    /**
+     * The tail of a wrapped line, which the engine measures as fitting whole.
+     *
+     * Four leading spaces, so the hanging indent its continuations are set in
+     * to is four as well, and a tail that has a space in it — which is what
+     * makes a whitespace backoff applicable where it must not apply.
+     */
+    const FITTING_TAIL = "    I started the Architect review and will say what it asks for.";
+    /** The room that line is fitted to, and what it is cut into there. */
+    const TAIL_ROOM = 55;
+    const TAIL_ROWS: readonly { readonly text: string; readonly indent: number }[] = [
+      { text: "    I started the Architect review and will say what ", indent: 0 },
+      { text: "it asks for.", indent: 4 },
+    ];
+
+    /** One logical line of plain text, as `fitPlain` is handed them. */
+    const plain = (text: string) => ({ key: "one", text });
+
+    it("D10: a remainder the engine measures as fitting stays on one row", () =>
+      withRenderer(function* (renderer) {
+        // The tail fits the room it is left with, so it is one row. Backing off
+        // to its last space would cut a row the engine had already accepted,
+        // and the reader would find `for.` alone on a row of its own.
+        const fitted = yield* fitPlain(renderer, WIDE, [plain(FITTING_TAIL)], TAIL_ROOM);
+        expect(fitted.ok).toBe(true);
+        if (!fitted.ok) {
+          return;
+        }
+        expect(fitted.value.map((one) => ({ text: one.text, indent: one.indent }))).toEqual(
+          TAIL_ROWS,
+        );
+        // Still exactly what was written: the cuts put nothing in and take
+        // nothing out, and each row's runs spell the row.
+        expect(fitted.value.map((one) => one.text).join("")).toBe(FITTING_TAIL);
+        for (const row of fitted.value) {
+          expect(runText(row.runs)).toBe(row.text);
+          expect(row.text.length + row.indent).toBeLessThanOrEqual(TAIL_ROOM);
+        }
+
+        // And a remainder exactly as wide as the room it has: the bound is
+        // inclusive, so it is one row rather than two.
+        const exact = yield* fitPlain(renderer, WIDE, [plain("1234567 abc defg")], 8);
+        expect(exact.ok).toBe(true);
+        if (!exact.ok) {
+          return;
+        }
+        expect(exact.value.map((one) => ({ text: one.text, indent: one.indent }))).toEqual([
+          { text: "1234567 ", indent: 0 },
+          { text: "abc defg", indent: 0 },
+        ]);
+        expect(exact.value.map((one) => one.text).join("")).toBe("1234567 abc defg");
+      }));
+
+    it("D10: a reserved reading keeps a fitting remainder whole", () =>
+      withRenderer(function* (renderer) {
+        const line: ReplReadingLine = Object.freeze({
+          key: "one",
+          text: FITTING_TAIL,
+          runs: Object.freeze([Object.freeze({ text: FITTING_TAIL, token: "source" as const })]),
+          rail: "rail-pending" as const,
+          depth: 0,
+          badge: undefined,
+          style: Object.freeze({ role: "source" as const, selected: false, inspected: false }),
+        });
+        const reservation = yield* reserveFor(renderer, WIDE, 80);
+        expect(reservation.ok).toBe(true);
+        if (!reservation.ok) {
+          return;
+        }
+        // The same content room the plain case has, once the rail, its two
+        // separators and the status column this reading reserves are taken.
+        const room =
+          reservation.value.rail +
+          reservation.value.separator * 2 +
+          reservation.value.status +
+          TAIL_ROOM;
+        const prepared = yield* prepareReading(renderer, WIDE, [line], room);
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          return;
+        }
+        expect(prepared.value.reservation.content).toBe(TAIL_ROOM);
+        expect(prepared.value.rows.map((one) => ({ text: one.text, indent: one.indent }))).toEqual(
+          TAIL_ROWS,
+        );
+        expect(prepared.value.rows.map((one) => one.text).join("")).toBe(FITTING_TAIL);
+        for (const row of prepared.value.rows) {
+          expect(runText(row.runs)).toBe(row.text);
+          // Measured, not counted: every row fits the content it was reserved.
+          expect(row.width + row.indent).toBeLessThanOrEqual(prepared.value.reservation.content);
+        }
       }));
 
     it("refuses rather than clipping when not one grapheme fits", () =>

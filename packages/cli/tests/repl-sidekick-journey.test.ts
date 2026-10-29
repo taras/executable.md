@@ -30,7 +30,7 @@ import { initialState } from "../src/repl/application.ts";
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Ok, spawn, suspend, until, useScope, withResolvers } from "effection";
+import { ensure, Ok, spawn, suspend, until, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -59,6 +59,7 @@ import {
 } from "./fixtures/repl/issue-932/history.ts";
 import {
   appendGate,
+  awaitedFact,
   awaiting,
   awaited,
   draftText,
@@ -67,8 +68,13 @@ import {
   MESSAGE_PROMPT,
   messageText,
   MOUNTED_AGENT,
+  blockSays,
   mountedReading,
+  saidByPerson,
+  saidBySidekick,
   screenOf,
+  rowsShow,
+  sidekickColumn,
   sendMessage,
   settled,
   shows,
@@ -76,6 +82,7 @@ import {
   useMountedRepl,
   useMountedHost,
   mountedExecution,
+  sidekickPaneIn,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
 import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
 
@@ -1212,13 +1219,20 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(during.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(during.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(during.model.entries).toEqual([]);
-    expect(shows(repl.terminal, "(not submitted)")).toBe(true);
+    // The screen says the same thing by what it is showing: the catalog holds
+    // no entry, and the draft is still a draft somebody is holding rather than
+    // work that has been admitted.
+    expect(shows(repl.terminal, "No entry yet")).toBe(true);
     // Both composers still hold what was typed into them, and the Sidekick is
     // working — so Stop is the control, not Send.
     expect(draftText(repl.terminal)).toBe("mine");
     expect(messageText(repl.terminal)).toBe("later");
     expect(shows(repl.terminal, "[stop]")).toBe(true);
-    expect(shows(repl.terminal, "[send]")).toBe(false);
+    // The Sidekick's own control is Stop while it works. The entry draft keeps
+    // its own Send beside it — they are two destinations with two controls —
+    // so this asks the pane rather than the whole screen.
+    const pane = screenOf(repl.terminal).map((line) => line.slice(sidekickColumn(repl.terminal)));
+    expect(rowsShow(pane, "[send]")).toBe(false);
 
     // The rest of the text arrives, and the entry the reply submits is held
     // open: generation is over and the response is running its controls.
@@ -1243,7 +1257,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     expect(complete.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(complete.model.entries).toEqual([]);
     expect(draftText(repl.terminal)).toBe("mine");
-    expect(shows(repl.terminal, "(not submitted)")).toBe(true);
+    expect(shows(repl.terminal, "No entry yet")).toBe(true);
     expect(repl.terminal.fed).toBe(fed);
 
     repl.fake.releaseDeltas();
@@ -1258,7 +1272,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // becomes the reply — the preview is gone, not joined by an answer.
     closing.release();
     yield* awaiting(repl.terminal, "the evaluated reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Half a thought.`),
+      saidBySidekick(one, "Half a thought."),
     );
     yield* settled(40);
     expect(shows(repl.terminal, "(preview)")).toBe(false);
@@ -1373,8 +1387,17 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
 
     repl.fake.releaseDeltas();
     yield* awaiting(repl.terminal, "the evaluated reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Half a thought.`),
+      saidBySidekick(one, "Half a thought."),
     );
+    // The screen says the Sidekick's words as soon as it has said them, and
+    // this reply carries an entry: the response is published once that entry
+    // has been evaluated, which is after the row is drawn. Caught on a loaded
+    // runner as a published chat whose last record was still the control the
+    // evaluation had just taken. So the fact this row goes on to read is the
+    // one it waits for.
+    yield* awaitedFact("the reply reaching the published chat", function* () {
+      return (yield* mountedReading(repl)).chat.some((record) => record.kind === "response");
+    });
     const after = (yield* mountedReading(repl)).chat;
     const answered = after.flatMap((record) =>
       record.kind === "response"
@@ -1488,7 +1511,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // ER2 — and the follow-up that *did* say something says it, in its own row,
     // exactly as it always has: removing the silent reply's notice removes a
     // sentence nobody wrote and nothing else.
-    expect(shows(repl.terminal, `${MOUNTED_AGENT}: Read it.`)).toBe(true);
+    expect(saidBySidekick(repl.terminal, "Read it.")).toBe(true);
     expect(shows(repl.terminal, "(preview)")).toBe(false);
     // And the reply that selected no chat contributed no utterance at all. The
     // superseded form of this row asserted a sentence about the absence; what
@@ -1525,7 +1548,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     yield* settled(40);
 
     // What a person asked for is still there, and nothing of the two replies is.
-    expect(shows(repl.terminal, "you: look")).toBe(true);
+    expect(saidByPerson(repl.terminal, "look")).toBe(true);
     expect(shows(repl.terminal, "answered without saying")).toBe(false);
     expect(shows(repl.terminal, "(preview)")).toBe(false);
     expect(shows(repl.terminal, "REPL.Bindings")).toBe(false);
@@ -1604,7 +1627,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // And the correction it was given, which answered: the failure stands in
     // the chat beside the reply that followed it, in that order.
     yield* awaiting(repl.terminal, "the corrected reply", (one) =>
-      shows(one, `${MOUNTED_AGENT}: Fixed it.`),
+      saidBySidekick(one, "Fixed it."),
     );
     expect(yield* composedChat(repl)).toEqual([
       "  you: remove it",
@@ -1613,6 +1636,24 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     ]);
   });
 });
+
+/**
+ * A reply that prepares an entry whose preflight suspends, and submits it.
+ *
+ * Its one element is a component read from a file the row below gates, so the
+ * preflight has somewhere to wait — between the slot being reserved and the
+ * entry starting, which is the window the start check exists for.
+ */
+const GATED_ENTRY_REPLY = [
+  '<Let as="entry" select="code">',
+  "```md",
+  "<GateThing />",
+  "```",
+  "</Let>",
+  "<REPL.EntryInput>{entry}</REPL.EntryInput>",
+  "<REPL.Submit />",
+  "",
+].join("\n");
 
 describe("Tier R5 — a mounted message prepares and submits a real entry", () => {
   it("M3: the message a person sends runs its entry, and is answered about it", function* () {
@@ -1653,9 +1694,9 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
 
     // And the chat is the person's message and the two replies' own Output —
     // not a response body, not the entry's source, not the feedback envelope.
-    expect(shows(repl.terminal, "you: greet")).toBe(true);
-    expect(shows(repl.terminal, `${MOUNTED_AGENT}: Submitted it.`)).toBe(true);
-    expect(shows(repl.terminal, `${MOUNTED_AGENT}: Thanks for the receipt.`)).toBe(true);
+    expect(saidByPerson(repl.terminal, "greet")).toBe(true);
+    expect(saidBySidekick(repl.terminal, "Submitted it.")).toBe(true);
+    expect(saidBySidekick(repl.terminal, "Thanks for the receipt.")).toBe(true);
     expect(shows(repl.terminal, "REPL.EntryInput")).toBe(false);
 
     // A second message, in the same conversation: one conversation per
@@ -1692,6 +1733,253 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     expect(second.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
     expect(second.model.entries[1]?.terminal?.output).toContain("| a | b |");
     expect(repl.fake.prompts[4] ?? "").toContain("Entry entry-2 completed.");
+  });
+
+  /**
+   * #971 B1: the Sidekick's own rows carry the entry each reply admitted.
+   *
+   * The association is read out of the Submit records this history already
+   * holds — which chat and which response performed the control, the slot it
+   * reserved, the entry key it named and the exact source it reserved — so a
+   * reply that really admitted an entry is followed by that entry's own state
+   * and output, and a reply that admitted nothing is followed by nothing.
+   *
+   * What the row *says* is read from the model where it is drawn and nowhere
+   * else: a reply's wording is not an account of what its entry did, and the
+   * two are deliberately different strings here so that one cannot pass for the
+   * other.
+   */
+  it("M3: each reply's rows carry the entry it admitted, and nothing it did not", function* () {
+    // A component the entry below reads, so its preflight has somewhere to
+    // wait: between the slot being reserved and the entry actually starting,
+    // which is the window the start check exists for.
+    const directory = yield* useTemporary("xmd-971-refused-reservation-");
+    yield* until(writeFile(join(directory, "GateThing.md"), "The manual entry ran.\n"));
+    const reached = withResolvers<void>();
+    const allow = withResolvers<void>();
+    // Released at the end whatever happened, so a failing row leaves no latch.
+    yield* ensure(() => allow.resolve());
+    let holding = false;
+    yield* API.Fs.around({
+      *readTextFile([path], next): Operation<string> {
+        if (holding && path.endsWith("GateThing.md")) {
+          holding = false;
+          reached.resolve();
+          yield* allow.operation;
+        }
+        return yield* next(path);
+      },
+    });
+    const host = yield* useMountedHost({ includes: [directory] });
+    let execution = "";
+    /** A position holding the first entry and not the second. */
+    let earlier = "";
+    let entries = "";
+    let chat = "";
+
+    yield* scoped(function* (): Operation<void> {
+      const repl = yield* useMountedRepl({ host });
+      repl.fake.script({ reply: entrySource("first", "the first entry ran", "{first}") });
+      repl.fake.script({ reply: "<Output>That is one.</Output>\n" });
+      yield* sendMessage(repl, "run one");
+      yield* awaiting(repl.terminal, "the first receipt", (one) => shows(one, "That is one."));
+
+      const after = yield* mountedReading(repl);
+      execution = after.execution;
+      expect(after.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      // The position as it stands with one entry admitted, for the prefix arm
+      // below. Taken now, because what makes it a prefix is what came after it.
+      earlier = after.model.checkpoints[after.model.checkpoints.length - 1]?.marker ?? "";
+      expect(earlier).not.toBe("");
+
+      repl.fake.script({ reply: entrySource("second", "the second entry ran", "{second}") });
+      repl.fake.script({ reply: "<Output>That is two.</Output>\n" });
+      yield* sendMessage(repl, "run two");
+      yield* awaiting(repl.terminal, "the second receipt", (one) => shows(one, "That is two."));
+
+      // Each reply's work, after the reply that admitted it: the entry the
+      // record names, the state the model holds it in, and what it actually
+      // printed. The entry's own words and the reply's are different strings,
+      // so a row carrying the reply's wording could not pass for either.
+      const live = yield* mountedReading(repl);
+      expect(live.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      const pane = sidekickPaneIn(screenOf(repl.terminal));
+      const at = (said: string): number => pane.findIndex((row) => row.includes(said));
+      expect(at("Entry 1 \u00b7 \u2713 COMPLETED")).toBeGreaterThan(at("Submitted it."));
+      expect(at("the first entry ran")).toBe(at("Entry 1 \u00b7 \u2713 COMPLETED") + 1);
+      expect(at("That is one.")).toBeGreaterThan(at("the first entry ran"));
+      expect(at("Entry 2 \u00b7 \u2713 COMPLETED")).toBeGreaterThan(at("That is one."));
+      expect(at("the second entry ran")).toBe(at("Entry 2 \u00b7 \u2713 COMPLETED") + 1);
+      // One row each: a reply is followed by the entry it submitted, not by
+      // every entry this execution has admitted.
+      for (const said of ["Entry 1 \u00b7", "Entry 2 \u00b7"]) {
+        expect([said, pane.filter((row) => row.includes(said)).length]).toEqual([said, 1]);
+      }
+      // The state is the model's own, not a word from the reply.
+      expect(live.model.entries[0]?.terminal?.status).toBe("ok");
+      expect(live.model.entries[0]?.terminal?.output).toContain("the first entry ran");
+
+      // A reply that admits nothing is followed by nothing. The draft an
+      // admission finished is empty, so this Submit is refused before any slot
+      // is taken — no control record, and so no association to read.
+      repl.fake.script({ reply: "<REPL.Submit />\n" });
+      repl.fake.script({ reply: "<Output>I will prepare source first.</Output>\n" });
+      yield* sendMessage(repl, "submit it");
+      yield* awaiting(repl.terminal, "the refusal going back", (one) =>
+        shows(one, "I will prepare source first."),
+      );
+      const refused = yield* mountedReading(repl);
+      expect(refused.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      const after3 = sidekickPaneIn(screenOf(repl.terminal));
+      const said = after3.findIndex((row) => row.includes("I will prepare source first."));
+      expect(said).toBeGreaterThan(0);
+      // Nothing after that reply says an entry: the rows below it are the
+      // composer and the pane's own controls.
+      expect(after3.slice(said + 1).some((row) => /Entry \d+ \u00b7/.test(row))).toBe(false);
+
+      // And a reply whose reservation *was* retained and then refused, whose
+      // exact reserved source somebody then runs themselves at the same slot.
+      // This is the one the record's slot, key and source cannot tell apart on
+      // their own: all three match, and the entry is still not that reply's.
+      holding = true;
+      repl.fake.script({ reply: GATED_ENTRY_REPLY });
+      repl.fake.script({ reply: "<Output>I did not admit an entry.</Output>\n" });
+      yield* sendMessage(repl, "run the gated one");
+      yield* reached.operation;
+      // The draft moves while the submission is being prepared, which is what
+      // the start check refuses on: the prepared text is not the text anybody
+      // is asking for any more.
+      yield* focusDraft(repl.terminal);
+      yield* typing(repl.terminal, "!");
+      allow.resolve();
+      yield* awaiting(repl.terminal, "the refused submission going back", (one) =>
+        shows(one, "I did not admit an entry."),
+      );
+
+      // Retained, and retained as refused: an intent with a reservation, and
+      // an outcome saying it ended without one. Nothing was admitted.
+      const held = yield* mountedReading(repl);
+      expect(held.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+      // The reservation this message took, which is the last one written: the
+      // two before it are the entries that really ran.
+      const intent = held.chat
+        .filter(
+          (record) =>
+            record.kind === "control" && record.component === "REPL.Submit" && record.submit,
+        )
+        .at(-1);
+      if (intent?.kind !== "control" || intent.submit === undefined) {
+        throw new Error("this history retained no Submit reservation to refuse");
+      }
+      const answered = held.chat.find(
+        (record) =>
+          record.kind === "control-outcome" &&
+          record.conversation === intent.conversation &&
+          record.response === intent.response &&
+          record.order === intent.order,
+      );
+      if (answered?.kind !== "control-outcome" || answered.outcome.status !== "err") {
+        throw new Error("that reservation was not retained as refused");
+      }
+
+      // Exactly the source it reserved, typed back in and run by hand. The
+      // backspace takes off the character that moved the draft, which leaves
+      // the reserved text itself.
+      yield* focusDraft(repl.terminal);
+      repl.terminal.feed("\x7f");
+      yield* awaiting(repl.terminal, "the reserved source restored", (one) =>
+        blockSays(draftText(one), intent.submit?.source ?? ""),
+      );
+      repl.terminal.feed("\r");
+      yield* awaiting(repl.terminal, "the manual entry running", (one) =>
+        shows(one, "The manual entry ran."),
+      );
+      const manual = yield* mountedReading(repl);
+      // The same slot, the same key and the same source — every coordinate the
+      // reservation named.
+      const took = manual.model.entries[intent.submit.ordinal];
+      expect([took?.key, took?.source]).toEqual([intent.submit.entry, intent.submit.source]);
+      // And the refused reply is credited with none of it: no work row, no
+      // state and no output of that entry anywhere after it.
+      const paneNow = sidekickPaneIn(screenOf(repl.terminal));
+      const refusedAt = paneNow.findIndex((row) => row.includes("I did not admit an entry."));
+      expect(refusedAt).toBeGreaterThan(0);
+      expect(paneNow.slice(refusedAt + 1).some((row) => /Entry \d+ \u00b7/.test(row))).toBe(false);
+      expect(paneNow.some((row) => row.includes("The manual entry ran."))).toBe(false);
+      expect(paneNow.filter((row) => /Entry \d+ \u00b7/.test(row))).toHaveLength(2);
+
+      entries = yield* until(readFile(pairedLocation(host.root, execution).entries, "utf8"));
+      chat = yield* until(readFile(pairedLocation(host.root, execution).sidekick, "utf8"));
+      repl.terminal.end();
+      yield* awaiting(repl.terminal, "the command leaving", () => repl.outcome() !== undefined);
+    });
+
+    // Cold, at a position that holds the first entry and not the second. The
+    // association is read again from the same records, and the second reply's
+    // work is not shown — an entry this prefix never admitted is not work this
+    // reading can show.
+    const calls = host.fake.prompts.length;
+    yield* scoped(function* (): Operation<void> {
+      const base = initialState(execution);
+      const repl = yield* useMountedRepl({
+        host,
+        location: encodeLocation({ ...base.route, at: earlier }),
+      });
+      yield* awaiting(repl.terminal, "the cold chat", (one) => shows(one, "That is one."));
+      const pane = sidekickPaneIn(screenOf(repl.terminal));
+      const counted = (said: string): number => pane.filter((row) => row.includes(said)).length;
+      // Once, after the one reply that admitted it. Twice would be an entry
+      // handed to a reply that did not submit it — which is what following the
+      // latest entry rather than the record's own coordinates would do here,
+      // because this prefix holds exactly one.
+      expect(counted("Entry 1 \u00b7 \u2713 COMPLETED")).toBe(1);
+      expect(counted("the first entry ran")).toBe(1);
+      expect(counted("Entry 2 \u00b7")).toBe(0);
+      expect(counted("the second entry ran")).toBe(0);
+      repl.terminal.end();
+      yield* awaiting(
+        repl.terminal,
+        "the cold command leaving",
+        () => repl.outcome() !== undefined,
+      );
+    });
+
+    // And cold at the head, where every entry this execution admitted is in
+    // the reading. The refusal is still a refusal: reopening reconciles what a
+    // dead process left and retains what it finds, and what it finds here is
+    // an answer already written — so nothing resurrects an association out of
+    // a slot that was later filled by hand.
+    yield* scoped(function* (): Operation<void> {
+      const repl = yield* useMountedRepl({
+        host,
+        location: encodeLocation(initialState(execution).route),
+      });
+      yield* awaiting(repl.terminal, "the cold chat at the head", (one) =>
+        shows(one, "I did not admit an entry."),
+      );
+      const pane = sidekickPaneIn(screenOf(repl.terminal));
+      const refusedAt = pane.findIndex((row) => row.includes("I did not admit an entry."));
+      expect(refusedAt).toBeGreaterThan(0);
+      expect(pane.slice(refusedAt + 1).some((row) => /Entry \d+ \u00b7/.test(row))).toBe(false);
+      expect(pane.some((row) => row.includes("The manual entry ran."))).toBe(false);
+      // The two replies that really did admit still carry theirs, which is
+      // what makes the absence above an answer rather than an empty pane.
+      expect(pane.filter((row) => /Entry \d+ \u00b7/.test(row))).toHaveLength(2);
+      repl.terminal.end();
+      yield* awaiting(
+        repl.terminal,
+        "the second cold command leaving",
+        () => repl.outcome() !== undefined,
+      );
+    });
+    // And reading it asked nobody anything and wrote nothing.
+    expect(host.fake.prompts).toHaveLength(calls);
+    expect(yield* until(readFile(pairedLocation(host.root, execution).entries, "utf8"))).toBe(
+      entries,
+    );
+    expect(yield* until(readFile(pairedLocation(host.root, execution).sidekick, "utf8"))).toBe(
+      chat,
+    );
   });
 });
 
@@ -1884,7 +2172,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
 
     // Held at the transport with the draft filled: the program is there, byte
     // for byte, and the seed is still the only entry that has run.
-    expect(ran.heldDraft).toBe(GREETINGS);
+    expect(blockSays(ran.heldDraft, GREETINGS)).toBe(true);
     expect(ran.heldEntries).toEqual(["entry-1"]);
 
     // The entry that ran is the draft that was held, and its output is the
@@ -1923,7 +2211,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     const ran = yield* arm(SECOND);
 
     expect(ran.published).toEqual({ names: SECOND });
-    expect(ran.heldDraft).toBe(GREETINGS);
+    expect(blockSays(ran.heldDraft, GREETINGS)).toBe(true);
 
     // The program is the same program. What changed is the binding it reads,
     // and that is what the output has to show.
@@ -3028,10 +3316,16 @@ describe("975 — the shipped session component journey", () => {
       yield* focusDraft(repl.terminal);
       yield* typing(repl.terminal, '<File path="manual.md">project manual</File>');
       repl.terminal.feed("\r");
-      yield* awaiting(repl.terminal, "the manual successor", () => {
-        const output = screenOf(repl.terminal).join("\n");
-        return output.includes("entry-4") && output.includes("[ok]");
-      });
+      yield* awaiting(repl.terminal, "the manual successor", () =>
+        screenOf(repl.terminal).some((line) => {
+          // The same fact the catalog used to spell as `entry-4 [ok]`: the fourth
+          // entry is the one being read, and it completed. The staged screen says
+          // it in the selected work's own heading — both on that one row, because
+          // a chat row naming an entry and a breadcrumb naming an outcome are two
+          // different rows saying two different things.
+          return line.includes("Entry 4") && line.includes("\u2713 COMPLETED");
+        }),
+      );
       expect(yield* until(readFile(join(project, "manual.md"), "utf8"))).toBe("project manual");
       beforeEntries = yield* until(readFile(location.entries, "utf8"));
       beforeChat = yield* until(readFile(location.sidekick, "utf8"));

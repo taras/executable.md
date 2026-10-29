@@ -30,7 +30,7 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
-import { allocate, showing, showingAcross } from "./pty.ts";
+import { allocate, settledEntry, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
 /**
@@ -169,7 +169,9 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     // the branch is now.
     yield* showing(second, `Published commit: ${published}`, ACT_MS);
     yield* click(second, "( ) continue");
-    yield* showing(second, "[ok] entry-1", ACT_MS);
+    // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
+    // Entries catalog, which this screen keeps in a drawer.
+    yield* settledEntry(second, 1, "ok", ACT_MS);
 
     // The suffix write executed, for the first time, on the answer — and
     // answering published nothing further.

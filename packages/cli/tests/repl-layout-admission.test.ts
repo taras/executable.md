@@ -18,12 +18,52 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import { NARROW, profileFor } from "../src/repl/layout.ts";
+import { NARROW, profileFor, skeletonOps } from "../src/repl/layout.ts";
+import { projectRepl } from "../src/repl/model.ts";
+import { navigationOf } from "../src/repl/navigation.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
+import type { ReplLive } from "../src/repl/application.ts";
+
+/**
+ * The two cells in front of a control's label that its focus marker draws in.
+ *
+ * Every control is measured with them, because a control measured without its
+ * marker comes out two columns narrower than the one drawn in its place.
+ */
+const CONTROL_ROOM = "  ";
 import { useReplRenderer } from "../src/repl/renderer.ts";
+import type { ReplRenderer } from "../src/repl/renderer.ts";
+import { prepareFrame } from "../src/repl/program.ts";
+import {
+  ACTION_ROW,
+  DRAWER_WINDOW,
+  initialState,
+  NO_AGENT,
+  QUEUE_WINDOW,
+  reduceRepl,
+  viewFor,
+  withWorkspace,
+  workspaceOf,
+} from "../src/repl/application.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
-import { createGrid, useCommitter, windowOf } from "./fixtures/repl/presentation.ts";
+import { createGrid, useCommitter, usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
+import { useTempFileCompiler } from "@executablemd/core";
+import {
+  CHECKPOINT_ASKING,
+  CHECKPOINT_CURRENT_WORKSPACE,
+  CHECKPOINT_LIVE,
+  CHECKPOINT_MEDIUM,
+  CHECKPOINT_NARROW,
+  CHECKPOINT_SIZE,
+  checkpointCatalogModel,
+  checkpointModel,
+  checkpointState,
+  checkpointStateModel,
+  checkpointViewOf,
+  commitCheckpoint,
+} from "./fixtures/repl/workspace-checkpoint.ts";
 import type { Committer, Drawn, TerminalGrid } from "./fixtures/repl/presentation.ts";
 import {
   EMPTY,
@@ -489,5 +529,454 @@ describe("REPL layout: the profiles this product supports", () => {
         expect(draft?.y).toBe(size.rows - 1);
       });
     }
+  });
+});
+
+/**
+ * #971 A2: what the staged composition admits at each supported size.
+ *
+ * The same invariant the rest of this file is about, asked of the screen the
+ * workspace draws: every window the frame measured holds a whole number of rows
+ * it has room for, every control it published was drawn, and nothing it left
+ * out is reachable. The geometry those numbers come from is a proposal under
+ * image review; that each of them is measured rather than computed here is not.
+ */
+describe("REPL layout: what the staged workspace admits at each size", () => {
+  it("A2: every measured window is whole, bounded and reachable", function* () {
+    yield* useTempFileCompiler();
+    const model = yield* checkpointModel();
+    for (const size of [CHECKPOINT_SIZE, CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
+      const where = `${size.columns}x${size.rows}`;
+      const presenter = yield* usePresenter(size);
+      const committed = yield* commitCheckpoint(presenter, {
+        model,
+        size,
+        workspace: CHECKPOINT_CURRENT_WORKSPACE,
+      });
+      const { admission, manifest } = committed.observed.committed;
+
+      // A window holds whole rows, never more than its capacity, and never a
+      // capacity it did not measure.
+      expect({ where, windows: admission.windows.size > 0 }).toEqual({ where, windows: true });
+      for (const slot of manifest.viewports) {
+        const window = windowOf(admission, slot.window);
+        const bounds = committed.observed.regionOf(slot.id);
+        expect({ where, window: slot.window, measured: bounds !== undefined }).toEqual({
+          where,
+          window: slot.window,
+          measured: true,
+        });
+        expect({
+          where,
+          window: slot.window,
+          whole: Number.isInteger(window.capacity) && Number.isInteger(window.count),
+        }).toEqual({ where, window: slot.window, whole: true });
+        expect({ where, window: slot.window, room: window.capacity >= 0 }).toEqual({
+          where,
+          window: slot.window,
+          room: true,
+        });
+        expect({
+          where,
+          window: slot.window,
+          within: window.count <= window.capacity && window.from + window.count <= window.total,
+        }).toEqual({ where, window: slot.window, within: true });
+      }
+
+      // Every admitted action was drawn, and nothing the row left out was.
+      const drawn = new Set(
+        committed.observed.targets.flatMap((one) => {
+          const key = presenter.tree.keyOf(one.node);
+          return key === undefined ? [] : [key];
+        }),
+      );
+      for (const candidate of manifest.actions?.controls ?? []) {
+        const admitted = admission.actions.has(candidate.key);
+        expect({ where, key: candidate.key, admitted, drawn: drawn.has(candidate.key) }).toEqual({
+          where,
+          key: candidate.key,
+          admitted,
+          drawn: admitted,
+        });
+      }
+    }
+  });
+
+  // The queue-specific form of this measurement — an empty moving tray with
+  // its own controls around it — is DQ2 in
+  // `fixtures/repl/deferred-presentation.json`. The obligation it carried is
+  // the case below, over the catalog this build actually offers.
+
+  /**
+   * The same question, about the catalog this build actually offers.
+   *
+   * A window is admitted against the room the frame will draw, and the only way
+   * to know the room was the right one is to watch the preparation measure it:
+   * a viewport still holding its own rows reports the space its contents wanted,
+   * and one measured before the controls around it reports a rectangle that is
+   * about to move. Nothing here changes an operation or a returned rectangle —
+   * the production `prepareFrame` runs against the same real engine, and this
+   * reads what went past.
+   */
+  it("A2: an overflowing Entries catalog is admitted from its last empty coherent measurement", function* () {
+    yield* useTempFileCompiler();
+    const model = yield* checkpointCatalogModel(9);
+    const size = CHECKPOINT_NARROW;
+    const presenter = yield* usePresenter(size);
+    // The closed screen first, so the catalog is opened from a frame whose
+    // focus the mounted tree actually answered for — the drawer is a modal, and
+    // only what it contains may hold focus while it is open.
+    const shipping = { model, size, workspace: workspaceOf(model) } as const;
+    const before = yield* commitCheckpoint(presenter, {
+      ...shipping,
+      state: checkpointState(model, { size, surface: "entries" }),
+    });
+    const opened = reduceRepl(
+      before.view.state,
+      { kind: "open-catalog" },
+      model,
+      before.view.live,
+    ).state;
+    const view = checkpointViewOf(model, before.focused, { ...shipping, state: opened });
+    const viewport = `box:${DRAWER_WINDOW}:viewport`;
+    const row = /^box:drawer:.*:row:\d+:row$/;
+    const seen: {
+      bounds: ReplBounds | undefined;
+      rows: number;
+      earlier: boolean;
+      later: boolean;
+      chrome: boolean;
+    }[] = [];
+    const delegate = presenter.renderer;
+    const watching: ReplRenderer = {
+      *measure(ops, measured) {
+        const result = yield* delegate.measure(ops, measured);
+        const ids = ops.flatMap((op) => ("id" in op && typeof op.id === "string" ? [op.id] : []));
+        if (result.ok && ids.includes(viewport)) {
+          seen.push({
+            bounds: result.value.boundsOf(viewport),
+            rows: ids.filter((id) => row.test(id)).length,
+            earlier: ids.includes("box:drawer:drawer:scroll:up"),
+            later: ids.includes("box:drawer:drawer:scroll:down"),
+            chrome:
+              ids.includes("box:drawer:drawer:open") && ids.includes("box:drawer:drawer:close"),
+          });
+        }
+        return result;
+      },
+      draw: (input) => delegate.draw(input),
+      resize: (next) => delegate.resize(next),
+      last: () => delegate.last(),
+      engines: () => delegate.engines(),
+    };
+    const prepared = yield* prepareFrame(watching, view);
+    if (!prepared.ok) {
+      throw prepared.error;
+    }
+    // More rows than the drawer was given, which is the case a moving window
+    // exists for at all.
+    const window = windowOf(prepared.value.admission, DRAWER_WINDOW);
+    expect({ beyond: window.total > window.capacity }).toEqual({ beyond: true });
+
+    // The last measurement that held the viewport is the one that admission
+    // came from: no rows of its own inside it, both of its own controls and
+    // the drawer's fixed chrome around it.
+    const last = seen[seen.length - 1];
+    if (last === undefined || last.bounds === undefined) {
+      throw new Error("this preparation measured no catalog viewport");
+    }
+    expect({
+      rows: last.rows,
+      earlier: last.earlier,
+      later: last.later,
+      chrome: last.chrome,
+    }).toEqual({ rows: 0, earlier: true, later: true, chrome: true });
+    // And it is a region with room in it. A window admitted against nothing
+    // would satisfy every rule below and show no reading at all.
+    expect({
+      width: last.bounds.width > 0,
+      height: last.bounds.height > 0,
+      whole: Number.isInteger(last.bounds.width) && Number.isInteger(last.bounds.height),
+    }).toEqual({ width: true, height: true, whole: true });
+
+    // The same rectangle the finished frame places that viewport at, measured
+    // by the same engine from the manifest it published.
+    const final = yield* delegate.measure(
+      skeletonOps(prepared.value.presentation.manifest.root),
+      size,
+    );
+    if (!final.ok) {
+      throw final.error;
+    }
+    expect(last.bounds).toEqual(final.value.boundsOf(viewport));
+    const above = final.value.boundsOf("box:drawer:drawer:scroll:up");
+    const below = final.value.boundsOf("box:drawer:drawer:scroll:down");
+    if (above === undefined || below === undefined) {
+      throw new Error("this frame drew the catalog without its own controls");
+    }
+    expect({
+      above: above.y + above.height <= last.bounds.y,
+      below: below.y >= last.bounds.y + last.bounds.height,
+    }).toEqual({ above: true, below: true });
+
+    // And a row the first frame does not show is reached by the control that
+    // moves the window, with a whole target of its own inside that viewport.
+    const first = yield* presenter.commit(view);
+    const shown = (observed: typeof first) =>
+      observed.keys.filter((key) => key.startsWith("entry:")).sort();
+    const moved = reduceRepl(
+      opened,
+      { kind: "scroll-entries", delta: 1 },
+      model,
+      before.view.live,
+      prepared.value.admission,
+    ).state;
+    const after = yield* presenter.commit(
+      checkpointViewOf(model, before.focused, { ...shipping, state: moved }),
+    );
+    const reached = shown(after).filter((key) => !shown(first).includes(key));
+    expect({ hidden: shown(first).length < window.total, reached: reached.length > 0 }).toEqual({
+      hidden: true,
+      reached: true,
+    });
+    const node = after.nodeOf(reached[0]);
+    const target = node === undefined ? undefined : after.targets.find((one) => one.node === node);
+    const bounds = after.boundsOf(reached[0]);
+    if (target === undefined || bounds === undefined) {
+      throw new Error(`${reached[0]} was drawn with no target of its own`);
+    }
+    expect({ target: target.bounds }).toEqual({ target: bounds });
+    expect({
+      whole:
+        Number.isInteger(bounds.x) &&
+        Number.isInteger(bounds.width) &&
+        Number.isInteger(bounds.y) &&
+        Number.isInteger(bounds.height),
+      inside:
+        bounds.y >= last.bounds.y && bounds.y + bounds.height <= last.bounds.y + last.bounds.height,
+    }).toEqual({ whole: true, inside: true });
+  });
+
+  // The accepted wide row is a fitted map, a gap and the controls. The gap and
+  // the controls both grew, so the engine divided what the map left between
+  // them — in halves, and half of an odd number of cells is not a cell. The
+  // accepted fixture's map happens to leave an even remainder, so nothing said
+  // the arrangement only worked for even ones. An ordinary empty root leaves an
+  // odd one, and every control after the gap landed on half a cell.
+  /**
+   * #971: the paused narrow History row gives its controls whole cells.
+   *
+   * The row holds the compact map and the footer's controls side by side. A
+   * paused entry offers four of them — History, Exit, Pause and Continue — with
+   * the phase stated between them, and that is the widest this row ever gets.
+   *
+   * What this holds the row to is that none of them is compressed. Measured
+   * before the correction, a 72-cell row gave its map the 29 cells its own text
+   * wanted and left the controls 43 where they need 51, and the engine answered
+   * every one of them with part of a cell — which the renderer then refused.
+   * The map yields first now, and the split is stated from a measurement of the
+   * two parts taken apart rather than of each under the other's pressure.
+   */
+  it("A3: a paused narrow History row admits every control on whole cells", function* () {
+    const empty = projectRepl([]);
+    if (!empty.ok) {
+      throw empty.error;
+    }
+    const model = empty.value;
+    // Paused, and stably so: `pausable` with expansion `paused` is the one
+    // state that offers Pause, the phase and Continue at once, and it is held
+    // fixed so every preparation pass sees the same four controls.
+    const paused: ReplLive = {
+      output: "",
+      question: undefined,
+      expansion: "paused" as const,
+      pausable: true,
+      running: true,
+      agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
+    };
+    for (const size of [CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
+      const where = `${size.columns}x${size.rows}`;
+      yield* scoped(function* (): Operation<void> {
+        const view = viewFor(
+          initialState("paused-root"),
+          model,
+          paused,
+          size,
+          undefined,
+          navigationOf(model.checkpoints, "live"),
+        );
+        if (!view.ok) {
+          throw view.error;
+        }
+        const presenter = yield* usePresenter(size);
+        const staged = withWorkspace(view.value, workspaceOf());
+        // Committing is itself part of the assertion: the renderer refuses a
+        // control on part of a cell rather than rounding it, so a frame that
+        // drew at all drew on whole ones. Said again below over every
+        // published rectangle, because "it did not throw" is not the claim.
+        const first = yield* presenter.commit(staged);
+        const node = presenter.tree.focused();
+        const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+        const committed = yield* presenter.commit({ ...staged, focused });
+
+        // Every control this state offers is admitted — Continue included, by
+        // being measured rather than appended after the fact — and each is
+        // drawn whole, inside the row, with its own complete label.
+        const labels: Readonly<Record<string, string>> = {
+          "footer:history": "[history]",
+          "footer:exit": "[exit]",
+          "footer:pause": "[pause]",
+          "footer:continue": "[continue]",
+        };
+        const row = committed.regionOf("box:history");
+        const map = committed.regionOf("box:history:map");
+        const actions = committed.regionOf(ACTION_ROW);
+        if (row === undefined || map === undefined || actions === undefined) {
+          throw new Error(`${where} drew no History row to divide`);
+        }
+        for (const [key, label] of Object.entries(labels)) {
+          const bounds = committed.boundsOf(key);
+          if (bounds === undefined) {
+            throw new Error(
+              `${where} drew no ${key}; its controls are ${JSON.stringify(
+                committed.keys.filter((one) => one.startsWith("footer:")),
+              )}`,
+            );
+          }
+          expect([
+            where,
+            key,
+            Number.isInteger(bounds.x) && Number.isInteger(bounds.width),
+          ]).toEqual([where, key, true]);
+          // The whole label, inside the target that owns it: a control shown
+          // short is a control a reader cannot read, and a label wider than its
+          // own box is one drawn over its neighbour. Every control is measured
+          // with the two cells its focus marker draws in, which is why its box
+          // is its label and that room — a control measured without it comes
+          // out two columns narrower than the one drawn in its place.
+          expect([where, key, bounds.width]).toEqual([
+            where,
+            key,
+            label.length + CONTROL_ROOM.length,
+          ]);
+          expect([where, key, (committed.cells.get(key) ?? "").includes(label)]).toEqual([
+            where,
+            key,
+            true,
+          ]);
+          expect([where, key, bounds.x >= actions.x]).toEqual([where, key, true]);
+          expect([where, key, bounds.x + bounds.width <= actions.x + actions.width]).toEqual([
+            where,
+            key,
+            true,
+          ]);
+        }
+        // The phase is stated beside them, as text rather than as part of a
+        // control's name.
+        expect([where, committed.keys.includes("footer:pause-state")]).toEqual([where, true]);
+
+        // The split itself: whole, exhaustive, and the map is what yielded.
+        expect([where, Number.isInteger(map.width) && Number.isInteger(actions.width)]).toEqual([
+          where,
+          true,
+        ]);
+        expect([where, map.width + actions.width]).toEqual([where, row.width]);
+        expect([where, actions.width >= 0]).toEqual([where, true]);
+
+        // And the control a keystroke reaches is one the frame actually drew.
+        const holding = presenter.tree.focused();
+        const held = holding === undefined ? undefined : presenter.tree.keyOf(holding);
+        expect([where, held === undefined || committed.boundsOf(held) !== undefined]).toEqual([
+          where,
+          true,
+        ]);
+        // The first frame drew the same row whole, before focus was carried in.
+        expect([where, Number.isInteger(first.regionOf(ACTION_ROW)?.width ?? 0.5)]).toEqual([
+          where,
+          true,
+        ]);
+      });
+    }
+  });
+
+  it("A2: the wide History row divides an odd remainder into whole cells", function* () {
+    const empty = projectRepl([]);
+    if (!empty.ok) {
+      throw empty.error;
+    }
+    const size = CHECKPOINT_SIZE;
+    const model = empty.value;
+    const view = viewFor(
+      initialState("ordinary-root"),
+      model,
+      {
+        output: "",
+        question: undefined,
+        expansion: "playing" as const,
+        pausable: false,
+        running: false,
+        agent: NO_AGENT,
+        lifecycle: NO_LIFECYCLE,
+      },
+      size,
+      undefined,
+      navigationOf(model.checkpoints, "empty"),
+    );
+    if (!view.ok) {
+      throw view.error;
+    }
+    const presenter = yield* usePresenter(size);
+    const staged = withWorkspace(view.value, workspaceOf());
+    const first = yield* presenter.commit(staged);
+    const node = presenter.tree.focused();
+    const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+    const committed = yield* presenter.commit({ ...staged, focused });
+
+    // The remainder this reading leaves really is odd, which is the whole
+    // reason the row needed a rule. Measured, not assumed.
+    const row = first.regionOf("box:history");
+    const map = first.regionOf("box:history:map");
+    if (row === undefined || map === undefined) {
+      throw new Error("this frame drew no History row to divide");
+    }
+    expect({ odd: (row.width - map.width) % 2 === 1 }).toEqual({ odd: true });
+
+    // Committing is the assertion the renderer makes: it refuses a control on
+    // half a cell rather than rounding it, so a frame that drew at all drew on
+    // whole cells. Said again here over every published rectangle.
+    for (const key of ["footer:history", "footer:exit"]) {
+      const bounds = committed.boundsOf(key);
+      if (bounds === undefined) {
+        throw new Error(`${key} was not drawn on the ordinary root's own screen`);
+      }
+      expect({
+        key,
+        whole: Number.isInteger(bounds.x) && Number.isInteger(bounds.width),
+      }).toEqual({ key, whole: true });
+      expect({ key, room: bounds.width > 0 }).toEqual({ key, room: true });
+    }
+    const gap = committed.regionOf("box:history:space");
+    const actions = committed.regionOf(ACTION_ROW);
+    if (gap === undefined || actions === undefined) {
+      throw new Error("this row drew no gap and controls to divide");
+    }
+    // The odd cell goes to the controls, which are what somebody is aiming at.
+    expect({ whole: Number.isInteger(gap.width) && Number.isInteger(actions.width) }).toEqual({
+      whole: true,
+    });
+    expect({ gap: gap.width, actions: actions.width }).toEqual({
+      gap: Math.floor((row.width - map.width) / 2),
+      actions: row.width - map.width - Math.floor((row.width - map.width) / 2),
+    });
+
+    // The controls say what they are, where the frame put them.
+    const history = committed.boundsOf("footer:history");
+    if (history === undefined) {
+      throw new Error("the History control was not drawn");
+    }
+    expect(presenter.grid.textIn(history).join(" ")).toContain("[history]");
+    // And focus is the mounted tree's own answer, read back rather than set.
+    expect({ focused: focused !== undefined }).toEqual({ focused: true });
   });
 });

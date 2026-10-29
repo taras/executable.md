@@ -33,7 +33,15 @@ export function cliRuntime(): "deno" | "bun" | "node" {
 
 export function cliBase(): string[] {
   if (Reflect.has(globalThis, "Deno")) {
-    return [process.execPath, "run", "--allow-all", entry("deno")];
+    // Quiet, because this runtime writes its own progress to the same terminal
+    // the command owns. Measured on a pty: `\x1b[0G\x1b[2K\x1b[J` arrived in
+    // the middle of a full-screen frame, erasing the cursor's row and every row
+    // below it — the History rail and the directions — and the command's diff
+    // renderer, which had already written them and was never told, did not
+    // write them again. The rows came back blank in tmux's own emulator and in
+    // an independent replay of the same bytes alike. It suppresses nothing the
+    // command itself says.
+    return [process.execPath, "run", "--quiet", "--allow-all", entry("deno")];
   }
   if (Reflect.has(globalThis, "Bun")) {
     return [process.execPath, entry("bun")];

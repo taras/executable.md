@@ -35,7 +35,7 @@ import {
   focusDraft,
   typing,
   click,
-  screenOf,
+  settledEntry,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
 import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
 
@@ -166,13 +166,10 @@ describe("REPL.Test accepted journeys", () => {
     yield* focusDraft(repl.terminal);
     yield* typing(repl.terminal, "<Greeting />");
     repl.terminal.feed("\r");
-    yield* awaiting(
-      repl.terminal,
-      "manual reuse",
-      () =>
-        screenOf(repl.terminal).join("\n").includes("entry-5") &&
-        screenOf(repl.terminal).join("\n").includes("[ok]"),
-    );
+    // The rail's own mark for the fifth entry. `entry-5` and `[ok]` are rows of
+    // the Entries catalog, and the catalog is a drawer on this screen: a reader
+    // that waited for them would be waiting for a drawer nobody opened.
+    yield* settledEntry(repl.terminal, 5, "ok");
     const read = yield* mountedReading(repl);
     expect(read.model.entries.slice(-2).map((entry) => entry.source)).toEqual([
       "<Greeting />",

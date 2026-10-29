@@ -38,7 +38,8 @@ import type { SidekickRecord } from "../../../../src/repl/sidekick/history.ts";
 import { projectRepl } from "../../../../src/repl/model.ts";
 import type { ReplModel } from "../../../../src/repl/model.ts";
 import { REPL_DIRECTORY } from "../../../../src/repl/storage.ts";
-import { FOOTER_ROWS } from "../../../../src/repl/layout.ts";
+import { drawerRect, FOOTER_ROWS } from "../../../../src/repl/layout.ts";
+import { COMPACT_HISTORY_TITLE } from "../../../../src/repl/application.ts";
 import type { PairedReplRepository } from "../../../../src/repl/sidekick/repository.ts";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { ReplEntryHost } from "../../../../src/repl-entry-installation.ts";
@@ -50,10 +51,10 @@ import type { FakeAcp } from "../../../support/fake-acp.ts";
 import { useTemporary } from "./sidekick-harness.ts";
 
 /** The draft row's own prompt, which is how its row is told from the other one. */
-export const DRAFT_PROMPT = "Draft: ";
+export const DRAFT_PROMPT = " DRAFT";
 
 /** The Sidekick's message box, by the prompt that names which destination it is. */
-export const MESSAGE_PROMPT = "Message Sidekick: ";
+export const MESSAGE_PROMPT = " › message the sidekick";
 
 const BYTES = new TextEncoder();
 const TEXT = new TextDecoder();
@@ -76,6 +77,30 @@ export function statusOn(terminal: Terminal): string | undefined {
  * smaller terminal no longer has. The engine redraws completely after a size
  * change, so the presentations from the resize onward are a whole screen.
  */
+/**
+ * How many cells one character occupies.
+ *
+ * A terminal advances two columns for an East Asian wide or fullwidth
+ * character and one for everything else. A replay that advanced one for all of
+ * them left the second cell of every wide glyph holding whatever was there
+ * before — measured, a drawer row of wide words came back as `界g界n 界o界f`,
+ * with letters from the frame underneath showing between them. Replaying the
+ * same bytes with this advance gives the row the product actually wrote.
+ */
+function cellsOf(character: string): number {
+  return WIDE_CHARACTERS.test(character) ? 2 : 1;
+}
+
+/**
+ * The ranges a terminal gives two columns to.
+ *
+ * East Asian Wide and Fullwidth, as the Unicode property names them. Written
+ * out rather than asked of an API because no runtime this suite runs on
+ * answers the question directly.
+ */
+const WIDE_CHARACTERS =
+  /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]|[\u{1F300}-\u{1F64F}]|[\u{1F900}-\u{1F9FF}]|[\u{20000}-\u{3FFFD}]/u;
+
 export function replay(written: readonly Uint8Array[]): string[] {
   const rows: string[][] = [];
   let row = 0;
@@ -90,7 +115,14 @@ export function replay(written: readonly Uint8Array[]): string[] {
       line.push(" ");
     }
     line[column] = character;
-    column += 1;
+    // The cells this character actually takes. A wide glyph owns the column
+    // after it as well, and that column is the glyph's rather than whatever
+    // the frame beneath it last wrote there.
+    const cells = cellsOf(character);
+    for (let after = 1; after < cells; after += 1) {
+      line[column + after] = "";
+    }
+    column += cells;
   };
 
   const text = written.map((bytes) => TEXT.decode(bytes)).join("");
@@ -212,6 +244,18 @@ export interface Terminal {
   fed: number;
   readonly raw: boolean[];
   resets: number;
+  /**
+   * How many presentations had already been made when this terminal was last
+   * resized.
+   *
+   * The screen a reader is looking at begins there. This renderer writes diffs
+   * and sends no clear when the window changes, so the cells of the frame
+   * before a resize are still in the buffer — and after a shrink some of them
+   * are cells the new frame never writes to. The engine redraws the whole
+   * terminal after a size change, so the presentations from that point on are a
+   * complete screen and the ones before it are a screen that is gone.
+   */
+  resizedAt: number;
   listeners: number;
   readers: number;
   feed(text: string): void;
@@ -266,6 +310,7 @@ export function recordingTerminal(
     fed: 0,
     raw: [],
     resets: 0,
+    resizedAt: 0,
     listeners: 0,
     readers: 0,
     feed(text: string): void {
@@ -286,6 +331,7 @@ export function recordingTerminal(
     },
     resized(next: ReplTerminalSize): void {
       terminal.size = next;
+      terminal.resizedAt = terminal.presented.length;
       for (const watcher of watchers) {
         watcher();
       }
@@ -415,12 +461,46 @@ export function recordingTerminal(
  * screen an assertion about the screen.
  */
 export function screenOf(terminal: Terminal): string[] {
-  return replay(terminal.presented);
+  // Bounded by the terminal these frames are being drawn into. The replay
+  // accumulates every presentation, and this renderer sends no clear when the
+  // window changes size — so after a shrink the buffer still holds the rows and
+  // the columns the larger screen had, and nobody is looking at those. A
+  // reading taken from them is a reading of a screen that is gone: measured, a
+  // narrow frame's routing bar came back with a wide frame's right-hand pane
+  // still on the end of it, and the row no longer ended in the word a reader
+  // was looking for.
+  const size = terminal.size;
+  return replay(terminal.presented.slice(terminal.resizedAt))
+    .slice(0, size.rows)
+    .map((line) => (line.length > size.columns ? line.slice(0, size.columns) : line));
 }
 
 /** Whether any row of the screen contains this text. */
 export function shows(terminal: Terminal, expected: string): boolean {
   return screenOf(terminal).some((line) => line.includes(expected));
+}
+
+/**
+ * How the staged chat says who said a row: a mark, and then the words.
+ *
+ * The pane attributes every utterance — it has to, because a person's messages,
+ * the Sidekick's replies, an attached client's and the REPL's own work all
+ * share one list. It spells that attribution as a mark rather than as a name
+ * prefix, and the mark is accompanied by the colour rather than replaced by it,
+ * so a reader is told twice. These two are the ones a journey asserts against:
+ * what a person at this screen said, and what the Sidekick answered.
+ */
+const SAID_BY_PERSON = "[U] ";
+const SAID_BY_SIDEKICK = "[S] ";
+
+/** Whether the screen shows this utterance, attributed to a person here. */
+export function saidByPerson(terminal: Terminal, text: string): boolean {
+  return shows(terminal, `${SAID_BY_PERSON}${text}`);
+}
+
+/** Whether the screen shows this utterance, attributed to the Sidekick. */
+export function saidBySidekick(terminal: Terminal, text: string): boolean {
+  return shows(terminal, `${SAID_BY_SIDEKICK}${text}`);
 }
 
 /**
@@ -458,7 +538,7 @@ export function* focusDraft(terminal: Terminal, limit = 240): Operation<void> {
     // destinations now — `Draft` and `Message Sidekick` — and both wear the
     // same focus marker, so a helper looking for the marker alone would stop at
     // whichever one it reached first and type a document into a chat box.
-    if (screenOf(terminal).some((line) => line.includes(`>> ${DRAFT_PROMPT}`))) {
+    if (screenOf(terminal).some((line) => line.includes(`>${DRAFT_PROMPT}`))) {
       return;
     }
     terminal.feed("\t");
@@ -488,7 +568,15 @@ export function focusedOn(terminal: Terminal, label: string): boolean {
       // position its number in the full list — `12 · Entry 3 admitted` — which
       // is another prefix the product puts there, like the two above.
       const named = beyond.replace(/^\d+ \u00b7 /, "");
-      if (after.startsWith(label) || beyond.startsWith(label) || named.startsWith(label)) {
+      // Case-folded, because the staged panes name their own tabs in capitals
+      // — `BINDINGS`, `SIDEKICK`, `QUEUE` — while a caller names the thing it
+      // is reaching for the way a person would say it.
+      const wanted = label.toLowerCase();
+      if (
+        after.toLowerCase().startsWith(wanted) ||
+        beyond.toLowerCase().startsWith(wanted) ||
+        named.toLowerCase().startsWith(wanted)
+      ) {
         return true;
       }
     }
@@ -537,7 +625,7 @@ export function* focusMessage(terminal: Terminal, limit = 240): Operation<void> 
  * Here the two markers are spelled out: the row's own, and the one focus adds.
  */
 export function focusedField(terminal: Terminal, prompt: string): boolean {
-  return screenOf(terminal).some((line) => line.includes(`>> ${prompt}`));
+  return screenOf(terminal).some((line) => line.includes(`>${prompt}`));
 }
 
 /**
@@ -547,8 +635,65 @@ export function focusedField(terminal: Terminal, prompt: string): boolean {
  * count of the rest — the field draws one row and says so.
  */
 export function draftText(terminal: Terminal): string {
-  const row = draftRow(terminal);
-  return row.slice(row.indexOf(DRAFT_PROMPT) + DRAFT_PROMPT.length).trimEnd();
+  return draftRowsIn(screenOf(terminal)).join("\n").trim();
+}
+
+/**
+ * The rows the draft is drawn in, beneath its own name.
+ *
+ * The draft is a block, like the Sidekick's composer beside it: its name and
+ * focus marker are one row and its value is fitted into rows of its own under
+ * them. So this reads the rows after that name, up to the first control or
+ * blank stretch below them.
+ */
+export function draftRowsIn(rows: readonly string[]): readonly string[] {
+  const at = rows.findIndex((line) => line.includes(DRAFT_PROMPT));
+  if (at === -1) {
+    return [];
+  }
+  // Where this field's own content begins: the column its name starts at, one
+  // past the marker in front of it.
+  const from = Math.max(0, rows[at].indexOf(DRAFT_PROMPT) - 1);
+  const borders = bordersBefore(rows[at], from);
+  // Where the field's own allocation ends, read from the row that names it: the
+  // Draft's heading shares its row with the control that acts on the draft, and
+  // the field is as wide as what that control leaves. The first control on that
+  // row is the Draft's own — nothing of this screen is drawn to the left of a
+  // pane's own field — and the column it starts at is where the value stops.
+  //
+  // Without it the value rows run to whatever is beside them. A routed outlet
+  // draws no divider to stop at, and a drawer in the pane alongside overwrites
+  // the one a shared width draws: measured, a draft holding `mine` came back as
+  // `mine                           [v later]`, which is a control of the form
+  // open in the next column.
+  const named = rows[at].slice(from);
+  const beside = /\s\[[^\]]*\]/.exec(named);
+  const allocated = beside === null ? undefined : beside.index;
+  const value: string[] = [];
+  for (const line of rows.slice(at + 1)) {
+    // This column's own rows only, for the reason the composer's reader stops:
+    // the rows below this pane run the whole width and are nobody's column. A
+    // routed outlet draws no divider, so they are recognised by what they say
+    // as well — a rail or a direction is not the end of somebody's draft.
+    if (bordersBefore(line, from) < borders || footerRow(line)) {
+      break;
+    }
+    // Cut at this column's own border: the draft sits in the middle column of
+    // three, and a row read to the end of the screen carries the pane beside
+    // it as well.
+    const within = line.slice(from);
+    const edge = within.indexOf("│");
+    const bounded = edge === -1 ? within : within.slice(0, edge);
+    const own = (allocated === undefined ? bounded : bounded.slice(0, allocated)).trimEnd();
+    if (own.trim().startsWith("[")) {
+      break;
+    }
+    value.push(own);
+  }
+  while (value.length > 0 && value[value.length - 1].trim() === "") {
+    value.pop();
+  }
+  return value;
 }
 
 /**
@@ -574,6 +719,33 @@ export function messageRows(terminal: Terminal): readonly string[] {
  * caller that captured the rows of a resize reads them rather than the buffer
  * the size before it also drew into.
  */
+/**
+ * How many pane borders stand to the left of this column on this row.
+ *
+ * What makes a row part of a column rather than beside it. A block's value is
+ * drawn in its own pane, and every row of that pane has the same borders in
+ * front of it; a row that spans the whole screen — the History rail, the
+ * guidance line — has fewer, and is not this block's row however its
+ * characters happen to line up. A screen with no columns at all answers zero
+ * for every row, which is what keeps a routed narrow outlet reading as it did.
+ */
+function bordersBefore(line: string, column: number): number {
+  return line.slice(0, column).split("\u2502").length - 1;
+}
+
+/**
+ * Whether this row belongs to the screen's footer rather than to any pane.
+ *
+ * The compact History band and the guidance below it run the whole width and
+ * are nobody's column, so a block reader that walked into them would read a
+ * rail or a direction as the end of somebody's draft. Recognised by what they
+ * actually say — the band names itself and carries the way out — because a
+ * count of rows from the bottom is the layout's business and not a reader's.
+ */
+function footerRow(line: string): boolean {
+  return line.includes("HISTORY") || line.includes("[exit]") || line.includes("Tab/Shift+Tab");
+}
+
 export function messageRowsIn(rows: readonly string[]): readonly string[] {
   const at = rows.findIndex((line) => line.includes(MESSAGE_PROMPT));
   if (at === -1) {
@@ -583,9 +755,21 @@ export function messageRowsIn(rows: readonly string[]): readonly string[] {
   // followed by its prompt — `>> ` or ` > ` — so the column three before the
   // prompt is the column every value row starts at.
   const from = Math.max(0, rows[at].indexOf(MESSAGE_PROMPT) - 3);
+  const borders = bordersBefore(rows[at], from);
   const value: string[] = [];
   for (const line of rows.slice(at + 1)) {
-    const own = line.slice(from).trimEnd();
+    // This pane's own rows only. The rows below it belong to the screen rather
+    // than to this column — the History rail and the guidance line run the
+    // whole width — and reading one of those from this column's offset splices
+    // a footer into somebody's message. A routed outlet draws no divider at
+    // all, so the footer is recognised by what it says as well as by that.
+    if (bordersBefore(line, from) < borders || footerRow(line)) {
+      break;
+    }
+    // Past this column's own border, where the staged screen divides its panes.
+    const within = line.slice(from).replace(/^\s*│/, "");
+    const edge = within.indexOf("│");
+    const own = (edge === -1 ? within : within.slice(0, edge)).trimEnd();
     const text = own.trim();
     // The composer's own rows end where this pane's controls and status begin.
     if (text.startsWith("[") || text.endsWith("is working...")) {
@@ -594,6 +778,25 @@ export function messageRowsIn(rows: readonly string[]): readonly string[] {
     value.push(own);
   }
   return value;
+}
+
+/**
+ * Whether a block drawn over several rows is showing this text.
+ *
+ * A field whose value is wider than its column is *fitted* into rows, and a
+ * fitter's cut is not a character: the row break stands where a space was, and
+ * the space is gone. So the screen cannot hand back the exact value once it has
+ * wrapped, and comparing the rejoined rows to the text character for character
+ * would be asserting where the fitter happened to break rather than what the
+ * field holds. Both sides are flattened to single spaces, which is what makes
+ * this a question about the words on the screen.
+ *
+ * For what a value *is* — byte for byte — read it where it is held: the entry
+ * a draft became records its own source.
+ */
+export function blockSays(shown: string, expected: string): boolean {
+  const flat = (text: string): string => text.replace(/\s+/g, " ").trim();
+  return flat(shown) === flat(expected);
 }
 
 /** Exactly what the Sidekick's message box is showing, as its rows show it. */
@@ -670,6 +873,129 @@ export function* untilDrawn(terminal: Terminal): Operation<void> {
   );
 }
 
+/**
+ * The mark the compact History rail gives one entry, or none where it names
+ * none.
+ *
+ * The rail marks every entry this file holds with the state the prefix being
+ * read holds it in, written as the first character of that state's own word: a
+ * glyph where the word has one, and a letter where it does not. It says so
+ * whichever entry is being read and whether or not a catalog is open, which is
+ * what makes it the thing to wait on — the catalog's own row spells the same
+ * fact `[ok]`, and the catalog is a drawer somebody has to open.
+ */
+export function railMarkOn(terminal: Terminal, order: number): string | undefined {
+  for (const line of screenOf(terminal)) {
+    const at = line.indexOf(COMPACT_HISTORY_TITLE);
+    if (at === -1) {
+      continue;
+    }
+    // Up to the rule, which is where the rail ends and where the reading is
+    // begins. A number past it is part of that sentence, not an entry.
+    const band = line.slice(at + COMPACT_HISTORY_TITLE.length);
+    const rail = band.split("\u2500\u2500")[0] ?? "";
+    const match = new RegExp(`(?:^|\\s)${order}\\s*([\\u2713\\u00d7\\u25cf\\u002dU])`).exec(rail);
+    return match === null ? undefined : match[1];
+  }
+  return undefined;
+}
+
+/** How this suite names an outcome, and the mark the rail gives it. */
+export const RAIL_MARKS: Readonly<Record<string, string>> = Object.freeze({
+  ok: "\u2713",
+  err: "\u00d7",
+  cancelled: "-",
+  unfinished: "\u25cf",
+});
+
+/**
+ * Wait until this entry has reached this outcome, as the rail says.
+ *
+ * The rail rather than the catalog, for the reason {@link railMarkOn} gives.
+ */
+export function settledEntry(terminal: Terminal, order: number, outcome: string): Operation<void> {
+  const mark = RAIL_MARKS[outcome] ?? outcome;
+  return awaiting(
+    terminal,
+    `entry ${order} reaching ${outcome}`,
+    (one) => railMarkOn(one, order) === mark,
+  );
+}
+
+/**
+ * Whether the Entries catalog is the drawer this frame is showing.
+ *
+ * Asked of the drawer's own rectangle. A row of this screen crosses every
+ * column it has — the reading beside a drawer is drawn on the same rows as the
+ * drawer itself — so a reader looking at whole rows finds the word `Entries`
+ * with a transcript column in front of it and a Sidekick pane behind it, and
+ * cannot tell the drawer's title from the narrow frame's routing bar or from
+ * the selected work's breadcrumb. Inside the rectangle there is only one of
+ * them.
+ */
+export function catalogShowing(terminal: Terminal): boolean {
+  const rect = drawerRect(terminal.size, true);
+  if (rect === undefined) {
+    return false;
+  }
+  const rows = screenOf(terminal);
+  let titled = false;
+  let closable = false;
+  for (let row = rect.y; row < rect.y + rect.height; row += 1) {
+    const text = (rows[row] ?? "").slice(rect.x, rect.x + rect.width).trim();
+    if (/^Entries\b/.test(text)) {
+      titled = true;
+    }
+    if (text.includes("[close]")) {
+      closable = true;
+    }
+  }
+  return titled && closable;
+}
+
+/**
+ * Open the Entries catalog, the way a person does.
+ *
+ * The staged screen keeps no permanent catalog column, so the catalog is a
+ * drawer somebody opens over the reading. Every row that reads a catalog row
+ * opens it first and closes it after: one left open would cover the pane the
+ * next assertion is about.
+ */
+export function* openCatalog(terminal: Terminal): Operation<void> {
+  if (catalogShowing(terminal)) {
+    return;
+  }
+  yield* activate(terminal, "Entries");
+  yield* awaiting(terminal, "the catalog opening", (one) => catalogShowing(one));
+}
+
+/** Put the catalog away again, which chooses nothing. */
+export function* closeCatalog(terminal: Terminal): Operation<void> {
+  if (!catalogShowing(terminal)) {
+    return;
+  }
+  yield* activate(terminal, "[close]");
+  yield* awaiting(terminal, "the catalog closing", (one) => !catalogShowing(one));
+}
+
+/** Whether this label is the row being read, by the selection channel. */
+export function marked(terminal: Terminal, label: string): boolean {
+  return markedIn(screenOf(terminal), label);
+}
+
+/**
+ * The same question, of rows a caller has already chosen.
+ *
+ * The two columns immediately before the label, so a focus marker beside them
+ * changes nothing: the two channels are independent.
+ */
+export function markedIn(rows: readonly string[], label: string): boolean {
+  return rows.some((line) => {
+    const at = line.indexOf(label);
+    return at >= 2 && line.slice(at - 2, at) === "* ";
+  });
+}
+
 /** How long any mounted wait gives something before it says it never happened. */
 export const MOUNTED_DEADLINE_MS = 15_000;
 
@@ -715,6 +1041,28 @@ export function* awaited(what: string, settled_: () => boolean): Operation<void>
   const deadline = Date.now() + MOUNTED_DEADLINE_MS;
   while (Date.now() < deadline) {
     if (settled_()) {
+      return;
+    }
+    yield* sleep(10);
+    yield* settled(20);
+  }
+  throw new Error(`${what} never happened within ${MOUNTED_DEADLINE_MS}ms`);
+}
+
+/**
+ * The same wait again, for a fact only an operation can read.
+ *
+ * What is on disk is the case in point. A row drawn on the screen and a record
+ * published in the history are two different moments: the Sidekick's words are
+ * shown as soon as it has said them, and the reply they belong to is saved
+ * after the entry it carries has been evaluated. A row that waited for the
+ * screen and then read the file would be asking about the second moment having
+ * waited for the first.
+ */
+export function* awaitedFact(what: string, held: () => Operation<boolean>): Operation<void> {
+  const deadline = Date.now() + MOUNTED_DEADLINE_MS;
+  while (Date.now() < deadline) {
+    if (yield* held()) {
       return;
     }
     yield* sleep(10);
@@ -1321,8 +1669,37 @@ export function* sendMessage(repl: MountedRepl, text: string): Operation<void> {
   yield* awaiting(repl.terminal, `the message box holding ${JSON.stringify(text)}`, (one) =>
     messageText(one).includes(text),
   );
-  yield* click(repl.terminal, "[send]");
+  // This screen has two Sends — the entry draft's and this composer's — so
+  // the column the Sidekick's own pane begins at is what names which one.
+  // Clicking the leftmost would submit a draft instead of sending a message.
+  yield* click(repl.terminal, "[send]", sidekickColumn(repl.terminal));
   yield* settled(60);
+}
+
+/**
+ * The column the Sidekick's own pane starts at, for a label it shares.
+ *
+ * Read from the composer's own row, which is the one row only that pane draws.
+ */
+export function sidekickColumn(terminal: Terminal): number {
+  return sidekickColumnIn(screenOf(terminal));
+}
+
+/** The same, out of rows a caller already has. */
+export function sidekickColumnIn(rows: readonly string[]): number {
+  const row = rows.find((line) => line.includes(MESSAGE_PROMPT));
+  return row === undefined ? 0 : Math.max(0, row.indexOf(MESSAGE_PROMPT));
+}
+
+/** The Sidekick's own pane, as the rows it draws and nothing beside it. */
+export function sidekickPaneIn(rows: readonly string[]): readonly string[] {
+  const from = sidekickColumnIn(rows);
+  return rows.map((line) => line.slice(from));
+}
+
+/** Exactly what the entry draft is showing, out of rows a caller already has. */
+export function draftTextIn(rows: readonly string[]): string {
+  return draftRowsIn(rows).join("\n").trim();
 }
 
 /**
@@ -1369,8 +1746,14 @@ export function* resizeTo(terminal: Terminal, size: ReplTerminalSize): Operation
   const from = terminal.presented.length;
   const rows = (): string[] => replay(terminal.presented.slice(from));
   terminal.resized(size);
+  // A whole frame is one whose footer has been drawn, witnessed by the way out
+  // being somewhere in that band. Which row of the band holds it is the
+  // layout's business — the staged screen puts the way out on its History row
+  // — so this asks whether the band is there rather than pinning a row of it.
   yield* awaited(`a whole frame at ${size.columns}x${size.rows}`, () =>
-    (rows()[Math.max(0, size.rows - FOOTER_ROWS)] ?? "").includes("[exit]"),
+    rows()
+      .slice(Math.max(0, size.rows - FOOTER_ROWS))
+      .some((line) => line.includes("[exit]")),
   );
   return rows;
 }

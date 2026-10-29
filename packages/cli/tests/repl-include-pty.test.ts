@@ -24,6 +24,15 @@ import type { Pty } from "./support/pty.ts";
 const ACT_MS = 30_000;
 const REACH_MS = 180_000;
 
+/**
+ * The draft row's own name, which is how a pointer finds it.
+ *
+ * The draft is a block now: its name and focus marker are one row and what
+ * somebody typed is fitted into rows of its own beneath them. Clicking the name
+ * is what puts the cursor in it.
+ */
+const DRAFT_PROMPT = " DRAFT";
+
 function greeting(which: "First" | "Second"): string {
   return `---\ndescription: ${which} greeting contract.\nprops:\n  type: object\n  properties:\n    from${which}: { type: string }\n  required: [from${which}]\n  additionalProperties: false\n---\n\n${which} greeting rendered.\n`;
 }
@@ -41,9 +50,12 @@ function* click(pty: Pty, label: string): Operation<void> {
 }
 
 function* submit(pty: Pty, source: string): Operation<void> {
-  yield* click(pty, "Draft: ");
+  yield* click(pty, DRAFT_PROMPT);
   yield* pty.type(source);
-  yield* showing(pty, source.split("\n").at(-1) ?? source, ACT_MS);
+  // Across the rows the column wrapped it onto: the draft is a block in a
+  // column now, so a source longer than that column is on the screen without
+  // being on any one row of it.
+  yield* showingAcross(pty, source.split("\n").at(-1) ?? source, ACT_MS);
   yield* pty.type("\r");
 }
 
@@ -122,7 +134,7 @@ function* refused(pty: Pty, history: string, name: string): Operation<void> {
   yield* submit(pty, `<${name} />`);
   yield* showing(pty, "this entry cannot run here", ACT_MS);
   expect(yield* readTextFile(history)).toBe(before);
-  yield* click(pty, "Draft: ");
+  yield* click(pty, DRAFT_PROMPT);
   for (let at = 0; at < `<${name} />`.length; at += 1) {
     yield* pty.type("\x7f");
   }
@@ -203,6 +215,10 @@ describe("REPL includes through the production source terminal", () => {
     yield* scoped(function* () {
       const pty = yield* allocate(line([location, ...includes]), home);
       yield* showing(pty, "Ready for Entry 3", REACH_MS);
+      // The catalog is a drawer on this screen: `Entries` is what opens it, and
+      // the row that selects the first entry is inside it.
+      yield* click(pty, "Entries");
+      yield* showing(pty, "1. [ok]", ACT_MS);
       yield* click(pty, "1. [ok]");
       yield* showing(pty, "First greeting rendered.", ACT_MS);
       yield* showing(pty, "External-only rendered.", ACT_MS);
@@ -304,10 +320,11 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
     function* activateKey(pty: Pty, label: string, occurrence = 0): Operation<void> {
       for (let step = 0; step < 160; step++) {
         const screen = yield* pty.shows();
-        const matching = screen.filter((line) => {
-          const at = line.indexOf(label);
-          return at >= 0 && (!label.startsWith("component ") || at < 36);
-        });
+        // Every row holding this label, in the order the screen draws them.
+        // The catalog is a drawer now rather than a column of its own, so the
+        // column a row lands in no longer tells its copy from another's: the
+        // occurrence does.
+        const matching = screen.filter((line) => line.includes(label));
         const row = matching[occurrence];
         const focused = label.startsWith("component ")
           ? row !== undefined && row.slice(0, row.indexOf(label)).includes(">")
@@ -337,18 +354,27 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
         `focus never reached ${label} (${occurrence}): ${JSON.stringify(yield* pty.shows())}`,
       );
     }
+    /** Open the Entries catalog, which is a drawer over the reading. */
+    function* openCatalog(pty: Pty): Operation<void> {
+      yield* activateKey(pty, "Entries");
+      yield* showing(pty, "1. [ok]", ACT_MS);
+    }
     function* inspect(pty: Pty): Operation<void> {
       for (const [index, expected] of ["first", "second"].entries()) {
+        // The scopes an entry holds are rows of its catalog, under the entry
+        // itself — and choosing one closes the drawer, so each pass opens it.
+        yield* openCatalog(pty);
         yield* activateKey(pty, "component OwnerLeaf", index);
         yield* showingAcross(pty, '<OwnerWrapper input="first"', ACT_MS);
         yield* showingAcross(pty, '<OwnerWrapper input="second"', ACT_MS);
-        yield* activateKey(pty, "Bindings");
+        yield* activateKey(pty, "BINDINGS");
         yield* activateKey(pty, "answered");
         yield* showing(pty, "[close]", ACT_MS);
         yield* showing(pty, JSON.stringify(expected), ACT_MS);
         yield* pty.type("\x1b");
         yield* sleep(150);
       }
+      yield* openCatalog(pty);
       yield* activateKey(pty, "1. [ok]");
       yield* showing(pty, "first/second", ACT_MS);
       for (const name of ["first", "second"]) {
