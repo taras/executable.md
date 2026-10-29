@@ -221,7 +221,7 @@ export function entryMarked(frame: PageFrame, entry: string): boolean {
  * characters is not accepted cut, so a row that shares only its first letters
  * does not count.
  */
-export function showsCut(rows: readonly string[], text: string, floor = 4): boolean {
+function showsCut(rows: readonly string[], text: string, floor = 4): boolean {
   if (rows.some((line) => line.includes(text))) {
     return true;
   }
