@@ -23,16 +23,8 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import {
-  ensure,
-  resource,
-  scoped,
-  sleep,
-  spawn,
-  until as untilResolved,
-  withResolvers,
-} from "effection";
-import type { Operation, Stream, Subscription, Task } from "effection";
+import { scoped, spawn, suspend, until as untilResolved, withResolvers } from "effection";
+import type { Operation } from "effection";
 import { useTempFileCompiler } from "@executablemd/core";
 import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
@@ -46,14 +38,12 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { randomBytes } from "node:crypto";
 
-import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
+import { decodeLocation } from "../src/repl/route.ts";
 import type { ReplRoute } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
-import { installReplTerminal } from "../src/repl/terminal-host.ts";
-import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
+import { ReplTerminal } from "../src/repl/terminal.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
-import { BODY_GUTTER, inspectionWidth, sidebarWidth } from "../src/repl/layout.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import { assembleReplProfile } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
@@ -63,9 +53,51 @@ import { createFakeAcp, makeRegistry, makeStore, tripwireAcp } from "./support/f
 import type { FakeAcp } from "./support/fake-acp.ts";
 import { ADAPTERS, AGENT } from "./support/plan-harness.ts";
 import { parseDurableEvent } from "@executablemd/durable-streams";
+import {
+  awaited,
+  awaitedFact,
+  mountedExecution,
+  recordingTerminal,
+} from "./support/mounted-repl.ts";
+import type { MountedHost, Terminal } from "./support/mounted-repl.ts";
+import { useReplPage } from "./support/mounted-page.ts";
+import type { PageFrame, ReplPage } from "./support/mounted-page.ts";
+import {
+  answerField,
+  chooseCatalogRow,
+  chooseConversation,
+  chooseEveryConversation,
+  chooseMarker,
+  chooseOption,
+  closeCatalog,
+  closeDrawer,
+  closeSelector,
+  conversationFilter,
+  draft,
+  drawerShows,
+  entryMarked,
+  entrySettles,
+  form,
+  historyMarkers,
+  occurrences,
+  offeredConversations,
+  openCatalog,
+  openHistory,
+  openQuestion,
+  openSelector,
+  paste,
+  railMark,
+  readingRetained,
+  selectPane,
+  sessionTurns,
+  shownPane,
+  shows,
+} from "./support/repl-page-adapters.ts";
 
 import { ENTRIES_FILE, PAIRED_DIRECTORY } from "../src/repl/sidekick/history.ts";
 import { projectRepl } from "../src/repl/model.ts";
+import { REPL_DIRECTORY } from "../src/repl/storage.ts";
+import { pairedReplRepository } from "../src/repl/sidekick/repository.ts";
 
 /** The exact source the Story publishes. */
 const STORY = [
@@ -190,6 +222,13 @@ const THREE = [
 /** One entry that asks one question of one Agent. */
 const ASKING = ['<Session name="planner">', '<Prompt text="ok?" />', "</Session>"].join("\n");
 
+/** What the revised review draws as the draft it asks about. */
+const REVISION_TITLE = "Create a README from a project name";
+
+/** Tall enough that a whole entry's reading is in the window rather than below it. */
+const WIDE: ReplTerminalSize = { columns: 200, rows: 140 };
+const TALL: ReplTerminalSize = { columns: 200, rows: 60 };
+
 describe("J1 — the Story, from one entry to one README", () => {
   beforeAll(() => useTempFileCompiler());
 
@@ -201,33 +240,25 @@ describe("J1 — the Story, from one entry to one README", () => {
     // queued, and before it streams, so a reader sees it active with nothing
     // said yet.
     const held = holds([AUTHORSHIP]);
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 140 });
 
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* install();
-      yield* immediateClock();
-      const hostRoot = yield* useTemporaryHost();
-      const running = yield* spawn(() => start(fake, held, workspace));
-      yield* untilDrawn(terminal);
+      const { page, hostRoot, workspace } = yield* beginJourney({ fake, held, size: WIDE });
 
-      terminal.bytes(BYTES.encode(STORY));
-      yield* settled(20);
-      terminal.feed("\r");
+      yield* submitted(page, STORY, 1);
 
       // Queued: the Prompt is scheduled and the provider has not taken it.
-      yield* showing(terminal, "· queued");
-      expect(shows(terminal, "· streaming")).toBe(false);
+      yield* page.until("the authorship turn queued", (frame) => shows(frame, "· queued"));
+      expect(shows(page.frame(), "· streaming")).toBe(false);
       // Taken, and streaming: the turn is active before it has said anything.
       held.start(AUTHORSHIP);
-      yield* showing(terminal, "· streaming");
+      yield* page.until("the authorship turn streaming", (frame) => shows(frame, "· streaming"));
       // Ended, with the fact its provider reported, and then retained: the row a
       // person was watching becomes its own record, under the scope the packaged
       // Plan was admitted as.
       held.deltas(AUTHORSHIP);
-      yield* showing(terminal, "stopped: end_turn");
-      yield* showing(terminal, "completed, recorded");
-      yield* awaiting("the turn was never retained", function* () {
+      yield* page.until("the turn's stop reason", (frame) => shows(frame, "stopped: end_turn"));
+      yield* page.until("the turn recorded", (frame) => shows(frame, "completed, recorded"));
+      yield* awaitedFact("the turn was never retained", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length > 0
         );
@@ -235,38 +266,42 @@ describe("J1 — the Story, from one entry to one README", () => {
 
       // The review is the REPL's own drawer, over the draft the Agent returned.
       // It announces itself first; activating that announcement opens it.
-      yield* openQuestion(terminal);
-      yield* showing(terminal, "Request changes");
-      expect(shows(terminal, "A first draft")).toBe(true);
+      yield* openQuestion(page);
+      yield* page.until("the review offering changes", (frame) =>
+        drawerShows(frame, "Request changes"),
+      );
+      expect(shows(page.frame(), "A first draft")).toBe(true);
 
       // Request changes with no feedback. Choosing an option submits the form,
       // and this one is refused: the schema requires the feedback that option
       // asks for, so the review stays open, nothing is answered and no turn
       // begins.
-      yield* click(terminal, "( ) Request changes");
-      yield* settled(40);
-      expect(shows(terminal, "Request changes")).toBe(true);
+      yield* chooseOption(page, "decision", "Request changes");
+      yield* page.until("the review refusing the missing feedback", (frame) =>
+        drawerShows(frame, "required property"),
+      );
+      expect(drawerShows(page.frame(), "Request changes")).toBe(true);
       expect(fake.prompts).toHaveLength(1);
       expect(recorded(yield* journal(hostRoot)).filter((kind) => kind === "elicit")).toEqual([]);
 
       // With feedback, the same conversation continues into the next turn.
-      yield* click(terminal, "feedback:");
-      terminal.bytes(BYTES.encode(FEEDBACK));
-      yield* settled(20);
-      yield* click(terminal, "[submit]");
-      yield* until(() => fake.prompts.length >= 2, "the revision was never asked for");
+      yield* answerField(page, "feedback", FEEDBACK);
+      yield* form(page).submit();
+      yield* awaited("the revision was never asked for", () => fake.prompts.length >= 2);
       expect(fake.prompts[1]).toContain(FEEDBACK);
       expect(new Set(fake.turns.map((turn) => turn.handle.sessionKey)).size).toBe(1);
 
       // Approved: the revision is what `<Evaluate>` admits. The revised review is
       // a new question, so it announces itself and is opened again.
-      yield* openQuestion(terminal);
-      yield* showing(terminal, "Approve");
-      yield* click(terminal, "( ) Approve");
+      yield* openQuestion(page);
+      yield* page.until("the revised review", (frame) => drawerShows(frame, REVISION_TITLE));
+      yield* chooseOption(page, "decision", "Approve");
 
       // The first question the generated program asks.
-      yield* openQuestion(terminal);
-      yield* showing(terminal, "Name the project");
+      yield* openQuestion(page);
+      yield* page.until("the program's first question", (frame) =>
+        drawerShows(frame, "Name the project"),
+      );
       const admitted = admission(yield* journal(hostRoot));
       // The approved text, byte for byte, inside the document's own whitespace:
       // `<Evaluate>`'s content is the newline and the two columns the `<Plan>`
@@ -285,16 +320,16 @@ describe("J1 — the Story, from one entry to one README", () => {
         { name: "Json", form: "self-closing" },
       ]);
 
-      yield* answer(terminal, "Project name", "Ledger");
-      yield* answer(terminal, "One-sentence description", "A tiny ledger.");
-      yield* submit(terminal);
+      yield* answerField(page, "project", "Ledger");
+      yield* answerField(page, "summary", "A tiny ledger.");
+      yield* form(page).submit();
 
       // The preview: the complete proposed file, in the confirmation's own
       // request, before anything has been written.
-      yield* openQuestion(terminal);
-      yield* showing(terminal, "Write this README?");
+      yield* openQuestion(page);
+      yield* page.until("the confirmation", (frame) => drawerShows(frame, "Write this README?"));
       for (const line of ["# The project", '"project": "Ledger"', '"summary": "A tiny ledger."']) {
-        expect([line, shows(terminal, line)]).toEqual([line, true]);
+        expect([line, shows(page.frame(), line)]).toEqual([line, true]);
       }
       expect(yield* untilResolved(readdir(workspace))).toEqual([]);
       // Nothing has rendered the report, and while this drawer is open nothing
@@ -307,23 +342,23 @@ describe("J1 — the Story, from one entry to one README", () => {
       // this report can be read before it is written is nowhere — which is what
       // a modal is for. That it has not been written is a durable fact, asserted
       // above, rather than something read off the screen.
-      expect(occurrences(terminal, CREATED)).toBe(0);
+      expect(occurrences(page.frame(), CREATED)).toBe(0);
 
       // Approved. The report follows the write: at the first frame that shows
       // it, the file is already there, with the bytes the preview showed.
-      yield* click(terminal, "( ) Approve");
-      yield* awaiting("the report never followed the write", function* () {
-        yield* settled(10);
-        return occurrences(terminal, CREATED) > 1;
-      });
+      yield* chooseOption(page, "decision", "Approve");
+      yield* page.until(
+        "the report following the write",
+        (frame) => occurrences(frame, CREATED) > 1,
+      );
       expect(yield* untilResolved(readdir(workspace))).toEqual(["README.md"]);
       expect(yield* untilResolved(readFile(join(workspace, "README.md"), "utf8"))).toBe(WRITTEN);
       // And the branch that was not taken rendered nothing: its line is on the
       // screen once, as source.
-      expect(occurrences(terminal, STOPPED)).toBe(1);
+      expect(occurrences(page.frame(), STOPPED)).toBe(1);
 
       // One write, and the entry settled on it.
-      yield* awaiting("the entry never settled", function* () {
+      yield* awaitedFact("the entry never settled", function* () {
         return (yield* journal(hostRoot)).some((event) => event.type === "close");
       });
       expect(yield* untilResolved(readdir(workspace))).toEqual(["README.md"]);
@@ -336,23 +371,22 @@ describe("J1 — the Story, from one entry to one README", () => {
         "agent_prompt",
         "agent_prompt",
       ]);
-      expect(occurrences(terminal, "completed, recorded")).toBe(2);
+      expect(occurrences(page.frame(), "completed, recorded")).toBe(2);
       // Read inside the catalog, which is where an entry's scopes are listed
       // now. The rows above are read before it is opened, because the drawer is
       // over the reading they are in.
-      yield* openCatalog(terminal);
-      expect(shows(terminal, "component Plan")).toBe(true);
-      expect(shows(terminal, "generated generated")).toBe(true);
+      yield* openCatalog(page);
+      expect(shows(page.frame(), "component Plan")).toBe(true);
+      expect(shows(page.frame(), "generated generated")).toBe(true);
       // And both Plan reviews are retained where they were asked, which is
       // inside that scope rather than in the entry.
-      expect(
-        yield* answeredUnder(terminal, "component Plan", "answered @executablemd/cli/Plan"),
-      ).toBe(2);
+      expect(yield* answeredUnder(page, "component Plan", "answered @executablemd/cli/Plan")).toBe(
+        2,
+      );
 
       // Two turns in one conversation, and nothing else was asked.
       expect(fake.prompts).toHaveLength(2);
-      terminal.end();
-      yield* running;
+      yield* leave(page);
     });
   });
 
@@ -360,57 +394,50 @@ describe("J1 — the Story, from one entry to one README", () => {
     const fake = createFakeAcp();
     fake.script({ reply: DRAFT });
     fake.script({ reply: REVISED });
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 140 });
 
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* install();
-      yield* immediateClock();
-      const hostRoot = yield* useTemporaryHost();
-      const running = yield* spawn(() => start(fake, holds([]), workspace));
-      yield* untilDrawn(terminal);
+      const { page, hostRoot, workspace } = yield* beginJourney({ fake, size: WIDE });
 
-      terminal.bytes(BYTES.encode(STORY));
-      yield* settled(20);
-      terminal.feed("\r");
+      yield* submitted(page, STORY, 1);
 
       // The same review, the same feedback, the same approved program.
-      yield* openQuestion(terminal);
-      yield* showing(terminal, "Request changes");
-      yield* click(terminal, "( ) Request changes");
-      yield* settled(40);
-      yield* click(terminal, "feedback:");
-      terminal.bytes(BYTES.encode(FEEDBACK));
-      yield* settled(20);
-      yield* click(terminal, "[submit]");
-      yield* until(() => fake.prompts.length >= 2, "the revision was never asked for");
-      yield* openQuestion(terminal);
-      yield* showing(terminal, "Approve");
-      yield* click(terminal, "( ) Approve");
+      yield* openQuestion(page);
+      yield* page.until("the review offering changes", (frame) =>
+        drawerShows(frame, "Request changes"),
+      );
+      yield* chooseOption(page, "decision", "Request changes");
+      yield* page.until("the review refusing the missing feedback", (frame) =>
+        drawerShows(frame, "required property"),
+      );
+      yield* answerField(page, "feedback", FEEDBACK);
+      yield* form(page).submit();
+      yield* awaited("the revision was never asked for", () => fake.prompts.length >= 2);
+      yield* openQuestion(page);
+      yield* page.until("the revised review", (frame) => drawerShows(frame, REVISION_TITLE));
+      yield* chooseOption(page, "decision", "Approve");
 
-      yield* openQuestion(terminal);
-      yield* showing(terminal, "Name the project");
-      yield* answer(terminal, "Project name", "Ledger");
-      yield* answer(terminal, "One-sentence description", "A tiny ledger.");
-      yield* submit(terminal);
+      yield* openQuestion(page);
+      yield* page.until("the program's first question", (frame) =>
+        drawerShows(frame, "Name the project"),
+      );
+      yield* answerField(page, "project", "Ledger");
+      yield* answerField(page, "summary", "A tiny ledger.");
+      yield* form(page).submit();
 
       // The same preview, reached the same way.
-      yield* openQuestion(terminal);
-      yield* showing(terminal, "Write this README?");
-      expect(shows(terminal, '"project": "Ledger"')).toBe(true);
+      yield* openQuestion(page);
+      yield* page.until("the confirmation", (frame) => drawerShows(frame, "Write this README?"));
+      expect(shows(page.frame(), '"project": "Ledger"')).toBe(true);
       expect(yield* untilResolved(readdir(workspace))).toEqual([]);
 
       // Declined. The two outcomes are observably different: one reports a
       // file it wrote, and this one reports that it wrote nothing.
-      yield* click(terminal, "( ) Decline");
-      yield* awaiting("the decline was never reported", function* () {
-        yield* settled(10);
-        return occurrences(terminal, STOPPED) > 1;
-      });
+      yield* chooseOption(page, "decision", "Decline");
+      yield* page.until("the decline reported", (frame) => occurrences(frame, STOPPED) > 1);
       // And the write branch rendered nothing: its report is on the screen once,
       // as the source it was admitted from.
-      expect(occurrences(terminal, CREATED)).toBe(1);
-      yield* awaiting("the entry never settled", function* () {
+      expect(occurrences(page.frame(), CREATED)).toBe(1);
+      yield* awaitedFact("the entry never settled", function* () {
         return (yield* journal(hostRoot)).some((event) => event.type === "close");
       });
       // Nothing was written, and the question that decided it is in the
@@ -419,8 +446,7 @@ describe("J1 — the Story, from one entry to one README", () => {
       expect(recorded(yield* journal(hostRoot)).filter((kind) => kind === "elicit")).toHaveLength(
         4,
       );
-      terminal.end();
-      yield* running;
+      yield* leave(page);
     });
   });
 });
@@ -499,74 +525,42 @@ describe("C1 — the command line this REPL runs under", () => {
   });
 
   it("C1: an entry that asks for no Agent materializes no adapter", function* () {
-    const reached: string[] = [];
-    const { terminal, install } = recordingTerminal();
+    const fake = createFakeAcp();
 
     yield* scoped(function* (): Operation<void> {
-      yield* useWorkspace();
-      yield* install();
-      yield* immediateClock();
-      const hostRoot = yield* useTemporaryHost();
-      const running = yield* spawn(function* (): Operation<void> {
-        const stack = yield* resolveAgentStack(
-          {
-            agentProvider: "acpx",
-            defaultAgent: AGENT,
-            approveAll: false,
-            approveReads: false,
-            denyAll: false,
-          },
-          undefined,
-        );
-        if (!stack.ok) {
-          throw stack.error;
-        }
-        const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
-          acp: { createRuntime: tripwireAcp((what) => reached.push(what)) },
-          planWriterRoot: yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-c1-"))),
-        })).finalize();
-        const ran = yield* runReplProgram({ profile });
-        if (!ran.ok) {
-          throw ran.error;
-        }
-      });
-      yield* untilDrawn(terminal);
-      terminal.bytes(BYTES.encode("# A document that asks nobody anything"));
-      yield* settled(20);
-      terminal.feed("\r");
-      yield* showing(terminal, "A document that asks nobody anything");
-      yield* awaiting("the entry never settled", function* () {
+      const { page, hostRoot } = yield* beginJourney({ fake });
+
+      yield* submitted(page, "# A document that asks nobody anything", 1);
+      yield* page.until("the entry shown", (frame) =>
+        shows(frame, "A document that asks nobody anything"),
+      );
+      yield* awaitedFact("the entry never settled", function* () {
         return (yield* journal(hostRoot)).some((event) => event.type === "close");
       });
       // Nothing about the provider was reached: no runtime, no registry, no
       // adapter on disk.
-      expect(reached).toEqual([]);
-      terminal.end();
-      yield* running;
+      expect(fake.created).toEqual([]);
+      expect(fake.ensured).toEqual([]);
+      expect(fake.prompts).toEqual([]);
+      expect(fake.started).toBe(false);
+      yield* leave(page);
     });
   });
 
   it("C1: `<Session.Launch>` is unavailable and the REPL keeps the terminal", function* () {
     const fake = createFakeAcp();
-    const { terminal, install } = recordingTerminal();
 
     yield* scoped(function* (): Operation<void> {
-      yield* useWorkspace();
-      yield* install();
-      yield* immediateClock();
-      const hostRoot = yield* useTemporaryHost();
-      const running = yield* spawn(() => start(fake, holds([]), ""));
-      yield* untilDrawn(terminal);
+      const { page, hostRoot } = yield* beginJourney({ fake });
+      const { terminal } = page.repl;
       const modes = terminal.raw.length;
 
-      terminal.bytes(BYTES.encode("<Session.Launch>\ndo the work\n</Session.Launch>"));
-      yield* settled(20);
-      terminal.feed("\r");
+      yield* submitted(page, "<Session.Launch>\ndo the work\n</Session.Launch>", 1);
 
       // The established refusal, from the Api's own default: this command
       // installs no foreground launcher, so nothing was started and the entry
       // failed on the reservation rather than on anything it launched.
-      yield* awaiting("the entry never settled", function* () {
+      yield* awaitedFact("the entry never settled", function* () {
         return (yield* journal(hostRoot)).some((event) => event.type === "close");
       });
       const closed = (yield* journal(hostRoot)).find((event) => event.type === "close");
@@ -579,8 +573,7 @@ describe("C1 — the command line this REPL runs under", () => {
       // nothing was restored while the entry ran.
       expect(terminal.raw.length).toBe(modes);
       expect(terminal.resets).toBe(0);
-      terminal.end();
-      yield* running;
+      yield* leave(page);
     });
   });
 });
@@ -786,55 +779,45 @@ describe("A2–A5 — the selected REPL component environment", () => {
     fake.script({ reply: "# Unavailable draft\n\n<Local />\n" });
     const approved = '# Included draft\n\n<Greeting fromFirst="ok" />\n<SessionOnly />\n';
     fake.script({ reply: approved });
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 140 });
-    yield* install();
-    yield* immediateClock();
     const hostRoot = yield* useTempDirectory("xmd-include-history-");
-    yield* useTemporaryHost(hostRoot);
-    const running = yield* spawn(function* () {
-      const profile = yield* assembleReplProfile(
-        { provider: "acpx", defaultAgent: AGENT, adapters: ADAPTERS, permissionMode: "deny-all" },
-        NO_PLUGINS,
-        {
-          includes: [relative(yield* cwd(), fixture.first), fixture.second],
-          planWriterRoot: join(fixture.root, "plans"),
-          acp: {
-            createRuntime: fake.create,
-            sessionStore: makeStore(),
-            agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
-          },
-        },
+    const ran = yield* scoped(function* (): Operation<string> {
+      const { page, host } = yield* beginJourney({
+        fake,
+        hostRoot,
+        size: WIDE,
+        includes: [relative(yield* cwd(), fixture.first), fixture.second],
+        planWriterRoot: join(fixture.root, "plans"),
+        permissionMode: "deny-all",
+        workspace: false,
+      });
+      const execution = yield* mountedExecution(page.repl);
+      const sessionComponents = join(host.root, PAIRED_DIRECTORY, execution, "components");
+      yield* writeTextFile(join(sessionComponents, "Greeting.md"), "Session collision.");
+      yield* writeTextFile(join(sessionComponents, "SessionOnly.md"), "Session only.");
+      yield* submitted(page, '<Plan as="draft">Write an included greeting.</Plan>\n\n{draft}', 1);
+      yield* awaited(
+        "Plan never repaired the unavailable component",
+        () => fake.prompts.length === 2,
       );
-      const ran = yield* runReplProgram({ profile });
-      if (!ran.ok) {
-        throw ran.error;
-      }
+      expect(fake.prompts[1]).toContain("Local");
+      expect(fake.prompts[0]).toContain("First greeting contract.");
+      expect(fake.prompts[0]).toContain(`${fixture.first}/Greeting.md`);
+      expect(fake.prompts[0]).not.toContain("Second greeting contract.");
+      expect(fake.prompts[0]).toContain(join(sessionComponents, "SessionOnly.md"));
+      expect(fake.prompts[0]).not.toContain("<RootLocal>");
+      expect(fake.prompts[0]).not.toContain("<Local>");
+      yield* openQuestion(page);
+      yield* page.until("the review offering approval", (frame) => drawerShows(frame, "Approve"));
+      yield* chooseOption(page, "decision", "Approve");
+      yield* page.until("the approved draft shown", (frame) => shows(frame, "Included draft"));
+      yield* awaitedFact("approved Plan entry never closed", function* () {
+        return (yield* journal(hostRoot)).some(
+          (event) => event.type === "close" && event.coroutineId === "root",
+        );
+      });
+      return yield* leave(page);
     });
-    yield* untilDrawn(terminal);
-    const sessions = join(hostRoot, "xmd", "repl", PAIRED_DIRECTORY);
-    const execution = (yield* untilResolved(readdir(sessions)))[0]!;
-    const sessionComponents = join(sessions, execution, "components");
-    yield* writeTextFile(join(sessionComponents, "Greeting.md"), "Session collision.");
-    yield* writeTextFile(join(sessionComponents, "SessionOnly.md"), "Session only.");
-    yield* typed(terminal, '<Plan as="draft">Write an included greeting.</Plan>\n\n{draft}');
-    yield* until(() => fake.prompts.length === 2, "Plan never repaired the unavailable component");
-    expect(fake.prompts[1]).toContain("Local");
-    expect(fake.prompts[0]).toContain("First greeting contract.");
-    expect(fake.prompts[0]).toContain(`${fixture.first}/Greeting.md`);
-    expect(fake.prompts[0]).not.toContain("Second greeting contract.");
-    expect(fake.prompts[0]).toContain(join(sessionComponents, "SessionOnly.md"));
-    expect(fake.prompts[0]).not.toContain("<RootLocal>");
-    expect(fake.prompts[0]).not.toContain("<Local>");
-    yield* openQuestion(terminal);
-    yield* click(terminal, "( ) Approve");
-    yield* showing(terminal, "Included draft");
-    yield* awaiting("approved Plan entry never closed", function* () {
-      return (yield* journal(hostRoot)).some(
-        (event) => event.type === "close" && event.coroutineId === "root",
-      );
-    });
-    terminal.end();
-    yield* running;
+    expect(ran).toContain("xmd://repl/");
     const model = projectRepl(
       (yield* journal(hostRoot)).map((event) => {
         const parsed = parseDurableEvent(JSON.stringify(event));
@@ -864,29 +847,20 @@ describe("J3 — durable truth, and a cold process over it", () => {
     const live = createFakeAcp();
     live.script({ reply: DRAFT });
     live.script({ reply: REVISED });
-    const first = recordingTerminal({ columns: 200, rows: 140 });
     let location = "";
     let markers: string[] = [];
 
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* first.install();
-      yield* immediateClock();
-      yield* useTemporaryHost(hostRoot);
-      const running = yield* spawn(() => start(live, holds([]), workspace));
-      yield* untilDrawn(first.terminal);
+      const { page, workspace } = yield* beginJourney({ fake: live, hostRoot, size: WIDE });
       // The exact Story, through the real packaged Plan, exactly as J1 walks it.
-      yield* takeTheJourney(first.terminal, live, hostRoot, workspace);
+      yield* takeTheJourney(page, live, hostRoot, workspace);
       // The History positions this run reached, read from the drawer that
       // offers them.
-      yield* click(first.terminal, "[history]");
-      yield* settled(40);
-      markers = historyMarkers(first.terminal);
+      yield* openHistory(page);
+      markers = historyMarkers(page.frame());
       expect(markers.length).toBeGreaterThan(3);
-      yield* click(first.terminal, "[close]");
-      yield* settled(20);
-      first.terminal.end();
-      location = yield* running;
+      yield* closeDrawer(page);
+      location = yield* leave(page);
     });
 
     // What the live process printed, and what the history holds now.
@@ -895,14 +869,13 @@ describe("J3 — durable truth, and a cold process over it", () => {
     expect(live.prompts).toHaveLength(2);
 
     const cold = createFakeAcp();
-    const second = recordingTerminal({ columns: 200, rows: 140 });
     yield* scoped(function* (): Operation<void> {
-      const elsewhere = yield* useWorkspace();
-      yield* second.install();
-      yield* immediateClock();
-      yield* useTemporaryHost(hostRoot);
-      const running = yield* spawn(() => start(cold, holds([]), elsewhere, location));
-      yield* untilDrawn(second.terminal);
+      const { page, workspace: elsewhere } = yield* beginJourney({
+        fake: cold,
+        hostRoot,
+        size: WIDE,
+        location,
+      });
 
       // The whole journey, from the Journal: the packaged Plan's own scope, the
       // program it produced, both retained turns and their conversation, the
@@ -915,54 +888,56 @@ describe("J3 — durable truth, and a cold process over it", () => {
         '"summary": "A tiny ledger."',
         CREATED,
       ]) {
-        yield* showing(second.terminal, line);
+        yield* page.until(`${line} shown`, (frame) => shows(frame, line));
       }
       // Both turns are recorded rows rather than a live process's readings.
       // Counted before the catalog is opened, because the drawer is over the
       // reading these rows are in.
-      expect(occurrences(second.terminal, "completed, recorded")).toBe(2);
+      expect(occurrences(page.frame(), "completed, recorded")).toBe(2);
       // The packaged Plan's own scope and the program it produced, read where
       // an entry's scopes are listed: inside its catalog.
-      yield* openCatalog(second.terminal);
+      yield* openCatalog(page);
       for (const line of ["component Plan", "generated generated"]) {
-        yield* showing(second.terminal, line);
+        yield* page.until(`${line} listed`, (frame) => shows(frame, line));
       }
       // And both Plan reviews are retained where they were asked.
-      expect(
-        yield* answeredUnder(second.terminal, "component Plan", "answered @executablemd/cli/Plan"),
-      ).toBe(2);
+      expect(yield* answeredUnder(page, "component Plan", "answered @executablemd/cli/Plan")).toBe(
+        2,
+      );
       // The program's own two questions are retained with the answers they
       // took. Their positions carry no path — generated source is not a file —
       // so they are shown under the fragment that produced them.
-      yield* openCatalog(second.terminal);
-      yield* click(second.terminal, "generated generated");
-      yield* settled(40);
+      yield* openCatalog(page);
+      yield* chooseCatalogRow(page, "generated generated");
       // The answers themselves are read from the reading above, which shows
       // them in full; what this counts is that each question is retained under
       // the fragment that asked it, at the position it was written.
-      expect(occurrences(second.terminal, "answered 4:1")).toBe(1);
-      expect(occurrences(second.terminal, "answered 12:1")).toBe(1);
+      const fragment = yield* page.until(
+        "the fragment's retained questions",
+        (frame) =>
+          occurrences(frame, "answered 4:1") > 0 && occurrences(frame, "answered 12:1") > 0,
+      );
+      expect(occurrences(fragment, "answered 4:1")).toBe(1);
+      expect(occurrences(fragment, "answered 12:1")).toBe(1);
       // And the branch that was not taken is on the screen once, as source.
-      expect(occurrences(second.terminal, STOPPED)).toBe(1);
+      expect(occurrences(fragment, STOPPED)).toBe(1);
 
       // The same History positions, from the same drawer.
-      yield* click(second.terminal, "[history]");
-      yield* settled(40);
-      expect(historyMarkers(second.terminal)).toEqual(markers);
-      yield* click(second.terminal, "[close]");
-      yield* settled(20);
+      yield* openHistory(page);
+      expect(historyMarkers(page.frame())).toEqual(markers);
+      yield* closeDrawer(page);
 
       // Nothing was asked of anybody: no provider, no adapter, and no question
       // or permission offered to answer a second time.
       expect(cold.prompts).toEqual([]);
       expect(cold.started).toBe(false);
-      expect(shows(second.terminal, "[submit]")).toBe(false);
-      expect(shows(second.terminal, "( ) Approve")).toBe(false);
+      expect(page.frame().has("drawer:form:submit")).toBe(false);
+      expect(shows(page.frame(), "[submit]")).toBe(false);
+      expect(shows(page.frame(), "( ) Approve")).toBe(false);
       // And nothing was written: the file the entry wrote is in the first
       // process's working directory, and this one has its own.
       expect(yield* untilResolved(readdir(elsewhere))).toEqual([]);
-      second.terminal.end();
-      yield* running;
+      yield* leave(page);
     });
 
     // Byte for byte the history it opened: reading a run is not appending to it.
@@ -974,7 +949,6 @@ describe("J3 — durable truth, and a cold process over it", () => {
     const live = createFakeAcp();
     live.script({ reply: "ONE-DONE" });
     live.script({ reply: "TWO-DONE" });
-    const first = recordingTerminal({ columns: 200, rows: 140 });
     let location = "";
     let turnRows: string[] = [];
 
@@ -983,37 +957,32 @@ describe("J3 — durable truth, and a cold process over it", () => {
     // chronology would have to resolve, and the one a cold reader has to
     // resolve the same way.
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* first.install();
-      yield* immediateClock();
-      yield* useTemporaryHost(hostRoot);
-      const running = yield* spawn(() => start(live, holds([]), workspace));
-      yield* untilDrawn(first.terminal);
+      const { page } = yield* beginJourney({ fake: live, hostRoot, size: WIDE });
 
-      yield* typed(first.terminal, promptEntry("ask-one"));
-      yield* settledOn(first.terminal, 1);
-      yield* focusDraft(first.terminal);
-      yield* typed(first.terminal, promptEntry("ask-two"));
-      yield* settledOn(first.terminal, 2);
+      yield* submitted(page, promptEntry("ask-one"), 1);
+      yield* entrySettles(page, 1, "ok");
+      yield* submitted(page, promptEntry("ask-two"), 2);
+      yield* entrySettles(page, 2, "ok");
 
       // Both turns are on the Sessions reading, in one conversation, before
       // anything is read back: this is the reading a cold process has to
       // reproduce, and it is captured as it is *drawn* so the comparison below
       // is of two screens rather than of two descriptions.
-      yield* showing(first.terminal, "ONE-DONE");
-      yield* showing(first.terminal, "TWO-DONE");
+      yield* page.until(
+        "both replies",
+        (frame) => shows(frame, "ONE-DONE") && shows(frame, "TWO-DONE"),
+      );
       // The conversation control exists, which is what says the Sessions
       // surface is offering a conversation to filter by at all. Which key it
       // is, is a fact about the record and is asserted of the record below —
       // a provider session key is longer than this column and is drawn cut.
-      expect(shows(first.terminal, "All sessions")).toBe(true);
-      turnRows = promptRows(first.terminal);
+      expect(shows(page.frame(), "All sessions")).toBe(true);
+      turnRows = sessionTurns(page.frame());
       expect(turnRows).toHaveLength(2);
       expect(turnRows.some((row) => shownPrompt(row, "ask-one"))).toBe(true);
       expect(turnRows.some((row) => shownPrompt(row, "ask-two"))).toBe(true);
 
-      first.terminal.end();
-      location = yield* running;
+      location = yield* leave(page);
     });
 
     expect(live.prompts).toEqual(["ask-one", "ask-two"]);
@@ -1061,43 +1030,39 @@ describe("J3 — durable truth, and a cold process over it", () => {
     // that refuses every call it is given: reaching one is the defect, so the
     // stand-in makes reaching one a failure rather than a silent success.
     const cold = createFakeAcp();
-    const second = recordingTerminal({ columns: 200, rows: 140 });
     yield* scoped(function* (): Operation<void> {
-      const elsewhere = yield* useWorkspace();
-      yield* second.install();
-      yield* immediateClock();
-      yield* useTemporaryHost(hostRoot);
       const at = `${location.split("?")[0]}/${selected.key}`;
-      const running = yield* spawn(() => start(cold, holds([]), elsewhere, at));
-      yield* untilDrawn(second.terminal);
+      const { page } = yield* beginJourney({ fake: cold, hostRoot, size: WIDE, location: at });
 
       // The catalog the file holds, in admission order with its outcomes.
-      yield* settledOn(second.terminal, 1);
-      yield* settledOn(second.terminal, 2);
+      yield* entrySettles(page, 1, "ok");
+      yield* entrySettles(page, 2, "ok");
       // Which entry this location selected, read from the catalog that marks
       // it. The catalog is a drawer over the reading now, so it is opened to be
       // read and put away again before the rows below read what is underneath.
-      yield* openCatalog(second.terminal);
-      expect(selectedEntryOn(second.terminal) ?? "").toContain(selected.key);
-      yield* closeCatalog(second.terminal);
+      yield* openCatalog(page);
+      expect(entryMarked(page.frame(), selected.key)).toBe(true);
+      yield* closeCatalog(page);
 
       // The global Sessions chronology, row for row and conversation for
       // conversation, is the one the live process showed — both entries' turns
       // under the one conversation, with the selection narrowing none of it.
-      yield* showing(second.terminal, "ONE-DONE");
-      yield* showing(second.terminal, "TWO-DONE");
-      expect(shows(second.terminal, "All sessions")).toBe(true);
-      expect(promptRows(second.terminal)).toEqual(turnRows);
+      yield* page.until(
+        "both replies",
+        (frame) => shows(frame, "ONE-DONE") && shows(frame, "TWO-DONE"),
+      );
+      expect(shows(page.frame(), "All sessions")).toBe(true);
+      expect(sessionTurns(page.frame())).toEqual(turnRows);
 
       // The selected entry's own transcript, read off the transcript column
       // rather than compared projection to projection — two projections of one
       // file agree by construction, and what this row is about is the screen.
-      const transcript = column(second.terminal, SIDEBAR).join("\n");
+      const transcript = (page.frame().area("box:transcript")?.rows() ?? []).join("\n");
       expect(transcript).toContain("TWO-DONE");
       expect(transcript).not.toContain("ONE-DONE");
       // The first entry's turn is still on the Sessions reading beside it,
       // which is what makes the absence above a locus and not a lost record.
-      expect(promptRows(second.terminal).some((row) => shownPrompt(row, "ask-one"))).toBe(true);
+      expect(sessionTurns(page.frame()).some((row) => shownPrompt(row, "ask-one"))).toBe(true);
 
       // Nobody was asked anything to do it.
       expect(cold.prompts).toEqual([]);
@@ -1105,8 +1070,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       expect(cold.created).toEqual([]);
       expect(cold.ensured).toEqual([]);
 
-      second.terminal.end();
-      yield* running;
+      yield* leave(page);
     });
 
     // Byte for byte the history it opened: reading a run is not appending to it.
@@ -1121,22 +1085,15 @@ describe("J3 — durable truth, and a cold process over it", () => {
       const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
       const live = createFakeAcp();
       live.script(scripted);
-      const first = recordingTerminal({ columns: 200, rows: 60 });
       let location = "";
 
       yield* scoped(function* (): Operation<void> {
-        const workspace = yield* useWorkspace();
-        yield* first.install();
-        yield* immediateClock();
-        yield* useTemporaryHost(hostRoot);
-        const running = yield* spawn(() => start(live, holds([]), workspace));
-        yield* untilDrawn(first.terminal);
-        yield* typed(first.terminal, ASKING);
+        const { page } = yield* beginJourney({ fake: live, hostRoot, size: TALL });
+        yield* submitted(page, ASKING, 1);
         // The partial text, and how the turn ended, on the live surface.
-        yield* showing(first.terminal, PARTIAL);
-        yield* showing(first.terminal, `· ${status}`);
-        first.terminal.end();
-        location = yield* running;
+        yield* page.until(`${PARTIAL} shown`, (frame) => shows(frame, PARTIAL));
+        yield* page.until(`the turn ${what}`, (frame) => shows(frame, `· ${status}`));
+        location = yield* leave(page);
       });
 
       // The record holds both facts, and holds them once.
@@ -1151,26 +1108,19 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // A cold process shows the same terminal facts: the text it streamed and
       // the status it ended with, never a turn that is still going.
       const cold = createFakeAcp();
-      const second = recordingTerminal({ columns: 200, rows: 60 });
       yield* scoped(function* (): Operation<void> {
-        const elsewhere = yield* useWorkspace();
-        yield* second.install();
-        yield* immediateClock();
-        yield* useTemporaryHost(hostRoot);
-        const running = yield* spawn(() => start(cold, holds([]), elsewhere, location));
-        yield* untilDrawn(second.terminal);
-        yield* showing(second.terminal, PARTIAL);
-        yield* showing(second.terminal, `· ${status}`);
+        const { page } = yield* beginJourney({ fake: cold, hostRoot, size: TALL, location });
+        yield* page.until(`${PARTIAL} shown`, (frame) => shows(frame, PARTIAL));
+        yield* page.until(`the turn ${what}`, (frame) => shows(frame, `· ${status}`));
         if (stopped !== undefined) {
-          yield* showing(second.terminal, stopped);
+          yield* page.until(`${stopped} shown`, (frame) => shows(frame, stopped));
         }
         // Never presented as work in progress, and nobody was asked again.
-        expect([what, shows(second.terminal, "· queued")]).toEqual([what, false]);
-        expect([what, shows(second.terminal, "· streaming")]).toEqual([what, false]);
+        expect([what, shows(page.frame(), "· queued")]).toEqual([what, false]);
+        expect([what, shows(page.frame(), "· streaming")]).toEqual([what, false]);
         expect([what, cold.prompts]).toEqual([what, []]);
         expect([what, cold.started]).toEqual([what, false]);
-        second.terminal.end();
-        yield* running;
+        yield* leave(page);
       });
     }
   });
@@ -1179,29 +1129,26 @@ describe("J3 — durable truth, and a cold process over it", () => {
     const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
     const live = createFakeAcp();
     live.script({ reply: REPLY });
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 60 });
     let ended: string | undefined;
 
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* install();
-      yield* immediateClock();
-      yield* useTemporaryHost(hostRoot);
-      const running = yield* spawn(() => start(live, holds([]), workspace));
-      yield* untilDrawn(terminal);
-      yield* typed(terminal, ASKING);
-      yield* showing(terminal, REPLY.trim());
+      const { page } = yield* beginJourney({ fake: live, hostRoot, size: TALL });
+      yield* submitted(page, ASKING, 1);
+      yield* page.until("the reply", (frame) => shows(frame, REPLY.trim()));
+      yield* entrySettles(page, 1, "ok");
 
       // Three real markers, in the order the run reached them: the entry's own
       // admission, the turn's publication, and the root settling.
-      yield* click(terminal, "[history]");
-      yield* settled(40);
+      yield* openHistory(page);
       // The categories a retained position reads as. Re-anchored for #881
       // PR 3: a drawer row was the checkpoint's own label and is now its place
       // in the recorded order and what kind of position it is — identical
       // wording live and historical, so neither route invents a richer one.
       for (const marker of ["Entry 1 admitted", "Agent turn recorded", "Entry outcome recorded"]) {
-        expect([marker, shows(terminal, marker)]).toEqual([marker, true]);
+        expect([marker, historyMarkers(page.frame()).some((row) => row.includes(marker))]).toEqual([
+          marker,
+          true,
+        ]);
       }
 
       // The prefix before the turn was published holds no turn: the entry is
@@ -1215,15 +1162,15 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // true of a prefix that holds the turn and one that does not, which is
       // the one thing these two assertions must tell apart. Closing keeps the
       // position: the drawer moved the reading to it, and the reading stays.
-      yield* click(terminal, "Entry 1 admitted");
-      yield* settled(40);
-      yield* click(terminal, "[close]");
-      yield* settled(20);
-      expect(historicalOn(terminal)).toBe(true);
-      expect(shows(terminal, REPLY.trim())).toBe(false);
-      expect(shows(terminal, "ok? ·")).toBe(false);
-      yield* click(terminal, "[history]");
-      yield* settled(40);
+      yield* chooseMarker(page, "Entry 1 admitted");
+      yield* closeDrawer(page);
+      const admitted = yield* page.until(
+        "the first position being read",
+        (frame) => readingRetained(frame) && frame.area("box:drawer:layer") === undefined,
+      );
+      expect(shows(admitted, REPLY.trim())).toBe(false);
+      expect(shows(admitted, "ok? ·")).toBe(false);
+      yield* openHistory(page);
 
       // The drawer stays open on the position it moved to, and offers the
       // whole recorded order from there.
@@ -1233,43 +1180,46 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // is the premise this slice reverses: the positions *after* the one
       // being read are where a reader can go next, so navigation is taken at
       // the whole file while content stays at the prefix. The separation is
-      // still the claim, and it is now the pair below: the later position is
-      // offered, and nothing it holds is on the screen.
-      expect(historicalOn(terminal)).toBe(true);
-      expect(shows(terminal, "Agent turn recorded")).toBe(true);
-      // The two content claims with the layer out of the way, for the reason
-      // above; the drawer row above is the drawer's own and is read in it.
-      yield* click(terminal, "[close]");
-      yield* settled(20);
-      expect(shows(terminal, REPLY.trim())).toBe(false);
-      expect(shows(terminal, "completed, recorded")).toBe(false);
-      yield* click(terminal, "[history]");
-      yield* settled(40);
+      // still the pair below: the later position is offered, and nothing it
+      // holds is on the screen.
+      expect(readingRetained(page.frame())).toBe(true);
+      expect(historyMarkers(page.frame()).some((row) => row.includes("Agent turn recorded"))).toBe(
+        true,
+      );
+      // The two content assertions with the layer out of the way, for the
+      // reason above; the drawer row above is the drawer's own and is read in it.
+      yield* closeDrawer(page);
+      expect(shows(page.frame(), REPLY.trim())).toBe(false);
+      expect(shows(page.frame(), "completed, recorded")).toBe(false);
+      yield* openHistory(page);
 
       // Back at the head: the drawer is modal, so it is closed first and then
       // the live control is reachable.
-      yield* click(terminal, "[close]");
-      yield* settled(20);
-      yield* click(terminal, "[live]");
-      yield* showing(terminal, REPLY.trim());
+      yield* closeDrawer(page);
+      yield* page.press("footer:live");
+      yield* page.until(
+        "the head showing the reply",
+        (frame) => !readingRetained(frame) && shows(frame, REPLY.trim()),
+      );
 
       // The prefix that holds the record holds the turn, with the facts the
       // record carries and nothing live.
-      yield* click(terminal, "[history]");
-      yield* settled(40);
-      yield* click(terminal, "Agent turn recorded");
-      yield* settled(40);
+      yield* openHistory(page);
+      yield* chooseMarker(page, "Agent turn recorded");
       // And the positive side of the same pair, also out from under the layer.
-      yield* click(terminal, "[close]");
-      yield* settled(20);
-      yield* showing(terminal, REPLY.trim());
-      yield* showing(terminal, "completed, recorded");
-      expect(historicalOn(terminal)).toBe(true);
+      yield* closeDrawer(page);
+      yield* page.until(
+        "the recorded turn being read",
+        (frame) =>
+          readingRetained(frame) &&
+          frame.area("box:drawer:layer") === undefined &&
+          shows(frame, REPLY.trim()) &&
+          shows(frame, "completed, recorded"),
+      );
 
       // Reading a marker asked nobody anything.
       expect(live.prompts).toHaveLength(1);
-      terminal.end();
-      ended = yield* running;
+      ended = yield* leave(page);
     });
 
     // Which prefix it came to rest on, taken where the route is still published.
@@ -1285,39 +1235,48 @@ describe("J3 — durable truth, and a cold process over it", () => {
 
   it("J3: a location this host cannot read refuses before any replay", function* () {
     const cold = createFakeAcp();
-    const { terminal, install } = recordingTerminal();
 
     yield* scoped(function* (): Operation<void> {
       yield* useWorkspace();
-      yield* install();
       yield* immediateClock();
-      const hostRoot = yield* useTemporaryHost();
-      const profile = yield* settledProfile(cold);
+      const host = yield* useJourneyHost({ fake: cold });
 
       // Malformed: not this grammar at all, so it is refused before a terminal
       // is taken, a history file is opened or a provider is named.
-      const malformed = yield* runReplProgram({ profile, location: "xmd://nope" });
-      expect(malformed.ok).toBe(false);
-      expect(malformed.ok === false && malformed.error.message).toContain(
-        "a REPL location begins with xmd://repl/",
-      );
-      expect(terminal.presented).toEqual([]);
+      yield* scoped(function* (): Operation<void> {
+        const { terminal, install } = recordingTerminal();
+        yield* install();
+        const malformed = yield* runReplProgram({ profile: host.profile, location: "xmd://nope" });
+        expect(malformed.ok).toBe(false);
+        expect(malformed.ok === false && malformed.error.message).toContain(
+          "a REPL location begins with xmd://repl/",
+        );
+        expect(terminal.presented).toEqual([]);
+      });
 
       // Well formed, and naming an execution this host does not hold. That is a
       // readable request about a history that is not here, so the surface says
       // so rather than replaying something.
-      const running = yield* spawn(function* (): Operation<void> {
-        yield* runReplProgram({ profile, location: "xmd://repl/0123456789abcdef/entries" });
+      const page = yield* useReplPage({
+        host,
+        location: "xmd://repl/0123456789abcdef/entries",
       });
-      yield* showing(terminal, "this execution has no history here.");
+      yield* page.until("the refusal", (frame) =>
+        shows(frame, "this execution has no history here."),
+      );
 
       // Neither reached a provider, and neither replayed anything: no history
       // file was made for a run that never had one.
       expect(cold.started).toBe(false);
       expect(cold.prompts).toEqual([]);
-      expect(yield* absentHistory(hostRoot)).toBe(true);
-      terminal.end();
-      yield* running;
+      expect(yield* absentHistory(host.dataRoot)).toBe(true);
+      page.repl.terminal.end();
+      yield* awaited("the command never returned", () => page.repl.outcome() !== undefined);
+      const refusal = page.repl.outcome();
+      expect(refusal?.ok).toBe(false);
+      expect(refusal?.ok === false && refusal.error.message).toBe(
+        "this execution has no history here.",
+      );
     });
   });
 });
@@ -1333,63 +1292,50 @@ describe("J2 — three conversations at once, through the terminal", () => {
       fake.script({ reply: ANSWERED });
     }
     const held = holds([PLAN_IT, REVIEW_IT, BUILD_IT]);
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 140 });
 
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* install();
-      yield* immediateClock();
-      const hostRoot = yield* useTemporaryHost();
-      const running = yield* spawn(() => start(fake, held, workspace));
-      yield* untilDrawn(terminal);
-      yield* typed(terminal, THREE);
+      const { page, hostRoot } = yield* beginJourney({ fake, held, size: WIDE });
+      yield* submitted(page, THREE, 1);
 
       // All three turns are scheduled at once, and each is held where its state
       // is decided. Deliberately not in the order the document wrote them: the
       // reviewer is observed first, the implementer second, and the planner has
       // not been taken at all — so the order these conversations appear in is
       // the order they were seen, and cannot be the authored `<Spawn>` order.
-      yield* showing(terminal, "· queued");
+      yield* page.until("a turn queued", (frame) => shows(frame, "· queued"));
       held.start(REVIEW_IT);
       held.deltas(REVIEW_IT);
-      yield* awaiting(`${REVIEW_IT} never showed as completed`, function* () {
-        yield* settled(10);
-        return screenOf(terminal).some((line) => saying(line, REVIEW_IT, "completed"));
-      });
+      yield* page.until(`${REVIEW_IT} completed`, (frame) =>
+        sessionTurns(frame).some((row) => saying(row, REVIEW_IT, "completed")),
+      );
       held.start(BUILD_IT);
 
       // One frame holding all three states, each named by what its own child
       // asked. Read together rather than in three waits: what this row is about
       // is a screen, not a sequence.
-      yield* awaiting("the three states never stood together", function* () {
-        yield* settled(10);
-        const rows = screenOf(terminal);
-        return (
+      yield* page.until("the three states standing together", (frame) =>
+        (
           [
             [REVIEW_IT, "completed"],
             [BUILD_IT, "streaming"],
             [PLAN_IT, "queued"],
           ] as const
-        ).every(([asked, state]) => rows.some((line) => saying(line, asked, state)));
-      });
-      yield* showing(terminal, "All sessions");
+        ).every(([asked, state]) => sessionTurns(frame).some((row) => saying(row, asked, state))),
+      );
+      expect(shows(page.frame(), "All sessions")).toBe(true);
 
       // With the implementer's turn recorded too, a conversation control is
       // there to filter by while the planner has still not been taken.
       held.deltas(BUILD_IT);
-      // The digest every session key of this run carries, which is how a row is
-      // recognized as a conversation control on a sidebar too narrow for a key.
-      const digest = (fake.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
-      expect(digest).not.toBe("");
       // The conversations are behind the Transcript's own selector now: one
       // list, and the choices that filter it are shown when the control saying
       // so is activated. Opening it is how a person reaches them.
-      yield* click(terminal, "All sessions");
-      yield* awaiting("no conversation was ever offered", function* () {
-        yield* settled(10);
-        return conversationRows(terminal, digest).length > 0;
-      });
-      expect(screenOf(terminal).some((line) => saying(line, PLAN_IT, "queued"))).toBe(true);
+      yield* openSelector(page);
+      yield* page.until(
+        "a conversation offered",
+        (frame) => offeredConversations(frame).length > 0,
+      );
+      expect(sessionTurns(page.frame()).some((row) => saying(row, PLAN_IT, "queued"))).toBe(true);
 
       // Selecting one is the route's own business: it carries that
       // conversation's exact provider session key, and the entry column beside
@@ -1397,86 +1343,90 @@ describe("J2 — three conversations at once, through the terminal", () => {
       const keys = [PLAN_IT, REVIEW_IT, BUILD_IT].map(
         (asked) => fake.turns.find((turn) => turn.text.includes(asked))?.handle.sessionKey ?? "",
       );
-      const unfiltered = sessionOf(terminal);
-      const offered = conversationRows(terminal, digest).length;
-      yield* click(terminal, conversationRows(terminal, digest)[0] ?? "");
-      yield* settled(40);
+      const unfiltered = conversationFilter(page.frame());
+      const offered = offeredConversations(page.frame());
+      const first = offered[0] ?? "";
+      // The control is the key the provider really issued, whole.
+      expect(keys).toContain(first);
+      yield* chooseConversation(page, first);
+      yield* page.until(
+        "the reading narrowed to one conversation",
+        (frame) => childrenShown(frame).length === 1,
+      );
       // The row names the conversation the provider really issued. A sidebar is
-      // 32 columns and a session key is not, so the row carries as much of it as
-      // the column holds and says so — and what is compared is that prefix
+      // narrow and a session key is not, so the selector carries as much of it
+      // as the column holds and says so — and what is compared is that prefix
       // against the keys this run's own fixture recorded.
-      const marked = sessionOf(terminal) ?? "";
-      expect(keys.some((key) => key.startsWith(marked.replace(/\u2026$/, "")))).toBe(true);
+      const marked = conversationFilter(page.frame()) ?? "";
+      expect(keys.some((key) => key.startsWith(marked.replace(/…$/, "")))).toBe(true);
       // One conversation's turns, and only its own.
-      expect(childrenShown(terminal)).toHaveLength(1);
+      expect(childrenShown(page.frame())).toHaveLength(1);
       // The reading gained the filter and nothing else: nothing was filtered
-      // before, exactly one conversation is marked now, and the entry it was
-      // standing on is the entry it is standing on.
+      // before, exactly one conversation is marked now, and the control the
+      // person was standing on is the control they are standing on.
       expect(unfiltered).toBeUndefined();
-      expect(sessionOf(terminal)).toBeDefined();
-      const standing = sessionOf(terminal);
-      // Where the person is standing now: on the control they just chose.
-      const focused = focusedRow(terminal);
+      expect(conversationFilter(page.frame())).toBeDefined();
+      const standing = conversationFilter(page.frame());
+      const focused = page.frame().focused;
+      if (focused === undefined) {
+        throw new Error(`no control holds focus. ${page.describe()}`);
+      }
       // Its row, whatever it has settled to: what this asserts is that the
       // catalog holds the entry, not what became of it. The catalog is a drawer
       // over the reading now, so it is opened for that fact and put away by its
       // own control — and then the focus the person had is walked back to
       // through the ordinary ring, because opening a drawer is a real move and
       // the rows below compare where somebody is standing.
-      yield* openCatalog(terminal);
-      expect(shows(terminal, "] entry-1")).toBe(true);
-      yield* closeCatalog(terminal);
-      yield* focusBackTo(terminal, focused);
-      expect(focusedRow(terminal)).toBe(focused);
+      yield* openCatalog(page);
+      expect(shows(page.frame(), "] entry-1")).toBe(true);
+      yield* closeCatalog(page);
+      yield* page.focus(focused);
+      expect(page.frame().focused).toBe(focused);
 
       // Background work in another conversation: the planner's turn is taken,
       // streams and is recorded, while the route, the history position and the
       // focused control stay exactly where the person left them.
       held.start(PLAN_IT);
       held.deltas(PLAN_IT);
-      yield* awaiting("the third turn was never retained", function* () {
+      yield* awaitedFact("the third turn was never retained", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
       });
-      expect(sessionOf(terminal)).toBe(standing);
-      expect(focusedRow(terminal)).toBe(focused);
+      expect(conversationFilter(page.frame())).toBe(standing);
+      expect(page.frame().focused).toBe(focused);
       // And the filter still holds: the others are retained and not shown,
       // because this screen is showing one.
-      expect(childrenShown(terminal)).toHaveLength(1);
+      expect(childrenShown(page.frame())).toHaveLength(1);
 
       // Cleared back to All, the whole chronology is there again — all three
       // children, each with the state its own turn ended in, and one more
       // conversation to filter by than before.
       // Cleared through the selector, which is what the filter is chosen in:
       // the control carries the name of whichever conversation was chosen, so
-      // it is opened by what it currently says and the unfiltered reading is a
-      // row inside it.
-      yield* openSelector(terminal);
-      yield* click(terminal, EVERY_CONVERSATION);
-      yield* settled(40);
-      expect(sessionOf(terminal)).toBeUndefined();
-      expect(childrenShown(terminal)).toEqual([PLAN_IT, REVIEW_IT, BUILD_IT]);
-      for (const asked of [PLAN_IT, REVIEW_IT, BUILD_IT]) {
-        expect([
-          asked,
-          screenOf(terminal).some((line) => saying(line, asked, "completed")),
-        ]).toEqual([asked, true]);
-      }
+      // the unfiltered reading is a row inside it.
+      yield* openSelector(page);
+      yield* chooseEveryConversation(page);
+      const everyone = yield* page.until("all three turns completed", (frame) =>
+        [PLAN_IT, REVIEW_IT, BUILD_IT].every((asked) =>
+          sessionTurns(frame).some((row) => saying(row, asked, "completed")),
+        ),
+      );
+      expect(conversationFilter(everyone)).toBeUndefined();
+      expect(childrenShown(everyone)).toEqual([PLAN_IT, REVIEW_IT, BUILD_IT]);
       // And one more conversation to filter by than there was, because the
       // third one has now been seen.
-      yield* openSelector(terminal);
-      expect(conversationRows(terminal, digest).length).toBeGreaterThan(offered);
-      yield* closeSelector(terminal);
+      yield* openSelector(page);
+      expect(offeredConversations(page.frame()).length).toBeGreaterThan(offered.length);
+      yield* closeSelector(page);
 
       // Three turns, three records, one per conversation.
-      yield* awaiting("the three turns were never all retained", function* () {
+      yield* awaitedFact("the three turns were never all retained", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
       });
-      terminal.end();
-      yield* running;
+      yield* leave(page);
     });
   });
 });
@@ -1485,30 +1435,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
   beforeAll(() => useTempFileCompiler());
 
   /** The draft this reading carries across every size, with a space in it. */
-  const DRAFT = "and then this one";
-
-  /** Type into the draft without submitting it, and wait for the route to say so. */
-  function* drafting(terminal: Terminal, text: string): Operation<void> {
-    yield* focusDraft(terminal);
-    terminal.bytes(BYTES.encode(text));
-    const deadline = Date.now() + DEADLOCK_MS;
-    let last = "";
-    let still = 0;
-    while (still < 3) {
-      const now = draftTextOn(terminal) ?? "";
-      if (now === last && now === text) {
-        still += 1;
-      } else {
-        still = 0;
-        last = now;
-      }
-      if (Date.now() > deadline) {
-        throw new Error(`the draft never settled. draft row=${now}`);
-      }
-      yield* sleep(20);
-      yield* settled(10);
-    }
-  }
+  const TYPED = "and then this one";
 
   it("TL10: a conversation filter and a draft survive the round trip, and a cold open restores them", function* () {
     const live = createFakeAcp();
@@ -1516,126 +1443,93 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       live.script({ reply: ANSWERED });
     }
     const held = holds([PLAN_IT, REVIEW_IT, BUILD_IT]);
-    // The same wide terminal the other conversation rows use, so the whole
-    // reading is in the window rather than below it: what this row is about is a
-    // resize, not what a short window admits.
-    const first = recordingTerminal({ columns: 200, rows: 140 });
-    let hostRoot = "";
+    const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
     let location: string | undefined;
-    let standing: string | undefined;
     let filtered: string | undefined;
     /** The full provider session key the conversation row named. */
     let chosen: string | undefined;
 
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* first.install();
-      yield* immediateClock();
-      hostRoot = yield* useTemporaryHost();
-      const terminal = first.terminal;
-      const running = yield* spawn(() => start(live, held, workspace));
-      yield* untilDrawn(terminal);
-      yield* typed(terminal, THREE);
+      // The same wide terminal the other conversation rows use, so the whole
+      // reading is in the window rather than below it: what this row is about is a
+      // resize, not what a short window admits.
+      const { page } = yield* beginJourney({ fake: live, held, hostRoot, size: WIDE });
+      yield* submitted(page, THREE, 1);
 
       // Every child to its record, so there is more than one conversation to
       // filter by and a settled entry to reopen over.
-      yield* showing(terminal, "· queued");
+      yield* page.until("a turn queued", (frame) => shows(frame, "· queued"));
       for (const asked of [PLAN_IT, REVIEW_IT, BUILD_IT]) {
         held.start(asked);
         held.deltas(asked);
       }
-      yield* awaiting("the three turns were never all retained", function* () {
+      yield* awaitedFact("the three turns were never all retained", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
       });
 
       // 1. A conversation filter, chosen by pointing at the row it is drawn in.
-      const digest = (live.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
-      expect(digest).not.toBe("");
       // The conversations are behind the Transcript's own selector now: one
       // list, and the choices that filter it are shown when the control saying
       // so is activated. Opening it is how a person reaches them.
-      yield* click(terminal, "All sessions");
-      yield* awaiting("no conversation was ever offered", function* () {
-        yield* settled(10);
-        return conversationRows(terminal, digest).length > 0;
-      });
-      // Which conversation this is about, as a full provider key, settled before
-      // anything is clicked and taken from this run's own fixture rather than
-      // from the route under test. A 32-column row shows as much of a key as it
-      // holds, so the row names the key and the fixture supplies the rest.
-      const chosenRow = conversationRows(terminal, digest)[0] ?? "";
-      const shownKey = chosenRow.replace(/^[>*\s]+/, "").replace(/\u2026$/, "");
-      chosen = [...new Set(live.turns.map((turn) => turn.handle.sessionKey))].find((key) =>
-        key.startsWith(shownKey),
+      yield* openSelector(page);
+      yield* page.until(
+        "a conversation offered",
+        (frame) => offeredConversations(frame).length > 0,
       );
+      // Which conversation this is about, as a full provider key: the control's
+      // own key, checked against what this run's fixture says the provider issued.
+      chosen = offeredConversations(page.frame())[0];
       expect(chosen).toBeDefined();
+      expect(live.turns.map((turn) => turn.handle.sessionKey)).toContain(chosen);
 
-      yield* click(terminal, chosenRow);
-      yield* awaiting("the filter never reached the reading", function* () {
-        yield* settled(10);
-        return sessionOf(terminal) !== undefined;
-      });
-      filtered = sessionOf(terminal);
+      yield* chooseConversation(page, chosen ?? "");
+      yield* page.until(
+        "the reading narrowed to one conversation",
+        (frame) => childrenShown(frame).length === 1,
+      );
+      filtered = conversationFilter(page.frame());
       expect(filtered).toBeDefined();
 
       // 2. A non-empty draft, typed into the field Tab reaches.
-      yield* drafting(terminal, DRAFT);
-      expect(sessionOf(terminal)).toBe(filtered);
-      expect(draftTextOn(terminal)).toBe(DRAFT);
-      expect(childrenShown(terminal)).toHaveLength(1);
+      yield* draft(page).type(TYPED);
+      expect(conversationFilter(page.frame())).toBe(filtered);
+      expect(draft(page).text()).toBe(TYPED);
+      expect(childrenShown(page.frame())).toHaveLength(1);
 
       // 3. Narrow. What is read here is the draft row and the reading itself.
-      const from = terminal.presented.length;
-      terminal.resized({ columns: 72, rows: 20 });
-      // Waited for by the frame's shape rather than by its content, so what the
-      // draft row says is an assertion below rather than a condition for getting
-      // there.
-      yield* awaiting("the narrow frame never arrived", function* () {
-        yield* settled(10);
-        return (
-          terminal.presented.length > from && replay(terminal.presented.slice(from)).length === 20
-        );
-      });
-      const narrow = replay(terminal.presented.slice(from));
-      expect(narrow.length).toBe(20);
-      expect(draftTextIn(narrow)).toBe(DRAFT);
-      expect(narrow.filter((line) => line.trimEnd().length > 72)).toEqual([]);
+      const narrow = yield* page.resize({ columns: 72, rows: 20 });
+      expect(narrow.rows.length).toBe(20);
+      expect(draft(page).text()).toBe(TYPED);
+      expect(narrow.rows.filter((line) => line.trimEnd().length > 72)).toEqual([]);
       // A narrow frame draws one routed surface, and choosing a conversation
       // chooses a filter rather than a surface — so the Sessions reading is not
       // on this screen at all. What a narrow frame still has to keep is the
       // draft, which is on it, and the route, which is read back below at the
       // width that draws all of it.
-      expect(narrow.some((line) => line.includes("* Entries"))).toBe(true);
+      expect(narrow.has("entries:heading")).toBe(true);
 
       // 4. Wide again, and the reading is the same string it was: the filter,
       //    the route and the draft are all in it.
-      const back = terminal.presented.length;
-      terminal.resized({ columns: 200, rows: 140 });
-      yield* awaiting("the wide frame never came back", function* () {
-        yield* settled(10);
-        return (
-          terminal.presented.length > back && replay(terminal.presented.slice(back)).length === 140
-        );
-      });
-      expect(sessionOf(terminal)).toBe(filtered);
-      expect(draftTextOn(terminal)).toBe(DRAFT);
-      expect(childrenShown(terminal)).toHaveLength(1);
+      const back = yield* page.resize(WIDE);
+      expect(back.rows.length).toBe(140);
+      expect(conversationFilter(back)).toBe(filtered);
+      expect(draft(page).text()).toBe(TYPED);
+      expect(childrenShown(back)).toHaveLength(1);
 
-      terminal.end();
-      location = yield* running;
+      location = yield* leave(page);
     });
 
     // The whole reading, in the one string the command publishes on its way out,
     // compared field by field against what this run's fixture says each should
     // be: the conversation it was filtered to by its full key, the draft byte for
     // byte, the surface and locus it was standing on, and the live head.
-    standing = location;
+    const standing = location;
     expect(standing).toBeDefined();
     const standingRoute = routeOf(standing);
     expect(standingRoute.session).toBe(chosen);
-    expect(standingRoute.draft).toBe(DRAFT);
+    expect(standingRoute.draft).toBe(TYPED);
     expect(standingRoute.surface).toBe("entries");
     expect(standingRoute.scopes).toEqual([]);
     expect(standingRoute.at).toBeUndefined();
@@ -1646,21 +1540,14 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
     // A cold process over that exact location: the same filter and the same
     // draft, with no provider reached at all.
     const cold = createFakeAcp();
-    const second = recordingTerminal({ columns: 200, rows: 140 });
     yield* scoped(function* (): Operation<void> {
-      const elsewhere = yield* useWorkspace();
-      yield* second.install();
-      yield* immediateClock();
-      yield* useTemporaryHost(hostRoot);
-      const running = yield* spawn(() => start(cold, holds([]), elsewhere, location));
-      yield* untilDrawn(second.terminal);
+      const { page } = yield* beginJourney({ fake: cold, hostRoot, size: WIDE, location });
 
-      yield* awaiting("the cold process never restored the reading", function* () {
-        yield* settled(10);
-        return sessionOf(second.terminal) === filtered;
-      });
-      expect(draftTextOn(second.terminal)).toBe(DRAFT);
-      expect(childrenShown(second.terminal)).toHaveLength(1);
+      yield* page.until(
+        "the cold process restoring the reading",
+        (frame) => conversationFilter(frame) === filtered && draft(page).text() === TYPED,
+      );
+      expect(childrenShown(page.frame())).toHaveLength(1);
 
       // Nobody was asked, nothing was started, created or ensured.
       expect(cold.prompts).toEqual([]);
@@ -1668,13 +1555,12 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
       expect(cold.created).toEqual([]);
       expect(cold.ensured).toEqual([]);
 
-      second.terminal.end();
-      const reopened = yield* running;
+      const reopened = yield* leave(page);
       // What went in came back out: the cold process returns the same canonical
       // reading it was given, which is the whole of what reopening means.
       expect(reopened).toBe(standing);
       expect(routeOf(reopened).session).toBe(chosen);
-      expect(routeOf(reopened).draft).toBe(DRAFT);
+      expect(routeOf(reopened).draft).toBe(TYPED);
     });
 
     // And the Journal is byte-identical: a cold process reads, it does not write.
@@ -1682,25 +1568,36 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
   });
 });
 
+/**
+ * The rows the Sessions reading itself is drawn in.
+ *
+ * The sidebar band from the top of the screen, cut at the reading's own
+ * `sessions:later` control: below that sit the Entries heading and the
+ * catalog, which a conversation filter does not touch, and beside it are
+ * columns holding a journal that grows.
+ */
+const listBand = (frame: PageFrame): string[] => {
+  const viewport = frame.area("box:sessions:viewport");
+  const later = frame.control("sessions:later");
+  if (viewport === undefined || later === undefined) {
+    return [];
+  }
+  return frame
+    .within({
+      x: viewport.bounds.x,
+      y: 0,
+      width: viewport.bounds.width,
+      height: later.bounds.y,
+    })
+    .rows();
+};
+
+/** The last row of that band with anything written in it. */
+const lastWritten = (band: readonly string[]): number =>
+  band.reduce((last, line, at) => (line.trim().length > 0 ? at : last), -1);
+
 describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => {
   beforeAll(() => useTempFileCompiler());
-
-  /**
-   * The rows the Sessions reading itself is drawn in.
-   *
-   * The sidebar band, cut at the reading's own `[↓ later]` control: below that
-   * sit the Entries heading and the catalog, which a conversation filter does
-   * not touch, and beside it are columns holding a journal that grows.
-   */
-  const listBand = (terminal: Terminal): string[] => {
-    const rows = screenOf(terminal).map((line) => line.slice(0, SIDEBAR));
-    const bottom = rows.findIndex((line) => line.includes("[↓ later]"));
-    return rows.slice(0, bottom === -1 ? rows.length : bottom);
-  };
-
-  /** The last row of that band with anything written in it. */
-  const lastWritten = (band: readonly string[]): number =>
-    band.reduce((last, line, at) => (line.trim().length > 0 ? at : last), -1);
 
   it("TL5: filtering to one conversation blanks the cells the vacated rows were drawn in", function* () {
     const fake = createFakeAcp();
@@ -1708,62 +1605,51 @@ describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => 
       fake.script({ reply: ANSWERED });
     }
     const held = holds([PLAN_IT, REVIEW_IT, BUILD_IT]);
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 140 });
 
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* install();
-      yield* immediateClock();
-      const hostRoot = yield* useTemporaryHost();
-      const running = yield* spawn(() => start(fake, held, workspace));
-      yield* untilDrawn(terminal);
-      yield* typed(terminal, THREE);
+      const { page, hostRoot } = yield* beginJourney({ fake, held, size: WIDE });
+      yield* submitted(page, THREE, 1);
 
       // Every child runs to its record, so the unfiltered reading holds all
       // three conversations and every fact each turn carries.
-      yield* showing(terminal, "· queued");
+      yield* page.until("a turn queued", (frame) => shows(frame, "· queued"));
       for (const asked of [PLAN_IT, REVIEW_IT, BUILD_IT]) {
         held.start(asked);
         held.deltas(asked);
       }
-      yield* awaiting("the three turns were never all retained", function* () {
+      yield* awaitedFact("the three turns were never all retained", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
       });
-      yield* awaiting("all three children never stood together", function* () {
-        yield* settled(10);
-        return childrenShown(terminal).length === 3;
-      });
+      yield* page.until(
+        "all three children standing together",
+        (frame) => childrenShown(frame).length === 3,
+      );
 
-      const digest = (fake.turns[0]?.handle.sessionKey ?? "").split(":")[2] ?? "";
-      expect(digest).not.toBe("");
       // The conversations are behind the Transcript's own selector now: one
       // list, and the choices that filter it are shown when the control saying
       // so is activated. Opening it is how a person reaches them.
-      yield* click(terminal, "All sessions");
-      yield* awaiting("no conversation was ever offered", function* () {
-        yield* settled(10);
-        return conversationRows(terminal, digest).length > 0;
-      });
+      yield* openSelector(page);
+      yield* page.until(
+        "a conversation offered",
+        (frame) => offeredConversations(frame).length > 0,
+      );
 
       // What the long reading draws, before anything is filtered.
-      const before = listBand(terminal);
+      const before = listBand(page.frame());
       const lastBefore = lastWritten(before);
       // Pre-assert: the reading really is windowed, so there is a reading to
-      // shrink and a `[↓ later]` to bound it by.
+      // shrink and a `sessions:later` to bound it by.
       expect(before.length).toBeGreaterThan(0);
       expect(lastBefore).toBeGreaterThan(0);
 
       // Filtered to one real conversation, which is a shorter reading.
-      yield* click(terminal, conversationRows(terminal, digest)[0] ?? "");
-      yield* awaiting("the reading never shrank", function* () {
-        yield* settled(10);
-        return childrenShown(terminal).length === 1;
-      });
-      expect(sessionOf(terminal)).toBeDefined();
+      yield* chooseConversation(page, offeredConversations(page.frame())[0] ?? "");
+      yield* page.until("the reading shrinking", (frame) => childrenShown(frame).length === 1);
+      expect(conversationFilter(page.frame())).toBeDefined();
 
-      const after = listBand(terminal);
+      const after = listBand(page.frame());
       const lastAfter = lastWritten(after);
       // The reading really is shorter, which is what makes the rows below it
       // vacated rather than merely redrawn.
@@ -1791,11 +1677,29 @@ describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => 
       );
       expect(left).toEqual([]);
 
-      terminal.end();
-      yield* running;
+      yield* leave(page);
     });
   });
 });
+
+/** Wait for the command to return, and hand its failure on where it ended with one. */
+function* ending(page: ReplPage): Operation<void> {
+  yield* awaited("the command never ended", () => page.repl.outcome() !== undefined);
+  const outcome = page.repl.outcome();
+  if (outcome !== undefined && !outcome.ok) {
+    throw outcome.error;
+  }
+}
+
+/** What a scope that ends in failure threw, or none where it returned. */
+function* failing(body: () => Operation<void>): Operation<unknown> {
+  try {
+    yield* scoped(body);
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
 
 describe("X1 — how this command ends, with work still in flight", () => {
   beforeAll(() => useTempFileCompiler());
@@ -1804,48 +1708,29 @@ describe("X1 — how this command ends, with work still in flight", () => {
    * One run with a turn the provider has taken and never finishes, so every
    * ending below is induced while there is real work to join.
    */
-  function* inFlight(
-    terminal: Terminal,
-    install: () => Operation<void>,
-    fake: FakeAcp,
-  ): Operation<{ readonly hostRoot: string; readonly ending: Ending }> {
-    const workspace = yield* useWorkspace();
-    yield* install();
-    yield* immediateClock();
-    const hostRoot = yield* useTemporaryHost();
-    const ending = yield* commanding(fake, workspace);
-    yield* untilDrawn(terminal);
-    yield* typed(terminal, ASKING);
+  function* inFlight(fake: FakeAcp, hostRoot: string, waitingFor: string): Operation<ReplPage> {
+    const { page } = yield* beginJourney({ fake, hostRoot, size: TALL });
+    yield* submitted(page, ASKING, 1);
     // Taken by the backend and streaming nothing: the turn is in flight, and
     // the only way out of it is the ending this row induces.
-    yield* showing(terminal, "· streaming");
-    return { hostRoot, ending };
-  }
-
-  /** What one ending left behind. */
-  function* ended(
-    terminal: Terminal,
-    hostRoot: string,
-    ending: Ending,
-  ): Operation<{ readonly before: string[]; readonly after: string[] }> {
-    void terminal;
-    const before = recorded(yield* journal(hostRoot));
-    yield* until(() => ending.over, "the command never ended");
-    // Read after the owner has joined: what a run appends late is exactly what
-    // this cannot show while it is still going.
-    yield* settled(40);
-    return { before, after: recorded(yield* journal(hostRoot)) };
+    yield* page.until(`${waitingFor} shown`, (frame) => shows(frame, waitingFor));
+    return page;
   }
 
   it("X1: EOF ends the command, joins the turn and appends nothing late", function* () {
     const fake = createFakeAcp();
     fake.script({ reply: PARTIAL, manual: true });
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 60 });
+    const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
 
     yield* scoped(function* (): Operation<void> {
-      const { hostRoot, ending } = yield* inFlight(terminal, install, fake);
+      const page = yield* inFlight(fake, hostRoot, "· streaming");
+      const { terminal } = page.repl;
+      const before = recorded(yield* journal(hostRoot));
       terminal.end();
-      const { before, after } = yield* ended(terminal, hostRoot, ending);
+      yield* ending(page);
+      // Read after the owner has joined: what a run appends late is exactly what
+      // this cannot show while it is still going.
+      const after = recorded(yield* journal(hostRoot));
 
       // The turn was cancelled rather than finished, and it appended nothing: a
       // record for work that was interrupted would be a record of something
@@ -1862,37 +1747,53 @@ describe("X1 — how this command ends, with work still in flight", () => {
   it("X1: a renderer that fails ends the command the same way", function* () {
     const fake = createFakeAcp();
     fake.script({ reply: PARTIAL, manual: true });
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 60 });
+    const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
+    const failure = new Error("the screen is gone");
+    let terminal: Terminal | undefined;
+    let before: string[] = [];
 
-    yield* scoped(function* (): Operation<void> {
-      const { hostRoot, ending } = yield* inFlight(terminal, install, fake);
+    const caught = yield* failing(function* (): Operation<void> {
+      const page = yield* inFlight(fake, hostRoot, "· streaming");
+      terminal = page.repl.terminal;
+      before = recorded(yield* journal(hostRoot));
       // The screen is gone. A frame cannot be presented, which is not a reason
       // to keep running and not a reason to append anything.
-      terminal.failWrites(new Error("the screen is gone"));
-      terminal.feed("\t");
-      const { before, after } = yield* ended(terminal, hostRoot, ending);
-
-      expect(after).toEqual(before);
-      expect(after.filter((kind) => kind === "agent_prompt")).toEqual([]);
-      expect(terminal.raw).toEqual([true, false]);
-      expect(terminal.resets).toBe(1);
+      page.repl.terminal.failNextPresent(failure);
+      yield* page.key("Tab");
+      yield* ending(page);
     });
+
+    expect(caught).toBe(failure);
+    const after = recorded(yield* journal(hostRoot));
+    expect(after).toEqual(before);
+    expect(after.filter((kind) => kind === "agent_prompt")).toEqual([]);
+    expect(terminal?.raw).toEqual([true, false]);
+    expect(terminal?.resets).toBe(1);
   });
 
   it("X1: a terminal that fails mid-read ends the command the same way", function* () {
     const fake = createFakeAcp();
     fake.script({ reply: PARTIAL, manual: true });
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 60 });
+    const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
+    const gone = new Error("the terminal is gone");
+    let terminal: Terminal | undefined;
+    let before: string[] = [];
 
-    yield* scoped(function* (): Operation<void> {
-      const { hostRoot, ending } = yield* inFlight(terminal, install, fake);
-      terminal.failInput(new Error("the terminal is gone"));
-      const { before, after } = yield* ended(terminal, hostRoot, ending);
-
-      expect(after).toEqual(before);
-      expect(terminal.raw).toEqual([true, false]);
-      expect(terminal.resets).toBe(1);
+    const caught = yield* failing(function* (): Operation<void> {
+      const lose = yield* losingInput();
+      const page = yield* inFlight(fake, hostRoot, "· streaming");
+      terminal = page.repl.terminal;
+      before = recorded(yield* journal(hostRoot));
+      lose(gone);
+      page.repl.terminal.end();
+      yield* ending(page);
     });
+
+    expect(caught).toBe(gone);
+    const after = recorded(yield* journal(hostRoot));
+    expect(after).toEqual(before);
+    expect(terminal?.raw).toEqual([true, false]);
+    expect(terminal?.resets).toBe(1);
   });
 
   it("X1: cancelling the command joins the pending request without answering it", function* () {
@@ -1900,26 +1801,24 @@ describe("X1 — how this command ends, with work still in flight", () => {
     // A turn that asks for a tool this policy does not approve by itself, so a
     // request is waiting on a person when the command is cancelled.
     fake.script({ reply: PARTIAL, requestsTool: "rm -rf /", manual: true });
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 60 });
+    const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
 
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* install();
-      yield* immediateClock();
-      const hostRoot = yield* useTemporaryHost();
-      const ending = yield* commanding(fake, workspace);
-      yield* untilDrawn(terminal);
-      yield* typed(terminal, ASKING);
-      // A person is being asked. Nothing has answered it.
-      yield* showing(terminal, "rm -rf /");
+      const mounted = withResolvers<ReplPage>();
+      // The command lives in a task of its own, so that cancelling the process
+      // is cancelling that task.
+      const command = yield* spawn(function* (): Operation<void> {
+        // A person is being asked. Nothing has answered it.
+        mounted.resolve(yield* inFlight(fake, hostRoot, "rm -rf /"));
+        yield* suspend();
+      });
+      const page = yield* mounted.operation;
       const before = recorded(yield* journal(hostRoot));
 
       // The command scope is cancelled — the process is going away. This is not
       // a denial: nobody decided anything, and a teardown that answered on the
       // person's behalf would be recording a decision they never made.
-      yield* ending.task.halt();
-      yield* until(() => ending.over, "the command never ended");
-      yield* settled(40);
+      yield* command.halt();
 
       expect(fake.decisions).toEqual([]);
       expect(recorded(yield* journal(hostRoot))).toEqual(before);
@@ -1927,42 +1826,36 @@ describe("X1 — how this command ends, with work still in flight", () => {
         [],
       );
       // And the terminal is given back, once.
-      expect(terminal.raw).toEqual([true, false]);
-      expect(terminal.resets).toBe(1);
+      expect(page.repl.terminal.raw).toEqual([true, false]);
+      expect(page.repl.terminal.resets).toBe(1);
     });
   });
 
   it("UI2: [exit] while a request is waiting denies nothing and answers nothing", function* () {
     const fake = createFakeAcp();
     fake.script({ reply: PARTIAL, requestsTool: "rm -rf /", manual: true });
-    const { terminal, install } = recordingTerminal({ columns: 200, rows: 60 });
+    const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
 
     yield* scoped(function* (): Operation<void> {
-      const workspace = yield* useWorkspace();
-      yield* install();
-      yield* immediateClock();
-      const hostRoot = yield* useTemporaryHost();
-      const ending = yield* commanding(fake, workspace);
-      yield* untilDrawn(terminal);
-      yield* typed(terminal, ASKING);
-      yield* showing(terminal, "rm -rf /");
+      const page = yield* inFlight(fake, hostRoot, "rm -rf /");
       const before = recorded(yield* journal(hostRoot));
 
       // Left from the control on the screen, rather than by cancelling the scope
       // from outside it. The decision a person did not make is still not made: a
       // command that denied a request on the way out would be recording one.
-      yield* click(terminal, "[exit]");
-      yield* until(() => ending.over, "the command never ended");
-      yield* settled(40);
+      yield* page.press("footer:exit");
+      yield* ending(page);
 
       expect(fake.decisions).toEqual([]);
       expect(recorded(yield* journal(hostRoot))).toEqual(before);
-      expect(terminal.raw).toEqual([true, false]);
-      expect(terminal.resets).toBe(1);
+      expect(page.repl.terminal.raw).toEqual([true, false]);
+      expect(page.repl.terminal.resets).toBe(1);
       // The location it ended at carries no drawer only this process could mount.
-      expect(ending.location).toBeDefined();
-      expect(ending.location).not.toContain("+permission");
-      expect(ending.location).not.toContain("+elicit");
+      const outcome = page.repl.outcome();
+      const location = outcome?.ok === true ? outcome.value.location : undefined;
+      expect(location).toBeDefined();
+      expect(location).not.toContain("+permission");
+      expect(location).not.toContain("+elicit");
     });
   });
 });
@@ -1975,66 +1868,72 @@ describe("X1 — how this command ends, with work still in flight", () => {
  * shortcut past it.
  */
 function* takeTheJourney(
-  terminal: Terminal,
+  page: ReplPage,
   fake: FakeAcp,
   hostRoot: string,
   workspace: string,
 ): Operation<void> {
-  terminal.bytes(BYTES.encode(STORY));
-  yield* settled(20);
-  terminal.feed("\r");
+  yield* submitted(page, STORY, 1);
   // Each question announces itself and opens nothing, so every one of them is
   // reached by activating that announcement first.
-  yield* openQuestion(terminal);
-  yield* showing(terminal, "Request changes");
-  yield* click(terminal, "( ) Request changes");
-  yield* settled(40);
-  yield* click(terminal, "feedback:");
-  terminal.bytes(BYTES.encode(FEEDBACK));
-  yield* settled(20);
-  yield* click(terminal, "[submit]");
-  yield* until(() => fake.prompts.length >= 2, "the revision was never asked for");
-  yield* openQuestion(terminal);
-  yield* showing(terminal, "Approve");
-  yield* click(terminal, "( ) Approve");
-  yield* openQuestion(terminal);
-  yield* showing(terminal, "Name the project");
-  yield* answer(terminal, "Project name", "Ledger");
-  yield* answer(terminal, "One-sentence description", "A tiny ledger.");
-  yield* submit(terminal);
-  yield* openQuestion(terminal);
-  yield* showing(terminal, "Write this README?");
-  yield* click(terminal, "( ) Approve");
-  yield* showing(terminal, "Created README.md.");
-  yield* awaiting("the entry never settled", function* () {
+  yield* openQuestion(page);
+  yield* page.until("the review offering changes", (frame) =>
+    drawerShows(frame, "Request changes"),
+  );
+  yield* chooseOption(page, "decision", "Request changes");
+  yield* page.until("the review refusing the missing feedback", (frame) =>
+    drawerShows(frame, "required property"),
+  );
+  yield* answerField(page, "feedback", FEEDBACK);
+  yield* form(page).submit();
+  yield* awaited("the revision was never asked for", () => fake.prompts.length >= 2);
+  yield* openQuestion(page);
+  yield* page.until("the revised review", (frame) => drawerShows(frame, REVISION_TITLE));
+  yield* chooseOption(page, "decision", "Approve");
+  yield* openQuestion(page);
+  yield* page.until("the program's first question", (frame) =>
+    drawerShows(frame, "Name the project"),
+  );
+  yield* answerField(page, "project", "Ledger");
+  yield* answerField(page, "summary", "A tiny ledger.");
+  yield* form(page).submit();
+  yield* openQuestion(page);
+  yield* page.until("the confirmation", (frame) => drawerShows(frame, "Write this README?"));
+  yield* chooseOption(page, "decision", "Approve");
+  yield* page.until("the report following the write", (frame) => occurrences(frame, CREATED) > 1);
+  yield* awaitedFact("the entry never settled", function* () {
     return (yield* journal(hostRoot)).some((event) => event.type === "close");
   });
   expect(yield* untilResolved(readdir(workspace))).toEqual(["README.md"]);
+  yield* entrySettles(page, 1, "ok");
 }
 
-/** The profile this command would assemble, over a provider nothing scripts. */
-function* settledProfile(fake: FakeAcp): Operation<ReplExecutionProfile> {
-  const stack = yield* resolveAgentStack(
-    {
-      agentProvider: "acpx",
-      defaultAgent: AGENT,
-      approveAll: false,
-      approveReads: false,
-      denyAll: false,
-    },
-    undefined,
-  );
-  if (!stack.ok) {
-    throw stack.error;
+/**
+ * Select one scope by its catalog row, and count what it says was answered.
+ *
+ * #881 PR 2 gave the Transcript the selected entry's reading, so the records of
+ * every scope no longer appear there at once; the answers a nested scope
+ * retained are read by selecting that scope, which is where the product says
+ * they were asked. Selection is the behavior being tested: a row counted under
+ * the wrong scope would be an answer attributed to somewhere it never happened.
+ *
+ * The scope first, because it is a row of the entry's catalog and the catalog
+ * is a drawer over the reading: choosing a row closes it again, which is what
+ * leaves the reading showing what that scope retains. Then the inspector,
+ * because selecting a scope is a reading and the right column defaults to the
+ * Sidekick.
+ */
+function* answeredUnder(page: ReplPage, scope: string, text: string): Operation<number> {
+  yield* openCatalog(page);
+  yield* chooseCatalogRow(page, scope);
+  if (shownPane(page.frame()) === "sidekick") {
+    yield* selectPane(page, "bindings");
   }
-  return yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
-    acp: {
-      createRuntime: fake.create,
-      sessionStore: makeStore(),
-      agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
-    },
-    planWriterRoot: yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-plan-"))),
-  })).finalize();
+  const reading = yield* page.until(
+    `a row saying ${text} after selecting ${scope}`,
+    (frame) => occurrences(frame, text) > 0,
+  );
+  return occurrences(reading, text);
 }
 
 /** Whether this host holds no REPL history at all. */
@@ -2068,83 +1967,173 @@ function* entryHistory(hostRoot: string): Operation<string> {
   return yield* untilResolved(readFile(path, "utf8"));
 }
 
+/** A REPL host over a data root, and the profile and scripted agent a command runs under it. */
+interface JourneyHost extends MountedHost {
+  readonly dataRoot: string;
+}
+
 /**
- * One running command, and whether it is over.
+ * Install one REPL host and assemble the profile a command runs under it.
  *
- * A flag rather than the task's own state, because what every ending row asks is
- * the same question — has the owner joined? — and a task that ended by failing
- * answers it as much as one that returned.
+ * The data root can be handed back in, which is what a cold row needs: a second
+ * command over the same history is the only way to prove a screen was
+ * reconstructed from the Journal rather than from anything the first process
+ * still held.
  */
-interface Ending {
-  readonly task: Task<void>;
-  readonly over: boolean;
-  /** The location it ended at, once it has ended on its own rather than been cancelled. */
-  readonly location: string | undefined;
-}
-
-function* commanding(fake: FakeAcp, workspace: string): Operation<Ending> {
-  // What the run reports, in a record typed as what it holds. The task is read
-  // from the spawn rather than filled in afterwards, so nothing here has to begin
-  // life as a value of the wrong type.
-  const reported: { over: boolean; location: string | undefined } = {
-    over: false,
-    location: undefined,
-  };
-  const task = yield* spawn(function* (): Operation<void> {
-    try {
-      reported.location = yield* start(fake, holds([]), workspace);
-    } catch {
-      // The ending is what the row is about; how it was reported is the row's
-      // own business and not this helper's.
-    } finally {
-      reported.over = true;
-    }
+function* useJourneyHost(options: {
+  readonly fake: FakeAcp;
+  readonly held?: Holds;
+  readonly dataRoot?: string;
+  readonly includes?: readonly string[];
+  readonly planWriterRoot?: string;
+  readonly permissionMode?: "approve-reads" | "deny-all";
+}): Operation<JourneyHost> {
+  const dataRoot =
+    options.dataRoot ?? (yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-"))));
+  yield* installReplHost({
+    dataRoot: () => dataRoot,
+    identify: () => randomBytes(8).toString("hex"),
+    createExclusive: (path) => open(path, "wx").then((handle) => handle.close()),
+    appendRecord: (path, record) => appendFile(path, record),
   });
-  return {
-    task,
-    get over(): boolean {
-      return reported.over;
-    },
-    get location(): string | undefined {
-      return reported.location;
-    },
-  };
-}
-
-/** Start the program the way the command does, with the profile it assembles. */
-function* start(
-  fake: FakeAcp,
-  held: Holds,
-  workspace: string,
-  location?: string,
-): Operation<string> {
-  const writerRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-plan-")));
-  const profile = yield* (yield* assembleReplProfile(
+  const profile = yield* assembleReplProfile(
     {
       provider: "acpx",
       defaultAgent: AGENT,
       adapters: ADAPTERS,
-      permissionMode: "approve-reads",
+      permissionMode: options.permissionMode ?? "approve-reads",
     },
     NO_PLUGINS,
     {
+      ...(options.includes === undefined ? {} : { includes: options.includes }),
       acp: {
-        createRuntime: held.create(fake),
+        createRuntime:
+          options.held === undefined ? options.fake.create : options.held.create(options.fake),
         sessionStore: makeStore(),
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
       },
-      planWriterRoot: writerRoot,
+      planWriterRoot:
+        options.planWriterRoot ?? (yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-plan-")))),
     },
-  )).finalize();
-  const ran = yield* runReplProgram({
+  );
+  const root = join(dataRoot, ...REPL_DIRECTORY);
+  return {
+    dataRoot,
+    root,
+    fake: options.fake,
     profile,
-    ...(location === undefined ? {} : { location }),
+    repository: pairedReplRepository(root),
+    gate: undefined,
+    operations: undefined,
+  };
+}
+
+/**
+ * Start the program the way the command does, on a page, in the calling scope.
+ *
+ * Everything it installs — the working directory, the clock, the host, the
+ * terminal and the command itself — lives as long as that scope does, so a row
+ * that starts a second process over the same history starts it in a scope of
+ * its own.
+ */
+function* beginJourney(options: {
+  readonly fake: FakeAcp;
+  readonly held?: Holds;
+  readonly hostRoot?: string;
+  readonly size?: ReplTerminalSize;
+  readonly location?: string;
+  readonly includes?: readonly string[];
+  readonly planWriterRoot?: string;
+  readonly permissionMode?: "approve-reads" | "deny-all";
+  /** Whether to give the command a temporary working directory. Defaults to yes. */
+  readonly workspace?: boolean;
+}): Operation<{
+  readonly page: ReplPage;
+  readonly host: JourneyHost;
+  readonly hostRoot: string;
+  readonly workspace: string;
+}> {
+  const workspace = options.workspace === false ? "" : yield* useWorkspace();
+  yield* immediateClock();
+  const host = yield* useJourneyHost({
+    fake: options.fake,
+    ...(options.held === undefined ? {} : { held: options.held }),
+    ...(options.hostRoot === undefined ? {} : { dataRoot: options.hostRoot }),
+    ...(options.includes === undefined ? {} : { includes: options.includes }),
+    ...(options.planWriterRoot === undefined ? {} : { planWriterRoot: options.planWriterRoot }),
+    ...(options.permissionMode === undefined ? {} : { permissionMode: options.permissionMode }),
   });
-  if (!ran.ok) {
-    throw ran.error;
+  const page = yield* useReplPage({
+    host,
+    ...(options.size === undefined ? {} : { size: options.size }),
+    ...(options.location === undefined ? {} : { location: options.location }),
+  });
+  return { page, host, hostRoot: host.dataRoot, workspace };
+}
+
+/**
+ * Type one whole entry and submit it.
+ *
+ * Pasted as one chunk: a page-long entry arrives as many decoded keys, and
+ * Enter means "submit this draft" only once the draft is all of it. The entry
+ * is admitted when the History rail marks it and the draft this helper just
+ * typed has emptied. A draft is execution-wide and survives admission as the
+ * *next* entry's text (#827 Slice C), so what clears is this one — and it
+ * clears only when it has become an entry.
+ */
+function* submitted(page: ReplPage, text: string, order: number): Operation<void> {
+  yield* paste(page, draft(page), text);
+  yield* page.key("Enter");
+  yield* page.until(
+    `the draft becoming entry ${order}`,
+    (frame) => railMark(frame, order) !== undefined && draft(page).text() === "",
+  );
+}
+
+/** Close the terminal's input the way end of file does, and return where the command ended. */
+function* leave(page: ReplPage): Operation<string> {
+  page.repl.terminal.end();
+  yield* awaited("the command never returned", () => page.repl.outcome() !== undefined);
+  const outcome = page.repl.outcome();
+  if (outcome === undefined) {
+    throw new Error("the command returned no outcome");
   }
-  void workspace;
-  return ran.value.location;
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  return outcome.value.location;
+}
+
+/**
+ * Make the terminal's byte source fail, which is how a terminal is lost.
+ *
+ * Installed over the terminal the page mounts, so the read the command has
+ * outstanding ends and the next one raises the failure it was handed.
+ */
+function* losingInput(): Operation<(error: Error) => void> {
+  const lost: { error: Error | undefined } = { error: undefined };
+  yield* ReplTerminal.around(
+    {
+      input: (args, forward) => ({
+        *[Symbol.iterator]() {
+          const subscription = yield* forward(...args);
+          return {
+            *next() {
+              const result = yield* subscription.next();
+              if (lost.error !== undefined) {
+                throw lost.error;
+              }
+              return result;
+            },
+          };
+        },
+      }),
+    },
+    { at: "max" },
+  );
+  return (error) => {
+    lost.error = error;
+  };
 }
 
 /**
@@ -2296,19 +2285,8 @@ function admission(events: readonly Record<string, unknown>[]): {
   const named = (value?.named ?? []) as { name: string; form: string }[];
   return {
     source: String(value?.source),
-    named: named.map(({ name, form }) => ({ name, form })),
+    named: named.map((one) => ({ name: one.name, form: one.form })),
   };
-}
-
-const BYTES = new TextEncoder();
-const DEADLOCK_MS = 30_000;
-const TEXT = new TextDecoder();
-
-/** Let every task that is ready take its turn. */
-function* settled(turns = 8): Operation<void> {
-  for (let turn = 0; turn < turns; turn += 1) {
-    yield* sleep(0);
-  }
 }
 
 /** A clock the test moves, so nothing in this suite waits on real time. */
@@ -2329,709 +2307,6 @@ function immediateClock(): Operation<void> {
   );
 }
 
-/** Wait for something this run will do that only an operation can read. */
-function* awaiting(what: string, reached: () => Operation<boolean>): Operation<void> {
-  const deadline = Date.now() + DEADLOCK_MS;
-  while (!(yield* reached())) {
-    if (Date.now() > deadline) {
-      throw new Error(what);
-    }
-    yield* sleep(5);
-    yield* settled(10);
-  }
-}
-
-/** Wait for something this run will do, or say what never happened. */
-function* until(holds: () => boolean, what: string): Operation<void> {
-  const deadline = Date.now() + DEADLOCK_MS;
-  while (!holds()) {
-    if (Date.now() > deadline) {
-      throw new Error(what);
-    }
-    yield* sleep(5);
-    yield* settled(10);
-  }
-}
-
-/** A terminal the test drives completely. */
-interface Terminal {
-  /** Everything ever presented, in order. */
-  readonly presented: Uint8Array[];
-  /**
-   * When set, the next presentation blocks here until it is released.
-   *
-   * The seam the frame-order control needs: while a frame is being written, the
-   * stream must not have been told that frame was applied.
-   */
-  holdPresent: { release(): void } | undefined;
-  size: ReplTerminalSize;
-  readonly raw: boolean[];
-  resets: number;
-  listeners: number;
-  readers: number;
-  feed(text: string): void;
-  bytes(raw: Uint8Array): void;
-  /** Make the next presentation block, so a test can look at the frame stream. */
-  holdNextPresent(): void;
-  /** Make every later presentation fail, which is how a renderer is lost. */
-  failWrites(error: Error): void;
-  /** Make the byte source fail, which is how a terminal is lost. */
-  failInput(error: Error): void;
-  resized(size: ReplTerminalSize): void;
-  end(): void;
-}
-
-function recordingTerminal(
-  size: ReplTerminalSize = { columns: 160, rows: 36 },
-  interactive = true,
-): {
-  terminal: Terminal;
-  install(): Operation<void>;
-} {
-  const queue: Uint8Array[] = [];
-  const watchers = new Set<() => void>();
-  let waiting: ((result: IteratorResult<Uint8Array, void>) => void) | undefined;
-  let ended = false;
-
-  let holding = false;
-  let writeFailure: Error | undefined;
-  let inputFailure: Error | undefined;
-  const terminal: Terminal = {
-    presented: [],
-    holdPresent: undefined,
-    size,
-    raw: [],
-    resets: 0,
-    listeners: 0,
-    readers: 0,
-    feed(text: string): void {
-      terminal.bytes(BYTES.encode(text));
-    },
-    failWrites(error: Error): void {
-      writeFailure = error;
-    },
-    failInput(error: Error): void {
-      inputFailure = error;
-      const resolve = waiting;
-      waiting = undefined;
-      resolve?.({ done: true, value: undefined });
-    },
-    holdNextPresent(): void {
-      holding = true;
-    },
-    bytes(raw: Uint8Array): void {
-      const resolve = waiting;
-      if (resolve === undefined) {
-        queue.push(raw);
-        return;
-      }
-      waiting = undefined;
-      resolve({ done: false, value: raw });
-    },
-    resized(next: ReplTerminalSize): void {
-      terminal.size = next;
-      for (const watcher of watchers) {
-        watcher();
-      }
-    },
-    end(): void {
-      ended = true;
-      const resolve = waiting;
-      if (resolve !== undefined) {
-        waiting = undefined;
-        resolve({ done: true, value: undefined });
-      }
-    },
-  };
-
-  const host: ReplTerminalCapabilities = {
-    interactive: () => interactive,
-    size: () => terminal.size,
-    *write(bytes: Uint8Array): Operation<void> {
-      if (writeFailure !== undefined) {
-        throw writeFailure;
-      }
-      terminal.presented.push(new Uint8Array(bytes));
-      if (!holding) {
-        // A write that completed, which still costs the caller a turn.
-        yield* sleep(0);
-        return;
-      }
-      holding = false;
-      const held = withResolvers<void>();
-      terminal.holdPresent = { release: held.resolve };
-      yield* held.operation;
-    },
-    writeNow(): void {
-      terminal.resets += 1;
-    },
-    setRaw(raw: boolean): void {
-      terminal.raw.push(raw);
-    },
-    input(): Stream<Uint8Array, void> {
-      return resource<Subscription<Uint8Array, void>>(function* (provide) {
-        let open = false;
-        // Registered before the reader is taken, so a scope cancelled between
-        // the two leaves nothing holding this terminal's input.
-        yield* ensure(() => {
-          if (!open) {
-            return;
-          }
-          open = false;
-          terminal.readers -= 1;
-          // Actively cancelled: a cleanup that waited for the outstanding read
-          // to end on its own would need another keystroke to get one.
-          const resolve = waiting;
-          waiting = undefined;
-          resolve?.({ done: true, value: undefined });
-        });
-        terminal.readers += 1;
-        open = true;
-        yield* provide({
-          *next(): Operation<IteratorResult<Uint8Array, void>> {
-            if (inputFailure !== undefined) {
-              throw inputFailure;
-            }
-            // Always one suspension per chunk, buffered or not: the reader turns
-            // one chunk into many decoded events, and draining a buffer without
-            // yielding hands them over faster than the scanner takes them.
-            const pending = withResolvers<IteratorResult<Uint8Array, void>>();
-            const head = queue.shift();
-            if (head !== undefined) {
-              pending.resolve({ done: false, value: head });
-            } else if (ended) {
-              pending.resolve({ done: true, value: undefined });
-            } else {
-              waiting = pending.resolve;
-            }
-            return yield* pending.operation;
-          },
-        });
-      });
-    },
-    onResize(listener: () => void): () => void {
-      watchers.add(listener);
-      terminal.listeners += 1;
-      return () => {
-        watchers.delete(listener);
-        terminal.listeners -= 1;
-      };
-    },
-  };
-
-  return { terminal, install: () => installReplTerminal(host) };
-}
-
-/**
- * A REPL host over a temporary directory nothing else uses.
- *
- * The root can be handed back in, which is what a cold row needs: a second
- * command scope over the same history file is the only way to prove a screen
- * was reconstructed from the Journal rather than from anything this process
- * still held.
- */
-function* useTemporaryHost(existing?: string): Operation<string> {
-  const root = existing ?? (yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-"))));
-  yield* installReplHost({
-    dataRoot: () => root,
-    identify: () => randomBytes(8).toString("hex"),
-    createExclusive: (path) => open(path, "wx").then((handle) => handle.close()),
-    appendRecord: (path, record) => appendFile(path, record),
-  });
-  return root;
-}
-
-/**
- * What the screen says, by replaying what was written to it.
- *
- * A real buffer rather than the bytes with escapes stripped, because this
- * renderer writes *diffs*: it moves the cursor to what changed and writes only
- * that. Concatenating the diffs gives characters in the order they were written
- * rather than the order they appear, and a character the previous frame already
- * had is not written again at all.
- */
-function screenOf(terminal: Terminal): string[] {
-  return replay(terminal.presented);
-}
-
-/**
- * The same replay over a chosen run of presentations.
- *
- * What a resize draws can only be read on its own: this renderer writes diffs,
- * so a buffer that also holds the frames before the resize holds rows the
- * smaller terminal no longer has. The engine redraws completely after a size
- * change, so the presentations from the resize onward are a whole screen.
- */
-function replay(presented: readonly Uint8Array[]): string[] {
-  const rows: string[][] = [];
-  let row = 0;
-  let column = 0;
-
-  const put = (character: string): void => {
-    while (rows.length <= row) {
-      rows.push([]);
-    }
-    const line = rows[row]!;
-    while (line.length < column) {
-      line.push(" ");
-    }
-    line[column] = character;
-    column += 1;
-  };
-
-  const written = presented.map((bytes) => TEXT.decode(bytes)).join("");
-  for (let index = 0; index < written.length; index += 1) {
-    const character = written[index];
-    if (character !== "\u001B") {
-      if (character === "\n") {
-        row += 1;
-        column = 0;
-      } else if (character === "\r") {
-        column = 0;
-      } else if (character !== undefined) {
-        put(character);
-      }
-      continue;
-    }
-    const csi = /^\u001B\[([0-9;]*)([@-~])/.exec(written.slice(index));
-    if (csi !== null) {
-      const parameters = (csi[1] ?? "").split(";").map((one) => (one === "" ? 0 : Number(one)));
-      if (csi[2] === "H") {
-        row = Math.max(0, (parameters[0] ?? 1) - 1);
-        column = Math.max(0, (parameters[1] ?? 1) - 1);
-      } else if (csi[2] === "J") {
-        rows.length = 0;
-        row = 0;
-        column = 0;
-      }
-      index += csi[0].length - 1;
-      continue;
-    }
-    const osc = /^\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/.exec(written.slice(index));
-    if (osc !== null) {
-      index += osc[0].length - 1;
-      continue;
-    }
-    index += 1;
-  }
-  return rows.map((line) => line.join(""));
-}
-
-/**
- * How many columns the Sessions sidebar owns.
- *
- * Asked of the layout rather than written down, so a row comparing "the entry
- * column did not move" compares the band beside the sidebar rather than a
- * number somebody guessed — and so a change to the accepted share makes these
- * helpers read the right column instead of quietly reading the wrong one. Tier
- * PW is where that share itself is asserted; this one only slices.
- */
-const SIDEBAR = sidebarWidth({ columns: 160, rows: 36 }) ?? 0;
-
-/** The conversation this screen is filtered by, as the route states it. */
-function sessionOf(terminal: Terminal): string | undefined {
-  // The conversation this reading is filtered to is what the Transcript's own
-  // selector says. There is one list now, and the control that opens its
-  // choices carries the name of whichever was chosen — so the filter is read
-  // where the screen states it rather than from a marked row of a column this
-  // composition does not draw. `All sessions` is the unfiltered reading, which
-  // is no conversation at all.
-  // Found by the mark that says it opens rather than by the row it is on: a
-  // name too long for the title's remaining room is given a row of its own
-  // beneath it, and the selector is the only thing in this column wearing that
-  // mark either way.
-  for (const line of screenOf(terminal)) {
-    const column = (line.split("\u2502")[0] ?? "").trimEnd();
-    if (!column.endsWith(SELECTOR_MARK)) {
-      continue;
-    }
-    const label = column
-      .slice(0, column.length - SELECTOR_MARK.length)
-      .replace(new RegExp(`^\\s*${TRANSCRIPT_TITLE}`), "")
-      .trim();
-    return label === "" || label === ALL_SESSIONS ? undefined : label;
-  }
-  return undefined;
-}
-
-/**
- * The row inside the selector that stands for no filter at all.
- *
- * Not the same words the control itself carries: the control says which
- * conversation a reading is filtered to, and the list says which readings are
- * on offer — the unfiltered one among them.
- */
-const EVERY_CONVERSATION = "All conversations";
-
-/** What the staged Transcript calls itself, its selector's mark, and no filter. */
-const TRANSCRIPT_TITLE = "TRANSCRIPT";
-const SELECTOR_MARK = "\u25be";
-const ALL_SESSIONS = "All sessions";
-
-/**
- * The conversation rows the Sessions surface offers to filter by, in order.
- *
- * Found by a digest every one of this run's session keys carries, because the
- * row is the key and the sidebar is narrower than one: the selected row also has
- * the focus marker written over its first character, so matching the spelling of
- * the key's own prefix would find every row except the one a person chose.
- */
-function conversationRows(terminal: Terminal, digest: string): string[] {
-  return screenOf(terminal)
-    .map((line) => line.slice(0, SIDEBAR).trimEnd())
-    .filter((line) => line.includes(digest))
-    .map((line) => line.trim());
-}
-
-/** The positions the open History drawer offers, in order. */
-function historyMarkers(terminal: Terminal): string[] {
-  const rows = screenOf(terminal).map((line) => line.trimEnd());
-  const at = rows.findIndex((line) => line.trim().endsWith("History"));
-  if (at === -1) {
-    return [];
-  }
-  const found: string[] = [];
-  for (let row = at + 1; row < rows.length; row += 1) {
-    const label = (rows[row] ?? "").trim().replace(/^>\s*/, "");
-    if (label === "[↑ earlier]") {
-      // How the window moves, not a position in it. This drawer scrolls (#875),
-      // and both window controls sit outside the content they scroll.
-      continue;
-    }
-    if (label.length === 0 || label.startsWith("[")) {
-      break;
-    }
-    found.push(label);
-  }
-  return found;
-}
-
-/** Which of the three children's turns this screen is showing, in source order. */
-function childrenShown(terminal: Terminal): string[] {
-  const rows = screenOf(terminal);
-  return [PLAN_IT, REVIEW_IT, BUILD_IT].filter((asked) =>
-    rows.some((line) => saying(line, asked, "")),
-  );
-}
-
-/**
- * How many rows of the screen hold this text.
- *
- * A count rather than a yes-or-no, because the admitted program's own source is
- * on this screen too: the Plan's scope retains it, so a line the program will
- * render later is already visible as the source it came from. What says the
- * program *ran* that line is a second row holding it.
- */
-function occurrences(terminal: Terminal, text: string): number {
-  return screenOf(terminal).filter((line) => line.includes(text)).length;
-}
-
-/**
- * Select one scope by its catalog row, and count what it says was answered.
- *
- * #881 PR 2 gave the Transcript the selected entry's reading, so the records of
- * every scope no longer appear there at once; the answers a nested scope
- * retained are read by selecting that scope, which is where the product says
- * they were asked. Selection is the behavior being tested: a row counted under the wrong scope
- * would be an answer attributed to somewhere it never happened.
- */
-/**
- * Open the Entries catalog, which is a drawer over the reading.
- *
- * An entry's own scopes are rows of that catalog, under the entry they belong
- * to. The catalog is not a column any more, so reaching one of its rows begins
- * with the control that opens it; a catalog already open is left alone.
- */
-function* openCatalog(terminal: Terminal): Operation<void> {
-  if (catalogShowing(terminal)) {
-    return;
-  }
-  yield* click(terminal, "Entries");
-  yield* until(() => catalogShowing(terminal), "the Entries catalog never opened");
-}
-
-/**
- * Put the Entries catalog away again, which chooses nothing.
- *
- * Its own control rather than a key, because this screen states the way out on
- * the drawer itself and a key would be a second answer to the same question.
- */
-function* closeCatalog(terminal: Terminal): Operation<void> {
-  if (!catalogShowing(terminal)) {
-    return;
-  }
-  yield* click(terminal, "[close]");
-  yield* until(() => !catalogShowing(terminal), "the Entries catalog never closed");
-}
-
-/** Whether the catalog's own rows are on the screen. */
-function catalogShowing(terminal: Terminal): boolean {
-  return screenOf(terminal).some((line) => /(?:^|\s)1\. \[/.test(line));
-}
-
-function* answeredUnder(terminal: Terminal, scope: string, text: string): Operation<number> {
-  // Bindings first, where the command is showing the Sidekick. A scope's own
-  // rows are the inspector's, and the right pane now defaults to the Sidekick
-  // (#883 section 5) — which is a reading rather than a route, so a row about
-  // the inspector asks for it the way a person does.
-  // Which pane is showing, read from the body it draws: both tabs are named in
-  // that column's header on every frame, so a label would answer yes whichever
-  // reading was selected and this would stop asking for Bindings at all.
-  // The scope first, because it is a row of the entry's catalog and the catalog
-  // is a drawer over the reading: choosing a row closes it again, which is what
-  // leaves the reading below showing what that scope retains. Then the
-  // inspector, because selecting a scope is a reading and the right column
-  // defaults to the Sidekick.
-  yield* openCatalog(terminal);
-  yield* click(terminal, scope);
-  yield* settled(40);
-  if (panePresented(terminal) === "sidekick") {
-    yield* click(terminal, BINDINGS_TAB);
-    yield* settled(40);
-  }
-  const found = occurrences(terminal, text);
-  if (found === 0) {
-    throw new Error(
-      `after selecting ${scope}, no row said ${text}: ${JSON.stringify(
-        screenOf(terminal)
-          .map((line) => line.trimEnd())
-          .filter((line) => line.length > 0)
-          .slice(0, 12),
-      )}`,
-    );
-  }
-  return found;
-}
-
-/** Every row of the screen holding this text, trimmed, in order. */
-function shown(terminal: Terminal, text: string): string[] {
-  return screenOf(terminal)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.includes(text))
-    .map((line) => line.trim());
-}
-
-/** One column band of the screen, which is how a row says "this did not move". */
-function column(terminal: Terminal, from: number): string[] {
-  return screenOf(terminal).map((line) => line.slice(from).trimEnd());
-}
-
-/**
- * The row the focus marker is on, in the sidebar band alone.
- *
- * The band, because the columns beside it hold a journal that grows: a row read
- * across the whole screen would differ between two frames for a reason that has
- * nothing to do with where the focus is.
- */
-function focusedRow(terminal: Terminal): string | undefined {
-  return screenOf(terminal)
-    .map((line) => line.slice(0, SIDEBAR).trimEnd())
-    .find((line) => line.trimStart().startsWith(">"));
-}
-
-/**
- * Open the Transcript's conversation selector, whatever it currently says.
- *
- * The control carries the name of the conversation this reading is filtered to,
- * and `All sessions` when it is filtered to none — so what opens it is read off
- * the screen rather than spelled, and the choices it offers are its rows.
- */
-function* openSelector(terminal: Terminal): Operation<void> {
-  yield* click(terminal, sessionOf(terminal) ?? ALL_SESSIONS);
-  yield* settled(40);
-}
-
-/**
- * Put the selector's choices away again, which chooses nothing.
- *
- * The same control: activating it shows the conversations and activating it
- * again puts them away, which is what this screen says it does.
- */
-function* closeSelector(terminal: Terminal): Operation<void> {
-  yield* click(terminal, sessionOf(terminal) ?? ALL_SESSIONS);
-  yield* settled(40);
-}
-
-/**
- * Walk the focus ring until this row holds focus again.
- *
- * Through the mounted tree's own traversal, which is how a person comes back to
- * a control after a drawer took the focus: nothing here writes a focus store or
- * names a node the screen is not offering.
- */
-function* focusBackTo(terminal: Terminal, row: string | undefined): Operation<void> {
-  if (row === undefined) {
-    return;
-  }
-  for (let press = 0; press <= 240; press += 1) {
-    if (focusedRow(terminal) === row) {
-      return;
-    }
-    terminal.feed("\t");
-    yield* settled(12);
-  }
-  throw new Error(`focus never came back to ${JSON.stringify(row)}`);
-}
-
-/** Whether any row of the screen contains this text. */
-function shows(terminal: Terminal, expected: string): boolean {
-  return screenOf(terminal).some((line) => line.includes(expected));
-}
-
-/**
- * Which of the right pane's two readings this screen is showing.
- *
- * Read from the body the pane draws rather than from its tab: both names sit in
- * that column's header on every wide frame, so a label answers the same either
- * way. The Sidekick's body is the box its messages are typed into.
- */
-function panePresented(terminal: Terminal): "sidekick" | "bindings" {
-  return shows(terminal, MESSAGE_PROMPT) ? "sidekick" : "bindings";
-}
-
-/** The box the Sidekick's messages are typed into, as this screen names it. */
-const MESSAGE_PROMPT = "\u203a message the sidekick";
-
-/** What the inspection column calls its two readings, as this screen names them. */
-const BINDINGS_TAB = "BINDINGS";
-
-/** Wait until the first frame has been drawn. */
-function* untilDrawn(terminal: Terminal): Operation<void> {
-  yield* until(() => usable(terminal), "the screen never drew its first frame");
-}
-
-/**
- * What the draft row is called, which is how this suite finds it.
- *
- * The draft is a block now: its name and focus marker are one row, and what
- * somebody typed is fitted into rows of its own beneath them.
- */
-const DRAFT_PROMPT = " DRAFT";
-
-/**
- * Whether a frame a person could actually use has been drawn.
- *
- * Not merely that bytes arrived: a reset and an empty presentation are both
- * frames and neither is a screen. The contextual status row is described only
- * once a width has been measured, so with the draft row and a way out beside it
- * this says the command is up and showing a measured frame.
- */
-function usable(terminal: Terminal): boolean {
-  const rows = screenOf(terminal);
-  return (
-    rows.some((line) => line.includes(" \u00b7 ")) &&
-    rows.some((line) => line.includes(DRAFT_PROMPT)) &&
-    rows.some((line) => line.includes("[exit]") || line.includes("[history]"))
-  );
-}
-
-/**
- * Exactly what the draft is holding, beneath the row that names it.
- *
- * Bounded by the column its name is drawn in and by the control beside that
- * name: the draft is a block in a column now, and a row read to the end of the
- * screen carries the pane alongside it as well.
- */
-function draftTextOn(terminal: Terminal): string | undefined {
-  return draftTextIn(screenOf(terminal));
-}
-
-/** The same, out of rows a caller already has — a replay of one size's frames. */
-function draftTextIn(rows: readonly string[]): string | undefined {
-  const at = rows.findIndex((line) => line.includes(DRAFT_PROMPT));
-  if (at === -1) {
-    return undefined;
-  }
-  const named = rows[at] ?? "";
-  const from = Math.max(0, named.indexOf(DRAFT_PROMPT) - 1);
-  const beside = /\s\[[^\]]*\]/.exec(named.slice(from));
-  const allocated = beside === null ? undefined : beside.index;
-  const value: string[] = [];
-  for (const line of rows.slice(at + 1)) {
-    if (line.includes("HISTORY") || line.includes("[exit]") || line.includes("Tab/Shift+Tab")) {
-      break;
-    }
-    const within = line.slice(from);
-    const edge = within.indexOf("\u2502");
-    const bounded = edge === -1 ? within : within.slice(0, edge);
-    const own = (allocated === undefined ? bounded : bounded.slice(0, allocated)).trimEnd();
-    if (own.trim().startsWith("[")) {
-      break;
-    }
-    value.push(own);
-  }
-  while (value.length > 0 && (value[value.length - 1] ?? "").trim() === "") {
-    value.pop();
-  }
-  return value.join("\n").trim();
-}
-
-/**
- * Every entry the catalog is showing, by the identity it draws.
- *
- * The outcome is part of the row this product promises, so a row without one is
- * the empty placeholder rather than an entry. Markers are stripped: whether a
- * row is selected or focused is a different question from whether it exists.
- */
-function entriesOn(terminal: Terminal): string[] {
-  const found: string[] = [];
-  for (const line of screenOf(terminal)) {
-    const column = line.split("\u2502")[0] ?? "";
-    const match = /^[\s>*]*(\d+)\.\s+\[([a-z]+)\]\s+(\S.*?)\s*$/.exec(column);
-    if (match !== null) {
-      found.push(`${match[1]}. ${match[3]}`);
-    }
-  }
-  return found.length > 0 ? found : railOn(terminal);
-}
-
-/** Wait until the History rail marks this entry as settled well. */
-function* settledOn(terminal: Terminal, order: number): Operation<void> {
-  yield* until(
-    () => railOn(terminal).includes(`${order}. \u2713`),
-    `the rail never marked entry ${order} as settled`,
-  );
-}
-
-/**
- * The entries the compact History rail is marking, as `order. mark`.
- *
- * The catalog that spells `N. [ok] entry-N` is a drawer on this screen, so a
- * reading of it is a reading of something nobody opened. The rail is what every
- * frame draws, and it carries one mark per entry — which is the same two facts
- * this suite asks for: how many entries there are and what each came to.
- *
- * Read up to the rule, which is where the rail ends and the sentence beside it
- * begins: a number past that belongs to the sentence and not to an entry.
- */
-function railOn(terminal: Terminal): string[] {
-  for (const line of screenOf(terminal)) {
-    const at = line.indexOf("HISTORY");
-    if (at === -1) {
-      continue;
-    }
-    const rail = line.slice(at + "HISTORY".length).split("\u2500\u2500")[0] ?? "";
-    const found: string[] = [];
-    for (const match of rail.matchAll(/(\d+)\s*([\u2713\u00d7\u25cf\u002d])/g)) {
-      found.push(`${match[1]}. ${match[2]}`);
-    }
-    return found;
-  }
-  return [];
-}
-
-/** The catalog row this reading has selected, if it is showing one. */
-function selectedEntryOn(terminal: Terminal): string | undefined {
-  for (const line of screenOf(terminal)) {
-    const column = line.split("\u2502")[0] ?? "";
-    const match = /^[\s>]*\*\s*(\d+)\.\s+\[([a-z]+)\]\s+(\S.*?)\s*$/.exec(column);
-    if (match !== null) {
-      return `${match[1]}. ${match[3]}`;
-    }
-  }
-  return undefined;
-}
-
 /**
  * The canonical route one returned location carries, decoded.
  *
@@ -3047,206 +2322,26 @@ function routeOf(location: string | undefined): ReplRoute {
   return decoded.value;
 }
 
-/** Whether this reading is a retained position rather than the live head. */
-function historicalOn(terminal: Terminal): boolean {
-  return shows(terminal, "[live]");
+/** Which of the three children's turns this frame is showing, in source order. */
+function childrenShown(frame: PageFrame): string[] {
+  const rows = sessionTurns(frame);
+  return [PLAN_IT, REVIEW_IT, BUILD_IT].filter((asked) =>
+    rows.some((row) => saying(row, asked, "")),
+  );
 }
 
-/** The conversation the Sessions reading is filtered to, as the row marks it. */
-function filteredConversationOn(terminal: Terminal): string | undefined {
-  for (const line of screenOf(terminal)) {
-    const match = /^\s*>?\s*(?:\*\s*)?>\s(\S.*?)\s*(?:\u2502.*)?$/.exec(line);
-    if (match !== null && !match[1].startsWith("[")) {
-      return match[1];
-    }
-  }
-  return undefined;
-}
-
-/**
- * Wait until the screen shows this text, or say it never did — and show it.
- *
- * The rendered frame goes in the message, because "never showed X" on its own
- * says nothing about what it showed instead, and what it showed instead is the
- * whole of the evidence when a journey stalls.
- */
-function* showing(terminal: Terminal, expected: string): Operation<void> {
-  const deadline = Date.now() + DEADLOCK_MS;
-  while (!shows(terminal, expected)) {
-    if (Date.now() > deadline) {
-      // Read now rather than passed in: the frame that matters is the one on the
-      // screen when the wait gave up, not the one it started from.
-      throw new Error(
-        `the screen never showed ${expected}. rendered=` +
-          JSON.stringify(
-            screenOf(terminal)
-              .map((line) => line.trimEnd())
-              .filter((line) => line.trim().length > 0),
-          ),
-      );
-    }
-    yield* sleep(5);
-    yield* settled(10);
-  }
-}
-
-/** Where on the screen one label is, if it is there. */
-function coordinateOf(
-  terminal: Terminal,
-  label: string,
-  from = 0,
-): { readonly column: number; readonly row: number } | undefined {
-  for (const [row, line] of screenOf(terminal).entries()) {
-    if (row < from) {
-      continue;
-    }
-    const column = line.indexOf(label);
-    if (column !== -1) {
-      return { column, row };
-    }
-  }
-  return undefined;
-}
-
-/**
- * Where the open drawer begins, as the row its own top rule is on.
- *
- * Needed to tell a control inside the drawer from text that merely reads the
- * same outside it: #881 PR 2 gave the Transcript the entry's source, and a
- * question's own schema is written in that source — so `Project name` is on the
- * screen twice, once as the field to click and once as the `title` the author
- * typed. A pointer aimed at the second lands behind the modal and does nothing.
- */
-function drawerTop(terminal: Terminal): number {
-  for (const [row, line] of screenOf(terminal).entries()) {
-    const said = line.trim();
-    if (said.length > 8 && /^\u2500+$/.test(said)) {
-      return row;
-    }
-  }
-  return 0;
-}
-
-/**
- * Click one control, by finding it on the screen and pressing there.
- *
- * The way a person reaches a control without traversing to it: activating by
- * pointer needs no focus, so it can reach a control while an execution is still
- * moving. The protocol counts from one and the screen counts from zero.
- */
-function* click(terminal: Terminal, label: string, from = 0): Operation<void> {
-  const at = coordinateOf(terminal, label, from);
-  if (at === undefined) {
-    throw new Error(`no control labelled ${label} is on the screen`);
-  }
-  terminal.feed(`\x1b[<0;${at.column + 1};${at.row + 1}M`);
-  yield* settled(30);
-}
-
-/**
- * Where the waiting-question control is, once this process is asking.
- *
- * On the footer's one action row, found by the control that is on it in every
- * state — the question's own text also appears in the transcript, and only one of
- * the two is something to activate.
- */
-function askedRow(
-  terminal: Terminal,
-): { readonly column: number; readonly row: number } | undefined {
-  for (const [row, line] of screenOf(terminal).entries()) {
-    if (!line.includes("[exit]")) {
-      continue;
-    }
-    const column = line.indexOf("[answer]");
-    if (column !== -1) {
-      return { column, row };
-    }
-  }
-  return undefined;
-}
-
-/**
- * Open the waiting question's drawer, the way a person does.
- *
- * A question announces itself and opens nothing: activating the announcement is
- * what opens the form. So every question in a journey is two acts, and one that
- * follows an answered question announces itself again.
- */
-function* openQuestion(terminal: Terminal): Operation<void> {
-  yield* until(() => askedRow(terminal) !== undefined, "the question never announced itself");
-  const at = askedRow(terminal);
-  if (at === undefined) {
-    throw new Error("the waiting question's control left the screen before it was activated");
-  }
-  terminal.feed(`\x1b[<0;${at.column + 1};${at.row + 1}M`);
-  yield* settled(30);
-}
-
-/**
- * Type one whole entry and submit it.
- *
- * The draft is waited for rather than counted: a page-long entry arrives as many
- * decoded keys, and Enter means "submit this draft" only once the draft is all
- * of it. What says it has settled is the route, which carries the draft.
- */
-function* typed(terminal: Terminal, text: string): Operation<void> {
-  terminal.bytes(BYTES.encode(text));
-  const deadline = Date.now() + DEADLOCK_MS;
-  let last = "";
-  let still = 0;
-  while (still < 3) {
-    const now = draftTextOn(terminal) ?? "";
-    if (now === last && now.length > 0) {
-      still += 1;
-    } else {
-      still = 0;
-      last = now;
-    }
-    if (Date.now() > deadline) {
-      throw new Error("the draft never settled");
-    }
-    yield* sleep(20);
-    yield* settled(10);
-  }
-  const before = entriesOn(terminal);
-  terminal.feed("\r");
-  yield* sleep(200);
-  yield* settled(20);
-  // Two facts together: the catalog gained a row it did not have, and the draft
-  // this helper just typed has emptied. A draft is execution-wide and survives
-  // admission as the *next* entry's text (#827 Slice C), so what clears is this
-  // one — and it clears only when it has become an entry.
-  yield* until(() => {
-    const now = entriesOn(terminal);
-    return (
-      now.length > before.length &&
-      now.some((entry) => !before.includes(entry)) &&
-      draftTextOn(terminal) === ""
-    );
-  }, "the draft never became an entry");
-}
-
-/**
- * The Sessions rows this run's two Prompts are drawn on, as the sidebar draws
- * them.
- *
- * Sliced to the sidebar's own width, because that is what a reader sees: the
- * column is narrower than a turn's whole line, so what is on the screen is the
- * prefix of it that fits. Compared rather than interpreted — two readings of
- * one journal have to draw the same rows.
- */
 /**
  * Whether this line shows this prompt, whole or shortened to fit its row.
  *
  * A row is as wide as the region the frame measured for it, and a sidebar is
- * thirty-two columns: a prompt nobody bounded keeps the columns the row's own
- * vocabulary leaves it, marked where it was cut. So a question about which turn
- * a row is asks whether the row shows that prompt, not whether it holds every
- * letter of it.
+ * narrow: a prompt nobody bounded keeps the columns the row's own vocabulary
+ * leaves it, marked where it was cut. So a question about which turn a row is
+ * asks whether the row shows that prompt, not whether it holds every letter of
+ * it.
  */
 function shownPrompt(line: string, prompt: string): boolean {
   for (let kept = prompt.length; kept >= 1; kept -= 1) {
-    if (line.includes(kept === prompt.length ? prompt : `${prompt.slice(0, kept)}\u2026`)) {
+    if (line.includes(kept === prompt.length ? prompt : `${prompt.slice(0, kept)}…`)) {
       return true;
     }
   }
@@ -3256,60 +2351,15 @@ function shownPrompt(line: string, prompt: string): boolean {
 /** Whether this line shows this prompt and this state, in that order. */
 function saying(line: string, prompt: string, state: string): boolean {
   for (let kept = prompt.length; kept >= 1; kept -= 1) {
-    const shown = kept === prompt.length ? prompt : `${prompt.slice(0, kept)}\u2026`;
-    if (line.includes(`${shown} \u00b7 ${state}`)) {
+    const shown = kept === prompt.length ? prompt : `${prompt.slice(0, kept)}…`;
+    if (line.includes(`${shown} · ${state}`)) {
       return true;
     }
   }
   return false;
 }
 
-function promptRows(terminal: Terminal): string[] {
-  return screenOf(terminal)
-    .map((line) => line.slice(0, SIDEBAR).trimEnd())
-    .filter((line) => line.includes("ask-"));
-}
-
 /** One entry holding one Prompt, so every entry records sequence `0`. */
 function promptEntry(text: string): string {
   return `<Session name="planner"><Prompt text="${text}" /></Session>\n`;
-}
-
-/**
- * Put focus on the entry draft.
- *
- * There is no label to aim at: the draft is empty once its text has become an
- * entry, and what it draws is its own prompt. So the marker and the prompt
- * together are what name it — a focused field renders its marker immediately
- * before its prompt, and the draft's prompt is the only one that is itself a
- * marker.
- */
-function* focusDraft(terminal: Terminal): Operation<void> {
-  for (let press = 0; press <= 240; press += 1) {
-    // The draft's own row, by its marker and its name together. The draft is a
-    // block now: one marker, then the name it is known by, with what somebody
-    // typed on rows of its own beneath — and this screen has a second field
-    // wearing the same marker, so the marker alone would stop at whichever
-    // came first and type an entry into the Sidekick's box.
-    if (screenOf(terminal).some((line) => line.includes(`>${DRAFT_PROMPT}`))) {
-      return;
-    }
-    terminal.feed("\t");
-    yield* settled(12);
-  }
-  throw new Error("focus never reached the entry draft in 240 presses");
-}
-
-/** Type a value into the field this label names. */
-function* answer(terminal: Terminal, label: string, value: string): Operation<void> {
-  // Inside the drawer that is asking, not wherever the words first appear.
-  yield* click(terminal, label, drawerTop(terminal));
-  terminal.bytes(BYTES.encode(value));
-  yield* settled(20);
-}
-
-/** Submit the open form. */
-function* submit(terminal: Terminal): Operation<void> {
-  yield* click(terminal, "[submit]", drawerTop(terminal));
-  yield* settled(40);
 }

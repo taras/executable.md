@@ -1,29 +1,68 @@
 /**
  * Measured admission (#875 TL2–TL5).
  *
- * One real layout engine pair, one real Freedom tree, and a terminal cell grid
- * that accumulates what every frame actually wrote. What is under test is the invariant the whole boundary rests on: **the rows and controls a person can
- * see, focus and click are exactly the rows and controls the measured frame
- * admitted.**
+ * The invariant the whole boundary rests on: **the rows and controls a person
+ * can see, focus and click are exactly the rows and controls the measured frame
+ * admitted.** It is asked of the running command, which is driven by terminal
+ * input and read from the frame it presented beside the cells Termless shows,
+ * and of the measured pipeline itself, driven over a real journal.
  *
  * Every number asserted here comes from the frame — the geometry it published,
  * the window it measured, the cells it painted. Nothing in this file works out
  * where a row ought to be: a test that computed the answer would agree with
  * itself while the product drew something else, which is the defect the measured
- * pipeline exists to make impossible.
+ * pipeline exists to make impossible. The rows over `admitActions` state their
+ * measured inputs as literals, because that function decides from what it is
+ * told and from nothing else.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { collect, inlineSource, useTempFileCompiler } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import { NARROW, profileFor, skeletonOps } from "../src/repl/layout.ts";
-import { projectRepl } from "../src/repl/model.ts";
+import { skeletonOps } from "../src/repl/layout.ts";
+import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
+import type { ReplModel } from "../src/repl/model.ts";
+import { EntrySegmentStream } from "../src/repl/entries.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
-import type { ReplBounds } from "../src/repl/layout.ts";
-import type { ReplLive } from "../src/repl/application.ts";
+import type { ReplActionCandidate, ReplBounds } from "../src/repl/layout.ts";
+import type { ReplWindow } from "../src/repl/layout-admission.ts";
+import { admitActions } from "../src/repl/layout-admission.ts";
+import type { ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
+import type { ReplRenderer } from "../src/repl/renderer.ts";
+import { prepareFrame } from "../src/repl/program.ts";
+import {
+  ACTION_ROW,
+  DRAWER_WINDOW,
+  initialState,
+  NO_AGENT,
+  READING_WINDOW,
+  reduceRepl,
+  SESSIONS_WINDOW,
+  viewFor,
+  withWorkspace,
+  workspaceOf,
+} from "../src/repl/application.ts";
+import type { ReplTerminalSize } from "../src/repl/terminal.ts";
+import { usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
+import { referenceEvents } from "./fixtures/repl/reference.ts";
+import { useReplPage } from "./support/mounted-page.ts";
+import type { PageFrame, ReplPage } from "./support/mounted-page.ts";
+import {
+  draft,
+  entrySettles,
+  focusCycle,
+  frameAt,
+  openCatalog,
+  paste,
+  scrollUntil,
+} from "./support/repl-page-adapters.ts";
 
 /**
  * The two cells in front of a control's label that its focus marker draws in.
@@ -32,535 +71,531 @@ import type { ReplLive } from "../src/repl/application.ts";
  * marker comes out two columns narrower than the one drawn in its place.
  */
 const CONTROL_ROOM = "  ";
-import { useReplRenderer } from "../src/repl/renderer.ts";
-import type { ReplRenderer } from "../src/repl/renderer.ts";
-import { prepareFrame } from "../src/repl/program.ts";
-import {
-  ACTION_ROW,
-  DRAWER_WINDOW,
-  initialState,
-  NO_AGENT,
-  QUEUE_WINDOW,
-  reduceRepl,
-  viewFor,
-  withWorkspace,
-  workspaceOf,
-} from "../src/repl/application.ts";
-import { useReplTree } from "../src/repl/reconcile.ts";
-import type { ReplTerminalSize } from "../src/repl/terminal.ts";
-import { useGrid, useCommitter, usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
-import { useTempFileCompiler } from "@executablemd/core";
-import {
-  CHECKPOINT_ASKING,
-  CHECKPOINT_CURRENT_WORKSPACE,
-  CHECKPOINT_LIVE,
-  CHECKPOINT_MEDIUM,
-  CHECKPOINT_NARROW,
-  CHECKPOINT_SIZE,
-  checkpointCatalogModel,
-  checkpointModel,
-  checkpointState,
-  checkpointStateModel,
-  checkpointViewOf,
-  commitCheckpoint,
-} from "./fixtures/repl/workspace-checkpoint.ts";
-import type { Committer, Drawn, TerminalGrid } from "./fixtures/repl/presentation.ts";
-import {
-  EMPTY,
-  ENTRIES,
-  fixturePairs,
-  SESSIONS,
-  STANDING_ACTIONS,
-} from "./fixtures/repl/surface.ts";
-import type { ReplFixtureAction, ReplFixtureState, Surfaced } from "./fixtures/repl/surface.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
 const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
+const NARROW: ReplTerminalSize = { columns: 72, rows: 20 };
 
-/** Forty conversations, which no supported profile can show at once. */
-const MANY_SESSIONS = Object.freeze(
-  Array.from({ length: 40 }, (_, at) => `conversation ${String(at).padStart(2, "0")}`),
-);
+/** What a REPL at rest holds: nothing running, nothing asked, no Sidekick. */
+const IDLE: ReplLive = Object.freeze({
+  output: "",
+  question: undefined,
+  expansion: "playing" as const,
+  pausable: false,
+  running: false,
+  agent: NO_AGENT,
+  lifecycle: NO_LIFECYCLE,
+});
 
-/** Eighteen entries, which no sidebar share can show at once. */
-const MANY_ENTRIES = Object.freeze(Array.from({ length: 18 }, (_, at) => `entry ${at + 1}`));
-
-function stateWith(over: Partial<ReplFixtureState>): ReplFixtureState {
-  return Object.freeze({ ...EMPTY, ...over });
+function projected(events: readonly DurableEvent[]): ReplModel {
+  const result = projectRepl(events);
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
 }
 
-/** One live screen: a real engine pair, a real tree and one accumulating grid. */
-interface Screen {
-  readonly committer: Committer<Surfaced>;
-  readonly grid: TerminalGrid;
-  /** Commit one state at one size, returning what the frame actually drew. */
-  commit(state: ReplFixtureState, size: ReplTerminalSize): Operation<Drawn<Surfaced>>;
-  /** Measure and admit one state without mounting or drawing anything. */
-  measure(state: ReplFixtureState, size: ReplTerminalSize): Operation<Drawn<Surfaced>["admission"]>;
-  resize(size: ReplTerminalSize): void;
+/** The reference entry's journal, read the way the application reads one. */
+function* referenceModel(): Operation<ReplModel> {
+  yield* useTempFileCompiler();
+  return projected(yield* referenceEvents());
 }
 
 /**
- * A screen that commits whatever state it is handed.
+ * A journal of this many settled entries, each of which really ran.
  *
- * The builder is rebuilt per commit because the state is: what a frame shows is
- * derived from one immutable reading, so a new reading is a new builder rather
- * than a mutation of the last one.
+ * A catalog that fits needs no admission decision, so what the count is for is
+ * the window: the measurement the rows below read is about the one that does
+ * not fit.
  */
-function* useScreen(size: ReplTerminalSize): Operation<Screen> {
-  const renderer = yield* useReplRenderer(size);
-  const tree = yield* useReplTree<Surfaced>();
-  const grid = yield* useGrid(size);
-  let current = size;
-  const screen: Screen = {
-    get committer(): Committer<Surfaced> {
-      throw new Error("commit through `commit`, so the builder matches the state");
-    },
-    grid,
-    *commit(state, at) {
-      const committer = yield* useCommitter<Surfaced>({
-        size: at,
-        tree,
-        renderer,
-        source: fixturePairs(state, at),
-        grid,
-      });
-      return yield* committer.commit();
-    },
-    *measure(state, at) {
-      const committer = yield* useCommitter<Surfaced>({
-        size: at,
-        tree,
-        renderer,
-        source: fixturePairs(state, at),
-        grid,
-      });
-      return yield* committer.measure();
-    },
-    resize(next) {
-      current = next;
-      renderer.resize(next);
-    },
-  };
-  // `current` is read by nothing else; holding it documents that a resize tells
-  // the engines before the next frame is built for the new size.
-  void current;
-  return screen;
+function* entriesModel(count: number): Operation<ReplModel> {
+  yield* useTempFileCompiler();
+  const physical = new InMemoryStream();
+  for (let at = 1; at <= count; at += 1) {
+    const settled = yield* physical.readAll();
+    const execution = yield* executeInstalled(
+      {
+        ...inlineSource(`# Entry ${at}\n\nThe ${at} th reading of this history.\n`),
+        stream: new EntrySegmentStream(physical),
+      },
+      [],
+      { initialBindings: settled.length === 0 ? {} : entryInitialBindings(projected(settled)) },
+    );
+    yield* collect(execution);
+  }
+  return projected(yield* physical.readAll());
 }
 
-/** Every description key one frame mounted, sorted for a stable comparison. */
-function keysOf(drawn: Drawn<Surfaced>): string[] {
-  return [...drawn.keys].sort();
+/** The view the application draws for one model, as the program hands it to a frame. */
+function viewOf(
+  model: ReplModel,
+  size: ReplTerminalSize,
+  options: { readonly state?: ReplState; readonly focused?: string } = {},
+): ReplView {
+  const view = viewFor(
+    options.state ?? initialState("reference"),
+    model,
+    IDLE,
+    size,
+    options.focused,
+    navigationOf(model.checkpoints, "live"),
+  );
+  if (!view.ok) {
+    throw view.error;
+  }
+  return withWorkspace(view.value, workspaceOf(model));
 }
 
-/** The whole focus cycle, as Tab visits it from wherever focus is now. */
-function* tabCycle(drawn: Drawn<Surfaced>, limit = 200): Operation<string[]> {
-  const visited: string[] = [];
-  for (let step = 0; step < limit; step += 1) {
-    const moved = yield* drawn.tree.dispatch({ kind: "key", key: "Tab" });
-    if (!moved.ok || moved.value.outcome !== "focus") {
-      break;
-    }
-    const key =
-      moved.value.focused === undefined ? undefined : drawn.tree.keyOf(moved.value.focused);
-    if (key === undefined) {
-      break;
-    }
-    if (visited.includes(key)) {
-      break;
-    }
-    visited.push(key);
+/** The window the frame measured under this name, or a failure naming the ones it did. */
+function windowIn(frame: PageFrame, name: string): ReplWindow {
+  const held = frame.windows.get(name);
+  if (held === undefined) {
+    throw new Error(
+      `this frame measured no ${name} window; it measured ${[...frame.windows.keys()].join(", ")}`,
+    );
   }
-  return visited;
+  return held;
 }
 
-/** The whole cycle in reverse, as Backtab visits it. */
-function* backtabCycle(drawn: Drawn<Surfaced>, limit = 200): Operation<string[]> {
-  const visited: string[] = [];
-  for (let step = 0; step < limit; step += 1) {
-    const moved = yield* drawn.tree.dispatch({ kind: "key", key: "Backtab" });
-    if (!moved.ok || moved.value.outcome !== "focus") {
-      break;
-    }
-    const key =
-      moved.value.focused === undefined ? undefined : drawn.tree.keyOf(moved.value.focused);
-    if (key === undefined || visited.includes(key)) {
-      break;
-    }
-    visited.push(key);
-  }
-  return visited;
+/** Submit one entry through the Draft and wait for the History rail to mark it settled. */
+function* submit(page: ReplPage, order: number, source: string): Operation<void> {
+  yield* paste(page, draft(page), source);
+  yield* page.key("Enter");
+  yield* entrySettles(page, order, "ok");
 }
 
-/** The viewport one window was measured in, read from the committed frame. */
-function viewportOf(drawn: Drawn<Surfaced>, window: string): ReplBounds {
-  const slot = drawn.manifest.viewports.find((one) => one.window === window);
-  if (slot === undefined) {
-    throw new Error(`this frame placed no ${window} viewport`);
+const CATALOG_ENTRIES = 10;
+const entryKey = (order: number): string => `entry:entry-${order}`;
+const entryLabel = (order: number): string => `${order}. [ok] entry-${order}`;
+
+/**
+ * A page at the narrowest size with its Entries catalog open over ten entries.
+ *
+ * The entries are submitted where the History rail marks each of them, and the
+ * terminal is made narrow afterwards: the catalog's window holds six rows at
+ * the narrowest size, so ten of them overflow it.
+ */
+function* catalogOverEntries(): Operation<ReplPage> {
+  const page = yield* useReplPage({ size: WIDE });
+  for (let order = 1; order <= CATALOG_ENTRIES; order += 1) {
+    yield* submit(page, order, `Entry ${order} text.`);
   }
-  const bounds = drawn.regionOf(slot.id);
-  if (bounds === undefined) {
-    throw new Error(`this frame published no geometry for the ${window} viewport`);
-  }
-  return bounds;
+  yield* page.resize(NARROW);
+  yield* openCatalog(page);
+  return page;
 }
+
+/** A reading long enough that no region holds it: forty paragraphs, one row each. */
+const LONG_READING = Array.from({ length: 40 }, (_unused, at) => `VACATED-${at}`).join("\n\n");
+
+/** The measured extent of one control on a one-row action row. */
+const extentAt = (x: number, width: number): ReplBounds => ({ x, y: 0, width, height: 1 });
+
+/** Controls offered to an action row, each measured under the id `box:` and its key. */
+const offered = (...keys: string[]): readonly ReplActionCandidate[] =>
+  keys.map((key) => ({ key, id: `box:${key}`, control: true }));
+
+/** The row's answer to "where did this control land", from literal extents. */
+const boundsIn =
+  (extents: Readonly<Record<string, ReplBounds>>) =>
+  (id: string): ReplBounds | undefined =>
+    extents[id.replace(/^box:/, "")];
+
+/** The rows the reading's viewport holds on this frame, trimmed. */
+const reading = (frame: PageFrame): readonly string[] =>
+  frame.area("box:reading:viewport")?.rows() ?? [];
 
 describe("REPL layout: what an empty measurement describes", () => {
   it("TL2: a measured viewport holds no node, no cell and no target", function* () {
-    const screen = yield* useScreen(WIDE);
-    const state = stateWith({ sessions: MANY_SESSIONS, entries: MANY_ENTRIES });
+    const model = yield* referenceModel();
+    const presenter = yield* usePresenter(WIDE);
     // The measuring pass describes every scrolling viewport empty. It is the
     // same walk the commit uses, so if it mounted anything the commit would be
     // reconciling against a tree the measurement had already changed.
-    const admission = yield* screen.measure(state, WIDE);
-    expect(screen.grid.rows()).toEqual([]);
-    expect(windowOf(admission, SESSIONS).capacity).toBeGreaterThan(0);
-    expect(windowOf(admission, ENTRIES).capacity).toBeGreaterThan(0);
-    // Nothing was mounted and nothing was painted by measuring.
-    const drawn = yield* screen.commit(state, WIDE);
-    expect(drawn.rendered.map.targets.length).toBeGreaterThan(0);
+    const admission = yield* presenter.prepare(viewOf(model, WIDE));
+    expect(windowOf(admission, SESSIONS_WINDOW).capacity).toBeGreaterThan(0);
+    expect(windowOf(admission, READING_WINDOW).capacity).toBeGreaterThan(0);
+    // Nothing was mounted, nothing was painted and no frame was committed.
+    expect(presenter.tree.mounted()).toEqual([]);
+    expect(presenter.grid.rows()).toEqual([]);
+    expect(presenter.renderer.last()).toBeUndefined();
+    const drawn = yield* presenter.commit(viewOf(model, WIDE));
+    expect(drawn.targets.length).toBeGreaterThan(0);
   });
 
   it("TL2: capacity describes the region, not whatever is overflowing it", function* () {
-    const screen = yield* useScreen(WIDE);
-    const few = yield* screen.measure(
-      stateWith({ sessions: MANY_SESSIONS.slice(0, 3), entries: MANY_ENTRIES }),
-      WIDE,
-    );
-    const many = yield* screen.measure(
-      stateWith({ sessions: MANY_SESSIONS, entries: MANY_ENTRIES }),
-      WIDE,
+    const page = yield* useReplPage({ size: WIDE });
+    yield* submit(page, 1, "Entry one.");
+    const few = windowIn(page.frame(), READING_WINDOW);
+    expect(few.total).toBeLessThanOrEqual(few.capacity);
+
+    yield* submit(page, 2, LONG_READING);
+    const many = windowIn(
+      yield* page.until(
+        "the long entry being read",
+        (frame) => windowIn(frame, READING_WINDOW).total > few.capacity,
+      ),
+      READING_WINDOW,
     );
     // The same region, so the same room. A capacity that moved with the length
-    // of the list would be measuring the list.
-    expect(windowOf(many, SESSIONS).capacity).toBe(windowOf(few, SESSIONS).capacity);
-    expect(windowOf(few, SESSIONS).total).toBe(3);
-    expect(windowOf(many, SESSIONS).total).toBe(40);
+    // of the reading would be measuring the reading.
+    expect(many.capacity).toBe(few.capacity);
+    expect(many.total).toBeGreaterThan(many.capacity);
+    expect(many.count).toBeLessThanOrEqual(many.capacity);
   });
 
   it("TL2: an action label is measured with the focus marker it draws with", function* () {
-    const screen = yield* useScreen(WIDE);
-    const drawn = yield* screen.commit(stateWith({ sessions: MANY_SESSIONS }), WIDE);
-    // Each control is as wide as its own label, so a pointer aimed at one
-    // reaches it and not its neighbour.
-    for (const action of STANDING_ACTIONS) {
-      const bounds = drawn.boundsOf(action.key);
-      expect(bounds).toBeDefined();
-      expect(bounds?.width).toBe(action.label.length);
+    const page = yield* useReplPage({ size: WIDE });
+    // Each control is as wide as its own label and the room its marker draws
+    // in, so a pointer aimed at one reaches it and not its neighbour.
+    for (const size of [WIDE, NARROW]) {
+      const frame = yield* frameAt(page, size);
+      for (const [key, label] of [
+        ["footer:history", "[history]"],
+        ["footer:exit", "[exit]"],
+        ["draft:send", "[send]"],
+      ]) {
+        const control = frame.control(key);
+        expect(control?.text).toBe(label);
+        expect(control?.bounds.width).toBe(label.length + CONTROL_ROOM.length);
+      }
     }
   });
 });
 
 describe("REPL layout: what a window admits", () => {
   it("TL3: a row outside the window is in no node, cell, target or Tab stop", function* () {
-    const screen = yield* useScreen(WIDE);
-    const state = stateWith({ sessions: MANY_SESSIONS, entries: MANY_ENTRIES });
-    const drawn = yield* screen.commit(state, WIDE);
-    const held = windowOf(drawn.admission, SESSIONS);
-    expect(held.total).toBe(40);
+    const page = yield* catalogOverEntries();
+    const frame = page.frame();
+    const held = windowIn(frame, DRAWER_WINDOW);
+    expect(held.total).toBe(CATALOG_ENTRIES);
     expect(held.capacity).toBeLessThan(held.total);
     expect(held.more).toBe(true);
 
-    const shown = MANY_SESSIONS.slice(held.from, held.from + held.count);
-    const hidden = MANY_SESSIONS.filter((one) => !shown.includes(one));
+    const orders = Array.from({ length: CATALOG_ENTRIES }, (_unused, at) => at + 1);
+    const shown = orders.slice(held.from, held.from + held.count);
+    const hidden = orders.filter((order) => !shown.includes(order));
     expect(hidden.length).toBeGreaterThan(0);
 
-    const keys = keysOf(drawn);
-    for (const session of hidden) {
-      const key = `session:${session}`;
-      // Not mounted, so there is nothing to draw, nothing to aim at and
-      // nothing for traversal to stop on.
-      expect(keys).not.toContain(key);
-      expect(drawn.nodeOf(key)).toBeUndefined();
-      expect(drawn.cellOf(key)).toBeUndefined();
-      expect(drawn.boundsOf(key)).toBeUndefined();
+    for (const order of hidden) {
+      // Not placed, so there is nothing to draw, nothing to aim at and nothing
+      // for traversal to stop on.
+      expect(frame.has(entryKey(order))).toBe(false);
+      expect(frame.rows.some((line) => line.includes(entryLabel(order)))).toBe(false);
     }
-    const cycle = yield* tabCycle(drawn);
-    for (const session of hidden) {
-      expect(cycle).not.toContain(`session:${session}`);
+    const forward = yield* focusCycle(page, "Tab");
+    const backward = yield* focusCycle(page, "Backtab");
+    for (const order of hidden) {
+      expect(forward).not.toContain(entryKey(order));
+      // And the same in reverse: a hidden row is not reachable from either side.
+      expect(backward).not.toContain(entryKey(order));
     }
-    // And the same in reverse: a hidden row is not reachable from either side.
-    const reverse = yield* backtabCycle(drawn);
-    for (const session of hidden) {
-      expect(reverse).not.toContain(`session:${session}`);
-    }
-    for (const session of shown) {
-      expect(cycle).toContain(`session:${session}`);
+    for (const order of shown) {
+      expect(forward).toContain(entryKey(order));
     }
   });
 
   it("TL3: no row is drawn outside the viewport it was admitted to", function* () {
-    const screen = yield* useScreen(WIDE);
-    const drawn = yield* screen.commit(
-      stateWith({ sessions: MANY_SESSIONS, entries: MANY_ENTRIES }),
-      WIDE,
-    );
-    const viewport = viewportOf(drawn, SESSIONS);
-    const held = windowOf(drawn.admission, SESSIONS);
-    for (const session of MANY_SESSIONS.slice(held.from, held.from + held.count)) {
-      const bounds = drawn.boundsOf(`session:${session}`);
-      expect(bounds).toBeDefined();
-      if (bounds === undefined) {
-        continue;
-      }
-      expect(bounds.y).toBeGreaterThanOrEqual(viewport.y);
-      expect(bounds.y).toBeLessThan(viewport.y + viewport.height);
+    const page = yield* catalogOverEntries();
+    const frame = page.frame();
+    const viewport = frame.area(`box:${DRAWER_WINDOW}:viewport`);
+    if (viewport === undefined) {
+      throw new Error(`this frame placed no drawer viewport. ${page.describe()}`);
+    }
+    const held = windowIn(frame, DRAWER_WINDOW);
+    expect(held.count).toBeGreaterThan(0);
+    for (let order = held.from + 1; order <= held.from + held.count; order += 1) {
+      expect(viewport.contains(entryKey(order))).toBe(true);
+      expect(viewport.shows(entryLabel(order))).toBe(true);
     }
   });
 
   it("TL3: earlier and later reach every row, including the last", function* () {
-    const screen = yield* useScreen(WIDE);
-    const last = MANY_SESSIONS[MANY_SESSIONS.length - 1];
-    let offsets: Record<string, number> = {};
-    let reached = false;
-    let seen = 0;
+    const page = yield* catalogOverEntries();
+    const last = entryKey(CATALOG_ENTRIES);
+    expect(page.frame().has(last)).toBe(false);
+
     // Walk the window to the end the way a person does, one press at a time,
-    // and stop when the final row is genuinely mounted.
-    for (let press = 0; press < 60; press += 1) {
-      const state = stateWith({ sessions: MANY_SESSIONS, entries: MANY_ENTRIES, offsets });
-      const drawn = yield* screen.commit(state, WIDE);
-      const held = windowOf(drawn.admission, SESSIONS);
-      seen = held.from;
-      if (drawn.nodeOf(`session:${last}`) !== undefined) {
-        reached = true;
-        // Visible, so it is a real target with real geometry.
-        expect(drawn.boundsOf(`session:${last}`)).toBeDefined();
-        expect(yield* tabCycle(drawn)).toContain(`session:${last}`);
-        break;
-      }
-      if (!held.more) {
-        break;
-      }
-      offsets = { ...offsets, [SESSIONS]: held.from + 1 };
-    }
-    expect(reached).toBe(true);
-    expect(seen).toBeGreaterThan(0);
+    // and stop when the final row is genuinely placed.
+    const reached = yield* scrollUntil(
+      page,
+      { window: DRAWER_WINDOW, control: "drawer:scroll:down", toward: "more" },
+      (frame) => frame.has(last),
+    );
+    expect(windowIn(reached, DRAWER_WINDOW).from).toBeGreaterThan(0);
+    // Visible, so it is a real control with real geometry and a Tab stop.
+    expect(reached.control(last)?.text).toBe(entryLabel(CATALOG_ENTRIES));
+    yield* page.focus(last);
+    expect(page.frame().focused).toBe(last);
+
+    // And back: the first row is reachable again from the far end.
+    const first = entryKey(1);
+    expect(page.frame().has(first)).toBe(false);
+    const back = yield* scrollUntil(
+      page,
+      { window: DRAWER_WINDOW, control: "drawer:scroll:up", toward: "less" },
+      (frame) => frame.has(first),
+    );
+    expect(windowIn(back, DRAWER_WINDOW).from).toBe(0);
   });
 
   it("TL3: the first scroll after a resize moves from the clamp that is drawn", function* () {
-    const screen = yield* useScreen(MEDIUM);
-    const state = stateWith({ sessions: MANY_SESSIONS, entries: MANY_ENTRIES });
+    const page = yield* catalogOverEntries();
 
     // Scrolled to the very end of the smaller region, which is as far as this
     // reading goes while the terminal is this size.
-    const medium = yield* screen.commit(state, MEDIUM);
-    const narrowRoom = windowOf(medium.admission, SESSIONS);
-    const far = narrowRoom.total - narrowRoom.capacity;
-    const atEnd = stateWith({ ...state, offsets: { [SESSIONS]: far } });
-    const settled = yield* screen.commit(atEnd, MEDIUM);
-    expect(windowOf(settled.admission, SESSIONS).from).toBe(far);
-    expect(windowOf(settled.admission, SESSIONS).more).toBe(false);
+    yield* scrollUntil(
+      page,
+      { window: DRAWER_WINDOW, control: "drawer:scroll:down", toward: "more" },
+      (frame) => !windowIn(frame, DRAWER_WINDOW).more,
+    );
+    const atEnd = windowIn(page.frame(), DRAWER_WINDOW);
+    expect(atEnd.from).toBe(atEnd.total - atEnd.capacity);
+    expect(atEnd.from).toBeGreaterThan(1);
 
     // The terminal grows. A taller region holds more rows, so the last window
-    // starts further back — the stored offset is now past it, and what the
-    // frame draws is the clamp.
-    screen.resize(WIDE);
-    const wide = yield* screen.commit(atEnd, WIDE);
-    const clamped = windowOf(wide.admission, SESSIONS);
-    expect(clamped.capacity).toBeGreaterThan(narrowRoom.capacity);
-    expect(clamped.from).toBeLessThan(far);
+    // starts further back — the position scrolled to is now past it, and what
+    // the frame draws is the clamp.
+    const clamped = windowIn(
+      yield* page.resize({ columns: NARROW.columns, rows: NARROW.rows + 2 }),
+      DRAWER_WINDOW,
+    );
+    expect(clamped.capacity).toBeGreaterThan(atEnd.capacity);
+    expect(clamped.from).toBeLessThan(atEnd.from);
     expect(clamped.from).toBe(clamped.total - clamped.capacity);
     // And the clamp is what is on screen: the last row really is the last one.
     expect(clamped.more).toBe(false);
+    expect(page.frame().has(entryKey(CATALOG_ENTRIES))).toBe(true);
 
-    // So the next press moves from there. Asking to go one row earlier than
-    // the *drawn* clamp lands one row earlier; a frame that had moved from the
-    // stored number instead would still be showing the clamp.
-    const back = stateWith({ ...state, offsets: { [SESSIONS]: clamped.from - 1 } });
-    const moved = yield* screen.commit(back, WIDE);
-    expect(windowOf(moved.admission, SESSIONS).from).toBe(clamped.from - 1);
-    expect(windowOf(moved.admission, SESSIONS).more).toBe(true);
+    // So the next press moves from there. Going one row earlier than the drawn
+    // clamp lands one row earlier; a frame that had moved from the position
+    // scrolled to instead would land two rows further on.
+    yield* page.press("drawer:scroll:up");
+    const moved = windowIn(
+      yield* page.until(
+        "the window moving earlier",
+        (frame) => windowIn(frame, DRAWER_WINDOW).from !== clamped.from,
+      ),
+      DRAWER_WINDOW,
+    );
+    expect(moved.from).toBe(clamped.from - 1);
+    expect(moved.more).toBe(true);
   });
 });
 
 describe("REPL layout: what an action row admits", () => {
+  /** A row 72 cells wide, and the measured extent of six controls offered to it. */
+  const ROW: ReplBounds = { x: 0, y: 0, width: 72, height: 1 };
+
   /** Controls wide enough that the narrowest supported row cannot hold them all. */
-  const CROWDED: readonly ReplFixtureAction[] = Object.freeze([
-    Object.freeze({ key: "footer:history", label: "[history]" }),
-    Object.freeze({ key: "footer:exit", label: "[exit]" }),
-    Object.freeze({ key: "footer:pause", label: "[pause expansion now]" }),
-    Object.freeze({ key: "footer:continue", label: "[continue expansion now]" }),
-    Object.freeze({ key: "footer:live", label: "[return to the live head]" }),
-    Object.freeze({ key: "footer:answer", label: "[answer the open question]" }),
-  ]);
+  const CROWDED = [
+    "footer:history",
+    "footer:exit",
+    "footer:pause",
+    "footer:continue",
+    "footer:live",
+    "footer:answer",
+  ];
+  const CROWDED_EXTENTS: Readonly<Record<string, ReplBounds>> = {
+    "footer:history": extentAt(0, 11),
+    "footer:exit": extentAt(11, 8),
+    "footer:pause": extentAt(19, 23),
+    "footer:continue": extentAt(42, 26),
+    "footer:live": extentAt(68, 28),
+    "footer:answer": extentAt(96, 29),
+  };
 
   it("TL4: a row too narrow for everything admits a whole prefix only", function* () {
-    const screen = yield* useScreen(NARROW);
-    const drawn = yield* screen.commit(stateWith({ actions: CROWDED }), NARROW);
-    const admitted = CROWDED.filter((one) => drawn.admission.actions.has(one.key));
-    const omitted = CROWDED.filter((one) => !drawn.admission.actions.has(one.key));
+    const { admitted } = admitActions({
+      row: ROW,
+      controls: offered(...CROWDED),
+      boundsOf: boundsIn(CROWDED_EXTENTS),
+    });
+    const kept = CROWDED.filter((key) => admitted.has(key));
+    const omitted = CROWDED.filter((key) => !admitted.has(key));
     expect(omitted.length).toBeGreaterThan(0);
 
     // A contiguous prefix of the offered order, and nothing after the break.
-    expect(admitted.map((one) => one.key)).toEqual(
-      CROWDED.slice(0, admitted.length).map((one) => one.key),
-    );
+    expect(kept).toEqual(CROWDED.slice(0, kept.length));
+    expect(kept).toEqual(["footer:history", "footer:exit", "footer:pause", "footer:continue"]);
     // The way out stays, because it comes first.
-    expect(drawn.admission.actions.has("footer:history")).toBe(true);
-    expect(drawn.admission.actions.has("footer:exit")).toBe(true);
-
-    const row = drawn.manifest.actions;
-    expect(row).toBeDefined();
-    const keys = keysOf(drawn);
-    for (const one of omitted) {
-      expect(keys).not.toContain(one.key);
-      expect(drawn.boundsOf(one.key)).toBeUndefined();
-    }
-    const cycle = yield* tabCycle(drawn);
-    for (const one of omitted) {
-      expect(cycle).not.toContain(one.key);
-    }
+    expect(admitted.has("footer:history")).toBe(true);
+    expect(admitted.has("footer:exit")).toBe(true);
+    expect(omitted).toEqual(["footer:live", "footer:answer"]);
   });
 
   it("TL4: every admitted control is drawn whole, inside the row", function* () {
-    const screen = yield* useScreen(NARROW);
-    const drawn = yield* screen.commit(stateWith({ actions: CROWDED }), NARROW);
-    const footer = drawn.regionOf("box:footer:actions");
-    expect(footer).toBeDefined();
-    if (footer === undefined) {
-      return;
-    }
-    for (const one of CROWDED) {
-      if (!drawn.admission.actions.has(one.key)) {
-        continue;
-      }
-      const bounds = drawn.boundsOf(one.key);
-      expect(bounds).toBeDefined();
-      if (bounds === undefined) {
-        continue;
-      }
+    const edge = ROW.x + ROW.width;
+    // The last control ends exactly on the row's edge, and the next starts there.
+    const extents: Readonly<Record<string, ReplBounds>> = {
+      "footer:history": extentAt(0, 11),
+      "footer:exit": extentAt(11, 8),
+      "footer:flush": extentAt(19, edge - 19),
+      "footer:beyond": extentAt(edge, 3),
+    };
+    const { admitted } = admitActions({
+      row: ROW,
+      controls: offered("footer:history", "footer:exit", "footer:flush", "footer:beyond"),
+      boundsOf: boundsIn(extents),
+    });
+    expect([...admitted]).toEqual(["footer:history", "footer:exit", "footer:flush"]);
+    for (const key of admitted) {
+      const bounds = extents[key];
       // Whole: its own trailing edge is inside the row's, so no part of it is
       // drawn off the end where a person could see it and not hit it.
-      expect(bounds.width).toBe(one.label.length);
-      expect(bounds.x + bounds.width).toBeLessThanOrEqual(footer.x + footer.width);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(edge);
+    }
+
+    // The running command places its controls the same way at every size.
+    const page = yield* useReplPage({ size: WIDE });
+    for (const size of [WIDE, MEDIUM, NARROW]) {
+      const frame = yield* frameAt(page, size);
+      const actions = frame.area(ACTION_ROW);
+      expect(actions?.contains("footer:history")).toBe(true);
+      expect(actions?.contains("footer:exit")).toBe(true);
     }
   });
 
   it("TL4: a control the row cannot hold does not let a narrower one past it", function* () {
-    const screen = yield* useScreen(NARROW);
-    // The third control is far too wide for the narrowest row; the fourth
-    // would fit in what is left. Order is priority, so neither is admitted.
-    const ordered: readonly ReplFixtureAction[] = Object.freeze([
-      Object.freeze({ key: "footer:history", label: "[history]" }),
-      Object.freeze({ key: "footer:exit", label: "[exit]" }),
-      Object.freeze({ key: "footer:wide", label: `[${"w".repeat(90)}]` }),
-      Object.freeze({ key: "footer:narrow", label: "[x]" }),
-    ]);
-    const drawn = yield* screen.commit(stateWith({ actions: ordered }), NARROW);
-    expect(drawn.admission.actions.has("footer:history")).toBe(true);
-    expect(drawn.admission.actions.has("footer:exit")).toBe(true);
-    expect(drawn.admission.actions.has("footer:wide")).toBe(false);
+    // The third control is far too wide for the narrowest row; the fourth fits
+    // in what is left of it. Order is priority, so neither is admitted.
+    const extents: Readonly<Record<string, ReplBounds>> = {
+      "footer:history": extentAt(0, 11),
+      "footer:exit": extentAt(11, 8),
+      "footer:wide": extentAt(19, 92),
+      "footer:narrow": extentAt(60, 3),
+    };
+    const { admitted } = admitActions({
+      row: ROW,
+      controls: offered("footer:history", "footer:exit", "footer:wide", "footer:narrow"),
+      boundsOf: boundsIn(extents),
+    });
+    expect(admitted.has("footer:history")).toBe(true);
+    expect(admitted.has("footer:exit")).toBe(true);
+    expect(admitted.has("footer:wide")).toBe(false);
     // The whole point: it fits, and it is still not admitted, because the row
     // stopped at the first control it could not hold whole.
-    expect(drawn.admission.actions.has("footer:narrow")).toBe(false);
-    expect(keysOf(drawn)).not.toContain("footer:narrow");
-    expect(yield* tabCycle(drawn)).not.toContain("footer:narrow");
+    expect(admitted.has("footer:narrow")).toBe(false);
   });
 });
 
 describe("REPL layout: what a shrinking reading leaves behind", () => {
+  /** Submit the long entry, then a short one that is read in its place. */
+  function* shrunk(page: ReplPage): Operation<readonly string[]> {
+    yield* submit(page, 1, LONG_READING);
+    yield* page.until("the long entry being read", (frame) =>
+      reading(frame).some((line) => line.includes("VACATED-3")),
+    );
+    const before = reading(page.frame());
+    yield* submit(page, 2, "Short.");
+    yield* page.until("the short entry being read", (frame) =>
+      reading(frame).some((line) => line.includes("Short.")),
+    );
+    return before;
+  }
+
   it("TL5: cells a filtered reading vacates are blank, not merely undescribed", function* () {
-    const screen = yield* useScreen(WIDE);
-    const many = stateWith({ sessions: MANY_SESSIONS, entries: MANY_ENTRIES });
-    const first = yield* screen.commit(many, WIDE);
-    const viewport = viewportOf(first, SESSIONS);
-    const held = windowOf(first.admission, SESSIONS);
-    expect(held.count).toBeGreaterThan(3);
+    const page = yield* useReplPage({ size: WIDE });
+    const before = yield* shrunk(page);
+    const after = reading(page.frame());
 
-    // Pre-assert: the area about to be vacated really has text in it now.
-    const vacating: ReplBounds = {
-      x: viewport.x,
-      y: viewport.y + 2,
-      width: viewport.width,
-      height: held.count - 2,
-    };
-    expect(screen.grid.nonblank(vacating).length).toBeGreaterThan(0);
+    // Pre-assert: the area about to be vacated really had text in it. Without
+    // this the assertion below would pass on an empty screen.
+    const kept = after.findLastIndex((line) => line.trim().length > 0) + 1;
+    expect(kept).toBeGreaterThan(0);
+    expect(before.slice(kept).some((line) => line.trim().length > 0)).toBe(true);
 
-    // The filter: a long conversation reading becomes a short one. This is the
-    // one shape where a shared measure-and-draw engine leaves the old text —
-    // the measurement skeleton leaves these cells blank too, so a shared
-    // instance's diff has nothing to say about them.
-    const few = stateWith({ sessions: MANY_SESSIONS.slice(0, 2), entries: MANY_ENTRIES });
-    yield* screen.commit(few, WIDE);
-
-    // Asserted against the accumulated grid, so this is what the terminal
-    // shows rather than what the last frame happened to describe.
-    expect(screen.grid.nonblank(vacating)).toEqual([]);
+    // The reading becomes a short one. This is the one shape where a shared
+    // measure-and-draw engine leaves the old text: the measurement skeleton
+    // leaves these cells blank too, so a shared instance's diff has nothing to
+    // say about them. Asserted against the screen Termless holds, so this is
+    // what the terminal shows rather than what the last frame described.
+    expect(after.join("\n")).not.toContain("VACATED-");
+    expect(after.slice(kept).every((line) => line.length === 0)).toBe(true);
+    expect(page.frame().rows.join("\n")).not.toContain("VACATED-");
   });
 
   it("TL5: the rows that remain are still drawn where the frame says", function* () {
-    const screen = yield* useScreen(WIDE);
-    yield* screen.commit(stateWith({ sessions: MANY_SESSIONS, entries: MANY_ENTRIES }), WIDE);
-    const after = yield* screen.commit(
-      stateWith({ sessions: MANY_SESSIONS.slice(0, 2), entries: MANY_ENTRIES }),
-      WIDE,
-    );
-    for (const session of MANY_SESSIONS.slice(0, 2)) {
-      const bounds = after.boundsOf(`session:${session}`);
-      expect(bounds).toBeDefined();
-      if (bounds === undefined) {
-        continue;
-      }
-      expect(screen.grid.textIn(bounds)[0]).toContain(session);
+    const page = yield* useReplPage({ size: WIDE });
+    yield* shrunk(page);
+    const frame = page.frame();
+    expect(frame.controls.length).toBeGreaterThan(0);
+    for (const placed of frame.controls) {
+      expect(frame.control(placed.key)?.text).not.toBe("");
     }
+    expect(frame.control("entries:heading")?.text).toBe("Entries");
+    expect(frame.control("footer:history")?.text).toBe("[history]");
+    expect(frame.area("box:reading:viewport")?.shows("Short.")).toBe(true);
   });
 });
 
 describe("REPL layout: the profiles this product supports", () => {
-  it("TL1: every supported size keeps its columns and its seven footer rows", function* () {
-    for (const size of [WIDE, MEDIUM, NARROW]) {
-      yield* scoped(function* (): Operation<void> {
-        const screen = yield* useScreen(size);
-        const drawn = yield* screen.commit(
-          stateWith({ sessions: MANY_SESSIONS, entries: MANY_ENTRIES }),
-          size,
-        );
-        expect(drawn.manifest.profile).toBe(profileFor(size));
-        const footer = drawn.regionOf("box:footer");
-        expect(footer).toEqual({
-          x: 0,
-          y: size.rows - 7,
-          width: size.columns,
-          height: 7,
-        });
-        // Five band rows, and the draft on the last one.
-        expect(drawn.manifest.history.rows.length).toBe(5);
-        const draft = drawn.boundsOf("footer:input");
-        expect(draft?.y).toBe(size.rows - 1);
+  it("TL1: every supported size keeps its columns and its two footer rows", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    for (const { size, profile } of [
+      { size: WIDE, profile: "wide" },
+      { size: MEDIUM, profile: "medium" },
+      { size: NARROW, profile: "narrow" },
+    ]) {
+      const frame = yield* frameAt(page, size);
+      expect(frame.profile).toBe(profile);
+      const bounds = (id: string): ReplBounds | undefined => frame.area(id)?.bounds;
+      // One identity row, the body between, then one compact History row and
+      // one row of guidance, at every size.
+      expect(bounds("box:identity")).toEqual({ x: 0, y: 0, width: size.columns, height: 1 });
+      expect(bounds("box:body")).toEqual({
+        x: 0,
+        y: 1,
+        width: size.columns,
+        height: size.rows - 3,
       });
+      expect(bounds("box:history")).toEqual({
+        x: 0,
+        y: size.rows - 2,
+        width: size.columns,
+        height: 1,
+      });
+      expect(bounds("box:guidance")).toEqual({
+        x: 0,
+        y: size.rows - 1,
+        width: size.columns,
+        height: 1,
+      });
+      expect(frame.rows[size.rows - 2]).toContain("HISTORY");
+      expect(frame.area("box:history")?.contains("footer:history")).toBe(true);
+      expect(frame.area("box:draft")?.contains("footer:input")).toBe(true);
     }
+
+    const wide = yield* frameAt(page, WIDE);
+    // The first composition gives the columns 36, 66 and 58 cells, dividers
+    // included, the body 33 rows and the Draft four of the centre's.
+    expect(wide.area("box:sidebar")?.bounds).toMatchObject({ x: 0, width: 36, height: 33 });
+    expect(wide.area("box:transcript")?.bounds).toMatchObject({ x: 36, width: 66, height: 33 });
+    expect(wide.area("box:inspection")?.bounds).toMatchObject({ x: 102, width: 58, height: 33 });
+    expect(wide.area("box:draft")?.bounds.height).toBe(4);
   });
 });
 
-/**
- * #971 A2: what the staged composition admits at each supported size.
- *
- * The same invariant the rest of this file is about, asked of the screen the
- * workspace draws: every window the frame measured holds a whole number of rows
- * it has room for, every control it published was drawn, and nothing it left
- * out is reachable. The geometry those numbers come from is a proposal under
- * image review; that each of them is measured rather than computed here is not.
- */
-describe("REPL layout: what the staged workspace admits at each size", () => {
+describe("REPL layout: what the application admits at each size", () => {
   it("A2: every measured window is whole, bounded and reachable", function* () {
-    yield* useTempFileCompiler();
-    const model = yield* checkpointModel();
-    for (const size of [CHECKPOINT_SIZE, CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
+    const model = yield* referenceModel();
+    for (const size of [WIDE, MEDIUM, NARROW]) {
       const where = `${size.columns}x${size.rows}`;
       const presenter = yield* usePresenter(size);
-      const committed = yield* commitCheckpoint(presenter, {
-        model,
-        size,
-        workspace: CHECKPOINT_CURRENT_WORKSPACE,
-      });
-      const { admission, manifest } = committed.observed.committed;
+      // The opening frame, where the Draft's own focus is taken; then the
+      // frame composed with the control the mounted tree answered for.
+      yield* presenter.commit(viewOf(model, size));
+      const node = presenter.tree.focused();
+      const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+      const observed = yield* presenter.commit(viewOf(model, size, { focused }));
+      const { admission, manifest } = observed.committed;
 
       // A window holds whole rows, never more than its capacity, and never a
       // capacity it did not measure.
       expect({ where, windows: admission.windows.size > 0 }).toEqual({ where, windows: true });
       for (const slot of manifest.viewports) {
         const window = windowOf(admission, slot.window);
-        const bounds = committed.observed.regionOf(slot.id);
+        const bounds = observed.regionOf(slot.id);
         expect({ where, window: slot.window, measured: bounds !== undefined }).toEqual({
           where,
           window: slot.window,
@@ -585,11 +620,12 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
 
       // Every admitted action was drawn, and nothing the row left out was.
       const drawn = new Set(
-        committed.observed.targets.flatMap((one) => {
+        observed.targets.flatMap((one) => {
           const key = presenter.tree.keyOf(one.node);
           return key === undefined ? [] : [key];
         }),
       );
+      expect((manifest.actions?.controls ?? []).length).toBeGreaterThan(0);
       for (const candidate of manifest.actions?.controls ?? []) {
         const admitted = admission.actions.has(candidate.key);
         expect({ where, key: candidate.key, admitted, drawn: drawn.has(candidate.key) }).toEqual({
@@ -603,9 +639,9 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
   });
 
   // The queue-specific form of this measurement — an empty moving tray with
-  // its own controls around it — is DQ2 in
-  // `fixtures/repl/deferred-presentation.json`. The obligation it carried is
-  // the case below, over the catalog this build actually offers.
+  // its own controls around it — is not run: this build draws no Queue tray
+  // (specs/repl-spec.md). The obligation it carried is the case below, over
+  // the catalog this build actually offers.
 
   /**
    * The same question, about the catalog this build actually offers.
@@ -619,25 +655,19 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
    * reads what went past.
    */
   it("A2: an overflowing Entries catalog is admitted from its last empty coherent measurement", function* () {
-    yield* useTempFileCompiler();
-    const model = yield* checkpointCatalogModel(9);
-    const size = CHECKPOINT_NARROW;
+    const model = yield* entriesModel(9);
+    const size = NARROW;
     const presenter = yield* usePresenter(size);
     // The closed screen first, so the catalog is opened from a frame whose
     // focus the mounted tree actually answered for — the drawer is a modal, and
     // only what it contains may hold focus while it is open.
-    const shipping = { model, size, workspace: workspaceOf(model) } as const;
-    const before = yield* commitCheckpoint(presenter, {
-      ...shipping,
-      state: checkpointState(model, { size, surface: "entries" }),
-    });
-    const opened = reduceRepl(
-      before.view.state,
-      { kind: "open-catalog" },
-      model,
-      before.view.live,
-    ).state;
-    const view = checkpointViewOf(model, before.focused, { ...shipping, state: opened });
+    yield* presenter.commit(viewOf(model, size));
+    const node = presenter.tree.focused();
+    const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+    const closed = viewOf(model, size, { focused });
+    yield* presenter.commit(closed);
+    const opened = reduceRepl(closed.state, { kind: "open-catalog" }, model, IDLE).state;
+    const view = viewOf(model, size, { state: opened, focused });
     const viewport = `box:${DRAWER_WINDOW}:viewport`;
     const row = /^box:drawer:.*:row:\d+:row$/;
     const seen: {
@@ -728,19 +758,18 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
       opened,
       { kind: "scroll-entries", delta: 1 },
       model,
-      before.view.live,
+      IDLE,
       prepared.value.admission,
     ).state;
-    const after = yield* presenter.commit(
-      checkpointViewOf(model, before.focused, { ...shipping, state: moved }),
-    );
+    const after = yield* presenter.commit(viewOf(model, size, { state: moved, focused }));
     const reached = shown(after).filter((key) => !shown(first).includes(key));
     expect({ hidden: shown(first).length < window.total, reached: reached.length > 0 }).toEqual({
       hidden: true,
       reached: true,
     });
-    const node = after.nodeOf(reached[0]);
-    const target = node === undefined ? undefined : after.targets.find((one) => one.node === node);
+    const reachedNode = after.nodeOf(reached[0]);
+    const target =
+      reachedNode === undefined ? undefined : after.targets.find((one) => one.node === reachedNode);
     const bounds = after.boundsOf(reached[0]);
     if (target === undefined || bounds === undefined) {
       throw new Error(`${reached[0]} was drawn with no target of its own`);
@@ -795,7 +824,7 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
       agent: NO_AGENT,
       lifecycle: NO_LIFECYCLE,
     };
-    for (const size of [CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
+    for (const size of [MEDIUM, NARROW]) {
       const where = `${size.columns}x${size.rows}`;
       yield* scoped(function* (): Operation<void> {
         const view = viewFor(
@@ -905,7 +934,7 @@ describe("REPL layout: what the staged workspace admits at each size", () => {
     if (!empty.ok) {
       throw empty.error;
     }
-    const size = CHECKPOINT_SIZE;
+    const size = WIDE;
     const model = empty.value;
     const view = viewFor(
       initialState("ordinary-root"),

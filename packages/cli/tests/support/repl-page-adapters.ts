@@ -591,13 +591,18 @@ export function* closeDrawer(page: ReplPage): Operation<void> {
 }
 
 /**
- * Press the History position whose row shows this label.
+ * Press the History position whose row shows this label, from the live head,
+ * and wait for the reading to move to it.
  *
- * Waits for nothing: the reading moves to that position, and which frame shows
- * it is the case's question.
+ * Input that arrives before the reading has moved is handled against a model
+ * that is not yet projected at the new position, and the screen is left on an
+ * error line.
  */
 export function* chooseMarker(page: ReplPage, label: string): Operation<void> {
   const now = page.frame();
+  if (readingRetained(now)) {
+    throw new Error(`the reading is already at a retained position. ${page.describe()}`);
+  }
   const chosen = now
     .keys()
     .find((key) => key.startsWith(MARKER) && now.control(key)?.text.includes(label));
@@ -605,6 +610,7 @@ export function* chooseMarker(page: ReplPage, label: string): Operation<void> {
     throw new Error(`no History position shows ${JSON.stringify(label)}. ${page.describe()}`);
   }
   yield* page.press(chosen);
+  yield* page.until("the reading moving to that position", readingRetained);
 }
 
 /** Whether the reading is a retained position rather than the live head. */
