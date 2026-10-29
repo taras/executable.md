@@ -40,5 +40,5 @@ git cat-file -t {revision}
 </Dir>
 </Loop>
 <If condition={rejection !== null}><Return value={{ok:false,rejection}} /><Else>
-<Return value={{ok:true,value:{...value,revision:resolved[value.revision] ?? value.revision,...(Array.isArray(value.evidence) ? {evidence:evidence.map(entry => entry && typeof entry === "object" ? {...entry,revision:resolved[entry.revision] ?? entry.revision} : entry)} : {})},changes}} />
+<Return value={{ok:true,value:{...value,revision:(Object.hasOwn(resolved,value.revision) ? resolved[value.revision] : value.revision),...(Array.isArray(value.evidence) ? {evidence:evidence.map(entry => entry && typeof entry === "object" ? {...entry,revision:(Object.hasOwn(resolved,entry.revision) ? resolved[entry.revision] : entry.revision)} : entry)} : {})},changes}} />
 </Else></If>

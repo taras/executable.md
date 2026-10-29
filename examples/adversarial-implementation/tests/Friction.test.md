@@ -83,6 +83,28 @@ printf 'xmd revision collision 481\n' | git hash-object -w --stdin
 </TempDir>
 </Test>
 
+<Test name="prototype spellings reach revision schema rejection without crashing" timeout="60s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Dir path={fixture.repository}>
+```bash exec as="observed"
+git rev-parse HEAD
+```
+</Dir>
+<Let as="revision" value={observed.stdout.trim()} />
+<Let as="assignment" value={{phase:"review",work:"test",repository:fixture.repository,revision,priorRevision:null,request:"Inspect the saved evidence.",changedPaths:[],artifacts:[],evidence:[],findings:[],assessment,continuation:{phase:"ready",role:null}}} />
+<Each in={["constructor","toString","__proto__"]} let="invalid">
+<Each in={["source","evidence"]} let="field">
+<Let as="reply" value={{schema:"phase-result.v2",phase:"review",work:"test",outcome:"pass",revision:field === "source" ? invalid : revision,summary:"The saved checks passed.",handoff:"Inspect the saved evidence.",artifacts:[],evidence:[{revision:field === "evidence" ? invalid : revision,command:"saved focused test",outcome:"passed",artifact:"receipt.json"}],findings:[],next:{phase:"ready",role:null},assessment}} />
+<Json value={reply} as="raw" />
+<Phase.Response assignment={assignment} role="planner" text={raw} profile={{kind:"phase",knownDocuments:[]}} as="checked" />
+<AssertEquals actual={checked.ok} expected={false} />
+<AssertEquals actual={checked.rejection.code} expected="schema" />
+</Each>
+</Each>
+</TempDir>
+</Test>
+
 <Test name="the continuation entry preserves holds and consumed corrections" timeout="60s">
 <TempDir>
 <Let as="held" value={{manifest:{},checkpoint:{status:"hold",dispatchable:false,round:3,hold:{kind:"correction_bound",reason:"Inspect the saved attempts."}},calls:[{status:"rejected"}],documents:{}}} />
