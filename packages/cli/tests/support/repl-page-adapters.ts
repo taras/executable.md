@@ -25,6 +25,16 @@ export function shows(frame: PageFrame, text: string): boolean {
   return frame.rows.some((line) => line.includes(text));
 }
 
+/** Whether the screen shows this utterance, attributed to a person here. */
+export function saidByPerson(frame: PageFrame, text: string): boolean {
+  return shows(frame, `[U] ${text}`);
+}
+
+/** Whether the screen shows this utterance, attributed to the Sidekick. */
+export function saidBySidekick(frame: PageFrame, text: string): boolean {
+  return shows(frame, `[S] ${text}`);
+}
+
 /** The mark the History rail gives an outcome, in the rail's own words for it. */
 const RAIL_MARKS: Readonly<Record<string, string>> = Object.freeze({
   ok: "\u2713",
@@ -75,13 +85,92 @@ export interface PageSidekick {
   readonly composer: PageField;
   /** Its own Stop placed and its own Send not. */
   working(): boolean;
-  /** Type into the composer and press the pane's own Send once it is offered. */
+  /** Type into the composer, press the pane's own Send once it is offered, and wait for the composer to empty. */
   send(text: string): Operation<void>;
-  /** Press the pane's own Stop. Waits for nothing: what Stop does is the case's question. */
+  /**
+   * Press the pane's own Stop, or the one its open question form wears.
+   * Waits for nothing: what Stop does is the case's question.
+   */
   stop(): Operation<void>;
+  /** Its own Send offered and its own Stop gone. */
+  idle(): boolean;
 }
 
 const LAYER = "box:drawer:layer";
+
+const ENCODER = new TextEncoder();
+
+/** Paste into a field as one chunk and wait until the last line shows in its region. */
+export function* paste(page: ReplPage, field: PageField, text: string): Operation<void> {
+  const flat = (words: string): string => words.replace(/\s+/g, " ").trim();
+  const last = flat(text.trim().split("\n").at(-1) ?? "");
+  yield* field.focus();
+  page.repl.terminal.bytes(ENCODER.encode(text));
+  yield* page.until(`${field.key} holding the pasted text`, () =>
+    flat(field.text()).includes(last),
+  );
+}
+
+/** The pane the inspection column is reading: the Sidekick when its composer is placed. */
+export function shownPane(frame: PageFrame): "sidekick" | "bindings" {
+  return frame.has("sidekick:message") ? "sidekick" : "bindings";
+}
+
+/** Choose a pane by its tab, the way a person does: focus it and press Enter. */
+export function* selectPane(page: ReplPage, pane: "sidekick" | "bindings"): Operation<void> {
+  yield* page.focus(`tab:${pane}`);
+  yield* page.key("Enter");
+  yield* page.until(`the ${pane} pane being read`, (frame) => shownPane(frame) === pane);
+}
+
+/** One field of the form a question or Configure opens in the drawer. */
+export interface PageFormValue {
+  readonly key: string;
+  /** The value as drawn after the field's `=`. */
+  text(): string;
+  focus(): Operation<void>;
+  /** Focus the field, type, and wait until its value shows what was typed. */
+  type(text: string): Operation<void>;
+}
+
+/** The form a question opens in the drawer. */
+export interface PageForm {
+  isOpen(): boolean;
+  value(name: string): PageFormValue;
+  submit(): Operation<void>;
+  close(): Operation<void>;
+}
+
+export function form(page: ReplPage): PageForm {
+  return {
+    isOpen: () => page.frame().has("drawer:form:submit"),
+    value(name) {
+      const key = `drawer:value:${name}`;
+      const text = (): string =>
+        (page.frame().control(key)?.text ?? "").replace(/^[^=]*=\s?/, "").trim();
+      return {
+        key,
+        text,
+        focus: () => page.focus(key),
+        *type(typed) {
+          yield* page.focus(key);
+          const held = text();
+          page.repl.terminal.feed(typed);
+          yield* page.until(`${key} holding ${JSON.stringify(held + typed)}`, () =>
+            text().includes(held + typed),
+          );
+        },
+      };
+    },
+    submit: () => page.press("drawer:form:submit"),
+    close: () => page.press("drawer:close"),
+  };
+}
+
+/** Whether the Sidekick's own Send is offered and its own Stop is gone. */
+export function sidekickIdle(frame: PageFrame): boolean {
+  return frame.has("sidekick:send") && !frame.has("sidekick:stop");
+}
 
 export function sidekick(page: ReplPage): PageSidekick {
   const composer = page.field("sidekick:message", "box:tray");
@@ -93,8 +182,15 @@ export function sidekick(page: ReplPage): PageSidekick {
       yield* composer.type(text);
       yield* page.until("the Sidekick offering its own Send", (one) => one.has("sidekick:send"));
       yield* page.press("sidekick:send");
+      const flat = (words: string): string => words.replace(/\s+/g, " ").trim();
+      yield* page.until(
+        `the Sidekick taking ${JSON.stringify(text)}`,
+        () => !flat(composer.text()).includes(flat(text)),
+      );
     },
-    stop: () => page.press("sidekick:stop"),
+    stop: () =>
+      page.press(page.frame().has("sidekick:stop") ? "sidekick:stop" : "drawer:sidekick:stop"),
+    idle: () => sidekickIdle(page.frame()),
   };
 }
 
