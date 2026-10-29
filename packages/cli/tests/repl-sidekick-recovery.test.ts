@@ -71,10 +71,10 @@ import type { RepositoryRoot } from "./fixtures/repl/issue-883/host.ts";
 import {
   awaited,
   mountedExecution,
-  mountedReading,
   operationGate,
   useMountedHost,
 } from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/mounted-page.ts";
 import { draft, entrySettles, shows, sidekick } from "./support/repl-page-adapters.ts";
 import { encodeLocation } from "../src/repl/route.ts";
@@ -2551,7 +2551,7 @@ describe("975 — placement survives cold Submit reconciliation", () => {
         });
         yield* sidekick(page).send("start and wait");
         yield* awaited("the admitted entry to wait", () => observed.length === 1);
-        const read = yield* mountedReading(repl);
+        const read = yield* settledReading(repl);
         expect(read.model.entries[0]?.source).toBe(source);
         expect(read.model.entries[0]?.settled).toBe(false);
       });
@@ -2606,7 +2606,7 @@ describe("975 — placement survives cold Submit reconciliation", () => {
         expect(observed.at(-1)).toBe(where);
         expect(yield* until(readFile(join(where, "suffix.md"), "utf8"))).toBe("continued");
         expect(yield* cwd()).toBe(project);
-        const read = yield* mountedReading(repl);
+        const read = yield* settledReading(repl);
         expect(read.model.entries[0]?.source).toBe(source);
       });
     });

@@ -115,7 +115,8 @@ import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import { useReplPage } from "./support/mounted-page.ts";
 import type { PageControl, PageFrame, ReplPage } from "./support/mounted-page.ts";
-import { mountedReading } from "./support/mounted-repl.ts";
+import {} from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import {
   draft as draftOf,
   drawer as drawerOf,
@@ -5074,7 +5075,7 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     // C1: a real nested scope is selected, and the breadcrumb beside Entries
     // says the ancestry it resolved to. The scope is read from the history on
     // disk, so a run that stopped admitting it fails here.
-    const { model } = yield* mountedReading(page.repl);
+    const { model } = yield* settledReading(page.repl);
     expect(model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2"]);
     const entry = model.entries[model.entries.length - 1];
     const nested = entry?.scope.scopes[0];
@@ -5219,7 +5220,7 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
       frozen: page.frame().has("footer:live"),
     });
     const standing = function* () {
-      const read = yield* mountedReading(page.repl);
+      const read = yield* settledReading(page.repl);
       return {
         entries: read.model.entries.length,
         chat: read.chat.length,
@@ -5778,7 +5779,7 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
 describe("Checkpoint #971 A4 — current outcomes, work and the waiting question", () => {
   it("A4: every outcome, work identity and the waiting question read from the current screen", function* () {
     const page = yield* reachOutcomes(WIDE);
-    const { model } = yield* mountedReading(page.repl);
+    const { model } = yield* settledReading(page.repl);
     expect(model.entries.map((one) => one.terminal?.status ?? "unfinished")).toEqual([
       "ok",
       "err",

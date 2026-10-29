@@ -27,12 +27,12 @@ import {
   awaited,
   awaitedFact,
   mountedExecution,
-  mountedReading,
   MOUNTED_AGENT,
   operationGate,
   OTHER_MOUNTED_AGENT,
   useMountedHost,
 } from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import type { AppendGate, MountedHost, MountedRepl } from "./support/mounted-repl.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { useReplPage } from "./support/mounted-page.ts";
@@ -266,7 +266,7 @@ function* ask(page: ReplPage, text: string): Operation<void> {
 /** Wait until this command's chat history holds at least this many replies. */
 function* repliesSaved(repl: MountedRepl, count: number): Operation<void> {
   yield* awaitedFact(`this chat saving ${count} replies`, function* () {
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     return read.chat.filter((one) => one.kind === "response").length >= count;
   });
 }
@@ -603,7 +603,7 @@ describe("Tier MP — the message box is cleared by the message that was saved",
     yield* page.until("the reply arriving", (one) => shows(one, "Understood."));
 
     // Saved and sent is the text Send captured, not what the box held later.
-    expect(chatMessages((yield* mountedReading(repl)).chat)).toEqual(["ask"]);
+    expect(chatMessages((yield* settledReading(repl)).chat)).toEqual(["ask"]);
     expect(fake.prompts[0]).toContain("ask");
     expect(fake.prompts[0]).not.toContain("ask!");
     // The acknowledgement cleared its own revision and nothing newer.
@@ -652,7 +652,7 @@ describe("Tier MP — a working Sidekick, and what reaches the screen while it w
     yield* page.type("\r\r");
     yield* fake.holdingTurns(1);
     expect(fake.prompts).toHaveLength(1);
-    expect(chatMessages((yield* mountedReading(repl)).chat)).toEqual(["ask"]);
+    expect(chatMessages((yield* settledReading(repl)).chat)).toEqual(["ask"]);
 
     // This pane's Send is gone and its Stop is there; the draft keeps its own.
     yield* page.until("the pane working, with Stop as its control", (one) =>
@@ -831,7 +831,7 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
     yield* sidekick(page).send("run two");
     yield* page.until("the second entry being reported", (one) => saidBySidekick(one, "Both ran."));
     expect(yield* markedEntry(page, "entry-1")).toBe(true);
-    expect((yield* mountedReading(repl)).model.entries).toHaveLength(2);
+    expect((yield* settledReading(repl)).model.entries).toHaveLength(2);
     expect(shows(page.frame(), "the released step")).toBe(true);
 
     // Bindings still switches, and reads that same entry.
@@ -940,7 +940,7 @@ function* submittedUnderEdit(edit: boolean): Operation<{
   allow.resolve();
   yield* page.until("the response completing", (one) => shows(one, "Done."));
 
-  const read = yield* mountedReading(repl);
+  const read = yield* settledReading(repl);
   return {
     entries: read.model.entries.map((entry) => entry.key),
     draft: draft(page).text(),
@@ -1542,9 +1542,9 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
     yield* configure(page).closed();
     yield* page.until("Configure closing on the save", (one) => one.has("sidekick:send"));
     yield* awaitedFact("the preference being saved", function* () {
-      return (yield* mountedReading(repl)).chat.some((record) => record.kind === "preferences");
+      return (yield* settledReading(repl)).chat.some((record) => record.kind === "preferences");
     });
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const saved = read.chat.filter((record) => record.kind === "preferences");
     expect(saved).toHaveLength(1);
     expect(saved[0]).toMatchObject({ model: `model-${many.length}` });
@@ -1682,7 +1682,7 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
     // The next Escape is Configure's: nothing saved, and the choice goes with it.
     yield* page.key("Escape");
     yield* page.until("Configure closing", (one) => !shows(one, "[refresh]"));
-    expect((yield* mountedReading(repl)).chat.some((one) => one.kind === "preferences")).toBe(
+    expect((yield* settledReading(repl)).chat.some((one) => one.kind === "preferences")).toBe(
       false,
     );
     expect(draft(page).text()).toBe("note");
@@ -1807,7 +1807,7 @@ describe("Tier SS — Sessions shows two owners, each in its own order", () => {
     // elided and a row read through an elision cannot establish an absence:
     // the entry turn is recorded when its own history holds it, and that is
     // the fact this claim is about.
-    const holding = yield* mountedReading(repl);
+    const holding = yield* settledReading(repl);
     expect(holding.model.turns).toEqual([]);
 
     repl.fake.releaseTurn();
@@ -1823,7 +1823,7 @@ describe("Tier SS — Sessions shows two owners, each in its own order", () => {
 
     // And the entry journal holds not one Sidekick record. The two histories
     // are two files, and this is the one that says so.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.model.turns).toHaveLength(1);
     expect(read.model.turns[0]?.input).toBe("ask-entry");
     expect(read.chat.some((record) => record.kind === "message")).toBe(true);
@@ -1977,12 +1977,12 @@ describe("Tier SS — an older chat is read, and only read", () => {
     yield* sidekick(page).composer.type("not sent yet");
     expect(sidekick(page).composer.text()).toBe("not sent yet");
     // And a selected entry, so the left surface can be shown to survive.
-    const entries = (yield* mountedReading(repl)).model.entries.length;
+    const entries = (yield* settledReading(repl)).model.entries.length;
     expect(entries).toBe(0);
 
     const before = repl.fake.prompts.length;
     const sessionsBefore = repl.fake.ensured.length;
-    const chatBefore = (yield* mountedReading(repl)).chat.length;
+    const chatBefore = (yield* settledReading(repl)).chat.length;
 
     // The older turn, activated from the Sessions reading by the mounted
     // control. Nothing here reaches the owner.
@@ -2020,8 +2020,8 @@ describe("Tier SS — an older chat is read, and only read", () => {
     // Selecting a reading started nothing, wrote nothing and stopped nothing.
     expect(repl.fake.prompts).toHaveLength(before);
     expect(repl.fake.ensured).toHaveLength(sessionsBefore);
-    expect((yield* mountedReading(repl)).chat).toHaveLength(chatBefore);
-    expect((yield* mountedReading(repl)).model.entries).toHaveLength(entries);
+    expect((yield* settledReading(repl)).chat).toHaveLength(chatBefore);
+    expect((yield* settledReading(repl)).model.entries).toHaveLength(entries);
 
     // Back restores the current chat and the message that was never sent.
     yield* page.press("sidekick:back");
@@ -2192,7 +2192,7 @@ describe("Tier SS — an older chat is read, and only read", () => {
 
     /** The older chat's own rows, composed from the real history as it stands. */
     const olderRows = function* (): Operation<readonly ReplSidekickChatRow[]> {
-      const read = yield* mountedReading(repl);
+      const read = yield* settledReading(repl);
       const projected = projectSidekick(read.chat);
       if (!projected.ok) {
         throw projected.error;
@@ -2592,7 +2592,7 @@ describe("Tier SS — a real gap, and a turn nothing answered", () => {
 
     // The real history, read back, and the rows it composes. The divergence is
     // present: the saved reply's own response record is not numbered one.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const projected = projectSidekick(read.chat);
     if (!projected.ok) {
       throw projected.error;
@@ -3170,7 +3170,7 @@ function* stoppedBeforeAppend(stopped: boolean): Operation<void> {
 
     // And the history says the same. The chat holds the message somebody sent;
     // whether it holds a turn is exactly what the hold decided.
-    const after = yield* mountedReading(repl);
+    const after = yield* settledReading(repl);
     expect(chatMessages(after.chat)).toEqual(["stop me"]);
     const prompts = after.chat.filter((record) => {
       if (record.kind !== "event") {
@@ -3319,7 +3319,7 @@ describe("Tier SS — the filter both sections share", () => {
     // is membership for its own live row, acknowledged or not.
     expect(transcriptShows(page.frame(), "say it")).toBe(true);
     // And nothing is saved: the append is still in flight.
-    expect(chatMessages((yield* mountedReading(repl)).chat)).toEqual(["say it"]);
+    expect(chatMessages((yield* settledReading(repl)).chat)).toEqual(["say it"]);
 
     // The append let go so the cycle can come down, and then Stop. What this
     // row is about is the filter surviving that; the boundary *before* the
@@ -3362,7 +3362,7 @@ describe("Tier SS — the filter both sections share", () => {
       // recorded checkpoint behind it.
       yield* submitEntry(page, TWO_STEP_ENTRY);
       yield* entrySettles(page, 1, "ok");
-      const first = yield* mountedReading(repl);
+      const first = yield* settledReading(repl);
       marker = first.model.checkpoints[first.model.checkpoints.length - 1]?.marker ?? "";
       expect(marker).not.toBe("");
 
@@ -3378,7 +3378,7 @@ describe("Tier SS — the filter both sections share", () => {
       yield* page.until("the Sidekick at rest", sidekickIdle);
 
       execution = yield* mountedExecution(repl);
-      const read = yield* mountedReading(repl);
+      const read = yield* settledReading(repl);
       entryKey = read.model.turns.map((one) => one.sessionKey).find((one) => one.length > 0) ?? "";
       const chat = projectSidekick(read.chat);
       if (!chat.ok) {
@@ -3499,7 +3499,7 @@ describe("Tier SS — what reaches the screen, and at every size", () => {
 
     // The provider's turn really is saved, and no reply has been published
     // against it: the two facts the row is separating are both on disk.
-    const saved = yield* mountedReading(repl);
+    const saved = yield* settledReading(repl);
     expect(
       saved.chat.filter(
         // Narrowed by the discriminant the record already carries.
@@ -3792,7 +3792,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
 
     // And what was saved is complete, whatever the window is showing.
     yield* repliesSaved(repl, 2);
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const replies = read.chat.filter((record) => record.kind === "response");
     expect(replies).toHaveLength(2);
     expect(JSON.stringify(replies[0])).toContain("one-C");
@@ -3808,7 +3808,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     // Acknowledged on disk, which is what makes the screen's answer a fact
     // about a chat rather than about a script.
     yield* repliesSaved(repl, 12);
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.chat.filter((record) => record.kind === "response")).toHaveLength(12);
 
     // The newest reply, with nothing pressed to bring it into view.
@@ -3949,7 +3949,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     const fed = repl.terminal.fed;
     // Nothing is saved: this is a preview, and the provider is still holding.
     expect(
-      (yield* mountedReading(repl)).chat.filter((one) => one.kind === "response"),
+      (yield* settledReading(repl)).chat.filter((one) => one.kind === "response"),
     ).toHaveLength(0);
     // Its own earlier rows moved up rather than being drawn over.
     expect(paneShows(page.frame(), "BEGIN")).toBe(false);
@@ -3959,7 +3959,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     yield* page.until("the grown preview's new last row", (one) => paneShows(one, "TAIL-LAST"));
     expect(repl.terminal.fed).toBe(fed);
     expect(
-      (yield* mountedReading(repl)).chat.filter((one) => one.kind === "response"),
+      (yield* settledReading(repl)).chat.filter((one) => one.kind === "response"),
     ).toHaveLength(0);
 
     // Released, it settles as the same item: one response, still showing its
@@ -3974,7 +3974,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     // And the reply itself, acknowledged: the control coming back is the pane
     // saying it is idle, and the record is what says the turn was kept.
     yield* repliesSaved(repl, 1);
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const responses = read.chat.filter((one) => one.kind === "response");
     expect(responses).toHaveLength(1);
     expect(responses[0]).toMatchObject({ response: "response:1", hasOutput: true });
@@ -4010,7 +4010,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     );
 
     // Saved, and this reading did not jump to it.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(JSON.stringify(read.chat)).toContain("ANSWER-13");
     expect(chatRows(page.frame())).not.toContain(`[S] ANSWER-13`);
     expect(chatRows(page.frame())).toEqual(held);
@@ -4162,7 +4162,7 @@ describe("Tier MC — the message composer wraps and grows", () => {
     yield* page.until("the reply arriving", (one) => shows(one, "Understood."));
 
     // Exactly one message, and it is the literal text Send captured.
-    expect(chatMessages((yield* mountedReading(repl)).chat)).toEqual([typed]);
+    expect(chatMessages((yield* settledReading(repl)).chat)).toEqual([typed]);
     expect(repl.fake.prompts).toHaveLength(1);
     expect(repl.fake.prompts[0]).toContain("LINE-1");
     expect(repl.fake.prompts[0]).toContain("LINE-9");
@@ -4183,7 +4183,7 @@ describe("Tier MC — the message composer wraps and grows", () => {
     yield* page.until("the reply arriving", (one) => shows(one, "Done."));
     // Cleared, and back to the one blank row the box starts at.
     expect(composer(page)).toEqual([""]);
-    expect(chatMessages((yield* mountedReading(repl)).chat)).toEqual(["one\ntwo\nthree"]);
+    expect(chatMessages((yield* settledReading(repl)).chat)).toEqual(["one\ntwo\nthree"]);
   });
 
   it("MC7: the value, its focus and its height survive every size and a held turn", function* () {
@@ -4304,7 +4304,7 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
     yield* page.until("the draft being consumed by its entry", () => draft(page).text() === "");
     yield* page.until(`the entry printing ${JSON.stringify(shown)}`, (one) => shows(one, shown));
     yield* awaitedFact(`the history recording ${recorded} entries`, function* () {
-      return (yield* mountedReading(page.repl)).model.entries.length >= recorded;
+      return (yield* settledReading(page.repl)).model.entries.length >= recorded;
     });
     // And the rail marking it settled, which the recorded model does not imply.
     // The band carries the entry from the moment it is admitted and widens
@@ -4320,7 +4320,7 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
   /** Wait until the retained feedback holds a receipt that says this. */
   function* receiptSaved(repl: MountedRepl, said: string): Operation<void> {
     yield* awaitedFact(`the receipt saying ${JSON.stringify(said)} being saved`, function* () {
-      return (yield* mountedReading(repl)).chat.some(
+      return (yield* settledReading(repl)).chat.some(
         (one) => one.kind === "feedback" && one.text.includes(said),
       );
     });
@@ -4403,7 +4403,7 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
         const page = yield* useReplPage({ host });
         yield* runs(page, FIRST, "the first entry", 1);
         yield* runs(page, SECOND, "the second entry", 2);
-        expect((yield* mountedReading(page.repl)).model.entries).toHaveLength(2);
+        expect((yield* settledReading(page.repl)).model.entries).toHaveLength(2);
         if (arm.historical) {
           yield* freezeAt(page, FIRST_OUTCOME);
         }
@@ -4434,7 +4434,7 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
         yield* page.until("the third entry printing", (one) => shows(one, "the third entry"));
         yield* receiptSaved(repl, "Entry entry-3 completed.");
 
-        const read = yield* mountedReading(repl);
+        const read = yield* settledReading(repl);
         const intent = lastSubmit(read.chat);
         // The entry that actually ran, and what the person is told about it.
         expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
@@ -4493,7 +4493,7 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
       yield* entrySettles(page, 3, "err");
       yield* receiptSaved(repl, "Entry entry-3 failed.");
 
-      const read = yield* mountedReading(repl);
+      const read = yield* settledReading(repl);
       const intent = lastSubmit(read.chat);
       // Three entries, the third this one, and the earlier two untouched.
       expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
@@ -4572,7 +4572,7 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
     // that goes back to the head is still the one being offered.
     expect(page.frame().has("footer:live")).toBe(true);
 
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const intent = lastSubmit(read.chat);
     expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
     expect(read.model.entries[2]?.terminal?.status).toBe("err");
@@ -4638,7 +4638,7 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
       yield* draft(page).type(THIRD);
       yield* page.key("Enter");
       yield* lingering();
-      expect((yield* mountedReading(repl)).model.entries).toHaveLength(2);
+      expect((yield* settledReading(repl)).model.entries).toHaveLength(2);
       expect(draft(page).text()).toContain(THIRD);
 
       // Live again, and the same Run admits the next entry — the third, with
@@ -4655,7 +4655,7 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
         () => !draft(page).text().includes(THIRD),
       );
 
-      const read = yield* mountedReading(repl);
+      const read = yield* settledReading(repl);
       expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
       expect(read.model.entries[2]?.source).toBe(THIRD);
     });

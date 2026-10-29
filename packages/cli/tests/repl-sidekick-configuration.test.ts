@@ -43,9 +43,9 @@ import {
   awaited,
   awaitedFact,
   MOUNTED_AGENT,
-  mountedReading,
   OTHER_MOUNTED_AGENT,
 } from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/mounted-page.ts";
 import type { PageFrame, ReplPage } from "./support/mounted-page.ts";
@@ -1120,7 +1120,7 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
       // Refused before anything was retained: no person message in the
       // history, nothing asked of the agent, and the text still in the box for
       // them to send when the inspection is done.
-      const read = yield* mountedReading(repl);
+      const read = yield* settledReading(repl);
       expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(0);
       expect(repl.fake.prompts).toEqual([]);
       expect(sidekick(page).composer.text().includes("during")).toBe(true);
@@ -1148,7 +1148,7 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     yield* config.close();
 
     yield* conversed(page, "during", "Asked and answered.");
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(1);
     expect(repl.fake.prompts).toHaveLength(1);
   });
@@ -1548,7 +1548,7 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     // The new conversation was really activated — read from the history rather
     // than inferred from the screen.
     yield* awaitedFact("the new conversation being activated", function* (): Operation<boolean> {
-      const read = yield* mountedReading(repl);
+      const read = yield* settledReading(repl);
       return read.chat.some(
         (record) =>
           record.kind === "conversation" &&
@@ -1888,7 +1888,7 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     // One order, on disk: the response that was being written, and then the
     // preference that waited for it. Read back through the projection, so this
     // is the history as everything else reads it.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const kinds = read.chat.map((record) => record.kind);
     expect(kinds.indexOf("preferences")).toBeGreaterThan(kinds.lastIndexOf("response"));
     expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
@@ -1916,7 +1916,7 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
       return (yield* savedPreference(repl)) !== undefined;
     });
     yield* config.closed();
-    const first = yield* mountedReading(repl);
+    const first = yield* settledReading(repl);
     const before = first.chat.filter((record) => record.kind === "preferences");
     expect(before).toHaveLength(1);
     const owning = before[0]?.kind === "preferences" ? before[0].conversation : undefined;
@@ -1949,7 +1949,7 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
         // The beginning of it, which is what this pane's width holds.
         config.shows("the Sidekick is already doing"),
       );
-      const during = yield* mountedReading(repl);
+      const during = yield* settledReading(repl);
       expect(during.chat.filter((record) => record.kind === "preferences")).toHaveLength(1);
 
       cancelling.release();
@@ -1976,11 +1976,11 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     yield* config.chooseModel("balanced");
     yield* config.apply();
     yield* awaitedFact("the second conversation's preference", function* (): Operation<boolean> {
-      const read = yield* mountedReading(repl);
+      const read = yield* settledReading(repl);
       return read.chat.filter((record) => record.kind === "preferences").length === 2;
     });
 
-    const after = yield* mountedReading(repl);
+    const after = yield* settledReading(repl);
     const saved = after.chat.flatMap((record) =>
       record.kind === "preferences"
         ? [{ conversation: record.conversation, model: record.model }]
@@ -2028,7 +2028,7 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     );
 
     // One new message, carrying the old request's own literal text.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const asked = read.chat.filter((record) => record.kind === "message");
     expect(asked).toHaveLength(2);
     expect(asked.map((record) => (record.kind === "message" ? record.text : ""))).toEqual([
@@ -2073,7 +2073,7 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     expect(shows(page.frame(), "[retry]")).toBe(false);
     // The attempt itself was kept: this is about what is offered, not about
     // rewriting what happened.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(2);
     expect(shows(page.frame(), "(unfinished)")).toBe(true);
     expect(repl.fake.prompts).toHaveLength(2);
@@ -2209,10 +2209,10 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     // And both results really came back: the entry rendered its Agent's answer,
     // and the Sidekick's chat holds its own reply.
     yield* awaitedFact("the entry's record", function* (): Operation<boolean> {
-      const held = yield* mountedReading(repl);
+      const held = yield* settledReading(repl);
       return held.model.entries[0]?.terminal?.output?.includes(ANSWERED) === true;
     });
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.model.entries).toHaveLength(1);
     expect(read.model.entries[0]?.terminal?.output).toContain(ANSWERED);
     // Read by the attribution mark this pane spells its origins with: the

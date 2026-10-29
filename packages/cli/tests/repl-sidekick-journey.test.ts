@@ -62,10 +62,10 @@ import {
   awaitedFact,
   awaited,
   MOUNTED_AGENT,
-  mountedReading,
   useMountedHost,
   mountedExecution,
 } from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/mounted-page.ts";
 import type { ReplPage } from "./support/mounted-page.ts";
@@ -1120,7 +1120,7 @@ function paneRows(page: ReplPage): string[] {
  */
 function* savedReplies(repl: MountedRepl, count: number): Operation<void> {
   yield* awaitedFact(`this chat saving ${count} replies`, function* () {
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     return read.chat.filter((one) => one.kind === "response").length >= count;
   });
 }
@@ -1135,7 +1135,7 @@ function* savedReplies(repl: MountedRepl, count: number): Operation<void> {
  * missing is asking it about the gaps between what it drew.
  */
 function* composedChat(repl: MountedRepl): Operation<readonly string[]> {
-  const read = yield* mountedReading(repl);
+  const read = yield* settledReading(repl);
   const known = yield* projected(read.chat);
   return sidekickChatLines(
     Object.freeze({
@@ -1229,7 +1229,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // And nothing of it has happened. The controls are in the *second* piece,
     // so this is before them — but nothing from the first has run either: no
     // control pair, no entry, no reply.
-    const during = yield* mountedReading(repl);
+    const during = yield* settledReading(repl);
     expect(during.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(during.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(during.model.entries).toEqual([]);
@@ -1268,7 +1268,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // has run: no control pair, no fill, no entry. This is the boundary the
     // claim is about, because source nobody completed is not a program.
     yield* repl.fake.streamingTurns(1);
-    const complete = yield* mountedReading(repl);
+    const complete = yield* settledReading(repl);
     expect(complete.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(complete.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(complete.model.entries).toEqual([]);
@@ -1281,7 +1281,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // Still a preview while its controls run: nothing has been evaluated into
     // a reply.
     expect(shows(page.frame(), `${MOUNTED_AGENT} (preview): Half a thought.`)).toBe(true);
-    const running = yield* mountedReading(repl);
+    const running = yield* settledReading(repl);
     expect(running.chat.filter((record) => record.kind === "response")).toEqual([]);
 
     // Released: the entry settles, the response is evaluated, and the same item
@@ -1290,7 +1290,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     yield* page.until("the evaluated reply", (one) => saidBySidekick(one, "Half a thought."));
     yield* page.until("the Sidekick at rest", sidekickIdle);
     expect(shows(page.frame(), "(preview)")).toBe(false);
-    const after = yield* mountedReading(repl);
+    const after = yield* settledReading(repl);
     // One response record for the turn that was being previewed, and exactly
     // one: the item a person watched arrive is the item they are reading.
     const answered = after.chat.filter(
@@ -1353,7 +1353,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
       }
       // Nothing about a prefix is executed, however complete it reads: a
       // syntactically whole region is not permission to run anything.
-      const during = yield* mountedReading(repl);
+      const during = yield* settledReading(repl);
       expect(during.chat.filter((record) => record.kind === "response")).toEqual([]);
       expect(during.model.entries).toEqual([]);
       // The interpolation waits rather than being guessed at, and a passive
@@ -1369,7 +1369,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     yield* repl.fake.streamingTurns(1);
     expect(previewGeneratedXmdRoot(pieces.join("")).ok).toBe(false);
     yield* page.until("the body being withdrawn", (one) => !shows(one, "(preview)"));
-    const withdrawn = yield* mountedReading(repl);
+    const withdrawn = yield* settledReading(repl);
     expect(withdrawn.chat.filter((record) => record.kind === "response")).toEqual([]);
     // And no source is shown in its place.
     expect(shows(page.frame(), "<Output>")).toBe(false);
@@ -1377,7 +1377,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // Settled on what the files say: the response record is what ends this
     // turn, and the screen follows it.
     yield* awaitedFact("the response record", function* () {
-      return (yield* mountedReading(repl)).chat.some((record) => record.kind === "response");
+      return (yield* settledReading(repl)).chat.some((record) => record.kind === "response");
     });
     yield* page.until("the Sidekick at rest", sidekickIdle);
     expect(shows(page.frame(), "(preview)")).toBe(false);
@@ -1395,7 +1395,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     );
     // The history as it stood while that preview was on the screen: the
     // person's message and no response at all.
-    const during = (yield* mountedReading(repl)).chat;
+    const during = (yield* settledReading(repl)).chat;
     expect(during.filter((record) => record.kind === "response")).toEqual([]);
 
     repl.fake.releaseDeltas();
@@ -1407,9 +1407,9 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // evaluation had just taken. So the fact this row goes on to read is the
     // one it waits for.
     yield* awaitedFact("the reply reaching the published chat", function* () {
-      return (yield* mountedReading(repl)).chat.some((record) => record.kind === "response");
+      return (yield* settledReading(repl)).chat.some((record) => record.kind === "response");
     });
-    const after = (yield* mountedReading(repl)).chat;
+    const after = (yield* settledReading(repl)).chat;
     const answered = after.flatMap((record) =>
       record.kind === "response"
         ? [{ response: record.response, conversation: record.conversation }]
@@ -1585,7 +1585,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     );
     // And every record is still there: both saved turns, the control's own
     // intent and outcome, and the feedback that carried it.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const known = yield* projected(read.chat);
     expect(known.turns.map((turn) => turn.turn)).toEqual([1, 2]);
     expect(known.turns.map((turn) => turn.status)).toEqual(["completed", "completed"]);
@@ -1625,7 +1625,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     yield* page.until("the recorded reason", (one) => shows(one, `${MOUNTED_AGENT} (failed):`));
     // Its own recorded reason, and not a status this screen composed: what the
     // row says is what the history holds.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const known = yield* projected(read.chat);
     const failed = known.chat.find((item) => item.kind === "reply");
     if (failed === undefined || failed.kind !== "reply") {
@@ -1680,7 +1680,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     );
 
     // One entry ran, from the source the reply captured with its fence intact.
-    const first = yield* mountedReading(repl);
+    const first = yield* settledReading(repl);
     expect(first.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
     expect(first.model.entries[0]?.source).toContain("```js eval");
     expect(first.model.entries[0]?.source).toContain("Hello from the reply.");
@@ -1710,7 +1710,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     yield* sidekick(page).send("table");
     yield* page.until("the revision being answered", (one) => saidBySidekick(one, "Revised it."));
 
-    const second = yield* mountedReading(repl);
+    const second = yield* settledReading(repl);
     const conversations = new Set(
       second.chat.flatMap((record) => (record.kind === "message" ? [record.conversation] : [])),
     );
@@ -1774,7 +1774,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       yield* sidekick(page).send("run one");
       yield* page.until("the first receipt", (one) => saidBySidekick(one, "That is one."));
 
-      const after = yield* mountedReading(repl);
+      const after = yield* settledReading(repl);
       execution = after.execution;
       expect(after.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
       // The position as it stands with one entry admitted, for the prefix arm
@@ -1794,7 +1794,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // record names, the state the model holds it in, and what it actually
       // printed. The entry's own words and the reply's are different strings,
       // so a row carrying the reply's wording could not pass for either.
-      const live = yield* mountedReading(repl);
+      const live = yield* settledReading(repl);
       expect(live.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
       const pane = paneRows(page);
       const at = (said: string): number => pane.findIndex((row) => row.includes(said));
@@ -1821,7 +1821,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       yield* page.until("the refusal going back", (one) =>
         sidekickShows(one, "I will prepare source first."),
       );
-      const refused = yield* mountedReading(repl);
+      const refused = yield* settledReading(repl);
       expect(refused.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
       const after3 = paneRows(page);
       const said = after3.findIndex((row) => row.includes("I will prepare source first."));
@@ -1850,7 +1850,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
 
       // Retained, and retained as refused: an intent with a reservation, and
       // an outcome saying it ended without one. Nothing was admitted.
-      const held = yield* mountedReading(repl);
+      const held = yield* settledReading(repl);
       expect(held.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
       // The reservation this message took, which is the last one written: the
       // two before it are the entries that really ran.
@@ -1886,7 +1886,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       yield* page.key("Enter");
       yield* page.until("the manual entry running", (one) => shows(one, "The manual entry ran."));
       yield* entrySettles(page, 3, "ok");
-      const manual = yield* mountedReading(repl);
+      const manual = yield* settledReading(repl);
       // The same slot, the same key and the same source — every coordinate the
       // reservation named.
       const took = manual.model.entries[intent.submit.ordinal];
@@ -2099,14 +2099,14 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     // What the draft is holding, and what has run: a fill alone starts nothing,
     // so the seed is still the only entry there is.
     const heldDraft = draft(page).text();
-    const held = yield* mountedReading(repl);
+    const held = yield* settledReading(repl);
 
     repl.fake.releaseTurn();
     yield* page.until("the reply answering about its own entry", (one) =>
       saidBySidekick(one, "Thanks for the receipt."),
     );
 
-    const after = yield* mountedReading(repl);
+    const after = yield* settledReading(repl);
 
     // A second message in the same conversation, revising the same names as a
     // table. It prepares and submits in one response, so nothing is held.
@@ -2116,7 +2116,7 @@ describe("Tier TE — a published binding becomes real greetings, and then a rea
     yield* sidekick(page).send("table");
     yield* page.until("the table being answered", (one) => saidBySidekick(one, "Table receipt."));
 
-    const finished = yield* mountedReading(repl);
+    const finished = yield* settledReading(repl);
     const conversations = new Set(
       finished.chat
         .filter((record) => record.kind === "message")
@@ -2252,7 +2252,7 @@ describe("Tier TE — a failed entry is corrected as a new entry", () => {
       saidBySidekick(one, "Corrected it."),
     );
 
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const [failed, corrected] = read.model.entries;
 
     // The first entry really ran and really failed, with its own reason.
@@ -3264,7 +3264,7 @@ describe("975 — the shipped session component journey", () => {
       yield* page.until("the taught journey to finish", (one) =>
         saidBySidekick(one, "Read the session greeting."),
       );
-      const read = yield* mountedReading(repl);
+      const read = yield* settledReading(repl);
       expect(read.model.entries.map((entry) => entry.source)).toEqual([
         '<File path="components/Greeting.md">Hello from this session.</File>',
         "<Greeting />",
@@ -3480,7 +3480,7 @@ describe("975 — configured-first lookup and unchanged permissions", () => {
     yield* page.until("the selected greeting", (one) =>
       saidBySidekick(one, "Configured greeting completed."),
     );
-    const selected = yield* mountedReading(repl);
+    const selected = yield* settledReading(repl);
     expect(selected.model.entries[0]?.terminal?.output).toBe("Configured greeting.");
     expect(repl.fake.prompts[1]).toContain(join(configured, "Greeting.md"));
     expect(repl.fake.prompts[1]).not.toContain("Session collision.");
@@ -3496,7 +3496,7 @@ describe("975 — configured-first lookup and unchanged permissions", () => {
     yield* page.until("the selected-definition refusal", (one) =>
       saidBySidekick(one, "Inspected the malformed definition."),
     );
-    const refused = yield* mountedReading(repl);
+    const refused = yield* settledReading(repl);
     expect(refused.model.entries).toHaveLength(1);
     expect(repl.fake.prompts[4]).toContain("REPL.Submit");
     expect(repl.fake.prompts[4]).not.toContain("Later fallback must not execute.");
@@ -3525,7 +3525,7 @@ describe("975 — configured-first lookup and unchanged permissions", () => {
       saidBySidekick(one, "Inspected the denied write."),
     );
     expect(yield* until(readdir(join(workspace, "components")))).toEqual([]);
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.model.entries).toHaveLength(1);
     expect(read.model.entries[0]?.terminal?.output).toContain("permission");
     expect(repl.fake.prompts[2]).toContain("permission");

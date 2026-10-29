@@ -56,7 +56,8 @@ import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { denoReplEntry } from "../src/deno-repositories.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { mountedReading } from "./support/mounted-repl.ts";
+import {} from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/mounted-page.ts";
 import { shows, sidekick } from "./support/repl-page-adapters.ts";
 import { createRepositoryRoot, runPhase } from "./fixtures/repl/issue-883/host.ts";
@@ -1201,7 +1202,7 @@ describe("975 — native Git keeps project selection and requires an authored ch
     repl.fake.script({ reply: "<Output>Read the project checkout.</Output>" });
     yield* sidekick(page).send("read the known project checkout");
     yield* page.until("the project read", (one) => shows(one, "Read the project checkout."));
-    expect((yield* mountedReading(repl)).model.entries[0]?.terminal?.output).toContain(
+    expect((yield* settledReading(repl)).model.entries[0]?.terminal?.output).toContain(
       "request.md",
     );
     repl.fake.script({

@@ -24,13 +24,8 @@ import { testForSidekick, take } from "../src/repl/sidekick/admission.ts";
 import { encodeLocation } from "../src/repl/route.ts";
 import { initialState } from "../src/repl/application.ts";
 import { useHarness, useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import {
-  awaited,
-  awaitedFact,
-  mountedExecution,
-  mountedReading,
-  useMountedHost,
-} from "./support/mounted-repl.ts";
+import { awaited, awaitedFact, mountedExecution, useMountedHost } from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/mounted-page.ts";
 import type { ReplPage } from "./support/mounted-page.ts";
@@ -104,13 +99,13 @@ function* exchange(page: ReplPage, replies: readonly string[]): Operation<void> 
   yield* sidekick(page).send(`run batch ${serial}`);
   yield* page.until(done, (frame) => shows(frame, done));
   yield* awaitedFact(`${done} being saved`, function* () {
-    return (yield* mountedReading(page.repl)).chat.some(
+    return (yield* settledReading(page.repl)).chat.some(
       (record) => record.kind === "response" && record.output.includes(done),
     );
   });
 }
 function* reports(repl: MountedRepl) {
-  return (yield* mountedReading(repl)).chat.flatMap((record) =>
+  return (yield* settledReading(repl)).chat.flatMap((record) =>
     record.kind === "control-outcome" &&
     record.observed !== undefined &&
     reportSchema.safeParse(record.observed).success
@@ -150,7 +145,7 @@ describe("REPL.Test accepted journeys", () => {
     yield* exchange(page, [create, "<REPL.Entry.Output entry={1} />"]);
     expect(yield* exists(join(workspace, "greeting.txt"))).toBe(false);
     expect(yield* reports(repl)).toEqual([]);
-    expect((yield* mountedReading(repl)).model.entries).toHaveLength(1);
+    expect((yield* settledReading(repl)).model.entries).toHaveLength(1);
     expect(yield* readTextFile(join(workspace, "components/Greeting.md"))).toBe(greeting);
     yield* exchange(page, [single]);
     expect((yield* reports(repl)).at(-1)?.status).toBe("passed");
@@ -172,7 +167,7 @@ describe("REPL.Test accepted journeys", () => {
     // the Entries catalog, and the catalog is a drawer on this screen: a reader
     // that waited for them would be waiting for a drawer nobody opened.
     yield* entrySettles(page, 5, "ok");
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.model.entries.slice(-2).map((entry) => entry.source)).toEqual([
       "<Greeting />",
       "<Greeting />",
@@ -202,7 +197,7 @@ describe("REPL.Test accepted journeys", () => {
       ]);
     }
     expect((yield* reports(repl)).map((report) => report.status)).toEqual(["passed", "passed"]);
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(
       read.model.entries
         .filter((entry) => entry.source === "<Direct />")
@@ -322,17 +317,17 @@ describe("REPL.Test selection, display and isolation", () => {
     ]);
     expect(repl.fake.prompts.join("\n")).toContain(join(configured, "Greeting.md"));
     expect((yield* reports(repl)).map((report) => report.status)).toEqual(["passed", "passed"]);
-    expect((yield* mountedReading(repl)).model.entries[0]?.terminal?.output).toBe(
+    expect((yield* settledReading(repl)).model.entries[0]?.terminal?.output).toBe(
       "configured greeting",
     );
-    const chat = (yield* mountedReading(repl)).chat.filter((record) => record.kind === "response");
+    const chat = (yield* settledReading(repl)).chat.filter((record) => record.kind === "response");
     expect(chat.slice(-3, -1).every((record) => !record.hasOutput && record.output === "")).toBe(
       true,
     );
     yield* exchange(page, [
       '<REPL.Test path="components/selection.test.md" as="tests" /><Output><Json value={tests} /></Output>',
     ]);
-    const withOutput = (yield* mountedReading(repl)).chat
+    const withOutput = (yield* settledReading(repl)).chat
       .filter((record) => record.kind === "response")
       .at(-2);
     expect(withOutput?.hasOutput).toBe(true);
@@ -366,7 +361,7 @@ describe("REPL.Test selection, display and isolation", () => {
       submit("<Json value={typeof documentOnly} />"),
       submit("<DocumentPrivate />"),
     ]);
-    const entries = (yield* mountedReading(repl)).model.entries;
+    const entries = (yield* settledReading(repl)).model.entries;
     expect(entries.map((entry) => ({ source: entry.source, terminal: entry.terminal }))).toEqual([
       expect.objectContaining({ source: '<Let as="rootOnly" value="entry value" /><Greeting />' }),
       expect.objectContaining({ source: "<Json value={typeof documentOnly} />" }),
@@ -386,7 +381,7 @@ describe("REPL.Test selection, display and isolation", () => {
       "fallback must not run",
     );
     expect(
-      (yield* mountedReading(repl)).chat.filter((record) => record.kind === "response").at(-2)
+      (yield* settledReading(repl)).chat.filter((record) => record.kind === "response").at(-2)
         ?.hasOutput,
     ).toBe(false);
     yield* writeTextFile(join(workspace, "protected.txt"), "canonical file");
@@ -700,7 +695,7 @@ describe("REPL.Test retained and fatal outcomes", () => {
       location: encodeLocation(initialState(id).route),
     });
     const reopened = reopenedPage.repl;
-    const reading = yield* mountedReading(reopened);
+    const reading = yield* settledReading(reopened);
     expect(reading.model.entries.at(-1)?.terminal?.output).toBe("historical greeting");
     expect((yield* reports(reopened))[0]?.status).toBe("passed");
     expect(host.fake.prompts).toHaveLength(prompts);
@@ -762,7 +757,7 @@ describe("REPL.Test retained and fatal outcomes", () => {
           yield* ensure(function* () {
             expect(later).toBe(0);
             expect(yield* reports(repl)).toEqual([]);
-            const read = yield* mountedReading(repl);
+            const read = yield* settledReading(repl);
             const failures = read.chat.filter(
               (record) => record.kind === "control-outcome" && record.outcome.status === "err",
             );
@@ -776,7 +771,7 @@ describe("REPL.Test retained and fatal outcomes", () => {
           yield* sidekick(page).send(`fail ${kind}`);
           if (kind === "cleanup") {
             yield* awaitedFact("the cleanup failure being recorded", function* () {
-              return (yield* mountedReading(repl)).chat.some(
+              return (yield* settledReading(repl)).chat.some(
                 (record) => record.kind === "control-outcome" && record.outcome.status === "err",
               );
             });
@@ -786,6 +781,13 @@ describe("REPL.Test retained and fatal outcomes", () => {
         }),
       ]);
       expect(checked).toBe(true);
+      if (kind === "cleanup" && result !== undefined && !result.ok) {
+        // Said rather than dropped. `allSettled` keeps this arm's own failure,
+        // and the arm that ends normally is the one this row is about — so a
+        // refused read inside it used to arrive as nothing but a `checked`
+        // that stayed false, which named neither the read nor the file.
+        throw result.error;
+      }
       if (kind !== "cleanup") {
         expect(result?.ok).toBe(false);
         if (result !== undefined && !result.ok) {

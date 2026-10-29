@@ -12,7 +12,8 @@ import { ReplHost } from "../src/repl/host.ts";
 import { SidekickOwnerError } from "../src/repl/sidekick/owner.ts";
 import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { awaitedFact, mountedReading } from "./support/mounted-repl.ts";
+import { awaitedFact } from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/mounted-page.ts";
 import { shows, sidekick } from "./support/repl-page-adapters.ts";
 
@@ -61,11 +62,11 @@ describe("shared Sidekick dispatch", () => {
     );
     yield* awaitedFact("both replies being saved", function* () {
       return (
-        (yield* mountedReading(repl)).chat.filter((record) => record.kind === "response").length ===
+        (yield* settledReading(repl)).chat.filter((record) => record.kind === "response").length ===
         2
       );
     });
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(repl.fake.prompts).toHaveLength(2);
     expect(read.model.entries[0]?.source).toBe("<Output>generated</Output>\n");
     expect(read.model.entries[0]?.terminal?.output).toContain("generated");

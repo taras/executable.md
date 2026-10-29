@@ -17,7 +17,8 @@ import { ENTRIES_FILE } from "../src/repl/sidekick/history.ts";
 import { useReplPage } from "./support/mounted-page.ts";
 import type { PageFrame, ReplPage } from "./support/mounted-page.ts";
 import { draft, drawer, sidekick } from "./support/repl-page-adapters.ts";
-import { appendGate, awaitedFact, mountedReading } from "./support/mounted-repl.ts";
+import { appendGate, awaitedFact } from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 
 const WIDE = { columns: 160, rows: 36 };
 const MEDIUM = { columns: 120, rows: 30 };
@@ -228,7 +229,7 @@ describe("Page M6 — Stop, pressed on the screen", () => {
 
     // No turn followed, and the submission's intent is retained with no outcome.
     expect(repl.fake.prompts).toHaveLength(1);
-    const stopped = yield* mountedReading(repl);
+    const stopped = yield* settledReading(repl);
     const controls = stopped.chat.filter((record) => record.kind === "control");
     const answered = new Set(
       stopped.chat
@@ -254,7 +255,7 @@ describe("Page M6 — Stop, pressed on the screen", () => {
       (frame.area("box:history")?.rows().join(" ") ?? "").includes("1 ✓"),
     );
     yield* awaitedFact("entry 1 closing on disk", function* () {
-      const read = yield* mountedReading(repl);
+      const read = yield* settledReading(repl);
       return read.model.entries[0]?.terminal?.status === "ok";
     });
 

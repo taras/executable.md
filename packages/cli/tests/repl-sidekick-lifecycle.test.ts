@@ -46,9 +46,9 @@ import {
   awaited,
   MOUNTED_AGENT,
   mountedExecution,
-  mountedReading,
   useMountedHost,
 } from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/mounted-page.ts";
 import type { ReplPage } from "./support/mounted-page.ts";
@@ -919,7 +919,7 @@ describe("Tier PV — generation that ended without a reply", () => {
 
     // None of its controls ran: no entry, no control pair, no reply — and no
     // automatic successor turn either.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.model.entries).toEqual([]);
     expect(read.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
@@ -984,7 +984,7 @@ describe("Tier PV — generation that ended without a reply", () => {
     yield* page.until("the attempt Stop left", (one) =>
       shows(one, `${MOUNTED_AGENT} (unfinished): As far as I`),
     );
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(read.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(shows(page.frame(), "[retry]")).toBe(false);
@@ -1046,7 +1046,7 @@ describe("Tier PV — generation that ended without a reply", () => {
     yield* page.until("the box being ready again", (one) => sidekickIdle(one));
     // Which response that reply was recorded as, and which turn it actually
     // ran as — read out of the history the command wrote.
-    const preceding = (yield* mountedReading(repl)).chat.flatMap((record) =>
+    const preceding = (yield* settledReading(repl)).chat.flatMap((record) =>
       record.kind === "response" ? [{ response: record.response, turn: record.turn }] : [],
     );
     expect(preceding).toHaveLength(1);
@@ -1070,7 +1070,7 @@ describe("Tier PV — generation that ended without a reply", () => {
     expect(shows(page.frame(), "Second attempt.")).toBe(true);
     // And the attempt is addressed by the turn it really became, which is the
     // one its own record holds.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const attempts = read.chat.flatMap((record) =>
       record.kind === "message" ? [record.turn] : [],
     );
@@ -1294,7 +1294,7 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
     expect(form(page).isOpen()).toBe(false);
     expect(page.frame().has("footer:asked")).toBe(false);
 
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     return {
       chat: read.chat,
       draft: draft(page).text(),
@@ -1477,7 +1477,7 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
 
     // Nothing was answered and nothing followed: the intent stands with no
     // outcome beside it, which is what an interrupted question is.
-    const stopped = yield* mountedReading(repl);
+    const stopped = yield* settledReading(repl);
     const intents = stopped.chat.filter(
       (record) => record.kind === "control" && record.component === "Elicit",
     );

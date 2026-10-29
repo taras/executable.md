@@ -595,6 +595,7 @@ function* phases(): Operation<unknown> {
   if (phase === "workspace-start" || phase === "workspace-continue") {
     const mounted = yield* until(import("../../../support/mounted-repl.ts"));
     const { useReplPage } = yield* until(import("../../../support/mounted-page.ts"));
+    const { settledReading } = yield* until(import("../../../support/mounted-history.ts"));
     const adapters = yield* until(import("../../../support/repl-page-adapters.ts"));
     const { denoReplEntry } = yield* until(import("../../../../src/deno-repositories.ts"));
     const project = join(dataRoot, "project");
@@ -679,7 +680,7 @@ function* phases(): Operation<unknown> {
       yield* page.until("the workspace entry's question", (one) =>
         adapters.shows(one, "waiting for an answer"),
       );
-      const read = yield* mounted.mountedReading(repl);
+      const read = yield* settledReading(repl);
       return {
         execution: id,
         workspace: location.directory,
@@ -692,7 +693,7 @@ function* phases(): Operation<unknown> {
     // row of the Entries catalog, which this screen keeps in a drawer — so the
     // settled state is read where the screen states it.
     yield* adapters.entrySettles(page, 1, "ok");
-    const read = yield* mounted.mountedReading(repl);
+    const read = yield* settledReading(repl);
     return {
       execution: id,
       live,
