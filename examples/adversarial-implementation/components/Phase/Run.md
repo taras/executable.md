@@ -133,7 +133,7 @@ mkdir -- {quotedAttempt}
 shasum -a 256 -- {rawQuoted} {resultQuoted}
 ```
 <If condition={hashes.exitCode !== 0}><Fail message="Accepted response hash receipt failed; preserve publication effects." /></If>
-<Dir path={attempt}><File path="response-acceptance.json"><Json value={{round:accepted.round,raw:accepted.rawPath,result:attempt + "/result.json",hashes:hashes.stdout,diagnostics:accepted.diagnostics}} /></File></Dir>
+<Dir path={attempt}><File path="response-acceptance.json"><Json value={{round:accepted.round,raw:accepted.rawPath,result:attempt + "/result.json",hashes:hashes.stdout,diagnostics:accepted.diagnostics,normalizations:accepted.normalizations}} /></File></Dir>
 <Phase.Event attempt={attempt} stage="result-saved" assignment={assignment} role={props.role} outcome={result.outcome} next={result.next} revision={result.revision} as="finished" />
 <Return value={result} />
 </Dir>

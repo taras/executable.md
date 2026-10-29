@@ -64,6 +64,83 @@ The roles use the normal agent permission policy. Running this example invokes
 paid native coding agents and permits the assigned implementation work. It does
 not authorize a push, merge, issue edit or PR edit.
 
+## Run a separate phase or continue a saved ticket
+
+Use these entries from the workflow repository when coordinating a separate
+review or advancing an existing ticket. They apply to ordinary commands; a
+running REPL can invoke the same `Phase.Run` and `Ticket.Continue` components.
+Keep the CLI and include directory on the selected workflow version. The
+assignment's `repository` selects the source checkout independently.
+
+For a separate phase, save one request file using the existing phase assignment:
+
+```json
+{
+  "role": "planner",
+  "session": "original-planner-session",
+  "attempt": "/absolute/path/to/work/review-1",
+  "initialize": false,
+  "inputPaths": ["/absolute/path/to/review-guide.md"],
+  "assignment": {
+    "phase": "review",
+    "work": "selected-task",
+    "repository": "/absolute/path/to/source",
+    "revision": "1111111111111111111111111111111111111111",
+    "priorRevision": null,
+    "request": "Review the committed change against the supplied guide.",
+    "changedPaths": [],
+    "artifacts": [],
+    "evidence": [],
+    "findings": [],
+    "assessment": {
+      "mechanical": false,
+      "architecture": false,
+      "acceptance": true,
+      "risk": null,
+      "reason": "Review the changed behavior and its evidence.",
+      "evidence": ["/absolute/path/to/review-guide.md"]
+    },
+    "continuation": {"phase": "ready", "role": null}
+  }
+}
+```
+
+Replace the paths, session and revision with the recorded values. The attempt
+must be unused. `inputPaths` and the assignment's `handoffInputs` select text
+files whose contents enter this prompt; artifacts remain references. A retained
+session uses `initialize: false`. Set it to true only for the role's first call.
+
+```bash
+deno task xmd run examples/adversarial-implementation/phase.md \
+  --props-request /absolute/path/to/request.json \
+  --include examples/adversarial-implementation/components --raw
+```
+
+The command returns the canonical phase result. `Phase.Run` saves its assignment,
+raw reply, result, status and acceptance receipt beneath the request's attempt.
+Source and role checks run before a prompt. Reusing an occupied attempt refuses;
+inspect its saved effects before selecting another attempt.
+
+To advance a saved `Ticket.Run` or `Ticket.Continue` record, pass that complete
+record rather than reconstructing its assignment or artifact paths:
+
+```bash
+deno task xmd run examples/adversarial-implementation/continue.md \
+  --props-record /absolute/path/to/ticket-record.json --props-steps 1 \
+  --include examples/adversarial-implementation/components --raw
+```
+
+The returned record preserves the original manifest, sessions, documents, calls
+and correction counts. Each step executes at most one recorded role. Held and
+completed records return without a prompt. This entry does not clear a hold or
+retry an uncertain execution. Resolve the recorded cause before preparing a
+continuation, and preserve the original evidence. Capture the complete output
+under a new filename when retaining the next record; do not redirect it over
+the input file.
+
+External reviewer models and publication use their existing workflows. The
+phase entry retains the implementation workflow's role and model policy.
+
 ## Responsibilities and models
 
 | Owner | Work | Model and effort |
@@ -115,6 +192,11 @@ review remain responsible for that judgment.
 
 Captured replies pass through the workflow's existing `<Phase.Extract>` and
 `<SafeParse>` for schema validation.
+Before phase validation, shortened hexadecimal source and evidence revisions
+expand only when they identify one commit in the assigned repository. Missing,
+ambiguous and non-commit references hold without a correction prompt. The raw
+reply stays saved; `response-acceptance.json` records the expansions. Other
+evidence fields remain subject to the existing correspondence checks.
 One narrated or fenced JSON result is accepted without another agent call.
 Multiple candidates, incomplete JSON and unclosed fences hold with the original
 reply and diagnostics. Schema matching never chooses between candidates.
