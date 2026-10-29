@@ -5,6 +5,7 @@ props:
   properties:
     assignment: {type: object}
     guide: {type: string}
+    correction: {type: [object, 'null'], default: null}
   required: [assignment, guide]
   additionalProperties: false
 ---
@@ -12,6 +13,13 @@ props:
 <Adversarial.Schema as="schemas" />
 <Phase.Profile role="planner" design={true} assessment={props.assignment.assessment} as="profile" />
 <Output><Agent name="claude"><Session name={props.assignment.session} model={profile.model} effort={profile.effort}><Prompt throwOnError={true}>
+<If condition={props.correction !== null}>
+You remain the original Planner. This is response-only correction {props.correction.ordinal} of three. Shorten only the rejected summary or handoff to its stated bound. Every other result value is frozen by the supplied schema, including the API, outcome, source revision, artifacts, assessment and command evidence.
+
+Perform no implementation, command execution, test, signing, publication or other productive work. Do not repeat the earlier assignment. Return only the corrected JSON result. If the existing facts cannot satisfy the schema, preserve that uncertainty; do not invent evidence.
+
+<Json value={props.correction} />
+<Else>
 <If condition={props.assignment.initialize}>
 You are the adversarial Planner. This assignment authorizes API implementation and representative consumer validation in the assigned checkout.
 
@@ -34,4 +42,6 @@ Prepared assignment:
 
 Return exactly one JSON object satisfying this contract. Evidence names actual command receipts and revisions; schema validation does not establish that tests passed.
 <Json value={schemas.foundation} />
+</Else>
+</If>
 </Prompt></Session></Agent></Output>
