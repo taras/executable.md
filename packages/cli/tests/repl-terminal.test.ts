@@ -36,8 +36,9 @@ import { runText } from "../src/repl/description.ts";
 import type { ReplBounds, ReplRegion } from "../src/repl/layout.ts";
 import { ReplRenderError, resolvePointer, useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplMeasured, ReplRendered, ReplRenderer } from "../src/repl/renderer.ts";
-import { createGrid, useCommitter } from "./fixtures/repl/presentation.ts";
+import { useGrid, useCommitter } from "./fixtures/repl/presentation.ts";
 import type { Drawn, TerminalGrid } from "./fixtures/repl/presentation.ts";
+import { useTerminalScreen } from "./support/terminal-screen.ts";
 import { close, fixed, open, percent, text } from "@bomb.sh/tty";
 import type { Op } from "@bomb.sh/tty";
 import { nearestCommonAncestor, ReplClock, useReplFrames } from "../src/repl/frame.ts";
@@ -173,7 +174,7 @@ function* mounted(
 }> {
   const renderer = yield* useReplRenderer(size);
   const tree = yield* useReplTree<Surfaced>();
-  const grid = createGrid();
+  const grid = yield* useGrid(size);
   const committer = yield* useCommitter<Surfaced>({
     size,
     tree,
@@ -199,7 +200,7 @@ function* driving(size: ReplTerminalSize): Operation<{
 }> {
   const renderer = yield* useReplRenderer(size);
   const tree = yield* useReplTree<Surfaced>();
-  const grid = createGrid();
+  const grid = yield* useGrid(size);
   return {
     tree,
     renderer,
@@ -2569,7 +2570,7 @@ describe("REPL terminal: a measurement that does not commit", () => {
     const size = { columns: 160, rows: 36 };
     const renderer = yield* useReplRenderer(size);
     const tree = yield* useReplTree<Surfaced>();
-    const grid = createGrid();
+    const grid = yield* useGrid(size);
     const held = holding(renderer);
 
     const committer = yield* useCommitter<Surfaced>({
@@ -2612,7 +2613,7 @@ describe("REPL terminal: a measurement that does not commit", () => {
     const size = { columns: 160, rows: 36 };
     const renderer = yield* useReplRenderer(size);
     const tree = yield* useReplTree<Surfaced>();
-    const grid = createGrid();
+    const grid = yield* useGrid(size);
 
     /** A renderer whose measurement refuses for a reason no retry fixes. */
     const refusing: ReplRenderer = {
@@ -2730,5 +2731,60 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
         }
       });
     }
+  });
+});
+
+describe("Termless screen adapter", () => {
+  const SMALL = { columns: 12, rows: 3 };
+
+  it("erases what an erase-line clears, rather than keeping the frame beneath it", function* () {
+    const screen = yield* useTerminalScreen(SMALL);
+    screen.feed("\u001B[1;1Hstale text\u001B[2;1Hkeep this");
+    screen.feed("\u001B[1;1H\u001B[2K\u001B[2;5H\u001B[K");
+    expect(screen.rows()).toEqual(["", "keep", ""]);
+  });
+
+  it("keeps the truecolor, the weight and a reset each cell was written under", function* () {
+    const grid = yield* useGrid(SMALL);
+    const encode = (text: string): Uint8Array => new TextEncoder().encode(text);
+    grid.apply(encode("\u001B[1m\u001B[38;2;127;211;232m\u001B[48;2;18;32;38m\u001B[1;1Hab"));
+    grid.apply(encode("\u001B[0m\u001B[1;3Hc"));
+    expect(grid.styleAt(0, 0)).toEqual({ foreground: 0x7fd3e8, background: 0x122026, attrs: [1] });
+    expect(grid.styleAt(2, 0)).toEqual({ foreground: undefined, background: undefined, attrs: [] });
+    expect(grid.styledIn({ x: 1, y: 0, width: 2, height: 1 })).toEqual([
+      "b|7fd3e8|122026|1 c|-|-|",
+    ]);
+  });
+
+  it("gives a wide glyph both of its cells, and names it once", function* () {
+    const screen = yield* useTerminalScreen(SMALL);
+    screen.feed("\u001B[1;1Habcd\u001B[1;1H界g");
+    expect(screen.rows()[0]).toBe("界gd");
+    expect([screen.at(0, 0), screen.at(1, 0), screen.at(2, 0), screen.at(4, 0)]).toEqual([
+      "界",
+      "",
+      "g",
+      " ",
+    ]);
+  });
+
+  it("joins a character whose bytes arrive in two writes", function* () {
+    const screen = yield* useTerminalScreen(SMALL);
+    const bytes = new TextEncoder().encode("界✓");
+    screen.feed(bytes.slice(0, 2));
+    screen.feed(bytes.slice(2));
+    expect(screen.rows()[0]).toBe("界✓");
+  });
+
+  it("is released with the scope that owns it and still reports what it last showed", function* () {
+    const screen = yield* scoped(function* () {
+      const owned = yield* useTerminalScreen(SMALL);
+      owned.feed("\u001B[2;1Hlast");
+      expect(owned.closed).toBe(false);
+      return owned;
+    });
+    expect(screen.closed).toBe(true);
+    expect(screen.rows()).toEqual(["", "last", ""]);
+    expect(() => screen.feed("more")).toThrow("this screen has been closed");
   });
 });

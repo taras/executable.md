@@ -4,6 +4,15 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@termless/core@0.10.2>@napi-rs/canvas': '-'
+  '@termless/core@0.10.2>@resvg/resvg-js': '-'
+  '@termless/core@0.10.2>@twemoji/svg': '-'
+  '@termless/core@0.10.2>ghostty-web': '-'
+  '@termless/core@0.10.2>gifenc': '-'
+  '@termless/core@0.10.2>playwright': '-'
+  '@termless/core@0.10.2>upng-js': '-'
+
 importers:
 
   .:
@@ -123,6 +132,12 @@ importers:
       '@executablemd/workflow':
         specifier: workspace:*
         version: link:packages/workflow
+      '@termless/core':
+        specifier: 0.10.2
+        version: 0.10.2
+      '@termless/xtermjs':
+        specifier: 0.10.2
+        version: 0.10.2(@termless/core@0.10.2)
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.15
@@ -2072,6 +2087,28 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
+  '@termless/core@0.10.2':
+    resolution: {integrity: sha512-xr/TvnhzB0R7g24W3EcwP8UQ+ztYd5ybk4oxR/PkcEh92O5NRjl9mCkqz/wvTcGX3u77AcmA8w5Ox16T22DOCA==}
+    engines: {bun: '>=1.0.0', node: '>=23.6.0'}
+    peerDependencies:
+      '@termless/ghostty': ^0.10.2
+      node-pty: '>=1.0.0'
+    peerDependenciesMeta:
+      '@termless/ghostty':
+        optional: true
+      node-pty:
+        optional: true
+
+  '@termless/xtermjs@0.10.2':
+    resolution: {integrity: sha512-FhQ7eCiokMlS5U7x4P+pTl48sDGZsuBiLhBw/9yKZarq24IviUgERHnOouoQHmtzCmc//jiX6SP4Axbg4cLB/g==}
+    engines: {bun: '>=1.0.0', node: '>=23.6.0'}
+    peerDependencies:
+      '@termless/core': ^0.10.2
+      silvery: '>=0.4.2'
+    peerDependenciesMeta:
+      silvery:
+        optional: true
+
   '@tybys/wasm-util@0.10.4':
     resolution: {integrity: sha512-W3c4gRigFS0T/Ma4qIYF3GDAc5AQdHb1yL5znJT1Zv1YaD9Kitx656wBjvr19qbiosmZT8lWDM5BEMynUqX65A==}
 
@@ -2128,6 +2165,12 @@ packages:
 
   '@x0k/json-schema-merge@1.0.4':
     resolution: {integrity: sha512-KvmMgAftbVzATq4IRnkno/SKSu+gjaR2ZUPJG5JUlY4W3twRJo03sk2914u8scmosibBZ0m7s6euZlJuqpv8Ww==}
+
+  '@xterm/addon-unicode11@0.9.0':
+    resolution: {integrity: sha512-FxDnYcyuXhNl+XSqGZL/t0U9eiNb/q3EWT5rYkQT/zuig8Gz/VagnQANKHdDWFM2lTMk9ly0EFQxxxtZUoRetw==}
+
+  '@xterm/headless@6.0.0':
+    resolution: {integrity: sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw==}
 
   acorn@8.16.0:
     resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
@@ -4287,6 +4330,14 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
+  '@termless/core@0.10.2': {}
+
+  '@termless/xtermjs@0.10.2(@termless/core@0.10.2)':
+    dependencies:
+      '@termless/core': 0.10.2
+      '@xterm/addon-unicode11': 0.9.0
+      '@xterm/headless': 6.0.0
+
   '@tybys/wasm-util@0.10.4':
     dependencies:
       tslib: 2.8.1
@@ -4343,6 +4394,10 @@ snapshots:
   '@x0k/json-schema-merge@1.0.4':
     dependencies:
       '@types/json-schema': 7.0.15
+
+  '@xterm/addon-unicode11@0.9.0': {}
+
+  '@xterm/headless@6.0.0': {}
 
   acorn@8.16.0: {}
 

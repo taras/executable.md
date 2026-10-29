@@ -14,7 +14,7 @@
  * product the same way rather than through two accounts of it.
  */
 
-import { ensure, resource, sleep, spawn, until, withResolvers } from "effection";
+import { action, ensure, race, resource, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation, Result, Stream, Subscription } from "effection";
 import { appendFile, open as openFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -49,6 +49,8 @@ import { useTempFileCompiler, useNormalizedOutput } from "@executablemd/core";
 import { createFakeAcp, makeRegistry, makeStore } from "../../../support/fake-acp.ts";
 import type { FakeAcp } from "../../../support/fake-acp.ts";
 import { useTemporary } from "./sidekick-harness.ts";
+import { readScreen, usedRows, useTerminalScreen } from "../../../support/terminal-screen.ts";
+import type { TerminalScreen } from "../../../support/terminal-screen.ts";
 
 /** The draft row's own prompt, which is how its row is told from the other one. */
 export const DRAFT_PROMPT = " DRAFT";
@@ -57,7 +59,6 @@ export const DRAFT_PROMPT = " DRAFT";
 export const MESSAGE_PROMPT = " › message the sidekick";
 
 const BYTES = new TextEncoder();
-const TEXT = new TextDecoder();
 
 /**
  * The contextual status row: what the execution is doing, and what Enter does.
@@ -70,99 +71,23 @@ export function statusOn(terminal: Terminal): string | undefined {
 }
 
 /**
- * The same replay over a chosen run of presentations.
+ * The canvas a finished run of presentations is read on, when nobody says what
+ * size the terminal was.
  *
- * What a resize draws can only be read on its own: this renderer writes diffs,
- * so a buffer that also holds the frames before the resize holds rows the
- * smaller terminal no longer has. The engine redraws completely after a size
- * change, so the presentations from the resize onward are a whole screen.
+ * The largest any mounted case draws at, so a frame of any of them lands on it
+ * whole and is read from its top-left corner.
  */
-/**
- * How many cells one character occupies.
- *
- * A terminal advances two columns for an East Asian wide or fullwidth
- * character and one for everything else. A replay that advanced one for all of
- * them left the second cell of every wide glyph holding whatever was there
- * before — measured, a drawer row of wide words came back as `界g界n 界o界f`,
- * with letters from the frame underneath showing between them. Replaying the
- * same bytes with this advance gives the row the product actually wrote.
- */
-function cellsOf(character: string): number {
-  return WIDE_CHARACTERS.test(character) ? 2 : 1;
-}
+const CANVAS: ReplTerminalSize = { columns: 200, rows: 140 };
 
 /**
- * The ranges a terminal gives two columns to.
+ * What a run of presentations leaves on a fresh screen.
  *
- * East Asian Wide and Fullwidth, as the Unicode property names them. Written
- * out rather than asked of an API because no runtime this suite runs on
- * answers the question directly.
+ * For a reading of one stretch of frames on its own — the frames from a resize
+ * onward are a whole screen, because the engine redraws completely after a
+ * size change. The rows end at the last one anything was written on.
  */
-const WIDE_CHARACTERS =
-  /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]|[\u{1F300}-\u{1F64F}]|[\u{1F900}-\u{1F9FF}]|[\u{20000}-\u{3FFFD}]/u;
-
 export function replay(written: readonly Uint8Array[]): string[] {
-  const rows: string[][] = [];
-  let row = 0;
-  let column = 0;
-
-  const put = (character: string): void => {
-    while (rows.length <= row) {
-      rows.push([]);
-    }
-    const line = rows[row];
-    while (line.length < column) {
-      line.push(" ");
-    }
-    line[column] = character;
-    // The cells this character actually takes. A wide glyph owns the column
-    // after it as well, and that column is the glyph's rather than whatever
-    // the frame beneath it last wrote there.
-    const cells = cellsOf(character);
-    for (let after = 1; after < cells; after += 1) {
-      line[column + after] = "";
-    }
-    column += cells;
-  };
-
-  const text = written.map((bytes) => TEXT.decode(bytes)).join("");
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character !== "\u001B") {
-      if (character === "\n") {
-        row += 1;
-        column = 0;
-      } else if (character === "\r") {
-        column = 0;
-      } else {
-        put(character);
-      }
-      continue;
-    }
-    // CSI: the only sequences this renderer uses to position and to clear.
-    const csi = /^\u001B\[([0-9;]*)([@-~])/.exec(text.slice(index));
-    if (csi !== null) {
-      const parameters = csi[1].split(";").map((one) => (one === "" ? 0 : Number(one)));
-      if (csi[2] === "H") {
-        row = Math.max(0, (parameters[0] ?? 1) - 1);
-        column = Math.max(0, (parameters[1] ?? 1) - 1);
-      } else if (csi[2] === "J") {
-        rows.length = 0;
-        row = 0;
-        column = 0;
-      }
-      index += csi[0].length - 1;
-      continue;
-    }
-    // OSC, and the two-byte escapes. Neither carries anything readable.
-    const osc = /^\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/.exec(text.slice(index));
-    if (osc !== null) {
-      index += osc[0].length - 1;
-      continue;
-    }
-    index += 1;
-  }
-  return rows.map((line) => line.join(""));
+  return readScreen(CANVAS, written, (screen) => usedRows(screen.rows()));
 }
 
 /** The draft row as the screen draws it, or none before a frame has drawn one. */
@@ -222,8 +147,18 @@ export function* settled(turns = 8): Operation<void> {
 
 /** A terminal the test drives completely. */
 export interface Terminal {
-  /** Everything ever presented, in order. */
+  /** Every presentation the program attempted, in order, including one still held. */
   readonly presented: Uint8Array[];
+  /**
+   * How many presentations have completed.
+   *
+   * A presentation reaches the screen when its write finishes, not when it is
+   * attempted: a held write is in `presented` and not yet on the screen, and a
+   * write that failed or was cancelled never reaches it.
+   */
+  readonly drawn: number;
+  /** How many waits are subscribed to the next completed presentation. */
+  readonly waiting: number;
   /**
    * When set, the next presentation blocks here until it is released.
    *
@@ -244,24 +179,16 @@ export interface Terminal {
   fed: number;
   readonly raw: boolean[];
   resets: number;
-  /**
-   * How many presentations had already been made when this terminal was last
-   * resized.
-   *
-   * The screen a reader is looking at begins there. This renderer writes diffs
-   * and sends no clear when the window changes, so the cells of the frame
-   * before a resize are still in the buffer — and after a shrink some of them
-   * are cells the new frame never writes to. The engine redraws the whole
-   * terminal after a size change, so the presentations from that point on are a
-   * complete screen and the ones before it are a screen that is gone.
-   */
-  resizedAt: number;
   listeners: number;
   readers: number;
+  /** The screen the completed presentations drew, once installed. */
+  readonly screen: TerminalScreen | undefined;
   feed(text: string): void;
   bytes(raw: Uint8Array): void;
   /** Make the next presentation block, so a test can look at the frame stream. */
   holdNextPresent(): void;
+  /** Make the next presentation fail with this error, as a broken terminal does. */
+  failNextPresent(error: Error): void;
   resized(size: ReplTerminalSize): void;
   /**
    * Resize *between* two of the program's size reads.
@@ -285,6 +212,17 @@ export interface Terminal {
   /** How many churned reads are still owed, so a test can wait for the end. */
   churning(): number;
   end(): void;
+  /**
+   * Say the command drawing on this terminal has returned.
+   *
+   * A wait for the screen cannot be satisfied by a command that is no longer
+   * drawing, so every pending one wakes and reports how it ended.
+   */
+  stopped(failure: Error | undefined): void;
+  /** How the command ended, once {@link stopped} has said so. */
+  readonly ending: { readonly failure: Error | undefined } | undefined;
+  /** Settles once more than `count` presentations have completed, or the command stopped. */
+  after(count: number): Operation<void>;
 }
 
 export function recordingTerminal(
@@ -296,21 +234,42 @@ export function recordingTerminal(
 } {
   const queue: Uint8Array[] = [];
   const watchers = new Set<() => void>();
+  const wakers = new Set<() => void>();
   let waiting: ((result: IteratorResult<Uint8Array, void>) => void) | undefined;
   let ended = false;
+  let screen: TerminalScreen | undefined;
+  let drawn = 0;
+  let ending: { readonly failure: Error | undefined } | undefined;
 
   let holding = false;
+  let failing: Error | undefined;
   let dragging: { after: number; next: ReplTerminalSize } | undefined;
   let churn: { left: number; settled: ReplTerminalSize } | undefined;
+  const wake = (): void => {
+    for (const one of [...wakers]) {
+      one();
+    }
+  };
   const terminal: Terminal = {
     presented: [],
+    get drawn() {
+      return drawn;
+    },
+    get waiting() {
+      return wakers.size;
+    },
+    get screen() {
+      return screen;
+    },
+    get ending() {
+      return ending;
+    },
     holdPresent: undefined,
     size,
     sized: 0,
     fed: 0,
     raw: [],
     resets: 0,
-    resizedAt: 0,
     listeners: 0,
     readers: 0,
     feed(text: string): void {
@@ -318,6 +277,9 @@ export function recordingTerminal(
     },
     holdNextPresent(): void {
       holding = true;
+    },
+    failNextPresent(error: Error): void {
+      failing = error;
     },
     bytes(raw: Uint8Array): void {
       terminal.fed += 1;
@@ -331,7 +293,7 @@ export function recordingTerminal(
     },
     resized(next: ReplTerminalSize): void {
       terminal.size = next;
-      terminal.resizedAt = terminal.presented.length;
+      screen?.resize(next);
       for (const watcher of watchers) {
         watcher();
       }
@@ -353,6 +315,23 @@ export function recordingTerminal(
         resolve({ done: true, value: undefined });
       }
     },
+    stopped(failure: Error | undefined): void {
+      ending = { failure };
+      wake();
+    },
+    after(count: number): Operation<void> {
+      return action<void>((resolve) => {
+        if (drawn > count || ending !== undefined) {
+          resolve();
+          return () => {};
+        }
+        const one = (): void => resolve();
+        wakers.add(one);
+        return () => {
+          wakers.delete(one);
+        };
+      });
+    },
   };
 
   const host: ReplTerminalCapabilities = {
@@ -373,6 +352,7 @@ export function recordingTerminal(
         // read and drain the whole drag in one call. Nothing needs the
         // announcement: the frame being outrun is already reading again.
         terminal.size = next;
+        screen?.resize(next);
       } else if (dragging !== undefined && terminal.sized >= dragging.after) {
         const { next } = dragging;
         dragging = undefined;
@@ -381,16 +361,28 @@ export function recordingTerminal(
       return reported;
     },
     *write(bytes: Uint8Array): Operation<void> {
-      terminal.presented.push(new Uint8Array(bytes));
-      if (!holding) {
+      const written = new Uint8Array(bytes);
+      terminal.presented.push(written);
+      if (failing !== undefined) {
+        const failure = failing;
+        failing = undefined;
+        throw failure;
+      }
+      if (holding) {
+        holding = false;
+        const held = withResolvers<void>();
+        terminal.holdPresent = { release: held.resolve };
+        yield* held.operation;
+      } else {
         // A write that completed, which still costs the caller a turn.
         yield* sleep(0);
-        return;
       }
-      holding = false;
-      const held = withResolvers<void>();
-      terminal.holdPresent = { release: held.resolve };
-      yield* held.operation;
+      if (screen === undefined) {
+        throw new Error("this terminal was written to before it was installed");
+      }
+      screen.feed(written);
+      drawn += 1;
+      wake();
     },
     writeNow(): void {
       terminal.resets += 1;
@@ -446,33 +438,22 @@ export function recordingTerminal(
     },
   };
 
-  return { terminal, install: () => installReplTerminal(host) };
+  return {
+    terminal,
+    *install(): Operation<void> {
+      screen = yield* useTerminalScreen(terminal.size);
+      yield* installReplTerminal(host);
+    },
+  };
 }
 
-/**
- * What the screen says, by replaying what was written to it.
- *
- * A real buffer rather than the bytes with escapes stripped, because this
- * renderer writes *diffs*: it moves the cursor to what changed and writes only
- * that. Concatenating the diffs gives characters in the order they were written
- * rather than the order they appear, and a character the previous frame already
- * had is not written again at all — so stripped bytes read as words with letters
- * missing. Interpreting the cursor moves is what makes an assertion about the
- * screen an assertion about the screen.
- */
+/** What the screen shows now: every visible row, as the completed presentations left it. */
 export function screenOf(terminal: Terminal): string[] {
-  // Bounded by the terminal these frames are being drawn into. The replay
-  // accumulates every presentation, and this renderer sends no clear when the
-  // window changes size — so after a shrink the buffer still holds the rows and
-  // the columns the larger screen had, and nobody is looking at those. A
-  // reading taken from them is a reading of a screen that is gone: measured, a
-  // narrow frame's routing bar came back with a wide frame's right-hand pane
-  // still on the end of it, and the row no longer ended in the word a reader
-  // was looking for.
-  const size = terminal.size;
-  return replay(terminal.presented.slice(terminal.resizedAt))
-    .slice(0, size.rows)
-    .map((line) => (line.length > size.columns ? line.slice(0, size.columns) : line));
+  const screen = terminal.screen;
+  if (screen === undefined) {
+    throw new Error("this terminal has no screen until it is installed");
+  }
+  return screen.rows();
 }
 
 /** Whether any row of the screen contains this text. */
@@ -1071,6 +1052,50 @@ export function* awaitedFact(what: string, held: () => Operation<boolean>): Oper
   throw new Error(`${what} never happened within ${MOUNTED_DEADLINE_MS}ms`);
 }
 
+/**
+ * Wait until a completed presentation shows what this asks about.
+ *
+ * Driven by the screen rather than by a clock: the question is asked of the
+ * cells now, and again each time another presentation completes, so it costs
+ * nothing while nothing is drawn and cannot miss a frame between asking and
+ * listening. A command that stops first ends the wait with how it stopped, and
+ * the deadline is only how long a missing frame gets before the wait says so.
+ */
+export function* untilShown(
+  terminal: Terminal,
+  what: string,
+  shows: (terminal: Terminal) => boolean,
+): Operation<void> {
+  const rows = (): string =>
+    JSON.stringify(
+      screenOf(terminal)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    );
+  yield* race([
+    (function* (): Operation<void> {
+      while (true) {
+        const seen = terminal.drawn;
+        if (shows(terminal)) {
+          return;
+        }
+        const ending = terminal.ending;
+        if (ending !== undefined) {
+          throw ending.failure ?? new Error(`the command ended before ${what}. rows=${rows()}`);
+        }
+        yield* terminal.after(seen);
+      }
+    })(),
+    (function* (): Operation<void> {
+      yield* sleep(MOUNTED_DEADLINE_MS);
+      const { columns, rows: height } = terminal.size;
+      throw new Error(
+        `${what} was never shown within ${MOUNTED_DEADLINE_MS}ms at ${columns}x${height}. rows=${rows()}`,
+      );
+    })(),
+  ]);
+}
+
 /** Where this text is on the screen, if it is anywhere. */
 export function coordinateOf(
   terminal: Terminal,
@@ -1593,10 +1618,12 @@ export function* useMountedRepl(
   yield* recording.install();
   const settledOutcome: { value?: Result<ReplOutcome> } = {};
   yield* spawn(function* (): Operation<void> {
-    settledOutcome.value = yield* runReplProgram({
+    const outcome = yield* runReplProgram({
       profile: host.profile,
       ...(options.location === undefined ? {} : { location: options.location }),
     });
+    settledOutcome.value = outcome;
+    recording.terminal.stopped(outcome.ok ? undefined : outcome.error);
   });
   yield* untilDrawn(recording.terminal);
   return {
@@ -1737,39 +1764,33 @@ export function panePresented(terminal: Terminal): "sidekick" | "bindings" {
 /**
  * Resize, wait for a whole frame of the new size, and hand back its reading.
  *
- * The reading is a function rather than an array because a row goes on driving
- * the screen after the resize: every call replays only the presentations from
- * this resize onward, so what it answers is this size's own screen rather than
- * a buffer still holding the taller one's rows.
+ * A whole frame is one presented after the resize whose footer carries the way
+ * out. The reading is a function because a row goes on driving the screen
+ * after the resize, and each call answers with what it shows then.
  */
 export function* resizeTo(terminal: Terminal, size: ReplTerminalSize): Operation<() => string[]> {
-  const from = terminal.presented.length;
-  const rows = (): string[] => replay(terminal.presented.slice(from));
+  const from = terminal.drawn;
   terminal.resized(size);
-  // A whole frame is one whose footer has been drawn, witnessed by the way out
-  // being somewhere in that band. Which row of the band holds it is the
-  // layout's business — the staged screen puts the way out on its History row
-  // — so this asks whether the band is there rather than pinning a row of it.
-  yield* awaited(`a whole frame at ${size.columns}x${size.rows}`, () =>
-    rows()
-      .slice(Math.max(0, size.rows - FOOTER_ROWS))
-      .some((line) => line.includes("[exit]")),
+  yield* untilShown(
+    terminal,
+    `a whole frame at ${size.columns}x${size.rows}`,
+    (one) =>
+      one.drawn > from &&
+      screenOf(one)
+        .slice(Math.max(0, size.rows - FOOTER_ROWS))
+        .some((line) => line.includes("[exit]")),
   );
-  return rows;
+  return () => screenOf(terminal);
 }
 
 /**
  * The same reading for a size this terminal may already be at.
  *
  * A window told it is the size it is draws nothing, so there is no resize to
- * wait for — and no need for one: the engine redraws completely after a size
- * change, so the accumulated buffer is already this size's own whole screen.
- * Replaying only the frames since a *same-size* mark would read a diff, which
- * holds the cells that changed and not the footer.
+ * wait for: the screen already shows this size.
  */
 export function* readingAt(terminal: Terminal, size: ReplTerminalSize): Operation<() => string[]> {
   if (terminal.size.columns === size.columns && terminal.size.rows === size.rows) {
-    // deno-lint-ignore require-yield
     return () => screenOf(terminal);
   }
   return yield* resizeTo(terminal, size);

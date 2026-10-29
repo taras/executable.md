@@ -48,7 +48,7 @@ import {
 } from "../src/repl/application.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
-import { createGrid, useCommitter, usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
+import { useGrid, useCommitter, usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
 import { useTempFileCompiler } from "@executablemd/core";
 import {
   CHECKPOINT_ASKING,
@@ -110,7 +110,7 @@ interface Screen {
 function* useScreen(size: ReplTerminalSize): Operation<Screen> {
   const renderer = yield* useReplRenderer(size);
   const tree = yield* useReplTree<Surfaced>();
-  const grid = createGrid();
+  const grid = yield* useGrid(size);
   let current = size;
   const screen: Screen = {
     get committer(): Committer<Surfaced> {

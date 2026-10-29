@@ -43,59 +43,29 @@ import type { ReplDescription } from "../../../src/repl/description.ts";
 import type { ReplAction } from "../../../src/repl/components/actions.ts";
 import type { ReplPresentationContext, ReplView } from "../../../src/repl/application.ts";
 import type { ReplTerminalSize } from "../../../src/repl/terminal.ts";
+import { usedRows, useTerminalScreen } from "../../support/terminal-screen.ts";
+import type { CellStyle } from "../../support/terminal-screen.ts";
 
-const TEXT = new TextDecoder();
-
-/**
- * What one cell was drawn with, as the terminal was told.
- *
- * `foreground` and `background` are 24-bit, the way the palette states them and
- * the way the renderer's own truecolor SGR reports them, so what came out of a
- * cell is comparable with what was asked for without either side re-deriving the
- * other. `attrs` holds the SGR attribute parameters that were in force — `1` for
- * bold — in ascending order. `undefined` is the terminal's own default, which is
- * what a cell nothing coloured keeps.
- */
-export interface CellStyle {
-  readonly foreground: number | undefined;
-  readonly background: number | undefined;
-  readonly attrs: readonly number[];
-}
-
-const DEFAULT_STYLE: CellStyle = Object.freeze({
-  foreground: undefined,
-  background: undefined,
-  attrs: Object.freeze([]),
-});
+export type { CellStyle };
 
 /**
  * A terminal's cells, as the bytes written to it leave them.
  *
- * A real buffer rather than the bytes with escapes stripped, because this
- * renderer writes *diffs*: it moves the cursor to what changed and writes only
- * that. Concatenating the diffs gives characters in the order they were written
- * rather than the order they appear, and a character the previous frame already
- * had is not written again at all — so stripped bytes read as words with letters
- * missing. Interpreting the cursor moves is what makes this a screen.
- *
- * It persists across frames on purpose. A cell a later frame leaves blank is the
- * evidence that the text which used to be there was actually erased, and that
- * evidence only exists if the frame before it is still in the buffer.
- *
- * Every cell keeps the colour, background and attributes it was written under as
- * well as its character, because an assertion that a row is a failure is an
- * assertion about those cells. The same escapes carry both: the renderer sets the
- * attributes and then moves the cursor, so a cell's style is whatever was in
- * force at the moment the character landed in it — which is why a grid that only
- * skipped the escapes could find a colour somewhere in the stream and prove
- * nothing about where it was used.
+ * One emulated screen at the frame's size, persisting across frames on purpose:
+ * this renderer writes diffs, and a cell a later frame leaves blank is the
+ * evidence that the text which used to be there was actually erased — which
+ * only exists if the frame before it is still on the screen. Every cell keeps
+ * the colour, background and attributes it was written under.
  */
 export interface TerminalGrid {
-  /** Replay one presentation's bytes into the grid. */
+  /** Apply one presentation's bytes to the screen. */
   apply(bytes: Uint8Array): void;
-  /** Every row written so far, in order. */
+  /** The screen is now this size, as a terminal is when its window changes. */
+  resize(size: ReplTerminalSize): void;
+  readonly size: ReplTerminalSize;
+  /** Every row down to the last one anything is written on. */
   rows(): readonly string[];
-  /** One cell, or a space where nothing has ever been written. */
+  /** One cell, or a space where nothing is drawn. */
   at(column: number, row: number): string;
   /** The rows of one rectangle, each exactly as wide as the rectangle. */
   textIn(bounds: ReplBounds): readonly string[];
@@ -115,184 +85,46 @@ export interface TerminalGrid {
   styledIn(bounds: ReplBounds): readonly string[];
 }
 
-export function createGrid(): TerminalGrid {
-  const cells: string[][] = [];
-  const styles: CellStyle[][] = [];
-  let row = 0;
-  let column = 0;
-  let current: CellStyle = DEFAULT_STYLE;
-
-  /**
-   * How many cells one character occupies.
-   *
-   * A terminal advances two columns for an East Asian wide or fullwidth
-   * character and one for everything else. A replay that advanced one for all of
-   * them left the second cell of every wide glyph holding whatever was there
-   * before — measured, a drawer row of wide words came back as `界g界n 界o界f`,
-   * with letters from the frame underneath showing between them. Replaying the
-   * same bytes with this advance gives the row the product actually wrote.
-   */
-  function cellsOf(character: string): number {
-    return WIDE_CHARACTERS.test(character) ? 2 : 1;
-  }
-
-  /**
-   * The ranges a terminal gives two columns to.
-   *
-   * East Asian Wide and Fullwidth, as the Unicode property names them. Written
-   * out rather than asked of an API because no runtime this suite runs on
-   * answers the question directly.
-   */
-  const WIDE_CHARACTERS =
-    /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]|[\u{1F300}-\u{1F64F}]|[\u{1F900}-\u{1F9FF}]|[\u{20000}-\u{3FFFD}]/u;
-
-  const put = (character: string): void => {
-    while (cells.length <= row) {
-      cells.push([]);
-      styles.push([]);
-    }
-    const line = cells[row];
-    const styled = styles[row];
-    while (line.length < column) {
-      line.push(" ");
-      styled.push(DEFAULT_STYLE);
-    }
-    line[column] = character;
-    styled[column] = current;
-    // The cells this character actually takes: a wide glyph owns the column
-    // after it, and that column is the glyph's rather than whatever the frame
-    // beneath it last wrote there.
-    const taken = cellsOf(character);
-    for (let after = 1; after < taken; after += 1) {
-      line[column + after] = "";
-      styled[column + after] = current;
-    }
-    column += taken;
-  };
-
-  const read = (x: number, y: number): string => cells[y]?.[x] ?? " ";
-  const readStyle = (x: number, y: number): CellStyle => styles[y]?.[x] ?? DEFAULT_STYLE;
-
-  /** The style one `m` sequence leaves in force, applied to what is already. */
-  const select = (parameters: readonly number[]): void => {
-    let foreground = current.foreground;
-    let background = current.background;
-    const attrs = new Set(current.attrs);
-    for (let at = 0; at < parameters.length; at += 1) {
-      const parameter = parameters[at];
-      if (parameter === 0) {
-        foreground = undefined;
-        background = undefined;
-        attrs.clear();
-        continue;
-      }
-      // Truecolor, which is the only form this renderer emits: `38;2;r;g;b` for
-      // the foreground and `48;2;r;g;b` for the background.
-      if ((parameter === 38 || parameter === 48) && parameters[at + 1] === 2) {
-        const packed =
-          ((parameters[at + 2] ?? 0) << 16) |
-          ((parameters[at + 3] ?? 0) << 8) |
-          (parameters[at + 4] ?? 0);
-        if (parameter === 38) {
-          foreground = packed;
-        } else {
-          background = packed;
-        }
-        at += 4;
-        continue;
-      }
-      if (parameter === 39) {
-        foreground = undefined;
-        continue;
-      }
-      if (parameter === 49) {
-        background = undefined;
-        continue;
-      }
-      if (parameter >= 1 && parameter <= 9) {
-        attrs.add(parameter);
-        continue;
-      }
-      // `2x` turns off the attribute `x` switched on, except 20 and 21.
-      if (parameter >= 22 && parameter <= 29) {
-        attrs.delete(parameter - 20);
-      }
-    }
-    current = Object.freeze({
-      foreground,
-      background,
-      attrs: Object.freeze([...attrs].sort((left, right) => left - right)),
-    });
-  };
-
-  return {
+/** A grid of this size, released with the scope that asked for it. */
+export function* useGrid(size: ReplTerminalSize): Operation<TerminalGrid> {
+  const screen = yield* useTerminalScreen(size);
+  const grid: TerminalGrid = {
     apply(bytes) {
-      const written = TEXT.decode(bytes);
-      for (let index = 0; index < written.length; index += 1) {
-        const character = written[index];
-        if (character !== "\u001B") {
-          if (character === "\n") {
-            row += 1;
-            column = 0;
-          } else if (character === "\r") {
-            column = 0;
-          } else {
-            put(character);
-          }
-          continue;
-        }
-        // CSI: positioning, clearing and the attributes a cell is written under.
-        const csi = /^\u001B\[([0-9;]*)([@-~])/.exec(written.slice(index));
-        if (csi !== null) {
-          const parameters = csi[1].split(";").map((one) => (one === "" ? 0 : Number(one)));
-          if (csi[2] === "H") {
-            row = Math.max(0, (parameters[0] ?? 1) - 1);
-            column = Math.max(0, (parameters[1] ?? 1) - 1);
-          } else if (csi[2] === "J") {
-            cells.length = 0;
-            styles.length = 0;
-            row = 0;
-            column = 0;
-          } else if (csi[2] === "m") {
-            select(parameters);
-          }
-          index += csi[0].length - 1;
-          continue;
-        }
-        // OSC, and the two-byte escapes. Neither carries anything readable.
-        const osc = /^\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/.exec(written.slice(index));
-        if (osc !== null) {
-          index += osc[0].length - 1;
-          continue;
-        }
-        index += 1;
+      screen.feed(bytes);
+    },
+    resize(next) {
+      if (next.columns !== screen.size.columns || next.rows !== screen.size.rows) {
+        screen.resize(next);
       }
+    },
+    get size() {
+      return screen.size;
     },
     rows() {
-      return cells.map((line) => line.join(""));
+      return usedRows(screen.rows());
     },
     at(x, y) {
-      return read(x, y);
+      return screen.at(x, y);
     },
     textIn(bounds) {
       const lines: string[] = [];
       for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) {
         let line = "";
         for (let x = bounds.x; x < bounds.x + bounds.width; x += 1) {
-          line += read(x, y);
+          line += screen.at(x, y);
         }
         lines.push(line);
       }
       return lines;
     },
     blank(bounds) {
-      return this.nonblank(bounds).length === 0;
+      return grid.nonblank(bounds).length === 0;
     },
     nonblank(bounds) {
       const found: string[] = [];
       for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) {
         for (let x = bounds.x; x < bounds.x + bounds.width; x += 1) {
-          const character = read(x, y);
+          const character = screen.at(x, y);
           if (character !== " ") {
             found.push(`${x},${y}=${character}`);
           }
@@ -301,20 +133,21 @@ export function createGrid(): TerminalGrid {
       return found;
     },
     styleAt(x, y) {
-      return readStyle(x, y);
+      return screen.styleAt(x, y);
     },
     styledIn(bounds) {
       const lines: string[] = [];
       for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) {
         const line: string[] = [];
         for (let x = bounds.x; x < bounds.x + bounds.width; x += 1) {
-          line.push(`${read(x, y)}|${described(readStyle(x, y))}`);
+          line.push(`${screen.at(x, y)}|${described(screen.styleAt(x, y))}`);
         }
         lines.push(line.join(" "));
       }
       return lines;
     },
   };
+  return grid;
 }
 
 function described(style: CellStyle): string {
@@ -371,7 +204,7 @@ export function usePresenter(size: ReplTerminalSize): Operation<Presenter> {
   return resource(function* (provide) {
     const renderer = yield* useReplRenderer(size);
     const tree = yield* useReplTree<ReplAction>();
-    const grid = createGrid();
+    const grid = yield* useGrid(size);
     let observed: Observed | undefined;
 
     const presenter: Presenter = {
@@ -440,6 +273,7 @@ export function usePresenter(size: ReplTerminalSize): Operation<Presenter> {
       },
       resize(next) {
         renderer.resize(next);
+        grid.resize(next);
       },
     };
     yield* provide(presenter);
@@ -531,7 +365,8 @@ export function useCommitter<T>(options: {
 }): Operation<Committer<T>> {
   return resource(function* (provide) {
     const { tree, renderer, source } = options;
-    const grid = options.grid ?? createGrid();
+    const grid = options.grid ?? (yield* useGrid(options.size));
+    grid.resize(options.size);
     let drawn: Drawn<T> | undefined;
 
     function* admit(): Operation<{ admission: ReplAdmission; manifest: ReplLayoutManifest }> {

@@ -22,6 +22,7 @@ import {
   scoped,
   sleep,
   spawn,
+  suspend,
   withResolvers,
 } from "effection";
 import {
@@ -65,6 +66,7 @@ import { runReplProgram } from "../src/repl/program.ts";
 // screen the same way rather than through a second account of it.
 import {
   activate,
+  awaited,
   catalogShowing,
   closeCatalog,
   marked,
@@ -87,7 +89,20 @@ import {
   statusOn,
   shows,
   untilDrawn,
+  untilShown,
+  resizeTo,
+  useMountedRepl,
+  messageText,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
+import {
+  pointAt,
+  pressed,
+  refusedAt,
+  submitDraft,
+  traverse,
+  typeDraft,
+  typeMessage,
+} from "./support/repl-page.ts";
 import type { Terminal } from "./fixtures/repl/issue-883/mounted-program.ts";
 import { entryVocabulary } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
@@ -2594,6 +2609,129 @@ describe("REPL journey: when a frame counts as applied", () => {
   });
 });
 
+describe("Termless mounted adapter", () => {
+  /** The screen and every wait, reader and listener released, and the modes restored once. */
+  const released = (terminal: Terminal | undefined): void => {
+    expect([
+      terminal?.screen?.closed,
+      terminal?.waiting,
+      terminal?.readers,
+      terminal?.listeners,
+      terminal?.resets,
+      terminal?.raw.at(-1),
+    ]).toEqual([true, 0, 0, 0, 1, false]);
+  };
+
+  it("reads typing, diffs and every profile off completed presentations", function* () {
+    const repl = yield* useMountedRepl({ size: { columns: 160, rows: 36 } });
+    const { terminal } = repl;
+    const top = screenOf(terminal)[0];
+    expect(top.trim().length).toBeGreaterThan(0);
+
+    const before = terminal.drawn;
+    terminal.feed("abc");
+    yield* untilShown(terminal, "the draft holding abc", (one) => draftText(one) === "abc");
+    expect(terminal.drawn).toBeGreaterThan(before);
+    // The typed frame is a diff: on a fresh screen it draws no identity row,
+    // and the owned screen still has the one the first frame drew.
+    expect(replay(terminal.presented.slice(-1))[0] ?? "").not.toBe(top);
+    expect(screenOf(terminal)[0]).toBe(top);
+
+    for (const size of [
+      { columns: 120, rows: 30 },
+      { columns: 72, rows: 20 },
+      { columns: 160, rows: 36 },
+    ]) {
+      yield* resizeTo(terminal, size);
+      const rows = screenOf(terminal);
+      expect(rows.length).toBe(size.rows);
+      expect(rows.filter((line) => line.length > size.columns)).toEqual([]);
+      expect(draftText(terminal)).toBe("abc");
+    }
+    expect(repl.outcome()).toBeUndefined();
+  });
+
+  it("puts a held write on the screen only once it completes, and a cancelled one never", function* () {
+    const { terminal, readings } = yield* scoped(function* () {
+      const repl = yield* useMountedRepl();
+      const { terminal } = repl;
+      terminal.feed("abc");
+      yield* untilShown(terminal, "the draft holding abc", (one) => draftText(one) === "abc");
+
+      const attempted = terminal.presented.length;
+      const drawn = terminal.drawn;
+      terminal.holdNextPresent();
+      terminal.feed("x");
+      yield* awaited("a held presentation", () => terminal.holdPresent !== undefined);
+      expect(terminal.presented.length).toBeGreaterThan(attempted);
+      expect(terminal.drawn).toBe(drawn);
+      expect(draftText(terminal)).toBe("abc");
+      terminal.holdPresent?.release();
+      yield* untilShown(terminal, "the released frame", (one) => draftText(one) === "abcx");
+
+      // Held again, and then the command's owner leaves with the write in flight.
+      terminal.holdPresent = undefined;
+      terminal.holdNextPresent();
+      terminal.feed("y");
+      yield* awaited("a second held presentation", () => terminal.holdPresent !== undefined);
+      yield* spawn(() => untilShown(terminal, "a frame that never completes", () => false));
+      yield* awaited("a wait subscribed to the next frame", () => terminal.waiting === 1);
+      return { terminal, readings: { drawn: terminal.drawn, fed: terminal.fed } };
+    });
+
+    expect([terminal.drawn, terminal.fed]).toEqual([readings.drawn, readings.fed]);
+    expect(draftTextIn(screenOf(terminal))).toBe("abcx");
+    released(terminal);
+  });
+
+  it("hands a failed write to the command's owner unchanged and releases the screen", function* () {
+    const failure = new Error("this terminal stopped accepting writes");
+    let terminal: Terminal | undefined;
+    let fed = 0;
+    let caught: unknown;
+    try {
+      yield* scoped(function* (): Operation<void> {
+        const repl = yield* useMountedRepl();
+        terminal = repl.terminal;
+        yield* spawn(() => untilShown(repl.terminal, "a draft holding z", () => false));
+        yield* awaited("a wait subscribed to the next frame", () => repl.terminal.waiting === 1);
+        repl.terminal.failNextPresent(failure);
+        repl.terminal.feed("z");
+        fed = repl.terminal.fed;
+        yield* suspend();
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(failure);
+    expect(terminal?.fed).toBe(fed);
+    released(terminal);
+  });
+
+  it("ends a wait the screen can no longer satisfy when the command exits", function* () {
+    const { terminal, waited } = yield* scoped(function* () {
+      const repl = yield* useMountedRepl();
+      const { terminal } = repl;
+      const pending = yield* spawn(function* (): Operation<unknown> {
+        try {
+          yield* untilShown(terminal, "something never drawn", () => false);
+          return undefined;
+        } catch (error) {
+          return error;
+        }
+      });
+      yield* awaited("a wait subscribed to the next frame", () => terminal.waiting === 1);
+      terminal.end();
+      const waited = yield* pending;
+      expect(repl.outcome()?.ok).toBe(true);
+      return { terminal, waited };
+    });
+    expect(String(waited)).toContain("the command ended before something never drawn");
+    released(terminal);
+  });
+});
+
 describe("REPL journey: resizing while a frame is being prepared", () => {
   it("J2: a window dragged while a frame is being prepared keeps the command", function* () {
     const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
@@ -4861,21 +4999,16 @@ describe("REPL journey: what an open drawer covers, through the terminal", () =>
        * accumulated screen is current at whatever size it is read at.
        */
       function* covering(label: string): Operation<void> {
-        yield* settled(30);
         // What a person is looking at before the drawer goes up, kept whole:
-        // which of its rows the drawer will actually cover is not a question
-        // the size answers on its own, so it is asked once the drawer is there
-        // and the same rectangle is then read on both screens.
+        // which of its rows the drawer covers is asked once it is there.
         const body = screenOf(terminal);
 
-        yield* activate(terminal, "[history]");
         // Waited for in the rectangle, because the drawer covers the row the
-        // location is drawn on: there is no readable location to ask while it is
-        // open, which is itself the coverage being tested.
-        yield* until_(terminal, `the drawer at ${label}`, (one) =>
+        // location is drawn on.
+        yield* traverse(terminal, "[history]", (one) => focusedOn(one, "[history]"));
+        yield* pressed(terminal, "\r", `the drawer at ${label}`, (one) =>
           textOf(screenOf(one), drawerBox(one)).includes("History"),
         );
-        yield* settled(30);
         const open = screenOf(terminal);
         // The rectangle this frame actually placed it in. Read from the open
         // drawer and not from the closed screen: the top is the rule the drawer
@@ -4920,8 +5053,12 @@ describe("REPL journey: what an open drawer covers, through the terminal", () =>
           true,
         );
 
-        terminal.feed("\x1b");
-        yield* until_(terminal, `the drawer closing at ${label}`, (one) => !shows(one, "[close]"));
+        yield* pressed(
+          terminal,
+          "\x1b",
+          `the drawer closing at ${label}`,
+          (one) => !shows(one, "[close]"),
+        );
       }
 
       // Narrow from the start, which is not the same screen as one that was
@@ -4930,11 +5067,9 @@ describe("REPL journey: what an open drawer covers, through the terminal", () =>
 
       // Then a round trip, because a diffing renderer leaves stale text exactly
       // where a rectangle moved.
-      terminal.resized({ columns: 160, rows: 36 });
-      yield* until_(terminal, "the wide frame", (one) => one.size.columns === 160);
+      yield* resizeTo(terminal, { columns: 160, rows: 36 });
       yield* covering("160x36");
-      terminal.resized({ columns: 72, rows: 20 });
-      yield* until_(terminal, "the narrow frame again", (one) => one.size.columns === 72);
+      yield* resizeTo(terminal, { columns: 72, rows: 20 });
       yield* covering("72x20 again");
 
       terminal.end();
@@ -4943,13 +5078,118 @@ describe("REPL journey: what an open drawer covers, through the terminal", () =>
   });
 });
 
+/** An entry that prints, publishes a binding, and then waits on a question. */
+const STOPPED_ENTRY = [
+  "```js eval",
+  'const token = "held";',
+  'output("printed before the question");',
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+  "One: {answer.decision}",
+  "",
+].join("\n");
+
+describe("REPL journey: the Draft's Stop, through the terminal", () => {
+  it("EL2: Draft Stop admits no successor until the stopped entry's cleanup joins", function* () {
+    const { terminal, install } = recordingTerminal();
+    let entering = false;
+    const release = withResolvers<void>();
+    // The execution's own teardown, held: the state where its close is written
+    // and its task has not been joined.
+    const holding: ExecutionInstallation = {
+      *install(): Operation<void> {
+        yield* ensure(function* () {
+          entering = true;
+          yield* release.operation;
+        });
+      },
+    };
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: { ...PROFILE, installations: [holding] } });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+      });
+      // After the spawn, so it runs first: a failing row lets the held cleanup go.
+      yield* ensure(() => release.resolve());
+      yield* untilDrawn(terminal);
+      const [file] = yield* histories(root);
+
+      yield* submitDraft(terminal, STOPPED_ENTRY);
+      yield* untilShown(terminal, "the entry asking, with what it printed", (one) =>
+        guidanceRow(one).includes("Entry 1 waiting for an answer"),
+      );
+      yield* pointAt(terminal, "[stop]");
+      yield* awaited("the stopped entry's cleanup being entered", () => entering);
+
+      // A successor asked for while cleanup is held is not admitted, and the
+      // draft keeps it. The Tab after Enter is drawn only once Enter was read.
+      yield* submitDraft(terminal, COLD_ONE);
+      yield* traverse(terminal, "the control after the Draft", (one) => !draftFocused(one));
+      expect((yield* projectionOf(root, file)).entries.map((entry) => entry.key)).toEqual([
+        "entry-1",
+      ]);
+      expect(draftShows(terminal, COLD_ONE)).toBe(true);
+
+      release.resolve();
+      yield* untilShown(terminal, "readiness for the successor", (one) =>
+        guidanceRow(one).includes("Ready for Entry 2"),
+      );
+      yield* traverse(terminal, "the Draft", draftFocused);
+      terminal.feed("\r");
+      yield* settledEntry(terminal, 2, "ok");
+
+      // The history says what happened: one interruption that kept what it
+      // printed, and exactly one successor.
+      const model = yield* projectionOf(root, file);
+      expect(model.entries.map((entry) => entry.terminal?.status)).toEqual(["cancelled", "ok"]);
+      expect(
+        model.entries[0]?.transcript.some(
+          (row) => row.kind === "output" && row.text.includes("printed before the question"),
+        ),
+      ).toBe(true);
+      expect(model.entries[0]?.scope.elicitations).toEqual([]);
+
+      terminal.end();
+      yield* running;
+    });
+    expect(terminal.resets).toBe(1);
+  });
+});
+
 describe("REPL journey: a selection, a position and a draft across a resize", () => {
-  it("TL10: wide to narrow and back keeps the whole reading, and a cold open restores it", function* () {
+  it("TL10: every size and a refusal keep the nested reading, and a cold open restores it", function* () {
     const first = recordingTerminal({ columns: 160, rows: 36 });
     let root: string | undefined;
     let files: string[] = [];
     let ended: ReplOutcome | undefined;
     let standing: string | undefined;
+
+    /**
+     * Whether the trail reads entry 2 and the component beneath it.
+     *
+     * The trail, because the catalog's selection channel marks the *entry* row
+     * for every reading under it: a deeper scope is named by the breadcrumb and
+     * by nothing else on this screen.
+     */
+    const nestedCrumb = (terminal: Terminal): boolean => {
+      const trail = crumbTrail(terminal);
+      const entry = trail.indexOf("Entry 2");
+      return entry !== -1 && trail.indexOf(SCOPE_NAME, entry) > entry;
+    };
 
     yield* scoped(function* (): Operation<void> {
       yield* first.install();
@@ -4967,153 +5207,126 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       });
       yield* untilDrawn(terminal);
       files = yield* histories(root);
-
-      // Two settled entries, so there is a catalog to select from and positions
-      // to read at.
       yield* submitted(terminal, COLD_ONE);
       yield* settledEntry(terminal, 1, "ok");
-      yield* submitted(terminal, COLD_TWO);
+      // The second entry invokes a component, so this execution retains a scope
+      // beneath an entry — which is the reading this journey carries across
+      // every size.
+      yield* submitted(terminal, SCOPED_TWO);
       yield* settledEntry(terminal, 2, "ok");
 
-      // 1. An entry selected by pointing at the cell its row is drawn in, which
-      //    is the production input path for a selection.
-      // A catalog row: opened to point at it, and the choice closes it again.
-      yield* openCatalog(terminal);
-      yield* click(terminal, "2. [ok] entry-2");
-      yield* until_(
-        terminal,
-        "the catalog closing behind the choice",
-        (one) => !catalogShowing(one),
-      );
-      yield* until_(terminal, "entry-2 being the locus", (one) =>
+      /** Point at one catalog row; the choice closes the catalog and selects it. */
+      function* selecting(row: string, reaches: (one: Terminal) => boolean): Operation<void> {
+        yield* openCatalog(terminal);
+        yield* pointAt(terminal, row);
+        yield* untilShown(
+          terminal,
+          `${row} being the locus`,
+          (one) => !catalogShowing(one) && reaches(one),
+        );
+      }
+      /** Whether the catalog marks this row as the one being read. */
+      function* markedRow(row: string): Operation<boolean> {
+        yield* openCatalog(terminal);
+        const found = marked(terminal, row);
+        yield* closeCatalog(terminal);
+        return found;
+      }
+      /**
+       * What the catalog says about this reading, asked where its rows are.
+       *
+       * Three questions of one reading rather than three readings: the rows a
+       * reader is looking at are one frame, and a fact taken from a later one
+       * would be a fact about a different screen.
+       */
+      function* catalogued(): Operation<{
+        readonly entry: boolean;
+        readonly scope: boolean;
+        readonly first: boolean;
+      }> {
+        yield* openCatalog(terminal);
+        const rows = screenOf(terminal);
+        const read = {
+          entry: markedIn(rows, READING),
+          scope: rows.some((line) => line.includes(CATALOG_SCOPE)),
+          first: rows.some((line) => line.includes("1. [ok] entry-1")),
+        };
+        yield* closeCatalog(terminal);
+        return read;
+      }
+
+      // 1. An entry selected by pointing at the cell its catalog row is drawn in.
+      yield* selecting("2. [ok] entry-2", (one) =>
         (selectedEntryOn(one) ?? "").includes("Entry 2"),
       );
-      yield* openCatalog(terminal);
-      // Read in the catalog, which is where this screen keeps the rows.
-      yield* openCatalog(terminal);
-      expect(marked(terminal, "2. [ok] entry-2")).toBe(true);
-      yield* closeCatalog(terminal);
-      yield* closeCatalog(terminal);
+      expect(yield* markedRow("2. [ok] entry-2")).toBe(true);
 
-      // 2. A History position, chosen through the drawer the footer control
-      //    opens. Entry 2's own admission, so the entry selected above still
-      //    exists at it.
+      // 2. The position the component was admitted at, chosen in the drawer the
+      //    footer control opens. That prefix is the one that holds the scope
+      //    being read: a position taken at entry 2's own admission predates it.
+      //    Choosing it leaves the drawer open, so it is dismissed and the
+      //    position stands.
       yield* activate(terminal, "[history]");
       expect(shows(terminal, "[close]")).toBe(true);
-      yield* focusOn(terminal, "Entry 2 admitted");
-      terminal.feed("\r");
-      yield* until_(terminal, "a frozen position", (one) => historicalOn(one));
-      // Choosing a position does not close the drawer it was chosen in, so it is
-      // dismissed the way a person dismisses it — and the position stands.
-      terminal.feed("\x1b");
-      yield* until_(terminal, "the drawer closing", (one) => !shows(one, "[close]"));
+      yield* focusOn(terminal, CHECKPOINT);
+      yield* pressed(terminal, "\r", "a frozen position", historicalOn);
+      yield* pressed(terminal, "\x1b", "the drawer closing", (one) => !shows(one, "[close]"));
       expect(historicalOn(terminal)).toBe(true);
 
-      // 3. A non-empty draft, typed into the field Tab reaches.
-      yield* focusDraft(terminal);
-      terminal.bytes(BYTES.encode(DRAFTED));
-      yield* until_(
-        terminal,
-        "the draft reaching the row it is typed on",
-        (one) => draftText(one) === DRAFTED,
-      );
+      // 3. The component beneath that entry, selected by pointing at its own
+      //    catalog row.
+      yield* selecting(CATALOG_SCOPE, nestedCrumb);
+      expect(yield* catalogued()).toEqual({ entry: true, scope: true, first: true });
 
-      // The whole semantic reading, as the screen shows it: the entry selected,
-      // a recorded position being read, and the draft on its own row.
-      expect(selectedEntryOn(terminal)).toContain("Entry 2");
-      expect(historicalOn(terminal)).toBe(true);
+      // 4. A message, process-local, and a draft, each typed into its own field.
+      yield* typeMessage(terminal, ASKED);
+      yield* typeDraft(terminal, DRAFTED);
+      expect(nestedCrumb(terminal)).toBe(true);
       expect(draftFocused(terminal)).toBe(true);
-      expect(draftShows(terminal, DRAFTED)).toBe(true);
-      // At entry 2's own admission the catalog says what that position says: the
-      // entry is there and has settled nothing yet.
-      // The marked row is in the catalog, which is where the rows are.
-      yield* openCatalog(terminal);
-      expect(marked(terminal, READING)).toBe(true);
-      yield* closeCatalog(terminal);
 
-      // 4. Narrow. The routed surface is one column wide now, and what a reader
-      //    chose is still what the screen says: the draft is on its own row, the
-      //    entry still carries the selection marker, and the catalog is still the
-      //    catalog.
-      // Read off the frames presented from the resize onward, because this
-      // renderer writes diffs: a buffer that also held the wide frames would
-      // answer with rows the narrow terminal no longer has.
-      const from = terminal.presented.length;
-      terminal.resized({ columns: 72, rows: 20 });
-      yield* until_(
-        terminal,
-        "the narrow frame",
-        (one) =>
-          one.presented.length > from &&
-          replay(one.presented.slice(from)).some((line) => line.includes("* Entries")),
-      );
-      const narrow = replay(terminal.presented.slice(from));
-      expect(narrow.length).toBe(20);
-      expect(narrow.filter((line) => line.trimEnd().length > 72)).toEqual([]);
-      // The draft is drawn in this frame, with what was typed into it. Drawn
-      // rather than focused: a resize rebuilds the tree, and which control the
-      // new one hands the keyboard to is its business — what this row is about
-      // is that the text a person put there is still on the screen they got
-      // back. Read from the narrow frames, like the rows above and below.
-      expect(narrow.some((line) => line.includes(DRAFT_PROMPT))).toBe(true);
-      expect(draftTextIn(narrow)).toBe(DRAFTED);
-      // And the catalog is still the catalog, read where this screen keeps it:
-      // a drawer over the reading, opened for its rows and put away again. The
-      // rows of the narrow terminal, so a wide frame's leftovers further down
-      // the buffer cannot answer for it.
-      yield* openCatalog(terminal);
-      const listed = screenOf(terminal);
-      expect(markedIn(listed, READING)).toBe(true);
-      expect(listed.some((line) => line.includes("1. [ok] entry-1"))).toBe(true);
-      yield* closeCatalog(terminal);
+      // 5. Medium and routed narrow: the same nested reading, position and
+      //    draft, on a screen rebuilt for each size.
+      for (const size of [
+        { columns: 120, rows: 30 },
+        { columns: 72, rows: 20 },
+      ]) {
+        const rows = (yield* resizeTo(terminal, size))();
+        expect(rows.length).toBe(size.rows);
+        expect(rows.filter((line) => line.trimEnd().length > size.columns)).toEqual([]);
+        expect(draftTextIn(rows)).toBe(DRAFTED);
+        expect([size.columns, nestedCrumb(terminal), historicalOn(terminal)]).toEqual([
+          size.columns,
+          true,
+          true,
+        ]);
+        expect(yield* catalogued()).toEqual({ entry: true, scope: true, first: true });
+      }
 
-      // 5. Wide again, and the reading is the one that went in: the same selected
-      //    entry, the same frozen position, the same draft, on a screen that has
-      //    been taken apart and rebuilt twice.
-      const back = terminal.presented.length;
-      terminal.resized({ columns: 160, rows: 36 });
-      yield* until_(
-        terminal,
-        "the wide frame again",
-        (one) => one.presented.length > back && replay(one.presented.slice(back)).length === 36,
-      );
-      expect(selectedEntryOn(terminal)).toContain("Entry 2");
+      // 6. Below the minimum: one refusal, and no control drawn anywhere on it.
+      const refused = yield* refusedAt(terminal, { columns: 60, rows: 15 });
+      expect(refused.filter((line) => /\[[^\]]*\]/.test(line))).toEqual([]);
+      expect(refused.some((line) => line.includes(SCOPE_NAME))).toBe(false);
+
+      // 7. Wide again, and the reading is the one that went in, the message too.
+      yield* resizeTo(terminal, { columns: 160, rows: 36 });
+      expect(nestedCrumb(terminal)).toBe(true);
       expect(historicalOn(terminal)).toBe(true);
       expect(draftText(terminal)).toBe(DRAFTED);
-      // The marked row is in the catalog, which is where the rows are.
-      yield* openCatalog(terminal);
-      expect(marked(terminal, READING)).toBe(true);
-      yield* closeCatalog(terminal);
+      expect(messageText(terminal)).toContain(ASKED);
+      expect(yield* catalogued()).toEqual({ entry: true, scope: true, first: true });
 
-      // 6. And the cells agree with the targets the frame published for them: a
-      //    pointer at the row entry 1 is drawn in selects entry 1, and one at
-      //    entry 2's row puts the reading back exactly as it was.
-      // A catalog row: opened to point at it, and the choice closes it again.
-      yield* openCatalog(terminal);
-      yield* click(terminal, "1. [ok] entry-1");
-      yield* until_(
-        terminal,
-        "the catalog closing behind the choice",
-        (one) => !catalogShowing(one),
-      );
-      yield* until_(terminal, "entry-1 being the locus", (one) =>
+      // 8. The cells agree with the targets the frame published: pointing at
+      //    entry 1's row selects it, and entry 2's puts the reading back. Both
+      //    select an entry, which is a reading of the entry rather than of the
+      //    component — so the component is pointed at again before leaving, and
+      //    that is the reading the command publishes.
+      yield* selecting("1. [ok] entry-1", (one) =>
         (selectedEntryOn(one) ?? "").includes("Entry 1"),
       );
-      // Read in the catalog, which is where this screen keeps the rows.
-      yield* openCatalog(terminal);
-      expect(marked(terminal, "1. [ok] entry-1")).toBe(true);
-      yield* closeCatalog(terminal);
-      // And back, by pointing at the other row — which means opening the
-      // catalog again, because the choice before it closed the catalog.
-      yield* openCatalog(terminal);
-      yield* click(terminal, READING);
-      yield* until_(terminal, "entry-2 again", (one) =>
-        (selectedEntryOn(one) ?? "").includes("Entry 2"),
-      );
-      // The marked row is in the catalog, which is where the rows are.
-      yield* openCatalog(terminal);
-      expect(marked(terminal, READING)).toBe(true);
-      yield* closeCatalog(terminal);
+      expect(yield* markedRow("1. [ok] entry-1")).toBe(true);
+      yield* selecting(READING, (one) => !nestedCrumb(one));
+      expect(yield* markedRow(READING)).toBe(true);
+      yield* selecting(CATALOG_SCOPE, nestedCrumb);
       expect(draftText(terminal)).toBe(DRAFTED);
 
       terminal.end();
@@ -5121,7 +5334,8 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
     });
 
     // The whole reading, in the one string the command publishes on its way out:
-    // route, surface, selected entry, frozen position, inspect and draft.
+    // route, surface, selected entry, the component beneath it, frozen position,
+    // inspect and draft.
     standing = ended?.location;
     expect(standing).toContain("/entry-2");
     expect(standing).toContain("at=");
@@ -5130,6 +5344,11 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
     expect(stood.ok).toBe(true);
     if (stood.ok) {
       expect(stood.value.draft).toBe(DRAFTED);
+      // Two members, the entry and the occurrence beneath it: an entry-only
+      // route would describe a different reading from the one left on screen.
+      expect(stood.value.scopes).toHaveLength(2);
+      expect(stood.value.scopes[0]).toBe("entry-2");
+      expect(standing).toContain(`/${stood.value.scopes[1]}`);
     }
 
     const retained = root;
@@ -5139,8 +5358,8 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
     const path = yield* historyPath(retained, files[0]!);
     const before = yield* until(readFile(path, "utf8"));
 
-    // A cold process over that exact location: the same reading, with no work
-    // performed and nothing appended.
+    // A cold process over that exact location: the same nested reading, with no
+    // work performed and nothing appended.
     const second = recordingTerminal({ columns: 160, rows: 36 });
     let performed: Performed | undefined;
     yield* scoped(function* (): Operation<void> {
@@ -5159,7 +5378,6 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       });
       yield* untilDrawn(second.terminal);
 
-      // Read in the catalog, which is where this screen keeps the rows.
       // Where a cold process puts the keyboard, asked before anything here has
       // opened a drawer over the reading: a drawer owns focus while it is up and
       // hands it back to the control that opened it, so this is the one moment
@@ -5167,16 +5385,19 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       expect(draftFocused(second.terminal)).toBe(true);
       expect(draftShows(second.terminal, DRAFTED)).toBe(true);
 
-      // The position this location names, not the head: entry 2 is there and has
-      // settled nothing at its own admission. Both rows and the marker while
-      // the catalog is the drawer up, because that is where the rows are.
+      // The reading this location names, not the head: the component beneath
+      // entry 2, at a position where entry 2 has settled nothing. The rows and
+      // the marker while the catalog is the drawer up, because that is where
+      // the rows are.
+      expect(nestedCrumb(second.terminal)).toBe(true);
       yield* openCatalog(second.terminal);
       expect(shows(second.terminal, "1. [ok] entry-1")).toBe(true);
       expect(shows(second.terminal, READING)).toBe(true);
       expect(marked(second.terminal, READING)).toBe(true);
+      expect(shows(second.terminal, CATALOG_SCOPE)).toBe(true);
       yield* closeCatalog(second.terminal);
       expect(draftShows(second.terminal, DRAFTED)).toBe(true);
-      expect(selectedEntryOn(second.terminal)).toContain("Entry 2");
+      expect(nestedCrumb(second.terminal)).toBe(true);
       expect(historicalOn(second.terminal)).toBe(true);
 
       second.terminal.end();
@@ -5203,8 +5424,32 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
  * the rows the other size drew.
  */
 
+/**
+ * The second entry's source, which invokes a component this fixture directory
+ * already supplies — so the execution retains a scope beneath an entry.
+ */
+const SCOPED_TWO = [COLD_TWO, '<Checklist title="Resize scope" steps={2} />', ""].join("\n");
+
+/** The component occurrence this reading is of, as the screen names it. */
+const SCOPE_NAME = "Checklist";
+
+/** Its own catalog row, drawn beneath the entry that admitted it. */
+const CATALOG_SCOPE = `component ${SCOPE_NAME}`;
+
+/**
+ * The retained position this journey freezes at.
+ *
+ * The component's own admission rather than the entry's: a prefix taken at
+ * entry 2's admission predates the component, and a reading of a scope the
+ * prefix does not hold is one resolution refuses.
+ */
+const CHECKPOINT = "Component admitted";
+
 /** The draft this reading carries across every size, with a space in it. */
 const DRAFTED = "keep this draft";
+
+/** The Sidekick message the same reading carries, which no location records. */
+const ASKED = "and what changed";
 
 /**
  * Entry 2's catalog row, as the position being read says it.

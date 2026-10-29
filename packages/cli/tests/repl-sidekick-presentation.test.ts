@@ -74,9 +74,22 @@ import {
   settled,
   shows,
   typing,
+  untilShown,
   useMountedHost,
   useMountedRepl,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
+import {
+  pointAt,
+  pressed,
+  refusedAt,
+  selectSidekick,
+  send,
+  sidekickPane,
+  submitDraft,
+  traverse,
+  typeDraft,
+  typeMessage,
+} from "./support/repl-page.ts";
 import type {
   AppendGate,
   MountedHost,
@@ -101,8 +114,6 @@ import {
   checkpointSelected,
   checkpointState,
   commitCheckpoint,
-  SEEDED_DRAFT,
-  SEEDED_MESSAGE,
   seededState,
 } from "./fixtures/repl/workspace-checkpoint.ts";
 import { runReplProgram, sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
@@ -259,48 +270,28 @@ function* markedEntry(terminal: Terminal, label: string): Operation<boolean> {
 }
 
 describe("Tier MP — one Sidekick per command, acquired without working", () => {
-  it("M1: a fresh command shows its Sidekick, asks the agent nothing, and still runs entries", function* () {
-    const repl = yield* useMountedRepl();
+  it("M1: a fresh command shows its Sidekick, asks the agent nothing, and keeps focus on the draft", function* () {
+    const { terminal, fake } = yield* useMountedRepl();
 
-    // The pane is the Sidekick by default, which is its body being the one
-    // drawn. Both tabs are named in that column's header either way, so the
-    // reading is read from the pane rather than from the label.
-    expect(panePresented(repl.terminal)).toBe("sidekick");
-    expect(shows(repl.terminal, "BINDINGS")).toBe(true);
-    // An execution nobody has said anything in.
-    expect(shows(repl.terminal, "No messages yet.")).toBe(true);
-    // And the box its messages go in, named so the row says which destination
-    // it is.
-    expect(shows(repl.terminal, MESSAGE_PROMPT.trim())).toBe(true);
-    expect(shows(repl.terminal, "[send]")).toBe(true);
+    // The pane is the Sidekick by default: its body is the one drawn, beside
+    // both tabs in the header.
+    expect(panePresented(terminal)).toBe("sidekick");
+    for (const label of ["BINDINGS", "No messages yet.", MESSAGE_PROMPT.trim(), "[send]"]) {
+      expect([label, shows(terminal, label)]).toEqual([label, true]);
+    }
+    // Acquiring it did no work: no runtime, no session, no turn.
+    expect([fake.created, fake.ensured, fake.prompts, fake.started]).toEqual([[], [], [], false]);
 
-    // Acquiring it did no work: no runtime created, no session established, no
-    // turn sent. Reopening a chat is free, and so is looking at one.
-    expect(repl.fake.created).toEqual([]);
-    expect(repl.fake.ensured).toEqual([]);
-    expect(repl.fake.prompts).toEqual([]);
-    expect(repl.fake.started).toBe(false);
-
-    // Focus is the draft's, not the Sidekick's: the pane being the one showing
-    // is a reading, and somebody who starts typing is typing their entry.
-    //
-    // Waited for rather than read off the first drawn frame. A startup focus
-    // claim is resolved when the frame that carries it is built, and on a
-    // loaded machine that is not always the frame that arrives first — so a
-    // row that read it immediately reported "the Sidekick took the focus" for
-    // a screen that had simply not caught up. Nothing is pressed either way.
-    yield* awaiting(repl.terminal, "the draft holding focus with nothing pressed", (one) =>
+    // A startup focus claim is resolved by the frame that carries it, which is
+    // not always the first one drawn. Nothing is pressed either way.
+    yield* untilShown(terminal, "the draft holding focus with nothing pressed", (one) =>
       focusedField(one, DRAFT_PROMPT),
     );
-    expect(focusedField(repl.terminal, MESSAGE_PROMPT)).toBe(false);
+    expect(focusedField(terminal, MESSAGE_PROMPT)).toBe(false);
 
-    // Selecting the Sidekick is what focuses its box, because that is somebody
-    // asking to type into it.
-    yield* activate(repl.terminal, "Sidekick");
-    expect(focusedField(repl.terminal, MESSAGE_PROMPT)).toBe(true);
-    // Still nothing asked of the agent by looking at it.
-    expect(repl.fake.ensured).toEqual([]);
-    expect(repl.fake.prompts).toEqual([]);
+    // Selecting the Sidekick is what focuses its box, and still asks the agent nothing.
+    yield* selectSidekick(terminal);
+    expect([fake.ensured, fake.prompts]).toEqual([[], []]);
   });
 
   it("M1: a legacy execution is reopened unchanged, and publishes no pair", function* () {
@@ -534,183 +525,126 @@ describe("Tier MP — the message box is cleared by the message that was saved",
   it("M4: a delayed acknowledgement clears what was sent and keeps what came after", function* () {
     const gate = appendGate();
     const repl = yield* useMountedRepl({ gate });
-    repl.fake.script({ reply: FILLING_REPLY });
-    repl.fake.script({ reply: "<Output>Understood.</Output>\n" });
+    const { terminal, fake } = repl;
+    fake.script({ reply: FILLING_REPLY });
+    fake.script({ reply: "<Output>Understood.</Output>\n" });
+    // Typing in the draft pauses the Sidekick's automatic replacement of it.
+    yield* typeDraft(terminal, "mine");
 
-    // The draft is this person's: they typed in it, which pauses the Sidekick's
-    // automatic replacement until they ask for something next.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "mine");
-    expect(draftText(repl.terminal)).toBe("mine");
-
-    // The record that saves the message, held open before it is asked for.
     const saving = heldMessageRecord(gate);
-    yield* sendMessage(repl, "ask");
+    yield* send(terminal, "ask");
     yield* saving.started();
-
-    // Both texts move on while the save is in flight. The box first, which
-    // stays editable while the Sidekick is working.
-    yield* focusMessage(repl.terminal);
-    yield* typing(repl.terminal, "!");
-    expect(messageText(repl.terminal).includes("ask!")).toBe(true);
-    // Then the draft, which is a newer claim on it than the message was.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "X");
-    expect(draftText(repl.terminal)).toBe("mineX");
-
+    // Both texts move on while the save is in flight, and each is a newer claim.
+    yield* typeMessage(terminal, "!");
+    yield* typeDraft(terminal, "X");
     saving.release();
-    yield* awaiting(repl.terminal, "the reply arriving", (one) => shows(one, "Understood."));
+    yield* untilShown(terminal, "the reply arriving", (one) => shows(one, "Understood."));
 
-    // What was saved and what was sent are the text Send captured, not what the
-    // box held by the time the record landed.
+    // Saved and sent is the text Send captured, not what the box held later.
     expect(chatMessages((yield* mountedReading(repl)).chat)).toEqual(["ask"]);
-    expect(repl.fake.prompts[0]).toContain("ask");
-    expect(repl.fake.prompts[0]).not.toContain("ask!");
-
-    // And both newer texts survive: the message that was sent cleared its own
-    // revision and nothing else.
-    expect(messageText(repl.terminal).includes("ask!")).toBe(true);
-    expect(draftText(repl.terminal)).toBe("mineX");
-
-    // The newer draft edit still owns the draft, so the reply's fill was
-    // refused rather than overwriting what somebody is typing — and the reply
-    // was told so.
-    expect(repl.fake.prompts[1] ?? "").toContain("taken the shared draft over");
-    expect(draftText(repl.terminal)).toBe("mineX");
+    expect(fake.prompts[0]).toContain("ask");
+    expect(fake.prompts[0]).not.toContain("ask!");
+    // The acknowledgement cleared its own revision and nothing newer.
+    expect(messageText(terminal)).toContain("ask!");
+    expect(draftText(terminal)).toBe("mineX");
+    // The newer draft edit refused the reply's fill, and the reply was told so.
+    expect(fake.prompts[1] ?? "").toContain("taken the shared draft over");
   });
 
   it("M4: control — with nothing typed after it, the same message clears the box", function* () {
     const gate = appendGate();
     const repl = yield* useMountedRepl({ gate });
-    repl.fake.script({ reply: FILLING_REPLY });
-    repl.fake.script({ reply: "<Output>Understood.</Output>\n" });
+    const { terminal, fake } = repl;
+    fake.script({ reply: FILLING_REPLY });
+    fake.script({ reply: "<Output>Understood.</Output>\n" });
+    yield* typeDraft(terminal, "mine");
 
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "mine");
-
-    // The same hold, released with nothing typed in between: the revisions the
-    // acknowledgement names are still the current ones.
     const saving = heldMessageRecord(gate);
-    yield* sendMessage(repl, "ask");
+    yield* send(terminal, "ask");
     yield* saving.started();
     saving.release();
+    yield* untilShown(terminal, "the reply arriving", (one) => shows(one, "Understood."));
 
-    yield* awaiting(repl.terminal, "the reply arriving", (one) => shows(one, "Understood."));
-
-    // The box is empty, because the history holds what was in it.
-    expect(messageText(repl.terminal).includes("ask")).toBe(false);
-    // And the takeover this explicit instruction released let the fill through
-    // — which is only true because the root applied the acknowledgement before
-    // the reply that came straight back asked to fill.
-    expect(repl.fake.prompts[1] ?? "").toContain("Entry input updated.");
-    expect(repl.fake.prompts[1] ?? "").not.toContain("taken the shared draft over");
-    expect(draftText(repl.terminal)).toContain("Replaced by the reply.");
+    expect(messageText(terminal)).not.toContain("ask");
+    // The released takeover let the fill through, which is only true because
+    // the acknowledgement was applied before the reply asked to fill.
+    expect(fake.prompts[1] ?? "").toContain("Entry input updated.");
+    expect(fake.prompts[1] ?? "").not.toContain("taken the shared draft over");
+    expect(draftText(terminal)).toContain("Replaced by the reply.");
   });
 });
 
 describe("Tier MP — a working Sidekick, and what reaches the screen while it works", () => {
   it("M5: while generation is held, Stop is the control and Send cannot start a second cycle", function* () {
     const repl = yield* useMountedRepl();
-    // Generation that has been accepted and is saying nothing yet.
-    repl.fake.script({ held: true, reply: "<Output>Done.</Output>\n" });
+    const { terminal, fake } = repl;
+    fake.script({ held: true, reply: "<Output>Done.</Output>\n" });
 
-    // Two activations in one chunk: one burst, which is the only way to ask for
-    // a second cycle before the first has remounted the row. The reservation is
-    // taken synchronously by the reduction, so the second finds it held.
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
-      focusedField(one, MESSAGE_PROMPT),
-    );
-    yield* typing(repl.terminal, "ask");
-    repl.terminal.feed("\r\r");
-    yield* repl.fake.holdingTurns(1);
-
-    // One turn, and one message in the history: the second Enter asked for a
-    // cycle that was already taken.
-    expect(repl.fake.prompts).toHaveLength(1);
+    yield* selectSidekick(terminal);
+    yield* typeMessage(terminal, "ask");
+    // Two Enters in one chunk ask for a second cycle before the first has
+    // remounted the row; the reservation the first took refuses it.
+    terminal.feed("\r\r");
+    yield* fake.holdingTurns(1);
+    expect(fake.prompts).toHaveLength(1);
     expect(chatMessages((yield* mountedReading(repl)).chat)).toEqual(["ask"]);
 
-    // Working, and the pane says so in its own status row. Send is gone —
-    // there is no admitted activation target for a second cycle — and Stop is
-    // there.
-    expect(saidBySidekick(repl.terminal, "working")).toBe(true);
-    expect(shows(repl.terminal, "[stop]")).toBe(true);
-    // Asked of this pane rather than of the whole screen: the entry draft keeps
-    // its own Send beside it, and the two are two destinations with two
-    // controls. What must be gone is *this* pane's.
-    expect(rowsShow(paneColumn(repl.terminal), "[send]")).toBe(false);
+    // This pane's Send is gone and its Stop is there; the draft keeps its own.
+    yield* untilShown(terminal, "the pane working, with Stop as its control", (one) =>
+      saidBySidekick(one, "working"),
+    );
+    expect(rowsShow(sidekickPane(terminal), "[stop]")).toBe(true);
+    expect(rowsShow(sidekickPane(terminal), "[send]")).toBe(false);
+    // And the box is still a box while the reply comes back.
+    yield* typeMessage(terminal, "then this");
 
-    // And the box is still a box: somebody composing their next question while
-    // a reply comes back is the ordinary case.
-    yield* focusMessage(repl.terminal);
-    yield* typing(repl.terminal, "then this");
-    expect(messageText(repl.terminal).includes("then this")).toBe(true);
-
-    repl.fake.releaseTurn();
-    yield* awaiting(repl.terminal, "the reply arriving", (one) => shows(one, "Done."));
+    fake.releaseTurn();
+    yield* untilShown(terminal, "the reply arriving", (one) => shows(one, "Done."));
+    yield* untilShown(terminal, "this pane's Send coming back", (one) =>
+      rowsShow(sidekickPane(one), "[send]"),
+    );
     // Finishing sends nothing: text prepared while busy is still only prepared.
-    expect(messageText(repl.terminal).includes("then this")).toBe(true);
-    expect(repl.fake.prompts).toHaveLength(1);
-    expect(shows(repl.terminal, "[send]")).toBe(true);
+    expect(messageText(terminal)).toContain("then this");
+    expect(fake.prompts).toHaveLength(1);
   });
 
   it("M5: the first reply appears while its follow-up is held, with nothing pressed", function* () {
-    const repl = yield* useMountedRepl();
-    // A response that says something *and* reads something: the Output is the
-    // reply a person is answered with, and the read is what owes a next turn.
-    repl.fake.script({
-      reply: ["<Output>First answer.</Output>", "<REPL.Bindings />", ""].join("\n"),
-    });
-    // That next turn, held: generation in flight with the reply before it
-    // already acknowledged.
-    repl.fake.script({ held: true, reply: "<Output>Second answer.</Output>\n" });
+    const { terminal, fake } = yield* useMountedRepl();
+    // The Output answers; the read is what owes a next turn, which is held.
+    fake.script({ reply: ["<Output>First answer.</Output>", "<REPL.Bindings />", ""].join("\n") });
+    fake.script({ held: true, reply: "<Output>Second answer.</Output>\n" });
 
-    yield* sendMessage(repl, "ask");
-    yield* repl.fake.holdingTurns(1);
-    // Nothing is typed, clicked or submitted from here, and this is what says
-    // so: a claim about the screen updating on its own is only a claim if no
-    // keystroke could have caused it.
-    const fed = repl.terminal.fed;
-
-    // The reply has to arrive while the job that produced it is still running,
-    // because the only thing that knows it arrived is the Sidekick.
-    yield* awaiting(
-      repl.terminal,
-      "the acknowledged first reply arriving with no keystroke",
-      (one) => saidBySidekick(one, `First answer.`),
+    yield* send(terminal, "ask");
+    yield* fake.holdingTurns(1);
+    const fed = terminal.fed;
+    yield* untilShown(terminal, "the first reply arriving with no keystroke", (one) =>
+      saidBySidekick(one, "First answer."),
     );
-    expect(repl.terminal.fed).toBe(fed);
-    // Still working, because the turn its read owes has not come back.
-    expect(shows(repl.terminal, "[stop]")).toBe(true);
-    expect(shows(repl.terminal, "Second answer.")).toBe(false);
-    // And the message job is still the one in flight: no second cycle started.
-    expect(repl.fake.prompts).toHaveLength(2);
+    expect(terminal.fed).toBe(fed);
+    // Still working, and still the one cycle.
+    expect(rowsShow(sidekickPane(terminal), "[stop]")).toBe(true);
+    expect(shows(terminal, "Second answer.")).toBe(false);
+    expect(fake.prompts).toHaveLength(2);
 
-    repl.fake.releaseTurn();
-    yield* awaiting(repl.terminal, "the follow-up answering", (one) =>
-      saidBySidekick(one, `Second answer.`),
+    fake.releaseTurn();
+    yield* untilShown(terminal, "the follow-up answering", (one) =>
+      saidBySidekick(one, "Second answer."),
     );
-    expect(repl.fake.prompts).toHaveLength(2);
-    expect(shows(repl.terminal, "[send]")).toBe(true);
+    yield* untilShown(terminal, "this pane's Send coming back", (one) =>
+      rowsShow(sidekickPane(one), "[send]"),
+    );
+    expect(fake.prompts).toHaveLength(2);
   });
 
   it("M5: control — an ordinary entry's own progress reaches the screen with no further key", function* () {
-    const repl = yield* useMountedRepl();
-
-    // One ordinary entry, admitted the ordinary way, and then nothing.
-    yield* focusDraft(repl.terminal);
-    repl.terminal.bytes(new TextEncoder().encode(TWO_STEP_ENTRY));
-    yield* settled(60);
-    repl.terminal.feed("\r");
-
-    // Its output arrives without another keystroke: the entry's own
-    // notifications wake the loop, and they are not the Sidekick's.
-    yield* awaiting(repl.terminal, "the entry's output arriving with no keystroke", (one) =>
+    const { terminal, fake } = yield* useMountedRepl();
+    yield* submitDraft(terminal, TWO_STEP_ENTRY);
+    const fed = terminal.fed;
+    yield* untilShown(terminal, "the entry's output arriving with no keystroke", (one) =>
       shows(one, "the released step"),
     );
-    // And no Sidekick work happened at all.
-    expect(repl.fake.ensured).toEqual([]);
-    expect(repl.fake.prompts).toEqual([]);
+    expect(terminal.fed).toBe(fed);
+    expect([fake.ensured, fake.prompts]).toEqual([[], []]);
   });
 });
 
@@ -725,162 +659,98 @@ const PROFILES: readonly ReplTerminalSize[] = [
 const TOO_SMALL: ReplTerminalSize = { columns: 60, rows: 15 };
 
 describe("Tier MP — the Sidekick at every size it is drawn at", () => {
-  it("M7: all three profiles keep both texts, the footer's seven rows and one body", function* () {
-    const repl = yield* useMountedRepl();
+  /** Both destinations with their own text, the Sidekick selected explicitly as a route. */
+  function* composed(terminal: Terminal, draft: string, message: string): Operation<void> {
+    yield* typeDraft(terminal, draft);
+    yield* selectSidekick(terminal);
+    yield* typeMessage(terminal, message);
+  }
 
-    // Both destinations, each with its own text. Short, because the medium
-    // profile's right pane is narrow and a field draws one row: a longer value
-    // would be truncated by the pane, which is a fact about the pane rather
-    // than about the text surviving.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "note");
-    // Activated explicitly, which is both what focuses the box and what makes
-    // the Sidekick a *route* — the narrow profile has one outlet and reaches it
-    // only when the route says so.
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
-      focusedField(one, MESSAGE_PROMPT),
-    );
-    yield* typing(repl.terminal, "ask");
+  it("M7: all three profiles keep both texts, the footer and one body", function* () {
+    const { terminal } = yield* useMountedRepl();
+    // Short, because the medium profile's right pane is narrow and a field
+    // draws one row there.
+    yield* composed(terminal, "note", "ask");
 
     for (const size of PROFILES) {
-      const rows = yield* readingAt(repl.terminal, size);
-      const drawn = rows();
-
-      // The footer is this screen's own rows at the bottom of the frame: the
-      // way out is in that band wherever this size puts it, and the frame is
-      // exactly as tall as the size asked for.
-      expect(drawn.slice(footerRow(drawn)).some((line) => line.includes("[exit]"))).toBe(true);
+      const drawn = (yield* readingAt(terminal, size))();
       expect(drawn.length).toBe(size.rows);
-
-      // The Sidekick's own text is in the pane this route is reading, at every
-      // size — one body and one message box, not one per column.
-      expect(messageTextIn(drawn).includes("ask")).toBe(true);
-      expect(drawn.filter((line) => line.includes(MESSAGE_PROMPT)).length).toBe(1);
-      // And one Send in that pane. The entry draft keeps its own beside it —
-      // two destinations, two controls — so this counts the pane's rather than
-      // the screen's.
-      expect(sidekickPaneIn(drawn).filter((line) => line.includes("[send]")).length).toBe(1);
-
+      expect(rowsShow(drawn, "[exit]")).toBe(true);
+      // One body and one message box in the pane this route reads, and that
+      // pane's one Send; the draft keeps its own beside it.
+      expect(messageTextIn(drawn)).toContain("ask");
+      expect(drawn.filter((line) => line.includes(MESSAGE_PROMPT))).toHaveLength(1);
+      expect(sidekickPaneIn(drawn).filter((line) => line.includes("[send]"))).toHaveLength(1);
       if (size.columns > NARROW.columns) {
-        // A shared width draws the selected work beside the chat, so the
-        // entry's own draft is there to read as well.
         expect(blockSays(draftTextIn(drawn), "note")).toBe(true);
         continue;
       }
-      // A narrow frame routes one outlet, and this route is reading the
-      // Sidekick — so the draft is in no cell of it, which is not the same as
-      // lost. Going back to the entries is how a person reaches it, and it is
-      // still holding what they typed; then back here, where the chat's text is
-      // still holding too. Both are facts about the reading rather than about
-      // the frame, which is the whole of this row's claim.
-      expect(drawn.some((line) => line.includes(DRAFT_PROMPT))).toBe(false);
-      yield* openCatalog(repl.terminal);
-      yield* closeCatalog(repl.terminal);
-      yield* awaiting(repl.terminal, "the draft back on the narrow outlet", (one) =>
+      // Narrow routes its one outlet to the Sidekick, so the draft is in no
+      // cell — and going to the entries, then wide again, shows it was held.
+      expect(rowsShow(drawn, DRAFT_PROMPT)).toBe(false);
+      yield* openCatalog(terminal);
+      yield* closeCatalog(terminal);
+      yield* untilShown(terminal, "the draft back on the narrow outlet", (one) =>
         blockSays(draftTextIn(screenOf(one)), "note"),
       );
-      // And the chat's own text is holding too, read where there is a column
-      // for it. Reaching the entries is what cleared the Sidekick route, and a
-      // narrow frame heads no shared column — so there is no tab on it to ask
-      // for that reading back with, which is the routing this size does rather
-      // than anything happening to the text.
-      const recovered = yield* readingAt(repl.terminal, PROFILES[0]);
-      expect(messageTextIn(recovered()).includes("ask")).toBe(true);
-      expect(blockSays(draftTextIn(recovered()), "note")).toBe(true);
+      const recovered = (yield* readingAt(terminal, PROFILES[0]))();
+      expect(messageTextIn(recovered)).toContain("ask");
+      expect(blockSays(draftTextIn(recovered), "note")).toBe(true);
     }
   });
 
   it("M7: selecting Bindings removes the Sidekick's body and its input targets", function* () {
-    const repl = yield* useMountedRepl();
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "my entry");
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
-      focusedField(one, MESSAGE_PROMPT),
-    );
-    yield* typing(repl.terminal, "my question");
+    const { terminal } = yield* useMountedRepl();
+    yield* composed(terminal, "my entry", "my question");
 
-    // Bindings is a pane, not a reading: selecting it takes the Sidekick's body
-    // away, and with it every target somebody could type or send into.
-    yield* activate(repl.terminal, "Bindings");
-    const onBindings = yield* readingAt(repl.terminal, repl.terminal.size);
-    expect(paneShown(onBindings())).toBe("bindings");
-    expect(rowsShow(onBindings(), MESSAGE_PROMPT)).toBe(false);
-    // The pane's own Send, not the screen's: the entry draft is in a different
-    // column and keeps the control that belongs to it.
-    expect(rowsShow(paneColumn(repl.terminal), "[send]")).toBe(false);
-    // The draft is still the draft, because it is not in that pane.
-    expect(blockSays(draftTextIn(onBindings()), "my entry")).toBe(true);
-
-    // And going back brings the message with it: the text is process-local and
-    // is not thrown away by looking at something else.
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message coming back", (one) =>
-      messageText(one).includes("my question"),
+    yield* traverse(terminal, "the Bindings tab", (one) => focusedOn(one, "Bindings"));
+    yield* pressed(
+      terminal,
+      "\r",
+      "the Bindings reading",
+      (one) => panePresented(one) === "bindings",
     );
+    expect(shows(terminal, MESSAGE_PROMPT)).toBe(false);
+    expect(rowsShow(paneColumn(terminal), "[send]")).toBe(false);
+    expect(blockSays(draftText(terminal), "my entry")).toBe(true);
+
+    // The message is process-local, and looking at something else keeps it.
+    yield* selectSidekick(terminal);
+    expect(messageText(terminal)).toContain("my question");
   });
 
   it("M7: a default Sidekick shrinks to narrow Entries, and an explicit one stays", function* () {
-    const repl = yield* useMountedRepl();
-    // Nothing has been activated, so the route names no view: the right pane is
-    // the Sidekick by default, which is a reading rather than a route.
-    expect(panePresented(repl.terminal)).toBe("sidekick");
-
-    // Narrow routes one outlet, and with no explicit view it is Entries.
-    const narrow = yield* resizeTo(repl.terminal, { columns: 72, rows: 20 });
+    const { terminal } = yield* useMountedRepl();
+    // Nothing activated: the Sidekick is a default reading, not a route.
+    expect(panePresented(terminal)).toBe("sidekick");
+    const narrow = yield* resizeTo(terminal, NARROW);
     expect(rowsShow(narrow(), "Entries")).toBe(true);
-    expect(rowsShow(narrow(), MESSAGE_PROMPT)).toBe(false);
-    // The Sidekick's own Send is gone with its pane. The entry draft keeps the
-    // one that belongs to it — this outlet is the Draft's — so this asks about
-    // the pane that was routed away rather than about the screen.
     expect(paneShown(narrow())).toBe("bindings");
 
-    // Back out, and ask for the Sidekick explicitly. That is a route, so it
-    // survives the shrink this time.
-    yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
-      focusedField(one, MESSAGE_PROMPT),
-    );
-    yield* typing(repl.terminal, "kept");
-
-    const again = yield* resizeTo(repl.terminal, { columns: 72, rows: 20 });
-    expect(messageTextIn(again()).includes("kept")).toBe(true);
-
-    // And expanding gives the two panes back without losing where somebody was.
-    const expanded = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
+    // Selected explicitly, it is a route, and it survives the shrink.
+    yield* resizeTo(terminal, PROFILES[0]);
+    yield* selectSidekick(terminal);
+    yield* typeMessage(terminal, "kept");
+    expect(messageTextIn((yield* resizeTo(terminal, NARROW))())).toContain("kept");
+    const expanded = yield* resizeTo(terminal, PROFILES[0]);
     expect(paneShown(expanded())).toBe("sidekick");
-    expect(messageTextIn(expanded()).includes("kept")).toBe(true);
+    expect(messageTextIn(expanded())).toContain("kept");
   });
 
   it("M7: an older entry stays frozen while the Sidekick works, and Bindings still reads it", function* () {
     const repl = yield* useMountedRepl();
+    const { terminal, fake } = repl;
+    yield* submitDraft(terminal, TWO_STEP_ENTRY);
+    yield* untilShown(terminal, "the released step", (one) => shows(one, "the released step"));
+    yield* settledEntry(terminal, 1, "ok");
+    // Selected in the catalog, which closes behind the choice.
+    yield* openCatalog(terminal);
+    yield* pointAt(terminal, "1.");
+    yield* untilShown(terminal, "the catalog closing", (one) => !catalogShowing(one));
 
-    // One ordinary entry of this person's, run and settled.
-    yield* focusDraft(repl.terminal);
-    repl.terminal.bytes(new TextEncoder().encode(TWO_STEP_ENTRY));
-    yield* settled(60);
-    repl.terminal.feed("\r");
-    // Settled, read from the rail. The catalog's `[ok]` row is in a drawer
-    // nobody has opened, and what this needs is that the entry is done.
-    yield* awaiting(repl.terminal, "the released step", (one) => shows(one, "the released step"));
-    yield* settledEntry(repl.terminal, 1, "ok");
-
-    // Selected, so the reading beside the catalog is that entry's own.
-    // Chosen in the catalog, which is where this screen keeps those rows: a
-    // drawer over the reading, opened to point at one, and the choice closes it.
-    yield* openCatalog(repl.terminal);
-    yield* click(repl.terminal, "1.");
-    yield* awaiting(
-      repl.terminal,
-      "the catalog closing behind the choice",
-      (one) => !catalogShowing(one),
-    );
-
-    // A reply that runs a second entry. The chat and the catalog both move;
-    // the position somebody is reading does not.
-    repl.fake.script({
+    // A reply that runs a second entry: the chat and the catalog move, and the
+    // position somebody is reading does not.
+    fake.script({
       reply: [
         '<Let as="code" select="code">',
         "````xmd",
@@ -896,65 +766,39 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
         "",
       ].join("\n"),
     });
-    repl.fake.script({ reply: "<Output>Both ran.</Output>\n" });
-
-    yield* sendMessage(repl, "run two");
-    yield* awaiting(repl.terminal, "the second entry being reported", (one) =>
-      saidBySidekick(one, `Both ran.`),
+    fake.script({ reply: "<Output>Both ran.</Output>\n" });
+    yield* send(terminal, "run two");
+    yield* untilShown(terminal, "the second entry being reported", (one) =>
+      saidBySidekick(one, "Both ran."),
     );
-
-    // The catalog grew and the chat updated, and the selection is where it was.
-    expect(yield* markedEntry(repl.terminal, "1.")).toBe(true);
+    expect(yield* markedEntry(terminal, "1.")).toBe(true);
     expect((yield* mountedReading(repl)).model.entries).toHaveLength(2);
-    // The reading is still the first entry's: a current message does not move
-    // somebody off the position they were reading.
-    expect(shows(repl.terminal, "the released step")).toBe(true);
+    expect(shows(terminal, "the released step")).toBe(true);
 
-    // Bindings still switches, and what it reads is still that same entry.
-    yield* activate(repl.terminal, "Bindings");
-    yield* awaiting(
-      repl.terminal,
-      "the inspector coming back",
-      (one) => panePresented(one) === "bindings",
-    );
-    expect(yield* markedEntry(repl.terminal, "1.")).toBe(true);
-    expect(shows(repl.terminal, "the released step")).toBe(true);
-    expect(shows(repl.terminal, MESSAGE_PROMPT)).toBe(false);
+    // Bindings still switches, and reads that same entry.
+    yield* activate(terminal, "Bindings");
+    yield* untilShown(terminal, "the inspector", (one) => panePresented(one) === "bindings");
+    expect(yield* markedEntry(terminal, "1.")).toBe(true);
+    expect(shows(terminal, "the released step")).toBe(true);
+    expect(shows(terminal, MESSAGE_PROMPT)).toBe(false);
 
     // And back to the Sidekick, with the chat it had.
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the chat coming back", (one) =>
-      saidBySidekick(one, `Both ran.`),
-    );
-    expect(saidByPerson(repl.terminal, "run two")).toBe(true);
+    yield* selectSidekick(terminal);
+    expect(saidBySidekick(terminal, "Both ran.")).toBe(true);
+    expect(saidByPerson(terminal, "run two")).toBe(true);
   });
 
   it("M7: a terminal below the minimum refuses, and recovers with both texts", function* () {
-    const repl = yield* useMountedRepl();
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "my entry");
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
-      focusedField(one, MESSAGE_PROMPT),
-    );
-    yield* typing(repl.terminal, "my question");
-
-    // Too small to draw: a refusal, not a smaller screen.
-    const from = repl.terminal.presented.length;
-    repl.terminal.resized(TOO_SMALL);
-    yield* awaiting(repl.terminal, "the refusal this size draws", () =>
-      rowsShow(replay(repl.terminal.presented.slice(from)), `${NARROW.columns}x`),
-    );
-    const refused = replay(repl.terminal.presented.slice(from));
+    const { terminal } = yield* useMountedRepl();
+    yield* composed(terminal, "my entry", "my question");
+    // A refusal is the whole of its own screen: no pane's control is on it.
+    const refused = yield* refusedAt(terminal, TOO_SMALL);
     expect(rowsShow(refused, MESSAGE_PROMPT)).toBe(false);
-    // A refusal is the whole of its own screen: no control of any pane's is on
-    // it, the draft's own Send included.
     expect(rowsShow(refused, "[send]")).toBe(false);
 
-    // And back: nothing about either text was a property of the frame.
-    const recovered = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
+    const recovered = yield* resizeTo(terminal, PROFILES[0]);
     expect(blockSays(draftTextIn(recovered()), "my entry")).toBe(true);
-    expect(messageTextIn(recovered()).includes("my question")).toBe(true);
+    expect(messageTextIn(recovered())).toContain("my question");
   });
 });
 
@@ -1575,72 +1419,100 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
     expect(shows(repl.terminal, "[refresh]")).toBe(true);
   }
 
+  /** Open Configure from its header control, and wait for what it advertises. */
+  function* configureOpened(terminal: Terminal): Operation<void> {
+    yield* pointAt(terminal, `[configure ${MOUNTED_AGENT}]`);
+    yield* untilShown(terminal, "the advertised models", (one) => shows(one, "Balanced"));
+  }
+
+  /** Choose one advertised model in the open drawer, without applying it. */
+  function* chosen(terminal: Terminal, name: string): Operation<void> {
+    yield* pointAt(terminal, `( ) ${name}`, paneEnvelope(terminal.size.columns));
+    yield* untilShown(terminal, `${name} being chosen`, (one) => shows(one, `(x) ${name}`));
+  }
+
+  /** Configure is closed, and focus is on the control that opened it. */
+  function openerFocused(terminal: Terminal): boolean {
+    return !shows(terminal, "[refresh]") && focusedOn(terminal, `[configure ${MOUNTED_AGENT}]`);
+  }
+
+  /** Whether History's drawer is up, which is the one left of the pane Configure owns. */
+  function historyOpen(terminal: Terminal): boolean {
+    const close = coordinateOf(terminal, "[close]");
+    return close !== undefined && close.column < paneEnvelope(terminal.size.columns);
+  }
+
   it("CFG6: Configure stays inside its pane at every size, and survives a refusal", function* () {
-    const repl = yield* useMountedRepl();
-    repl.fake.configuration(ADVERTISED);
-
-    // Both composers, and an explicit Sidekick route so the narrow profile
-    // keeps this pane rather than routing its one outlet to Entries.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "note");
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
-      focusedField(one, MESSAGE_PROMPT),
-    );
-    yield* typing(repl.terminal, "ask");
-
-    yield* openConfigure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-    yield* click(repl.terminal, "( ) Fast", paneEnvelope(repl.terminal.size.columns));
-    yield* awaiting(repl.terminal, "a chosen model", (one) => shows(one, "(x) Fast"));
+    const { terminal, fake } = yield* useMountedRepl();
+    fake.configuration(ADVERTISED);
+    // An explicit Sidekick route, so narrow keeps this pane rather than Entries.
+    yield* typeDraft(terminal, "note");
+    yield* selectSidekick(terminal);
+    yield* typeMessage(terminal, "ask");
+    yield* configureOpened(terminal);
+    yield* chosen(terminal, "Fast");
 
     for (const size of PROFILES) {
-      const rows = yield* readingAt(repl.terminal, size);
-      yield* awaiting(repl.terminal, `Configure at ${size.columns}x${size.rows}`, (one) =>
+      yield* readingAt(terminal, size);
+      yield* untilShown(terminal, `Configure at ${size.columns}x${size.rows}`, (one) =>
         shows(one, "(x) Fast"),
       );
+      const drawn = screenOf(terminal);
+      // Against the accepted envelope rather than the production rectangle: a
+      // test that asked the code where it put the drawer would agree with it.
       const envelope = paneEnvelope(size.columns);
-      const drawn = rows();
-
-      // Inside the pane that owns it, and above the footer's seven rows.
-      // Compared against the reference envelope rather than against the
-      // production rectangle: a test that asked the code where it put the
-      // drawer would agree with it however wrong it was.
       for (const label of ["[close]", "[refresh]"]) {
-        const at = columnOf(repl.terminal, label, envelope);
+        const at = columnOf(terminal, label, envelope);
         expect(at.column).toBeGreaterThanOrEqual(envelope);
         expect(at.column).toBeLessThan(size.columns);
         expect(at.row).toBeLessThan(footerRow(drawn));
       }
-      // One presented modal, and the footer still the footer.
-      expect(drawn.filter((line) => line.includes("[close]")).length).toBe(1);
+      expect(drawn.filter((line) => line.includes("[close]"))).toHaveLength(1);
       expect(rowsShow(drawn, "[exit]")).toBe(true);
-      // The chosen model survived the resize, and nothing was applied by it.
-      expect(rowsShow(drawn, "(x) Fast")).toBe(true);
-      // And the draft is read where it is drawn. A narrow frame routes one
-      // outlet and Configure belongs to the pane this route is reading, so the
-      // draft is in no cell there — which the resize back below proves is not
-      // the same as lost.
-      if (size.columns > NARROW.columns) {
-        expect(blockSays(draftTextIn(drawn), "note")).toBe(true);
-      } else {
-        expect(drawn.some((line) => line.includes(DRAFT_PROMPT))).toBe(false);
-      }
+      // Narrow routes its one outlet to this pane, so the draft is in no cell there.
+      expect(
+        size.columns > NARROW.columns
+          ? blockSays(draftTextIn(drawn), "note")
+          : !rowsShow(drawn, DRAFT_PROMPT),
+      ).toBe(true);
     }
 
-    // Too small to draw: a refusal, and Configure is not in it.
-    const from = repl.terminal.presented.length;
-    repl.terminal.resized(TOO_SMALL);
-    yield* awaiting(repl.terminal, "the refusal this size draws", () =>
-      rowsShow(replay(repl.terminal.presented.slice(from)), `${NARROW.columns}x`),
+    expect(rowsShow(yield* refusedAt(terminal, TOO_SMALL), "[refresh]")).toBe(false);
+    // Back: the drawer, its unapplied choice and the draft are as they were.
+    yield* resizeTo(terminal, PROFILES[0]);
+    yield* untilShown(terminal, "Configure coming back", (one) => shows(one, "[refresh]"));
+    expect(shows(terminal, "(x) Fast")).toBe(true);
+    expect(blockSays(draftText(terminal), "note")).toBe(true);
+    // Escape hands focus back to the opener, and the box Configure covered still holds its text.
+    yield* pressed(terminal, "\x1b", "Configure closing, focus back on its opener", (one) =>
+      openerFocused(one),
     );
-    expect(rowsShow(replay(repl.terminal.presented.slice(from)), "[refresh]")).toBe(false);
+    expect(messageText(terminal)).toContain("ask");
+  });
 
-    // And back: the drawer, its selection and both composers are as they were.
-    const wide = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
-    yield* awaiting(repl.terminal, "Configure coming back", (one) => shows(one, "[refresh]"));
-    expect(rowsShow(wide(), "(x) Fast")).toBe(true);
-    expect(blockSays(draftTextIn(wide()), "note")).toBe(true);
+  it("CFG6: Tab and Shift+Tab move inside Configure, and Close or Escape return to its opener", function* () {
+    const { terminal, fake } = yield* useMountedRepl();
+    fake.configuration(ADVERTISED);
+    yield* typeDraft(terminal, "note");
+    yield* configureOpened(terminal);
+
+    yield* traverse(terminal, "the Agent field", (one) => focusedField(one, "> Agent: "));
+    yield* pressed(terminal, "\t", "the first choice", (one) => focusedOn(one, "( ) Balanced"));
+    yield* pressed(terminal, "\t", "the second choice", (one) => focusedOn(one, "( ) Fast"));
+    yield* pressed(terminal, "\x1b[Z", "Shift+Tab to the first", (one) =>
+      focusedOn(one, "( ) Balanced"),
+    );
+    // A sentinel typed at a choice edits nothing behind the drawer, and the
+    // Escape after it gives focus back to the control that opened Configure.
+    terminal.feed("zz");
+    yield* pressed(terminal, "\x1b", "Configure closing, focus back on its opener", openerFocused);
+    expect([draftText(terminal), messageText(terminal).includes("zz")]).toEqual(["note", false]);
+
+    yield* configureOpened(terminal);
+    yield* pointAt(terminal, "[close]", paneEnvelope(terminal.size.columns));
+    yield* untilShown(terminal, "Configure closing, focus back on its opener", openerFocused);
+    // From there, a composer is reached the ordinary way.
+    yield* typeDraft(terminal, "-more");
   });
 
   it("CFG6: a choice below the drawer's window is reached by scrolling to it", function* () {
@@ -1781,143 +1653,81 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
   });
 
   it("CFG6: control — an explicitly selected narrow Sidekick draws Configure and takes its keys", function* () {
-    const repl = yield* useMountedRepl();
-    repl.fake.configuration(ADVERTISED);
-
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "note");
-    // Explicitly selected, which is what the narrow profile honours: its one
-    // outlet goes to the pane a person chose rather than to Entries.
-    yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
-      focusedField(one, MESSAGE_PROMPT),
-    );
-    yield* openConfigure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-
-    const narrow = yield* resizeTo(repl.terminal, { columns: 72, rows: 20 });
-    // Drawn at this size, which is the positive half of the hidden-default
-    // case: the row below hides Configure by *not* selecting this pane, so
-    // this one has to show that the same size draws it when it is selected.
-    yield* awaiting(repl.terminal, "Configure at the narrow size", (one) =>
-      shows(one, "[refresh]"),
-    );
+    const { terminal, fake } = yield* useMountedRepl();
+    fake.configuration(ADVERTISED);
+    yield* typeDraft(terminal, "note");
+    // Explicitly selected, which narrow honours: its outlet goes to this pane.
+    yield* selectSidekick(terminal);
+    yield* configureOpened(terminal);
+    const narrow = yield* resizeTo(terminal, NARROW);
+    yield* untilShown(terminal, "Configure at the narrow size", (one) => shows(one, "[refresh]"));
     expect(rowsShow(narrow(), "Balanced")).toBe(true);
 
-    // And its own field takes the keys here: the agent's name is edited in the
-    // drawer that is on the screen, and the draft keeps what is in it.
-    yield* focusOn(repl.terminal, "> Agent: ");
-    yield* typing(repl.terminal, "-two");
-    yield* awaiting(repl.terminal, "the name being edited at this size", (one) =>
+    // Its own field takes the keys here, and the draft is in no cell of this outlet.
+    yield* traverse(terminal, "the Agent field", (one) => focusedField(one, "> Agent: "));
+    yield* pressed(terminal, "-two", "the name being edited", (one) =>
       shows(one, `Agent: ${MOUNTED_AGENT}-two`),
     );
-    // And the draft kept what is in it. Read where it is drawn, which takes two
-    // steps at this size: Configure owns the keyboard while it is open, so it
-    // is closed first, and then this frame's one outlet is routed back to the
-    // entries, which is the reading the draft belongs to.
-    expect(shows(repl.terminal, DRAFT_PROMPT)).toBe(false);
-    yield* click(repl.terminal, "[close]");
-    yield* awaiting(repl.terminal, "Configure closing", (one) => !shows(one, "[refresh]"));
-    yield* openCatalog(repl.terminal);
-    yield* closeCatalog(repl.terminal);
-    yield* awaiting(
-      repl.terminal,
-      "the draft back on the narrow outlet",
+    expect(shows(terminal, DRAFT_PROMPT)).toBe(false);
+    yield* pointAt(terminal, "[close]");
+    yield* untilShown(terminal, "Configure closing", (one) => !shows(one, "[refresh]"));
+    yield* openCatalog(terminal);
+    yield* closeCatalog(terminal);
+    yield* untilShown(
+      terminal,
+      "the draft on the narrow outlet",
       (one) => draftText(one) === "note",
     );
   });
 
   it("CFG6: History over Configure closes once, and a hidden Configure takes no keys", function* () {
     const repl = yield* useMountedRepl();
+    const { terminal } = repl;
     repl.fake.configuration(ADVERTISED);
+    yield* typeDraft(terminal, "note");
+    yield* configureOpened(terminal);
 
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "note");
-    yield* openConfigure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-
-    // History owns the modal while it is open, so one close closes History and
-    // leaves Configure exactly as it was underneath.
-    yield* click(repl.terminal, "[history]");
-    yield* awaiting(repl.terminal, "History's own drawer", (one) => {
-      const close = coordinateOf(one, "[close]");
-      return close !== undefined && close.column < paneEnvelope(one.size.columns);
-    });
-    yield* click(repl.terminal, "[close]");
-    yield* awaiting(repl.terminal, "History leaving its rectangle", (one) => {
-      const close = coordinateOf(one, "[close]");
-      return close === undefined || close.column >= paneEnvelope(one.size.columns);
-    });
-    // Still running, and Configure is still the thing in the pane.
+    // History owns the modal while it is open: one close is History's.
+    yield* pointAt(terminal, "[history]");
+    yield* untilShown(terminal, "History's own drawer", historyOpen);
+    yield* pointAt(terminal, "[close]");
+    yield* untilShown(terminal, "History closing", (one) => !historyOpen(one));
     expect(repl.outcome()).toBe(undefined);
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+    expect(shows(terminal, "[refresh]")).toBe(true);
 
-    // Shrunk with no explicit Sidekick route: the pane routes to Entries, so
-    // Configure is nowhere on the screen and the visible Draft takes the keys.
-    const narrow = yield* resizeTo(repl.terminal, { columns: 72, rows: 20 });
-    expect(rowsShow(narrow(), "[refresh]")).toBe(false);
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "-more");
-    expect(draftText(repl.terminal)).toBe("note-more");
-
-    // And the hidden drawer kept what was in it, rather than being closed by a
-    // resize or consuming what was typed.
-    const back = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
-    yield* awaiting(repl.terminal, "Configure coming back", (one) => shows(one, "[refresh]"));
-    expect(rowsShow(back(), "Balanced")).toBe(true);
+    // With no explicit route narrow shows Entries, and the visible Draft takes the keys.
+    expect(rowsShow((yield* resizeTo(terminal, NARROW))(), "[refresh]")).toBe(false);
+    yield* typeDraft(terminal, "-more");
+    yield* resizeTo(terminal, PROFILES[0]);
+    yield* untilShown(terminal, "Configure coming back", (one) => shows(one, "[refresh]"));
+    expect(shows(terminal, "Balanced")).toBe(true);
+    expect(shows(terminal, `${MOUNTED_AGENT}-more`)).toBe(false);
   });
 
   it("CX3: Escape closes History first, and Configure under its own rule after", function* () {
     const repl = yield* useMountedRepl();
+    const { terminal } = repl;
     repl.fake.configuration(ADVERTISED);
+    yield* typeDraft(terminal, "note");
+    yield* configureOpened(terminal);
+    // Chosen and not applied, so what each Escape keeps or discards is visible.
+    yield* chosen(terminal, "Fast");
 
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "note");
-    yield* openConfigure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
-    // A choice made and not applied, so what survives the first Escape and what
-    // the second one discards are both observable.
-    const envelope = paneEnvelope(repl.terminal.size.columns);
-    yield* click(repl.terminal, "( ) Fast", envelope);
-    yield* awaiting(repl.terminal, "the model being selected", (one) => shows(one, "(x) Fast"));
-
-    // History over it. A route drawer owns the modal while it is open, so
-    // Configure underneath is held state and not presentation — and an Escape
-    // meant for the reading in front must not reach it.
-    yield* click(repl.terminal, "[history]");
-    yield* awaiting(repl.terminal, "History's own drawer", (one) => {
-      const close = coordinateOf(one, "[close]");
-      return close !== undefined && close.column < paneEnvelope(one.size.columns);
-    });
-    repl.terminal.feed("\x1b");
-    yield* awaiting(repl.terminal, "History leaving its rectangle", (one) => {
-      const close = coordinateOf(one, "[close]");
-      return close === undefined || close.column >= paneEnvelope(one.size.columns);
-    });
-    // One drawer closed, and exactly one: Configure is still the thing in the
-    // pane and still holds the choice that was made in it.
+    yield* pointAt(terminal, "[history]");
+    yield* untilShown(terminal, "History's own drawer", historyOpen);
+    yield* pressed(terminal, "\x1b", "History closing", (one) => !historyOpen(one));
     expect(repl.outcome()).toBe(undefined);
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
-    expect(shows(repl.terminal, "(x) Fast")).toBe(true);
+    expect(shows(terminal, "[refresh]")).toBe(true);
+    expect(shows(terminal, "(x) Fast")).toBe(true);
 
-    // The next Escape is Configure's, and it closes under Configure's own rule:
-    // nothing saved, and the choice goes with the drawer.
-    const from = repl.terminal.presented.length;
-    repl.terminal.feed("\x1b");
-    yield* awaited("Configure closing", () =>
-      replay(repl.terminal.presented.slice(from)).some(
-        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
-      ),
-    );
-    expect(shows(repl.terminal, "[refresh]")).toBe(false);
+    // The next Escape is Configure's: nothing saved, and the choice goes with it.
+    yield* pressed(terminal, "\x1b", "Configure closing", (one) => !shows(one, "[refresh]"));
     expect((yield* mountedReading(repl)).chat.some((one) => one.kind === "preferences")).toBe(
       false,
     );
-    // The draft was never the destination of either key.
-    expect(draftText(repl.terminal)).toBe("note");
-    yield* openConfigure(repl);
-    yield* awaiting(repl.terminal, "the models again", (one) => shows(one, "Balanced"));
-    expect(shows(repl.terminal, "(x) Fast")).toBe(false);
+    expect(draftText(terminal)).toBe("note");
+    yield* configureOpened(terminal);
+    expect(shows(terminal, "(x) Fast")).toBe(false);
   });
 
   it("CX4: Configure says scroll, the readings around it still say earlier", function* () {
@@ -5615,51 +5425,23 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
 });
 
 /**
- * #971 A3: one mounted screen carried through every supported size and back.
+ * #971 A3: what a resize places, removes and recovers, read from the frame.
  *
- * One presenter, one tree and one grid throughout, because what is under test
- * is what survives a resize rather than what a fresh frame can draw: the
- * reading, the selection, both texts, and the control a keystroke reaches.
- *
- * The sizes below the minimum are part of the journey. That frame draws one
- * sentence and places no control at all, and the one after it has to bring the
- * reading back — a screen that recovered into something else would be a resize
- * that lost somebody's work.
+ * The reading surviving every size through real input is TL10's journey. This
+ * is the evidence only the committed frame has: which key holds focus, which
+ * controls are mounted and targetable, and that a refusal places none at all.
  */
 describe("Tier A3 — the staged screen resized, and recovered", () => {
   it("A3: 160 to 120 to 72, below the minimum, and back", function* () {
-    // The fixture's entries compile their own eval blocks, which is what this
-    // file's other rows get from the program they run.
     yield* useTempFileCompiler();
-    // The journal read at a position somebody moved to, rather than at its
-    // head. Both halves come from one call, because a route may only name the
-    // position its own model was projected at: a marker set on the model of
-    // the present is a route resolution refuses.
-    const { model, at: selected } = yield* checkpointSelected();
-    // Seeded once, and the only reading in this journey: that retained
-    // position, the entry and nested scope it holds, and two texts no default
-    // supplies. A frame that rebuilt the fixture's own state instead of
-    // carrying this one would be visibly a different screen.
+    // A retained position with a nested scope selected, so the band says it is
+    // reading earlier and the route has more than an entry in it.
+    const { model } = yield* checkpointSelected();
     const state = seededState(model);
+    expect(state.route.scopes.length).toBe(2);
     const presenter = yield* usePresenter(CHECKPOINT_SIZE);
     const first = yield* commitCheckpoint(presenter, { model, state });
-    expect(first.focused).toBe("footer:input");
-    const scopes = state.route.scopes;
-    const at = state.route.at;
-    expect(scopes.length).toBe(2);
-
-    // The position is a real one: a marker this journal retained, named by the
-    // route, and the one its model was projected at. All three, because any
-    // two of them agreeing on `undefined` would say only that this reading is
-    // of the present.
-    expect(typeof at).toBe("string");
-    expect(at).toBe(selected);
-    expect(at).toBe(model.selection);
-    expect(model.checkpoints.map((one) => one.marker)).toContain(selected);
-    expect(selected.length).toBeGreaterThan(0);
-
-    // And the screen says which reading it is showing: a position behind HEAD
-    // marks the History band, which a reading of the present does not.
+    let held = first.focused;
     const banded = (frame: CheckpointFrame): string => {
       const bounds = frame.observed.regionOf("box:history");
       if (bounds === undefined) {
@@ -5667,15 +5449,7 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
       }
       return presenter.grid.textIn(bounds).join(" ");
     };
-    expect(banded(first)).toContain("reading earlier");
-
-    // The key the tree answered with, carried from size to size. Passing it is
-    // what tells the fixture not to let the Draft take focus again:
-    // re-offering it at every size would be restoring focus rather than
-    // keeping whatever a resize left focused.
-    let held = first.focused;
-
-    /** The same reading at one more size, committed into the same tree. */
+    /** The same reading at one more size, keeping whatever focus the last one left. */
     const resized = function* (size: ReplTerminalSize) {
       presenter.resize(size);
       const committed = yield* commitCheckpoint(presenter, {
@@ -5688,91 +5462,42 @@ describe("Tier A3 — the staged screen resized, and recovered", () => {
       return committed;
     };
 
-    for (const size of [CHECKPOINT_MEDIUM, CHECKPOINT_NARROW]) {
-      const where = `${size.columns}x${size.rows}`;
-      const committed = yield* resized(size);
-      // The reading is the same reading: same entry, same nested scope, same
-      // recorded position, and both texts exactly as they were typed.
-      expect({ where, scopes: committed.view.state.route.scopes }).toEqual({ where, scopes });
-      expect({ where, at: committed.view.state.route.at }).toEqual({ where, at });
-      expect({ where, draft: committed.view.state.draft }).toEqual({
+    /** Focus is still the Draft's, which is drawn, under a History band. Read before the next commit. */
+    const placed = (frame: CheckpointFrame): void => {
+      const where = `${frame.observed.committed.manifest.size.columns}`;
+      expect({ where, focused: frame.focused }).toEqual({ where, focused: "footer:input" });
+      expect({ where, drawn: frame.observed.boundsOf("footer:input") !== undefined }).toEqual({
         where,
-        draft: SEEDED_DRAFT,
+        drawn: true,
       });
-      expect({ where, message: committed.view.state.message }).toEqual({
-        where,
-        message: SEEDED_MESSAGE,
-      });
-      // And it is still showing the retained reading rather than the present,
-      // wherever the row has the cells to say so. The band is content, so it
-      // is cut at the room its own measured controls leave it; at 72 columns
-      // this reading's band is longer than that room, and what falls off is
-      // the phrase below. That the row cannot hold it is an appearance
-      // question for the image review these sizes are already waiting on —
-      // what this journey holds is that the reading itself does not change.
-      const band = banded(committed);
-      expect({ where, drawn: band.length > 0 }).toEqual({ where, drawn: true });
-      if (size.columns >= CHECKPOINT_MEDIUM.columns) {
-        expect({ where, banded: band.includes("reading earlier") }).toEqual({
-          where,
-          banded: true,
-        });
-      }
-      // The Draft is still on this screen, so focus is still on it.
-      expect({ where, focused: committed.focused }).toEqual({ where, focused: "footer:input" });
-      expect({
-        where,
-        drawn: committed.observed.boundsOf("footer:input") !== undefined,
-      }).toEqual({ where, drawn: true });
-    }
+      expect({ where, banded: banded(frame).trim().length > 0 }).toEqual({ where, banded: true });
+    };
+    placed(first);
+    expect(banded(first)).toContain("reading earlier");
+    placed(yield* resized(CHECKPOINT_MEDIUM));
+    placed(yield* resized(CHECKPOINT_NARROW));
 
-    // A control narrowing removed is not merely hidden: it is in no cell, no
-    // frame map and no mounted node, so nothing can activate it.
+    // A control narrowing removed is in no cell, frame map or mounted node.
     const narrow = presenter.last();
-    if (narrow === undefined) {
-      throw new Error("this journey committed no narrow frame");
-    }
     for (const key of ["tray:queue", "follow", "sidekick:stop"]) {
-      expect({ key, mounted: narrow.keys.includes(key) }).toEqual({ key, mounted: false });
-      expect({ key, drawn: narrow.boundsOf(key) !== undefined }).toEqual({ key, drawn: false });
+      expect({ key, mounted: narrow?.keys.includes(key) }).toEqual({ key, mounted: false });
+      expect({ key, drawn: narrow?.boundsOf(key) !== undefined }).toEqual({ key, drawn: false });
     }
 
-    // Below the minimum the frame is its own refusal: one sentence, and not one
-    // control anywhere on it.
+    // Below the minimum the frame is its own refusal, with no control anywhere.
     const refused = yield* resized(CHECKPOINT_BELOW);
     expect(refused.observed.committed.manifest.profile).toBe("too-small");
     expect(refused.observed.targets.length).toBe(0);
     expect(refused.observed.committed.manifest.actions).toBe(undefined);
-    const said = presenter.grid
-      .textIn({ x: 0, y: 0, width: CHECKPOINT_BELOW.columns, height: CHECKPOINT_BELOW.rows })
-      .join(" ");
-    expect(said).toContain(`${NARROW.columns}x${NARROW.rows}`);
 
-    // And growing the window brings the same reading back.
     const recovered = yield* resized(CHECKPOINT_SIZE);
-    expect(recovered.view.state.route.scopes).toEqual(scopes);
-    expect(recovered.view.state.route.at).toEqual(at);
-    expect(recovered.view.state.draft).toBe(SEEDED_DRAFT);
-    expect(recovered.view.state.message).toBe(SEEDED_MESSAGE);
     expect(recovered.focused).toBe("footer:input");
-    expect(recovered.observed.boundsOf("footer:input")).not.toBe(undefined);
     expect(banded(recovered)).toContain("reading earlier");
-    for (const key of ["tray:todo", "sidekick:stop"]) {
-      expect({ key, drawn: recovered.observed.boundsOf(key) !== undefined }).toEqual({
-        key,
-        drawn: true,
-      });
-    }
-    // The shared queue's tray and the Follow control a recovered frame used to
-    // bring back with it are DQ0 and DF1 in
-    // `fixtures/repl/deferred-presentation.json`: this build offers neither, at
-    // any size, before or after a refusal.
-    for (const key of ["tray:queue", "follow"]) {
-      expect({ key, drawn: recovered.observed.boundsOf(key) !== undefined }).toEqual({
-        key,
-        drawn: false,
-      });
-    }
+    // The shared queue's tray and Follow are DQ0 and DF1 in
+    // `fixtures/repl/deferred-presentation.json`: offered at no size.
+    const drawn = (key: string): boolean => recovered.observed.boundsOf(key) !== undefined;
+    expect(["tray:todo", "sidekick:stop"].filter(drawn)).toEqual(["tray:todo", "sidekick:stop"]);
+    expect(["tray:queue", "follow"].filter(drawn)).toEqual([]);
   });
 });
 

@@ -102,7 +102,7 @@ import {
 import { ACCEPTED_EDGE, ACCEPTED_SURFACE } from "./fixtures/repl/issue-883/reference-style.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import {
-  createGrid,
+  useGrid,
   regionBounds,
   usePresenter,
   viewportBounds,
@@ -1199,7 +1199,7 @@ describe("REPL presentation: what an updated frame leaves behind", () => {
   it("G5: the grid it all rests on retains the attributes a cell was written under", function* () {
     // A control, so a defect in the replay cannot be mistaken for a defect in
     // the product: these are the exact sequences this renderer emits.
-    const grid = createGrid();
+    const grid = yield* useGrid({ columns: 160, rows: 36 });
     const encode = (text: string): Uint8Array => new TextEncoder().encode(text);
     grid.apply(
       encode("\u001B[0m\u001B[1m\u001B[38;2;127;211;232m\u001B[48;2;18;32;38m\u001B[1;1Hab"),
@@ -3253,7 +3253,7 @@ describe("REPL responsiveness: a chat the keystroke did not change", () => {
     }
     // One grid across every frame this command draws, because this renderer
     // writes diffs: a single frame's bytes are what changed, not the screen.
-    const grid = createGrid();
+    const grid = yield* useGrid(size);
     return {
       renderer,
       tree,
