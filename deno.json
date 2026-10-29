@@ -43,6 +43,8 @@
     "@std/encoding/base64": "jsr:@std/encoding@^1/base64",
     "@std/expect": "npm:expect@^30",
     "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
+    "@termless/core": "npm:@termless/core@0.10.2",
+    "@termless/xtermjs": "npm:@termless/xtermjs@0.10.2",
     "oxlint": "npm:oxlint@1.74.0",
     "oxlint-tsgolint": "npm:oxlint-tsgolint@0.25.0",
     "semver": "npm:semver@^7.8.5",

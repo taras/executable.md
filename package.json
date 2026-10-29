@@ -63,6 +63,8 @@
     "@executablemd/test-support": "workspace:*",
     "@executablemd/testing": "workspace:*",
     "@executablemd/workflow": "workspace:*",
+    "@termless/core": "0.10.2",
+    "@termless/xtermjs": "0.10.2",
     "@types/node": "^22.0.0",
     "@types/semver": "^7.7.0",
     "expect": "^30.0.0",
@@ -79,6 +81,17 @@
     "lint": "oxlint -c .oxlintrc.json --ignore-pattern 'scripts/tests/fixtures/**' --ignore-pattern '**/npm/**' --ignore-pattern 'packages/workflow/vendor/cloudflare-computer-dofs/**' --ignore-pattern 'packages/acp/vendor/acpx/**' --ignore-pattern 'packages/cli/src/repl/vendor/freedom/**' packages scripts && oxlint -c .oxlint-prose.json site smoke-test && node scripts/lint-architecture.js && oxfmt --check packages scripts && pnpm run lint:dead-code",
     "lint:dead-code": "knip --config knip.json --no-progress --no-config-hints --include files,exports,types",
     "fmt": "oxfmt --write packages scripts"
+  },
+  "pnpm": {
+    "overrides": {
+      "@termless/core@0.10.2>@napi-rs/canvas": "-",
+      "@termless/core@0.10.2>@resvg/resvg-js": "-",
+      "@termless/core@0.10.2>@twemoji/svg": "-",
+      "@termless/core@0.10.2>ghostty-web": "-",
+      "@termless/core@0.10.2>gifenc": "-",
+      "@termless/core@0.10.2>playwright": "-",
+      "@termless/core@0.10.2>upng-js": "-"
+    }
   },
   "workspaces": [
     "packages/*"
