@@ -593,7 +593,9 @@ function* phases(): Operation<unknown> {
   const entries = join(repository, PAIRED_DIRECTORY, execution, ENTRIES_FILE);
 
   if (phase === "workspace-start" || phase === "workspace-continue") {
-    const mounted = yield* until(import("./mounted-program.ts"));
+    const mounted = yield* until(import("../../../support/mounted-repl.ts"));
+    const { useReplPage } = yield* until(import("../../../support/mounted-page.ts"));
+    const adapters = yield* until(import("../../../support/repl-page-adapters.ts"));
     const { denoReplEntry } = yield* until(import("../../../../src/deno-repositories.ts"));
     const project = join(dataRoot, "project");
     yield* until(mkdir(project, { recursive: true }));
@@ -609,7 +611,7 @@ function* phases(): Operation<unknown> {
       { runtime: "source", platform: "unix", execPath: "/nonexistent/xmd" },
       join(dataRoot, "managed"),
     );
-    const repl = yield* mounted.useMountedRepl({
+    const page = yield* useReplPage({
       dataRoot,
       projectCwd: project,
       hostFiles: true,
@@ -650,6 +652,7 @@ function* phases(): Operation<unknown> {
         ? { location: encodeLocation(initialState(execution).route) }
         : {}),
     });
+    const repl = page.repl;
     const id = yield* mounted.mountedExecution(repl);
     const location = pairedLocation(repository, id);
     if (phase === "workspace-start") {
@@ -672,9 +675,9 @@ function* phases(): Operation<unknown> {
           source +
           "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />",
       });
-      yield* mounted.sendMessage(repl, "perform workspace work and wait");
-      yield* mounted.awaiting(repl.terminal, "the workspace entry's question", (one) =>
-        mounted.shows(one, "waiting for an answer"),
+      yield* adapters.sidekick(page).send("perform workspace work and wait");
+      yield* page.until("the workspace entry's question", (one) =>
+        adapters.shows(one, "waiting for an answer"),
       );
       const read = yield* mounted.mountedReading(repl);
       return {
@@ -688,7 +691,7 @@ function* phases(): Operation<unknown> {
     // The History rail's own mark for the first entry. `1. [ok] entry-1` is a
     // row of the Entries catalog, which this screen keeps in a drawer — so the
     // settled state is read where the screen states it.
-    yield* mounted.settledEntry(repl.terminal, 1, "ok");
+    yield* adapters.entrySettles(page, 1, "ok");
     const read = yield* mounted.mountedReading(repl);
     return {
       execution: id,

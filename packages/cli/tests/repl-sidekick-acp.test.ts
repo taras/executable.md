@@ -58,12 +58,8 @@ import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sideki
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { requestAttachment } from "../src/sidekick-acp/client.ts";
 import { usePosixSidekickTransport } from "../src/sidekick-acp/posix.ts";
-import {
-  recordingTerminal,
-  untilDrawn,
-  useMountedHost,
-  MOUNTED_AGENT,
-} from "./fixtures/repl/issue-883/mounted-program.ts";
+import { recordingTerminal, useMountedHost, MOUNTED_AGENT } from "./support/mounted-repl.ts";
+import { firstPresentation } from "./support/repl-page-adapters.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { PAIRED_DIRECTORY, parseEntryRecords } from "../src/repl/sidekick/history.ts";
@@ -1502,6 +1498,7 @@ describe("ACP startup bootstrap", () => {
     yield* scoped(function* () {
       const recording = recordingTerminal();
       yield* recording.install();
+      const drawn = yield* firstPresentation();
       const starting = yield* spawn(() =>
         runReplProgram({ profile: host.profile, sidekickAcp: path }),
       );
@@ -1514,7 +1511,7 @@ describe("ACP startup bootstrap", () => {
       ]);
       yield* refused(until(lstat(path)));
       host.fake.releaseTurn();
-      yield* untilDrawn(recording.terminal);
+      yield* drawn;
       const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
       const opened = yield* host.repository.open(descriptor.execution);
       const saved = yield* records(opened);
@@ -1560,8 +1557,9 @@ describe("ACP startup bootstrap", () => {
     const first = yield* scoped(function* () {
       const recording = recordingTerminal();
       yield* recording.install();
+      const drawn = yield* firstPresentation();
       yield* spawn(() => runReplProgram({ profile: host.profile, sidekickAcp: path }));
-      yield* untilDrawn(recording.terminal);
+      yield* drawn;
       return Descriptor.parse(JSON.parse(yield* readTextFile(path)));
     });
     const before = yield* records(yield* host.repository.open(first.execution));
@@ -1569,6 +1567,7 @@ describe("ACP startup bootstrap", () => {
     yield* scoped(function* () {
       const recording = recordingTerminal();
       yield* recording.install();
+      const drawn = yield* firstPresentation();
       yield* spawn(() =>
         runReplProgram({
           profile: host.profile,
@@ -1576,7 +1575,7 @@ describe("ACP startup bootstrap", () => {
           location: `xmd://repl/${first.execution}/entries`,
         }),
       );
-      yield* untilDrawn(recording.terminal);
+      yield* drawn;
       const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
       expect(descriptor.conversation).toBe(first.conversation);
       expect(host.fake.prompts).toHaveLength(1);

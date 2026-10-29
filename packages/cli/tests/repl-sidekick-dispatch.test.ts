@@ -12,13 +12,9 @@ import { ReplHost } from "../src/repl/host.ts";
 import { SidekickOwnerError } from "../src/repl/sidekick/owner.ts";
 import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import {
-  awaiting,
-  mountedReading,
-  sendMessage,
-  shows,
-  useMountedRepl,
-} from "./fixtures/repl/issue-883/mounted-program.ts";
+import { mountedReading } from "./support/mounted-repl.ts";
+import { useReplPage } from "./support/mounted-page.ts";
+import { shows, sidekick } from "./support/repl-page-adapters.ts";
 
 function service(
   held: Harness,
@@ -53,13 +49,14 @@ function fills(source: string): string {
 
 describe("shared Sidekick dispatch", () => {
   it("keeps the mounted UI's real controls, generated entry and final answer", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     repl.fake.script({
       reply: fills("<Output>generated</Output>\n") + "\n<REPL.Submit />\n<Output>Working.</Output>",
     });
     repl.fake.script({ reply: "<Output>Done through shared dispatch.</Output>" });
-    yield* sendMessage(repl, "write the controlled entry");
-    yield* awaiting(repl.terminal, "the final shared-dispatch answer", (one) =>
+    yield* sidekick(page).send("write the controlled entry");
+    yield* page.until("the final shared-dispatch answer", (one) =>
       shows(one, "Done through shared dispatch."),
     );
     const read = yield* mountedReading(repl);

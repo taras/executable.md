@@ -25,19 +25,16 @@ import { encodeLocation } from "../src/repl/route.ts";
 import { initialState } from "../src/repl/application.ts";
 import { useHarness, useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import {
-  useMountedRepl,
-  useMountedHost,
+  awaited,
+  awaitedFact,
   mountedExecution,
   mountedReading,
-  sendMessage,
-  awaiting,
-  shows,
-  focusDraft,
-  typing,
-  click,
-  settledEntry,
-} from "./fixtures/repl/issue-883/mounted-program.ts";
-import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
+  useMountedHost,
+} from "./support/mounted-repl.ts";
+import type { MountedRepl } from "./support/mounted-repl.ts";
+import { useReplPage } from "./support/mounted-page.ts";
+import type { ReplPage } from "./support/mounted-page.ts";
+import { draft, entrySettles, shows, sidekick } from "./support/repl-page-adapters.ts";
 
 const reportSchema = z
   .object({
@@ -83,28 +80,34 @@ function write(path: string, text: string): string {
 }
 function* mounted(
   includes?: readonly string[],
-): Operation<{ repl: MountedRepl; workspace: string }> {
+): Operation<{ page: ReplPage; repl: MountedRepl; workspace: string }> {
   yield* useComponentModuleLoader();
   const project = yield* useTemporary("xmd-testing-project-");
-  const repl = yield* useMountedRepl({
+  const page = yield* useReplPage({
     projectCwd: project,
     hostFiles: true,
     ...(includes === undefined ? {} : { includes }),
   });
+  const repl = page.repl;
   const workspace = pairedLocation(repl.root, yield* mountedExecution(repl)).directory;
   yield* writeTextFile(join(workspace, "package.json"), '{"type":"module"}');
   yield* until(symlink(join(ROOT, "node_modules"), join(workspace, "node_modules"), "dir"));
-  return { repl, workspace };
+  return { page, repl, workspace };
 }
 let serial = 0;
-function* exchange(repl: MountedRepl, replies: readonly string[]): Operation<void> {
+function* exchange(page: ReplPage, replies: readonly string[]): Operation<void> {
   const done = `testing-finished-${serial++}`;
   for (const reply of replies) {
-    repl.fake.script({ reply });
+    page.repl.fake.script({ reply });
   }
-  repl.fake.script({ reply: `<Output>${done}</Output>` });
-  yield* sendMessage(repl, `run batch ${serial}`);
-  yield* awaiting(repl.terminal, done, (terminal) => shows(terminal, done));
+  page.repl.fake.script({ reply: `<Output>${done}</Output>` });
+  yield* sidekick(page).send(`run batch ${serial}`);
+  yield* page.until(done, (frame) => shows(frame, done));
+  yield* awaitedFact(`${done} being saved`, function* () {
+    return (yield* mountedReading(page.repl)).chat.some(
+      (record) => record.kind === "response" && record.output.includes(done),
+    );
+  });
 }
 function* reports(repl: MountedRepl) {
   return (yield* mountedReading(repl)).chat.flatMap((record) =>
@@ -121,7 +124,7 @@ function passing(name = "real assertion", expected = "yes"): string {
 
 describe("REPL.Test accepted journeys", () => {
   it("R1: authors, fails, fixes and reuses ordinary Markdown without executing its creation", function* () {
-    const { repl, workspace } = yield* mounted();
+    const { page, repl, workspace } = yield* mounted();
     const chapter = yield* readGuideChapter("Entries");
     if (!chapter.ok) {
       throw chapter.error;
@@ -144,15 +147,15 @@ describe("REPL.Test accepted journeys", () => {
     }
     const greeting =
       '<File path="greeting.txt">Hello from this session.</File>Hello from this session.';
-    yield* exchange(repl, [create, "<REPL.Entry.Output entry={1} />"]);
+    yield* exchange(page, [create, "<REPL.Entry.Output entry={1} />"]);
     expect(yield* exists(join(workspace, "greeting.txt"))).toBe(false);
     expect(yield* reports(repl)).toEqual([]);
     expect((yield* mountedReading(repl)).model.entries).toHaveLength(1);
     expect(yield* readTextFile(join(workspace, "components/Greeting.md"))).toBe(greeting);
-    yield* exchange(repl, [single]);
+    yield* exchange(page, [single]);
     expect((yield* reports(repl)).at(-1)?.status).toBe("passed");
     expect(yield* readTextFile(join(workspace, "greeting.txt"))).toBe("Hello from this session.");
-    yield* exchange(repl, [fail]);
+    yield* exchange(page, [fail]);
     const failed = (yield* reports(repl)).at(-1);
     expect(failed?.status).toBe("failed");
     expect(failed?.documents[0]?.tests[0]).toMatchObject({
@@ -161,15 +164,14 @@ describe("REPL.Test accepted journeys", () => {
       error: { kind: "assertion", actual: '"Hello from this session."', expected: '"wrong"' },
     });
     expect(repl.fake.prompts.join("\n")).toContain("wrong");
-    yield* exchange(repl, [fix, reuse]);
+    yield* exchange(page, [fix, reuse]);
     expect((yield* reports(repl)).at(-1)?.status).toBe("passed");
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "<Greeting />");
-    repl.terminal.feed("\r");
+    yield* draft(page).type("<Greeting />");
+    yield* page.key("Enter");
     // The rail's own mark for the fifth entry. `entry-5` and `[ok]` are rows of
     // the Entries catalog, and the catalog is a drawer on this screen: a reader
     // that waited for them would be waiting for a drawer nobody opened.
-    yield* settledEntry(repl.terminal, 5, "ok");
+    yield* entrySettles(page, 5, "ok");
     const read = yield* mountedReading(repl);
     expect(read.model.entries.slice(-2).map((entry) => entry.source)).toEqual([
       "<Greeting />",
@@ -182,11 +184,11 @@ describe("REPL.Test accepted journeys", () => {
   });
 
   it("R2: tests and entries use a same-path TypeScript edit while old source and output stay retained", function* () {
-    const { repl, workspace } = yield* mounted();
+    const { page, repl, workspace } = yield* mounted();
     const test = (value: string) =>
       `<Test name="direct"><Direct as="actual" /><AssertEquals actual={actual} expected=${JSON.stringify(value)} /></Test>`;
     for (const version of ["first", "second"]) {
-      yield* exchange(repl, [
+      yield* exchange(page, [
         submit(
           write(
             "components/Direct.ts",
@@ -213,14 +215,14 @@ describe("REPL.Test accepted journeys", () => {
   });
 
   it("R3: reports real ordered results, empty selections, no-tests, parse/runtime failures and partial output", function* () {
-    const { repl, workspace } = yield* mounted();
+    const { page, repl, workspace } = yield* mounted();
     yield* ensureDir(join(workspace, "empty"));
     yield* writeTextFile(join(workspace, "components/a.test.md"), passing("first fails", "wrong"));
     yield* writeTextFile(
       join(workspace, "components/b.test.md"),
       "<Test><AssertEquals actual={1} expected={1} /></Test>",
     );
-    yield* exchange(repl, ['<REPL.Test path="components" />']);
+    yield* exchange(page, ['<REPL.Test path="components" />']);
     let suite = (yield* reports(repl)).at(-1);
     expect(suite?.status).toBe("failed");
     expect(suite?.documents.map((document) => document.path)).toEqual([
@@ -231,7 +233,7 @@ describe("REPL.Test accepted journeys", () => {
     expect(suite?.documents[1]?.tests[0]?.name).toBeUndefined();
     expect(suite?.documents[1]?.tests[0]?.location).toContain("b.test.md");
     yield* writeTextFile(join(workspace, "components/a.test.md"), passing());
-    yield* exchange(repl, ['<REPL.Test path="components" />']);
+    yield* exchange(page, ['<REPL.Test path="components" />']);
     expect((yield* reports(repl)).at(-1)?.status).toBe("passed");
     const scenarios: ReadonlyArray<readonly [string, string | undefined, string]> = [
       ["empty", undefined, "no-tests"],
@@ -253,7 +255,7 @@ describe("REPL.Test accepted journeys", () => {
       if (text !== undefined) {
         yield* writeTextFile(join(workspace, path), text);
       }
-      yield* exchange(repl, [`<REPL.Test path=${JSON.stringify(path)} />`]);
+      yield* exchange(page, [`<REPL.Test path=${JSON.stringify(path)} />`]);
       suite = (yield* reports(repl)).at(-1);
       expect({ path, status: suite?.status }).toEqual({ path, status: expected });
       expect(suite?.path).toBe(path);
@@ -274,7 +276,7 @@ describe("REPL.Test accepted journeys", () => {
       }
     }
     yield* writeTextFile(join(workspace, "components/c.test.md"), "valid without Test");
-    yield* exchange(repl, ['<REPL.Test path="components" />']);
+    yield* exchange(page, ['<REPL.Test path="components" />']);
     expect((yield* reports(repl)).at(-1)?.status).toBe("failed");
     expect((yield* reports(repl)).at(-1)?.documents.map((document) => document.status)).toEqual([
       "passed",
@@ -283,11 +285,11 @@ describe("REPL.Test accepted journeys", () => {
     ]);
     for (const path of ["", "/tmp/absolute", "../escape"]) {
       const before = (yield* reports(repl)).length;
-      yield* exchange(repl, [`<REPL.Test path=${JSON.stringify(path)} />`]);
+      yield* exchange(page, [`<REPL.Test path=${JSON.stringify(path)} />`]);
       expect(yield* reports(repl)).toHaveLength(before);
     }
     yield* writeTextFile(join(workspace, "literal#%.md"), passing());
-    yield* exchange(repl, ['<REPL.Test path="literal#%.md" />']);
+    yield* exchange(page, ['<REPL.Test path="literal#%.md" />']);
     expect((yield* reports(repl)).at(-1)?.documents[0]?.path).toBe("literal#%.md");
   });
 });
@@ -306,13 +308,13 @@ describe("REPL.Test selection, display and isolation", () => {
         },
       },
     ]);
-    const { repl, workspace } = yield* mounted([configured]);
+    const { page, repl, workspace } = yield* mounted([configured]);
     yield* writeTextFile(join(workspace, "components/Greeting.md"), "session greeting");
     yield* writeTextFile(
       join(workspace, "components/selection.test.md"),
       '<Test name="selection"><Greeting as="actual" /><AssertEquals actual={actual} expected="configured greeting" /><HostValue as="host" /><AssertEquals actual={host} expected="host declaration" /></Test>',
     );
-    yield* exchange(repl, [
+    yield* exchange(page, [
       '<REPL.Syntax names={["Greeting"]} />',
       submit('<Let as="rootOnly" value="entry value" /><Greeting />'),
       '<REPL.Test path="components/selection.test.md" />',
@@ -327,7 +329,7 @@ describe("REPL.Test selection, display and isolation", () => {
     expect(chat.slice(-3, -1).every((record) => !record.hasOutput && record.output === "")).toBe(
       true,
     );
-    yield* exchange(repl, [
+    yield* exchange(page, [
       '<REPL.Test path="components/selection.test.md" as="tests" /><Output><Json value={tests} /></Output>',
     ]);
     const withOutput = (yield* mountedReading(repl)).chat
@@ -353,14 +355,14 @@ describe("REPL.Test selection, display and isolation", () => {
       join(workspace, "isolated/b.test.md"),
       '<Test name="binding absent"><AssertEquals actual={typeof documentOnly} expected="undefined" /></Test><Test name="registration absent"><DocumentPrivate /></Test>',
     );
-    yield* exchange(repl, ['<REPL.Test path="isolated" />']);
+    yield* exchange(page, ['<REPL.Test path="isolated" />']);
     const isolated = (yield* reports(repl)).at(-1);
     expect(isolated?.documents.map((document) => document.status)).toEqual(["passed", "failed"]);
     expect(isolated?.documents[1]?.tests.map((test) => test.status)).toEqual(["pass", "fail"]);
     expect(isolated?.documents[1]?.tests[1]?.error?.message).toContain(
       "Cannot resolve component: DocumentPrivate",
     );
-    yield* exchange(repl, [
+    yield* exchange(page, [
       submit("<Json value={typeof documentOnly} />"),
       submit("<DocumentPrivate />"),
     ]);
@@ -378,7 +380,7 @@ describe("REPL.Test selection, display and isolation", () => {
       join(workspace, "components/broken.test.md"),
       '<Test name="selected malformed"><Broken /></Test>',
     );
-    yield* exchange(repl, ['<REPL.Test path="components/broken.test.md" as="tests" />']);
+    yield* exchange(page, ['<REPL.Test path="components/broken.test.md" as="tests" />']);
     expect((yield* reports(repl)).at(-1)?.status).toBe("failed");
     expect((yield* reports(repl)).at(-1)?.documents[0]?.report).not.toContain(
       "fallback must not run",
@@ -393,14 +395,14 @@ describe("REPL.Test selection, display and isolation", () => {
       join(workspace, "components/protected.test.md"),
       '<Test name="protected"><File path="protected.txt" as="actual" /><AssertEquals actual={actual} expected="canonical file" /></Test>',
     );
-    yield* exchange(repl, ['<REPL.Test path="components/protected.test.md" />']);
+    yield* exchange(page, ['<REPL.Test path="components/protected.test.md" />']);
     expect((yield* reports(repl)).at(-1)?.status).toBe("passed");
   });
 
   it("R1 refusal: a completed entry with a denied File never reports successful component availability", function* () {
     yield* Permissions.around({ files: ([operation]) => operation !== "write" });
-    const { repl, workspace } = yield* mounted();
-    yield* exchange(repl, [
+    const { page, repl, workspace } = yield* mounted();
+    yield* exchange(page, [
       submit(write("components/Never.md", '<File path="never-ran.txt">ran</File>unavailable')),
       "<REPL.Entry.Output entry={1} />",
     ]);
@@ -604,7 +606,7 @@ describe("REPL.Test admission and joined lifetime", () => {
   });
 
   it("R5: Exit joins response cleanup and normal test timeout/teardown keep their real result kinds", function* () {
-    const { repl, workspace } = yield* mounted();
+    const { page, repl, workspace } = yield* mounted();
     yield* writeTextFile(
       join(workspace, "components/Timeout.ts"),
       'import { suspend } from "effection"; export default function*() { yield* suspend(); }',
@@ -613,7 +615,7 @@ describe("REPL.Test admission and joined lifetime", () => {
       join(workspace, "components/kinds.test.md"),
       '<Test name="timeout" timeout="10ms"><Timeout /></Test>\n<Test name="teardown">\n```js persist eval\nyield* spawn(function* () { try { yield* suspend(); } finally { throw new Error("per-test teardown"); } });\n```\n</Test>\n<Test name="after"><AssertEquals actual={1} expected={1} /></Test>',
     );
-    yield* exchange(repl, ['<REPL.Test path="components/kinds.test.md" />']);
+    yield* exchange(page, ['<REPL.Test path="components/kinds.test.md" />']);
     const tests = (yield* reports(repl)).at(-1)?.documents[0]?.tests;
     expect(tests?.map((test) => [test.status, test.error?.kind])).toEqual([
       ["fail", "timeout"],
@@ -628,13 +630,13 @@ describe("REPL.Test admission and joined lifetime", () => {
       yield* release.operation;
     });
     repl.fake.script({ reply: '<REPL.Test path="components/hold.test.md" />' });
-    yield* sendMessage(repl, "cancel on exit");
+    yield* sidekick(page).send("cancel on exit");
     yield* entered.operation;
     repl.terminal.end();
     yield* cleaning.operation;
     expect(repl.outcome()).toBeUndefined();
     release.resolve();
-    yield* awaiting(repl.terminal, "exit joining test cleanup", () => repl.outcome() !== undefined);
+    yield* awaited("exit joining test cleanup", () => repl.outcome() !== undefined);
     expect(yield* reports(repl)).toHaveLength(1);
   });
 });
@@ -652,13 +654,14 @@ describe("REPL.Test retained and fatal outcomes", () => {
     let chatBefore = "";
     let bodies = 0;
     yield* scoped(function* () {
-      const repl = yield* useMountedRepl({ host });
+      const page = yield* useReplPage({ host });
+      const repl = page.repl;
       id = yield* mountedExecution(repl);
       const location = pairedLocation(repl.root, id);
       workspace = location.directory;
       yield* writeTextFile(join(workspace, "package.json"), '{"type":"module"}');
       yield* until(symlink(join(ROOT, "node_modules"), join(workspace, "node_modules"), "dir"));
-      yield* exchange(repl, [
+      yield* exchange(page, [
         submit(
           write("components/Greeting.md", "historical greeting") +
             "\n" +
@@ -678,13 +681,13 @@ describe("REPL.Test retained and fatal outcomes", () => {
         function* () {},
       );
       repl.fake.script({ reply: '<REPL.Test path="components/hold.test.md" />' });
-      yield* sendMessage(repl, "start interrupted tests");
+      yield* sidekick(page).send("start interrupted tests");
       yield* entered.operation;
-      yield* click(repl.terminal, "[stop]");
-      yield* awaiting(repl.terminal, "Stop joins", (terminal) => shows(terminal, "[send]"));
+      yield* sidekick(page).stop();
+      yield* page.until("Stop joins", (frame) => frame.has("sidekick:send"));
       expect(yield* reports(repl)).toHaveLength(1);
       repl.terminal.end();
-      yield* awaiting(repl.terminal, "first close", () => repl.outcome() !== undefined);
+      yield* awaited("first close", () => repl.outcome() !== undefined);
       entriesBefore = yield* readTextFile(location.entries);
       chatBefore = yield* readTextFile(location.sidekick);
     });
@@ -692,10 +695,11 @@ describe("REPL.Test retained and fatal outcomes", () => {
     yield* rm(join(workspace, "components/Greeting.md"));
     yield* rm(join(workspace, "components/pass.test.md"));
     const location = pairedLocation(host.root, id);
-    const reopened = yield* useMountedRepl({
+    const reopenedPage = yield* useReplPage({
       host,
       location: encodeLocation(initialState(id).route),
     });
+    const reopened = reopenedPage.repl;
     const reading = yield* mountedReading(reopened);
     expect(reading.model.entries.at(-1)?.terminal?.output).toBe("historical greeting");
     expect((yield* reports(reopened))[0]?.status).toBe("passed");
@@ -704,14 +708,14 @@ describe("REPL.Test retained and fatal outcomes", () => {
     expect(yield* readTextFile(location.entries)).toBe(entriesBefore);
     expect(yield* readTextFile(location.sidekick)).toBe(chatBefore);
     reopened.fake.script({ reply: "<Output>inspection only</Output>" });
-    yield* sendMessage(reopened, "continue explicitly after interruption");
-    yield* awaiting(reopened.terminal, "explicit recovery response", (terminal) =>
-      shows(terminal, "inspection only"),
+    yield* sidekick(reopenedPage).send("continue explicitly after interruption");
+    yield* reopenedPage.until("explicit recovery response", (frame) =>
+      shows(frame, "inspection only"),
     );
     expect(host.fake.prompts[prompts]).toContain("what it did is not known");
     expect(bodies).toBe(1);
     yield* writeTextFile(join(workspace, "components/pass.test.md"), passing());
-    yield* exchange(reopened, ['<REPL.Test path="components/pass.test.md" />']);
+    yield* exchange(reopenedPage, ['<REPL.Test path="components/pass.test.md" />']);
     expect(yield* reports(reopened)).toHaveLength(2);
   });
 
@@ -754,7 +758,7 @@ describe("REPL.Test retained and fatal outcomes", () => {
       let checked = false;
       const [result] = yield* allSettled([
         scoped(function* () {
-          const { repl, workspace } = yield* mounted();
+          const { page, repl, workspace } = yield* mounted();
           yield* ensure(function* () {
             expect(later).toBe(0);
             expect(yield* reports(repl)).toEqual([]);
@@ -769,11 +773,13 @@ describe("REPL.Test retained and fatal outcomes", () => {
           yield* writeTextFile(join(workspace, "components/a.test.md"), passing());
           yield* writeTextFile(join(workspace, "components/b.test.md"), "<Later />" + passing());
           repl.fake.script({ reply: '<REPL.Test path="components" />' });
-          yield* sendMessage(repl, `fail ${kind}`);
+          yield* sidekick(page).send(`fail ${kind}`);
           if (kind === "cleanup") {
-            yield* awaiting(repl.terminal, "cleanup failure", (terminal) =>
-              shows(terminal, "[send]"),
-            );
+            yield* awaitedFact("the cleanup failure being recorded", function* () {
+              return (yield* mountedReading(repl)).chat.some(
+                (record) => record.kind === "control-outcome" && record.outcome.status === "err",
+              );
+            });
           } else {
             yield* suspend();
           }
