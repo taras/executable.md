@@ -692,6 +692,10 @@ function* drive(
   const messageFits = createPlainFitStore();
   // And the directions', which change when focus or readiness does.
   const guidanceFits = createPlainFitStore();
+  // And the staged Draft's, for the third time: a key typed into the Draft is
+  // not a key typed into the composer, and one store for both would evict the
+  // other's lines on every keystroke.
+  const draftFits = createPlainFitStore();
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
     const screen = yield* useReplScreen();
@@ -1317,6 +1321,7 @@ function* drive(
         chatFits,
         messageFits,
         guidanceFits,
+        draftFits,
       );
       if (!ready.ok) {
         throw ready.error;
@@ -1380,6 +1385,7 @@ function* drive(
           chatFits,
           messageFits,
           guidanceFits,
+          draftFits,
         );
         if (!ready.ok) {
           throw ready.error;
@@ -1585,6 +1591,7 @@ function* drive(
       chatFits,
       messageFits,
       guidanceFits,
+      draftFits,
     );
     rendered = first.rendered;
     presenting = presentedDrawer(first.view);
@@ -1603,6 +1610,7 @@ function* drive(
         chatFits,
         messageFits,
         guidanceFits,
+        draftFits,
       );
       rendered = marked.rendered;
       presenting = presentedDrawer(marked.view);
@@ -1829,6 +1837,7 @@ function* drive(
         chatFits,
         messageFits,
         guidanceFits,
+        draftFits,
       );
       rendered = painted.rendered;
       presenting = presentedDrawer(painted.view);
@@ -1857,6 +1866,7 @@ function* drive(
           chatFits,
           messageFits,
           guidanceFits,
+          draftFits,
         );
         rendered = again.rendered;
         presenting = presentedDrawer(again.view);
@@ -3122,6 +3132,7 @@ function* paint(
   chat?: ReplPlainFitStore,
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
+  draft?: ReplPlainFitStore,
 ): Operation<ReplPainted> {
   while (true) {
     const painted = yield* prepared(
@@ -3134,6 +3145,7 @@ function* paint(
       chat,
       message,
       guidance,
+      draft,
     );
     if (painted !== undefined) {
       return painted;
@@ -3161,6 +3173,7 @@ function* prepared(
   chat?: ReplPlainFitStore,
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
+  draft?: ReplPlainFitStore,
 ): Operation<ReplPainted | undefined> {
   return yield* scoped(function* (): Operation<ReplPainted | undefined> {
     const held = yield* frames.subscribe({ owner: "repl", participants: [["repl"]] });
@@ -3193,6 +3206,7 @@ function* prepared(
         chat,
         message,
         guidance,
+        draft,
       );
       if (committed.ok) {
         // 5. Present the copied bytes. 6. The caller retains the returned map.
@@ -3318,11 +3332,12 @@ export function* commitReplFrame(
   chat?: ReplPlainFitStore,
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
+  draft?: ReplPlainFitStore,
 ): Operation<Result<ReplCommitted>> {
   // Measure before anything is mounted: this asks the engine how much room each
   // region has, so what a window shows is the frame's answer rather than this
   // boundary's guess. It mounts nothing and publishes nothing.
-  const prepared = yield* prepareFrame(renderer, view, store, chat, message, guidance);
+  const prepared = yield* prepareFrame(renderer, view, store, chat, message, guidance, draft);
   if (!prepared.ok) {
     return prepared;
   }
@@ -3566,6 +3581,14 @@ export function* prepareFrame(
    * store for both would evict the chat every time a reader moved.
    */
   guidanceStore?: ReplPlainFitStore,
+  /**
+   * Where this command is holding the staged Draft's own cuts.
+   *
+   * Its own storage for the third time. The Draft is somebody's next entry and
+   * the composer is their next message: typing in one changes nothing about the
+   * other, and a shared store would evict whichever was not being typed into.
+   */
+  draftStore?: ReplPlainFitStore,
 ): Operation<Result<ReplPrepared>> {
   // No widths at all for the pass that answers what the widths are. Every row
   // whose text has to fit a region is left out of it, because a growing column
@@ -3972,8 +3995,13 @@ export function* prepareFrame(
   // sentence and publishes no footer at all, so preparing a rail for it
   // would turn a refusal the product already handles into a measurement
   // failure.
+  // And the staged composition has no band either: its footer carries one
+  // compact row built from the navigation itself, and nothing it draws reads a
+  // prepared rail. Measuring five rows for it is an engine render a frame
+  // spent on a band that is never drawn — 65ms over a sixteen-second typing
+  // workload.
   const rail =
-    profileFor(view.size) === "too-small"
+    workspace || profileFor(view.size) === "too-small"
       ? Ok(undefined)
       : yield* prepareRail(
           renderer,
@@ -3987,11 +4015,16 @@ export function* prepareFrame(
   }
   // The staged Draft's own value, fitted to the selected work it sits in. A
   // fixed number of rows, so no measurement above depends on it.
+  //
+  // Through a store of its own, and over the lines that are drawn rather than
+  // over the whole draft: a key typed into a long draft was re-measuring every
+  // line of it through the engine, and the rows above the block were cut only
+  // to be dropped.
   const draftLines = draftLinesOf(view);
   const drafted =
     draftLines === undefined || widths.surfaceBody < 1
       ? Ok(undefined)
-      : yield* fitPlain(renderer, view.size, draftLines, widths.surfaceBody);
+      : yield* fitPlain(renderer, view.size, draftLines, widths.surfaceBody, draftStore);
   if (!drafted.ok) {
     return drafted;
   }

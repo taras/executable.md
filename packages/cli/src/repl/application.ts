@@ -6520,15 +6520,21 @@ function drawerFor(
   }
   const { title, titleStyle, dismissing, entering, content } = held;
   const width = context.widths?.drawer ?? 0;
-  // Which owner's form this is, for the scroll controls, the editable line the
-  // window claims focus for, and `[close]`. One drawer is presented at a time,
-  // so this is also what says the Sidekick's own is the one on screen.
-  const asking = presentedAsking(view)?.question.key;
-  const configuring = presentedConfiguring(view) !== undefined;
+  // Which owner's drawer this is, for the scroll controls, the editable line
+  // the window claims focus for, and `[close]`. One drawer is presented at a
+  // time, so this is also what says the Sidekick's own is the one on screen.
+  //
   // The catalog's window is the entries window somebody is already scrolling,
   // so its controls carry that reading's own scroll rather than the generic
-  // one — the clamp is this drawer's measured capacity either way.
+  // one — the clamp is this drawer's measured capacity either way. It is asked
+  // first below because `drawerContent` asks it first: two orders over the same
+  // three readings is how a drawer comes to show one window's rows and move
+  // another one's. Holding all three at once needs a route none of these
+  // controls offers, so this is drift prevented rather than a state anybody
+  // has been in.
   const catalog = presentedCatalog(view);
+  const asking = presentedAsking(view)?.question.key;
+  const configuring = presentedConfiguring(view) !== undefined;
   const rows: Described[] = [];
   rows.push(
     row(
@@ -6536,12 +6542,12 @@ function drawerFor(
       // Configure's window moves through a list of choices rather than through
       // a recorded order, so it is the one drawer that does not say Earlier.
       padControl(configuring ? SCROLL_UP : EARLIER, width),
-      asking !== undefined
-        ? { select: "sidekick-scroll", delta: -1 }
+      catalog
+        ? { select: "scroll-entries", delta: -1 }
         : configuring
           ? { select: "configure-scroll", delta: -1 }
-          : catalog
-            ? { select: "scroll-entries", delta: -1 }
+          : asking !== undefined
+            ? { select: "sidekick-scroll", delta: -1 }
             : { select: "scroll", delta: -1 },
       styleOf("action"),
       { here: view.focused },
@@ -6554,12 +6560,12 @@ function drawerFor(
     row(
       "drawer:scroll:down",
       padControl(configuring ? SCROLL_DOWN : LATER, width),
-      asking !== undefined
-        ? { select: "sidekick-scroll", delta: 1 }
+      catalog
+        ? { select: "scroll-entries", delta: 1 }
         : configuring
           ? { select: "configure-scroll", delta: 1 }
-          : catalog
-            ? { select: "scroll-entries", delta: 1 }
+          : asking !== undefined
+            ? { select: "sidekick-scroll", delta: 1 }
             : { select: "scroll", delta: 1 },
       styleOf("action"),
       { here: view.focused },
@@ -6602,16 +6608,16 @@ function drawerFor(
       padControl("[close]", width),
       dismissing !== undefined
         ? { select: "permission-dismiss", request: dismissing }
-        : // Closing one of the Sidekick's own drawers is not what closing the
-          // entry's means. The question form keeps its question and its values;
-          // Configure discards what was chosen and not applied, and saves and
-          // changes nothing.
-          configuring
-          ? { select: "configure-close" }
-          : catalog
-            ? // Putting the catalog away chooses nothing: the scope being
-              // read, the marker, the filter and both drafts stand.
-              { select: "catalog-close" }
+        : catalog
+          ? // Putting the catalog away chooses nothing: the scope being read,
+            // the marker, the filter and both drafts stand.
+            { select: "catalog-close" }
+          : // Closing one of the Sidekick's own drawers is not what closing the
+            // entry's means. The question form keeps its question and its
+            // values; Configure discards what was chosen and not applied, and
+            // saves and changes nothing.
+            configuring
+            ? { select: "configure-close" }
             : asking === undefined
               ? { select: "close" }
               : { select: "sidekick-question-close" },
@@ -8318,9 +8324,10 @@ export function readingKeyOf(state: ReplState, open: ReplDrawerRef): string | un
 export function drawerOffsetOf(state: ReplState, open: ReplDrawerRef | undefined): number {
   if (open === undefined) {
     // The catalog's own, and before the Sidekick's two: it takes the screen
-    // from them while it is open, so the window being moved is this one. It
-    // keeps the entries viewport it has always been scrolled by, so a reader
-    // who scrolls, closes and opens again is where they left off.
+    // from them while it is open, so the window being moved is this one. The
+    // entries viewport is where opening it put them — `open-catalog` selects
+    // the Entries reading and starts it at its first row — and scrolling here
+    // moves that same viewport while the overlay is up.
     if (state.catalog) {
       return state.viewports.entries;
     }
@@ -11746,7 +11753,11 @@ export function queueLinesOf(
   }));
 }
 
-/** The draft's own lines as the staged Draft fits them, or none. */
+/**
+ * The draft's own lines as the staged Draft fits them, or none.
+ *
+ * The newest ones, because those are the ones drawn. See below.
+ */
 export function draftLinesOf(view: ReplView):
   | readonly {
       readonly key: string;
@@ -11757,9 +11768,23 @@ export function draftLinesOf(view: ReplView):
   if (staged(view) === undefined) {
     return undefined;
   }
-  return view.state.draft
-    .split("\n")
-    .map((text, at) => ({ key: `draft:${at}`, text, runs: sourceRuns(text) }));
+  const lines = view.state.draft.split("\n");
+  // Only the lines this block can draw. Every line is fitted on its own and
+  // every one of them is at least one row — a blank line included — so the last
+  // `DRAFT_VALUE_ROWS` lines already hold at least as many rows as the Draft
+  // shows, and the newest rows of those are the newest rows of the whole draft.
+  // The lines above them are measured through the engine only to be dropped:
+  // typing into a three-hundred-line draft cost 61.9ms a key at 160x36 against
+  // 12.2ms before this block existed, almost all of it in cuts nothing drew.
+  const drawn = lines.slice(Math.max(0, lines.length - DRAFT_VALUE_ROWS));
+  const from = lines.length - drawn.length;
+  // Keyed by where the line is in the draft, not by where it is in this list:
+  // the key names the line somebody is editing.
+  return drawn.map((text, at) => ({
+    key: `draft:${from + at}`,
+    text,
+    runs: sourceRuns(text),
+  }));
 }
 
 /**
