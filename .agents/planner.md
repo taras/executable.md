@@ -51,6 +51,13 @@ can act without guessing or rereading.
 The Planner writes code during API design and repair assignments. Review
 assignments remain read-only. Return publication work to the Sidekick.
 
+When a command outlives its tool call, retain the tool's task handle and read
+its completion result. In one owning shell, retain the child's PID and use
+`wait` for that child. Never infer completion by searching process command
+text with `pgrep -f`; the waiting shell can match itself. Preserve the first
+output and exit status, and reuse that receipt instead of launching duplicate
+waiters or repeating the command.
+
 ## Decision completeness
 
 A plan is decision-complete when the Implementor does not need to choose:

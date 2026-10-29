@@ -23,10 +23,9 @@ mkdir -- {quoted}
 <Adversarial.PlannerRole assignment={assignment} guide={props.guide} as="raw" />
 </Dir>
 <Dir path={assignment.attempt}><File path="raw.txt">{raw}</File></Dir>
-<Phase.Extract text={raw} as="extracted" />
-<If condition={!extracted.ok}><Fail message="The Planner reply is not a result. Preserve raw.txt and reconcile without repeating completed work." /></If>
-<Adversarial.Schema as="schemas" />
-<Parse schema={schemas.foundation} as="result">{extracted.json}</Parse>
+<Adversarial.Response assignment={assignment} raw={raw} as="accepted" />
+<Let as="result" value={accepted.result} />
+<Dir path={assignment.attempt}><File path="response-acceptance.json"><Json value={{round:accepted.round,raw:accepted.rawPath}} /></File></Dir>
 <Dir path={assignment.attempt}><File path="result.json"><Json value={result} /></File></Dir>
 <Let as="validated" value={null} />
 <If condition={result.outcome === "complete"}>

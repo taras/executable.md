@@ -113,6 +113,20 @@ review remain responsible for that judgment.
 
 ## Challenge, repair and review
 
+Captured replies pass through the workflow's existing `<Phase.Extract>` and
+`<SafeParse>` for schema validation.
+One narrated or fenced JSON result is accepted without another agent call.
+Multiple candidates, incomplete JSON and unclosed fences hold with the original
+reply and diagnostics. Schema matching never chooses between candidates.
+
+When the only invalid fields are an oversized summary or handoff, foundation
+response correction can shorten those fields in the same Planner session, at
+most three times. Every other field is frozen, including the API, source,
+assessment and evidence. Each correction saves its request, raw reply and
+disposition, and checks that source remains at the same clean commit. The
+productive assignment is not repeated. An ambiguous or substantively invalid
+reply has no established result to repair and holds without another prompt.
+
 The Implementor keeps passing work in a focused commit and saves a failed API
 witness outside the source checkout. It returns `needs_discovery` with
 `apiConflict: { expected, observed, reproducer, artifact }`, failed command

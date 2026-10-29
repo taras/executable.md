@@ -127,6 +127,13 @@ behavior, ownership and evidence already fit the accepted plan.
 
 ## Working discipline
 
+When a command outlives its tool call, retain the tool's task handle and read
+its completion result. In one owning shell, retain the child's PID and use
+`wait` for that child. Never infer completion by searching process command
+text with `pgrep -f`; the waiting shell can match itself. Preserve the first
+output and exit status, and reuse that receipt instead of launching duplicate
+waiters or repeating the command.
+
 - Preserve unrelated user changes and use a separate worktree when the current
   tree is not the intended branch.
 - Follow the repository Code Rules and Effection lifecycle contract.
