@@ -5171,12 +5171,25 @@ describe("REPL journey: the Draft's Stop, through the terminal", () => {
 });
 
 describe("REPL journey: a selection, a position and a draft across a resize", () => {
-  it("TL10: every size and a refusal keep the whole reading, and a cold open restores it", function* () {
+  it("TL10: every size and a refusal keep the nested reading, and a cold open restores it", function* () {
     const first = recordingTerminal({ columns: 160, rows: 36 });
     let root: string | undefined;
     let files: string[] = [];
     let ended: ReplOutcome | undefined;
     let standing: string | undefined;
+
+    /**
+     * Whether the trail reads entry 2 and the component beneath it.
+     *
+     * The trail, because the catalog's selection channel marks the *entry* row
+     * for every reading under it: a deeper scope is named by the breadcrumb and
+     * by nothing else on this screen.
+     */
+    const nestedCrumb = (terminal: Terminal): boolean => {
+      const trail = crumbTrail(terminal);
+      const entry = trail.indexOf("Entry 2");
+      return entry !== -1 && trail.indexOf(SCOPE_NAME, entry) > entry;
+    };
 
     yield* scoped(function* (): Operation<void> {
       yield* first.install();
@@ -5196,50 +5209,83 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       files = yield* histories(root);
       yield* submitted(terminal, COLD_ONE);
       yield* settledEntry(terminal, 1, "ok");
-      yield* submitted(terminal, COLD_TWO);
+      // The second entry invokes a component, so this execution retains a scope
+      // beneath an entry — which is the reading this journey carries across
+      // every size.
+      yield* submitted(terminal, SCOPED_TWO);
       yield* settledEntry(terminal, 2, "ok");
 
       /** Point at one catalog row; the choice closes the catalog and selects it. */
-      function* selecting(row: string, entry: string): Operation<void> {
+      function* selecting(row: string, reaches: (one: Terminal) => boolean): Operation<void> {
         yield* openCatalog(terminal);
         yield* pointAt(terminal, row);
         yield* untilShown(
           terminal,
-          `${entry} being the locus`,
-          (one) => !catalogShowing(one) && (selectedEntryOn(one) ?? "").includes(entry),
+          `${row} being the locus`,
+          (one) => !catalogShowing(one) && reaches(one),
         );
       }
-      /** Whether the catalog marks this row as the one being read, asked where its rows are. */
-      function* reading(row: string): Operation<boolean> {
+      /** Whether the catalog marks this row as the one being read. */
+      function* markedRow(row: string): Operation<boolean> {
         yield* openCatalog(terminal);
         const found = marked(terminal, row);
         yield* closeCatalog(terminal);
         return found;
       }
+      /**
+       * What the catalog says about this reading, asked where its rows are.
+       *
+       * Three questions of one reading rather than three readings: the rows a
+       * reader is looking at are one frame, and a fact taken from a later one
+       * would be a fact about a different screen.
+       */
+      function* catalogued(): Operation<{
+        readonly entry: boolean;
+        readonly scope: boolean;
+        readonly first: boolean;
+      }> {
+        yield* openCatalog(terminal);
+        const rows = screenOf(terminal);
+        const read = {
+          entry: markedIn(rows, READING),
+          scope: rows.some((line) => line.includes(CATALOG_SCOPE)),
+          first: rows.some((line) => line.includes("1. [ok] entry-1")),
+        };
+        yield* closeCatalog(terminal);
+        return read;
+      }
 
       // 1. An entry selected by pointing at the cell its catalog row is drawn in.
-      yield* selecting("2. [ok] entry-2", "Entry 2");
-      expect(yield* reading("2. [ok] entry-2")).toBe(true);
+      yield* selecting("2. [ok] entry-2", (one) =>
+        (selectedEntryOn(one) ?? "").includes("Entry 2"),
+      );
+      expect(yield* markedRow("2. [ok] entry-2")).toBe(true);
 
-      // 2. A History position, chosen in the drawer the footer control opens.
-      //    Choosing it leaves the drawer open, so it is dismissed and the position stands.
+      // 2. The position the component was admitted at, chosen in the drawer the
+      //    footer control opens. That prefix is the one that holds the scope
+      //    being read: a position taken at entry 2's own admission predates it.
+      //    Choosing it leaves the drawer open, so it is dismissed and the
+      //    position stands.
       yield* activate(terminal, "[history]");
       expect(shows(terminal, "[close]")).toBe(true);
-      yield* focusOn(terminal, "Entry 2 admitted");
+      yield* focusOn(terminal, CHECKPOINT);
       yield* pressed(terminal, "\r", "a frozen position", historicalOn);
       yield* pressed(terminal, "\x1b", "the drawer closing", (one) => !shows(one, "[close]"));
       expect(historicalOn(terminal)).toBe(true);
 
-      // 3. A message, process-local, and a draft, each typed into its own field.
+      // 3. The component beneath that entry, selected by pointing at its own
+      //    catalog row.
+      yield* selecting(CATALOG_SCOPE, nestedCrumb);
+      expect(yield* catalogued()).toEqual({ entry: true, scope: true, first: true });
+
+      // 4. A message, process-local, and a draft, each typed into its own field.
       yield* typeMessage(terminal, ASKED);
       yield* typeDraft(terminal, DRAFTED);
-      expect(selectedEntryOn(terminal)).toContain("Entry 2");
+      expect(nestedCrumb(terminal)).toBe(true);
       expect(draftFocused(terminal)).toBe(true);
-      // At entry 2's own admission the catalog says the entry has settled nothing yet.
-      expect(yield* reading(READING)).toBe(true);
 
-      // 4. Medium and routed narrow: the same selection, position and draft,
-      //    on a screen rebuilt for each size.
+      // 5. Medium and routed narrow: the same nested reading, position and
+      //    draft, on a screen rebuilt for each size.
       for (const size of [
         { columns: 120, rows: 30 },
         { columns: 72, rows: 20 },
@@ -5248,31 +5294,39 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
         expect(rows.length).toBe(size.rows);
         expect(rows.filter((line) => line.trimEnd().length > size.columns)).toEqual([]);
         expect(draftTextIn(rows)).toBe(DRAFTED);
-        expect(selectedEntryOn(terminal)).toContain("Entry 2");
-        yield* openCatalog(terminal);
-        expect(markedIn(screenOf(terminal), READING)).toBe(true);
-        expect(shows(terminal, "1. [ok] entry-1")).toBe(true);
-        yield* closeCatalog(terminal);
+        expect([size.columns, nestedCrumb(terminal), historicalOn(terminal)]).toEqual([
+          size.columns,
+          true,
+          true,
+        ]);
+        expect(yield* catalogued()).toEqual({ entry: true, scope: true, first: true });
       }
 
-      // 5. Below the minimum: one refusal, and no control drawn anywhere on it.
+      // 6. Below the minimum: one refusal, and no control drawn anywhere on it.
       const refused = yield* refusedAt(terminal, { columns: 60, rows: 15 });
       expect(refused.filter((line) => /\[[^\]]*\]/.test(line))).toEqual([]);
+      expect(refused.some((line) => line.includes(SCOPE_NAME))).toBe(false);
 
-      // 6. Wide again, and the reading is the one that went in, the message too.
+      // 7. Wide again, and the reading is the one that went in, the message too.
       yield* resizeTo(terminal, { columns: 160, rows: 36 });
-      expect(selectedEntryOn(terminal)).toContain("Entry 2");
+      expect(nestedCrumb(terminal)).toBe(true);
       expect(historicalOn(terminal)).toBe(true);
       expect(draftText(terminal)).toBe(DRAFTED);
       expect(messageText(terminal)).toContain(ASKED);
-      expect(yield* reading(READING)).toBe(true);
+      expect(yield* catalogued()).toEqual({ entry: true, scope: true, first: true });
 
-      // 7. The cells agree with the targets the frame published: pointing at
-      //    entry 1's row selects it, and entry 2's puts the reading back.
-      yield* selecting("1. [ok] entry-1", "Entry 1");
-      expect(yield* reading("1. [ok] entry-1")).toBe(true);
-      yield* selecting(READING, "Entry 2");
-      expect(yield* reading(READING)).toBe(true);
+      // 8. The cells agree with the targets the frame published: pointing at
+      //    entry 1's row selects it, and entry 2's puts the reading back. Both
+      //    select an entry, which is a reading of the entry rather than of the
+      //    component — so the component is pointed at again before leaving, and
+      //    that is the reading the command publishes.
+      yield* selecting("1. [ok] entry-1", (one) =>
+        (selectedEntryOn(one) ?? "").includes("Entry 1"),
+      );
+      expect(yield* markedRow("1. [ok] entry-1")).toBe(true);
+      yield* selecting(READING, (one) => !nestedCrumb(one));
+      expect(yield* markedRow(READING)).toBe(true);
+      yield* selecting(CATALOG_SCOPE, nestedCrumb);
       expect(draftText(terminal)).toBe(DRAFTED);
 
       terminal.end();
@@ -5280,7 +5334,8 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
     });
 
     // The whole reading, in the one string the command publishes on its way out:
-    // route, surface, selected entry, frozen position, inspect and draft.
+    // route, surface, selected entry, the component beneath it, frozen position,
+    // inspect and draft.
     standing = ended?.location;
     expect(standing).toContain("/entry-2");
     expect(standing).toContain("at=");
@@ -5289,6 +5344,11 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
     expect(stood.ok).toBe(true);
     if (stood.ok) {
       expect(stood.value.draft).toBe(DRAFTED);
+      // Two members, the entry and the occurrence beneath it: an entry-only
+      // route would describe a different reading from the one left on screen.
+      expect(stood.value.scopes).toHaveLength(2);
+      expect(stood.value.scopes[0]).toBe("entry-2");
+      expect(standing).toContain(`/${stood.value.scopes[1]}`);
     }
 
     const retained = root;
@@ -5298,8 +5358,8 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
     const path = yield* historyPath(retained, files[0]!);
     const before = yield* until(readFile(path, "utf8"));
 
-    // A cold process over that exact location: the same reading, with no work
-    // performed and nothing appended.
+    // A cold process over that exact location: the same nested reading, with no
+    // work performed and nothing appended.
     const second = recordingTerminal({ columns: 160, rows: 36 });
     let performed: Performed | undefined;
     yield* scoped(function* (): Operation<void> {
@@ -5318,7 +5378,6 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       });
       yield* untilDrawn(second.terminal);
 
-      // Read in the catalog, which is where this screen keeps the rows.
       // Where a cold process puts the keyboard, asked before anything here has
       // opened a drawer over the reading: a drawer owns focus while it is up and
       // hands it back to the control that opened it, so this is the one moment
@@ -5326,16 +5385,19 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       expect(draftFocused(second.terminal)).toBe(true);
       expect(draftShows(second.terminal, DRAFTED)).toBe(true);
 
-      // The position this location names, not the head: entry 2 is there and has
-      // settled nothing at its own admission. Both rows and the marker while
-      // the catalog is the drawer up, because that is where the rows are.
+      // The reading this location names, not the head: the component beneath
+      // entry 2, at a position where entry 2 has settled nothing. The rows and
+      // the marker while the catalog is the drawer up, because that is where
+      // the rows are.
+      expect(nestedCrumb(second.terminal)).toBe(true);
       yield* openCatalog(second.terminal);
       expect(shows(second.terminal, "1. [ok] entry-1")).toBe(true);
       expect(shows(second.terminal, READING)).toBe(true);
       expect(marked(second.terminal, READING)).toBe(true);
+      expect(shows(second.terminal, CATALOG_SCOPE)).toBe(true);
       yield* closeCatalog(second.terminal);
       expect(draftShows(second.terminal, DRAFTED)).toBe(true);
-      expect(selectedEntryOn(second.terminal)).toContain("Entry 2");
+      expect(nestedCrumb(second.terminal)).toBe(true);
       expect(historicalOn(second.terminal)).toBe(true);
 
       second.terminal.end();
@@ -5361,6 +5423,27 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
  * what an assertion about one size needs, since the accumulated buffer still holds
  * the rows the other size drew.
  */
+
+/**
+ * The second entry's source, which invokes a component this fixture directory
+ * already supplies — so the execution retains a scope beneath an entry.
+ */
+const SCOPED_TWO = [COLD_TWO, '<Checklist title="Resize scope" steps={2} />', ""].join("\n");
+
+/** The component occurrence this reading is of, as the screen names it. */
+const SCOPE_NAME = "Checklist";
+
+/** Its own catalog row, drawn beneath the entry that admitted it. */
+const CATALOG_SCOPE = `component ${SCOPE_NAME}`;
+
+/**
+ * The retained position this journey freezes at.
+ *
+ * The component's own admission rather than the entry's: a prefix taken at
+ * entry 2's admission predates the component, and a reading of a scope the
+ * prefix does not hold is one resolution refuses.
+ */
+const CHECKPOINT = "Component admitted";
 
 /** The draft this reading carries across every size, with a space in it. */
 const DRAFTED = "keep this draft";
