@@ -118,7 +118,14 @@ export const PROVENANCE_VARIABLES: Record<keyof WeightSource, string> = {
 /** The provenance fields that name a run, as opposed to the toolchain that ran in it. */
 export type RunIdentity = Pick<WeightSource, "commit" | "runUrl" | "attempt" | "runner">;
 
-const RUN_FIELDS: Array<keyof RunIdentity> = ["commit", "runUrl", "attempt", "runner"];
+/**
+ * Every field of a run's identity, in one place.
+ *
+ * Assembly compares each runtime's provenance against the run it is assembling
+ * for, and reading provenance from the environment demands the same fields. A
+ * second list would let a field added here go uncompared there.
+ */
+export const RUN_FIELDS: Array<keyof RunIdentity> = ["commit", "runUrl", "attempt", "runner"];
 
 /** The named variables' values, or a refusal naming every one that is missing. */
 function supplied(

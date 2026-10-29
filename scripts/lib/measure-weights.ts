@@ -19,6 +19,7 @@ import {
   formatTestWeights,
   measurementFile,
   parseRuntimeMeasurement,
+  RUN_FIELDS,
   TestWeightsError,
   WEIGHTS_VERSION,
 } from "./test-weights.ts";
@@ -98,8 +99,6 @@ function described(paths: string[]): string {
     ? paths.join(", ")
     : `${paths.slice(0, 5).join(", ")} and ${paths.length - 5} more`;
 }
-
-const RUN_FIELDS: Array<keyof RunIdentity> = ["commit", "runUrl", "attempt", "runner"];
 
 function provenanceProblems(
   runtime: Runtime,

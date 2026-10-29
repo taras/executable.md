@@ -21,6 +21,7 @@ import {
   parseTestWeights,
   parseWeightSource,
   PROVENANCE_VARIABLES,
+  RUN_FIELDS,
   runIdentityFrom,
   TestWeightsError,
   weightsFile,
@@ -474,6 +475,24 @@ describe("assembling the measurement", () => {
       },
     });
     expect(parseTestWeights(formatTestWeights(weights))).toEqual(weights);
+  });
+
+  it("compares every field of a run's identity", function* () {
+    // Looped rather than listed, so a field added to a run's identity is
+    // compared here the moment it exists rather than when someone remembers to
+    // write its case.
+    for (const field of RUN_FIELDS) {
+      const disagreeing = field === "attempt" ? SOURCE.attempt + 1 : `other-${field}`;
+      const refused = refusal({
+        ...allComplete(),
+        bun: complete("bun", { source: { ...SOURCE, [field]: disagreeing } }),
+      });
+
+      expect({
+        field,
+        named: refused?.includes(`bun was measured with ${field}`) ?? false,
+      }).toEqual({ field, named: true });
+    }
   });
 
   it("refuses every set of records that does not prove the whole corpus in one run", function* () {
