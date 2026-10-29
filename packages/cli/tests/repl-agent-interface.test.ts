@@ -81,7 +81,7 @@ import type { ReplAdmission } from "../src/repl/layout-admission.ts";
 import type { ReplPresentationContext } from "../src/repl/application.ts";
 import { commitReplFrame } from "../src/repl/program.ts";
 import type { ReplCommitted } from "../src/repl/program.ts";
-import { createGrid, committedContext } from "./fixtures/repl/presentation.ts";
+import { useGrid, committedContext } from "./fixtures/repl/presentation.ts";
 import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "../src/repl/route.ts";
 import type { ReplRoute } from "../src/repl/route.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
@@ -3372,7 +3372,7 @@ describe("U1 — a row's rectangle does not bound its text (#875 R1)", () => {
     // frame published for this row and in the cells around it. A rectangle does
     // not bound its text, so the row being the right width proves nothing on its
     // own — the state has to be in the row's own cells, and nowhere else.
-    const grid = createGrid();
+    const grid = yield* useGrid(view.size);
     grid.apply(frame.committed.rendered.output);
     const beside = {
       x: at.x + at.width,

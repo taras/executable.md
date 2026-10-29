@@ -26,6 +26,8 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { ensure, type Operation, scoped, sleep, withResolvers } from "effection";
 
+import { readScreen, usedRows } from "./terminal-screen.ts";
+
 /** The window the pty is given, which is a size this REPL draws at. */
 export const WINDOW = { columns: 160, rows: 36 };
 
@@ -400,63 +402,11 @@ function* scriptPty(inside: string): Operation<Pty> {
 }
 
 /**
- * What the terminal shows, by replaying what was written to it.
- *
- * A buffer rather than the bytes with escapes stripped, because this renderer
- * writes *diffs*: it moves the cursor to what changed and writes only that. A
- * focus marker arrives as "go to row 30, column 13, write `>`", so the text a
- * person reads as `> [exit]` is never a run of bytes anybody sent.
+ * What the terminal shows: everything `script` captured, on a screen of this
+ * pty's size, from the top of its scrollback.
  */
 function replayed(written: string): string[] {
-  const rows: string[][] = [];
-  let row = 0;
-  let column = 0;
-  const put = (character: string): void => {
-    while (rows.length <= row) {
-      rows.push([]);
-    }
-    const line = rows[row];
-    while (line.length < column) {
-      line.push(" ");
-    }
-    line[column] = character;
-    column += 1;
-  };
-  for (let index = 0; index < written.length; index += 1) {
-    const character = written[index];
-    if (character !== "\u001B") {
-      if (character === "\n") {
-        row += 1;
-        column = 0;
-      } else if (character === "\r") {
-        column = 0;
-      } else {
-        put(character);
-      }
-      continue;
-    }
-    const csi = /^\u001B\[([0-9;]*)([@-~])/.exec(written.slice(index));
-    if (csi !== null) {
-      const parameters = csi[1].split(";").map((one) => (one === "" ? 0 : Number(one)));
-      if (csi[2] === "H") {
-        row = Math.max(0, (parameters[0] ?? 1) - 1);
-        column = Math.max(0, (parameters[1] ?? 1) - 1);
-      } else if (csi[2] === "J") {
-        rows.length = 0;
-        row = 0;
-        column = 0;
-      }
-      index += csi[0].length - 1;
-      continue;
-    }
-    const osc = /^\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/.exec(written.slice(index));
-    if (osc !== null) {
-      index += osc[0].length - 1;
-      continue;
-    }
-    index += 1;
-  }
-  return rows.map((line) => line.join(""));
+  return readScreen(WINDOW, [written], (screen) => usedRows(screen.buffer()));
 }
 
 /** Wait until the screen shows this text, or say what it shows instead. */

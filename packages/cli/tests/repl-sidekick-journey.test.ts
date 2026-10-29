@@ -83,8 +83,10 @@ import {
   useMountedHost,
   mountedExecution,
   sidekickPaneIn,
+  untilShown,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
 import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
+import { send } from "./support/repl-page.ts";
 
 /**
  * The orientation an older build left on a conversation it completed a turn of.
@@ -1658,81 +1660,58 @@ const GATED_ENTRY_REPLY = [
 describe("Tier R5 — a mounted message prepares and submits a real entry", () => {
   it("M3: the message a person sends runs its entry, and is answered about it", function* () {
     const repl = yield* useMountedRepl();
-    // The first message's two turns: the reply that prepares and submits, then
-    // the turn it is told what its own writes did.
-    repl.fake.script({ reply: entrySource("greeting", "Hello from the reply.", "{greeting}") });
-    repl.fake.script({ reply: "<Output>Thanks for the receipt.</Output>\n" });
-
-    yield* sendMessage(repl, "greet");
-    yield* awaiting(repl.terminal, "the reply answering about its own entry", (one) =>
+    const { terminal, fake } = repl;
+    // The reply that prepares and submits, then the turn told what its writes did.
+    fake.script({ reply: entrySource("greeting", "Hello from the reply.", "{greeting}") });
+    fake.script({ reply: "<Output>Thanks for the receipt.</Output>\n" });
+    yield* send(terminal, "greet");
+    yield* untilShown(terminal, "the reply answering about its own entry", (one) =>
       shows(one, "Thanks for the receipt."),
     );
 
-    // One entry ran, from literally the source the reply captured — the
-    // executable fence intact rather than evaluated by the reply — and it
-    // produced what that source says.
+    // One entry ran, from the source the reply captured with its fence intact.
     const first = yield* mountedReading(repl);
     expect(first.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
     expect(first.model.entries[0]?.source).toContain("```js eval");
     expect(first.model.entries[0]?.source).toContain("Hello from the reply.");
     expect(first.model.entries[0]?.terminal?.output).toContain("Hello from the reply.");
-    // The entry's own output is on the screen, because the entry really ran.
-    expect(shows(repl.terminal, "Hello from the reply.")).toBe(true);
+    expect(shows(terminal, "Hello from the reply.")).toBe(true);
+    expect(draftText(terminal)).toBe("");
 
-    // The draft the admission took is finished, on the row a person reads it on.
-    expect(draftText(repl.terminal)).toBe("");
-
-    // The receipt names this exact entry and carries no body: the second turn
-    // is told what the two writes did, in the order they were admitted.
-    expect(repl.fake.prompts).toHaveLength(2);
-    const receipt = repl.fake.prompts[1] ?? "";
+    // The receipt names this entry, carries no body, and keeps admission order.
+    expect(fake.prompts).toHaveLength(2);
+    const receipt = fake.prompts[1] ?? "";
     expect(receipt).toContain("## REPL.EntryInput");
     expect(receipt).toContain("## REPL.Submit");
     expect(receipt).toContain("Entry entry-1 completed.");
     expect(receipt).not.toContain("```js eval");
     expect(receipt.indexOf("## REPL.EntryInput")).toBeLessThan(receipt.indexOf("## REPL.Submit"));
 
-    // And the chat is the person's message and the two replies' own Output —
-    // not a response body, not the entry's source, not the feedback envelope.
-    expect(saidByPerson(repl.terminal, "greet")).toBe(true);
-    expect(saidBySidekick(repl.terminal, "Submitted it.")).toBe(true);
-    expect(saidBySidekick(repl.terminal, "Thanks for the receipt.")).toBe(true);
-    expect(shows(repl.terminal, "REPL.EntryInput")).toBe(false);
+    // The chat is the message and the replies' own Output, nothing else.
+    expect(saidByPerson(terminal, "greet")).toBe(true);
+    expect(saidBySidekick(terminal, "Submitted it.")).toBe(true);
+    expect(saidBySidekick(terminal, "Thanks for the receipt.")).toBe(true);
+    expect(shows(terminal, "REPL.EntryInput")).toBe(false);
 
-    // A second message, in the same conversation: one conversation per
-    // execution, so this turn is not oriented again.
-    repl.fake.script({ reply: "<REPL.Bindings />\n" });
-    repl.fake.script({ reply: entrySource("greeting", "| a | b |", "{greeting}") });
-    repl.fake.script({ reply: "<Output>Revised it.</Output>\n" });
-
-    yield* sendMessage(repl, "table");
-    yield* awaiting(repl.terminal, "the revision being answered", (one) =>
-      shows(one, "Revised it."),
-    );
+    // A second message in the same conversation, which is not oriented again.
+    fake.script({ reply: "<REPL.Bindings />\n" });
+    fake.script({ reply: entrySource("greeting", "| a | b |", "{greeting}") });
+    fake.script({ reply: "<Output>Revised it.</Output>\n" });
+    yield* send(terminal, "table");
+    yield* untilShown(terminal, "the revision being answered", (one) => shows(one, "Revised it."));
 
     const second = yield* mountedReading(repl);
     const conversations = new Set(
-      second.chat
-        .filter((record) => record.kind === "message")
-        .map((record) => (record.kind === "message" ? record.conversation : "")),
+      second.chat.flatMap((record) => (record.kind === "message" ? [record.conversation] : [])),
     );
     expect(conversations.size).toBe(1);
     expect(second.execution).toBe(first.execution);
-
-    // The read that followed came back with the binding the *first* entry
-    // actually published — so what a read answers is the history as it stands,
-    // not what it held when the conversation opened. It is the turn after this
-    // message's own: the message is asked, the reply reads, and the read goes
-    // back as that read's feedback.
-    expect(repl.fake.prompts).toHaveLength(5);
-    expect(JSON.parse(repl.fake.prompts[3] ?? "")).toEqual({
-      greeting: "Hello from the reply.",
-    });
-
-    // And the second entry really ran, revising the same name.
+    // The read came back with what the first entry published, as the history stands.
+    expect(fake.prompts).toHaveLength(5);
+    expect(JSON.parse(fake.prompts[3] ?? "")).toEqual({ greeting: "Hello from the reply." });
     expect(second.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
     expect(second.model.entries[1]?.terminal?.output).toContain("| a | b |");
-    expect(repl.fake.prompts[4] ?? "").toContain("Entry entry-2 completed.");
+    expect(fake.prompts[4] ?? "").toContain("Entry entry-2 completed.");
   });
 
   /**
