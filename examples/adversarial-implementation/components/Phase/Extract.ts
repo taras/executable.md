@@ -39,6 +39,15 @@ function parseText(text: string): Result<Json> {
   }
 }
 
+function opensRecord(text: string): boolean {
+  return (
+    /^\s*\{\s*(?:"|}|$)/.test(text) ||
+    /^\s*\[\s*(?:\{|\[|"|\]|(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(?=\s*(?:,|\]|$))|$)/.test(
+      text,
+    )
+  );
+}
+
 function readResult(input: string): Result<Json> {
   const whole = parseText(input.trim());
   if (whole.ok) {
@@ -46,7 +55,7 @@ function readResult(input: string): Result<Json> {
   }
   const candidates: Json[] = [];
   let outside = "";
-  let fence: { marker: string; json: boolean; body: string } | undefined;
+  let fence: { marker: string; json: boolean; unlabeled: boolean; body: string } | undefined;
   for (const line of input.split(/(?<=\n)/)) {
     const delimiter =
       fence === undefined
@@ -59,7 +68,7 @@ function readResult(input: string): Result<Json> {
         delimiter[1].length >= fence.marker.length &&
         delimiter[2].trim() === ""
       ) {
-        if (fence.json) {
+        if (fence.json || (fence.unlabeled && opensRecord(fence.body))) {
           const parsed = parseText(fence.body);
           if (!parsed.ok) {
             return parsed;
@@ -71,8 +80,17 @@ function readResult(input: string): Result<Json> {
         fence.body += line;
       }
     } else if (delimiter) {
+      if (delimiter[2].includes(delimiter[1])) {
+        outside += line;
+        continue;
+      }
       const language = delimiter[2].trim().toLowerCase();
-      fence = { marker: delimiter[1], json: language === "json" || language === "", body: "" };
+      fence = {
+        marker: delimiter[1],
+        json: language === "json",
+        unlabeled: language === "",
+        body: "",
+      };
       outside += line.slice(0, delimiter.index) + "\n";
     } else {
       outside += line;
@@ -86,6 +104,9 @@ function readResult(input: string): Result<Json> {
       (outside[index] !== "{" && outside[index] !== "[") ||
       /[A-Za-z0-9_$]/.test(outside[index - 1] ?? "")
     ) {
+      continue;
+    }
+    if (!opensRecord(outside.slice(index))) {
       continue;
     }
     const end = recordEnd(outside, index);

@@ -34,6 +34,12 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
   'Done: {"passed":true}',
   'Progress without a newline.```json\n{"passed":true}\n```',
   'R[1-4]: checks completed.```json\n{"passed":true}\n```',
+  'Saved the receipt under [receipt](receipt.json).\n{"passed":true}',
+  'Evidence:\n- [x] focused tests passed\n\n{"passed":true}',
+  'Checks [1/3] done.\n{"passed":true}',
+  'Kept the {quoted} placeholder.\n{"passed":true}',
+  '```\n$ deno task test\nok | 3 passed\n```\n{"passed":true}',
+  'Ran it (see ```log``` above).\n{"passed":true}',
   '```sh\necho "{not a result}"\n```\n{"passed":true}'
 ]} let="reply">
 <Phase.Extract text={reply} as="extracted" />
@@ -143,7 +149,7 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 </TempDir>
 </Test>
 
-<Test name="an oversized handoff is repaired in the same session without repeating implementation" timeout="60s">
+<Test name="an oversized summary is repaired in the same session without repeating implementation" timeout="60s">
 <TempDir>
 <Fixture.Repository as="fixture" />
 <Fixture.Run fixture={fixture} request="response-repair" command={runner} root={suiteRoot} as="child" />
