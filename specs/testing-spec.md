@@ -735,13 +735,33 @@ runtime names, the shape of every path, and the positivity and integrality of
 every millisecond are checked; anything else is refused, because a partition
 computed from unusable data is worse than no partition.
 
-`deno task weights:measure` is the only command that writes it. Measurement runs
-each applicable file alone through that runtime's exact one-file command, times
-the child with a monotonic clock, holds the results in memory, and writes only
-after every file passed — a file half-replaced by a suite that failed halfway
-would be indistinguishable from one measured on a healthy corpus. The write goes
-through a staged copy of the invocation's own, so it is atomic and a cancelled
-run removes only its own staging. Ordinary verification never rewrites it.
+`deno task weights:measure` is the only command that writes it, in two steps.
+
+`weights:measure <runtime> <directory>` measures one runtime. It runs each
+applicable file alone, in sorted order, through that runtime's exact one-file
+command, and times the child with a monotonic clock. It keeps
+`<directory>/test-weights-<runtime>.json` current: the record carries the
+runtime, a status, the full provenance, the applicable corpus it derived, every
+file that passed with its milliseconds in the order it ran, and the failure if
+there was one. Its status is `partial` before the first file and after each one
+that passes, `failed` with the file and exit status when a file fails — which
+stops the measurement — and `complete` once every file passed. A run that is cut
+off leaves `partial`, so an unfinished measurement is never mistaken for a
+finished one. The record has one current shape, and a reader refuses a missing,
+extra or malformed field.
+
+`weights:measure assemble <directory>` writes `test-weights.json` from the
+three records, and only when every one is `complete`; agrees with the commit,
+run URL, attempt and runner the environment names; records the same three
+runtime versions as the others; derived the same applicable corpus as the
+checkout; and measured each applicable file exactly once, and no other file.
+Otherwise it refuses with every problem named and writes nothing — a file
+assembled from a runtime that failed halfway, or from two runs, would be
+indistinguishable from one measured on a healthy corpus.
+
+Both writes go through a staged copy of the invocation's own, so each is atomic
+and a cancelled run removes only its own staging. Ordinary verification never
+rewrites either.
 
 ### Fallback
 
@@ -815,9 +835,15 @@ Concurrency inside a shard is not enabled.
 ### Remeasurement and calibration
 
 Remeasure after any change to the corpus, the exclusions, or a runner command.
-A hosted `workflow_dispatch` produces the measurement on the runner CI uses and
-uploads it as an artifact; committing that artifact is a deliberate act, which
-is what keeps the provenance true of the run that produced it. Milliseconds are
+A hosted `workflow_dispatch` produces the measurement on the runner CI uses.
+Each runtime is measured in its own job, serially within it, and uploads its
+record as `test-weights-<runtime>-attempt-<attempt>` however the job ended. An
+`assemble` job, which runs only when all three succeeded, assembles that
+attempt's records and uploads `test-weights.json` as the `test-weights`
+artifact. Each measuring job has 165 minutes, its measuring step 150 of them,
+and assembly 10, so the run's execution fits in 175 minutes; time queued for a
+runner is outside it. Committing that artifact is a deliberate act, which is
+what keeps the provenance true of the run that produced it. Milliseconds are
 never edited by hand.
 
 Counts are measured rather than chosen. For each runtime the lower bound is

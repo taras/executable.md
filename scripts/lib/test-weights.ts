@@ -9,9 +9,11 @@
  * file missing any of them rather than partitioning against data nobody can
  * place.
  *
- * This module reads. Producing a measurement is `measure-weights.ts`, and the
- * separation is deliberate: a shard job parses this file on every runner, and
- * it should not have to load a runner table and a process seam to do it.
+ * This module reads, both the committed file and the per-runtime record one
+ * measuring job leaves behind. Producing and assembling a measurement is
+ * `measure-weights.ts`, and the separation is deliberate: a shard job parses
+ * this file on every runner, and it should not have to load a runner table and
+ * a process seam to do it.
  */
 import { parseRuntime, RUNTIMES } from "../runtime-test-exclusions.ts";
 import type { Runtime } from "../runtime-test-exclusions.ts";
@@ -113,6 +115,44 @@ export const PROVENANCE_VARIABLES: Record<keyof WeightSource, string> = {
   bun: "WEIGHTS_BUN",
 };
 
+/** The provenance fields that name a run, as opposed to the toolchain that ran in it. */
+export type RunIdentity = Pick<WeightSource, "commit" | "runUrl" | "attempt" | "runner">;
+
+/**
+ * Every field of a run's identity, in one place.
+ *
+ * Assembly compares each runtime's provenance against the run it is assembling
+ * for, and reading provenance from the environment demands the same fields. A
+ * second list would let a field added here go uncompared there.
+ */
+export const RUN_FIELDS: Array<keyof RunIdentity> = ["commit", "runUrl", "attempt", "runner"];
+
+/** The named variables' values, or a refusal naming every one that is missing. */
+function supplied(
+  fields: Array<keyof WeightSource>,
+  read: (variable: string) => string | undefined,
+): Record<string, unknown> {
+  const entries = fields.map((field) => ({
+    field,
+    variable: PROVENANCE_VARIABLES[field],
+    value: read(PROVENANCE_VARIABLES[field]) ?? "",
+  }));
+
+  const missing = entries.filter((entry) => entry.value.trim().length === 0);
+  if (missing.length > 0) {
+    throw new TestWeightsError(
+      `provenance is missing from the environment: ${missing
+        .map((entry) => entry.variable)
+        .join(", ")}; expected ${entries.map((entry) => entry.variable).join(", ")}`,
+    );
+  }
+
+  return {
+    ...Object.fromEntries(entries.map((entry) => [entry.field, entry.value])),
+    attempt: Number(read(PROVENANCE_VARIABLES.attempt)),
+  };
+}
+
 /**
  * Provenance read from the environment, refusing rather than defaulting.
  *
@@ -121,25 +161,23 @@ export const PROVENANCE_VARIABLES: Record<keyof WeightSource, string> = {
  * and be wrong.
  */
 export function weightSourceFrom(read: (variable: string) => string | undefined): WeightSource {
-  const supplied = Object.entries(PROVENANCE_VARIABLES).map(([field, variable]) => ({
-    field,
-    variable,
-    value: read(variable) ?? "",
-  }));
+  return parseWeightSource(supplied([...RUN_FIELDS, "deno", "node", "bun"], read));
+}
 
-  const missing = supplied.filter((entry) => entry.value.trim().length === 0);
-  if (missing.length > 0) {
-    throw new TestWeightsError(
-      `provenance is missing from the environment: ${missing
-        .map((entry) => entry.variable)
-        .join(", ")}; expected ${Object.values(PROVENANCE_VARIABLES).join(", ")}`,
-    );
-  }
-
-  return parseWeightSource({
-    ...Object.fromEntries(supplied.map((entry) => [entry.field, entry.value])),
-    attempt: Number(read(PROVENANCE_VARIABLES.attempt)),
-  });
+/**
+ * The run an assembly belongs to, read from the environment the same way.
+ *
+ * Assembly takes no toolchain versions of its own: the versions it publishes
+ * are the ones the measuring jobs recorded, and it refuses when they disagree.
+ */
+export function runIdentityFrom(read: (variable: string) => string | undefined): RunIdentity {
+  const source = supplied(RUN_FIELDS, read);
+  return {
+    commit: text(source.commit, "source.commit", COMMIT),
+    runUrl: text(source.runUrl, "source.runUrl", RUN_URL),
+    attempt: positiveInteger(source.attempt, "source.attempt"),
+    runner: text(source.runner, "source.runner"),
+  };
 }
 
 function parseRuntimeWeights(values: unknown, label: string): Record<string, number> {
@@ -219,6 +257,151 @@ export function formatTestWeights(weights: TestWeights): string {
     null,
     2,
   )}\n`;
+}
+
+/**
+ * Where one measuring job stands. `partial` is what a job writes before its
+ * first file and after every file that passes, so a job that is cut off —
+ * timed out, cancelled, killed — still leaves a record that says it did not
+ * finish. `failed` names the file that stopped it, and `complete` means every
+ * applicable file passed.
+ */
+export type MeasurementStatus = "partial" | "failed" | "complete";
+
+const STATUSES: MeasurementStatus[] = ["partial", "failed", "complete"];
+
+/** One file that passed, and how long its process took. */
+export interface MeasuredFile {
+  file: string;
+  ms: number;
+}
+
+/** What one runtime's measuring job recorded, under the provenance it ran with. */
+export interface RuntimeMeasurement {
+  runtime: Runtime;
+  status: MeasurementStatus;
+  source: WeightSource;
+  /** The applicable corpus the job derived for its runtime, sorted. */
+  applicable: string[];
+  /** Every file that passed, in the order it ran. */
+  measured: MeasuredFile[];
+  failure: { file: string; status: number } | null;
+}
+
+function exactly(value: Record<string, unknown>, fields: string[], label: string): void {
+  const extra = Object.keys(value).filter((field) => !fields.includes(field));
+  if (extra.length > 0) {
+    throw new TestWeightsError(
+      `${label} has fields this format does not declare: ${extra.join(", ")}`,
+    );
+  }
+  const missing = fields.filter((field) => !(field in value));
+  if (missing.length > 0) {
+    throw new TestWeightsError(`${label} is missing ${missing.join(", ")}`);
+  }
+}
+
+function list(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new TestWeightsError(`${label} is not an array`);
+  }
+  return value;
+}
+
+/** One runtime's measurement record, validated against its one current shape. */
+export function parseRuntimeMeasurement(source: string, label = "measurement"): RuntimeMeasurement {
+  let document: unknown;
+  try {
+    document = JSON.parse(source);
+  } catch (error) {
+    throw new TestWeightsError(
+      `${label} is not JSON: ${error instanceof Error ? error.message : error}`,
+    );
+  }
+
+  const parsed = record(document, label);
+  exactly(parsed, ["runtime", "status", "source", "applicable", "measured", "failure"], label);
+
+  const runtime = parseRuntime(text(parsed.runtime, `${label}.runtime`));
+  if (runtime === undefined) {
+    throw new TestWeightsError(`${label}.runtime is not a supported runtime`);
+  }
+
+  const status = STATUSES.find((candidate) => candidate === parsed.status);
+  if (status === undefined) {
+    throw new TestWeightsError(`${label}.status is not one of ${STATUSES.join(", ")}`);
+  }
+
+  const provenance = record(parsed.source, `${label}.source`);
+  exactly(provenance, Object.keys(PROVENANCE_VARIABLES), `${label}.source`);
+
+  const applicable = list(parsed.applicable, `${label}.applicable`).map((path, index) =>
+    discoveredPath(text(path, `${label}.applicable[${index}]`), `${label}.applicable[${index}]`),
+  );
+
+  const measured = list(parsed.measured, `${label}.measured`).map((entry, index) => {
+    const at = `${label}.measured[${index}]`;
+    const fields = record(entry, at);
+    exactly(fields, ["file", "ms"], at);
+    return {
+      file: discoveredPath(text(fields.file, `${at}.file`), `${at}.file`),
+      ms: positiveInteger(fields.ms, `${at}.ms`),
+    };
+  });
+
+  let failure: RuntimeMeasurement["failure"] = null;
+  if (parsed.failure !== null) {
+    const fields = record(parsed.failure, `${label}.failure`);
+    exactly(fields, ["file", "status"], `${label}.failure`);
+    failure = {
+      file: discoveredPath(text(fields.file, `${label}.failure.file`), `${label}.failure.file`),
+      status: positiveInteger(fields.status, `${label}.failure.status`),
+    };
+  }
+  if ((status === "failed") !== (failure !== null)) {
+    throw new TestWeightsError(`${label}.failure must name a file exactly when status is failed`);
+  }
+
+  return {
+    runtime,
+    status,
+    source: parseWeightSource(provenance, `${label}.source`),
+    applicable,
+    measured,
+    failure,
+  };
+}
+
+/** One runtime's measurement record, in the key order it is written in. */
+export function formatRuntimeMeasurement(measurement: RuntimeMeasurement): string {
+  return `${JSON.stringify(
+    {
+      runtime: measurement.runtime,
+      status: measurement.status,
+      source: {
+        commit: measurement.source.commit,
+        runUrl: measurement.source.runUrl,
+        attempt: measurement.source.attempt,
+        runner: measurement.source.runner,
+        deno: measurement.source.deno,
+        node: measurement.source.node,
+        bun: measurement.source.bun,
+      },
+      applicable: measurement.applicable,
+      measured: measurement.measured.map((entry) => ({ file: entry.file, ms: entry.ms })),
+      failure:
+        measurement.failure === null
+          ? null
+          : { file: measurement.failure.file, status: measurement.failure.status },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+/** Where one runtime's measuring job writes its record, inside `directory`. */
+export function measurementFile(directory: URL, runtime: Runtime): URL {
+  return new URL(`test-weights-${runtime}.json`, directory);
 }
 
 /** Where the committed weights live, relative to the repository root. */

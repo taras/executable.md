@@ -364,11 +364,21 @@ here:
 
 ### Measuring the corpus
 
-`deno task weights:measure` runs every applicable test file alone, under each
-runtime's own runner, and writes what each one took to `test-weights.json`. It
-writes only after every measured file passed, and it is the only command that
-writes that file — verification, the runtime suites, and every other check read
-it and leave it alone.
+`deno task weights:measure <runtime> <directory>` runs every applicable file of
+that runtime alone, one at a time, under the runtime's own runner, and keeps
+`<directory>/test-weights-<runtime>.json` current as it goes: `partial` before
+the first file and after each one that passes, `failed` naming the file that
+stopped it, and `complete` once every file passed. A record cut off by a timeout
+or cancellation therefore still holds every file that finished, and says it did
+not finish.
+
+`deno task weights:measure assemble <directory>` reads the three records and
+writes `test-weights.json` only when all three are complete, belong to the same
+commit, run, attempt and runner, recorded the same three runtime versions, and
+each measured exactly the corpus the checkout applies to that runtime, every file
+once. Anything else is refused with every problem named, and the file is left
+alone. This task is the only one that writes that file — verification, the
+runtime suites, and every other check read it and leave it alone.
 
 Those weights are what the partition reads. A file with a recorded weight uses
 it; one without is charged the heaviest weight the *current* applicable corpus
@@ -387,13 +397,26 @@ job runs on, and without provenance the file would not say so.
 
 So the measurement belongs on the runner. **Measure test weights**
 (`.github/workflows/measure-test-weights.yml`) is dispatched against a ref from
-the Actions tab: it prepares the checkout in the usual order, measures all three
-runtimes on `ubuntu-latest`, and uploads `test-weights.json` as an artifact. It
-holds `contents: read` and pushes nothing, so downloading that artifact and
-committing it is a deliberate act — which is what keeps the provenance in the
-committed file true of the run that produced it. Remeasure after anything that
-moves the corpus, the exclusions, or a runner command; never hand-edit a
-millisecond.
+the Actions tab. Each runtime gets its own `ubuntu-latest` job, prepared in the
+usual order, so the run takes as long as its slowest runtime rather than the sum
+of all three. Each job uploads its record as `test-weights-<runtime>-attempt-<n>`
+whatever happened, so a failed or overrun runtime leaves its evidence behind. The
+`assemble` job runs only after all three succeeded, downloads that attempt's
+records, and uploads `test-weights.json` as the `test-weights` artifact; a run
+in which any runtime failed, timed out or was cancelled has no such artifact.
+
+The run has a 175-minute execution budget: 165 minutes for each runtime's job,
+whose measuring step stops at 150 so the upload still runs, and 10 for assembly.
+The slowest complete runtime observed, Deno, took 105 minutes. Time spent queued
+for a runner is outside any budget the workflow can set. Re-running only a failed
+runtime's job produces a record from a new attempt that assembly refuses to
+stitch to the earlier ones, so re-run the whole workflow.
+
+The workflow holds `contents: read` and pushes nothing, so downloading that
+artifact and committing it is a deliberate act — which is what keeps the
+provenance in the committed file true of the run that produced it. Remeasure
+after anything that moves the corpus, the exclusions, or a runner command; never
+hand-edit a millisecond.
 
 **Shard counts are measured, not chosen.** For each runtime the floor is
 `floor(sum of applicable weights / 300000) + 1`, and the installed count is the
