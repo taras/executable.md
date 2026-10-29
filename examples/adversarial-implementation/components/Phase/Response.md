@@ -15,7 +15,8 @@ returns: {type: object}
 <If condition={candidate.ok}>
 <Phase.Revisions repository={assignment.repository} value={candidate.value} as="canonical" />
 <If condition={!canonical.ok}><Return value={canonical} /><Break /></If>
-<Let as="extracted" value={{...extracted,json:JSON.stringify(canonical.value)}} />
+<Json value={canonical.value} as="canonicalJson" />
+<Let as="extracted" value={{...extracted,json:canonicalJson}} />
 <Let as="normalizations" value={canonical.changes} />
 </If>
 <SafeParse schema={schemas.result} as="parsed">{extracted.json}</SafeParse>
