@@ -16,13 +16,26 @@ on:
 permissions:
   contents: read
 
+# The execution budget is 175 minutes from the first measuring job's start to
+# the assembled artifact: 165 for the slowest runtime's job, then 10 for
+# assembly. Run 40829223380 measured Deno's whole corpus in 105.2 minutes and
+# Node's in 67.4 when the three ran one after another in a single 180-minute
+# job, which timed out 35 files into Bun. Each runtime now has a runner of its
+# own, so the wall clock is the slowest runtime rather than the sum. Time a run
+# spends queued for a runner is GitHub's, and no budget here can bound it.
 jobs:
   measure:
+    name: measure (${{ matrix.runtime }})
+    # Each runtime on its own runner, its files still one at a time, so no
+    # measurement contends with another runtime's processes. Without fail-fast
+    # a failing runtime does not cancel the others, and each still leaves its
+    # own record.
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [deno, node, bun]
     runs-on: ubuntu-latest
-    # Every applicable file is run alone under all three runtimes, so this job
-    # is far longer than any suite: it pays a process start per file per
-    # runtime, which is exactly the cost a shard will pay.
-    timeout-minutes: 180
+    timeout-minutes: 165
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -43,14 +56,21 @@ jobs:
       # One preparation, in the repository's load-bearing order: `deno install`,
       # then `pnpm install` beside it, then the browser bundle. The measured
       # commands resolve through the same tree the CI suites resolve through, so
-      # a weight is not measuring a different module layout.
+      # a weight is not measuring a different module layout. Every runtime's job
+      # prepares and installs the same thing, so all three record the same
+      # toolchain and assembly can hold them to it.
       - name: Prepare the checkout
         run: deno task setup
 
       # The versions are read from the executables this job just installed, not
       # from the pins above: a pin says what was asked for and these say what
       # ran.
-      - name: Measure every applicable test file under every runtime
+      #
+      # The step's own timeout sits inside the job's so that a runtime that
+      # overruns its allowance still reaches the upload below, carrying the
+      # `partial` record of every file it finished.
+      - name: Measure every applicable test file under ${{ matrix.runtime }}
+        timeout-minutes: 150
         env:
           WEIGHTS_COMMIT: ${{ github.sha }}
           WEIGHTS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -61,7 +81,53 @@ jobs:
           WEIGHTS_DENO="$(deno --version | head -1)" \
           WEIGHTS_NODE="$(node --version)" \
           WEIGHTS_BUN="$(bun --version)" \
-            deno task weights:measure
+            deno task weights:measure ${{ matrix.runtime }} "$RUNNER_TEMP/measurements"
+
+      # Uploaded whatever happened, under a name that says which runtime and
+      # which attempt it belongs to, so a failed or overrun measurement is still
+      # there to read. Its `status` says whether it finished.
+      - name: Upload the ${{ matrix.runtime }} measurement
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-weights-${{ matrix.runtime }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/measurements/test-weights-${{ matrix.runtime }}.json
+          if-no-files-found: warn
+
+  # Runs only when every runtime's job succeeded: a failed, cancelled or
+  # timed-out runtime skips it, so no `test-weights` artifact exists for a run
+  # that did not measure the whole corpus.
+  assemble:
+    needs: measure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.5
+
+      # Assembly derives each runtime's applicable corpus from this checkout,
+      # which needs the Deno dependencies and nothing else.
+      - name: Install dependencies
+        run: deno task deps
+
+      # Only this attempt's records: a re-run's measurement is never stitched to
+      # an earlier attempt's, and assembly refuses one that disagrees anyway.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: test-weights-*-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/measurements
+          merge-multiple: true
+
+      - name: Assemble the measurement
+        env:
+          WEIGHTS_COMMIT: ${{ github.sha }}
+          WEIGHTS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WEIGHTS_ATTEMPT: ${{ github.run_attempt }}
+          WEIGHTS_RUNNER: ubuntu-latest
+        run: deno task weights:measure assemble "$RUNNER_TEMP/measurements"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
