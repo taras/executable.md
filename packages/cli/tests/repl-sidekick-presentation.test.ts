@@ -4306,6 +4306,15 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
     yield* awaitedFact(`the history recording ${recorded} entries`, function* () {
       return (yield* mountedReading(page.repl)).model.entries.length >= recorded;
     });
+    // And the rail marking it settled, which the recorded model does not imply.
+    // The band carries the entry from the moment it is admitted and widens
+    // again when its outcome lands, and that width is what places the footer's
+    // own controls: measured at 160x36, [history] sits at column 92 with no
+    // entry, 94 while the first is running, 96 once it settled, 97 and then 98
+    // for the second. A row that acted on the running frame would aim a press
+    // at a cell the control has already left and wait for a drawer that never
+    // opens, which is how this tier failed under Bun on the runner.
+    yield* entrySettles(page, recorded, "ok");
   }
 
   /** Wait until the retained feedback holds a receipt that says this. */
