@@ -10,6 +10,14 @@ returns: {type: object}
 <Loop max={1}>
 <Phase.Extract text={props.text} as="extracted" />
 <If condition={!extracted.ok}><Return value={extracted} /><Break /></If>
+<Let as="normalizations" value={[]} />
+<SafeParse schema={{type:"object"}} as="candidate">{extracted.json}</SafeParse>
+<If condition={candidate.ok}>
+<Phase.Revisions repository={assignment.repository} value={candidate.value} as="canonical" />
+<If condition={!canonical.ok}><Return value={canonical} /><Break /></If>
+<Let as="extracted" value={{...extracted,json:JSON.stringify(canonical.value)}} />
+<Let as="normalizations" value={canonical.changes} />
+</If>
 <SafeParse schema={schemas.result} as="parsed">{extracted.json}</SafeParse>
 <If condition={!parsed.ok}><Return value={{ok:false,rejection:{kind:"response_validation",code:"schema",message:"The final JSON does not satisfy the canonical phase result schema.",issues:parsed.errors}}} /><Break /></If>
 <Let as="result" value={{...parsed.value,contract:parsed.value.contract ?? null,blocker:parsed.value.blocker ?? null}} />
@@ -85,5 +93,5 @@ returns: {type: object}
 <If condition={profile.kind === "delivery-editorial" && result.outcome === "pass" && (result.revision !== assignment.revision || !result.metadata || typeof result.metadata.title !== "string" || typeof result.metadata.body !== "string")}>
 <Return value={{ok:false,rejection:{kind:"response_validation",code:"editorial-metadata",message:"Metadata APPLY requires exact-head PASS and title/body strings naming already applied text.",issues:[]}}} /><Break />
 </If>
-<Return value={{ok:true,value:result}} />
+<Return value={{ok:true,value:result,normalizations}} />
 </Loop>

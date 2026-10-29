@@ -33,7 +33,10 @@ returns: {type: object}
 <Phase.Extract text={raw} as="extracted" />
 <If condition={extracted.ok}>
 <SafeParse schema={{type:"object",properties:{outcome:{enum:["complete","pass","changes_required","missing_evidence","needs_discovery","needs_decision","blocked"]},revision:{type:["string","null"]},summary:{type:"string",minLength:1},artifacts:{type:"array",items:{type:"string"}},evidence:{type:"array"},findings:{type:"array"}},required:["outcome","revision","summary","artifacts","evidence","findings"]}} as="recoverable">{extracted.json}</SafeParse>
-<If condition={recoverable.ok}><Let as="established" value={recoverable.value} /></If>
+<If condition={recoverable.ok}>
+<Phase.Revisions repository={props.assignment.repository} value={recoverable.value} as="canonical" />
+<If condition={canonical.ok}><Let as="established" value={canonical.value} /></If>
+</If>
 </If>
 </Else>
 </If>
@@ -94,4 +97,4 @@ shasum -a 256 -- {quoted}/request.json {quoted}/diagnostic.json {quoted}/origina
 </If>
 </If>
 <Phase.Accept assignment={props.assignment} role={props.role} profile={props.profile} text={raw} as="result" />
-<Return value={{result,round,rawPath,diagnostics}} />
+<Return value={{result,round,rawPath,diagnostics,normalizations:checked.normalizations ?? []}} />
