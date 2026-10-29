@@ -137,12 +137,20 @@ export function* typeMessage(terminal: Terminal, text: string): Operation<void> 
   );
 }
 
-/** Type a message and press the Sidekick pane's own Send. */
+/**
+ * Type a message and press the Sidekick pane's own Send, once the pane offers it.
+ *
+ * A reply can be drawn before its cycle ends, and until then the pane offers
+ * Stop where Send was.
+ */
 export function* send(terminal: Terminal, text: string): Operation<void> {
   if (!focusedField(terminal, MESSAGE_PROMPT)) {
     yield* selectSidekick(terminal);
   }
   yield* typeMessage(terminal, text);
+  yield* untilShown(terminal, "the Sidekick pane offering Send", (one) =>
+    rowsShow(sidekickPane(one), "[send]"),
+  );
   yield* pointAt(terminal, "[send]", sidekickColumn(terminal));
 }
 
