@@ -17,7 +17,7 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 
 import { useReplPage } from "./support/repl-page.ts";
-import type { ReplPage, ScreenScope } from "./support/repl-page.ts";
+import type { ReplPage, ScreenCell, ScreenScope } from "./support/repl-page.ts";
 import { awaited } from "./support/mounted-repl.ts";
 
 const WIDE = { columns: 160, rows: 36 };
@@ -35,6 +35,20 @@ const COMPOSER = "message the sidekick";
 
 /** The Sidekick's own Send, scoped by the one bounded layout statement made here. */
 const SIDEKICK_SEND: ScreenScope = { after: SIDEKICK, rightOf: SIDEKICK };
+
+/** Where this label actually begins, asked of the emulator's own cells. */
+function cellOf(page: ReplPage, label: string): ScreenCell[] {
+  const cells = page.repl.terminal.screen?.cells() ?? [];
+  const found: ScreenCell[] = [];
+  cells.forEach((row, index) => {
+    for (let column = 0; column < row.length; column += 1) {
+      if (row.slice(column, column + label.length).join("") === label) {
+        found.push({ column, row: index });
+      }
+    }
+  });
+  return found;
+}
 
 /** The message a refusal carries, for a case that asserts the refusal itself. */
 function* refusal(attempt: Operation<unknown>): Operation<string> {
@@ -185,5 +199,52 @@ describe("REPL page — resize, a modal, and writes that never land", () => {
       one.shows("held while writing"),
     );
     expect(landed.index).toBeGreaterThan(held);
+  });
+});
+
+describe("REPL page — a column is a terminal cell, not a string offset", () => {
+  it("locates a label after a wide glyph at the cell it is really drawn in", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+
+    // Three double-width glyphs, typed as a person types them. They land on
+    // the Draft's own value row, which is the row the Sidekick's Send shares —
+    // so each one moves every later cell of that row two columns while adding
+    // one character to its text.
+    yield* typed(page, "\u754c\u754c\u754c");
+
+    const reading = page.screen();
+    const located = reading.locate("[send]", SIDEKICK_SEND);
+    const drawn = cellOf(page, "[send]").filter((one) => one.row === located.row);
+    expect(drawn).toHaveLength(1);
+    // The one that matters: a located column is a terminal cell, so the cell it
+    // names is where the label actually begins.
+    expect(located).toEqual(drawn[0]);
+
+    // The Draft's own Send, on a row the glyphs are not on, is unmoved and
+    // still submits what was typed.
+    const draftSend = reading.locate("[send]", { onRow: DRAFT });
+    expect(cellOf(page, "[send]").filter((one) => one.row === draftSend.row)).toEqual([draftSend]);
+    yield* page.press("[send]", { onRow: DRAFT });
+    yield* page.until("the wide entry settling", (one) => one.shows("1 \u2713"));
+  });
+
+  it("counts an anchor's own column in cells when a wide glyph precedes it", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* typed(page, "\u754c\u754c\u754c");
+
+    // The scope floor comes from the anchor's own first cell, so a scope that
+    // admitted the Sidekick's Send before the glyphs still admits exactly it,
+    // and still excludes the Draft's.
+    const reading = page.screen();
+    expect(reading.found("[send]", SIDEKICK_SEND)).toBe(1);
+    expect(reading.found("[send]", { onRow: DRAFT })).toBe(1);
+    expect(reading.occurrences("[send]")).toBe(2);
+
+    // And the glyphs themselves are read where they are drawn: the first is on
+    // the Draft's value row, two cells wide, with nothing of it left behind.
+    const glyphs = cellOf(page, "\u754c");
+    expect(glyphs.length).toBeGreaterThan(0);
+    const first = reading.locate("\u754c\u754c\u754c");
+    expect(glyphs.some((one) => one.row === first.row && one.column === first.column)).toBe(true);
   });
 });

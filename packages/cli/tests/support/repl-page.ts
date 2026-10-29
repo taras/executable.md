@@ -45,8 +45,8 @@ export interface ScreenCell {
  * control beside that heading lives. `after` is the rows below it. `rightOf`
  * is the columns at or right of that text's own first cell — the one bounded
  * layout statement this file makes, and it says only what it says: a label
- * left of that column is not in the scope. It is not a claim about where a
- * pane begins.
+ * left of that column is not in the scope. It does not state where a pane
+ * begins.
  */
 export interface ScreenScope {
   readonly onRow?: string;
@@ -109,8 +109,8 @@ export interface ReplPage {
   describe(): string;
 }
 
-/** Every start column this text occupies in one row, including repeats. */
-function columnsIn(row: string, text: string): number[] {
+/** Every offset into this row's text where it holds this text, including repeats. */
+function offsetsIn(row: string, text: string): number[] {
   const found: number[] = [];
   let at = row.indexOf(text);
   while (at !== -1) {
@@ -118,6 +118,26 @@ function columnsIn(row: string, text: string): number[] {
     at = row.indexOf(text, at + 1);
   }
   return found;
+}
+
+/**
+ * The terminal column each character of this row's text was drawn in.
+ *
+ * A cell is a column and a character is not: a double-width glyph occupies two
+ * columns and the emulator reports the second of them as nothing at all, so a
+ * row holding one is shorter as text than it is wide on the screen. Pressing
+ * needs the column, and every offset this file resolves goes through here
+ * before it becomes one. A grapheme the emulator reports as several characters
+ * in one cell maps all of them to that cell.
+ */
+function columnsOf(cells: readonly string[]): number[] {
+  const columns: number[] = [];
+  for (const [column, cell] of cells.entries()) {
+    for (let index = 0; index < cell.length; index += 1) {
+      columns.push(column);
+    }
+  }
+  return columns;
 }
 
 /** The one row this text is drawn on, or a refusal naming how many there were. */
@@ -141,6 +161,9 @@ function visible(rows: readonly string[]): string[] {
 
 function reading(index: number, size: ReplTerminalSize, cells: string[][]): ScreenReading {
   const rows = cells.map((line) => line.join("").trimEnd());
+  const columns = cells.map((line) => columnsOf(line));
+  /** The column one offset into a row's text was drawn in. */
+  const columnAt = (row: number, offset: number): number => columns[row]?.[offset] ?? offset;
   /** The cells this scope admits: a row range, and a column floor. */
   const bounded = (scope: ScreenScope | undefined, what: string) => {
     let from = 0;
@@ -156,8 +179,7 @@ function reading(index: number, size: ReplTerminalSize, cells: string[][]): Scre
     }
     if (scope?.rightOf !== undefined) {
       const at = rowOf(rows, scope.rightOf, what);
-      const column = rows[at].indexOf(scope.rightOf);
-      floor = column;
+      floor = columnAt(at, rows[at].indexOf(scope.rightOf));
     }
     return { from, to, floor };
   };
@@ -165,7 +187,8 @@ function reading(index: number, size: ReplTerminalSize, cells: string[][]): Scre
     const { from, to, floor } = bounded(scope, what);
     const found: ScreenCell[] = [];
     for (let row = from; row < to; row += 1) {
-      for (const column of columnsIn(rows[row] ?? "", text)) {
+      for (const offset of offsetsIn(rows[row] ?? "", text)) {
+        const column = columnAt(row, offset);
         if (column >= floor) {
           found.push({ column, row });
         }
@@ -178,7 +201,7 @@ function reading(index: number, size: ReplTerminalSize, cells: string[][]): Scre
     size,
     rows,
     shows: (text) => rows.some((row) => row.includes(text)),
-    occurrences: (text) => rows.reduce((count, row) => count + columnsIn(row, text).length, 0),
+    occurrences: (text) => rows.reduce((count, row) => count + offsetsIn(row, text).length, 0),
     found: (text, scope) => matches(text, scope, `looking for ${JSON.stringify(text)}`).length,
     locate(text, scope) {
       const what = `pressing ${JSON.stringify(text)}`;
