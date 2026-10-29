@@ -1,0 +1,14 @@
+{
+  "work": "consumer-migration",
+  "repository": "/absolute/path/to/prepared-source-worktree",
+  "directory": "/absolute/path/to/fresh-artifact-directory",
+  "request": "Implement and validate the API that removes the accepted consumer friction, migrate the remaining consumers, and retire the named obsolete machinery. Preserve the accepted behavior and meaningful evidence.",
+  "inputs": ["/absolute/path/to/accepted-story.md"],
+  "sessions": {
+    "planner": "consumer-migration-planner",
+    "implementor": "consumer-migration-implementor",
+    "architect": "consumer-migration-architect"
+  },
+  "maxCorrections": 3,
+  "maxApiRepairs": 3
+}
