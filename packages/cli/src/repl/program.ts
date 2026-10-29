@@ -168,7 +168,6 @@ import type { ReplExecution } from "./journal.ts";
 import { lifecycleRefusal, openReplSession } from "./session.ts";
 import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
-import { presentedFrame, ReplFrameWitness } from "./frame-witness.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
 import {
@@ -3214,9 +3213,6 @@ function* prepared(
         // And only then 7. acknowledge that this timestamp has been applied.
         yield* screen.present(committed.value.rendered.output);
         held.value.acknowledge();
-        yield* ReplFrameWitness.operations.presented(
-          presentedFrame(committed.value, (node) => tree.keyOf(node), keyOfFocus(tree)),
-        );
         return {
           rendered: committed.value.rendered,
           view,

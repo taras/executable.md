@@ -7284,17 +7284,6 @@ Presenting the measurement a terminal has already contradicted would put stale
 geometry on the screen and publish targets naming rows nobody can see, and
 ending on it would be a command that cannot be resized — so it does neither.
 
-Each presented frame is reported to `ReplFrameWitness`, a contextual Api whose
-default does nothing. After the frame's bytes reach the terminal and its
-timestamp is acknowledged, the screen hands it a copy of what that frame
-committed: the size and profile, the key holding focus, each placed control's
-key and rectangle, each region's rectangle and each window's extent. The report
-is observation only. It carries no tree, no model and no way to dispatch, focus
-or redraw, and nothing the screen decides reads it, so an installed observer
-cannot become a second input path or a second owner of focus. Tests install it to
-find a control by its key and a pane by its region beside the cells the terminal
-shows, rather than by decoding labels, borders and focus glyphs.
-
 A frame that cannot be drawn ends the screen. A refused subscription, a refused
 reconcile and a refused render all raise, because the scope that owns the
 terminal is the only thing that restores its modes: a command that kept raw mode
