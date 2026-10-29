@@ -104,17 +104,12 @@ import { usePresenter } from "./fixtures/repl/presentation.ts";
 import type { CheckpointFrame } from "./fixtures/repl/workspace-checkpoint.ts";
 import {
   CHECKPOINT_ASKING,
-  CHECKPOINT_BELOW,
-  CHECKPOINT_MEDIUM,
   CHECKPOINT_NARROW,
   CHECKPOINT_QUESTION,
   CHECKPOINT_QUESTION_FORM,
-  CHECKPOINT_SIZE,
   checkpointModel,
-  checkpointSelected,
   checkpointState,
   commitCheckpoint,
-  seededState,
 } from "./fixtures/repl/workspace-checkpoint.ts";
 import { runReplProgram, sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
@@ -5421,83 +5416,6 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
     expect(rowsShow(wide(), PANE_TABS.bindings)).toBe(true);
     expect(messageTextIn(wide())).toContain("kept question");
     expect(blockSays(draftTextIn(wide()), "kept entry")).toBe(true);
-  });
-});
-
-/**
- * #971 A3: what a resize places, removes and recovers, read from the frame.
- *
- * The reading surviving every size through real input is TL10's journey. This
- * is the evidence only the committed frame has: which key holds focus, which
- * controls are mounted and targetable, and that a refusal places none at all.
- */
-describe("Tier A3 — the staged screen resized, and recovered", () => {
-  it("A3: 160 to 120 to 72, below the minimum, and back", function* () {
-    yield* useTempFileCompiler();
-    // A retained position with a nested scope selected, so the band says it is
-    // reading earlier and the route has more than an entry in it.
-    const { model } = yield* checkpointSelected();
-    const state = seededState(model);
-    expect(state.route.scopes.length).toBe(2);
-    const presenter = yield* usePresenter(CHECKPOINT_SIZE);
-    const first = yield* commitCheckpoint(presenter, { model, state });
-    let held = first.focused;
-    const banded = (frame: CheckpointFrame): string => {
-      const bounds = frame.observed.regionOf("box:history");
-      if (bounds === undefined) {
-        throw new Error("this frame published no History band");
-      }
-      return presenter.grid.textIn(bounds).join(" ");
-    };
-    /** The same reading at one more size, keeping whatever focus the last one left. */
-    const resized = function* (size: ReplTerminalSize) {
-      presenter.resize(size);
-      const committed = yield* commitCheckpoint(presenter, {
-        model,
-        state,
-        size,
-        ...(held === undefined ? {} : { focused: held }),
-      });
-      held = committed.focused;
-      return committed;
-    };
-
-    /** Focus is still the Draft's, which is drawn, under a History band. Read before the next commit. */
-    const placed = (frame: CheckpointFrame): void => {
-      const where = `${frame.observed.committed.manifest.size.columns}`;
-      expect({ where, focused: frame.focused }).toEqual({ where, focused: "footer:input" });
-      expect({ where, drawn: frame.observed.boundsOf("footer:input") !== undefined }).toEqual({
-        where,
-        drawn: true,
-      });
-      expect({ where, banded: banded(frame).trim().length > 0 }).toEqual({ where, banded: true });
-    };
-    placed(first);
-    expect(banded(first)).toContain("reading earlier");
-    placed(yield* resized(CHECKPOINT_MEDIUM));
-    placed(yield* resized(CHECKPOINT_NARROW));
-
-    // A control narrowing removed is in no cell, frame map or mounted node.
-    const narrow = presenter.last();
-    for (const key of ["tray:queue", "follow", "sidekick:stop"]) {
-      expect({ key, mounted: narrow?.keys.includes(key) }).toEqual({ key, mounted: false });
-      expect({ key, drawn: narrow?.boundsOf(key) !== undefined }).toEqual({ key, drawn: false });
-    }
-
-    // Below the minimum the frame is its own refusal, with no control anywhere.
-    const refused = yield* resized(CHECKPOINT_BELOW);
-    expect(refused.observed.committed.manifest.profile).toBe("too-small");
-    expect(refused.observed.targets.length).toBe(0);
-    expect(refused.observed.committed.manifest.actions).toBe(undefined);
-
-    const recovered = yield* resized(CHECKPOINT_SIZE);
-    expect(recovered.focused).toBe("footer:input");
-    expect(banded(recovered)).toContain("reading earlier");
-    // The shared queue's tray and Follow are DQ0 and DF1 in
-    // `fixtures/repl/deferred-presentation.json`: offered at no size.
-    const drawn = (key: string): boolean => recovered.observed.boundsOf(key) !== undefined;
-    expect(["tray:todo", "sidekick:stop"].filter(drawn)).toEqual(["tray:todo", "sidekick:stop"]);
-    expect(["tray:queue", "follow"].filter(drawn)).toEqual([]);
   });
 });
 

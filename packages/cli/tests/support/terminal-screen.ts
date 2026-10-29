@@ -59,6 +59,8 @@ export interface TerminalScreen {
   buffer(): string[];
   /** One visible cell: a space where nothing is drawn, empty behind a wide glyph. */
   at(column: number, row: number): string;
+  /** Every visible cell, row by row, each read as {@link at} reads it. */
+  cells(): string[][];
   styleAt(column: number, row: number): CellStyle;
   close(): void;
 }
@@ -76,6 +78,16 @@ const ATTRIBUTES: ReadonlyArray<readonly [number, (cell: Cell) => boolean]> = [
 
 function packed(color: Cell["fg"]): number | undefined {
   return color === null ? undefined : (color.r << 16) | (color.g << 8) | color.b;
+}
+
+function cellAt(backend: TerminalBackend, row: number, column: number): string {
+  const cell = backend.getCell(row, column);
+  if (cell.char !== "") {
+    return cell.char;
+  }
+  // xterm marks neither a blank cell nor the one behind a wide glyph, and
+  // only the glyph before it tells the two apart.
+  return column > 0 && backend.getCell(row, column - 1).wide ? "" : " ";
 }
 
 /** Open a screen nobody owns yet. Prefer {@link useTerminalScreen}. */
@@ -132,13 +144,19 @@ function openScreen(initial: ReplTerminalSize): TerminalScreen {
       if (column < 0 || column >= size.columns || row < 0 || row >= size.rows) {
         return " ";
       }
-      const cell = open().getCell(top() + row, column);
-      if (cell.char !== "") {
-        return cell.char;
+      return cellAt(open(), top() + row, column);
+    },
+    cells() {
+      const from = top();
+      const grid: string[][] = [];
+      for (let row = 0; row < size.rows; row += 1) {
+        const line: string[] = [];
+        for (let column = 0; column < size.columns; column += 1) {
+          line.push(cellAt(open(), from + row, column));
+        }
+        grid.push(line);
       }
-      // xterm marks neither a blank cell nor the one behind a wide glyph, and
-      // only the glyph before it tells the two apart.
-      return column > 0 && backend.getCell(top() + row, column - 1).wide ? "" : " ";
+      return grid;
     },
     styleAt(column, row) {
       if (column < 0 || column >= size.columns || row < 0 || row >= size.rows) {
