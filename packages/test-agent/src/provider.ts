@@ -13,14 +13,16 @@ import { randomUUID } from "node:crypto";
 import type { Operation } from "effection";
 import { useAcpxProvider } from "@executablemd/acp";
 import type {
+  AcpAgentRegistry,
+  AcpSessionRecord,
   AcpxProvider,
   AcpxProviderDependencies,
+  AcpxSessionStore,
   SessionRouteContext,
 } from "@executablemd/acp";
 import type { AgentSessionRouteStore, NativeAdapter } from "@executablemd/acp";
 import { useRouteSlot } from "./route-slot.ts";
 import type { AgentSessionCoordinator, ExecutableObserver } from "@executablemd/runtime";
-import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
 
 /**
  * The name `<TestAgent>` registers its partition-selecting factory under.
@@ -31,7 +33,7 @@ import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/r
  */
 export const TEST_AGENT_PROVIDER = "test-agent";
 
-export function createMemorySessionStore(): AcpSessionStore {
+export function createMemorySessionStore(): AcpxSessionStore {
   const records = new Map<string, AcpSessionRecord>();
   return {
     load(sessionId) {

@@ -436,9 +436,6 @@ importers:
       acorn:
         specifier: ^8.16.0
         version: 8.16.0
-      acpx:
-        specifier: 0.12.0
-        version: 0.12.0
       effection:
         specifier: 4.1.0
         version: 4.1.0
@@ -2252,11 +2249,6 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.12.0:
-    resolution: {integrity: sha512-APYpN04XFWrCGuSBvM4HTKWWFH8uSIuzc+qI7aCGeVdP9o4euZeBosFEkmNUHvBOop0XBemg6d8RsNvzXN3Mgw==}
-    engines: {node: '>=22.13.0'}
-    hasBin: true
-
   acpx@0.21.1:
     resolution: {integrity: sha512-bLhRh53QgccVWoGZw34RYDDj1l6iT8lBm0cmBi5luQ+LGDjTqe0BwWH5t7/e8v+gYJS7mEWcgy+MwlfZrdssMQ==}
     engines: {node: '>=22.13.0'}
@@ -3206,11 +3198,6 @@ packages:
 
   tsx@4.21.0:
     resolution: {integrity: sha512-5C1sg4USs1lfG0GFb2RLXsdpXqBSEhAaA/0kPL01wxzpMqLILNxIxIOKiILz+cdg/pLnOUxFYOR5yhHU666wbw==}
-    engines: {node: '>=18.0.0'}
-    hasBin: true
-
-  tsx@4.23.1:
-    resolution: {integrity: sha512-GQHnkIfxyx1wYCOS/wonik5MVRZU9hi1TEZmzGZSCJB1y9YgoZ8H6itNE/u4suE+yLmOzuE4E5S4TZ/ZX2wcWQ==}
     engines: {node: '>=18.0.0'}
     hasBin: true
 
@@ -4566,18 +4553,6 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.12.0:
-    dependencies:
-      '@agentclientprotocol/sdk': 1.9.0(zod@4.6.7)
-      commander: 15.0.0
-      skillflag: 0.2.1
-      tsx: 4.23.1
-      zod: 4.6.7
-    transitivePeerDependencies:
-      - bare-abort-controller
-      - bare-buffer
-      - react-native-b4a
-
   acpx@0.21.1:
     dependencies:
       '@agentclientprotocol/sdk': 1.9.0(zod@4.6.7)
@@ -5746,12 +5721,6 @@ snapshots:
     dependencies:
       esbuild: 0.27.4
       get-tsconfig: 4.13.6
-    optionalDependencies:
-      fsevents: 2.3.3
-
-  tsx@4.23.1:
-    dependencies:
-      esbuild: 0.28.1
     optionalDependencies:
       fsevents: 2.3.3
 

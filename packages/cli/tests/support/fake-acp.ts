@@ -17,6 +17,7 @@
  */
 
 import { run, until, withResolvers } from "effection";
+import { resolveAgentCommand } from "../../../acp/src/acpx-runtime.ts";
 import type { Operation } from "effection";
 import type {
   AcpAgentRegistry,
@@ -732,7 +733,7 @@ export function createFakeAcp(): FakeAcp {
             schema: "acpx.session.v1",
             acpxRecordId: input.sessionKey,
             acpSessionId: `acp:${input.sessionKey}`,
-            agentCommand: options.agentRegistry.resolve(input.agent),
+            agentCommand: resolveAgentCommand(options.agentRegistry, input.agent),
             cwd: input.cwd ?? options.cwd,
             createdAt: "2026-01-01T00:00:00.000Z",
             lastUsedAt: "2026-01-01T00:00:00.000Z",
@@ -881,6 +882,7 @@ export function createFakeAcp(): FakeAcp {
 
           return {
             requestId: input.requestId,
+            promptStarted: Promise.resolve(),
             materialized,
             events: {
               [Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
