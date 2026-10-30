@@ -8,6 +8,9 @@
  * adoption; a refusal preserves the standing route, selection and draft.
  */
 
+import { caretFor, eraseAt, insertAt } from "./caret.ts";
+import type { ReplCaret } from "./caret.ts";
+
 import type { MessageOrigin } from "./sidekick/history.ts";
 import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
@@ -109,6 +112,7 @@ import { entryReading, NO_READING } from "./source-reading.ts";
 import type { ReplReading } from "./source-reading.ts";
 import { readingRuns } from "./fitting.ts";
 import type {
+  ReplEditor,
   ReplFittedLabel,
   ReplFittedLine,
   ReplPreparedReading,
@@ -153,6 +157,7 @@ import {
   DRAWER,
   FIELD,
   fieldParts,
+  fieldLabel,
   fieldText,
   focusPrefixed,
   LINE,
@@ -720,6 +725,7 @@ export interface ReplFormMessage {
  * Values are keyed by field so editing one cannot overwrite another.
  */
 export interface ReplFormState {
+  readonly carets?: Readonly<Record<string, ReplCaret>>;
   /** What has been typed into each field so far, by field name. */
   readonly values: Readonly<Record<string, string>>;
   /** Which field text and Backspace act on, or none yet. */
@@ -777,6 +783,7 @@ export interface ReplOfferedChoice {
  * being pointed at another one.
  */
 export interface ReplConfiguring {
+  readonly caret?: ReplCaret;
   readonly conversation: string | undefined;
   readonly open: boolean;
   /** The agent name as typed, exactly — never a value chosen from a list. */
@@ -1014,6 +1021,8 @@ export const AT_TOP: ReplViewports = Object.freeze({
 
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
+  readonly draftCaret?: ReplCaret;
+  readonly messageCaret?: ReplCaret;
   readonly route: ReplRoute;
   /**
    * The text of the entry that would be submitted next.
@@ -1995,42 +2004,10 @@ export function reduceRepl(
     // Typing is always typing the *next* entry. Which entry is selected, and
     // whether one is running, decide nothing here: an admitted entry is
     // immutable, so there is never an entry these keystrokes could be editing.
-    case "type": {
-      if (configuring) {
-        return renaming(state, state.configuring.agent + action.text);
-      }
-      // The Sidekick's form first, while its drawer is the one holding focus.
-      // Before the message box deliberately: a form field may be *named*
-      // `message`, and a reduction that matched the name before the owner would
-      // type somebody's answer into the composer.
-      if (asking !== undefined) {
-        return filling(state, asking, live, action.field, (value) => value + action.text);
-      }
-      if (answering) {
-        return editing(state, live, action.field, (value) => value + action.text);
-      }
-      if (action.field === MESSAGE_FIELD) {
-        return messaging(state, state.message + action.text);
-      }
-      return drafting(state, state.draft + action.text);
-    }
-    case "erase": {
-      if (configuring) {
-        return renaming(state, shortened(state.configuring.agent));
-      }
-      if (asking !== undefined) {
-        return filling(state, asking, live, action.field, shortened);
-      }
-      if (answering) {
-        return editing(state, live, action.field, shortened);
-      }
-      if (action.field === MESSAGE_FIELD) {
-        return messaging(state, shortened(state.message));
-      }
-      return drafting(state, shortened(state.draft));
-    }
+    case "type":
+    case "erase":
     case "move-caret":
-      return settled(state);
+      return editCaret(state, live, action, configuring, asking, answering);
     case "reveal":
       return settled({ ...state, restore: Object.freeze({ kind: "reveal", key: action.key }) });
     case "submit": {
@@ -3051,42 +3028,54 @@ function openAsking(
   return { key: held.key, held, question };
 }
 
-/**
- * One field of the Sidekick's own form, edited.
- *
- * The entry's {@link editing} with the other owner's state: the field is
- * resolved against *this* question's declared fields, so a name the form does
- * not have edits nothing rather than inventing a value the schema never asked
- * for.
- */
-function filling(
+function editCaret(
   state: ReplState,
-  asking: { readonly held: ReplAsking; readonly question: ReplSidekickQuestion },
   live: ReplLive,
-  named: string | undefined,
-  change: (value: string) => string,
+  action: Extract<ReplAction, { readonly kind: "type" | "erase" | "move-caret" }>,
+  configuring: boolean,
+  asking: ReturnType<typeof openAsking>,
+  answering: boolean,
 ): ReplTransition {
-  const fields = asking.question.form.fields;
-  const field =
-    named === undefined
-      ? (fields.find((one) => one.name === asking.held.form.field) ?? fields[0])
-      : fields.find((one) => one.name === named);
-  if (field === undefined) {
-    return refuse(state, "this question has no such field.");
+  const change = (value: string, saved: ReplCaret | undefined): ReplCaret => {
+    const caret = caretFor(value, saved);
+    if (action.kind === "type") {
+      return insertAt(caret, action.text);
+    }
+    if (action.kind === "erase") {
+      return eraseAt(caret);
+    }
+    return action.caret?.value === value ? caretFor(value, action.caret) : caret;
+  };
+  if (configuring) {
+    const caret = change(state.configuring.agent, state.configuring.caret);
+    const next = action.kind === "move-caret" ? state : renaming(state, caret.value).state;
+    return settled({ ...next, configuring: { ...next.configuring, caret } });
   }
-  const form = written(
-    asking.held.form,
-    field.name,
-    change(asking.held.form.values[field.name] ?? ""),
-  );
-  return settled({
-    ...state,
-    asking: Object.freeze({
-      ...asking.held,
-      form: Object.freeze({ ...form, field: field.name }),
-    }),
-    refusal: undefined,
-  });
+  if (asking !== undefined || answering) {
+    const form = asking?.held.form ?? state.form;
+    const declared = asking?.question.form.fields ?? live.question?.form.fields ?? [];
+    const field =
+      action.field === undefined
+        ? (declared.find((one) => one.name === form.field) ?? declared[0])
+        : declared.find((one) => one.name === action.field);
+    if (field === undefined) {
+      return refuse(state, "this question has no such field.");
+    }
+    const caret = change(form.values[field.name] ?? "", form.carets?.[field.name]);
+    const next = action.kind === "move-caret" ? form : written(form, field.name, caret.value);
+    const edited = { ...next, field: field.name, carets: { ...next.carets, [field.name]: caret } };
+    return asking === undefined
+      ? settled({ ...state, form: edited })
+      : settled({ ...state, asking: { ...asking.held, form: edited } });
+  }
+  if (action.field === MESSAGE_FIELD) {
+    const caret = change(state.message, state.messageCaret);
+    const next = action.kind === "move-caret" ? state : messaging(state, caret.value).state;
+    return settled({ ...next, messageCaret: caret });
+  }
+  const caret = change(state.draft, state.draftCaret);
+  const next = action.kind === "move-caret" ? state : drafting(state, caret.value).state;
+  return settled({ ...next, draftCaret: caret });
 }
 
 /**
@@ -3359,7 +3348,10 @@ export function askingFor(state: ReplState, question: ReplSidekickQuestion | und
 
 /** One field's value replaced, leaving every other field alone. */
 function written(form: ReplFormState, field: string, value: string): ReplFormState {
+  const carets = { ...form.carets };
+  delete carets[field];
   return Object.freeze({
+    carets,
     ...form,
     values: Object.freeze({ ...form.values, [field]: value }),
     // A value that has changed makes the last verdict about the old one stale,
@@ -3384,25 +3376,6 @@ function focused(state: ReplState, live: ReplLive): ReplFormField | undefined {
   const fields = live.question?.form.fields ?? [];
   const named = fields.find((one) => one.name === state.form.field);
   return named ?? fields[0];
-}
-
-/** Edit the focused field, and only it. */
-function editing(
-  state: ReplState,
-  live: ReplLive,
-  named: string | undefined,
-  change: (value: string) => string,
-): ReplTransition {
-  const field = named === undefined ? focused(state, live) : fieldNamed(live, named);
-  if (field === undefined) {
-    return refuse(state, "nothing is being asked right now.");
-  }
-  const form = written(state.form, field.name, change(state.form.values[field.name] ?? ""));
-  return settled({
-    ...state,
-    form: Object.freeze({ ...form, field: field.name }),
-    refusal: undefined,
-  });
 }
 
 /**
@@ -4047,6 +4020,7 @@ function sidekickControls(
   items.push(
     field("sidekick:message", "> Message Sidekick: ", state.message, "message", styleOf("draft"), {
       field: MESSAGE_FIELD,
+      caret: state.messageCaret,
       here: view.focused,
       block: true,
       ...(claiming ? { focus: true } : {}),
@@ -4097,7 +4071,7 @@ function messaging(state: ReplState, message: string): ReplTransition {
 
 /** The state after the Sidekick filled the shared draft with exactly this. */
 export function filled(state: ReplState, source: string): ReplState {
-  return Object.freeze(drafting(state, source, "sidekick").state);
+  return Object.freeze({ ...drafting(state, source, "sidekick").state, draftCaret: undefined });
 }
 
 /**
@@ -4141,25 +4115,6 @@ function navigate(
   }
   return settled({ ...state, route, refusal: undefined });
 }
-
-/** One text unit shorter, counted in scalar values rather than code units. */
-function shortened(text: string): string {
-  // One grapheme, which is what a person pressed Backspace to remove. Code
-  // points are not it: `e` with two combining marks is one thing on the screen
-  // and three of them, so a reduction counting code points took three presses
-  // to remove one character and left two readings of it on the way — and a
-  // joined emoji came apart into the two it is joined from. `Intl.Segmenter` is
-  // the same boundary the fitter breaks rows on, so what a person deletes and
-  // what a row is cut at are one answer.
-  let last = 0;
-  for (const { index } of GRAPHEMES.segment(text)) {
-    last = index;
-  }
-  return text.slice(0, last);
-}
-
-/** Where one grapheme ends and the next begins, for text somebody is editing. */
-const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** How a value reads in one line of a list. */
 function summarize(value: Json): string {
@@ -4960,6 +4915,7 @@ function field(
   options: {
     readonly focus?: true;
     readonly here?: string | undefined;
+    readonly caret?: ReplCaret;
     /** The form field this line edits, for a line that edits one. */
     readonly field?: string;
     /** The Sidekick question this line answers, for a line that answers one. */
@@ -5001,6 +4957,9 @@ function field(
         prompt,
         text,
         purpose,
+        caret: caretFor(text, options.caret).offset,
+        ...(options.caret?.backward === true ? { backward: true } : {}),
+        ...(options.caret?.column === undefined ? {} : { column: options.caret.column }),
         ...(options.block === undefined ? {} : { block: options.block }),
         ...(options.field === undefined ? {} : { field: options.field }),
         ...(options.question === undefined ? {} : { question: options.question }),
@@ -5687,8 +5646,8 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "draft",
         styleOf("draft"),
         claiming
-          ? { focus: true, here: view.focused, classify: sourceRuns }
-          : { here: view.focused, classify: sourceRuns },
+          ? { focus: true, here: view.focused, classify: sourceRuns, caret: state.draftCaret }
+          : { here: view.focused, classify: sourceRuns, caret: state.draftCaret },
       ),
     );
   }
@@ -6992,8 +6951,8 @@ function formContent(
         asking === undefined ? "answer" : "sidekick-answer",
         styleOf("field-value"),
         asking === undefined
-          ? { here: focused }
-          : { here: focused, field: one.name, question: asking },
+          ? { here: focused, field: one.name, caret: held.carets?.[one.name] }
+          : { here: focused, field: one.name, question: asking, caret: held.carets?.[one.name] },
       ),
       field: { name: one.name, value },
     });
@@ -7180,7 +7139,7 @@ function configureContent(
       held.agent,
       "configure-agent",
       styleOf("field-value"),
-      { here: focused },
+      { here: focused, caret: held.caret },
     ),
   });
   // Exactly what was asked for, and exactly what was verified. The second is
@@ -7445,16 +7404,16 @@ function windowed(
       const reveal = beyond?.get(candidate.described.key);
       return reveal === undefined ? candidate.described : revealing(candidate.described, reveal);
     }
-    return field(
-      `drawer:value:${named.name}`,
-      "  = ",
-      named.value,
-      asking === undefined ? "answer" : "sidekick-answer",
-      styleOf("field-value"),
-      asking === undefined
-        ? { focus: true, here: focused }
-        : { focus: true, here: focused, field: named.name, question: asking },
-    );
+    const read = readDescription(candidate.described.description);
+    return {
+      ...candidate.described,
+      description: describeNode<ReplAction>({
+        key: read.key,
+        component: read.component,
+        input: read.input,
+        focus: true,
+      }),
+    };
   });
 }
 
@@ -8160,6 +8119,7 @@ export interface ReplMeasuredWidths {
  * scroll clamps against is what the screen is showing.
  */
 export interface ReplPresentationContext {
+  readonly editors?: ReadonlyMap<string, ReplEditor>;
   /**
    * The region widths this frame measured, or none before it has measured any.
    *
@@ -8728,6 +8688,10 @@ function measurementTextOf(component: ReplComponent<ReplAction>, input: ReplView
   const named = fields(input);
   const focused = named?.["focused"] === true;
   if (component === FIELD) {
+    const shown = named?.["shown"];
+    if (typeof shown === "string") {
+      return shown;
+    }
     const prompt = typeof named?.["prompt"] === "string" ? named["prompt"] : "";
     const text = typeof named?.["text"] === "string" ? named["text"] : "";
     return fieldText(prompt, text, focused);
@@ -8794,6 +8758,78 @@ function rowBox(
   });
 }
 
+function editorDescription(
+  description: ReplDescription<ReplAction>,
+  context: ReplPresentationContext,
+): ReplDescription<ReplAction> {
+  if (context.editors === undefined) {
+    return description;
+  }
+  const read = readDescription(description);
+  const editor = context.editors.get(read.key);
+  const input = fields(read.input);
+  const prompt = input?.["prompt"];
+  const focused = input?.["focused"] === true;
+  const shown =
+    editor === undefined || typeof prompt !== "string" || input?.["block"] === true
+      ? undefined
+      : fieldLabel(prompt, focused) + editor.display[editor.active].text;
+  return describeNode<ReplAction>({
+    key: read.key,
+    component: read.component,
+    input:
+      editor === undefined
+        ? read.input
+        : {
+            ...input,
+            caret: editor.caret.offset,
+            caretRows: editor.rows.map((row) => ({
+              stops: row.stops.map((stop) => ({ ...stop })),
+            })),
+            ...(shown === undefined ? {} : { shown }),
+          },
+    layout: read.layout,
+    children: read.children.map((child) => editorDescription(child, context)),
+    ...(read.modal ? { modal: true } : {}),
+    ...(read.focus ? { focus: true } : {}),
+  });
+}
+
+function editorRuns(
+  description: ReplDescription<ReplAction>,
+  context: ReplPresentationContext,
+): readonly ReplTokenRun[] | undefined {
+  const read = readDescription(description);
+  const input = fields(read.input);
+  const editor = context.editors?.get(read.key);
+  const prompt = input?.["prompt"];
+  if (editor !== undefined && typeof prompt === "string" && input?.["block"] !== true) {
+    const focused = input?.["focused"] === true;
+    const own = editor.display[editor.active];
+    return tokenRuns([
+      { text: fieldLabel(prompt, focused), token: "field-value" },
+      ...(focused ? own.runs : tokenRuns([{ text: own.text, token: "field-value" }])),
+    ]);
+  }
+  for (const [prefix, key, count] of [
+    ["draft:value:", "footer:input", context.draft?.length ?? 0],
+    ["sidekick:message:value:", "sidekick:message", context.message?.length ?? 0],
+  ] satisfies readonly (readonly [string, string, number])[]) {
+    if (!read.key.startsWith(prefix)) {
+      continue;
+    }
+    const editor = context.editors?.get(key);
+    if (editor === undefined) {
+      return undefined;
+    }
+    const at = Number(read.key.slice(prefix.length));
+    const from = Math.max(0, Math.min(editor.active, editor.display.length - count));
+    const own = editor.display[from + at];
+    return own?.runs;
+  }
+  return undefined;
+}
+
 /**
  * One reading's descriptions and the constraints that place them.
  *
@@ -8807,7 +8843,7 @@ export function presentationFor(
   context: ReplPresentationContext,
 ): ReplPresentation {
   const screen = described(view, context);
-  const composed = screen.items.map((item) => item.description);
+  const composed = screen.items.map((item) => editorDescription(item.description, context));
   // Placed only where the tree will hold them: a measuring pass mounts nothing.
   const descriptions = context.measuring
     ? composed
@@ -8819,8 +8855,9 @@ export function presentationFor(
   const runs = new Map<string, readonly ReplTokenRun[]>();
   for (const one of screen.rows) {
     styles.set(one.key, one.style);
-    if (one.runs !== undefined) {
-      runs.set(one.key, one.runs);
+    const edited = editorRuns(one.description, context);
+    if (edited !== undefined || one.runs !== undefined) {
+      runs.set(one.key, edited ?? one.runs ?? []);
     }
   }
   const size = view.size;
@@ -10474,6 +10511,7 @@ function workspaceControls(
       styleOf("draft"),
       {
         field: MESSAGE_FIELD,
+        caret: state.messageCaret,
         here: view.focused,
         block: true,
         ...(claiming ? { focus: true } : {}),
@@ -10506,6 +10544,7 @@ function workspaceDraft(
   const items: Described[] = [];
   items.push(
     field("footer:input", " DRAFT", view.state.draft, "draft", styleOf("field-label"), {
+      caret: view.state.draftCaret,
       here: view.focused,
       block: true,
       ...(claiming ? { focus: true } : {}),

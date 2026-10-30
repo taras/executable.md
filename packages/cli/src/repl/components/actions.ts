@@ -12,6 +12,8 @@
  * and a component's copy of one could be a frame out of date.
  */
 
+import type { ReplCaret } from "../caret.ts";
+
 import type { ReplDrawerRef, ReplPane, ReplSurface } from "../route.ts";
 
 /** The keys a field keeps for its own caret. */
@@ -33,10 +35,14 @@ export type ReplAction =
    * A caret key pressed in one named field, or in the draft when it names none.
    *
    * Handled by the field so the arrow stays in it rather than becoming
-   * navigation. No value keeps a caret position, so the root changes nothing
-   * for it.
+   * navigation. Its measured rows determine the requested value position.
    */
-  | { readonly kind: "move-caret"; readonly key: ReplCaretKey; readonly field?: string }
+  | {
+      readonly kind: "move-caret";
+      readonly key: ReplCaretKey;
+      readonly field?: string;
+      readonly caret?: ReplCaret;
+    }
   /**
    * Bring one row of a windowed list into view and give it focus.
    *

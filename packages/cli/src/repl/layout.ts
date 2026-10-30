@@ -970,6 +970,12 @@ function written(content: string, box: ReplBox, focused: boolean): Op[] {
     return [drawn(content, colour, attrs)];
   }
   return bounded(runs, room).map((run) => {
+    if (run.token === "caret") {
+      return text(run.text, {
+        color: terminalColour(REPL_PALETTE.composerSurface),
+        bg: terminalColour(REPL_PALETTE.focus),
+      });
+    }
     const { colour, attrs } = runStyleOf(run.token, style, focused);
     return drawn(run.text, colour, attrs);
   });

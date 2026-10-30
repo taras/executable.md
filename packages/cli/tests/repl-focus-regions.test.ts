@@ -1,5 +1,6 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import { sleep } from "effection";
 import type { Operation } from "effection";
 
@@ -115,6 +116,51 @@ describe("REPL focus regions: the normal screen", () => {
     yield* page.resize(WIDE);
     yield* typed(page, "-wide");
     expect(page.screen().shows("survives-resize-narrow-wide")).toBe(true);
+  });
+});
+
+describe("REPL focus regions: Unicode caret editing", () => {
+  it("PV3: Draft and Message edit at independent carets across rows, focus and resize", function* () {
+    const page = yield* useReplPage({ size: MEDIUM });
+    yield* page.type("é界\nsecond");
+    yield* page.until("both Draft rows", (one) => one.shows("é界") && one.shows("second"));
+    yield* key(page, "Home");
+    yield* key(page, "ArrowUp");
+    yield* key(page, "ArrowRight");
+    yield* typed(page, "中");
+    expect(page.screen().shows("é中界")).toBe(true);
+    yield* page.resize(NARROW);
+    yield* typed(page, "!");
+    expect(page.screen().shows("é中!界")).toBe(true);
+    yield* key(page, "Alt+ArrowDown");
+    yield* key(page, "Tab");
+    yield* key(page, "Backtab");
+    yield* typed(page, "?");
+    expect(page.screen().shows("é中!?界")).toBe(true);
+    yield* key(page, "Backspace");
+    yield* page.resize(MEDIUM);
+    yield* key(page, "Tab");
+    yield* key(page, "Tab");
+    yield* key(page, "Tab");
+    yield* page.type(" m界\nXYZ");
+    yield* page.until("both Message rows", (one) => one.shows(" m界") && one.shows("XYZ"));
+    yield* key(page, "Home");
+    yield* key(page, "ArrowUp");
+    yield* key(page, "ArrowRight");
+    yield* page.type("M");
+    yield* page.until("Message middle insertion", (one) => one.shows(" Mm界"));
+    yield* key(page, "Backspace");
+    yield* key(page, "ArrowDown");
+    yield* page.type("中");
+    yield* page.until("Message second-row insertion", (one) => one.shows("X中YZ"));
+    yield* key(page, "Alt+ArrowUp");
+    yield* key(page, "Tab");
+    yield* key(page, "Backtab");
+    yield* page.type("!");
+    yield* page.until("Message preserved caret", (one) => one.shows("X中!YZ"));
+    expect(page.screen().shows("é中!界")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(0);
+    expect(page.screen().shows("No entry yet")).toBe(true);
   });
 });
 
@@ -259,6 +305,45 @@ describe("REPL focus regions: owned composition invariants", () => {
       ]);
     });
   }
+
+  it("PV3: the rendered Draft keeps its caret visible in the value window", function* () {
+    const model = yield* journalModel([]);
+    const presenter = yield* usePresenter(MEDIUM);
+    let state: ReplState = {
+      ...initialState("caret"),
+      draft: "first\nsecond\nthird\nfourth\nfifth",
+    };
+    function* commit() {
+      const resolved = viewFor(state, model, IDLE, MEDIUM, focused(presenter));
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      return yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
+    }
+    yield* commit();
+    const moved = yield* dispatched(presenter, "Home");
+    if (moved.outcome !== "action") {
+      throw new Error("the Draft did not claim Home");
+    }
+    state = reduceRepl(state, moved.action, model, IDLE).state;
+    for (let row = 0; row < 4; row += 1) {
+      yield* commit();
+      const up = yield* dispatched(presenter, "ArrowUp");
+      if (up.outcome !== "action") {
+        throw new Error("the Draft did not claim Up");
+      }
+      state = reduceRepl(state, up.action, model, IDLE).state;
+    }
+    const shown = yield* commit();
+    expect(presenter.grid.rows().some((row) => row.includes("first"))).toBe(true);
+    const value = shown.boundsOf("draft:value:0");
+    if (value === undefined) {
+      throw new Error("the Draft value has no drawn bounds");
+    }
+    expect(presenter.grid.styleAt(value.x, value.y).background).toBe(REPL_PALETTE.focus);
+    expect(focused(presenter)).toBe("footer:input");
+    expect(state.draft).toBe("first\nsecond\nthird\nfourth\nfifth");
+  });
 
   it("R5: catalog Content re-entry uses the first admitted row rather than the last focus", function* () {
     const model = yield* journalModel(

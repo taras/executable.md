@@ -33,6 +33,9 @@
  * recovers on resize.
  */
 
+import { boundaries, caretRow } from "./caret.ts";
+import type { ReplCaret, ReplCaretRow } from "./caret.ts";
+
 import { close, fit, open, text } from "@bomb.sh/tty";
 import type { Op } from "@bomb.sh/tty";
 import { Err, Ok } from "effection";
@@ -1069,4 +1072,74 @@ export function readingRuns(
     parts.push({ text: run.text, token: run.token });
   }
   return tokenRuns(parts);
+}
+
+export interface ReplEditor {
+  readonly caret: ReplCaret;
+  readonly rows: readonly ReplCaretRow[];
+  readonly display: readonly { readonly text: string; readonly runs: readonly ReplTokenRun[] }[];
+  readonly active: number;
+}
+
+export function* fitEditor(
+  renderer: ReplRenderer,
+  size: ReplTerminalSize,
+  caret: ReplCaret,
+  room: number,
+  focused: boolean,
+): Operation<Result<ReplEditor>> {
+  const lines = caret.value.split("\n").map((text, at) => ({ key: `edit:${at}`, text }));
+  // Reserve a blank cell for a caret after the last grapheme of a fitted row.
+  const fitted = yield* fitPlain(renderer, size, lines, Math.max(1, room - 1));
+  if (!fitted.ok) {
+    return fitted;
+  }
+  const offsets = new Map<string, number>();
+  let source = 0;
+  for (const line of lines) {
+    offsets.set(line.key, source);
+    source += line.text.length + 1;
+  }
+  const rows: ReplCaretRow[] = [];
+  const display: { text: string; runs: readonly ReplTokenRun[] }[] = [];
+  for (const line of fitted.value) {
+    const from = offsets.get(line.line) ?? 0;
+    const stops = boundaries(line.text);
+    const measured = yield* widths(
+      renderer,
+      size,
+      stops.map((at) => line.text.slice(0, at)),
+    );
+    if (!measured.ok) {
+      return measured;
+    }
+    rows.push({
+      stops: stops.map((at, index) => ({
+        offset: from + at,
+        column: line.indent + measured.value[index],
+      })),
+    });
+    const own = `${" ".repeat(line.indent)}${line.text}`;
+    display.push({ text: own, runs: [{ text: own, token: "draft" }] });
+    offsets.set(line.line, from + line.text.length);
+  }
+  const active = caretRow(rows, caret.offset, caret.backward);
+  const line = fitted.value[active];
+  if (focused && line !== undefined) {
+    const from = rows[active].stops[0]?.offset ?? 0;
+    const at = caret.offset - from;
+    const end = boundaries(line.text).find((one) => one > at) ?? at;
+    const before = `${" ".repeat(line.indent)}${line.text.slice(0, at)}`;
+    const glyph = line.text.slice(at, end) || " ";
+    const after = line.text.slice(end);
+    display[active] = {
+      text: before + glyph + after,
+      runs: tokenRuns([
+        { text: before, token: "draft" },
+        { text: glyph, token: "caret" },
+        { text: after, token: "draft" },
+      ]),
+    };
+  }
+  return Ok({ caret, rows, display, active });
 }

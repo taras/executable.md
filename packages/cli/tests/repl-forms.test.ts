@@ -517,6 +517,32 @@ function* drive(
 }
 
 describe("F2 — invalid stays open; valid is exact", () => {
+  it("PV3: named entry fields retain independent middle carets through a rejected answer", function* () {
+    const asked = yield* askingFor(DETAILS_SCHEMA);
+    const live = asking(asked.question);
+    const first = yield* drive(opened(live), live, [
+      { kind: "type", field: "project", text: "a\u0301界" },
+      {
+        kind: "move-caret",
+        field: "project",
+        key: "ArrowLeft",
+        caret: { value: "a\u0301界", offset: 2 },
+      },
+      { kind: "type", field: "description", text: "other" },
+      { kind: "type", field: "project", text: "中" },
+      { kind: "erase", field: "project" },
+    ]);
+    expect(first.state.form.values).toEqual({ project: "a\u0301界", description: "other" });
+    expect(first.state.form.carets?.["project"]?.offset).toBe(2);
+    const rejected = {
+      ...first.state,
+      form: { ...first.state.form, messages: [{ field: "project", message: "try again" }] },
+    };
+    const continued = yield* drive(rejected, live, [{ kind: "type", field: "project", text: "!" }]);
+    expect(continued.state.form.values).toEqual({ project: "a\u0301!界", description: "other" });
+    expect(continued.state.form.messages).toEqual([]);
+  });
+
   it("F2: choosing Request changes with no feedback keeps the question and says why", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA);
     const live = asking(asked.question);

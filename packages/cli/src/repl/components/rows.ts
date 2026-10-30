@@ -21,6 +21,9 @@
  * answer with a semantic action.
  */
 
+import { caretFor, moveCaret } from "../caret.ts";
+import type { ReplCaretRow } from "../caret.ts";
+
 import { component, fields } from "../description.ts";
 import type { ReplComponent, ReplInputEvent, ReplNode, ReplViewData } from "../description.ts";
 import type { ReplAction, ReplCaretKey } from "./actions.ts";
@@ -465,7 +468,27 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       }
       const caret = CARET_KEYS.get(event.key);
       if (caret !== undefined) {
-        return { kind: "move-caret", key: caret, ...owns };
+        const input = fields(node.input);
+        const value = textOf(node.input, "text");
+        const offset = input?.["caret"];
+        const column = input?.["column"];
+        const position = caretFor(
+          value,
+          typeof offset === "number"
+            ? {
+                value,
+                offset,
+                ...(typeof column === "number" ? { column } : {}),
+                ...(input?.["backward"] === true ? { backward: true } : {}),
+              }
+            : undefined,
+        );
+        return {
+          kind: "move-caret",
+          key: caret,
+          caret: moveCaret(position, caret, editorRows(node.input)),
+          ...owns,
+        };
       }
       if (event.key === "Enter") {
         return submission(node.input);
@@ -520,6 +543,10 @@ function submission(input: ReplViewData): ReplAction | undefined {
  * nothing else can answer for them.
  */
 function rendered(input: ReplViewData): string {
+  const shown = optional(input, "shown");
+  if (shown !== undefined) {
+    return shown;
+  }
   const focused = fields(input)?.["focused"] === true;
   const prompt = textOf(input, "prompt");
   if (fields(input)?.["block"] === true) {
@@ -576,3 +603,30 @@ export const REFUSAL: ReplComponent<ReplAction> = component<ReplAction>({
     });
   },
 });
+
+function editorRows(input: ReplViewData): readonly ReplCaretRow[] {
+  const rows = fields(input)?.["caretRows"];
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  const result: ReplCaretRow[] = [];
+  for (const row of rows) {
+    const stops = fields(row)?.["stops"];
+    if (!Array.isArray(stops)) {
+      return [];
+    }
+    const parsed: { offset: number; column: number }[] = [];
+    for (const stop of stops) {
+      const offset = fields(stop)?.["offset"];
+      const column = fields(stop)?.["column"];
+      if (typeof offset !== "number" || typeof column !== "number") {
+        return [];
+      }
+      parsed.push({ offset, column });
+    }
+    if (parsed.length > 0) {
+      result.push({ stops: parsed });
+    }
+  }
+  return result;
+}
