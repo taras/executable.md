@@ -97,9 +97,19 @@ import { REPL_DIRECTORY } from "../src/repl/storage.ts";
 import { createFakeAcp } from "./support/fake-acp.ts";
 import { awaited } from "./support/mounted-repl.ts";
 import type { MountedHost } from "./support/mounted-repl.ts";
-import { useReplPage } from "./support/mounted-page.ts";
-import type { PageFrame, ReplPage } from "./support/mounted-page.ts";
-import { draft, drawer, paste, railMark, shows } from "./support/repl-page-adapters.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import type { ReplPage, ScreenReading, ScreenScope } from "./support/repl-page.ts";
+import {
+  closeDrawer,
+  DRAFT,
+  draftShows,
+  draftText,
+  drawerOpen,
+  intoDraft,
+  pasteDraft,
+  RAIL,
+  railMark,
+} from "./support/screen-journeys.ts";
 import { readScreen } from "./support/terminal-screen.ts";
 
 /** The widest accepted frame, stated here because layout keeps it private. */
@@ -1917,25 +1927,25 @@ describe("U2 — the program performs a permission, end to end", () => {
       const { page } = yield* useAgentPage(stub);
 
       // One entry, submitted the way a person submits one.
-      yield* paste(page, draft(page), THREE_SPAWNS);
+      yield* pasteDraft(page, THREE_SPAWNS);
       yield* page.key("Enter");
 
-      yield* page.until("the request being announced", (frame) => shows(frame, "asks: Write"));
+      yield* page.until("the request being announced", requestShown);
       // Nothing opened by itself: the request is a fact on its turn, and no
       // drawer is up to answer it with.
-      expect(drawer(page).isOpen()).toBe(false);
-      expect(shows(page.frame(), "[Allow once]")).toBe(false);
+      expect(drawerOpen(page.screen())).toBe(false);
+      expect(page.screen().shows(ALLOW_ONCE)).toBe(false);
 
-      // Activate the request fact, then choose one offered option — Tab and Enter,
-      // through the ordinary normalized boundary. The fact is reached where the
-      // screen draws it: this frame gives the Transcript a column of its own and
-      // the request stands in it, so there is no surface to open first.
-      yield* page.focus(requestKey(page.frame()));
-      yield* page.key("Enter");
-      yield* page.until("the permission drawer", () => drawer(page).isOpen());
-      expect(shows(page.frame(), "[Allow once]")).toBe(true);
+      // Activate the request fact, then choose one offered option, through the
+      // ordinary normalized boundary — the pointer, which the row above proves
+      // asks for the same thing Enter does. The fact is reached where the screen
+      // draws it: this frame gives the Transcript a column of its own and the
+      // request stands in it, so there is no surface to open first.
+      yield* page.press(ASKING);
+      yield* page.until("the permission drawer", (one) => drawerOpen(one));
+      expect(page.screen().shows(ALLOW_ONCE)).toBe(true);
 
-      yield* drawer(page).choose("Allow once");
+      yield* page.press(ALLOW_ONCE);
       // The program performs it: `perform()` calls the session's authority, and
       // only a successful call closes the drawer.
       yield* answered(stub, "call-1");
@@ -1944,11 +1954,13 @@ describe("U2 — the program performs a permission, end to end", () => {
       // already over.
       expect(stub.answers.get("call-1")).toBe(1);
 
-      // The drawer is gone from the screen, and focus is on the turn that was
-      // waiting rather than on whatever opened the drawer.
-      yield* page.until("the drawer closing", () => !drawer(page).isOpen());
-      expect(shows(page.frame(), "[Allow once]")).toBe(false);
-      expect(focusedText(page.frame())).toContain("review ·");
+      // The drawer is gone from the screen, and the turn that was waiting is
+      // still drawn. Where focus lands when a request is answered is asked of
+      // the tree, by the row "U2: activating it opens the drawer, and one choice
+      // settles that request once", which reads the key the root holds.
+      yield* page.until("the drawer closing", (one) => !drawerOpen(one));
+      expect(page.screen().shows(ALLOW_ONCE)).toBe(false);
+      expect(page.screen().shows("review ·")).toBe(true);
 
       outcome = yield* leave(page);
     });
@@ -1970,16 +1982,15 @@ describe("U2 — the program performs a permission, end to end", () => {
 
     yield* scoped(function* (): Operation<void> {
       const { page } = yield* useAgentPage(stub);
-      yield* paste(page, draft(page), THREE_SPAWNS);
+      yield* pasteDraft(page, THREE_SPAWNS);
       yield* page.key("Enter");
-      yield* page.until("the request being announced", (frame) => shows(frame, "asks: Write"));
+      yield* page.until("the request being announced", requestShown);
 
       // Open it the way a person does: the request stands in the Transcript's
       // own column at this size, and activating that row is what opens it.
-      yield* page.focus(requestKey(page.frame()));
-      yield* page.key("Enter");
-      yield* page.until("the permission drawer", () => drawer(page).isOpen());
-      expect(shows(page.frame(), "Escape or close denies")).toBe(true);
+      yield* page.press(ASKING);
+      yield* page.until("the permission drawer", (one) => drawerOpen(one));
+      expect(page.screen().shows("Escape or close denies")).toBe(true);
       expect(stub.outcomes.size).toBe(0);
 
       // Escape: the direct dismissal, which denies through the authority rather
@@ -1991,17 +2002,18 @@ describe("U2 — the program performs a permission, end to end", () => {
       expect(stub.answers.get("call-1")).toBe(1);
 
       // The drawer closed because the request is gone, not because a key was
-      // pressed: it is off the screen, and focus is back on the turn that was
-      // waiting.
-      yield* page.until("the drawer closing", () => !drawer(page).isOpen());
-      expect(shows(page.frame(), "Escape or close denies")).toBe(false);
-      expect(focusedText(page.frame())).toContain("review ·");
+      // pressed: it is off the screen, and the turn that was waiting is drawn
+      // again. Where focus lands is the tree's answer, read by the kernel row
+      // named in the case above.
+      yield* page.until("the drawer closing", (one) => !drawerOpen(one));
+      expect(page.screen().shows("Escape or close denies")).toBe(false);
+      expect(page.screen().shows("review ·")).toBe(true);
 
       // And the session is still live: dismissing one request cancelled nothing,
       // so the other conversation is still there to be seen.
-      expect(shows(page.frame(), "build")).toBe(true);
+      expect(page.screen().shows("build")).toBe(true);
       // And the reading is still the live head rather than a frozen position.
-      expect(shows(page.frame(), "[live]")).toBe(false);
+      expect(page.screen().shows("[live]")).toBe(false);
       outcome = yield* leave(page);
     });
 
@@ -2031,39 +2043,40 @@ describe("U4 — the loop wakes for Agent work", () => {
     yield* scoped(function* (): Operation<void> {
       const { page } = yield* useAgentPage(stub);
       const { terminal } = page.repl;
-      yield* paste(page, draft(page), THREE_SPAWNS);
+      yield* pasteDraft(page, THREE_SPAWNS);
       yield* page.key("Enter");
 
-      // A stable frame: all three observed, none of them started.
-      yield* page.until("every turn queued", (frame) => {
-        return shows(frame, "review · queued") && shows(frame, "check · queued");
-      });
+      // A stable screen: all three observed, none of them started.
+      yield* page.until(
+        "every turn queued",
+        (one) => one.shows("review · queued") && one.shows("check · queued"),
+      );
 
       // One turn starts. Nobody pressed anything, nothing was recorded, and the
       // screen has to say so.
       const beforeStart = terminal.presented.length;
       const keystrokes = terminal.fed;
-      const startedAt = page.frame().index;
+      const startedAt = page.screen().index;
       stub.start(REVIEWER);
-      const streaming = yield* page.until("the review turn streaming", (frame) =>
-        shows(frame, "review · streaming"),
+      const streaming = yield* page.until("the review turn streaming", (one) =>
+        one.shows("review · streaming"),
       );
       expect(streaming.index).toBeGreaterThan(startedAt);
       expect(terminal.presented.length).toBeGreaterThan(beforeStart);
       expect(terminal.fed).toBe(keystrokes);
       // And only that turn moved.
-      expect(shows(page.frame(), "check · queued")).toBe(true);
+      expect(page.screen().shows("check · queued")).toBe(true);
 
       // One turn asks for permission. The fact appears on the turn that is
       // waiting, in a frame nothing else asked for.
       const beforeAsking = terminal.presented.length;
       stub.start(BUILDER);
-      yield* page.until("the request being announced", (frame) => shows(frame, "asks: Write"));
+      yield* page.until("the request being announced", requestShown);
       expect(terminal.presented.length).toBeGreaterThan(beforeAsking);
       expect(terminal.fed).toBe(keystrokes);
       // Arriving opened nothing and moved nobody: no drawer is up.
-      expect(drawer(page).isOpen()).toBe(false);
-      expect(shows(page.frame(), "Escape or close denies")).toBe(false);
+      expect(drawerOpen(page.screen())).toBe(false);
+      expect(page.screen().shows("Escape or close denies")).toBe(false);
 
       yield* leave(page);
     });
@@ -2818,23 +2831,24 @@ function* answered(stub: Stub, toolCallId: string): Operation<void> {
   );
 }
 
-/** The one request fact the frame places, by its key. */
-function requestKey(frame: PageFrame): string {
-  const placed = frame.keys().filter((key) => key.startsWith("sessions:request:"));
-  if (placed.length !== 1) {
-    throw new Error(`one request was expected, and ${JSON.stringify(placed)} are placed`);
-  }
-  return placed[0];
-}
+/** What the chronology draws for the one request this suite's stub asks. */
+const ASKING = "asks: Write";
 
-/** Whether the frame places a request fact. */
-function requestPlaced(frame: PageFrame): boolean {
-  return frame.keys().some((key) => key.startsWith("sessions:request:"));
-}
+/** The option a person chooses to allow it this once, as the drawer offers it. */
+const ALLOW_ONCE = "[Allow once]";
 
-/** The text drawn in the control that holds focus. */
-function focusedText(frame: PageFrame): string {
-  return frame.focused === undefined ? "" : (frame.control(frame.focused)?.text ?? "");
+/**
+ * The row the sidebar's two tabs are drawn on, which is the way to either.
+ *
+ * Found by the tab that is always drawn there: the guidance row names a tab too
+ * — "open Sessions" is what it says while a request waits behind one — so a tab
+ * is pressed on the row that holds both of them.
+ */
+const TABS: ScreenScope = { onRow: "Entries" };
+
+/** Whether the screen draws the request fact. */
+function requestShown(reading: ScreenReading): boolean {
+  return reading.shows(ASKING);
 }
 
 /** The command's outcome, once the person is gone and the command has returned. */
@@ -3561,7 +3575,7 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         const { page, hostRoot } = yield* useAgentPage(stub, size);
 
         // One entry, which is what will ask for the permission.
-        yield* paste(page, draft(page), THREE_SPAWNS);
+        yield* pasteDraft(page, THREE_SPAWNS);
         yield* page.key("Enter");
 
         // That a request is waiting is read from the one row that says what the
@@ -3572,63 +3586,55 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         // and the wide one `Entry 1 waiting for permission`, and what each says
         // to do differs too — a frame that draws the list says to activate the
         // request and one that does not says where to open it.
-        yield* page.until("the request being announced", (frame) => shows(frame, "permission"));
+        yield* page.until("the request being announced", (one) => one.shows("permission"));
         // Arrival opened nothing, which is the row before this one's claim.
-        expect(drawer(page).isOpen()).toBe(false);
-        expect(shows(page.frame(), "[Allow once]")).toBe(false);
+        expect(drawerOpen(page.screen())).toBe(false);
+        expect(page.screen().shows(ALLOW_ONCE)).toBe(false);
 
         // 1. The next entry, typed while the request is waiting and before the
         // drawer is opened over it. Focus returns to the draft on its own once
         // the first entry is admitted.
         const TYPED = "C3-KEPT";
-        yield* draft(page).type(TYPED);
-        expect(draft(page).text()).toBe(TYPED);
+        yield* draftText(page, TYPED);
+        expect(draftShows(page.screen(), TYPED)).toBe(true);
 
         // 2. Answered once, through the ordinary controls and the one authority.
         // Where one outlet is routed the chronology is behind its own tab and a
         // person opens it first; where the Transcript has a column the request
         // already stands in it, and there is no surface to cross to.
-        if (!requestPlaced(page.frame())) {
-          yield* page.focus("sessions:heading");
-          yield* page.key("Enter");
-          yield* page.until("the request standing in Sessions", requestPlaced);
+        if (!requestShown(page.screen())) {
+          yield* page.press("Sessions", TABS);
+          yield* page.until("the request standing in Sessions", requestShown);
         }
-        yield* page.focus(requestKey(page.frame()));
-        yield* page.key("Enter");
-        yield* page.until("the permission drawer", () => drawer(page).isOpen());
-        expect(shows(page.frame(), "[Allow once]")).toBe(true);
-        yield* drawer(page).choose("Allow once");
+        yield* page.press(ASKING);
+        yield* page.until("the permission drawer", (one) => drawerOpen(one));
+        expect(page.screen().shows(ALLOW_ONCE)).toBe(true);
+        yield* page.press(ALLOW_ONCE);
         yield* answered(stub, "call-1");
         expect(stub.answers.get("call-1")).toBe(1);
-        yield* page.until("the drawer closing", () => !drawer(page).isOpen());
+        yield* page.until("the drawer closing", (one) => !drawerOpen(one));
 
         // 3. Byte for byte what was typed, and on the screen. A narrow frame
         // routes one outlet, and the chronology this request was answered on is
         // not the outlet the draft is drawn on — so the way back is taken
         // first, through the control that is on the screen at every size.
-        if (!page.frame().has("footer:input")) {
-          yield* page.focus("entries:heading");
-          yield* page.key("Enter");
-          yield* page.until(
-            "Entries being read",
-            (frame) => frame.has("footer:input") || drawer(page).isOpen(),
-          );
+        if (!page.screen().shows(DRAFT)) {
+          yield* page.press("Entries", TABS);
+          yield* page.until("Entries being read", (one) => one.shows(DRAFT) || drawerOpen(one));
           // That control both routes the outlet and opens the catalog over it.
           // Put the catalog away again, as the row itself says to: a modal left
           // up is a modal the rows below would be reading through.
-          if (drawer(page).isOpen()) {
-            yield* page.press("drawer:close");
-            yield* page.until("the catalog closing", () => !drawer(page).isOpen());
+          if (drawerOpen(page.screen())) {
+            yield* closeDrawer(page);
           }
         }
-        expect(draft(page).text()).toBe(TYPED);
-        expect(shows(page.frame(), TYPED)).toBe(true);
+        expect(draftShows(page.screen(), TYPED)).toBe(true);
 
         // 4. Found again the way the row says to find it, and still editable: a
         // draft nobody can get back to is a draft that was not really kept.
         const EDITED = `${TYPED}-EDITED`;
-        yield* draft(page).type("-EDITED");
-        expect(draft(page).text()).toBe(EDITED);
+        yield* draftText(page, "-EDITED");
+        expect(draftShows(page.screen(), EDITED)).toBe(true);
 
         // 5. And it is the thing that becomes the next entry, once the one that
         // asked for the permission has finished and been joined.
@@ -3636,25 +3642,25 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         // task that wrote it is still coming down, and a submission taken in that
         // window has nowhere to go. The row that says the next entry may start is
         // the one that means the teardown finished too (#870 UI11).
-        yield* page.until("the next entry becoming startable", (frame) =>
-          shows(frame, "Ready for Entry 2"),
+        yield* page.until("the next entry becoming startable", (one) =>
+          one.shows("Ready for Entry 2"),
         );
         // And what the first entry came to, read where this screen states it.
         // `1. [ok] entry-1` is a row of the Entries catalog, and the catalog is
         // a drawer over the reading at this size — opening one here would put a
         // modal over the draft the rows below go on to read.
-        expect(railMark(page.frame(), 1)).toBe("\u2713");
-        yield* draft(page).focus();
+        expect(railMark(page.screen(), 1)).toBe(RAIL.ok);
+        yield* intoDraft(page);
         yield* page.key("Enter");
         // The History rail's own mark for the second entry, which every size
         // draws: the catalog that spells `2.` is a drawer now, and one opened
         // here would be a drawer over the draft this row goes on to read.
-        yield* page.until("the second entry", (frame) => railMark(frame, 2) !== undefined);
+        yield* page.until("the second entry", (one) => railMark(one, 2) !== undefined);
         // Submitted means consumed: the draft is the *next* entry's, and there is
         // no next one typed yet.
         yield* page.until(
           "the draft being spent",
-          (frame) => frame.has("footer:input") && draft(page).text() === "",
+          (one) => one.shows(DRAFT) && !draftShows(one, TYPED),
         );
 
         // And the file says which bytes became that entry. An entry appearing and
@@ -3666,7 +3672,7 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         if (size.columns > NARROW.columns) {
           // Where there is a transcript column, the exact source is readable as
           // what the entry rendered.
-          yield* page.until("the edited source having run", (frame) => shows(frame, EDITED));
+          yield* page.until("the edited source having run", (one) => one.shows(EDITED));
         }
 
         yield* leave(page);

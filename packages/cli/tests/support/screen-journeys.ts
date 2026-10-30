@@ -271,8 +271,26 @@ export function entrySettles(
   order: number,
   outcome: keyof typeof RAIL,
 ): Operation<ScreenReading> {
-  const mark = `${order} ${RAIL[outcome]}`;
-  return page.until(`entry ${order} reaching ${outcome}`, (one) => one.shows(mark));
+  return page.until(
+    `entry ${order} reaching ${outcome}`,
+    (one) => railMark(one, order) === RAIL[outcome],
+  );
+}
+
+/**
+ * The mark the History rail gives one entry, or none where no screen names it.
+ *
+ * Read from the band's own row and only as far as its divider: what follows the
+ * divider is where the reading is, and a number there is a position rather than
+ * an outcome.
+ */
+export function railMark(reading: ScreenReading, order: number): string | undefined {
+  const band = reading.rows.find((row) => row.includes("HISTORY")) ?? "";
+  const rail = band.split("\u2500\u2500")[0] ?? "";
+  // The cancelled mark is a hyphen, which is a range inside a class anywhere but
+  // the end of one: it goes last, beside the mark a refused entry wears.
+  const marks = Object.values(RAIL).filter((mark) => mark !== RAIL.cancelled);
+  return new RegExp(`(?:^|\\s)${order}\\s*([${marks.join("")}U-])`).exec(rail)?.[1];
 }
 
 /** Whether a drawer is open: its own way out is the one every drawer draws. */
@@ -346,9 +364,14 @@ export function* drawnScreen(terminal: Terminal): Operation<Operation<void>> {
   ]);
 }
 
+/** Whether the Draft's own rows hold this text. */
+export function draftShows(reading: ScreenReading, text: string): boolean {
+  return reading.found(text, DRAFT_VALUE) > 0;
+}
+
 /** Whether the Draft holds this text, and the composer does not. */
 export function draftHolds(reading: ScreenReading, text: string): boolean {
-  return reading.found(text, DRAFT_VALUE) > 0 && reading.found(text, COMPOSER_VALUE) === 0;
+  return draftShows(reading, text) && reading.found(text, COMPOSER_VALUE) === 0;
 }
 
 /** Whether the composer holds this text. */
