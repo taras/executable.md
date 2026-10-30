@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAcpRuntime, resolveAgentCommand } from "../src/acpx-runtime.ts";
-import type { AcpRuntime, AcpRuntimeOptions } from "../src/acpx-runtime.ts";
+import type { AcpRuntime, AcpRuntimeEvent, AcpRuntimeOptions } from "../src/acpx-runtime.ts";
 import { createAcpxSessionStore, retainedSession } from "../src/session-store.ts";
 import { createAcpxProvider } from "../src/provider.ts";
 import {
@@ -164,7 +164,7 @@ describe(
       const observed: unknown = JSON.parse(yield* readTextFile(overlay.XMD_RELEASE_ENV_LOG));
       expect(observed).toEqual({ bound: "bound-first", auth: "protected-auth" });
       const turn = first.startTurn({ handle, text: "hello", mode: "prompt", requestId: "env" });
-      const events = [];
+      const events: AcpRuntimeEvent[] = [];
       for (const event of yield* each(stream(turn.events))) {
         events.push(event);
         yield* each.next();
