@@ -3,19 +3,30 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn, suspend } from "effection";
-import type { Operation } from "effection";
-import { Elicitation } from "@executablemd/core";
+import type { ReplOutcome } from "../src/repl/program.ts";
+import { runReplProgram } from "../src/repl/program.ts";
+import type { Result, Operation } from "effection";
+import { Elicitation, useTempFileCompiler } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
-import { readTextFile, readdir } from "@effectionx/fs";
-import { parseDurableEvent } from "@executablemd/durable-streams";
+import { readTextFile, readdir, writeTextFile, ensureDir } from "@effectionx/fs";
+import { serializeDurableEvent, parseDurableEvent } from "@executablemd/durable-streams";
 import { projectRepl } from "../src/repl/model.ts";
 import { PAIRED_DIRECTORY, ENTRIES_FILE } from "../src/repl/sidekick/history.ts";
 import { join } from "node:path";
-import { decodeLocation } from "../src/repl/route.ts";
-import { referenceSource, REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
+import { encodeLocation, decodeLocation } from "../src/repl/route.ts";
+import {
+  referenceEvents,
+  referenceSource,
+  REFERENCE_DIRECTORY,
+} from "./fixtures/repl/reference.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
-import { mountedExecution, awaited } from "./support/mounted-repl.ts";
+import {
+  recordingTerminal,
+  useMountedHost,
+  mountedExecution,
+  awaited,
+} from "./support/mounted-repl.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 
 import { useReplPage } from "./support/repl-page.ts";
@@ -495,5 +506,173 @@ describe("REPL original admission and terminal exit claims", () => {
     expect(yield* journalRecords(page)).toEqual(admitted);
     expect(page.screen().found("<Json value={1} />", DRAFT_VALUE)).toBe(1);
     expect(route(yield* leaveWithLocation(page)).draft).toBe("<Json value={1} />");
+  });
+});
+
+function* performedWork() {
+  const reads: string[] = [];
+  const performed = { reads, compiles: 0, asked: 0 };
+  yield* API.Fs.around({
+    *readTextFile([path], next) {
+      performed.reads.push(path);
+      return yield* next(path);
+    },
+  });
+  yield* API.Env.around({
+    *compile([source, options], next) {
+      performed.compiles += 1;
+      return yield* next(source, options);
+    },
+  });
+  yield* Elicitation.around({
+    *elicit([request], next) {
+      performed.asked += 1;
+      return yield* next(request);
+    },
+  });
+  return performed;
+}
+
+function* corruptPage() {
+  const host = yield* useMountedHost();
+  yield* ensureDir(host.root);
+  const path = join(host.root, "broken.jsonl");
+  yield* writeTextFile(path, "{not a record}\n");
+  const performed = yield* performedWork();
+  const page = yield* useReplPage({ host, location: "xmd://repl/broken/entries" });
+  return { page, path, performed };
+}
+
+function* leaveRefusal(page: ReplPage) {
+  yield* page.press("[exit]");
+  return yield* commandReturned(page);
+}
+
+describe("REPL original refusals before replay and terminal ownership", () => {
+  it("J1: Control-C leaves a refusal, and it is still a refusal", function* () {
+    const { page } = yield* corruptPage();
+    expect(page.screen().shows("cannot read")).toBe(true);
+    yield* page.type("\x03");
+    expect((yield* commandReturned(page)).ok).toBe(false);
+    released(page.repl.terminal);
+  });
+
+  it("J1: a corrupt history refuses atomically, with no append and no session", function* () {
+    const { page, path, performed } = yield* corruptPage();
+    expect(page.screen().shows("cannot read")).toBe(true);
+    expect((yield* leaveRefusal(page)).ok).toBe(false);
+    expect(performed).toEqual({ reads: [], compiles: 0, asked: 0 });
+    expect(yield* readTextFile(path)).toBe("{not a record}\n");
+    released(page.repl.terminal);
+  });
+
+  it("J1: a malformed location reaches no path, no file and no terminal", function* () {
+    const dataRoot = yield* useTemporary("xmd-malformed-location-");
+    const { terminal, install } = recordingTerminal();
+    yield* install();
+    const host = yield* useMountedHost({ dataRoot });
+    const outcome = yield* runReplProgram({ location: "xmd://repl//repl", profile: host.profile });
+    expect(outcome.ok).toBe(false);
+    expect(yield* readdir(dataRoot)).toEqual([]);
+    expect(terminal.raw).toEqual([]);
+    expect(terminal.resets).toBe(0);
+    expect(terminal.readers).toBe(0);
+  });
+
+  it("J1: a piped invocation refuses before a history file exists", function* () {
+    const dataRoot = yield* useTemporary("xmd-piped-invocation-");
+    const { terminal, install } = recordingTerminal(WIDE, false);
+    yield* install();
+    const host = yield* useMountedHost({ dataRoot });
+    let outcome: Result<ReplOutcome> | undefined;
+    yield* spawn(function* () {
+      outcome = yield* runReplProgram({ profile: host.profile });
+    });
+    yield* awaited("the piped invocation refusing", () => outcome !== undefined);
+    expect(outcome?.ok).toBe(false);
+    if (outcome !== undefined && !outcome.ok) {
+      expect(outcome.error.message).toContain("not available over a pipe");
+    }
+    expect(yield* readdir(dataRoot)).toEqual([]);
+    expect(terminal.raw).toEqual([]);
+    expect(terminal.presented).toEqual([]);
+    expect(terminal.resets).toBe(0);
+    terminal.end();
+  });
+
+  it("J1: a route naming a scope the history never had refuses before anything replays", function* () {
+    const dataRoot = yield* useTemporary("xmd-invalid-scope-");
+    let path = "";
+    const location = yield* scoped(function* () {
+      const page = yield* useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+      yield* referenceAsking(page);
+      path = yield* executionJournal(page);
+      expect((yield* retainedModel(page)).settled).toBe(false);
+      const base = route(yield* leaveWithLocation(page));
+      return encodeLocation({ ...base, scopes: ["entry-1", "Nowhere-9"] });
+    });
+    const before = yield* readTextFile(path);
+    const performed = yield* performedWork();
+    const page = yield* useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], location });
+    expect(page.screen().shows("holds no Nowhere-9")).toBe(true);
+    expect((yield* leaveRefusal(page)).ok).toBe(false);
+    expect(performed.asked).toBe(0);
+    expect(performed.compiles).toBe(0);
+    expect(yield* readTextFile(path)).toBe(before);
+  });
+
+  it("J1: a stale live-question URL refuses against a finished execution", function* () {
+    const dataRoot = yield* useTemporary("xmd-stale-question-");
+    let path = "";
+    const location = yield* scoped(function* () {
+      const page = yield* useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+      yield* referenceAsking(page);
+      yield* answerReference(page);
+      expect((yield* retainedModel(page)).settled).toBe(true);
+      path = yield* executionJournal(page);
+      const base = route(yield* leaveWithLocation(page));
+      return encodeLocation({ ...base, scopes: ["entry-1"], drawers: [{ kind: "live-elicit" }] });
+    });
+    expect(location).toContain("+elicit");
+    const before = yield* readTextFile(path);
+    const performed = yield* performedWork();
+    const page = yield* useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], location });
+    expect(page.screen().shows("nothing is being asked")).toBe(true);
+    expect((yield* leaveRefusal(page)).ok).toBe(false);
+    expect(performed.asked).toBe(0);
+    expect(performed.compiles).toBe(0);
+    expect(yield* readTextFile(path)).toBe(before);
+  });
+
+  it("J1: an answered history with its root still open refuses the same URL", function* () {
+    yield* useTempFileCompiler();
+    const events = yield* referenceEvents();
+    expect(events.at(-1)?.type).toBe("close");
+    const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
+    yield* ensureDir(host.root);
+    const path = join(host.root, "unclosed.jsonl");
+    const kept = events
+      .slice(0, -1)
+      .map((event) => serializeDurableEvent(event))
+      .join("");
+    yield* writeTextFile(path, kept);
+    const projected = projectRepl(events.slice(0, -1));
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    expect(projected.value.settled).toBe(false);
+    expect(projected.value.entries[0]?.scope.elicitations[0]?.answer).toEqual({
+      decision: "approve",
+    });
+    const performed = yield* performedWork();
+    const page = yield* useReplPage({
+      host,
+      location: `xmd://repl/unclosed/entries/${projected.value.entries[0]?.key ?? ""}/+elicit`,
+    });
+    expect(page.screen().shows("nothing is being asked")).toBe(true);
+    expect((yield* leaveRefusal(page)).ok).toBe(false);
+    expect(yield* readTextFile(path)).toBe(kept);
+    expect(performed.asked).toBe(0);
+    expect(performed.compiles).toBe(0);
   });
 });

@@ -24,6 +24,13 @@ import { expect } from "@executablemd/test-support/expect";
 import { useReplPage } from "./support/repl-page.ts";
 import {
   COMPOSER,
+  openHistory,
+  openConfigure,
+  tab,
+  scrollDrawerTo,
+  chooseOffered,
+  applyConfigure,
+  answerField,
   selectPane,
   closeDrawer,
   entrySettles,
@@ -645,5 +652,290 @@ describe("Sidekick submission held to the current Draft", () => {
     const result = yield* submittedUnderEdit(false);
     expect(result.entries).toEqual(["entry-1"]);
     expect(result.draft).toBe("");
+  });
+});
+
+const REVIEW_SCHEMA = {
+  type: "object",
+  properties: {
+    decision: { type: "string", enum: ["approve", "reject"] },
+    message: { type: "string", minLength: 4 },
+  },
+  required: ["decision", "message"],
+  additionalProperties: false,
+};
+const ONE_FIELD = {
+  type: "object",
+  properties: { message: { type: "string", minLength: 2 } },
+  required: ["message"],
+  additionalProperties: false,
+};
+function askingReply(
+  message: string,
+  schema: Readonly<Record<string, unknown>> = REVIEW_SCHEMA,
+): string {
+  return `<Elicit schema={${JSON.stringify(schema)}} as="answer">${message}</Elicit>\n`;
+}
+const ENTRY_ASKS =
+  '<Elicit schema={{ type: "object", properties: { ok: { type: "string", enum: ["yes"] } }, required: ["ok"], additionalProperties: false }} as="said">The entry is asking.</Elicit>\n';
+const ADVERTISED = {
+  model: {
+    selected: "balanced",
+    choices: [
+      { id: "balanced", name: "Balanced" },
+      { id: "fast", name: "Fast" },
+    ],
+  },
+  effort: { balanced: { selected: "medium", choices: [{ id: "medium", name: "Medium" }] } },
+};
+
+function* pendingQuestion(
+  page: ReplPage,
+  message = "Sidekick asks.",
+  schema: Readonly<Record<string, unknown>> = ONE_FIELD,
+): Operation<void> {
+  page.repl.fake.script({ reply: askingReply(message, schema) });
+  yield* sendMessage(page, "ask");
+  yield* page.until("the question notice", (one) => one.shows("[answer sidekick]"));
+}
+
+function* openedQuestion(page: ReplPage): Operation<void> {
+  yield* page.press("[answer sidekick]");
+  yield* page.until("the question form", (one) => one.shows("[submit]"));
+}
+
+function* historyOver(page: ReplPage): Operation<boolean> {
+  yield* openHistory(page);
+  yield* page.press("[close]");
+  yield* page.until(
+    "History leaving",
+    (one) => !one.shows("History") || one.shows("[submit]") || one.shows("[refresh]"),
+  );
+  return page.screen().shows("[submit]");
+}
+
+function* filledQuestion(): Operation<ReplPage> {
+  const page = yield* useReplPage();
+  yield* pendingQuestion(page);
+  yield* openedQuestion(page);
+  yield* page.press("*message:");
+  yield* page.type("partial");
+  yield* page.until("the partial answer", (one) => one.shows("message: partial"));
+  return page;
+}
+
+describe("Sidekick question announcement and modal ownership", () => {
+  it("MQ1: the notice arrives with nothing pressed, and only opening shows the form", function* () {
+    const gate = appendGate();
+    const page = yield* useReplPage({ gate });
+    page.repl.fake.script({ reply: askingReply("Approve the plan?") });
+    page.repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
+    const filing = gate.holdNext(
+      (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"component":"Elicit"'),
+    );
+    yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Enter");
+    yield* entrySettles(page, 1, "ok");
+    yield* chooseEntry(page, "entry-1");
+    yield* sendMessage(page, "review it");
+    yield* filing.started();
+    yield* selectPane(page, "bindings");
+    yield* draftText(page, "mine");
+    const fed = page.repl.terminal.fed;
+    filing.release();
+    yield* page.until("the question announcing without input", (one) =>
+      one.shows("SIDEKICK (question)"),
+    );
+    expect(page.repl.terminal.fed).toBe(fed);
+    expect(page.screen().shows(COMPOSER)).toBe(false);
+    expect(page.screen().shows("[submit]")).toBe(false);
+    expect(entryTrail(page.screen())).toContain("Entry 1");
+    yield* page.type("-still-draft");
+    yield* page.until(
+      "the original input still receiving text",
+      (one) => one.found("mine-still-draft", DRAFT_VALUE) === 1,
+    );
+    yield* selectPane(page, "sidekick");
+    yield* page.until("the notice in its pane", (one) => one.shows("[answer sidekick]"));
+    expect(page.screen().shows("[submit]")).toBe(false);
+    expect(composerHolds(page.screen(), "review it")).toBe(false);
+    yield* openedQuestion(page);
+    expect(page.screen().shows("Approve the plan?")).toBe(true);
+    expect(page.screen().shows("approve")).toBe(true);
+    expect(page.screen().shows("reject")).toBe(true);
+    expect(yield* finishDraft(page)).toBe("mine-still-draft");
+  });
+
+  it("MQ1: control — an ordinary entry's question announces itself the same way", function* () {
+    const page = yield* useReplPage();
+    yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Enter");
+    const fed = page.repl.terminal.fed;
+    yield* page.until("the entry announcing without input", (one) => one.shows("[answer]"));
+    expect(page.repl.terminal.fed).toBe(fed);
+    expect(page.repl.fake.ensured).toEqual([]);
+    expect(page.repl.fake.prompts).toEqual([]);
+  });
+
+  it("Q-P2: History over an open form closes once and leaves the form waiting", function* () {
+    const page = yield* filledQuestion();
+    expect(yield* historyOver(page)).toBe(true);
+    expect(page.repl.outcome()).toBeUndefined();
+    expect(page.screen().shows("Sidekick asks.")).toBe(true);
+    expect(page.screen().shows("message: partial")).toBe(true);
+  });
+
+  it("Q-P2: control — History closes the same way with no form open", function* () {
+    const page = yield* filledQuestion();
+    yield* closeDrawer(page);
+    yield* page.until("the question notice", (one) => one.shows("[answer sidekick]"));
+    expect(yield* historyOver(page)).toBe(false);
+    expect(page.repl.outcome()).toBeUndefined();
+    expect(page.screen().shows("[answer sidekick]")).toBe(true);
+  });
+});
+
+function* configureOpened(page: ReplPage): Operation<void> {
+  yield* openConfigure(page);
+  yield* page.until("the advertised models", (one) => one.shows("Balanced"));
+}
+
+function* configured(page: ReplPage): Operation<void> {
+  yield* page.until("Configure closing", (one) => !one.shows("[refresh]"));
+}
+
+describe("Configure keyboard, retained values and window ownership", () => {
+  it("CFG6: Tab and Shift+Tab move inside Configure, and Close or Escape return to its opener", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    yield* draftText(page, "note");
+    yield* configureOpened(page);
+    yield* tab(page);
+    yield* tab(page);
+    yield* tab(page);
+    yield* page.key("Enter");
+    yield* page.until("the second choice selected by keyboard", (one) => one.shows("(x) Fast"));
+    yield* page.key("Backtab");
+    yield* page.key("Enter");
+    yield* page.until("Backtab returning to the first choice", (one) => one.shows("(x) Balanced"));
+    yield* page.type("zz");
+    yield* page.key("Escape");
+    yield* configured(page);
+    expect(draftHolds(page.screen(), "note")).toBe(true);
+    expect(composerHolds(page.screen(), "zz")).toBe(false);
+    yield* page.key("Enter");
+    yield* page.until("the opener receiving Enter after Escape", (one) => one.shows("[refresh]"));
+    yield* page.press("[close]");
+    yield* configured(page);
+    yield* page.key("Enter");
+    yield* page.until("the opener receiving Enter after Close", (one) => one.shows("[refresh]"));
+    yield* page.key("Escape");
+    yield* configured(page);
+    yield* draftText(page, "-more");
+    expect(yield* finishDraft(page)).toBe("note-more");
+  });
+
+  it("CFG6: a choice below the drawer's window is reached by scrolling to it", function* () {
+    const page = yield* useReplPage();
+    const many = Array.from({ length: 64 }, (_, at) => ({
+      id: `model-${at + 1}`,
+      name: `Model ${at + 1}`,
+    }));
+    page.repl.fake.configuration({ model: { selected: "model-1", choices: many }, effort: {} });
+    yield* page.press("[configure scribe]");
+    yield* page.until("the advertised models", (one) => one.shows("Model 1"));
+    expect(page.screen().shows("( ) Model 64")).toBe(false);
+    yield* scrollDrawerTo(page, "( ) Model 64");
+    yield* chooseOffered(page, "Model 64");
+    expect(page.screen().shows("(x) Model 64")).toBe(true);
+    yield* scrollDrawerTo(page, "[apply]");
+    yield* applyConfigure(page);
+    yield* configured(page);
+    yield* page.until("the pane's Send", sidekickIdle);
+    yield* awaitedFact("the saved preference", function* () {
+      return (yield* settledReading(page.repl)).chat.some((one) => one.kind === "preferences");
+    });
+    const saved = (yield* settledReading(page.repl)).chat.filter(
+      (one) => one.kind === "preferences",
+    );
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ model: "model-64" });
+  });
+
+  it("CFG6: a half-filled Sidekick question keeps its values across Configure", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    page.repl.fake.script({ reply: "<Output>Ready.</Output>\n" });
+    yield* sendMessage(page, "hello");
+    yield* page.until("the first reply", (one) => one.shows("Ready."));
+    yield* page.until("the idle Sidekick", sidekickIdle);
+    yield* configureOpened(page);
+    yield* closeDrawer(page);
+    yield* pendingQuestion(page, "Approve the plan?", REVIEW_SCHEMA);
+    page.repl.fake.script({ reply: "<Output>Thanks for deciding.</Output>\n" });
+    yield* openedQuestion(page);
+    yield* answerField(page, "message", "ok");
+    yield* page.press("( ) approve");
+    yield* page.until("the partial answer", (one) => one.shows("message: ok"));
+    yield* closeDrawer(page);
+    yield* configureOpened(page);
+    yield* chooseOffered(page, "Fast");
+    yield* closeDrawer(page);
+    yield* openedQuestion(page);
+    expect(page.screen().shows("(x) approve")).toBe(true);
+    expect(page.screen().shows("message: ok")).toBe(true);
+    yield* tab(page);
+    yield* tab(page);
+    yield* page.type("ay");
+    yield* page.until("the complete value", (one) => one.shows("message: okay"));
+    yield* page.press("[submit]");
+    yield* page.until("the reply that was waiting", (one) => one.shows("Thanks for deciding."));
+    expect(JSON.parse(page.repl.fake.prompts[2] ?? "")).toEqual({
+      decision: "approve",
+      message: "okay",
+    });
+  });
+
+  it("CFG6: control — an explicitly selected narrow Sidekick draws Configure and takes its keys", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    yield* draftText(page, "note");
+    yield* intoComposer(page);
+    yield* configureOpened(page);
+    yield* page.resize(NARROW);
+    expect(page.screen().shows("Balanced")).toBe(true);
+    yield* tab(page);
+    yield* page.type("-two");
+    yield* page.until("the narrow Agent field taking keys", (one) =>
+      one.shows("Agent: scribe-two"),
+    );
+    expect(page.screen().shows("DRAFT")).toBe(false);
+    yield* page.press("[close]");
+    yield* configured(page);
+    yield* openEntryCatalog(page);
+    yield* closeDrawer(page);
+    expect(page.screen().found("note", { after: "DRAFT" })).toBe(1);
+    expect(yield* finishDraft(page)).toBe("note");
+  });
+
+  it("CX3: Escape closes History first, and Configure under its own rule after", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    yield* draftText(page, "note");
+    yield* configureOpened(page);
+    yield* chooseOffered(page, "Fast");
+    yield* openHistory(page);
+    yield* page.key("Escape");
+    yield* page.until("History closing over Configure", (one) => one.shows("[refresh]"));
+    expect(page.repl.outcome()).toBeUndefined();
+    expect(page.screen().shows("(x) Fast")).toBe(true);
+    yield* page.key("Escape");
+    yield* configured(page);
+    expect((yield* settledReading(page.repl)).chat.some((one) => one.kind === "preferences")).toBe(
+      false,
+    );
+    yield* configureOpened(page);
+    expect(page.screen().shows("(x) Fast")).toBe(false);
+    expect(yield* finishDraft(page)).toBe("note");
   });
 });
