@@ -426,12 +426,14 @@ describe("REPL terminal: responsive semantic frames", () => {
     // Its title, admitted content and the way out.
     expect(app.presenter.grid.textIn(layer).join("\n")).toContain("Entries");
     expect(keysInside(app.presenter, opened, layer)).toEqual(["drawer:close"]);
-    expect(opened.regionOf("box:history")).toEqual({
-      x: 0,
-      y: 18,
-      width: 72,
-      height: 1,
-    });
+    const history = opened.regionOf("box:history");
+    const guidance = opened.regionOf("box:guidance");
+    if (history === undefined || guidance === undefined) {
+      throw new Error("the narrow drawer lost its History band or fitted help");
+    }
+    expect(history).toEqual({ x: 0, y: guidance.y - 1, width: 72, height: 1 });
+    expect(guidance.y + guidance.height).toBe(NARROW.rows);
+    expect(layer.y + layer.height).toBeLessThanOrEqual(history.y);
     expect(opened.keys).toContain("footer:history");
   });
 

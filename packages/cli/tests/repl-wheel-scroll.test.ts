@@ -261,7 +261,8 @@ describe("wheel real consumers", () => {
     yield* page.press("retained =");
     yield* page.until(
       "binding drawer",
-      (one) => one.shows("Binding row 0") && one.shows("[close]"),
+      (one) =>
+        one.shows("Binding row 0") && one.shows("[close]") && one.shows("Enter does nothing"),
     );
     const cell = page.screen().locate('"Binding row 0"', { after: "Binding · retained" });
     yield* wheel(page, "down", cell);
@@ -275,7 +276,8 @@ describe("wheel real consumers", () => {
     yield* page.press("retained =");
     yield* page.until(
       "binding held end",
-      (one) => one.shows('"Binding row 59"') && one.shows("[close]"),
+      (one) =>
+        one.shows('"Binding row 59"') && one.shows("[close]") && one.shows("Enter does nothing"),
     );
     yield* key(page, "Home");
     expect(page.screen().found('"Binding row 0"', { after: "Binding · retained" }) > 0).toBe(true);
@@ -299,7 +301,10 @@ describe("wheel real consumers", () => {
     yield* page.press("BINDINGS");
     yield* page.until("string opener", (one) => one.shows("retained ="));
     yield* page.press("retained =");
-    yield* page.until("string drawer", (one) => one.shows("Binding · retained"));
+    yield* page.until(
+      "string reading owning its keys",
+      (one) => one.shows("Binding · retained") && one.shows("Enter does nothing"),
+    );
     const scope = { after: "Binding · retained" };
     expect(page.screen().found('"VALUE-BEGIN\\n', scope)).toBe(1);
     expect(page.screen().found("VALUE-END", scope)).toBe(0);
@@ -319,7 +324,10 @@ describe("wheel real consumers", () => {
     yield* page.press("retained =");
     yield* page.until(
       "string end held on reopen",
-      (one) => one.shows("Binding · retained") && one.found('VALUE-END"', scope) === 1,
+      (one) =>
+        one.shows("Binding · retained") &&
+        one.found('VALUE-END"', scope) === 1 &&
+        one.shows("Enter does nothing"),
     );
     yield* key(page, "Home");
     expect(page.screen().found('"VALUE-BEGIN\\n', scope)).toBe(1);

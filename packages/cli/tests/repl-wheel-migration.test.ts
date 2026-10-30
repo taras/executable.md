@@ -240,7 +240,8 @@ describe("wheel remaining migration journeys", () => {
     yield* page.press("answered ");
     yield* page.until(
       "recorded answer",
-      (one) => one.shows("Recorded answer") && one.shows("[close]"),
+      (one) =>
+        one.shows("Recorded answer") && one.shows("[close]") && one.shows("Enter does nothing"),
     );
     yield* key(page, "Home");
     for (const label of ["Recorded answer", "[close]", "[history]"]) {

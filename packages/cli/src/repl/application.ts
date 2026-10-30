@@ -4846,7 +4846,7 @@ function drawerState(view: ReplView, readiness: ReplReadiness): string {
  * it. A drawer's ring is not all one kind of control, so neither is this answer.
  */
 function primaryAction(view: ReplView, narrow: boolean): string {
-  const focused = view.focused;
+  const focused = focusClaim(view) ?? view.focused;
   if (focused?.endsWith(":anchor")) {
     return "Enter does nothing";
   }
@@ -5008,7 +5008,9 @@ function guidanceParts(
   readiness: ReplReadiness,
   compact: boolean,
 ): readonly GuidancePart[] {
-  const focused = view.focused;
+  // Reconciliation honors this claim before drawing. Fitting the old owner's
+  // help would move controls again when the focus refresh follows this frame.
+  const focused = focusClaim(view) ?? view.focused;
   const modal = modalOpen(view);
   const editing = focused === undefined || focused === "footer:input";
   const narrow = view.size.columns <= NARROW.columns;
@@ -5020,7 +5022,7 @@ function guidanceParts(
       text: "Up/Down reads one row; PageUp/PageDown reads a page; Home/End reaches the bounds.",
     });
   }
-  if (modal) {
+  if (modal && !anchor) {
     scrolling.push({
       text: "In Content: PageUp/PageDown reads more content. Arrows and Home/End keep editing a field.",
     });

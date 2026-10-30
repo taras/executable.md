@@ -1841,10 +1841,14 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     }
     // Sessions is in the sidebar at this size, and it holds the turns.
     expect(placed[0]?.sessions.some((key) => key.startsWith("sessions:turn:"))).toBe(true);
-    // Filtering and opening the drawer change what Sessions shows and leave the
-    // document transcript and the inspection column exactly as they were.
+    // Modal help can change the transcript's admitted tail; its reading position
+    // and the ordered content that still fits stay the same.
     expect(placed[1]?.transcript).toEqual(placed[0]?.transcript);
-    expect(placed[2]?.transcript).toEqual(placed[0]?.transcript);
+    const content = (keys: readonly string[]) => keys.filter((key) => !key.startsWith("guidance"));
+    const admitted = content(placed[2]?.transcript ?? []);
+    expect(admitted.length).toBeGreaterThan(1);
+    expect(admitted).toEqual(content(placed[0]?.transcript ?? []).slice(0, admitted.length));
+    expect(drawered.viewports).toEqual(all.viewports);
     expect(placed[1]?.inspection).toEqual(placed[0]?.inspection);
     expect(placed[2]?.inspection).toEqual(placed[0]?.inspection);
     expect(placed[1]?.sessions).not.toEqual(placed[0]?.sessions);
