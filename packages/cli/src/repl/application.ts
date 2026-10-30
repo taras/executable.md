@@ -4773,13 +4773,13 @@ function drawerState(view: ReplView, readiness: ReplReadiness): string {
  */
 function primaryAction(view: ReplView, narrow: boolean): string {
   const focused = view.focused;
-  if (focused === "footer:history") {
+  if (focused === "footer:history" || focused === "footer:top:history") {
     // Shortened where the row is 72 columns and not otherwise. The control under
     // the cursor is labelled `[history]`, so the narrow form is not vague — it is
     // the one word the label already supplies, given back to the keys.
     return narrow ? "Enter opens" : "Enter opens History";
   }
-  if (focused === "footer:exit") {
+  if (focused === "footer:exit" || focused === "footer:top:exit") {
     return "Enter exits";
   }
   if (focused === "drawer:close") {

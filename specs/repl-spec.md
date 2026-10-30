@@ -1086,7 +1086,7 @@ selected entry, the conversation filter and the draft.
 | --- | --- |
 | `160x36` and larger | an identity row; three columns — the Transcript of agent work, the selected work with its own Draft, and Bindings/Sidekick — each with its own surface and the divider that starts it; the drawer layer; then one compact History row and one row of guidance |
 | `120x30` and larger | the same three columns, narrower |
-| `72x20` and larger | one routed surface — the one the route selected — under the two surface controls, with the same drawer, History and guidance |
+| `72x20` and larger | one routed surface — the one the route selected — under the Sessions, Entries and Sidekick surface controls, with the same drawer, History and guidance |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 The **Transcript** on the left is the agent work this execution has, read as

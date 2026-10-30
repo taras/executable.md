@@ -861,6 +861,13 @@ describe("PV3/PV4: question and Configure editing", () => {
       (one) => one.shows("History") && !one.shows("[refresh]"),
     );
     yield* tab(page);
+    yield* tab(page);
+    yield* page.key("ArrowRight");
+    yield* page.until("held History Exit guidance", (one) => one.shows("Enter exits"));
+    yield* page.key("ArrowLeft");
+    yield* page.until("held History opener guidance", (one) => one.shows("Enter opens History"));
+    yield* page.key("Backtab");
+    yield* sleep(30);
     yield* page.key("Enter");
     yield* page.until("the held Configure restored", (one) => one.shows("[refresh]"));
     // Explicit restoration is the History opener; ordinary Content entry is Agent.
