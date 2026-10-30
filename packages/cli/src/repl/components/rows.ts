@@ -168,7 +168,7 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
           return { kind: "reveal", key: beyond };
         }
       }
-      if (event.kind !== "pointer" && event.key !== "Enter") {
+      if (event.kind !== "pointer" && (event.kind !== "key" || event.key !== "Enter")) {
         return undefined;
       }
       return activation(node.input);
@@ -485,7 +485,7 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       if (event.kind === "text") {
         return { kind: "type", text: event.text, ...owns };
       }
-      if (event.kind === "pointer") {
+      if (event.kind !== "key") {
         return undefined;
       }
       if (event.key === "Backspace") {
@@ -621,7 +621,7 @@ export const REFUSAL: ReplComponent<ReplAction> = component<ReplAction>({
       if (event.kind === "text") {
         return undefined;
       }
-      if (event.kind !== "pointer" && event.key !== "Enter") {
+      if (event.kind !== "pointer" && (event.kind !== "key" || event.key !== "Enter")) {
         return undefined;
       }
       return back === "live" ? { kind: "go-live" } : { kind: "select-surface", surface: "entries" };

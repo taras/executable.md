@@ -8,6 +8,8 @@
  * adoption; a refusal preserves the standing route, selection and draft.
  */
 
+import { VIEWPORT } from "./components/viewport.ts";
+
 import { boundaries, caretFor, eraseAt, insertAt } from "./caret.ts";
 import type { ReplCaret } from "./caret.ts";
 
@@ -1941,6 +1943,7 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
  */
 export function readsGeometry(action: ReplAction): boolean {
   return (
+    action.kind === "viewport-wheel" ||
     action.kind === "reading-key" ||
     action.kind === "scroll" ||
     // The Sidekick form's own window, for the same reason: how far it may
@@ -2008,6 +2011,45 @@ export function reduceRepl(
   switch (action.kind) {
     case "noop":
       return settled(state);
+    case "viewport-wheel": {
+      const window = admission.windows.get(action.window);
+      if (window === undefined || window.capacity < 1) {
+        return settled(given);
+      }
+      const requested = scrolled(window, action.direction === "up" ? -3 : 3);
+      const focus = window.focus;
+      const next =
+        focus === undefined
+          ? requested
+          : Math.min(
+              Math.max(requested, Math.max(0, focus.to - window.capacity)),
+              Math.min(focus.from, Math.max(0, window.total - window.capacity)),
+            );
+      if (next === window.from) {
+        return settled(given);
+      }
+      const kind =
+        action.window === SIDEKICK_WINDOW
+          ? "scroll-sidekick"
+          : action.window === SESSIONS_WINDOW
+            ? "scroll-sessions"
+            : action.window === ENTRIES_WINDOW
+              ? "scroll-entries"
+              : action.window === READING_WINDOW
+                ? "scroll-reading"
+                : action.window === DRAWER_WINDOW
+                  ? presented?.kind === "configure"
+                    ? "scroll-configure"
+                    : asking !== undefined
+                      ? "scroll-sidekick-question"
+                      : state.catalog
+                        ? "scroll-entries"
+                        : "scroll"
+                  : undefined;
+      return kind === undefined
+        ? settled(given)
+        : reduceRepl(state, { kind, delta: next - window.from }, model, live, admission, presented);
+    }
     case "reading-key": {
       const name =
         action.reading === "selected"
@@ -4819,11 +4861,6 @@ function primaryAction(view: ReplView, narrow: boolean): string {
     // control that is one of those may say so.
     return "Enter decides";
   }
-  if (focused !== undefined && focused.startsWith("drawer:scroll:")) {
-    // It moves the window over a message too long to draw at once. Saying this
-    // answers the question would promise an answer to somebody reading it.
-    return "Enter scrolls";
-  }
   if (focused !== undefined && focused.startsWith("drawer:choice:")) {
     // One offered value. Taking it fills the field rather than answering the
     // question, which still needs submitting.
@@ -5475,15 +5512,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       items.push(...sidekickReadingRows(undefined, view.focused));
     } else {
       items.push(
-        row(
-          "sidekick:earlier",
-          `  ${EARLIER}`,
-          { select: "scroll-sidekick", delta: -1 },
-          styleOf("navigate"),
-          { here: view.focused },
-        ),
-      );
-      items.push(
         ...anchored(
           shown(
             sidekickReadingRows(live.sidekick, view.focused, context.chat, chatStagingOf(view)),
@@ -5493,15 +5521,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           "sidekick:anchor",
           "chat",
           view.focused,
-        ),
-      );
-      items.push(
-        row(
-          "sidekick:later",
-          `  ${LATER}`,
-          { select: "scroll-sidekick", delta: 1 },
-          styleOf("navigate"),
-          { here: view.focused },
         ),
       );
       items.push(
@@ -6742,23 +6761,6 @@ function drawerFor(
   const overHeld =
     view.selection.drawers.at(-1)?.kind === "history" && view.state.heldHistory === true;
   const rows: Described[] = [];
-  rows.push(
-    row(
-      "drawer:scroll:up",
-      // Configure's window moves through a list of choices rather than through
-      // a recorded order, so it is the one drawer that does not say Earlier.
-      padControl(configuring ? SCROLL_UP : EARLIER, width),
-      catalog
-        ? { select: "scroll-entries", delta: -1 }
-        : configuring
-          ? { select: "configure-scroll", delta: -1 }
-          : asking !== undefined
-            ? { select: "sidekick-scroll", delta: -1 }
-            : { select: "scroll", delta: -1 },
-      styleOf("action"),
-      { here: view.focused },
-    ),
-  );
   const reveals = catalog
     ? (from: number, count: number) => catalogReveals(content, from, count)
     : (from: number, count: number) =>
@@ -6779,21 +6781,6 @@ function drawerFor(
   for (const placed of readings) {
     rows.push(placed);
   }
-  rows.push(
-    row(
-      "drawer:scroll:down",
-      padControl(configuring ? SCROLL_DOWN : LATER, width),
-      catalog
-        ? { select: "scroll-entries", delta: 1 }
-        : configuring
-          ? { select: "configure-scroll", delta: 1 }
-          : asking !== undefined
-            ? { select: "sidekick-scroll", delta: 1 }
-            : { select: "scroll", delta: 1 },
-      styleOf("action"),
-      { here: view.focused },
-    ),
-  );
 
   // The two nodes the footer would have drawn, inside the modal focus root. A
   // modal contains focus, so a way out mounted beside it would be one Tab could
@@ -6885,6 +6872,16 @@ function drawerFor(
       input: { ...fields(read.input), covered: true },
     });
   };
+  const contentKeys = new Set(readings.map((one) => one.key));
+  const viewportRows = visibleRows.filter((one) => contentKeys.has(one.key));
+  const fixedRows = visibleRows.filter((one) => !contentKeys.has(one.key));
+  const viewport = describeNode<ReplAction>({
+    key: "viewport:drawer",
+    component: VIEWPORT,
+    input: { window: DRAWER_WINDOW },
+    children: viewportRows.map((one) => one.description),
+  });
+  const viewportChildren = [viewport, ...fixedRows.map((one) => one.description)];
   const children = overHeld
     ? [
         covered(history),
@@ -6894,10 +6891,10 @@ function drawerFor(
           component: DRAWER,
           input: { label: "" },
           modal: true,
-          children: visibleRows.map((one) => one.description),
+          children: viewportChildren,
         }),
       ]
-    : visibleRows.map((one) => one.description);
+    : viewportChildren;
   const drawer: Described = {
     key: "drawer:open",
     style: titleStyle,
@@ -8366,21 +8363,6 @@ export const EARLIER = "[\u2191 earlier]";
 /** The other one. */
 export const LATER = "[\u2193 later]";
 
-/**
- * What Configure's own window controls are called instead.
- *
- * Earlier and Later are words about a *history*: they are right for a
- * recorded order — Sessions, the entry reading, the catalog, a chat — and
- * wrong for a list of settings, where moving the window reaches another
- * choice rather than another moment. Configure's window is the only one of
- * these that is not a reading of something that happened, so it is the only
- * one that says this. The actions behind the controls, their order, their
- * ownership and their scrolling are unchanged.
- */
-export const SCROLL_UP = "[\u2191 scroll up]";
-/** The other one. */
-export const SCROLL_DOWN = "[\u2193 scroll down]";
-
 /** The Sessions reading's window. */
 export const SESSIONS_WINDOW = "sessions";
 
@@ -8855,8 +8837,6 @@ type ReplSlot =
   | "reading"
   | "transcript"
   | "inspection"
-  | "drawer-above"
-  | "drawer-below"
   | "drawer-actions"
   | "drawer"
   | "drawer-title"
@@ -8868,7 +8848,6 @@ type ReplSlot =
   /** The Sidekick's own input row and its controls, below its chat. */
   | "inspection-below"
   /** The chat window's own two controls, which surround it. */
-  | "inspection-window"
   /** The staged composition's own rows, placed by key. */
   | "workspace"
   /** The tray window's two controls, which surround it rather than move in it. */
@@ -8878,17 +8857,8 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:open") {
     return "drawer-title";
   }
-  if (key === "drawer:scroll:up") {
-    return "drawer-above";
-  }
   if (key === "drawer:close" || key === "drawer:sidekick:stop" || key === "drawer:form:submit") {
     return "drawer-actions";
-  }
-  if (key === "drawer:scroll:down") {
-    // Below the window with the other fixed controls, never inside it: a
-    // control that scrolled away from whoever was reaching for it is the one
-    // thing this drawer's layout exists to prevent.
-    return "drawer-below";
   }
   if (key.startsWith("drawer:")) {
     return "drawer";
@@ -8939,11 +8909,6 @@ function slotOf(key: string): ReplSlot | undefined {
   }
   if (key.startsWith("tab:")) {
     return "inspection-above";
-  }
-  // Both window controls stay put around the chat rather than inside it, so a
-  // measured viewport is the moving part alone.
-  if (key === "sidekick:earlier" || key === "sidekick:later") {
-    return "inspection-window";
   }
   if (
     key === "sidekick:message" ||
@@ -9254,7 +9219,26 @@ export function presentationFor(
   context: ReplPresentationContext,
 ): ReplPresentation {
   const screen = described(view, context);
-  const composed = screen.items.map((item) => editorDescription(item.description, context));
+  const chat =
+    profileFor(view.size) !== "too-small" &&
+    view.refusal === undefined &&
+    showingSidekick(view) &&
+    view.live.sidekick !== undefined &&
+    presentedAsking(view) === undefined;
+  const chatRows = chat ? screen.items.filter((item) => slotOf(item.key) === "inspection") : [];
+  const chatKeys = new Set(chatRows.map((one) => one.key));
+  const items = screen.items.filter((item) => !chatKeys.has(item.key));
+  const composed = items.map((item) => editorDescription(item.description, context));
+  if (chat) {
+    composed.push(
+      describeNode<ReplAction>({
+        key: "viewport:sidekick",
+        component: VIEWPORT,
+        input: { window: SIDEKICK_WINDOW },
+        children: chatRows.map((one) => editorDescription(one.description, context)),
+      }),
+    );
+  }
   // Placed only where the tree will hold them: a measuring pass mounts nothing.
   const placedDescriptions = context.measuring
     ? composed
@@ -9454,7 +9438,6 @@ export function presentationFor(
    */
   const bodyWidth = (): number | undefined => context.widths?.body;
   const chatColumn = (region: ReplRegion): readonly ReplBox[] => {
-    const controls = of("inspection-window");
     const rows = of("inspection").map((candidate) => rowBox(candidate, region, bodyWidth()));
     const id = "box:inspection:viewport";
     const windowed =
@@ -9465,16 +9448,10 @@ export function presentationFor(
     if (!windowed) {
       return [box({ id, region, props: viewportProps(), children: rows })];
     }
-    viewports.push(Object.freeze({ id, region, window: SIDEKICK_WINDOW }));
-    return [
-      ...controls
-        .filter((candidate) => candidate.key.endsWith(":earlier"))
-        .map((candidate) => rowBox(candidate, region, bodyWidth())),
-      box({ id, region, props: viewportProps(), children: rows }),
-      ...controls
-        .filter((candidate) => candidate.key.endsWith(":later"))
-        .map((candidate) => rowBox(candidate, region, bodyWidth())),
-    ];
+    viewports.push(
+      Object.freeze({ id, region, window: SIDEKICK_WINDOW, owner: "viewport:sidekick" }),
+    );
+    return [box({ id, region, props: viewportProps(), children: rows })];
   };
 
   const located = of("located").map((candidate) => {
@@ -9848,7 +9825,9 @@ export function presentationFor(
   const [title] = of("drawer-title");
   if (rect !== undefined && title !== undefined) {
     const id = `box:${DRAWER_WINDOW}:viewport`;
-    viewports.push(Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW }));
+    viewports.push(
+      Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW, owner: "viewport:drawer" }),
+    );
     regions.push({ region: "drawer", id: "box:drawer:layer" });
     columns.push(
       box({
@@ -9857,9 +9836,6 @@ export function presentationFor(
         props: drawerLayerProps(rect, context.capture),
         children: [
           rowBox(title, "drawer", context.widths?.drawer),
-          ...of("drawer-above").map((candidate) =>
-            rowBox(candidate, "drawer", context.widths?.drawer),
-          ),
           box({
             id,
             region: "drawer",
@@ -9868,9 +9844,6 @@ export function presentationFor(
               rowBox(candidate, "drawer", context.widths?.drawer),
             ),
           }),
-          ...of("drawer-below").map((candidate) =>
-            rowBox(candidate, "drawer", context.widths?.drawer),
-          ),
           drawerActions(of("drawer-actions")),
         ],
       }),
@@ -9996,14 +9969,21 @@ export function admissionFor(input: {
     // The count first, because a window that follows its newest rows needs to
     // know where they end before it can say where it is.
     const total = totalOf(view, widths, reading, preview, chat, queue, notices, slot.window);
-    windows.set(
-      slot.window,
-      admitRows({
+    const rows =
+      slot.window === DRAWER_WINDOW
+        ? drawerContent(view, widths.drawer, preview, notices)?.content.map((one) => one.described)
+        : slot.window === SIDEKICK_WINDOW
+          ? sidekickReadingRows(view.live.sidekick, view.focused, chat, chatStagingOf(view))
+          : undefined;
+    const focused = rows?.findIndex((one) => one.key === view.focused) ?? -1;
+    windows.set(slot.window, {
+      ...admitRows({
         offset: offsetFor(view, slot.window, capacity, total, chat, widths, preview, notices),
         total,
         capacity,
       }),
-    );
+      ...(focused < 0 ? {} : { focus: { from: focused, to: focused + 1 } }),
+    });
   }
   const actions = manifest.actions;
   if (actions === undefined) {
@@ -12189,7 +12169,9 @@ function workspacePresentation(input: {
   const [title] = of("drawer-title");
   if (rect !== undefined && title !== undefined) {
     const id = `box:${DRAWER_WINDOW}:viewport`;
-    viewports.push(Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW }));
+    viewports.push(
+      Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW, owner: "viewport:drawer" }),
+    );
     regions.push({ region: "drawer", id: "box:drawer:layer" });
     columns.push(
       box({
@@ -12198,14 +12180,12 @@ function workspacePresentation(input: {
         props: drawerLayerProps(rect, context.capture),
         children: [
           rowBox(title, "drawer", context.widths?.drawer),
-          ...of("drawer-above").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
           box({
             id,
             region: "drawer",
             props: viewportProps(),
             children: of("drawer").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
           }),
-          ...of("drawer-below").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
           drawerActions(of("drawer-actions")),
         ],
       }),

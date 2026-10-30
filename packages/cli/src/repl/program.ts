@@ -185,7 +185,7 @@ import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
-import { resolvePointer, useReplRenderer } from "./renderer.ts";
+import { resolveWheel, resolvePointer, useReplRenderer } from "./renderer.ts";
 import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./renderer.ts";
 import { useReplScreen } from "./screen.ts";
 import type { ReplScreen, ReplScreenEvent } from "./screen.ts";
@@ -1650,12 +1650,21 @@ function* drive(
           ended = true;
         } else if (wake.event.kind === "resize") {
           renderer.resize(wake.event.size);
-        } else if (wake.event.kind === "pointer") {
+        } else if (wake.event.kind === "pointer" || wake.event.kind === "wheel") {
           // Resolved only against the frame that produced these coordinates. A
           // stale frame, a node the tree has removed and a target behind a drawer
           // all reach nothing, and the drop happens without an action.
+          const size = yield* screen.size();
+          const valid =
+            rendered !== undefined &&
+            size.columns === rendered.size.columns &&
+            size.rows === rendered.size.rows;
           const aimed =
-            rendered === undefined ? undefined : resolvePointer(rendered, wake.event.at);
+            !valid || rendered === undefined
+              ? undefined
+              : wake.event.kind === "wheel"
+                ? resolveWheel(rendered, wake.event.at, wake.event.direction)
+                : resolvePointer(rendered, wake.event.at);
           if (aimed !== undefined) {
             if (yield* act(aimed)) {
               departing = true;
@@ -3394,6 +3403,10 @@ export function* commitReplFrame(
   const drawn = yield* renderer.draw({
     ops: committedOps(root, nodeByKey, mounted, cells, tree.focused()),
     boxes: drawnBoxesOf(root, nodeByKey, mounted),
+    scrolls: presentation.manifest.viewports.flatMap((slot) => {
+      const node = slot.owner === undefined ? undefined : nodeByKey.get(slot.owner);
+      return node === undefined || !mounted.has(node) ? [] : [{ id: slot.id, node }];
+    }),
     // Every region and every viewport, so where one landed is a fact the frame
     // carries rather than something a later caller works out again.
     // Every structural box the manifest placed: the regions, the viewports, the

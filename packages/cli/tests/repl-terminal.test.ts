@@ -1120,6 +1120,7 @@ describe("REPL terminal: frame and renderer ownership", () => {
     ops.push(close());
     const request = {
       ops,
+      scrolls: [],
       boxes: ids.map((id) => ({ id, node: id, control: true })),
       regions: [] as string[],
       tree: 1,
@@ -2886,6 +2887,7 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
         // reach whatever is behind — so this frame is not drawn at all.
         const drawn = yield* renderer.draw({
           ops: shape.ops,
+          scrolls: [],
           boxes: [{ id: "target", node: "target", control: true }],
           regions: ["parent"],
           tree: 1,

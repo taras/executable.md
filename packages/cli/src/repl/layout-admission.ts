@@ -19,6 +19,8 @@ import type { ReplActionCandidate, ReplBounds } from "./layout.ts";
 
 /** One window over one ordered reading. */
 export interface ReplWindow {
+  /** The displayed extent of the focused content control, in fitted row order. */
+  readonly focus?: { readonly from: number; readonly to: number };
   /** The index in the whole reading that the first shown row came from. */
   readonly from: number;
   /** How many rows are shown, which is never more than the capacity. */

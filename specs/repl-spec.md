@@ -774,15 +774,37 @@ and background questions preserve focus and a reading positioned away from its
 tail. Focus, caret and navigation metadata are process-local and enter neither
 a location nor a retained record.
 
+PageUp and PageDown that a control in drawer Content does not handle move that
+drawer's window by its capacity less one displayed row, with a minimum of one
+row. This works from editable values and options, including a window containing
+only controls. Plain arrows and Home/End keep their editing meaning. Paging
+preserves values and the fixed Content entry and adds no Tab stop. If a keyboard
+page move removes the focused row, Freedom chooses its surviving destination
+using the existing recovery rules.
+
+The wheel scrolls the reading beneath your pointer without moving keyboard
+focus. Each decoded tick requests three displayed rows: up moves toward
+preceding content and down toward following content. Content edges stop movement
+without wrapping or moving another reading. When the focused control is inside
+that reading, the wheel stops before hiding it. Use keyboard navigation to
+reveal further controls, or move focus elsewhere to scroll farther with the
+wheel. A reading anchor belongs to its viewport rather than a particular row.
+
 ## Every drawer is a window
 
-A drawer shows as much of what it holds as the frame has room for, and its
-earlier and later controls reach the rest. That is true of all five readings a
-drawer can show: the question being asked, a pending permission request, a
-History position, a binding's retained value and a recorded answer. A retained
-value is as long as whatever produced it — a compiler's reason, a whole JSON
-document — so a drawer that described all of it at once would have its tail
-placed nowhere, which is the one part you opened the drawer to read.
+A drawer shows as much content as its measured window holds. Wheel input over
+the window and its keyboard reading or paging keys reach the rest. Questions,
+permission requests, History positions, retained binding values, recorded
+answers, the Entries catalog and Configure use this same bounded reading
+behavior. Only the rows admitted to the window appear, receive focus or become
+control targets.
+
+A wheel target covers the complete measured viewport, including text, trailing
+spaces, blank rows and empty body cells. Headings, borders, gutters, composers
+and fixed actions are outside that target. A fitting or empty viewport consumes
+wheel input without movement. Only the top modal's interactive subtree receives
+scrolling; input outside it cannot reach background content, including a visibly
+uncovered pane. At an edge, the event stops at that viewport.
 
 Only what is in the window is on the screen. A row above or below it is in no
 cell, reaches no pointer and is no stop for Tab, so the last position in a long
@@ -796,13 +818,13 @@ A drawer is bounded. A rule along the top of its rectangle says where the readin
 behind it stops, and its title and its rows start one cell in from each side, so a
 title cannot be read as one more line of what the drawer is covering. Both belong
 to the rectangle and both are measured: the window is measured at what is left
-after them, so a reading one row longer than that window is reached with one more
-`later` rather than drawn over the rule. A drawer holding a question nobody has
+after them, so a reading one row longer than that window is reached with
+wheel or keyboard scrolling rather than drawn over the rule. A drawer holding a question nobody has
 answered yet — the question itself, or a pending permission request — is named in
 the accent this screen uses for waiting, so the drawer you have to act on says so
 before you have read a word of it.
 
-The title, both window controls and `[close]` stay outside the thing they move.
+The title and `[close]` stay outside the moving content.
 A question's `[submit]` is fixed beside Close and any available Sidekick Stop,
 even when its fields are below the content window. Tab cycles Content -> Actions
 -> History/Exit; Shift+Tab reverses it. Content enters the first admitted editable
@@ -849,8 +871,7 @@ is truncated and nothing earlier is dropped to make room.
 
 The chat follows its newest messages. A message arriving, or a live preview
 growing, moves the window far enough to keep the latest rows at the bottom;
-earlier ones move up and stay reachable with the two controls that are already
-there. Scrolling up is how you stop following, and that reading stays where you
+earlier ones move up and stay reachable with the wheel and reading keys. Scrolling up is how you stop following, and that reading stays where you
 left it while messages continue to arrive and be saved — reaching the end again
 is how following resumes. A turn chosen from Sessions takes precedence over
 following, and a previous chat stays where it was put while the current one
@@ -915,7 +936,7 @@ its pane showing through. Everything else that is activated — `[send]`,
 keeps the surface the draft has.
 
 Every shared column's body sits two cells in from its pane on each side: the
-Sidekick's chat with its window controls, composer and announcements; the
+Sidekick's chat viewport, composer and announcements; the
 Transcript's directions, retained reading and the two controls around it; and the
 sidebar's Sessions and Entries lists with theirs. Each column's heading — the
 Transcript's band, the right pane's tab row, `Sessions` and `Entries` — spans the
@@ -1247,7 +1268,7 @@ transcript and the drawer that shows it.
 
 What fits is measured rather than counted. The screen asks the terminal how much
 room each region actually has — with every scrolling list empty, but with the
-headings, the window controls and the complete labels in place — and only then
+headings, fixed actions and the complete labels in place — and only then
 decides which rows and which controls exist. So what you can see, focus and click
 are the same set, at every size, and a row the frame has no room for is never
 described as though it had somewhere to be.
@@ -1478,6 +1499,9 @@ the producer: nothing is matched by name or by sibling order.
 Replacing what is displayed rewrites no submitted source and no record.
 
 ## Everything on this screen was measured
+
+Measurement and committed presentation both omit retired window controls; their
+former rows become viewport capacity.
 
 No text is clipped and none is estimated. Every width is an answer from the
 engine that will draw it, asked through a probe that draws nothing, and every
@@ -2172,6 +2196,12 @@ its coordinates, so a stale frame, a node that has gone and a target behind a
 drawer all reach nothing — and activating a control with a pointer produces the
 same action as pressing Enter on it.
 
+Wheel input carries decoded direction and coordinates. The presented frame
+resolves those coordinates to a live mounted viewport owner independently of
+control activation targets. Dispatch uses that frame's tree revision and the
+owner's mounted ancestry. Stale input, a removed target or a target outside the
+top modal reaches nothing. A wheel event never means a click or focus request.
+
 Presentation time has one owner: a single acknowledged frame stream, advanced only
 once every subscriber has applied the previous timestamp. A settled screen
 schedules no timer.
@@ -2371,14 +2401,10 @@ preference Apply is the one action admitted beside a message already running,
 because saving a preference is a record of this history rather than work the
 conversation does.
 
-An agent that advertises more choices than the drawer can draw is read by
-scrolling it, with the drawer's own controls: a choice below the window is still
-a choice, and nothing is dropped from the list to make it fit. Those controls
-read **scroll up** and **scroll down**, because this window moves through a list
-of settings rather than through a recorded order — every other window in this
-program is a reading of something that happened, and those keep Earlier and
-Later. `[close]` sits outside the window with them, so no length of list can
-scroll the way out of this drawer off the screen.
+An agent that advertises more choices than the drawer can draw is read with the
+wheel or Content paging keys. A choice below the window remains available;
+nothing is dropped to make the list fit. `[close]` and Apply stay outside the
+window, so the list cannot scroll them away.
 
 Apply saves and closes — the selection that asked for it, and only that one. A
 drawer closed and deliberately opened again, or edited while an Apply was still

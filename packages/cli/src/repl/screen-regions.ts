@@ -138,9 +138,6 @@ function drawerPlacement(key: string, input: ReplViewData): ReplPlacement {
   if (key === "footer:exit" || key === "footer:top:exit") {
     return { region: DRAWER_EXIT_REGION };
   }
-  if (key === "drawer:scroll:up" || key === "drawer:scroll:down") {
-    return { region: DRAWER_ACTIONS_REGION };
-  }
   if (key === "drawer:close") {
     return { region: DRAWER_ACTIONS_REGION, groups: [FIXED_ACTIONS], entry: 1 };
   }
@@ -230,8 +227,6 @@ function screenPlacement(
     return facts.narrow ? { region: reading } : { region: TABS_REGION };
   }
   if (
-    key === "sidekick:earlier" ||
-    key === "sidekick:later" ||
     key === "sidekick:back" ||
     key.startsWith("sidekick:retry:") ||
     key.startsWith("binding:") ||
