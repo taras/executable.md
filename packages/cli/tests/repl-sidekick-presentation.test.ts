@@ -3,7 +3,9 @@
 import { awaited, appendGate, useMountedHost } from "./support/mounted-repl.ts";
 import { FsApi, ensureDir, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
-import { sleep } from "effection";
+import { API } from "@executablemd/runtime";
+import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import { ensure, withResolvers, sleep } from "effection";
 import { decodeLocation } from "../src/repl/route.ts";
 import {
   ENTRIES_FILE,
@@ -22,6 +24,9 @@ import { expect } from "@executablemd/test-support/expect";
 import { useReplPage } from "./support/repl-page.ts";
 import {
   COMPOSER,
+  selectPane,
+  closeDrawer,
+  entrySettles,
   DRAFT_VALUE,
   draftText,
   pasteDraft,
@@ -444,5 +449,201 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     yield* page.until("the entry output without input", (one) => one.shows("the released step"));
     expect(page.repl.terminal.fed).toBe(fed);
     expect([page.repl.fake.ensured, page.repl.fake.prompts]).toEqual([[], []]);
+  });
+});
+
+const PROFILES = [WIDE, { columns: 120, rows: 30 }, NARROW];
+const TOO_SMALL = { columns: 60, rows: 15 };
+
+function* openEntryCatalog(page: ReplPage): Operation<void> {
+  yield* page.press("Entries", { onRow: "Entries" });
+  yield* page.until("the entry catalog", (one) => one.shows("[close]"));
+}
+
+function* chooseEntry(page: ReplPage, name: string): Operation<void> {
+  yield* openEntryCatalog(page);
+  yield* page.press(name, { rightOf: "[close]" });
+  yield* page.until("the selected entry", (one) => !one.shows("[close]"));
+}
+
+function entryTrail(reading: ScreenReading): string {
+  return reading.rows.find((row) => row.includes("› Entry")) ?? "";
+}
+
+describe("Sidekick texts and reading across every profile", () => {
+  it("M7: all three profiles keep both texts, the footer and one body", function* () {
+    const page = yield* useReplPage();
+    yield* draftText(page, "note");
+    yield* compose(page, "ask");
+    for (const size of PROFILES) {
+      const drawn =
+        page.screen().size.columns === size.columns && page.screen().size.rows === size.rows
+          ? page.screen()
+          : yield* page.resize(size);
+      expect(drawn.rows).toHaveLength(size.rows);
+      expect(drawn.shows("[exit]")).toBe(true);
+      expect(composerHolds(drawn, "ask")).toBe(true);
+      expect(drawn.occurrences(COMPOSER)).toBe(1);
+      expect(drawn.found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+      if (size.columns > NARROW.columns) {
+        expect(draftHolds(drawn, "note")).toBe(true);
+      } else {
+        expect(drawn.shows("DRAFT")).toBe(false);
+        yield* openEntryCatalog(page);
+        yield* closeDrawer(page);
+        expect(page.screen().found("note", { after: "DRAFT" })).toBe(1);
+        yield* page.resize(WIDE);
+        expect(composerHolds(page.screen(), "ask")).toBe(true);
+        expect(draftHolds(page.screen(), "note")).toBe(true);
+      }
+    }
+    expect(yield* finishDraft(page)).toBe("note");
+  });
+
+  it("M7: selecting Bindings removes the Sidekick's body and its input targets", function* () {
+    const page = yield* useReplPage();
+    yield* draftText(page, "my entry");
+    yield* compose(page, "my question");
+    yield* selectPane(page, "bindings");
+    expect(page.screen().shows(COMPOSER)).toBe(false);
+    expect(page.screen().occurrences("[send]")).toBe(1);
+    expect(page.screen().found("my entry", DRAFT_VALUE)).toBe(1);
+    yield* intoComposer(page);
+    expect(composerHolds(page.screen(), "my question")).toBe(true);
+    expect(yield* finishDraft(page)).toBe("my entry");
+  });
+
+  it("M7: a default Sidekick shrinks to narrow Entries, and an explicit one stays", function* () {
+    const page = yield* useReplPage();
+    expect(page.screen().shows(COMPOSER)).toBe(true);
+    const narrow = yield* page.resize(NARROW);
+    expect(narrow.shows("Entries")).toBe(true);
+    expect(narrow.shows(COMPOSER)).toBe(false);
+    yield* page.resize(WIDE);
+    yield* compose(page, "kept");
+    const kept = yield* page.resize(NARROW);
+    expect(kept.shows(COMPOSER)).toBe(true);
+    expect(composerHolds(kept, "kept")).toBe(true);
+    const expanded = yield* page.resize(WIDE);
+    expect(expanded.shows(COMPOSER)).toBe(true);
+    expect(composerHolds(expanded, "kept")).toBe(true);
+  });
+
+  it("M7: an older entry stays frozen while the Sidekick works, and Bindings still reads it", function* () {
+    const page = yield* useReplPage();
+    yield* pasteDraft(page, TWO_STEP_ENTRY);
+    yield* page.key("Enter");
+    yield* entrySettles(page, 1, "ok");
+    yield* chooseEntry(page, "entry-1");
+    expect(entryTrail(page.screen())).toContain("Entry 1");
+    page.repl.fake.script({
+      reply: [
+        '<Let as="code" select="code">',
+        "````xmd",
+        "```js eval",
+        'const second = "the second entry";',
+        "```",
+        "",
+        "<Output>{second}</Output>",
+        "````",
+        "</Let>",
+        "<REPL.EntryInput>{code}</REPL.EntryInput>",
+        "<REPL.Submit />",
+        "",
+      ].join("\n"),
+    });
+    page.repl.fake.script({ reply: "<Output>Both ran.</Output>\n" });
+    yield* sendMessage(page, "run two");
+    yield* page.until("the second entry reported", (one) => one.shows("[S] Both ran."));
+    expect(entryTrail(page.screen())).toContain("Entry 1");
+    expect((yield* settledReading(page.repl)).model.entries).toHaveLength(2);
+    expect(page.screen().shows("the released step")).toBe(true);
+    yield* selectPane(page, "bindings");
+    expect(entryTrail(page.screen())).toContain("Entry 1");
+    expect(page.screen().shows("the released step")).toBe(true);
+    expect(page.screen().shows(COMPOSER)).toBe(false);
+    yield* intoComposer(page);
+    expect(page.screen().shows("[S] Both ran.")).toBe(true);
+    expect(page.screen().shows("[U] run two")).toBe(true);
+  });
+
+  it("M7: a terminal below the minimum refuses, and recovers with both texts", function* () {
+    const page = yield* useReplPage();
+    yield* draftText(page, "my entry");
+    yield* compose(page, "my question");
+    const refused = yield* page.resize(TOO_SMALL);
+    expect(refused.shows("needs at least 72x20")).toBe(true);
+    expect(refused.shows("[")).toBe(false);
+    expect(refused.shows(COMPOSER)).toBe(false);
+    yield* page.resize(WIDE);
+    expect(draftHolds(page.screen(), "my entry")).toBe(true);
+    expect(composerHolds(page.screen(), "my question")).toBe(true);
+    expect(yield* finishDraft(page)).toBe("my entry");
+  });
+});
+
+const GATED_ENTRY_REPLY = [
+  '<Let as="entry" select="code">',
+  "```md",
+  "<GateThing />",
+  "```",
+  "</Let>",
+  "<REPL.EntryInput>{entry}</REPL.EntryInput>",
+  "<REPL.Submit />",
+  "",
+].join("\n");
+
+function* submittedUnderEdit(
+  edit: boolean,
+): Operation<{ entries: string[]; draft: string; edited: string | undefined }> {
+  const directory = yield* useTemporary("xmd-mounted-preflight-");
+  yield* writeTextFile(join(directory, "GateThing.md"), "The reserved entry ran.\n");
+  const reached = withResolvers<void>();
+  const allow = withResolvers<void>();
+  yield* ensure(() => allow.resolve());
+  let first = true;
+  yield* API.Fs.around({
+    *readTextFile([path], next) {
+      if (first && path.endsWith("GateThing.md")) {
+        first = false;
+        reached.resolve();
+        yield* allow.operation;
+      }
+      return yield* next(path);
+    },
+  });
+  const host = yield* useMountedHost({ includes: [directory] });
+  host.fake.script({ reply: GATED_ENTRY_REPLY });
+  host.fake.script({ reply: "<Output>Done.</Output>\n" });
+  const page = yield* useReplPage({ host });
+  yield* sendMessage(page, "run this");
+  yield* reached.operation;
+  let edited: string | undefined;
+  if (edit) {
+    yield* draftText(page, "mine now");
+    expect(page.screen().found("mine now", DRAFT_VALUE)).toBe(1);
+    edited = "<GateThing />mine now";
+  }
+  allow.resolve();
+  yield* page.until("the response completing", (one) => one.shows("Done."));
+  const read = yield* settledReading(page.repl);
+  return {
+    entries: read.model.entries.map((entry) => entry.key),
+    draft: (yield* finishDraft(page)) ?? "",
+    edited,
+  };
+}
+
+describe("Sidekick submission held to the current Draft", () => {
+  it("M-P2: a Draft edit during preflight admits no stale entry, and the edit survives", function* () {
+    const result = yield* submittedUnderEdit(true);
+    expect(result.entries).toEqual([]);
+    expect(result.draft).toBe(result.edited);
+    expect(result.draft).toContain("mine now");
+  });
+  it("M-P2: control — an unchanged Draft admits the requested entry once", function* () {
+    const result = yield* submittedUnderEdit(false);
+    expect(result.entries).toEqual(["entry-1"]);
+    expect(result.draft).toBe("");
   });
 });
