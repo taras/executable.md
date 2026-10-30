@@ -913,11 +913,31 @@ describe("REPL original interaction costs and visible exit routes", () => {
   }
 
   it("RS1: Tab moves the cue and the focus, and presents once", function* () {
+    const release = withResolvers<void>();
+    const tearingDown = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    yield* Execution.around({
+      *document([request], next) {
+        yield* ensure(function* () {
+          tearingDown.resolve();
+          yield* release.operation;
+        });
+        return yield* next(request);
+      },
+    });
     const page = yield* referencePage();
     yield* pasteDraft(page, FIRST_COLD);
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
-    yield* intoDraft(page);
+    yield* tearingDown.operation;
+    expect(page.screen().found("[stop]", { onRow: "DRAFT" })).toBe(1);
+    expect(page.screen().found("[send]", { onRow: "DRAFT" })).toBe(0);
+    // A retained outcome precedes teardown; Stop still occupies its traversal slot.
+    release.resolve();
+    yield* page.until(
+      "the joined entry offering Draft Send",
+      (one) => one.found("[send]", { onRow: "DRAFT" }) === 1,
+    );
     expect(page.screen().shows("Type here")).toBe(true);
     const before = page.repl.terminal.presented.length;
     const index = page.screen().index;
