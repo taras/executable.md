@@ -35,6 +35,25 @@ export const COMPOSER = "message the sidekick";
 /** The Sidekick's own Send and Stop, by the one bounded layout statement available. */
 export const SIDEKICK_PANE: ScreenScope = { after: SIDEKICK, rightOf: SIDEKICK };
 
+/**
+ * The rows the Sidekick's composer draws its own value on.
+ *
+ * Its prompt is drawn once, and the value sits under it, so the rows below that
+ * prompt are the composer's own. A pane scope cannot say this: the composer's
+ * value begins at column 104 while the tab above it begins at 106, so a floor
+ * taken from the tab excludes the field. Measured at 160x36.
+ */
+export const COMPOSER_VALUE: ScreenScope = { after: COMPOSER };
+
+/**
+ * The rows the Draft draws its own value on.
+ *
+ * Below its heading, which is where a field of this product puts its value. The
+ * composer's rows are below it too, so a case that must tell one field from the
+ * other asks for this and for {@link COMPOSER_VALUE} being empty of it.
+ */
+export const DRAFT_VALUE: ScreenScope = { after: DRAFT };
+
 /** The guidance row says this while the Draft takes keystrokes, and not otherwise. */
 export const TYPING = "Type here";
 
@@ -79,6 +98,19 @@ export function* intoDraft(page: ReplPage): Operation<void> {
     yield* tab(page);
   }
   if (!page.screen().shows(TYPING)) {
+    // The guidance row is where this product advertises the Draft, and a
+    // refusal takes that row for itself. History is the way to put a sentence
+    // like that away: it is modal, it changes no entry, and closing it leaves
+    // the guidance row saying what the focus ring is doing again.
+    yield* page.press("[history]");
+    yield* page.until("the History drawer", (one) => one.shows("[close]"));
+    yield* page.press("[close]");
+    yield* page.until("the drawer closing", (one) => !one.shows("[close]"));
+    for (let press = 0; press < 40 && !page.screen().shows(TYPING); press += 1) {
+      yield* tab(page);
+    }
+  }
+  if (!page.screen().shows(TYPING)) {
     throw new Error(`the Draft never took the keystrokes. ${page.describe()}`);
   }
 }
@@ -94,6 +126,23 @@ export function* intoComposer(page: ReplPage): Operation<void> {
   yield* page.until("the Bindings reading", (one) => !one.shows(COMPOSER));
   yield* page.press(SIDEKICK);
   yield* page.until("the Sidekick reading", (one) => one.shows(COMPOSER));
+}
+
+/**
+ * Put several lines in the Draft as one chunk, the way a paste arrives.
+ *
+ * The screen wraps a value into the rows its field has, so the arrival is read
+ * from the last line's own words rather than from the whole text: a wrapped
+ * value is not on the screen as one string.
+ */
+export function* pasteDraft(page: ReplPage, text: string): Operation<void> {
+  yield* intoDraft(page);
+  const last = text.trimEnd().split("\n").at(-1) ?? "";
+  yield* page.type(text);
+  yield* page.until(
+    `the Draft holding ${JSON.stringify(last)}`,
+    (one) => one.found(last, DRAFT_VALUE) > 0,
+  );
 }
 
 /** Put this text in the Draft, wherever the keystrokes were going before. */
@@ -137,9 +186,28 @@ export function sidekickIdle(reading: ScreenReading): boolean {
   );
 }
 
+/**
+ * The Sidekick pane's own rows, as this screen draws them.
+ *
+ * Below the tab row and from the Draft heading's own cell rightward. The pane's
+ * chat is drawn a couple of cells left of its tab, so the tab's column is too
+ * far right to be a floor, while the sidebar's copy of a reply sits far left of
+ * the Draft. Both bounds are cells of text this screen draws.
+ *
+ * It does not separate the Transcript, which shares those columns, so words
+ * both readings draw are asked of the whole screen by count instead.
+ */
+export function paneLines(reading: ScreenReading): string[] {
+  const tabs = reading.locate(SIDEKICK).row;
+  const floor = reading.locate(DRAFT).column;
+  return reading.rows.map((row, index) =>
+    index > tabs ? row.slice(Math.min(floor, row.length)) : "",
+  );
+}
+
 /** Whether the Sidekick's own pane shows this text. */
 export function sidekickShows(reading: ScreenReading, text: string): boolean {
-  return reading.found(text, SIDEKICK_PANE) > 0;
+  return paneLines(reading).some((row) => row.includes(text));
 }
 
 /** Wait until the History rail marks this entry with the mark its outcome has. */
@@ -221,4 +289,14 @@ export function* drawnScreen(terminal: Terminal): Operation<Operation<void>> {
       throw new Error(`no screen offering the way out was drawn within ${MOUNTED_DEADLINE_MS}ms`);
     })(),
   ]);
+}
+
+/** Whether the Draft holds this text, and the composer does not. */
+export function draftHolds(reading: ScreenReading, text: string): boolean {
+  return reading.found(text, DRAFT_VALUE) > 0 && reading.found(text, COMPOSER_VALUE) === 0;
+}
+
+/** Whether the composer holds this text. */
+export function composerHolds(reading: ScreenReading, text: string): boolean {
+  return reading.found(text, COMPOSER_VALUE) > 0;
 }
