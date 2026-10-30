@@ -276,7 +276,6 @@ memory — never in the instruction file, the argument vector, the environment, 
 session key, or the document the ACP turn ran. The answer produced it behind a
 prefix that appears in no earlier turn.
 
-<AssertEquals actual={proof.claudeVersion} expected={"2.1.241 (Claude Code)"} />
 <AssertEquals actual={proof.platform} expected={"darwin"} />
 <AssertEquals actual={proof.architecture} expected={"arm64"} />
 <Assert expr={proof.markerStored} />

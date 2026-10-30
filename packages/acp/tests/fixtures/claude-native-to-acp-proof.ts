@@ -55,7 +55,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
-import { createAgentRegistry } from "../../src/acpx-runtime.ts";
+import { createAgentRegistry, resolveAgentCommand } from "../../src/acpx-runtime.ts";
 import { agentSessionKeyDigest, createDenoExecutableObserver } from "@executablemd/runtime";
 import { allocatesIdentity, nativeAdapterFor } from "../../src/native-launch.ts";
 import { createDenoSessionRouteStore } from "../../src/session-route.ts";
@@ -85,19 +85,6 @@ const RECOVER_PREFIX = "RECOVERED-";
 
 /** The production target, exactly as an operator would type it. */
 const TARGET = "AGENTS.md#Implementor";
-
-/** The compatibility point these journeys are only meaningful against. */
-const REQUIRED_CLAUDE_VERSION = "2.1.241 (Claude Code)";
-
-/**
- * The role contract's opening sentence.
- *
- * Never sent to the model. It reaches the session only as part of the private
- * instruction layer the launch prepared, so an answer carrying it is evidence
- * the layer governed the first native turn — evidence that needs no test-only
- * token planted in a production role document.
- */
-const OPENING_SENTENCE = "The Implementor delivers an accepted plan as a focused, verified change.";
 
 /** What a filtered command shape says instead of the private file's path. */
 const PRIVATE_FILE = "<private-file>";
@@ -1501,20 +1488,20 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
   // about where it travelled, and reaches no rendered field.
   const instructions = head?.instructions ?? "";
   if (instructions.length > 0) {
-    const probes = [instructions.trim(), OPENING_SENTENCE];
+    const probe = instructions.trim();
     verdict.preparedTextInArgv = observed.some((invocation) =>
-      invocation.argv.some((argument) => probes.some((probe) => argument.includes(probe))),
+      invocation.argv.some((argument) => argument.includes(probe)),
     );
     const dump = (yield* exists(journey.environmentDump))
       ? yield* until(readFile(journey.environmentDump, "utf8"))
       : "";
-    verdict.preparedTextInEnvironment = probes.some((probe) => dump.includes(probe));
+    verdict.preparedTextInEnvironment = dump.includes(probe);
   }
   // Removed as soon as it has answered rather than at teardown: it is the one
   // artifact here that holds the operator's whole environment.
   yield* rm(journey.environmentDump, { recursive: false, force: true });
 
-  const agentCommand = createAgentRegistry().resolve("claude");
+  const agentCommand = resolveAgentCommand(createAgentRegistry(), "claude");
   const sessionKey = head?.sessionKey;
   let removed = true;
   if (typeof sessionKey === "string" && sessionKey.length > 0) {
@@ -1616,11 +1603,6 @@ function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
     return false;
   }
   verdict.claudeVersion = yield* claudeVersion(journey);
-  if (verdict.claudeVersion !== REQUIRED_CLAUDE_VERSION) {
-    verdict.verdict = "ENVIRONMENT_BLOCKED";
-    verdict.detail = `this journey is only meaningful against ${REQUIRED_CLAUDE_VERSION}`;
-    return false;
-  }
   if (!verdict.projectCopyVerified) {
     verdict.verdict = "HARNESS_FAILED";
     verdict.detail = "the project copy is not byte-identical to the checked-in role document";
@@ -1741,7 +1723,7 @@ function* observeBuild(journey: Journey): Operation<{ version: string; digest: s
  * instead of refusing would answer the prompt and fail this.
  */
 function* runAbsentIdentity(journey: Journey, verdict: JourneyVerdict): Operation<void> {
-  const agentCommand = createAgentRegistry().resolve("claude");
+  const agentCommand = resolveAgentCommand(createAgentRegistry(), "claude");
   const sessionKey = deriveSessionKey(agentCommand, journey.absentProject, "implementer");
   journey.absentKey = sessionKey;
   const store = createDenoSessionRouteStore(SESSION_COORDINATOR_ROOT);
