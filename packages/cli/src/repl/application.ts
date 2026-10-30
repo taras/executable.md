@@ -5217,9 +5217,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   const inspected = state.route.at !== undefined;
   const toSessions = row(
     "sessions:heading",
-    `${selected(routed === "sessions")}Sessions`,
+    `${selected(routed === "sessions" && !(narrow && showSidekick))}Sessions`,
     { select: "surface", surface: "sessions" },
-    styleOf("pane-heading", { selected: routed === "sessions" }),
+    styleOf("pane-heading", { selected: routed === "sessions" && !(narrow && showSidekick) }),
     { here: view.focused },
   );
   // The staged screen has no permanent catalog column, so its way to the
@@ -5227,9 +5227,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // to its own Entries surface, where the column is already drawn.
   const toEntries = row(
     "entries:heading",
-    `${selected(routed === "entries")}Entries`,
+    `${selected(routed === "entries" && !(narrow && showSidekick))}Entries`,
     workspace === undefined ? { select: "surface", surface: "entries" } : { select: "catalog" },
-    styleOf("pane-heading", { selected: routed === "entries" }),
+    styleOf("pane-heading", { selected: routed === "entries" && !(narrow && showSidekick) }),
     { here: view.focused },
   );
   // The way between surfaces belongs to neither of them. A narrow frame mounts

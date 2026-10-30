@@ -209,6 +209,9 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     yield* key(page, "ArrowRight");
     yield* page.key("Enter");
     yield* page.until("narrow Sidekick", (one) => one.shows("message the sidekick"));
+    expect(page.screen().shows("* Sidekick")).toBe(true);
+    expect(page.screen().shows("* Entries")).toBe(false);
+    expect(page.screen().shows("* Sessions")).toBe(false);
     yield* page.type("-narrow");
     yield* page.until("the narrow Message", (one) => one.shows("next-message-narrow"));
     yield* page.resize({ columns: 71, rows: 19 });
