@@ -847,10 +847,10 @@ what keeps the provenance true of the run that produced it. Milliseconds are
 never edited by hand.
 
 Counts are measured rather than chosen. For each runtime the lower bound is
-`floor(sum of applicable weights / 300000) + 1`, and the installed count is the
+`floor(sum of applicable weights / 420000) + 1`, and the installed count is the
 smallest for which five consecutive runs on one fixed head keep every shard
-`Test` step, and that runtime's whole execution window, under 300 seconds. A
+`Test` step, and that runtime's whole execution window, under 420 seconds. A
 miss increments only that runtime and begins a fresh sequence of five. Narrowing
 the corpus, dropping a runtime, or enabling in-shard concurrency is not a
-response to a miss. A single file whose own weight reaches 300 seconds cannot be
+response to a miss. A single file whose own weight reaches 420 seconds cannot be
 solved by any count, and is reported rather than absorbed.

@@ -23,7 +23,7 @@
 
 import { component, fields } from "../description.ts";
 import type { ReplComponent, ReplInputEvent, ReplNode, ReplViewData } from "../description.ts";
-import type { ReplAction } from "./actions.ts";
+import type { ReplAction, ReplCaretKey } from "./actions.ts";
 
 /** Read one string field, by parsing rather than by assertion. */
 export function textOf(input: ReplViewData, name: string): string {
@@ -116,6 +116,16 @@ export function fieldLabel(prompt: string, focused: boolean): string {
   return `${parts.marker}${parts.prompt}`;
 }
 
+/** The keys a field keeps for its caret, so they never become navigation. */
+const CARET_KEYS: ReadonlyMap<string, ReplCaretKey> = new Map<string, ReplCaretKey>([
+  ["ArrowUp", "ArrowUp"],
+  ["ArrowDown", "ArrowDown"],
+  ["ArrowLeft", "ArrowLeft"],
+  ["ArrowRight", "ArrowRight"],
+  ["Home", "Home"],
+  ["End", "End"],
+]);
+
 /** Read an optional string field. */
 function optional(input: ReplViewData, name: string): string | undefined {
   const value = fields(input)?.[name];
@@ -149,6 +159,12 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
       if (event.kind === "text") {
         return undefined;
       }
+      if (event.kind === "key") {
+        const beyond = revealed(node.input, event.key);
+        if (beyond !== undefined) {
+          return { kind: "reveal", key: beyond };
+        }
+      }
       if (event.kind !== "pointer" && event.key !== "Enter") {
         return undefined;
       }
@@ -156,6 +172,18 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
     });
   },
 });
+
+/**
+ * The row this key reaches that its window is not showing, if there is one.
+ *
+ * A row of a windowed list is told, by key, which of its logical neighbours lie
+ * outside the window. Every other arrow is left for navigation among the rows
+ * that are mounted.
+ */
+function revealed(input: ReplViewData, key: string): string | undefined {
+  const reveal = fields(fields(input)?.["reveal"] ?? null)?.[key];
+  return typeof reveal === "string" ? reveal : undefined;
+}
 
 /** What activating one row asks for, read from its own input. */
 function activation(input: ReplViewData): ReplAction | undefined {
@@ -434,6 +462,10 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       }
       if (event.key === "Backspace") {
         return { kind: "erase", ...owns };
+      }
+      const caret = CARET_KEYS.get(event.key);
+      if (caret !== undefined) {
+        return { kind: "move-caret", key: caret, ...owns };
       }
       if (event.key === "Enter") {
         return submission(node.input);

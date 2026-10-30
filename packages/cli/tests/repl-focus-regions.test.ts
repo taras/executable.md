@@ -1,0 +1,312 @@
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
+import { sleep } from "effection";
+import type { Operation } from "effection";
+
+import {
+  DRAWER_WINDOW,
+  focusSettled,
+  initialState,
+  NO_AGENT,
+  reduceRepl,
+  viewFor,
+  withWorkspace,
+  workspaceOf,
+} from "../src/repl/application.ts";
+import type { ReplLive, ReplState } from "../src/repl/application.ts";
+import type { ReplKey } from "../src/repl/description.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
+import { usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
+import type { Presenter } from "./fixtures/repl/presentation.ts";
+import { journalModel } from "./fixtures/repl/journals.ts";
+import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import type { PageKey, ReplPage } from "./support/repl-page.ts";
+
+const WIDE = { columns: 160, rows: 36 };
+const MEDIUM = { columns: 120, rows: 30 };
+const NARROW = { columns: 72, rows: 20 };
+
+function* key(page: ReplPage, name: PageKey): Operation<void> {
+  const before = page.screen().index;
+  yield* page.key(name);
+  yield* page.until(`a write after ${name}`, (one) => one.index > before);
+  // Reveal can publish its window before the follow-up presentation. Keep the
+  // keyboard cadence independent of focus cues or a guessed frame count.
+  yield* sleep(30);
+}
+
+function* typed(page: ReplPage, text: string): Operation<void> {
+  yield* page.type(text);
+  yield* page.until(`text ${JSON.stringify(text)}`, (one) => one.shows(text));
+}
+
+describe("REPL focus regions: the normal screen", () => {
+  for (const size of [WIDE, MEDIUM]) {
+    it(`R1/R2: fixed region entries deliver Draft and Message input at ${size.columns}x${size.rows}`, function* () {
+      const page = yield* useReplPage({ size });
+      yield* typed(page, "draft-kept");
+      // Draft -> Tabs -> Right reading -> Message, independent of child counts.
+      yield* key(page, "Tab");
+      yield* key(page, "Tab");
+      yield* key(page, "Tab");
+      yield* typed(page, "message-kept");
+      expect(page.screen().found("message-kept", { after: "message the sidekick" })).toBe(1);
+      expect(page.screen().found("draft-kept", { after: " DRAFT" })).toBe(1);
+      expect(page.repl.fake.prompts).toHaveLength(0);
+
+      // Message -> History -> Transcript -> Selected work -> Draft.
+      for (let step = 0; step < 4; step += 1) {
+        yield* key(page, "Tab");
+      }
+      yield* typed(page, "-returned");
+      expect(page.screen().shows("draft-kept-returned")).toBe(true);
+      for (const name of [
+        "ArrowLeft",
+        "ArrowUp",
+        "ArrowDown",
+        "Home",
+        "End",
+        "ArrowRight",
+      ] satisfies PageKey[]) {
+        yield* page.key(name);
+      }
+      yield* key(page, "Alt+ArrowDown");
+      expect(page.screen().shows("draft-kept-returned")).toBe(true);
+      expect(page.screen().shows("No entry yet")).toBe(true);
+      yield* key(page, "Tab");
+      yield* key(page, "Backtab");
+      yield* typed(page, "-fixed");
+      expect(page.screen().shows("draft-kept-returned-fixed")).toBe(true);
+      expect(page.screen().shows("message-kept")).toBe(true);
+    });
+  }
+
+  it("R3: tabs and History arrows move without activation; Enter selects", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* key(page, "Tab");
+    yield* key(page, "ArrowRight");
+    yield* key(page, "ArrowRight");
+    yield* page.key("ArrowRight");
+    yield* page.key("ArrowDown");
+    yield* key(page, "ArrowLeft");
+    yield* key(page, "ArrowLeft");
+    expect(page.screen().shows("message the sidekick")).toBe(true);
+    expect(page.screen().shows("[refresh]")).toBe(false);
+    yield* page.key("Enter");
+    yield* page.until("Bindings selected", (one) => !one.shows("message the sidekick"));
+    yield* key(page, "Tab");
+    yield* key(page, "ArrowRight");
+    expect(page.repl.terminal.ending).toBe(undefined);
+    yield* key(page, "ArrowLeft");
+    yield* page.key("Enter");
+    yield* page.until("History opened", (one) => one.shows("[close]"));
+  });
+
+  it("R4: narrowing from Tabs recovers to the bar and widening keeps its destination", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* typed(page, "survives-resize");
+    yield* key(page, "Tab");
+    yield* page.resize(NARROW);
+    // The empty routed outlet has no control: recovery is Sessions on the bar.
+    yield* key(page, "Tab");
+    yield* typed(page, "-narrow");
+    expect(page.screen().shows("survives-resize-narrow")).toBe(true);
+    yield* page.resize(WIDE);
+    yield* typed(page, "-wide");
+    expect(page.screen().shows("survives-resize-narrow-wide")).toBe(true);
+  });
+});
+
+describe("REPL focus regions: the catalog drawer at the narrow size", () => {
+  it("R5: nested arrows reveal hidden entries, fixed Content entry and modal close restore", function* () {
+    const page = yield* useReplPage({ size: NARROW, includes: [REFERENCE_DIRECTORY] });
+    for (let order = 1; order <= 6; order += 1) {
+      yield* typed(page, `<Checklist title="Plan ${order}" steps={1} />`);
+      yield* page.key("Enter");
+      yield* page.until(`entry ${order} settled`, (one) => one.shows(`${order} ✓`));
+      yield* page.until(`ready for entry ${order + 1}`, (one) =>
+        one.shows(`Ready for Entry ${order + 1}`),
+      );
+    }
+    // Draft -> History -> Surface bar, then Entries. Arrows do not open it.
+    yield* key(page, "Tab");
+    yield* key(page, "Tab");
+    yield* key(page, "ArrowRight");
+    expect(page.screen().shows("[close]")).toBe(false);
+    yield* page.key("Enter");
+    yield* page.until("catalog open", (one) => one.shows("[close]"));
+    expect(page.screen().shows("1. [")).toBe(true);
+    expect(page.screen().shows("6. [")).toBe(false);
+
+    yield* key(page, "ArrowDown");
+    yield* key(page, "ArrowRight");
+    yield* page.key("ArrowDown");
+    yield* key(page, "ArrowLeft");
+    yield* key(page, "Alt+ArrowDown");
+    yield* key(page, "Alt+ArrowUp");
+    for (let order = 3; order <= 6; order += 1) {
+      yield* key(page, "ArrowDown");
+    }
+    expect(page.screen().shows("6. [")).toBe(true);
+    expect(page.screen().shows("1. [")).toBe(false);
+    // Activate the reached row: the selected entry's source is the oracle.
+    yield* page.key("Enter");
+    yield* page.until("entry 6 selected", (one) => one.shows("Plan 6") && !one.shows("[close]"));
+    expect(page.screen().shows("Ready for Entry 7")).toBe(true);
+
+    // Closing selection restores Entries. Reopen, then use all three regions.
+    yield* page.key("Enter");
+    yield* page.until("catalog reopened", (one) => one.shows("[close]"));
+    yield* key(page, "Tab");
+    yield* key(page, "Tab");
+    yield* key(page, "Tab");
+    yield* page.key("Enter");
+    yield* page.until("fixed first admitted Content row selected", (one) => !one.shows("[close]"));
+    // Reopen at the restored opener; Actions is Close, never the Draft behind it.
+    yield* page.key("Enter");
+    yield* page.until("catalog reopened for Close", (one) => one.shows("[close]"));
+    yield* key(page, "Backtab");
+    yield* key(page, "Backtab");
+    yield* page.key("Enter");
+    yield* page.until("catalog closed by Actions", (one) => !one.shows("[close]"));
+    yield* key(page, "Tab");
+    yield* key(page, "Backtab");
+    yield* page.key("Enter");
+    yield* page.until("fixed Sessions entry routes without reopening catalog", (one) =>
+      one.shows("All sessions"),
+    );
+    expect(page.screen().shows("[close]")).toBe(false);
+  });
+});
+
+const IDLE: ReplLive = {
+  output: "",
+  question: undefined,
+  expansion: "playing",
+  pausable: false,
+  running: false,
+  agent: NO_AGENT,
+  lifecycle: NO_LIFECYCLE,
+  sidekick: {
+    chat: [],
+    busy: false,
+    agent: "scribe",
+    refusal: undefined,
+    question: undefined,
+    requested: undefined,
+    verified: undefined,
+    conversation: "owned",
+    reading: "owned",
+    current: true,
+    turns: [],
+    availability: { chats: ["owned"], sessions: [], refusal: undefined },
+  },
+};
+
+function focused(presenter: Presenter): string | undefined {
+  const node = presenter.tree.focused();
+  return node === undefined ? undefined : presenter.tree.keyOf(node);
+}
+
+function* dispatched(presenter: Presenter, name: ReplKey) {
+  const result = yield* presenter.tree.dispatch({ kind: "key", key: name });
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+describe("REPL focus regions: owned composition invariants", () => {
+  for (const size of [WIDE, MEDIUM]) {
+    it(`R1: the seven entries in both directions at ${size.columns}x${size.rows}`, function* () {
+      const model = yield* journalModel([]);
+      const view = viewFor(initialState("owned"), model, IDLE, size);
+      if (!view.ok) {
+        throw view.error;
+      }
+      const presenter = yield* usePresenter(size);
+      yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
+      expect(focused(presenter)).toBe("footer:input");
+      const entries = [
+        "tab:bindings",
+        "sidekick:earlier",
+        "sidekick:message",
+        "footer:history",
+        "transcript:selector",
+        "entries:heading",
+        "footer:input",
+      ];
+      const walked: (string | undefined)[] = [];
+      for (const _entry of entries) {
+        yield* dispatched(presenter, "Tab");
+        walked.push(focused(presenter));
+      }
+      expect(walked).toEqual(entries);
+      const back: (string | undefined)[] = [];
+      for (const _entry of entries) {
+        yield* dispatched(presenter, "Backtab");
+        back.push(focused(presenter));
+      }
+      expect(back).toEqual([
+        "entries:heading",
+        "transcript:selector",
+        "footer:history",
+        "sidekick:message",
+        "sidekick:earlier",
+        "tab:bindings",
+        "footer:input",
+      ]);
+    });
+  }
+
+  it("R5: catalog Content re-entry uses the first admitted row rather than the last focus", function* () {
+    const model = yield* journalModel(
+      Array.from({ length: 8 }, (_, index) => `# Reading ${index + 1}`),
+    );
+    let state: ReplState = initialState("owned");
+    const presenter = yield* usePresenter(NARROW);
+    function* commit() {
+      const resolved = viewFor(state, model, IDLE, NARROW, focused(presenter));
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      const view = withWorkspace(resolved.value, workspaceOf(model));
+      const shown = yield* presenter.commit(view);
+      state = focusSettled(view, focused(presenter), shown.committed.admission);
+      return shown;
+    }
+    function* send(name: ReplKey): Operation<void> {
+      const next = yield* dispatched(presenter, name);
+      if (next.outcome === "action") {
+        state = reduceRepl(state, next.action, model, IDLE).state;
+      }
+      yield* commit();
+    }
+    yield* commit();
+    yield* send("Tab");
+    yield* send("Tab");
+    yield* send("ArrowRight");
+    yield* send("Enter");
+    expect(focused(presenter)).toBe("entry:entry-1");
+    for (let row = 2; row <= 8; row += 1) {
+      yield* send("ArrowDown");
+      expect(focused(presenter)).toBe(`entry:entry-${row}`);
+    }
+    const shown = yield* commit();
+    const window = windowOf(shown.committed.admission, DRAWER_WINDOW);
+    expect(window.from).toBeGreaterThan(0);
+    const first = shown.keys.find((one) => one.startsWith("entry:"));
+    expect(first).not.toBe("entry:entry-8");
+    yield* send("Tab");
+    expect(focused(presenter)).toBe("drawer:close");
+    yield* send("Tab");
+    expect(focused(presenter)).toBe("footer:history");
+    yield* send("Tab");
+    expect(focused(presenter)).toBe(first);
+    yield* send("Backtab");
+    yield* send("Backtab");
+    yield* send("Enter");
+    expect(focused(presenter)).toBe("entries:heading");
+  });
+});

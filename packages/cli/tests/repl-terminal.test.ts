@@ -2037,7 +2037,9 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
       }
 
       // A key nothing has a meaning for is dropped rather than invented into one.
-      terminal.log.feed(BYTES.encode("\x1b[A"));
+      // An arrow is named now — the tree reads it as navigation — so the key
+      // nothing has a meaning for is a function key.
+      terminal.log.feed(BYTES.encode("\x1bOP"));
       terminal.log.feed(BYTES.encode("\r"));
       expect(yield* reported(events)).toEqual({
         kind: "input",
@@ -2245,6 +2247,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     if (closer === undefined) {
       throw new Error("the catalog's Close is mounted");
     }
+    yield* tree.dispatch({ kind: "key", key: "Backtab" });
     yield* tree.dispatch({ kind: "key", key: "Backtab" });
     expect(tree.focused()).toBe(closer);
 

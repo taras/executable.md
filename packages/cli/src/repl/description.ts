@@ -28,6 +28,7 @@
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 
+import type { ReplFocusGroup, ReplPlacement } from "./focus-navigation.ts";
 import type { ReplPresentationRole } from "./presentation-style.ts";
 
 /**
@@ -107,8 +108,28 @@ export function runText(runs: readonly ReplTokenRun[]): string {
  * a lifecycle outcome its owner decides, so the program answers this key where
  * it answers end of input, rather than a row answering it for the screen that
  * happens to be up.
+ *
+ * The arrows, Home, End and the Page keys are named as pressed. A field reads
+ * them as caret movement and a reading as scrolling; whatever the focused
+ * control does not handle, the tree reads as navigation.
  */
-export type ReplKey = "Enter" | "Escape" | "Tab" | "Backtab" | "Backspace" | "Interrupt";
+export type ReplKey =
+  | "Enter"
+  | "Escape"
+  | "Tab"
+  | "Backtab"
+  | "Backspace"
+  | "Interrupt"
+  | "ArrowUp"
+  | "ArrowDown"
+  | "ArrowLeft"
+  | "ArrowRight"
+  | "Alt+ArrowUp"
+  | "Alt+ArrowDown"
+  | "Home"
+  | "End"
+  | "PageUp"
+  | "PageDown";
 
 /**
  * One normalized event, as a host hands it over.
@@ -278,6 +299,8 @@ interface Described<Action> {
   readonly modal: boolean;
   /** Whether this node asks to hold focus once mounted. */
   readonly focus: boolean;
+  /** Where this node sits in keyboard navigation, when it is focusable. */
+  readonly navigation: ReplPlacement | undefined;
 }
 
 /**
@@ -340,6 +363,7 @@ export interface ReplDescribedView<Action> {
   readonly children: readonly ReplDescription<Action>[];
   readonly modal: boolean;
   readonly focus: boolean;
+  readonly navigation: ReplPlacement | undefined;
 }
 
 /**
@@ -384,6 +408,8 @@ export function describe<Action>(description: {
   modal?: true;
   /** Ask for focus once this node is mounted. */
   focus?: true;
+  /** Where this node sits in keyboard navigation. */
+  navigation?: ReplPlacement;
 }): ReplDescription<Action> {
   if (!Component.issued(description.component)) {
     // Reached from an untyped boundary: a plain object with the right members
@@ -406,8 +432,27 @@ export function describe<Action>(description: {
       children: Object.freeze([...(description.children ?? [])]),
       modal: description.modal === true,
       focus: description.focus === true,
+      navigation:
+        description.navigation === undefined ? undefined : placement(description.navigation),
     }),
   );
+}
+
+/** A placement copied out of whatever the caller holds and frozen, like an input. */
+function placement(given: ReplPlacement): ReplPlacement {
+  const group = (one: ReplFocusGroup): ReplFocusGroup =>
+    Object.freeze({ key: one.key, axis: one.axis });
+  return Object.freeze({
+    region: Object.freeze({
+      key: given.region.key,
+      rank: given.region.rank,
+      axis: given.region.axis,
+      ...(given.region.home === undefined ? {} : { home: given.region.home }),
+    }),
+    ...(given.groups === undefined ? {} : { groups: Object.freeze(given.groups.map(group)) }),
+    ...(given.anchor === true ? { anchor: true as const } : {}),
+    ...(given.entry === undefined ? {} : { entry: given.entry }),
+  });
 }
 
 /**
@@ -484,7 +529,14 @@ function at(path: readonly string[]): string {
  * modality.
  */
 export function validateDescriptions(descriptions: readonly unknown[]): Result<void> {
-  const found: Found = { claims: 0, modals: [], focus: undefined };
+  const found: Found = {
+    claims: 0,
+    modals: [],
+    focus: undefined,
+    regions: new Map(),
+    groups: new Map(),
+    anchors: new Map(),
+  };
   const judged = walk(descriptions, [], found);
   if (!judged.ok) {
     return judged;
@@ -514,6 +566,12 @@ interface Found {
   claims: number;
   modals: string[][];
   focus: string[] | undefined;
+  /** Each region's declaration, by key, and where it was first declared. */
+  regions: Map<string, { readonly said: string; readonly at: string[] }>;
+  /** Each group's axis, by its region and path, and where it was first declared. */
+  groups: Map<string, { readonly axis: string; readonly at: string[] }>;
+  /** Which description heads each group. */
+  anchors: Map<string, string[]>;
 }
 
 /**
@@ -583,10 +641,68 @@ function walk(
       }
     }
 
+    if (described.navigation !== undefined) {
+      const placed = navigated(described.navigation, here, found);
+      if (!placed.ok) {
+        return placed;
+      }
+    }
+
     const nested = walk(described.children, here, found);
     if (!nested.ok) {
       return nested;
     }
+  }
+  return Ok(undefined);
+}
+
+/**
+ * Whether one placement agrees with every other placement in the set.
+ *
+ * A region is one rank and one axis wherever it is named, a group is one axis,
+ * and a group has at most one anchor. Two answers to any of these would leave
+ * which key goes where decided by which control happened to be mounted first.
+ */
+function navigated(given: ReplPlacement, here: readonly string[], found: Found): Result<void> {
+  const region = given.region;
+  const said = `${region.rank}:${region.axis}:${region.home ?? "-"}`;
+  const known = found.regions.get(region.key);
+  if (known === undefined) {
+    found.regions.set(region.key, { said, at: [...here] });
+  } else if (known.said !== said) {
+    return Err(
+      new ReplDescriptionError(
+        `${at(here)} and ${at(known.at)} declare the region ${region.key} differently, so its ` +
+          "place in the Tab cycle cannot be decided.",
+      ),
+    );
+  }
+  let path = region.key;
+  for (const group of given.groups ?? []) {
+    path = `${path}\u0000${group.key}`;
+    const axis = found.groups.get(path);
+    if (axis === undefined) {
+      found.groups.set(path, { axis: group.axis, at: [...here] });
+    } else if (axis.axis !== group.axis) {
+      return Err(
+        new ReplDescriptionError(
+          `${at(here)} and ${at(axis.at)} declare the group ${group.key} with different axes, so ` +
+            "which arrows move inside it cannot be decided.",
+        ),
+      );
+    }
+  }
+  if (given.anchor === true && (given.groups?.length ?? 0) > 0) {
+    const heads = found.anchors.get(path);
+    if (heads !== undefined) {
+      return Err(
+        new ReplDescriptionError(
+          `${at(here)} and ${at(heads)} both head the group ${given.groups?.at(-1)?.key}, so ` +
+            "leaving it has two destinations.",
+        ),
+      );
+    }
+    found.anchors.set(path, [...here]);
   }
   return Ok(undefined);
 }

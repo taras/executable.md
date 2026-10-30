@@ -98,6 +98,7 @@ import {
 } from "./layout-admission.ts";
 import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
 import { ORDINARY, REPL_PALETTE, styleOf } from "./presentation-style.ts";
+import { placeScreen } from "./screen-regions.ts";
 import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts";
 import { jsonRuns, sourceRuns } from "./presentation-text.ts";
 import { HEAD_LABELS, NO_NAVIGATION, numbered, pointLabel } from "./navigation.ts";
@@ -905,7 +906,14 @@ export type ReplFocusRestore =
    * sentence to their document. Cold default visibility states no such thing:
    * the pane is simply the one showing, and the draft still holds focus.
    */
-  | { readonly kind: "message" };
+  | { readonly kind: "message" }
+  /**
+   * A row of a windowed list somebody moved to past the window's edge.
+   *
+   * Spent by the commit that focuses it, like every restoration: the window
+   * moves to show it in the frame that focuses it, and keeps that position.
+   */
+  | { readonly kind: "reveal"; readonly key: string };
 
 /**
  * The saved turn a selection asked to be shown, until a frame can show it.
@@ -2021,6 +2029,10 @@ export function reduceRepl(
       }
       return drafting(state, shortened(state.draft));
     }
+    case "move-caret":
+      return settled(state);
+    case "reveal":
+      return settled({ ...state, restore: Object.freeze({ kind: "reveal", key: action.key }) });
     case "submit": {
       // The one gate, over the part of its facts this reduction can see.
       // Inspection freezes durable state, not the draft, and submitting from a
@@ -4323,6 +4335,9 @@ export function focusClaim(view: ReplView): string | undefined {
   if (state.restore === undefined) {
     return undefined;
   }
+  if (state.restore.kind === "reveal") {
+    return state.restore.key;
+  }
   if (state.restore.kind === "asked") {
     return live.question === undefined || state.route.at !== undefined ? undefined : "footer:asked";
   }
@@ -4419,9 +4434,10 @@ export function focusSettled(
   // the window's own admitted start is kept — the offset this process holds
   // becomes the one a person is actually looking at, so the next frame asks the
   // same question and gets the same answer without a claim to ask it for.
-  const revealed = claim.startsWith("entry:")
-    ? admission?.windows.get(ENTRIES_WINDOW)?.from
-    : undefined;
+  const revealed =
+    claim.startsWith("entry:") || claim.startsWith("scope:")
+      ? admission?.windows.get(presentedCatalog(view) ? DRAWER_WINDOW : ENTRIES_WINDOW)?.from
+      : undefined;
   const viewports =
     revealed === undefined || revealed === view.state.viewports.entries
       ? view.state.viewports
@@ -5167,6 +5183,20 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   if (narrow) {
     items.push(toEntries);
   }
+  if (workspace !== undefined) {
+    // Each heading belongs to the surface it names, so a narrow frame describes
+    // only the one its route is showing: a heading for an outlet this frame has
+    // no region for would be a row mounted nowhere. Described ahead of the
+    // reading under it, because the order controls are described in is the
+    // order the arrows move through them.
+    items.push(
+      ...workspaceHeadings(view, context.selector, {
+        transcript: !narrow || routed === "sessions",
+        work: !narrow || (routed === "entries" && !showSidekick),
+        entries: !narrow,
+      }),
+    );
+  }
   if (!showSessions) {
     // Nothing: this frame is showing the other surface.
   } else if (live.sidekick === undefined && turns.length === 0) {
@@ -5219,18 +5249,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       ),
     );
   }
-  if (workspace !== undefined) {
-    // Each heading belongs to the surface it names, so a narrow frame describes
-    // only the one its route is showing: a heading for an outlet this frame has
-    // no region for would be a row mounted nowhere.
-    items.push(
-      ...workspaceHeadings(view, context.selector, {
-        transcript: !narrow || routed === "sessions",
-        work: !narrow || (routed === "entries" && !showSidekick),
-        entries: !narrow,
-      }),
-    );
-  } else if (!narrow) {
+  if (workspace === undefined && !narrow) {
     items.push(toEntries);
   }
   if (showEntry && workspace === undefined) {
@@ -6235,7 +6254,7 @@ function entryContent(
           fitControl([{ text: "    " }, { text: scope.label, elide: true }], width),
           { select: "scope", scopes: scope.path },
           styleOf("metadata"),
-          { here: focused },
+          { here: focused, claim },
         ),
       );
     }
@@ -6553,7 +6572,10 @@ function drawerFor(
       { here: view.focused },
     ),
   );
-  for (const placed of windowed(content, context, entering, view.focused, asking)) {
+  const reveals = catalog
+    ? (from: number, count: number) => catalogReveals(content, from, count)
+    : undefined;
+  for (const placed of windowed(content, context, entering, view.focused, asking, reveals)) {
     rows.push(placed);
   }
   rows.push(
@@ -7051,7 +7073,13 @@ function settingLine(settings: SessionConfiguration | undefined): string {
  * control: there is nothing to go to.
  */
 function catalogContent(view: ReplView, width: number): DrawerContent {
-  const rows = entryContent(view.model, view.focused, view.selection.entry?.key, width);
+  const rows = entryContent(
+    view.model,
+    view.focused,
+    view.selection.entry?.key,
+    width,
+    focusClaim(view),
+  );
   const content: DrawerRow[] =
     rows.length > 0
       ? rows.map((described) => ({ described }))
@@ -7398,6 +7426,8 @@ function windowed(
   focused: string | undefined,
   /** The Sidekick question these rows answer, or none for the entry's. */
   asking: string | undefined,
+  /** Which admitted rows have logical neighbours the window is not showing. */
+  reveals?: (from: number, count: number) => ReadonlyMap<string, Readonly<Record<string, string>>>,
 ): readonly Described[] {
   if (context.measuring) {
     return [];
@@ -7408,10 +7438,12 @@ function windowed(
   }
   const rows = content.slice(held.from, held.from + held.count);
   const index = entering ? rows.findIndex((candidate) => candidate.field !== undefined) : -1;
+  const beyond = reveals?.(held.from, held.count);
   return rows.map((candidate, at) => {
     const named = candidate.field;
     if (at !== index || named === undefined) {
-      return candidate.described;
+      const reveal = beyond?.get(candidate.described.key);
+      return reveal === undefined ? candidate.described : revealing(candidate.described, reveal);
     }
     return field(
       `drawer:value:${named.name}`,
@@ -7424,6 +7456,94 @@ function windowed(
         : { focus: true, here: focused, field: named.name, question: asking },
     );
   });
+}
+
+/** The same row, told which keys reach a neighbour outside its window. */
+function revealing(described: Described, reveal: Readonly<Record<string, string>>): Described {
+  const read = readDescription(described.description);
+  return {
+    ...described,
+    description: describeNode<ReplAction>({
+      key: read.key,
+      component: read.component,
+      input: { ...fields(read.input), reveal },
+      layout: read.layout,
+      ...(read.focus ? { focus: true as const } : {}),
+    }),
+  };
+}
+
+/** One catalog row's path: its entry, then each scope down to its own. */
+function catalogPath(key: string): readonly string[] | undefined {
+  if (key.startsWith("entry:")) {
+    return [key.slice("entry:".length)];
+  }
+  return key.startsWith("scope:") ? key.slice("scope:".length).split("/") : undefined;
+}
+
+/**
+ * Which admitted catalog rows have a logical neighbour outside the window.
+ *
+ * The neighbours are the catalog's own structure, read from the whole ordered
+ * list: the next and previous row under the same parent for Down and Up, the
+ * first scope beneath for Right, the parent for Left, and the next and previous
+ * row in the list for Alt+Down and Alt+Up. Only a neighbour the window does not
+ * hold is named; one it holds is mounted, and the tree moves to it itself.
+ */
+function catalogReveals(
+  content: readonly DrawerRow[],
+  from: number,
+  count: number,
+): ReadonlyMap<string, Readonly<Record<string, string>>> {
+  const keys = content.map((one) => one.described.key);
+  const paths = keys.map(catalogPath);
+  const shown = (at: number): boolean => at >= from && at < from + count;
+  const parentOf = (path: readonly string[]): string => path.slice(0, -1).join("/");
+  const found = new Map<string, Readonly<Record<string, string>>>();
+  for (let at = from; at < from + count && at < keys.length; at += 1) {
+    const path = paths[at];
+    if (path === undefined) {
+      continue;
+    }
+    const sibling = (step: -1 | 1): number | undefined => {
+      for (let other = at + step; other >= 0 && other < keys.length; other += step) {
+        const there = paths[other];
+        if (there === undefined || there.length < path.length) {
+          return undefined;
+        }
+        if (there.length === path.length) {
+          return parentOf(there) === parentOf(path) ? other : undefined;
+        }
+      }
+      return undefined;
+    };
+    const child = paths[at + 1]?.length === path.length + 1 ? at + 1 : undefined;
+    let parent: number | undefined;
+    for (let other = at - 1; other >= 0 && path.length > 1; other -= 1) {
+      if (paths[other]?.join("/") === parentOf(path)) {
+        parent = other;
+        break;
+      }
+    }
+    const targets: Record<string, number | undefined> = {
+      ArrowDown: sibling(1),
+      ArrowUp: sibling(-1),
+      ArrowRight: child,
+      ArrowLeft: parent,
+      "Alt+ArrowDown": at + 1 < keys.length ? at + 1 : undefined,
+      "Alt+ArrowUp": at > 0 ? at - 1 : undefined,
+    };
+    const reveal: Record<string, string> = {};
+    for (const [key, target] of Object.entries(targets)) {
+      if (target !== undefined && !shown(target)) {
+        reveal[key] = keys[target];
+      }
+    }
+    if (Object.keys(reveal).length > 0) {
+      found.set(keys[at], Object.freeze(reveal));
+    }
+  }
+  return found;
 }
 
 /**
@@ -8687,7 +8807,14 @@ export function presentationFor(
   context: ReplPresentationContext,
 ): ReplPresentation {
   const screen = described(view, context);
-  const descriptions = screen.items.map((item) => item.description);
+  const composed = screen.items.map((item) => item.description);
+  // Placed only where the tree will hold them: a measuring pass mounts nothing.
+  const descriptions = context.measuring
+    ? composed
+    : placeScreen(composed, { narrow: profileFor(view.size) === "narrow" }, (one) => {
+        const read = readDescription(one);
+        return isControl(read.component, read.input);
+      });
   const styles = new Map<string, ReplRowStyle>();
   const runs = new Map<string, readonly ReplTokenRun[]>();
   for (const one of screen.rows) {
@@ -9474,11 +9601,12 @@ function offsetFor(
     }
     return held;
   }
-  if (window !== ENTRIES_WINDOW || capacity < 1) {
+  const catalog = window === ENTRIES_WINDOW || (window === DRAWER_WINDOW && presentedCatalog(view));
+  if (!catalog || capacity < 1) {
     return held;
   }
   const claimed = focusClaim(view);
-  if (claimed === undefined || !claimed.startsWith("entry:")) {
+  if (claimed === undefined || !(claimed.startsWith("entry:") || claimed.startsWith("scope:"))) {
     return held;
   }
   const at = entryContent(view.model, undefined, undefined, undefined).findIndex(
@@ -10231,17 +10359,17 @@ function workspaceControls(
   // offered at all. A build without the shared queue draws no QUEUE tab and no
   // Follow checkbox: a control for behaviour that is not here is a choice
   // somebody can make and nothing happens, however it is drawn.
+  // A tray's name is a heading while it is the only tray, not a stop: TODO is
+  // inactive until the shared TODO ships, and a control that does nothing is a
+  // Tab stop somebody has to step past. Indented as a row is, so it reads in
+  // the same cells it always has.
   for (const tray of traysOf(workspace)) {
     const here = workspace.tray === tray;
     items.push(
-      row(
+      line(
         `tray:${tray}`,
-        tray.toUpperCase(),
-        {},
+        focusPrefixed(tray.toUpperCase(), false),
         styleOf(here ? "pane-heading" : "metadata", { selected: here }),
-        {
-          here: view.focused,
-        },
       ),
     );
   }
