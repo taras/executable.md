@@ -1781,3 +1781,165 @@ describe("REPL original completed-screen lifecycle", () => {
     released(page.repl.terminal);
   });
 });
+
+const POSITION_WORDS: Readonly<Record<string, string>> = {
+  entry: "Entry %E admitted", scope: "Component admitted", binding: "Bindings recorded",
+  generated: "Generated XMD admitted", elicit: "Answer recorded", agent: "Agent turn recorded", terminal: "Entry outcome recorded",
+};
+function expectedPositions(model: ReturnType<typeof projectRepl> extends Result<infer T> ? T : never): string[] {
+  let entries = 0;
+  return model.checkpoints.map((one, index) => {
+    if (one.kind === "entry") { entries += 1; }
+    const words = POSITION_WORDS[one.kind];
+    if (words === undefined) { throw new Error(`no category for ${one.kind}`); }
+    return `${index + 1} · ${words.replace("%E", String(entries))}`;
+  });
+}
+function positionLabels(one: ScreenReading): string[] {
+  return one.rows.flatMap((row) => row.match(/\d+ · (?:Entry \d+ admitted|Component admitted|Bindings recorded|Generated XMD admitted|Answer recorded|Agent turn recorded|Entry outcome recorded)/)?.[0] ?? []);
+}
+function* allPositions(page: ReplPage, expected: readonly string[]): Operation<{ first: string[]; reached: string[] }> {
+  const first = positionLabels(page.screen());
+  const seen = new Set(first);
+  for (let press = 0; press < expected.length * 2 && seen.size < expected.length; press += 1) {
+    const rows = page.screen().rows;
+    const last = positionLabels(page.screen()).at(-1);
+    if (last === undefined) { throw new Error(`the drawer holds no positions: ${page.describe()}`); }
+    const at = rows.findIndex((row) => row.includes(last));
+    const controlRow = rows.slice(at + 1).find((row) => row.includes("[↓ later]"));
+    if (controlRow === undefined) { throw new Error(`no later action after ${last}`); }
+    const index = page.screen().index;
+    yield* page.press("[↓ later]", { onRow: controlRow, rightOf: "[close]" });
+    yield* page.until("the next positions", (one) => one.index > index);
+    for (const label of positionLabels(page.screen())) { seen.add(label); }
+  }
+  return { first, reached: [...seen].sort((a, b) => Number(a.split(" ")[0]) - Number(b.split(" ")[0])) };
+}
+function historyBand(one: ScreenReading): string {
+  return one.rows.find((row) => row.includes("HISTORY"))?.replace(/>/g, " ").trimEnd() ?? "";
+}
+function* fourEntries(page: ReplPage): Operation<void> {
+  for (const [index, source] of [FIRST_COLD, SECOND_COLD, '```js eval\nconst third = "third";\n```\n\nThree: {third}\n', '```js eval\nconst fourth = "fourth";\n```\n\nFour: {fourth}\n'].entries()) {
+    yield* runSource(page, source);
+    yield* entrySettles(page, index + 1, "ok");
+  }
+}
+
+describe("REPL original complete History and cold catalog", () => {
+  it("H5: the drawer reaches them all, and four resizes keep the reading", function* () {
+    const page = yield* referencePage();
+    yield* fourEntries(page);
+    const expected = expectedPositions(yield* retainedModel(page));
+    expect(expected.length).toBeGreaterThan(8);
+    yield* draftText(page, "my next entry");
+    yield* openHistory(page);
+    expect((yield* allPositions(page, expected)).reached).toEqual(expected);
+    yield* page.press(expected.at(-1) ?? "");
+    yield* page.until("the last recorded position selected", (one) => one.shows("[live]"));
+    yield* closeDrawer(page);
+    yield* selectCatalog(page, "entry-1");
+    const band = historyBand(page.screen());
+    for (const size of [{ columns: 120, rows: 30 }, NARROW, { columns: 40, rows: 10 }, WIDE]) {
+      const shown = yield* page.resize(size);
+      expect(shown.rows.filter((row) => row.length > size.columns)).toEqual([]);
+      if (size.columns < 72) { expect(shown.shows("Make the window")).toBe(true); continue; }
+      expect(trail(shown)).toContain("Entry 1");
+      expect(shown.found("my next entry", DRAFT_VALUE)).toBe(1);
+      expect(shown.shows("[live]")).toBe(true);
+    }
+    expect(historyBand(page.screen())).toBe(band);
+    yield* page.resize(NARROW);
+    yield* openHistory(page);
+    const narrow = yield* allPositions(page, expected);
+    expect(narrow.reached).toEqual(expected);
+    expect(narrow.first.length).toBeLessThan(expected.length);
+    yield* leaveWithLocation(page);
+    released(page.repl.terminal);
+  });
+
+  it("H6: the settled head, the prefix, the same rail, and no work at all", function* () {
+    const dataRoot = yield* useTemporary("xmd-cold-position-order-");
+    const sizes = [WIDE, { columns: 120, rows: 30 }, NARROW];
+    const hot = yield* scoped(function* () {
+      const page = yield* useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], size: WIDE });
+      yield* fourEntries(page);
+      const expected = expectedPositions(yield* retainedModel(page));
+      yield* draftText(page, "my next entry");
+      yield* openHistory(page);
+      yield* page.press("Entry 1 admitted");
+      yield* page.until("the first prefix", (one) => one.shows("[live]"));
+      yield* closeDrawer(page);
+      const bands: string[] = [];
+      for (const size of sizes) {
+        const shown = page.screen().size.columns === size.columns ? page.screen() : yield* page.resize(size);
+        bands.push(historyBand(shown));
+      }
+      yield* openHistory(page);
+      expect((yield* allPositions(page, expected)).reached).toEqual(expected);
+      expect(positionLabels(page.screen())[0]).not.toBe(expected[0]);
+      yield* closeDrawer(page);
+      const path = yield* executionJournal(page);
+      return { location: yield* leaveWithLocation(page), path, expected, bands };
+    });
+    const bytes = yield* readTextFile(hot.path);
+    const host = yield* useMountedHost({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+    yield* noNewExecution();
+    const work = yield* performedWork();
+    const page = yield* useReplPage({ host, location: hot.location, size: WIDE });
+    expect(page.screen().shows("HEAD · SETTLED")).toBe(true);
+    for (const label of ["[pause]", "[continue]", "HEAD · LIVE", "HEAD · SETTLING"]) { expect(page.screen().shows(label)).toBe(false); }
+    yield* catalog(page);
+    expect(page.screen().shows("entry-1")).toBe(true);
+    expect(page.screen().shows("entry-2")).toBe(false);
+    yield* closeDrawer(page);
+    const cold: string[] = [];
+    for (const size of sizes) {
+      const shown = page.screen().size.columns === size.columns ? page.screen() : yield* page.resize(size);
+      cold.push(historyBand(shown));
+    }
+    expect(cold).toEqual(hot.bands);
+    yield* openHistory(page);
+    expect(positionLabels(page.screen())[0]).toBe(hot.expected[0]);
+    expect((yield* allPositions(page, hot.expected)).reached).toEqual(hot.expected);
+    yield* closeDrawer(page);
+    expect(yield* leaveWithLocation(page)).toBe(hot.location);
+    expect(work.compiles).toBe(0);
+    expect(work.asked).toBe(0);
+    expect(work.reads.filter((one) => one.endsWith(".md"))).toEqual([]);
+    expect(yield* readTextFile(hot.path)).toBe(bytes);
+  });
+
+  it("EC1: the same catalog and the same selected entry, with no work and no append", function* () {
+    const dataRoot = yield* useTemporary("xmd-cold-catalog-");
+    const hot = yield* scoped(function* () {
+      const page = yield* referencePageFor(dataRoot);
+      yield* runSource(page, FIRST_COLD);
+      yield* entrySettles(page, 1, "ok");
+      yield* runSource(page, SECOND_COLD);
+      yield* entrySettles(page, 2, "ok");
+      yield* selectCatalog(page, "entry-2");
+      return { location: yield* leaveWithLocation(page), path: yield* executionJournal(page) };
+    });
+    const bytes = yield* readTextFile(hot.path);
+    const host = yield* useMountedHost({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+    yield* noNewExecution();
+    const work = yield* performedWork();
+    const page = yield* useReplPage({ host, location: hot.location });
+    yield* catalog(page);
+    expect(page.screen().shows("1. [ok] entry-1")).toBe(true);
+    expect(page.screen().shows("2. [ok] entry-2")).toBe(true);
+    yield* closeDrawer(page);
+    expect(trail(page.screen())).toContain("Entry 2");
+    expect(page.screen().shows("Two: alpha-again")).toBe(true);
+    expect(page.screen().shows("One: alpha")).toBe(false);
+    expect((yield* retainedModel(page)).entries[1]?.bindings.find((one) => one.name === "carried")?.value).toBe("alpha-again");
+    expect(yield* leaveWithLocation(page)).toBe(hot.location);
+    expect(work.compiles).toBe(0);
+    expect(work.reads.filter((one) => one.endsWith(".md"))).toEqual([]);
+    expect(yield* readTextFile(hot.path)).toBe(bytes);
+    released(page.repl.terminal);
+  });
+});
+function referencePageFor(dataRoot: string): Operation<ReplPage> {
+  return useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], size: WIDE });
+}
