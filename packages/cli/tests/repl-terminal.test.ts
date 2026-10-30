@@ -46,36 +46,52 @@ import {
 } from "../src/repl/application.ts";
 import type { ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
 import type { ReplAction } from "../src/repl/components/actions.ts";
+import { flatten } from "../src/repl/layout.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
-import { ReplRenderError, resolvePointer, useReplRenderer } from "../src/repl/renderer.ts";
+import {
+  ReplRenderError,
+  resolvePointer,
+  useReplRenderer,
+} from "../src/repl/renderer.ts";
 import type { ReplMeasured, ReplRenderer } from "../src/repl/renderer.ts";
+import { emptyModel, journalModel } from "./fixtures/repl/journals.ts";
 import { useGrid, usePresenter } from "./fixtures/repl/presentation.ts";
 import type { Observed, Presenter } from "./fixtures/repl/presentation.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
 import { useTerminalScreen } from "./support/terminal-screen.ts";
 import { close, fixed, open, percent, text } from "@bomb.sh/tty";
 import type { Op } from "@bomb.sh/tty";
-import { nearestCommonAncestor, ReplClock, useReplFrames } from "../src/repl/frame.ts";
+import {
+  nearestCommonAncestor,
+  ReplClock,
+  useReplFrames,
+} from "../src/repl/frame.ts";
 import type { ReplFrameSubscription } from "../src/repl/frame.ts";
 import { replModes, useReplScreen } from "../src/repl/screen.ts";
 import type { ReplScreenEvent } from "../src/repl/screen.ts";
-import { installReplTerminal, nodeInputStream } from "../src/repl/terminal-host.ts";
+import {
+  installReplTerminal,
+  nodeInputStream,
+} from "../src/repl/terminal-host.ts";
 import { readerStream } from "../src/deno-terminal-surface.ts";
-import type { NodeShapedInput, ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
+import type {
+  NodeShapedInput,
+  ReplTerminalCapabilities,
+} from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplDispatched } from "../src/repl/reconcile.ts";
 import type { ReplInputEvent } from "../src/repl/description.ts";
-import { useReplPage } from "./support/mounted-page.ts";
-import type { PageArea, PageFrame, ReplPage } from "./support/mounted-page.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import {
-  draft,
+  DRAFT_VALUE,
+  draftShows,
+  draftText,
   entrySettles,
-  focusCycle,
-  frameAt,
-  openCatalog,
-  paste,
-} from "./support/repl-page-adapters.ts";
+  pasteDraft,
+  TYPING,
+} from "./support/screen-journeys.ts";
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
 const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
@@ -104,7 +120,9 @@ function* settled(): Operation<void> {
 }
 
 /** What one dispatch produced, or the failure it ended in. */
-function acted(outcome: Result<ReplDispatched<ReplAction>>): ReplDispatched<ReplAction> {
+function acted(
+  outcome: Result<ReplDispatched<ReplAction>>,
+): ReplDispatched<ReplAction> {
   if (!outcome.ok) {
     throw outcome.error;
   }
@@ -166,7 +184,10 @@ interface Application {
   }): Operation<Observed>;
 }
 
-function* useApplication(model: ReplModel, size: ReplTerminalSize = WIDE): Operation<Application> {
+function* useApplication(
+  model: ReplModel,
+  size: ReplTerminalSize = WIDE,
+): Operation<Application> {
   const presenter = yield* usePresenter(size);
   const first = initialState("reference");
   const opened = reduceRepl(first, { kind: "open-catalog" }, model, IDLE).state;
@@ -186,80 +207,202 @@ function* useApplication(model: ReplModel, size: ReplTerminalSize = WIDE): Opera
         current = at;
       }
       const node = presenter.tree.focused();
-      const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
-      return yield* presenter.commit(viewOf(model, at, { state: options.state, focused }));
+      const focused = node === undefined
+        ? undefined
+        : presenter.tree.keyOf(node);
+      return yield* presenter.commit(
+        viewOf(model, at, { state: options.state, focused }),
+      );
     },
   };
 }
 
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
-function* submit(page: ReplPage, order: number, source: string): Operation<void> {
-  yield* paste(page, draft(page), source);
+function* submit(
+  page: ReplPage,
+  order: number,
+  source: string,
+): Operation<void> {
+  yield* pasteDraft(page, source);
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
 }
 
-/** A reading long enough that the drawer's rectangle lands on top of it. */
-const COVERED_READING = Array.from({ length: 24 }, (_unused, at) => `COVERED-ROW-${at}`).join(
-  "\n\n",
-);
-
-const readingArea = (frame: PageFrame): PageArea | undefined => frame.area("box:reading:viewport");
-
-/** A page whose reading is the long entry, with nothing else in the way. */
-function* coveredScreen(size: ReplTerminalSize): Operation<ReplPage> {
-  const page = yield* useReplPage({ size });
-  yield* submit(page, 1, COVERED_READING);
-  yield* page.until(
-    "the long entry being read",
-    (frame) => readingArea(frame)?.shows("COVERED-ROW-3") ?? false,
+/** Whether one rectangle is drawn wholly inside another. */
+function within(
+  outer: ReplBounds | undefined,
+  inner: ReplBounds | undefined,
+): boolean {
+  if (outer === undefined || inner === undefined) {
+    return false;
+  }
+  return (
+    inner.x >= outer.x &&
+    inner.y >= outer.y &&
+    inner.x + inner.width <= outer.x + outer.width &&
+    inner.y + inner.height <= outer.y + outer.height
   );
-  return page;
+}
+
+/** The keys of the controls one frame published a pointer target for, in draw order. */
+function targetKeys(presenter: Presenter, observed: Observed): string[] {
+  return observed.targets.flatMap((one) => {
+    const key = presenter.tree.keyOf(one.node);
+    return key === undefined ? [] : [key];
+  });
+}
+
+/** The keys of the controls one frame drew wholly inside this rectangle. */
+function keysInside(
+  presenter: Presenter,
+  observed: Observed,
+  bounds: ReplBounds | undefined,
+): string[] {
+  return targetKeys(presenter, observed).filter((key) =>
+    within(bounds, observed.boundsOf(key))
+  );
+}
+
+/** Every region this frame placed, by the id the skeleton names it with. */
+function placedRegions(observed: Observed): string[] {
+  return flatten(observed.committed.manifest.root)
+    .filter((box) =>
+      box.key === undefined && observed.regionOf(box.id) !== undefined
+    )
+    .map((box) => box.id);
+}
+
+/** The key of the control holding focus, or none. */
+function focusedKey(presenter: Presenter): string | undefined {
+  const node = presenter.tree.focused();
+  return node === undefined ? undefined : presenter.tree.keyOf(node);
+}
+
+/**
+ * The action one control answers a pointer with, through the frame that drew it.
+ *
+ * Through the frame rather than the tree: a row the frame did not place, or
+ * placed and did not offer, is in no target map, so reaching for its node
+ * directly would prove something no pointer can do.
+ */
+function* actionOf(
+  presenter: Presenter,
+  observed: Observed,
+  key: string,
+): Operation<ReplAction> {
+  const { tree } = presenter;
+  const target = observed.targets.find((one) => tree.keyOf(one.node) === key);
+  if (target === undefined) {
+    throw new Error(`this frame published no target for ${key}`);
+  }
+  const dispatched = acted(
+    yield* tree.dispatch({
+      kind: "pointer",
+      target: target.node,
+      frame: tree.frame().id,
+    }),
+  );
+  if (dispatched.outcome !== "action") {
+    throw new Error(`the pointer on ${key} produced no action`);
+  }
+  return dispatched.action;
+}
+
+/** The rows the reading's viewport holds on the screen one frame left. */
+function readingRows(
+  presenter: Presenter,
+  observed: Observed,
+): readonly string[] {
+  const viewport = observed.regionOf("box:reading:viewport");
+  if (viewport === undefined) {
+    throw new Error("this frame placed no reading viewport");
+  }
+  return presenter.grid.textIn(viewport);
 }
 
 describe("REPL terminal: responsive semantic frames", () => {
   it("F1: a wide frame carries the identity row, three columns and the fixed footer", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    const frame = page.frame();
-    const bounds = (id: string): ReplBounds | undefined => frame.area(id)?.bounds;
+    const app = yield* useApplication(yield* emptyModel(), WIDE);
+    const frame = yield* app.commit();
+    const bounds = (id: string): ReplBounds | undefined => frame.regionOf(id);
 
-    expect(frame.profile).toBe("wide");
+    expect(frame.committed.manifest.profile).toBe("wide");
     // The spec's first composition: the columns are 36, 66 and 58 cells,
     // dividers included, the body 33 rows and the Draft four of the centre's.
-    expect(bounds("box:identity")).toEqual({ x: 0, y: 0, width: 160, height: 1 });
-    expect(bounds("box:sidebar")).toEqual({ x: 0, y: 1, width: 36, height: 33 });
-    expect(bounds("box:transcript")).toEqual({ x: 36, y: 1, width: 66, height: 33 });
-    expect(bounds("box:inspection")).toEqual({ x: 102, y: 1, width: 58, height: 33 });
+    expect(bounds("box:identity")).toEqual({
+      x: 0,
+      y: 0,
+      width: 160,
+      height: 1,
+    });
+    expect(bounds("box:sidebar")).toEqual({
+      x: 0,
+      y: 1,
+      width: 36,
+      height: 33,
+    });
+    expect(bounds("box:transcript")).toEqual({
+      x: 36,
+      y: 1,
+      width: 66,
+      height: 33,
+    });
+    expect(bounds("box:inspection")).toEqual({
+      x: 102,
+      y: 1,
+      width: 58,
+      height: 33,
+    });
     expect(bounds("box:draft")?.height).toBe(4);
     // Full width and pinned to the bottom, at every size: one compact History
     // row and one row of guidance.
-    expect(bounds("box:history")).toEqual({ x: 0, y: 34, width: 160, height: 1 });
-    expect(bounds("box:guidance")).toEqual({ x: 0, y: 35, width: 160, height: 1 });
+    expect(bounds("box:history")).toEqual({
+      x: 0,
+      y: 34,
+      width: 160,
+      height: 1,
+    });
+    expect(bounds("box:guidance")).toEqual({
+      x: 0,
+      y: 35,
+      width: 160,
+      height: 1,
+    });
 
     // Each pane holds its own controls and no other pane's.
-    expect(frame.area("box:sidebar")?.contains("transcript:selector")).toBe(true);
+    expect(within(bounds("box:sidebar"), frame.boundsOf("transcript:selector")))
+      .toBe(true);
     for (const key of ["entries:heading", "footer:input", "draft:send"]) {
-      expect([key, frame.area("box:transcript")?.contains(key)]).toEqual([key, true]);
+      expect([key, within(bounds("box:transcript"), frame.boundsOf(key))])
+        .toEqual([key, true]);
     }
-    for (const key of ["tab:bindings", "tab:sidekick", "sidekick:message"]) {
-      expect([key, frame.area("box:inspection")?.contains(key)]).toEqual([key, true]);
+    for (const key of ["tab:bindings", "tab:sidekick"]) {
+      expect([key, within(bounds("box:inspection"), frame.boundsOf(key))])
+        .toEqual([key, true]);
     }
+    expect(frame.keys).toContain("sidekick:absent");
     for (const key of ["footer:history", "footer:exit"]) {
-      expect([key, frame.area("box:history")?.contains(key)]).toEqual([key, true]);
+      expect([key, within(bounds("box:history"), frame.boundsOf(key))]).toEqual(
+        [key, true],
+      );
     }
-    expect(frame.has("tray:queue")).toBe(false);
-    expect(frame.has("follow")).toBe(false);
+    expect(frame.keys).not.toContain("tray:queue");
+    expect(frame.keys).not.toContain("follow");
   });
 
   it("F1: a medium frame keeps every region, narrower", function* () {
-    const page = yield* useReplPage({ size: MEDIUM });
-    const frame = page.frame();
-    const bounds = (id: string): ReplBounds | undefined => frame.area(id)?.bounds;
+    const app = yield* useApplication(yield* emptyModel(), MEDIUM);
+    const frame = yield* app.commit();
+    const bounds = (id: string): ReplBounds | undefined => frame.regionOf(id);
 
-    expect(frame.profile).toBe("medium");
-    const [left, centre, right] = ["box:sidebar", "box:transcript", "box:inspection"].map(bounds);
+    expect(frame.committed.manifest.profile).toBe("medium");
+    const [left, centre, right] = [
+      "box:sidebar",
+      "box:transcript",
+      "box:inspection",
+    ].map(bounds);
     if (left === undefined || centre === undefined || right === undefined) {
-      throw new Error(`a medium frame drew fewer than three columns. ${page.describe()}`);
+      throw new Error("a medium frame drew fewer than three columns");
     }
     // The same three columns, tiling the width, with the centre and the right
     // pane giving cells up from the 66 and 58 they hold at 160.
@@ -273,122 +416,175 @@ describe("REPL terminal: responsive semantic frames", () => {
       expect(column.y).toBe(1);
       expect(column.height).toBe(27);
     }
-    expect(bounds("box:history")).toEqual({ x: 0, y: 28, width: 120, height: 1 });
-    expect(bounds("box:guidance")).toEqual({ x: 0, y: 29, width: 120, height: 1 });
-    expect(frame.has("tray:queue")).toBe(false);
-    expect(frame.has("follow")).toBe(false);
+    expect(bounds("box:history")).toEqual({
+      x: 0,
+      y: 28,
+      width: 120,
+      height: 1,
+    });
+    expect(bounds("box:guidance")).toEqual({
+      x: 0,
+      y: 29,
+      width: 120,
+      height: 1,
+    });
+    expect(frame.keys).not.toContain("tray:queue");
+    expect(frame.keys).not.toContain("follow");
   });
 
   it("F1: a narrow frame routes one content surface and keeps the drawer and footer", function* () {
-    const page = yield* useReplPage({ size: NARROW });
-    const frame = page.frame();
+    const app = yield* useApplication(yield* emptyModel(), NARROW);
+    const frame = yield* app.commit();
 
-    expect(frame.profile).toBe("narrow");
-    expect(frame.area("box:content")?.bounds).toEqual({ x: 0, y: 1, width: 72, height: 17 });
+    expect(frame.committed.manifest.profile).toBe("narrow");
+    expect(frame.regionOf("box:content")).toEqual({
+      x: 0,
+      y: 1,
+      width: 72,
+      height: 17,
+    });
     for (const column of ["box:sidebar", "box:transcript", "box:inspection"]) {
-      expect([column, frame.area(column)]).toEqual([column, undefined]);
+      expect([column, frame.regionOf(column)]).toEqual([column, undefined]);
     }
     // The same footer contract as the wide frame: full width, one History row
     // and one row of guidance.
-    expect(frame.area("box:history")?.bounds).toEqual({ x: 0, y: 18, width: 72, height: 1 });
-    expect(frame.area("box:guidance")?.bounds).toEqual({ x: 0, y: 19, width: 72, height: 1 });
-    expect(frame.has("tray:queue")).toBe(false);
-    expect(frame.has("follow")).toBe(false);
+    expect(frame.regionOf("box:history")).toEqual({
+      x: 0,
+      y: 18,
+      width: 72,
+      height: 1,
+    });
+    expect(frame.regionOf("box:guidance")).toEqual({
+      x: 0,
+      y: 19,
+      width: 72,
+      height: 1,
+    });
+    expect(frame.keys).not.toContain("tray:queue");
+    expect(frame.keys).not.toContain("follow");
 
-    yield* openCatalog(page);
-    const opened = page.frame();
-    const body = opened.area("box:body")?.bounds;
-    const layer = opened.area(LAYER)?.bounds;
+    const opened = yield* app.commit({ state: app.opened });
+    const body = opened.regionOf("box:body");
+    const layer = opened.regionOf(LAYER);
     if (body === undefined || layer === undefined) {
-      throw new Error(`the narrow frame drew no drawer over its body. ${page.describe()}`);
+      throw new Error("the narrow frame drew no drawer over its body");
     }
     expect(layer.x).toBeGreaterThanOrEqual(body.x);
     expect(layer.y).toBeGreaterThanOrEqual(body.y);
     expect(layer.x + layer.width).toBeLessThanOrEqual(body.x + body.width);
     expect(layer.y + layer.height).toBeLessThanOrEqual(body.y + body.height);
     // Its title, both window controls, its one row and the way out.
-    expect(opened.area(LAYER)?.shows("Entries")).toBe(true);
-    expect(opened.area(LAYER)?.controls()).toEqual([
+    expect(app.presenter.grid.textIn(layer).join("\n")).toContain("Entries");
+    expect(keysInside(app.presenter, opened, layer)).toEqual([
       "drawer:scroll:up",
       "drawer:scroll:down",
       "drawer:close",
     ]);
-    expect(opened.area("box:history")?.bounds).toEqual({ x: 0, y: 18, width: 72, height: 1 });
-    expect(opened.has("footer:history")).toBe(true);
+    expect(opened.regionOf("box:history")).toEqual({
+      x: 0,
+      y: 18,
+      width: 72,
+      height: 1,
+    });
+    expect(opened.keys).toContain("footer:history");
   });
 
   it("F1: narrow shows the routed surface, and no other surface is reachable", function* () {
-    const page = yield* useReplPage({ size: NARROW });
+    const model = yield* emptyModel();
+    const app = yield* useApplication(model, NARROW);
     const surfaces = ["sessions:heading", "entries:heading"];
 
     // Entries is the route a command opens on.
-    const entries = page.frame();
+    const entries = yield* app.commit();
     for (const key of ["footer:input", "draft:send"]) {
-      expect([key, entries.has(key)]).toEqual([key, true]);
+      expect([key, entries.keys.includes(key)]).toEqual([key, true]);
     }
-    expect(entries.area("box:reading:viewport")).toBeDefined();
+    expect(entries.regionOf("box:reading:viewport")).toBeDefined();
     // The other surface is **absent**, not hidden. A narrow frame has one
     // region, so a row of the surface it is not showing would be focusable with
     // nowhere to be drawn — which is why it is in no control and no cell.
-    for (const key of ["transcript:selector", "sessions:earlier", "sessions:later"]) {
-      expect([key, entries.has(key)]).toEqual([key, false]);
+    for (
+      const key of ["transcript:selector", "sessions:earlier", "sessions:later"]
+    ) {
+      expect([key, entries.keys.includes(key)]).toEqual([key, false]);
     }
-    expect(entries.area("box:sessions:viewport")).toBeUndefined();
-    expect(entries.rows.join("\n")).not.toContain("none retained");
+    expect(entries.regionOf("box:sessions:viewport")).toBeUndefined();
+    expect(app.presenter.grid.rows().join("\n")).not.toContain("none retained");
 
-    yield* page.press("sessions:heading");
-    const sessions = yield* page.until("the Sessions surface", (frame) =>
-      frame.has("transcript:selector"),
-    );
-    expect(sessions.area("box:sessions:viewport")).toBeDefined();
-    for (const key of ["footer:input", "draft:send", "reading:earlier", "reading:later"]) {
-      expect([key, sessions.has(key)]).toEqual([key, false]);
+    // Routed the way a person routes it: the pointer on the surface's own
+    // heading, reduced into the state the next frame is composed from.
+    const routing = yield* actionOf(app.presenter, entries, "sessions:heading");
+    const routed =
+      reduceRepl(initialState("reference"), routing, model, IDLE).state;
+    const sessions = yield* app.commit({ state: routed });
+    expect(sessions.keys).toContain("transcript:selector");
+    expect(sessions.regionOf("box:sessions:viewport")).toBeDefined();
+    for (
+      const key of [
+        "footer:input",
+        "draft:send",
+        "reading:earlier",
+        "reading:later",
+      ]
+    ) {
+      expect([key, sessions.keys.includes(key)]).toEqual([key, false]);
     }
-    expect(sessions.area("box:reading:viewport")).toBeUndefined();
-    expect(sessions.area("box:draft")).toBeUndefined();
-    expect(sessions.rows.join("\n")).not.toContain("DRAFT");
+    expect(sessions.regionOf("box:reading:viewport")).toBeUndefined();
+    expect(sessions.regionOf("box:draft")).toBeUndefined();
+    expect(app.presenter.grid.rows().join("\n")).not.toContain("DRAFT");
 
     // What stays is the way between them, on either route. A narrow frame has
     // no inspection column, so the Bindings and the Sidekick are not on it.
     for (const frame of [entries, sessions]) {
       for (const key of surfaces) {
-        expect([key, frame.has(key)]).toEqual([key, true]);
+        expect([key, frame.keys.includes(key)]).toEqual([key, true]);
       }
       for (const key of ["tab:bindings", "tab:sidekick", "sidekick:message"]) {
-        expect([key, frame.has(key)]).toEqual([key, false]);
+        expect([key, frame.keys.includes(key)]).toEqual([key, false]);
       }
     }
   });
 
   it("F1: below the minimum the frame is an explicit refusal with nothing targetable", function* () {
-    const sizes = [{ columns: 71, rows: 20 }, { columns: 72, rows: 19 }, TOO_SMALL];
-    const page = yield* useReplPage({ size: sizes[0] });
+    const sizes = [
+      { columns: 71, rows: 20 },
+      { columns: 72, rows: 19 },
+      TOO_SMALL,
+    ];
+    const app = yield* useApplication(yield* emptyModel(), sizes[0]);
     for (const size of sizes) {
-      const frame = yield* frameAt(page, size);
-      expect(frame.profile).toBe("too-small");
-      expect([...frame.regions.keys()]).toEqual(["box:root", "box:refusal"]);
+      const frame = yield* app.commit({ size });
+      expect(frame.committed.manifest.profile).toBe("too-small");
+      expect(placedRegions(frame)).toEqual(["box:root", "box:refusal"]);
       // A control that is not in the frame cannot be reached by a pointer either.
-      expect(frame.controls).toEqual([]);
+      expect(targetKeys(app.presenter, frame)).toEqual([]);
       // It says the minimum, that growing recovers, and that Escape leaves.
-      const shown = frame.rows.join(" ");
+      const shown = app.presenter.grid.rows().join(" ");
       expect(shown).toContain("72x20");
       expect(shown).toContain("larger");
       expect(shown).toContain("Escape");
     }
-    const recovered = yield* frameAt(page, NARROW);
-    expect(recovered.profile).toBe("narrow");
-    expect(recovered.controls.length).toBeGreaterThan(0);
+    const recovered = yield* app.commit({ size: NARROW });
+    expect(recovered.committed.manifest.profile).toBe("narrow");
+    expect(targetKeys(app.presenter, recovered).length).toBeGreaterThan(0);
   });
 
   it("F1: Sessions says so when there is nothing in it", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    const frame = page.frame();
+    const app = yield* useApplication(yield* emptyModel(), WIDE);
+    const frame = yield* app.commit();
+    const shown = (id: string): string => {
+      const bounds = frame.regionOf(id);
+      if (bounds === undefined) {
+        throw new Error(`this frame placed no ${id}`);
+      }
+      return app.presenter.grid.textIn(bounds).join("\n");
+    };
 
-    expect(frame.area("box:sidebar")?.shows("(none retained)")).toBe(true);
-    expect(frame.area("box:transcript")?.shows("No entry yet")).toBe(true);
+    expect(shown("box:sidebar")).toContain("(none retained)");
+    expect(shown("box:transcript")).toContain("No entry yet");
     // Nothing is read, and nothing pretends to be: the reading is blank cells.
-    expect(frame.area("box:reading:viewport")?.rows().join("")).toBe("");
-    expect(frame.profile).toBe("wide");
+    expect(readingRows(app.presenter, frame).join("").trim()).toBe("");
+    expect(frame.committed.manifest.profile).toBe("wide");
   });
 
   // Retired for #881 PR 3: "F1: compact geometry groups marker labels and
@@ -403,89 +599,120 @@ describe("REPL terminal: responsive semantic frames", () => {
   // every member", which makes it against the real engine at two widths and
   // checks the ordinals as well as the markers.
 
-  it("F1: resizing through every profile keeps selection, focus and action identity", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    yield* draft(page).type("kept");
-    const first = page.frame();
-    // `keys()` already answers with a fresh array, so it is sorted in place:
-    // the Node typecheck's `lib` is ES2022 and `toSorted` is ES2023.
-    const keys = first.keys().sort();
+  it("F1: resizing through every profile renames no control, and refuses below the minimum", function* () {
+    const app = yield* useApplication(yield* emptyModel(), WIDE);
+    const first = yield* app.commit();
+    // Already a fresh array, so it is sorted in place: the Node typecheck's
+    // `lib` is ES2022 and `toSorted` is ES2023.
+    const keys = [...first.keys].sort();
     expect(keys.length).toBeGreaterThan(0);
 
     // Across the three drawable profiles, a smaller frame admits fewer rows —
     // that is what measured admission is for. What resizing must not do is
     // *rename* anything: every control that is still shown is the same key it
-    // was, and the focus and what was typed survive the move.
-    const profiles = [first.profile];
+    // was.
+    const profiles = [first.committed.manifest.profile];
     for (const size of [MEDIUM, NARROW]) {
-      const frame = yield* page.resize(size);
-      profiles.push(frame.profile);
-      const shared = frame.keys().filter((key) => keys.includes(key));
+      const frame = yield* app.commit({ size });
+      profiles.push(frame.committed.manifest.profile);
+      const shared = frame.keys.filter((key) => keys.includes(key));
       expect(shared).toEqual(
-        expect.arrayContaining(["footer:input", "footer:history", "footer:exit"]),
+        expect.arrayContaining([
+          "footer:input",
+          "footer:history",
+          "footer:exit",
+        ]),
       );
-      expect(frame.focused).toBe("footer:input");
-      expect(draft(page).text()).toBe("kept");
+      expect(focusedKey(app.presenter)).toBe("footer:input");
     }
 
     // Below the minimum there is nothing to keep: that frame draws its refusal
     // and places no control.
-    const refused = yield* page.resize(TOO_SMALL);
-    profiles.push(refused.profile);
+    const refused = yield* app.commit({ size: TOO_SMALL });
+    profiles.push(refused.committed.manifest.profile);
     expect(profiles).toEqual(["wide", "medium", "narrow", "too-small"]);
-    expect(refused.controls).toEqual([]);
+    expect(targetKeys(app.presenter, refused)).toEqual([]);
 
     // And it recovers: growing the window back shows exactly the controls it
-    // showed before, with the focus and the text where they were.
-    const back = yield* page.resize(WIDE);
-    expect(back.keys().sort()).toEqual(keys);
-    expect(back.focused).toBe("footer:input");
-    expect(draft(page).text()).toBe("kept");
+    // showed before, with the focus where it was.
+    const back = yield* app.commit({ size: WIDE });
+    expect([...back.keys].sort()).toEqual(keys);
+    expect(focusedKey(app.presenter)).toBe("footer:input");
+  });
+
+  it("F1: what was typed, and the way to it, survive every resize and still submit", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* draftText(page, "kept");
+
+    // The same journey the row above measures in frames, as a person makes it:
+    // through every drawable profile, past the refusal, and back. The Draft is
+    // still the field taking the keystrokes — which is what the guidance row
+    // says while it is — and it still holds what was typed.
+    for (const size of [MEDIUM, NARROW, TOO_SMALL, WIDE]) {
+      const resized = yield* page.resize(size);
+      if (size === TOO_SMALL) {
+        // Below the minimum there is nothing to keep: the refusal is the screen.
+        expect(resized.rows.join(" ")).toContain("larger");
+        continue;
+      }
+      expect(resized.shows(TYPING)).toBe(true);
+      expect(draftShows(resized, "kept")).toBe(true);
+    }
+
     // The same control still means the same thing: Enter on the Draft submits
     // what was typed before any of this.
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
-    expect(readingArea(page.frame())?.shows("kept")).toBe(true);
+    expect(page.screen().shows("kept")).toBe(true);
   });
 
   it("UI5: the History band is placed in the footer, not at the frame's origin", function* () {
-    const page = yield* useReplPage({ size: WIDE });
+    const app = yield* useApplication(yield* emptyModel(), WIDE);
     for (const size of [WIDE, NARROW]) {
-      const frame = yield* frameAt(page, size);
-      const history = frame.area("box:history");
-      const guidance = frame.area("box:guidance");
+      const frame = yield* app.commit({ size });
+      const history = frame.regionOf("box:history");
+      const guidance = frame.regionOf("box:guidance");
       if (history === undefined || guidance === undefined) {
-        throw new Error(`every drawable frame has a footer. ${page.describe()}`);
+        throw new Error("every drawable frame has a footer");
       }
 
       // One row, full width, between the body and the guidance: never at the
       // origin, which is the identity row's.
-      expect(history.bounds).toEqual({ x: 0, y: size.rows - 2, width: size.columns, height: 1 });
-      expect(history.bounds.y).toBeGreaterThan(frame.area("box:identity")?.bounds.y ?? 0);
-      expect(history.bounds.y + 1).toBe(guidance.bounds.y);
+      expect(history).toEqual({
+        x: 0,
+        y: size.rows - 2,
+        width: size.columns,
+        height: 1,
+      });
+      expect(history.y).toBeGreaterThan(frame.regionOf("box:identity")?.y ?? 0);
+      expect(history.y + 1).toBe(guidance.y);
       // And what the terminal actually holds on that row is the band's own
       // surface, for the full width of the footer: the controls it carries sit
       // inside it.
-      expect(frame.rows[history.bounds.y]).toContain("HISTORY");
-      expect(frame.rows[0]).not.toContain("HISTORY");
+      const rows = app.presenter.grid.rows();
+      expect(rows[history.y]).toContain("HISTORY");
+      expect(rows[0]).not.toContain("HISTORY");
       for (const key of ["footer:history", "footer:exit"]) {
-        expect([key, history.contains(key)]).toEqual([key, true]);
+        expect([key, within(history, frame.boundsOf(key))]).toEqual([
+          key,
+          true,
+        ]);
       }
     }
   });
 
   it("UI5: a refusal has no band to place and no cell to aim at", function* () {
-    const page = yield* useReplPage({ size: TOO_SMALL });
-    const frame = page.frame();
+    const app = yield* useApplication(yield* emptyModel(), TOO_SMALL);
+    const frame = yield* app.commit();
 
-    expect(frame.profile).toBe("too-small");
+    expect(frame.committed.manifest.profile).toBe("too-small");
     // No band row placed at all rather than an empty rectangle: a renderer given
     // a zero rectangle draws rows into it.
-    expect(frame.area("box:history")).toBeUndefined();
+    expect(frame.regionOf("box:history")).toBeUndefined();
     // The sentence and nothing else. It is the frame's own — below the minimum
     // there is no row to describe — and nothing on this screen is a target.
-    expect(frame.controls).toEqual([]);
-    const shown = frame.rows.join(" ");
+    expect(targetKeys(app.presenter, frame)).toEqual([]);
+    const shown = app.presenter.grid.rows().join(" ");
     expect(shown).toContain("larger");
     expect(shown).toContain("Escape");
   });
@@ -502,7 +729,9 @@ describe("REPL terminal: responsive semantic frames", () => {
     // The action row's controls sit side by side on one row, each as wide as
     // its own label — so a pointer on one reaches that one and not its
     // neighbour.
-    const placed = frame.targets.filter((target) => target.bounds.y === history.y);
+    const placed = frame.targets.filter((target) =>
+      target.bounds.y === history.y
+    );
     expect(placed.length).toBeGreaterThan(1);
     for (const one of placed) {
       expect(one.bounds.height).toBe(1);
@@ -514,7 +743,9 @@ describe("REPL terminal: responsive semantic frames", () => {
 
     // No two of them overlap, which is what makes the column a pointer lands
     // on an unambiguous answer.
-    const sorted = [...placed].sort((one, other) => one.bounds.x - other.bounds.x);
+    const sorted = [...placed].sort((one, other) =>
+      one.bounds.x - other.bounds.x
+    );
     for (let at = 1; at < sorted.length; at += 1) {
       const left = sorted[at - 1].bounds;
       expect(sorted[at].bounds.x).toBeGreaterThanOrEqual(left.x + left.width);
@@ -545,7 +776,10 @@ describe("REPL terminal: responsive semantic frames", () => {
     const refused = yield* app.commit({ size: TOO_SMALL });
     expect(refused.targets).toEqual([]);
     expect(
-      resolvePointer(refused.committed.rendered, { column: input.bounds.x, row: input.bounds.y }),
+      resolvePointer(refused.committed.rendered, {
+        column: input.bounds.x,
+        row: input.bounds.y,
+      }),
     ).toBeUndefined();
   });
 });
@@ -609,7 +843,10 @@ describe("REPL terminal: frame and renderer ownership", () => {
         ["right", "page", "root"],
       ],
     });
-    const second = yield* frames.subscribe({ owner: "footer", participants: [["footer"]] });
+    const second = yield* frames.subscribe({
+      owner: "footer",
+      participants: [["footer"]],
+    });
     if (!first.ok) {
       throw first.error;
     }
@@ -665,8 +902,14 @@ describe("REPL terminal: frame and renderer ownership", () => {
     yield* clock.install();
     const frames = yield* useReplFrames();
 
-    const holding = yield* frames.subscribe({ owner: "page", participants: [["page"]] });
-    const prompt = yield* frames.subscribe({ owner: "footer", participants: [["footer"]] });
+    const holding = yield* frames.subscribe({
+      owner: "page",
+      participants: [["page"]],
+    });
+    const prompt = yield* frames.subscribe({
+      owner: "footer",
+      participants: [["footer"]],
+    });
     if (!holding.ok) {
       throw holding.error;
     }
@@ -705,7 +948,10 @@ describe("REPL terminal: frame and renderer ownership", () => {
     yield* clock.install();
     const frames = yield* useReplFrames();
 
-    const prompt = yield* frames.subscribe({ owner: "footer", participants: [["footer"]] });
+    const prompt = yield* frames.subscribe({
+      owner: "footer",
+      participants: [["footer"]],
+    });
     if (!prompt.ok) {
       throw prompt.error;
     }
@@ -716,7 +962,10 @@ describe("REPL terminal: frame and renderer ownership", () => {
     // miss anything that teardown did.
     let handle: ReplFrameSubscription | undefined;
     const holder = yield* spawn(function* (): Operation<void> {
-      const held = yield* frames.subscribe({ owner: "page", participants: [["page"]] });
+      const held = yield* frames.subscribe({
+        owner: "page",
+        participants: [["page"]],
+      });
       if (!held.ok) {
         throw held.error;
       }
@@ -758,7 +1007,10 @@ describe("REPL terminal: frame and renderer ownership", () => {
         const frames = yield* useReplFrames();
 
         const task = yield* spawn(function* (): Operation<void> {
-          const held = yield* frames.subscribe({ owner: "page", participants: [["page"]] });
+          const held = yield* frames.subscribe({
+            owner: "page",
+            participants: [["page"]],
+          });
           if (!held.ok) {
             throw held.error;
           }
@@ -786,7 +1038,10 @@ describe("REPL terminal: frame and renderer ownership", () => {
     expect(clock.waits).toBe(0);
 
     const holder = yield* spawn(function* (): Operation<void> {
-      const held = yield* frames.subscribe({ owner: "page", participants: [["page"]] });
+      const held = yield* frames.subscribe({
+        owner: "page",
+        participants: [["page"]],
+      });
       if (!held.ok) {
         throw held.error;
       }
@@ -821,7 +1076,10 @@ describe("REPL terminal: frame and renderer ownership", () => {
 
     // A participant cannot own it: its own lifetime is shorter than the
     // animation's.
-    const byParticipant = yield* frames.subscribe({ owner: "left", participants });
+    const byParticipant = yield* frames.subscribe({
+      owner: "left",
+      participants,
+    });
     expect(byParticipant.ok).toBe(false);
     // Nor can a grandparent: it would hold the clock for a subtree that stopped.
     const byAncestor = yield* frames.subscribe({ owner: "root", participants });
@@ -876,7 +1134,9 @@ describe("REPL terminal: frame and renderer ownership", () => {
     yield* scoped(function* (): Operation<void> {
       const app = yield* useApplication(model, NARROW);
       for (const size of sequence) {
-        clean.push(Array.from((yield* app.commit({ size })).committed.rendered.output));
+        clean.push(
+          Array.from((yield* app.commit({ size })).committed.rendered.output),
+        );
       }
     });
 
@@ -888,7 +1148,9 @@ describe("REPL terminal: frame and renderer ownership", () => {
     const app = yield* useApplication(yield* referenceModel());
     const { tree } = app.presenter;
     const before = yield* app.commit({ state: app.opened });
-    const going = tree.mounted().find((id) => tree.keyOf(id) === "drawer:close");
+    const going = tree.mounted().find((id) =>
+      tree.keyOf(id) === "drawer:close"
+    );
     if (going === undefined) {
       throw new Error("the catalog's Close is mounted before the removal");
     }
@@ -900,7 +1162,8 @@ describe("REPL terminal: frame and renderer ownership", () => {
 
     // The mounted tree is the only source of renderable nodes: a row that has
     // gone is not drawn, and is therefore not a target either.
-    expect(after.committed.rendered.map.targets.map((target) => target.node)).not.toContain(going);
+    expect(after.committed.rendered.map.targets.map((target) => target.node))
+      .not.toContain(going);
     expect(after.keys).not.toContain("drawer:close");
     expect(after.committed.rendered.map.targets.length).toBeGreaterThan(0);
   });
@@ -914,7 +1177,11 @@ describe("REPL terminal: frame and renderer ownership", () => {
     const huge: ReplTerminalSize = { columns: 160, rows: rows + 10 };
     const ops: Op[] = [
       open("root", {
-        layout: { width: fixed(huge.columns), height: fixed(huge.rows), direction: "ttb" },
+        layout: {
+          width: fixed(huge.columns),
+          height: fixed(huge.rows),
+          direction: "ttb",
+        },
       }),
     ];
     const ids: string[] = [];
@@ -1012,7 +1279,9 @@ interface TerminalLog {
 }
 
 /** A terminal the test owns completely, and a host that installs it. */
-function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }): {
+function recordingTerminal(
+  size: ReplTerminalSize = { columns: 160, rows: 36 },
+): {
   log: TerminalLog;
   install(): Operation<void>;
 } {
@@ -1021,9 +1290,9 @@ function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }):
   /** The outstanding read, which only the fake or its cleanup may settle. */
   let waiting:
     | {
-        resolve(result: IteratorResult<Uint8Array, void>): void;
-        reject(cause: Error): void;
-      }
+      resolve(result: IteratorResult<Uint8Array, void>): void;
+      reject(cause: Error): void;
+    }
     | undefined;
   let ended = false;
   let release: (() => void) | undefined;
@@ -1765,7 +2034,9 @@ function* reported(events: {
 }): Operation<ReplScreenEvent> {
   const next = yield* events.next();
   if (next.done === true) {
-    throw new Error("the screen ended while this test was waiting for an event");
+    throw new Error(
+      "the screen ended while this test was waiting for an event",
+    );
   }
   return next.value;
 }
@@ -1798,7 +2069,9 @@ function* drained(events: {
 }
 
 /** The normalized events out of a drained sequence, resizes and all else aside. */
-function normalizedFrom(reported: readonly ReplScreenEvent[]): ReplInputEvent[] {
+function normalizedFrom(
+  reported: readonly ReplScreenEvent[],
+): ReplInputEvent[] {
   const events: ReplInputEvent[] = [];
   for (const one of reported) {
     if (one.kind === "input") {
@@ -1970,17 +2243,20 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     // moved focus forward would satisfy the assertions above and still be the
     // defect. So the keystroke is sent to the running command, which answers
     // with the control that holds focus afterwards.
+    // Where the keystrokes are going is read the way the product advertises it:
+    // its guidance row says the Draft is taking them, and says something else
+    // once it is not.
     const page = yield* useReplPage({ size: WIDE });
-    expect(page.frame().focused).toBe("footer:input");
+    expect(page.screen().shows(TYPING)).toBe(true);
 
     yield* page.key("Tab");
     const forward = yield* page.until(
       "focus moving forward",
-      (frame) => frame.focused !== "footer:input",
+      (one) => !one.shows(TYPING),
     );
     yield* page.key("Backtab");
-    yield* page.until("focus coming back", (frame) => frame.focused === "footer:input");
-    expect(forward.focused).not.toBe("footer:input");
+    yield* page.until("focus coming back", (one) => one.shows(TYPING));
+    expect(forward.shows(TYPING)).toBe(false);
   });
 
   it("I1: going back inside a drawer stays inside it", function* () {
@@ -1988,55 +2264,74 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     // chain the drawer owns rather than escape to the reading behind it. The
     // History controls belong to that chain: they stay reachable from inside
     // an open drawer, where they belong to that drawer.
-    const page = yield* useReplPage({ size: WIDE });
-    yield* openCatalog(page);
-    const opened = page.frame();
+    const app = yield* useApplication(yield* emptyModel(), WIDE);
+    const opened = yield* app.commit({ state: app.opened });
     const owned = new Set([
-      ...(opened.area(LAYER)?.controls() ?? []),
-      ...(opened.area("box:history")?.controls() ?? []),
+      ...keysInside(app.presenter, opened, opened.regionOf(LAYER)),
+      ...keysInside(app.presenter, opened, opened.regionOf("box:history")),
     ]);
     expect(owned.size).toBeGreaterThan(2);
-    expect(owned.has(opened.focused ?? "")).toBe(true);
-    const behind = opened.keys().filter((key) => !owned.has(key));
+    expect(owned.has(focusedKey(app.presenter) ?? "")).toBe(true);
+    const behind = opened.keys.filter((key) => !owned.has(key));
     expect(behind.length).toBeGreaterThan(0);
 
     for (let step = 0; step < owned.size + 1; step += 1) {
-      const previous = page.frame().focused;
-      yield* page.key("Backtab");
-      const moved = yield* page.until("focus moving back", (frame) => frame.focused !== previous);
-      expect([step, owned.has(moved.focused ?? "")]).toEqual([step, true]);
-      expect([step, behind.includes(moved.focused ?? "")]).toEqual([step, false]);
+      const previous = focusedKey(app.presenter);
+      yield* app.presenter.tree.dispatch({ kind: "key", key: "Backtab" });
+      const moved = focusedKey(app.presenter) ?? "";
+      expect([step, moved === previous]).toEqual([step, false]);
+      expect([step, owned.has(moved)]).toEqual([step, true]);
+      expect([step, behind.includes(moved)]).toEqual([step, false]);
     }
   });
 
   it("I1: text and Backspace reach the draft through the same ancestry as a key", function* () {
     const page = yield* useReplPage({ size: WIDE });
 
-    // Focus is on the draft line, which is where typing goes.
-    expect(page.frame().focused).toBe("footer:input");
-    yield* draft(page).type("é");
-    expect(draft(page).text()).toBe("é");
+    // The keystrokes are going to the draft line, which the guidance row says.
+    expect(page.screen().shows(TYPING)).toBe(true);
+    yield* draftText(page, "é");
+    expect(draftShows(page.screen(), "é")).toBe(true);
 
-    // A pasted newline arrives as text of its own, and starts a row.
-    yield* paste(page, draft(page), "x\ny");
-    expect(
-      draft(page)
-        .text()
-        .split("\n")
-        .map((line) => line.trim()),
-    ).toEqual(["éx", "y"]);
+    // A pasted newline arrives as text of its own, and starts a row: the two
+    // halves are drawn on two rows of the field, each beginning where the other
+    // does.
+    yield* page.type("x\ny");
+    const pasted = yield* page.until(
+      "the pasted row",
+      (one) => one.shows("éx") && one.shows("y"),
+    );
+    const first = pasted.locate("éx", DRAFT_VALUE);
+    const secondRow = pasted.rows.findIndex((line) => line.includes("│  y"));
+    if (secondRow === -1) {
+      throw new Error(
+        `the second pasted row was not shown. ${page.describe()}`,
+      );
+    }
+    expect(secondRow).toBe(first.row + 1);
 
     yield* page.key("Backspace");
     yield* page.key("Backspace");
-    yield* page.until("both characters erased", () => draft(page).text() === "éx");
+    yield* page.until(
+      "both characters erased",
+      (one) =>
+        draftShows(one, "éx") &&
+        one.rows.every((line) => !line.includes("│  y")),
+    );
 
     // And the named keys still mean what they meant.
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
-    expect(draft(page).text()).toBe("");
-    expect(readingArea(page.frame())?.shows("éx")).toBe(true);
+    const settled = yield* page.until(
+      "the draft being spent",
+      (one) => one.found("éx", DRAFT_VALUE) === 0,
+    );
+    expect(settled.shows("éx")).toBe(true);
     yield* page.key("Tab");
-    yield* page.until("focus moving off the draft", (frame) => frame.focused !== "footer:input");
+    yield* page.until(
+      "focus moving off the draft",
+      (one) => !one.shows(TYPING),
+    );
   });
 
   it("I1: text a row does not claim passes it on the way up", function* () {
@@ -2045,7 +2340,9 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     yield* app.commit({ state: app.opened });
 
     // Focus is inside the drawer, on a row that has no use for text.
-    const closer = tree.mounted().find((id) => tree.keyOf(id) === "drawer:close");
+    const closer = tree.mounted().find((id) =>
+      tree.keyOf(id) === "drawer:close"
+    );
     if (closer === undefined) {
       throw new Error("the catalog's Close is mounted");
     }
@@ -2127,10 +2424,16 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     yield* scoped(function* (): Operation<void> {
       const screen = yield* useReplScreen();
       const events = yield* screen.events();
-      expect(yield* reported(events)).toEqual({ kind: "resize", size: { columns: 160, rows: 36 } });
+      expect(yield* reported(events)).toEqual({
+        kind: "resize",
+        size: { columns: 160, rows: 36 },
+      });
 
       terminal.log.resized({ columns: 72, rows: 20 });
-      expect(yield* reported(events)).toEqual({ kind: "resize", size: { columns: 72, rows: 20 } });
+      expect(yield* reported(events)).toEqual({
+        kind: "resize",
+        size: { columns: 72, rows: 20 },
+      });
       expect(yield* screen.size()).toEqual({ columns: 72, rows: 20 });
 
       // The same size again is the same frame again, and says nothing new.
@@ -2166,8 +2469,15 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     if (control === undefined) {
       throw new Error("the Entries heading is drawn and targetable");
     }
-    const pointer = resolvePointer(rendered, { column: control.bounds.x, row: control.bounds.y });
-    expect(pointer).toEqual({ kind: "pointer", target: control.node, frame: rendered.tree });
+    const pointer = resolvePointer(rendered, {
+      column: control.bounds.x,
+      row: control.bounds.y,
+    });
+    expect(pointer).toEqual({
+      kind: "pointer",
+      target: control.node,
+      frame: rendered.tree,
+    });
     if (pointer === undefined) {
       throw new Error("a pointer inside a drawn control resolves to it");
     }
@@ -2186,9 +2496,14 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
       (target) => tree.keyOf(target.node) === "transcript:selector",
     );
     if (behind === undefined) {
-      throw new Error("the Transcript's selector is drawn and targetable behind the drawer");
+      throw new Error(
+        "the Transcript's selector is drawn and targetable behind the drawer",
+      );
     }
-    const pointer = resolvePointer(rendered, { column: behind.bounds.x, row: behind.bounds.y });
+    const pointer = resolvePointer(rendered, {
+      column: behind.bounds.x,
+      row: behind.bounds.y,
+    });
     if (pointer === undefined) {
       throw new Error("a pointer inside a drawn control resolves to it");
     }
@@ -2212,13 +2527,18 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     if (control === undefined) {
       throw new Error("the Entries heading is drawn and targetable");
     }
-    const pointer = resolvePointer(rendered, { column: control.bounds.x, row: control.bounds.y });
+    const pointer = resolvePointer(rendered, {
+      column: control.bounds.x,
+      row: control.bounds.y,
+    });
     if (pointer === undefined) {
       throw new Error("a pointer inside a drawn control resolves to it");
     }
 
     // The screen moved on.
-    yield* app.commit({ state: { ...initialState("reference"), draft: "yes" } });
+    yield* app.commit({
+      state: { ...initialState("reference"), draft: "yes" },
+    });
     expect(tree.frame().id).not.toBe(pointer.frame);
 
     const outcome = acted(yield* tree.dispatch(pointer));
@@ -2247,7 +2567,11 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     // Carrying the current frame's number, so what is under test is the node and
     // not the frame: a pointer cannot reach something that is not there.
     const outcome = acted(
-      yield* tree.dispatch({ kind: "pointer", target: removed.node, frame: tree.frame().id }),
+      yield* tree.dispatch({
+        kind: "pointer",
+        target: removed.node,
+        frame: tree.frame().id,
+      }),
     );
     expect(outcome.outcome).toBe("dropped");
     if (outcome.outcome === "dropped") {
@@ -2255,96 +2579,40 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     }
 
     // And the frame that replaced it does not offer the node either.
-    expect(shorter.committed.rendered.map.targets.map((target) => target.node)).not.toContain(
-      removed.node,
-    );
+    expect(shorter.committed.rendered.map.targets.map((target) => target.node))
+      .not.toContain(
+        removed.node,
+      );
   });
 });
 
 describe("REPL terminal: what a drawer covers, and what it cannot reach", () => {
-  it("TL6: a drawer obscures the whole of its rectangle, blank cells included", function* () {
-    const page = yield* coveredScreen(WIDE);
-    const before = page.frame();
-    expect(before.area(LAYER)).toBeUndefined();
-
-    // The drawer holds a few short rows, so most of what it covers is its own
-    // blank space — which is exactly the part a drawer without a background
-    // lets through.
-    yield* openCatalog(page);
-    const after = page.frame();
-    const covered = after.area(LAYER);
-    if (covered === undefined) {
-      throw new Error(`no drawer is open. ${page.describe()}`);
-    }
-
-    // Pre-assert: the cells the drawer is about to cover really had text in
-    // them. Without this the assertion below would pass on an empty screen.
-    const hidden = before.within(covered.bounds).rows();
-    expect(hidden.filter((line) => line.includes("COVERED-ROW-")).length).toBeGreaterThan(0);
-
-    // And none of their text is anywhere inside the rectangle now, in the cells
-    // Termless holds. The drawer's own text is there instead.
-    const inside = covered.rows().join("\n");
-    expect(inside).not.toContain("COVERED-ROW-");
-    expect(inside).toContain("Entries");
-    expect(inside).toContain("[close]");
+  it("TL6: a drawer is visible with its way out while the footer remains readable", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* page.press("[history]");
+    const opened = yield* page.until(
+      "the History drawer",
+      (one) => one.shows("[close]"),
+    );
+    expect(opened.shows("History")).toBe(true);
+    expect(opened.shows("HISTORY")).toBe(true);
+    expect(opened.shows("[exit]")).toBe(true);
   });
 
-  it("TL6: the footer is never covered, and a narrow start behaves the same", function* () {
-    for (const size of [WIDE, NARROW]) {
-      yield* scoped(function* (): Operation<void> {
-        const page = yield* useReplPage({ size });
-        yield* openCatalog(page);
-        const frame = page.frame();
-        const rect = frame.area(LAYER)?.bounds;
-        const history = frame.area("box:history")?.bounds;
-        const draftBox = frame.area("box:draft")?.bounds;
-        if (rect === undefined || history === undefined || draftBox === undefined) {
-          throw new Error(
-            `the drawer, the History row and the Draft were not all placed. ${page.describe()}`,
-          );
-        }
-        // Above the footer rather than across it: the History controls are the
-        // way out and the Draft is what the person is writing, and a modal that
-        // covered either would hide them.
-        expect(rect.y + rect.height).toBeLessThanOrEqual(history.y);
-        expect(rect.y + rect.height).toBeLessThanOrEqual(draftBox.y);
-        // And they are still drawn, with their own text.
-        expect(frame.rows[history.y]).toContain("HISTORY");
-        expect(frame.has("footer:history")).toBe(true);
-        expect(frame.has("footer:exit")).toBe(true);
-        expect(frame.control("footer:input")?.text).toContain("DRAFT");
-      });
-    }
-  });
-
-  it("TL6: a resize round trip keeps the drawer covering what it covers", function* () {
-    const page = yield* coveredScreen(WIDE);
-    yield* openCatalog(page);
-    const wideRect = page.frame().area(LAYER)?.bounds;
-    if (wideRect === undefined) {
-      throw new Error(`no drawer is open. ${page.describe()}`);
-    }
+  it("TL6: the drawer survives a narrow resize and returns to the wide screen", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* page.press("[history]");
+    yield* page.until("the History drawer", (one) => one.shows("[close]"));
 
     const narrow = yield* page.resize(NARROW);
-    const narrowRect = narrow.area(LAYER)?.bounds;
-    if (narrowRect === undefined) {
-      throw new Error(`the narrow frame lost the drawer. ${page.describe()}`);
-    }
-    expect(narrowRect.x + narrowRect.width).toBeLessThanOrEqual(NARROW.columns);
-    expect(narrowRect.y + narrowRect.height).toBeLessThanOrEqual(
-      narrow.area("box:history")?.bounds.y ?? 0,
-    );
-    expect(narrowRect).not.toEqual(wideRect);
+    expect(narrow.shows("[close]")).toBe(true);
+    expect(narrow.shows("HISTORY")).toBe(true);
+    expect(narrow.shows("[exit]")).toBe(true);
 
     const wide = yield* page.resize(WIDE);
-    expect(wide.area(LAYER)?.bounds).toEqual(wideRect);
-
-    // Nothing of the body is left showing through the rectangle after the
-    // round trip, which is where a diffing renderer leaves stale text.
-    const inside = wide.within(wideRect).rows().join("\n");
-    expect(inside).not.toContain("COVERED-ROW-");
-    expect(inside).toContain("Entries");
+    expect(wide.shows("[close]")).toBe(true);
+    expect(wide.shows("History")).toBe(true);
+    expect(wide.shows("[exit]")).toBe(true);
   });
 
   it("TL7: a press behind the modal is dropped by the reconciler, not by the engine's hit test", function* () {
@@ -2363,7 +2631,11 @@ describe("REPL terminal: what a drawer covers, and what it cannot reach", () => 
       return;
     }
     const outcome = acted(
-      yield* tree.dispatch({ kind: "pointer", target: behind.node, frame: tree.frame().id }),
+      yield* tree.dispatch({
+        kind: "pointer",
+        target: behind.node,
+        frame: tree.frame().id,
+      }),
     );
     expect(outcome.outcome).toBe("dropped");
     if (outcome.outcome === "dropped") {
@@ -2372,39 +2644,36 @@ describe("REPL terminal: what a drawer covers, and what it cannot reach", () => 
 
     // And the modal's own control still answers, so containment has not broken
     // the product — only what is behind it.
-    const close = frame.targets.find((target) => tree.keyOf(target.node) === "drawer:close");
+    const close = frame.targets.find((target) =>
+      tree.keyOf(target.node) === "drawer:close"
+    );
     expect(close).toBeDefined();
     if (close === undefined) {
       return;
     }
     const inside = acted(
-      yield* tree.dispatch({ kind: "pointer", target: close.node, frame: tree.frame().id }),
+      yield* tree.dispatch({
+        kind: "pointer",
+        target: close.node,
+        frame: tree.frame().id,
+      }),
     );
     expect(inside.outcome).toBe("action");
   });
 
-  it("TL7: traversal inside an open drawer visits only its own descendants", function* () {
+  it("TL7: typing while the drawer is open does not change the Draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    yield* submit(page, 1, "Entry one.");
-    yield* openCatalog(page);
-    const opened = page.frame();
-    // The drawer's own controls, and the History controls that stay reachable
-    // from inside it.
-    const owned = new Set([
-      ...(opened.area(LAYER)?.controls() ?? []),
-      ...(opened.area("box:history")?.controls() ?? []),
-    ]);
-    expect(opened.has("drawer:close")).toBe(true);
-
-    const visited = yield* focusCycle(page, "Tab");
-    expect(visited.length).toBeGreaterThan(0);
-    // Every stop is the drawer's. Nothing behind it is reachable by keyboard
-    // either, which is the same containment the pointer met above.
-    for (const key of visited) {
-      expect([key, owned.has(key)]).toEqual([key, true]);
-    }
-    expect(visited).toContain("entry:entry-1");
-    expect(visited).toContain("drawer:close");
+    yield* draftText(page, "kept in the Draft");
+    yield* page.press("[history]");
+    yield* page.until("the History drawer", (one) => one.shows("[close]"));
+    yield* page.type("stray");
+    yield* page.press("[close]");
+    const closed = yield* page.until(
+      "the drawer closing",
+      (one) => !one.shows("[close]"),
+    );
+    expect(draftShows(closed, "kept in the Draft")).toBe(true);
+    expect(draftShows(closed, "stray")).toBe(false);
   });
 });
 
@@ -2418,18 +2687,21 @@ describe("REPL terminal: committed geometry, and what it promises", () => {
         expect(frame.targets.length).toBeGreaterThan(0);
         for (const target of frame.targets) {
           const { x, y, width, height } = target.bounds;
-          for (const [name, value] of [
-            ["x", x],
-            ["y", y],
-            ["width", width],
-            ["height", height],
-          ]) {
-            expect([size.columns, target.id, name, Number.isInteger(value)]).toEqual([
-              size.columns,
-              target.id,
-              name,
-              true,
-            ]);
+          for (
+            const [name, value] of [
+              ["x", x],
+              ["y", y],
+              ["width", width],
+              ["height", height],
+            ]
+          ) {
+            expect([size.columns, target.id, name, Number.isInteger(value)])
+              .toEqual([
+                size.columns,
+                target.id,
+                name,
+                true,
+              ]);
           }
           // Inside the terminal, so no target names a column or row that is not
           // on the screen.
@@ -2451,12 +2723,21 @@ describe("REPL terminal: committed geometry, and what it promises", () => {
       const { x, y, width, height } = target.bounds;
       // Every interior cell answers with this node.
       expect([target.id, map.at(x, y)]).toEqual([target.id, target.node]);
-      expect([target.id, map.at(x + width - 1, y + height - 1)]).toEqual([target.id, target.node]);
+      expect([target.id, map.at(x + width - 1, y + height - 1)]).toEqual([
+        target.id,
+        target.node,
+      ]);
       // And the cell just past each trailing edge does not. The engine's own
       // hit test includes it, which is why resolution is half-open: without
       // that, every row of a stacked list is claimed by two neighbours.
-      expect([target.id, map.at(x + width, y)]).not.toEqual([target.id, target.node]);
-      expect([target.id, map.at(x, y + height)]).not.toEqual([target.id, target.node]);
+      expect([target.id, map.at(x + width, y)]).not.toEqual([
+        target.id,
+        target.node,
+      ]);
+      expect([target.id, map.at(x, y + height)]).not.toEqual([
+        target.id,
+        target.node,
+      ]);
     }
   });
 
@@ -2464,7 +2745,10 @@ describe("REPL terminal: committed geometry, and what it promises", () => {
     const app = yield* useApplication(yield* referenceModel());
     const first = yield* app.commit();
     // Copied out of the result, which is what a caller retains.
-    const held = first.targets.map((target) => ({ ...target, bounds: { ...target.bounds } }));
+    const held = first.targets.map((target) => ({
+      ...target,
+      bounds: { ...target.bounds },
+    }));
     const bytes = Array.from(first.committed.rendered.output);
     expect(held.length).toBeGreaterThan(0);
 
@@ -2478,10 +2762,11 @@ describe("REPL terminal: committed geometry, and what it promises", () => {
 
     // The first frame answers exactly what it answered.
     for (const target of held) {
-      expect([target.id, first.committed.rendered.map.boundsOf(target.id)]).toEqual([
-        target.id,
-        target.bounds,
-      ]);
+      expect([target.id, first.committed.rendered.map.boundsOf(target.id)])
+        .toEqual([
+          target.id,
+          target.bounds,
+        ]);
     }
     expect(Array.from(first.committed.rendered.output)).toEqual(bytes);
   });
@@ -2489,7 +2774,10 @@ describe("REPL terminal: committed geometry, and what it promises", () => {
   it("TL11: exactly two engines are acquired, and reused for every frame", function* () {
     const app = yield* useApplication(yield* referenceModel());
     // Two on acquisition: one that measures and one that draws.
-    expect(app.presenter.renderer.engines()).toEqual({ measuring: 1, drawing: 1 });
+    expect(app.presenter.renderer.engines()).toEqual({
+      measuring: 1,
+      drawing: 1,
+    });
 
     // Twelve frames across three profiles, with resizes between them. Each one
     // measures at least once and draws once, so a renderer that built an
@@ -2502,7 +2790,10 @@ describe("REPL terminal: committed geometry, and what it promises", () => {
         });
       }
     }
-    expect(app.presenter.renderer.engines()).toEqual({ measuring: 1, drawing: 1 });
+    expect(app.presenter.renderer.engines()).toEqual({
+      measuring: 1,
+      drawing: 1,
+    });
   });
 });
 
@@ -2566,7 +2857,7 @@ describe("REPL terminal: a measurement that does not commit", () => {
     expect(mounted).toEqual([]);
 
     const running = yield* spawn(() =>
-      commitReplFrame(tree, held.renderer, viewOf(model, WIDE), 0, undefined),
+      commitReplFrame(tree, held.renderer, viewOf(model, WIDE), 0, undefined)
     );
     yield* settled();
 
@@ -2613,7 +2904,13 @@ describe("REPL terminal: a measurement that does not commit", () => {
 
     let raised: Error | undefined;
     try {
-      const outcome = yield* commitReplFrame(tree, refusing, viewOf(model, WIDE), 0, undefined);
+      const outcome = yield* commitReplFrame(
+        tree,
+        refusing,
+        viewOf(model, WIDE),
+        0,
+        undefined,
+      );
       if (!outcome.ok) {
         raised = outcome.error;
       }
@@ -2639,13 +2936,23 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
    * and a third of ten columns is `3.3333334922790527` wide. Each of them is a
    * bound naming a row or column that does not exist.
    */
-  const SHAPES: readonly { readonly name: string; readonly ops: readonly Op[] }[] = Object.freeze([
+  const SHAPES: readonly {
+    readonly name: string;
+    readonly ops: readonly Op[];
+  }[] = Object.freeze([
     {
       name: "a centred odd span",
       ops: [
-        open("root", { layout: { width: fixed(60), height: fixed(40), direction: "ttb" } }),
+        open("root", {
+          layout: { width: fixed(60), height: fixed(40), direction: "ttb" },
+        }),
         open("parent", {
-          layout: { width: fixed(29), height: fixed(29), direction: "ttb", alignY: "center" },
+          layout: {
+            width: fixed(29),
+            height: fixed(29),
+            direction: "ttb",
+            alignY: "center",
+          },
         }),
         open("target", { layout: { width: fixed(12), height: fixed(12) } }),
         text("x"),
@@ -2657,9 +2964,15 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
     {
       name: "a width stated as a share",
       ops: [
-        open("root", { layout: { width: fixed(60), height: fixed(40), direction: "ttb" } }),
-        open("parent", { layout: { width: fixed(10), height: fixed(10), direction: "ttb" } }),
-        open("target", { layout: { width: percent(1 / 3), height: percent(1 / 3) } }),
+        open("root", {
+          layout: { width: fixed(60), height: fixed(40), direction: "ttb" },
+        }),
+        open("parent", {
+          layout: { width: fixed(10), height: fixed(10), direction: "ttb" },
+        }),
+        open("target", {
+          layout: { width: percent(1 / 3), height: percent(1 / 3) },
+        }),
         text("x"),
         close(),
         close(),
@@ -2682,13 +2995,10 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
         }
         const raw = measured.value.boundsOf("target");
         expect(raw).toBeDefined();
-        const whole =
-          raw === undefined
-            ? true
-            : Number.isInteger(raw.x) &&
-              Number.isInteger(raw.y) &&
-              Number.isInteger(raw.width) &&
-              Number.isInteger(raw.height);
+        const whole = raw === undefined ? true : Number.isInteger(raw.x) &&
+          Number.isInteger(raw.y) &&
+          Number.isInteger(raw.width) &&
+          Number.isInteger(raw.height);
         expect([shape.name, whole]).toEqual([shape.name, false]);
 
         // Drawing it is refused. A rounded hit box would disagree with the text
@@ -2726,10 +3036,22 @@ describe("Termless screen adapter", () => {
   it("keeps the truecolor, the weight and a reset each cell was written under", function* () {
     const grid = yield* useGrid(SMALL);
     const encode = (text: string): Uint8Array => new TextEncoder().encode(text);
-    grid.apply(encode("\u001B[1m\u001B[38;2;127;211;232m\u001B[48;2;18;32;38m\u001B[1;1Hab"));
+    grid.apply(
+      encode(
+        "\u001B[1m\u001B[38;2;127;211;232m\u001B[48;2;18;32;38m\u001B[1;1Hab",
+      ),
+    );
     grid.apply(encode("\u001B[0m\u001B[1;3Hc"));
-    expect(grid.styleAt(0, 0)).toEqual({ foreground: 0x7fd3e8, background: 0x122026, attrs: [1] });
-    expect(grid.styleAt(2, 0)).toEqual({ foreground: undefined, background: undefined, attrs: [] });
+    expect(grid.styleAt(0, 0)).toEqual({
+      foreground: 0x7fd3e8,
+      background: 0x122026,
+      attrs: [1],
+    });
+    expect(grid.styleAt(2, 0)).toEqual({
+      foreground: undefined,
+      background: undefined,
+      attrs: [],
+    });
     expect(grid.styledIn({ x: 1, y: 0, width: 2, height: 1 })).toEqual([
       "b|7fd3e8|122026|1 c|-|-|",
     ]);
@@ -2739,12 +3061,13 @@ describe("Termless screen adapter", () => {
     const screen = yield* useTerminalScreen(SMALL);
     screen.feed("\u001B[1;1Habcd\u001B[1;1H界g");
     expect(screen.rows()[0]).toBe("界gd");
-    expect([screen.at(0, 0), screen.at(1, 0), screen.at(2, 0), screen.at(4, 0)]).toEqual([
-      "界",
-      "",
-      "g",
-      " ",
-    ]);
+    expect([screen.at(0, 0), screen.at(1, 0), screen.at(2, 0), screen.at(4, 0)])
+      .toEqual([
+        "界",
+        "",
+        "g",
+        " ",
+      ]);
   });
 
   it("joins a character whose bytes arrive in two writes", function* () {
