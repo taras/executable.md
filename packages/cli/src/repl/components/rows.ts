@@ -21,9 +21,12 @@
  * answer with a semantic action.
  */
 
+import { caretFor, moveCaret } from "../caret.ts";
+import type { ReplCaretRow } from "../caret.ts";
+
 import { component, fields } from "../description.ts";
 import type { ReplComponent, ReplInputEvent, ReplNode, ReplViewData } from "../description.ts";
-import type { ReplAction } from "./actions.ts";
+import type { ReplAction, ReplCaretKey, ReplFieldPurpose } from "./actions.ts";
 
 /** Read one string field, by parsing rather than by assertion. */
 export function textOf(input: ReplViewData, name: string): string {
@@ -116,6 +119,16 @@ export function fieldLabel(prompt: string, focused: boolean): string {
   return `${parts.marker}${parts.prompt}`;
 }
 
+/** The keys a field keeps for its caret, so they never become navigation. */
+const CARET_KEYS: ReadonlyMap<string, ReplCaretKey> = new Map<string, ReplCaretKey>([
+  ["ArrowUp", "ArrowUp"],
+  ["ArrowDown", "ArrowDown"],
+  ["ArrowLeft", "ArrowLeft"],
+  ["ArrowRight", "ArrowRight"],
+  ["Home", "Home"],
+  ["End", "End"],
+]);
+
 /** Read an optional string field. */
 function optional(input: ReplViewData, name: string): string | undefined {
   const value = fields(input)?.[name];
@@ -149,6 +162,12 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
       if (event.kind === "text") {
         return undefined;
       }
+      if (event.kind === "key") {
+        const beyond = revealed(node.input, event.key);
+        if (beyond !== undefined) {
+          return { kind: "reveal", key: beyond };
+        }
+      }
       if (event.kind !== "pointer" && event.key !== "Enter") {
         return undefined;
       }
@@ -156,6 +175,18 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
     });
   },
 });
+
+/**
+ * The row this key reaches that its window is not showing, if there is one.
+ *
+ * A row of a windowed list is told, by key, which of its logical neighbours lie
+ * outside the window. Every other arrow is left for navigation among the rows
+ * that are mounted.
+ */
+function revealed(input: ReplViewData, key: string): string | undefined {
+  const reveal = fields(fields(input)?.["reveal"] ?? null)?.[key];
+  return typeof reveal === "string" ? reveal : undefined;
+}
 
 /** What activating one row asks for, read from its own input. */
 function activation(input: ReplViewData): ReplAction | undefined {
@@ -424,8 +455,33 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       // The field this line edits, read off its own description. Text reaches
       // the field the person is actually on rather than whichever one the
       // application last recorded as selected.
+      if (event.kind === "key" && (event.key === "Alt+ArrowUp" || event.key === "Alt+ArrowDown")) {
+        const beyond = revealed(node.input, event.key);
+        if (beyond !== undefined) {
+          return { kind: "reveal", key: beyond };
+        }
+      }
       const named = optional(node.input, "field");
-      const owns: { readonly field?: string } = named === undefined ? {} : { field: named };
+      const purpose = optional(node.input, "purpose");
+      const question = optional(node.input, "question");
+      if (
+        purpose !== "draft" &&
+        purpose !== "message" &&
+        purpose !== "answer" &&
+        purpose !== "sidekick-answer" &&
+        purpose !== "configure-agent"
+      ) {
+        return undefined;
+      }
+      const owns: {
+        readonly purpose: ReplFieldPurpose;
+        readonly field?: string;
+        readonly question?: string;
+      } = {
+        purpose,
+        ...(named === undefined ? {} : { field: named }),
+        ...(question === undefined ? {} : { question }),
+      };
       if (event.kind === "text") {
         return { kind: "type", text: event.text, ...owns };
       }
@@ -434,6 +490,30 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       }
       if (event.key === "Backspace") {
         return { kind: "erase", ...owns };
+      }
+      const caret = CARET_KEYS.get(event.key);
+      if (caret !== undefined) {
+        const input = fields(node.input);
+        const value = textOf(node.input, "text");
+        const offset = input?.["caret"];
+        const column = input?.["column"];
+        const position = caretFor(
+          value,
+          typeof offset === "number"
+            ? {
+                value,
+                offset,
+                ...(typeof column === "number" ? { column } : {}),
+                ...(input?.["backward"] === true ? { backward: true } : {}),
+              }
+            : undefined,
+        );
+        return {
+          kind: "move-caret",
+          key: caret,
+          caret: moveCaret(position, caret, editorRows(node.input)),
+          ...owns,
+        };
       }
       if (event.key === "Enter") {
         return submission(node.input);
@@ -488,6 +568,10 @@ function submission(input: ReplViewData): ReplAction | undefined {
  * nothing else can answer for them.
  */
 function rendered(input: ReplViewData): string {
+  const shown = optional(input, "shown");
+  if (shown !== undefined) {
+    return shown;
+  }
   const focused = fields(input)?.["focused"] === true;
   const prompt = textOf(input, "prompt");
   if (fields(input)?.["block"] === true) {
@@ -541,6 +625,70 @@ export const REFUSAL: ReplComponent<ReplAction> = component<ReplAction>({
         return undefined;
       }
       return back === "live" ? { kind: "go-live" } : { kind: "select-surface", surface: "entries" };
+    });
+  },
+});
+
+function editorRows(input: ReplViewData): readonly ReplCaretRow[] {
+  const rows = fields(input)?.["caretRows"];
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  const result: ReplCaretRow[] = [];
+  for (const row of rows) {
+    const stops = fields(row)?.["stops"];
+    if (!Array.isArray(stops)) {
+      return [];
+    }
+    const parsed: { offset: number; column: number }[] = [];
+    for (const stop of stops) {
+      const offset = fields(stop)?.["offset"];
+      const column = fields(stop)?.["column"];
+      if (typeof offset !== "number" || typeof column !== "number") {
+        return [];
+      }
+      parsed.push({ offset, column });
+    }
+    if (parsed.length > 0) {
+      result.push({ stops: parsed });
+    }
+  }
+  return result;
+}
+
+export const READING: ReplComponent<ReplAction> = component<ReplAction>({
+  name: "reading-anchor",
+  attach(node) {
+    node.focusable();
+    node.render(textOf(node.input, "label"));
+    node.onInput((input) => node.render(textOf(input, "label")));
+    node.claim((event) => {
+      if (event.kind !== "key") {
+        return undefined;
+      }
+      if (event.key === "Enter") {
+        return { kind: "noop" };
+      }
+      const reading = fields(node.input)?.["reading"];
+      if (
+        reading !== "selected" &&
+        reading !== "chat" &&
+        reading !== "drawer" &&
+        reading !== "empty"
+      ) {
+        return undefined;
+      }
+      if (
+        event.key === "ArrowUp" ||
+        event.key === "ArrowDown" ||
+        event.key === "PageUp" ||
+        event.key === "PageDown" ||
+        event.key === "Home" ||
+        event.key === "End"
+      ) {
+        return { kind: "reading-key", reading, key: event.key };
+      }
+      return undefined;
     });
   },
 });

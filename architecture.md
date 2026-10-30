@@ -6844,6 +6844,46 @@ action; the tree walks that target's own ancestry, and the first node to handle
 the event produces the typed action the root acts on. An event nothing handles
 is an explicit failure.
 
+**Keyboard focus moves by regions, and the structure is derived, not stored.**
+A focusable description may carry a placement: its region — a key, a rank in
+the Tab cycle, an axis and an optional recovery preference — the nested groups
+between that region and itself, whether it heads the innermost group, and an
+entry preference. The tree derives the navigation structure from the placed
+controls of the active focus root in canonical mounted order whenever a key
+asks, so an unmounted or covered control is never a destination and Freedom
+stays the one focus store. Tab and Backtab are the tree's alone and go to the
+next or previous region at its fixed entry. Arrows, Home, End and the Page keys
+are offered to the focused control's ancestry first — a field keeps them for
+its caret, a reading for scrolling, a windowed row to ask for a hidden
+neighbour to be revealed — and what nothing handles is navigation: along a
+level's axis, into a group from its anchor, back out to it, or through an
+anchorless group to its parent. Alt+Up and Alt+Down step through the region's
+depth-first order. No move activates anything. A pushed modal is entered at its
+first region's entry; a removed or uncovered control's survivor is chosen from
+its own neighbours, then its ancestors' anchors and its region's entry, then the
+lowest recovery preference, never the first control on the screen. The
+validator refuses two declarations of one region, a group with two axes and a
+group with two anchors, because each would make where a key goes depend on
+mounting order.
+
+The application keeps editing state with each value owner: Draft, Message,
+each pending question's named values, and Configure Agent. The renderer's fitted
+rows supply grapheme boundaries and display columns for caret movement. The
+focused field names its destination; the root validates that owner before
+editing. Carets survive coverage and resize but add no mounted focus store,
+location member or retained record.
+
+A reading has one stable anchor over its admitted rows, with no extra row or
+pointer target. Its keys scroll only that viewport. Logical lists supply their
+own hidden-neighbour targets and use the measured admission to reveal a row
+before focusing it. A question's fixed Submit sits beside Close and any offered
+Stop; a drawer's Content, Actions and History/Exit are separate regions. Nested
+History retains the lower presentation under the same tree-owned modal lifetime.
+The narrow surface bar offers Sessions, Entries and Sidekick; only the routed
+outlet and its composer are mounted. A refusal below minimum mounts no controls,
+and recovery enters routed content before the surface bar. No background update
+selects a focus destination.
+
 Freedom is vendored from a pinned unpublished commit under
 `packages/cli/src/repl/vendor/freedom/`, as a pristine copy and a patched copy
 whose every difference belongs to one named patch. See its `PROVENANCE.md`.
@@ -7185,12 +7225,14 @@ and is not containment — whether a dispatch may reach a node behind the modal
 is the reconciler's to refuse, and it refuses with capture off.
 
 Text is its own member of that normalized union, not a key with a payload: a
-named key — submit, dismiss, traverse, erase — is a command whoever handles it
-recognizes, and text is content that goes wherever content goes. It carries what
-the terminal decoded, so shifted, accented and multi-byte characters arrive
-already assembled, and a newline inside a paste arrives as one. A chord carries
-a letter in its physical key code, and reading that code would type the letter
-somebody held Control with, so a chord is dropped whole — payload included.
+named key — submit, dismiss, traverse, move, erase — is a command whoever
+handles it recognizes, and text is content that goes wherever content goes.
+Text carries what the terminal decoded, so shifted, accented and multi-byte
+characters arrive already assembled, and a newline inside a paste arrives as
+one. A chord carries a letter in its physical key code, and reading that code
+would type the letter somebody held Control with, so a chord is dropped whole —
+payload included. Arrows, Home, End, the Page keys and Alt+Up/Down are named as
+pressed rather than dropped: they carry no text.
 
 **One renderer owns two engines, and they are not interchangeable.** The engine
 emits a complete redraw after any update that is not a no-op, so telling it a

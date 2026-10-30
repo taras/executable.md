@@ -169,17 +169,6 @@ function* ring(presenter: Presenter, key: "Tab" | "Backtab"): Operation<readonly
   throw new Error(`focus never came back round with ${key}`);
 }
 
-/** Walk the ring until this key holds focus, the way a person reaches one. */
-function* focusKey(presenter: Presenter, key: string): Operation<void> {
-  for (let press = 0; press < 200; press += 1) {
-    if (focusedKey(presenter) === key) {
-      return;
-    }
-    yield* presenter.tree.dispatch({ kind: "key", key: "Tab" });
-  }
-  throw new Error(`focus never reached ${key}`);
-}
-
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
 function* submit(page: ReplPage, order: number, source: string): Operation<void> {
   yield* pasteDraft(page, source);
@@ -383,9 +372,13 @@ describe("REPL layout: what a window admits", () => {
       // And the same in reverse: a hidden row is not reachable from either side.
       expect(backward).not.toContain(entryKey(order));
     }
-    for (const order of shown) {
-      expect(forward).toContain(entryKey(order));
+    expect(forward).toEqual([entryKey(shown[0] ?? 1), "drawer:close", "footer:history"]);
+    const local: (string | undefined)[] = [focusedKey(catalog.presenter)];
+    for (let at = 1; at < shown.length; at += 1) {
+      yield* catalog.presenter.tree.dispatch({ kind: "key", key: "Alt+ArrowDown" });
+      local.push(focusedKey(catalog.presenter));
     }
+    expect(local).toEqual(shown.map(entryKey));
   });
 
   it("TL3: no row is drawn outside the viewport it was admitted to", function* () {
@@ -419,7 +412,12 @@ describe("REPL layout: what a window admits", () => {
     // Visible, so it is a real control with real geometry and a Tab stop.
     expect(reached.observed.cells.get(last)?.trim()).toBe(entryLabel(CATALOG_ENTRIES));
     expect(targetKeys(catalog.presenter, reached.observed)).toContain(last);
-    yield* focusKey(catalog.presenter, last);
+    yield* catalog.presenter.commit(
+      viewOf(catalog.model, NARROW, {
+        state: { ...reached.state, restore: { kind: "reveal", key: last } },
+        focused: focusedKey(catalog.presenter),
+      }),
+    );
     expect(focusedKey(catalog.presenter)).toBe(last);
 
     // And back: the first row is reachable again from the far end.
@@ -1190,7 +1188,8 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
     ).state;
     const presenter = yield* usePresenter(WIDE);
     yield* presenter.commit(viewOf(model, WIDE, { state: selected }));
-    yield* focusKey(presenter, "work:crumb:0");
+    yield* presenter.tree.dispatch({ kind: "key", key: "Backtab" });
+    yield* presenter.tree.dispatch({ kind: "key", key: "ArrowRight" });
     expect(focusedKey(presenter)).toBe("work:crumb:0");
     const entered = yield* presenter.tree.dispatch({ kind: "key", key: "Enter" });
     if (!entered.ok) {
@@ -1212,7 +1211,7 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
       viewOf(model, WIDE, { state: history, focused: focusedKey(presenter) }),
     );
     const marker = `drawer:marker:${model.checkpoints[0]?.marker ?? ""}`;
-    yield* focusKey(presenter, marker);
+    expect(focusedKey(presenter)).toBe(marker);
     const before = yield* presenter.commit(
       viewOf(model, WIDE, { state: history, focused: focusedKey(presenter) }),
     );
@@ -1234,7 +1233,7 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
     expect(after.keys).toEqual(before.keys);
   });
 
-  it("Q-P1: three Backtabs reach the default composer without activating a pane", function* () {
+  it("Q-P1: four Backtabs reach the default composer without activating a pane", function* () {
     const model = yield* entriesModel(0);
     const live: ReplLive = { ...IDLE, sidekick: KERNEL_SIDEKICK };
     const view = viewFor(initialState("owned"), model, live, WIDE);
@@ -1243,9 +1242,9 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
     }
     const presenter = yield* usePresenter(WIDE);
     yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
-    yield* focusKey(presenter, "footer:input");
+    expect(focusedKey(presenter)).toBe("footer:input");
     const walked = yield* ring(presenter, "Backtab");
-    expect(walked.indexOf("sidekick:message")).toBe(3);
+    expect(walked.indexOf("sidekick:message")).toBe(4);
     expect(view.value.state.route.view).toBeUndefined();
   });
 
@@ -1371,7 +1370,8 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
           expect(observed.keys.filter((key) => key === "drawer:close")).toHaveLength(1);
           if (kind === "question") {
             expect(observed.keys).not.toContain("drawer:value:last");
-            expect(observed.keys).not.toContain("drawer:form:submit");
+            expect(observed.keys).toContain("drawer:form:submit");
+            expect(within(layer, observed.boundsOf("drawer:form:submit"))).toBe(true);
           }
         });
       }
@@ -1487,20 +1487,24 @@ describe("Owned narrow guidance and pane navigation routes", () => {
     const presenter = yield* usePresenter(NARROW);
     const state = initialState("owned");
     for (const [key, expected] of [
-      ["footer:input", "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move"],
+      ["footer:input", "Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓"],
       [
         "sessions:heading",
-        "Ready for Entry 1 · Enter activates · Tab/Shift+Tab move · Tab to draft",
+        "Ready for Entry 1 · Enter activates · Tab regions Alt↑↓ · Tab to draft",
       ],
-      ["footer:exit", "Ready for Entry 1 · Enter exits · Tab/Shift+Tab move · Tab to draft"],
-      ["footer:history", "Ready for Entry 1 · Enter opens · Tab/Shift+Tab move · Tab to draft"],
+      ["footer:exit", "Ready for Entry 1 · Enter exits · Tab regions Alt↑↓ · Tab to draft"],
+      ["footer:history", "Ready for Entry 1 · Enter opens · Tab regions Alt↑↓ · Tab to draft"],
     ]) {
-      yield* presenter.commit(viewOf(model, NARROW, { state }));
-      yield* focusKey(presenter, key);
+      yield* presenter.commit(
+        viewOf(model, NARROW, {
+          state: { ...state, restore: { kind: "reveal", key } },
+          focused: focusedKey(presenter),
+        }),
+      );
       yield* presenter.commit(viewOf(model, NARROW, { state, focused: focusedKey(presenter) }));
       const row = presenter.grid
         .rows()
-        .find((one) => one.includes("Tab/Shift+Tab move"))
+        .find((one) => one.includes("Tab regions Alt↑↓"))
         ?.trim();
       expect([key, row]).toEqual([key, expected]);
       expect(row?.length ?? 999).toBeLessThanOrEqual(72);
@@ -1549,21 +1553,31 @@ describe("Owned narrow guidance and pane navigation routes", () => {
       ["drawer:form:submit", "answers"],
       ["drawer:scroll:down", "scrolls"],
     ]) {
-      yield* focusKey(presenter, key);
+      const selected = viewFor(
+        { ...state, restore: { kind: "reveal", key } },
+        model,
+        live,
+        NARROW,
+        focusedKey(presenter),
+      );
+      if (!selected.ok) {
+        throw selected.error;
+      }
+      yield* presenter.commit(withWorkspace(selected.value, workspaceOf(model)));
       yield* presenter.commit(view(focusedKey(presenter)));
       const row = presenter.grid
         .rows()
-        .find((one) => one.includes("Tab/Shift+Tab move"))
+        .find((one) => one.includes("Tab regions Alt↑↓"))
         ?.trim();
       expect([key, row]).toEqual([
         key,
-        `Entry 1 question · Enter ${action} · Esc closes · Tab/Shift+Tab move`,
+        `Entry 1 question · Enter ${action} · Esc closes · Tab regions Alt↑↓`,
       ]);
       expect(row?.length ?? 999).toBeLessThanOrEqual(72);
     }
   });
 
-  it("UH2: the default composer reaches Sidekick and Bindings by six and seven Backtabs", function* () {
+  it("UH2: Message reaches the reading then the fixed Bindings tab without selecting it", function* () {
     const model = yield* entriesModel(0);
     const live: ReplLive = { ...IDLE, sidekick: KERNEL_SIDEKICK };
     const resolved = viewFor(initialState("owned"), model, live, WIDE);
@@ -1572,11 +1586,14 @@ describe("Owned narrow guidance and pane navigation routes", () => {
     }
     const presenter = yield* usePresenter(WIDE);
     yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
-    yield* focusKey(presenter, "sidekick:message");
+    for (let step = 0; step < 3; step += 1) {
+      yield* presenter.tree.dispatch({ kind: "key", key: "Tab" });
+    }
+    expect(focusedKey(presenter)).toBe("sidekick:message");
     const walked = yield* ring(presenter, "Backtab");
-    expect(walked.indexOf("tab:sidekick")).toBe(6);
-    expect(walked.indexOf("tab:bindings")).toBe(7);
-    expect(walked[walked.indexOf("sidekick:message") + 1]).toBe("sidekick:send");
+    expect(walked.slice(0, 3)).toEqual(["sidekick:message", "sidekick:anchor", "tab:bindings"]);
+    expect(walked).not.toContain("tab:sidekick");
+    expect(resolved.value.state.route.right).toBeUndefined();
   });
 });
 
@@ -1604,7 +1621,7 @@ describe("Owned footer, History and single-field inventory", () => {
     for (const word of ["HISTORY", "─", "[history]", "[exit]"]) {
       expect(rows[exit.y]).toContain(word);
     }
-    expect(rows.at(-1)).toContain("Tab/Shift+Tab");
+    expect(rows.at(-1)).toContain("Tab regions");
     for (const checkpoint of model.checkpoints) {
       expect(rows[0]).not.toContain(checkpoint.label);
     }
@@ -1698,7 +1715,7 @@ describe("Owned footer, History and single-field inventory", () => {
     expect(observed.keys.filter((key) => key.startsWith("drawer:value:"))).toEqual([
       "drawer:value:rule",
     ]);
-    yield* focusKey(presenter, "drawer:value:rule");
+
     expect(focusedKey(presenter)).toBe("drawer:value:rule");
   });
 });

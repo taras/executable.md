@@ -48,6 +48,7 @@ export type ReplPresentationRole =
   | "punctuation"
   /** The cue in front of the row a keystroke reaches. */
   | "focus-marker"
+  | "caret"
   /** What a run produced: the thing a reader came for. */
   | "output"
   /** Facts about an event rather than its result. */
@@ -430,6 +431,7 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
     case "xmd-delimiter":
       return REPL_PALETTE.delimiter;
     case "xmd-tag":
+    case "caret":
     case "focus-marker":
       return REPL_PALETTE.focus;
     case "xmd-attribute":

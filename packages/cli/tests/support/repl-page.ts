@@ -75,7 +75,22 @@ export interface ScreenReading {
   locate(text: string, scope?: ScreenScope): ScreenCell;
 }
 
-export type PageKey = "Enter" | "Escape" | "Tab" | "Backtab" | "Backspace";
+export type PageKey =
+  | "Enter"
+  | "Escape"
+  | "Tab"
+  | "Backtab"
+  | "Backspace"
+  | "ArrowUp"
+  | "ArrowDown"
+  | "ArrowLeft"
+  | "ArrowRight"
+  | "Home"
+  | "End"
+  | "PageUp"
+  | "PageDown"
+  | "Alt+ArrowUp"
+  | "Alt+ArrowDown";
 
 const KEYS: Readonly<Record<PageKey, string>> = Object.freeze({
   Enter: "\r",
@@ -83,6 +98,16 @@ const KEYS: Readonly<Record<PageKey, string>> = Object.freeze({
   Tab: "\t",
   Backtab: "\x1b[Z",
   Backspace: "\x7f",
+  ArrowUp: "\x1b[A",
+  ArrowDown: "\x1b[B",
+  ArrowLeft: "\x1b[D",
+  ArrowRight: "\x1b[C",
+  Home: "\x1b[H",
+  End: "\x1b[F",
+  PageUp: "\x1b[5~",
+  PageDown: "\x1b[6~",
+  "Alt+ArrowUp": "\x1b[1;3A",
+  "Alt+ArrowDown": "\x1b[1;3B",
 });
 
 export interface ReplPage {

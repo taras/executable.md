@@ -2042,7 +2042,7 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     // Retry sends, and neither is consumed by it.
     // The send left the keystrokes in the composer, so this needs no route.
     yield* typed(page, "something else");
-    yield* draftText(page, "mine");
+    yield* draftText(page, "mine", ["Tab", "Tab", "Tab", "Tab"]);
 
     // Two activations in one burst: the same one cycle a Send reserves, so the
     // second finds it held rather than starting a second turn.
@@ -2305,7 +2305,6 @@ describe("Configure notice fitting", () => {
     // thirty: the notice has to be paid out over rows, and every one of its
     // characters has to be on one of them.
     const LONG = "x".repeat(70);
-    yield* tab(page);
     yield* clearAgentField(page);
     yield* page.type(LONG);
     yield* noticed(page, `${LONG} has its own settings.`);
@@ -2346,7 +2345,6 @@ describe("Configure notice fitting", () => {
     // Each is one grapheme that is not one cell, and none of them may be cut
     // apart, dropped, or left behind when the notice that carries them goes.
     const WIDE = `${"界界 ".repeat(12).trim()} é́ \u{1F469}‍\u{1F4BB}`;
-    yield* tab(page);
     yield* clearAgentField(page);
     yield* page.type(WIDE);
     // Recovered as the grid can hold it: a cell carries a base character, and

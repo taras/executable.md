@@ -353,7 +353,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(yield* publishedPairs(host.root)).toEqual([]);
     yield* compose(page, "!");
     expect(composerHolds(page.screen(), "explain!")).toBe(true);
-    yield* draftText(page, "next");
+    yield* draftText(page, "next", ["Tab", "Tab", "Tab", "Tab"]);
     running.release();
     yield* awaited("the pair being published", () => gate.reaching(pair.sidekick) > 0);
     expect(yield* publishedPairs(host.root)).toEqual([execution]);
@@ -394,7 +394,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     yield* sendComposed(page);
     yield* saving.started();
     yield* compose(page, "!");
-    yield* draftText(page, "X");
+    yield* draftText(page, "X", ["Tab", "Tab", "Tab", "Tab"]);
     saving.release();
     yield* page.until("the reply arriving", (one) => one.shows("Understood."));
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
@@ -643,7 +643,7 @@ function* submittedUnderEdit(
   yield* reached.operation;
   let edited: string | undefined;
   if (edit) {
-    yield* draftText(page, "mine now");
+    yield* draftText(page, "mine now", ["Tab", "Tab", "Tab", "Tab"]);
     expect(page.screen().found("mine now", DRAFT_VALUE)).toBe(1);
     edited = "<GateThing />mine now";
   }
@@ -756,7 +756,7 @@ describe("Sidekick question announcement and modal ownership", () => {
     yield* sendMessage(page, "review it");
     yield* filing.started();
     yield* selectPane(page, "bindings");
-    yield* draftText(page, "mine");
+    yield* draftText(page, "mine", ["Tab", "Tab", "Tab"]);
     const fed = page.repl.terminal.fed;
     filing.release();
     yield* page.until("the question announcing without input", (one) =>
@@ -820,20 +820,80 @@ function* configured(page: ReplPage): Operation<void> {
   yield* page.until("Configure closing", (one) => !one.shows("[refresh]"));
 }
 
+describe("PV3/PV4: question and Configure editing", () => {
+  it("keeps each value's middle caret across close and a held History drawer", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    yield* page.type("draft-kept");
+    yield* page.until("the Draft value", (one) => one.shows("draft-kept"));
+    yield* pendingQuestion(page);
+    yield* openedQuestion(page);
+    yield* page.type("ab界");
+    yield* page.until("the answer value", (one) => one.shows("message: ab界"));
+    yield* page.key("ArrowLeft");
+    yield* sleep(30);
+    yield* page.type("!");
+    yield* page.until("the answer middle caret", (one) => one.shows("message: ab!界"));
+    yield* page.key("Escape");
+    yield* page.until(
+      "the held question notice",
+      (one) => one.shows("[answer sidekick]") && !one.shows("[submit]"),
+    );
+    yield* openedQuestion(page);
+    yield* page.type("?");
+    yield* page.until("the reopened answer caret", (one) => one.shows("message: ab!?界"));
+    yield* page.key("Escape");
+    yield* page.until("the question closing", (one) => !one.shows("[submit]"));
+    yield* openConfigure(page);
+    yield* page.key("Home");
+    yield* sleep(30);
+    yield* page.key("ArrowRight");
+    yield* sleep(30);
+    yield* page.type("X");
+    yield* page.until("the Agent middle caret", (one) => one.shows("Agent: sXcribe"));
+    yield* page.key("Backspace");
+    yield* page.until("the Agent value restored", (one) => one.shows("Agent: scribe"));
+    yield* tab(page);
+    yield* tab(page);
+    yield* page.key("Enter");
+    yield* page.until(
+      "History over Configure",
+      (one) => one.shows("History") && !one.shows("[refresh]"),
+    );
+    yield* tab(page);
+    yield* tab(page);
+    yield* page.key("ArrowRight");
+    yield* page.until("held History Exit guidance", (one) => one.shows("Enter exits"));
+    yield* page.key("ArrowLeft");
+    yield* page.until("held History opener guidance", (one) => one.shows("Enter opens History"));
+    yield* page.key("Backtab");
+    yield* sleep(30);
+    yield* page.key("Enter");
+    yield* page.until("the held Configure restored", (one) => one.shows("[refresh]"));
+    // Explicit restoration is the History opener; ordinary Content entry is Agent.
+    yield* page.key("Backtab");
+    yield* sleep(30);
+    yield* page.key("Backtab");
+    yield* sleep(30);
+    yield* page.type("!");
+    yield* page.until("the Agent caret survived History", (one) => one.shows("Agent: s!cribe"));
+    expect(page.screen().found("draft-kept", { after: "DRAFT" })).toBe(1);
+  });
+});
+
 describe("Configure keyboard, retained values and window ownership", () => {
-  it("CFG6: Tab and Shift+Tab move inside Configure, and Close or Escape return to its opener", function* () {
+  it("CFG6: local arrows reach Configure choices, and Close or Escape return to its opener", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
     yield* draftText(page, "note");
     yield* configureOpened(page);
-    yield* tab(page);
-    yield* tab(page);
-    yield* tab(page);
+    yield* page.key("Alt+ArrowDown");
+    yield* page.key("Alt+ArrowDown");
     yield* page.key("Enter");
     yield* page.until("the second choice selected by keyboard", (one) => one.shows("(x) Fast"));
-    yield* page.key("Backtab");
+    yield* page.key("ArrowUp");
     yield* page.key("Enter");
-    yield* page.until("Backtab returning to the first choice", (one) => one.shows("(x) Balanced"));
+    yield* page.until("Up returning to the first choice", (one) => one.shows("(x) Balanced"));
     yield* page.type("zz");
     yield* page.key("Escape");
     yield* configured(page);
@@ -847,7 +907,7 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* page.until("the opener receiving Enter after Close", (one) => one.shows("[refresh]"));
     yield* page.key("Escape");
     yield* configured(page);
-    yield* draftText(page, "-more");
+    yield* draftText(page, "-more", ["Backtab"]);
     expect(yield* finishDraft(page)).toBe("note-more");
   });
 
@@ -861,7 +921,11 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* page.press("[configure scribe]");
     yield* page.until("the advertised models", (one) => one.shows("Model 1"));
     expect(page.screen().shows("( ) Model 64")).toBe(false);
-    yield* scrollDrawerTo(page, "( ) Model 64");
+    for (let at = 0; at < 64; at += 1) {
+      yield* page.key("Alt+ArrowDown");
+      yield* sleep(30);
+    }
+    yield* page.until("keyboard reveal of Model 64", (one) => one.shows("( ) Model 64"));
     yield* chooseOffered(page, "Model 64");
     expect(page.screen().shows("(x) Model 64")).toBe(true);
     yield* scrollDrawerTo(page, "[apply]");
@@ -900,8 +964,8 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* openedQuestion(page);
     expect(page.screen().shows("(x) approve")).toBe(true);
     expect(page.screen().shows("message: ok")).toBe(true);
-    yield* tab(page);
-    yield* tab(page);
+    yield* page.key("Alt+ArrowDown");
+    yield* page.key("Alt+ArrowDown");
     yield* page.type("ay");
     yield* page.until("the complete value", (one) => one.shows("message: okay"));
     yield* page.press("[submit]");
@@ -920,7 +984,6 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* configureOpened(page);
     yield* page.resize(NARROW);
     expect(page.screen().shows("Balanced")).toBe(true);
-    yield* tab(page);
     yield* page.type("-two");
     yield* page.until("the narrow Agent field taking keys", (one) =>
       one.shows("Agent: scribe-two"),
@@ -1186,7 +1249,7 @@ describe("Transcript ownership and immutable older chat readings", () => {
     expect(page.screen().shows("[submit]")).toBe(false);
     expect(sidekickShows(page.screen(), "Older answer.")).toBe(true);
     expect(page.screen().shows("Noted.")).toBe(false);
-    yield* draftText(page, "my entry");
+    yield* draftText(page, "my entry", ["Tab", "Tab", "Tab"]);
     yield* page.press("[Back to current chat]");
     yield* page.until("the question notice coming home", (one) => one.shows("[answer sidekick]"));
     expect(page.screen().shows("[submit]")).toBe(false);
@@ -1204,7 +1267,7 @@ function* questionThroughKeyboard(explicit: boolean): Operation<ReplPage> {
   if (explicit) {
     yield* intoComposer(page);
   } else {
-    for (let press = 0; press < 3; press += 1) {
+    for (let press = 0; press < 4; press += 1) {
       yield* page.key("Backtab");
     }
   }
@@ -1224,7 +1287,7 @@ describe("Sidekick resize ownership", () => {
     const page = yield* questionThroughKeyboard(false);
     const narrow = yield* page.resize(NARROW);
     expect(narrow.shows("[submit]")).toBe(false);
-    yield* draftText(page, "ordinary");
+    yield* draftText(page, "ordinary", ["Tab"]);
     yield* page.until(
       "the visible Draft taking text",
       (one) => one.found("ordinary", { after: "DRAFT" }) === 1,
@@ -1298,7 +1361,7 @@ const LONG_SCHEMA = {
 function* scrollFormTo(page: ReplPage, label: string, direction: "up" | "down"): Operation<void> {
   for (let press = 0; press < 100 && !page.screen().shows(label); press += 1) {
     const before = page.screen().index;
-    yield* page.press(direction === "down" ? "[↓ later]" : "[↑ earlier]", { rightOf: "[close]" });
+    yield* page.press(direction === "down" ? "[↓ later]" : "[↑ earlier]", { rightOf: "[submit]" });
     yield* page.until("the form scrolling", (one) => one.index > before);
   }
   expect(page.screen().shows(label)).toBe(true);
@@ -1326,8 +1389,8 @@ describe("Sidekick drawers across every supported size", () => {
     yield* page.type("first");
     yield* page.until("the partial value", (one) => one.shows("one: first"));
     expect(page.screen().shows("last:")).toBe(false);
-    expect(page.screen().shows("[submit]")).toBe(false);
-    yield* scrollFormTo(page, "[submit]", "down");
+    expect(page.screen().shows("[submit]")).toBe(true);
+    yield* scrollFormTo(page, "last:", "down");
     expect(page.screen().shows("last:")).toBe(true);
     yield* scrollFormTo(page, "Fill this in.", "up");
     for (const size of PROFILES) {
@@ -1617,6 +1680,7 @@ describe("Older chats retain their identity across failure and cold opening", ()
       yield* pasteDraft(
         page,
         '<Session name="planner"><Prompt text="unfinished-entry" /></Session>\n',
+        ["Tab", "Tab", "Tab", "Tab"],
       );
       yield* page.key("Enter");
       yield* first.fake.holdingTurns(1);
@@ -1657,7 +1721,7 @@ describe("Older chats retain their identity across failure and cold opening", ()
       root = first.root;
       const page = yield* useReplPage({ host: first });
       yield* exchange(page, "only ask", "Only answer.");
-      yield* pasteDraft(page, TWO_STEP_ENTRY);
+      yield* pasteDraft(page, TWO_STEP_ENTRY, ["Tab", "Tab", "Tab", "Tab"]);
       yield* page.key("Enter");
       yield* entrySettles(page, 1, "ok");
       execution = yield* mountedExecution(page.repl);
@@ -2534,7 +2598,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
     const page = yield* useReplPage();
     yield* draftText(page, "kept entry");
     yield* compose(page, "kept question");
-    for (let press = 0; press < 6; press += 1) {
+    for (let press = 0; press < 1; press += 1) {
       const index = page.screen().index;
       yield* page.key("Backtab");
       yield* page.until("the preceding control", (one) => one.index > index);
@@ -2542,7 +2606,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
     yield* page.key("Backtab");
     yield* page.key("Enter");
     yield* page.until("keyboard selecting Bindings", (one) => !one.shows(COMPOSER));
-    yield* tab(page);
+    yield* page.key("ArrowRight");
     yield* page.key("Enter");
     yield* page.until("keyboard selecting Sidekick", (one) => one.shows(COMPOSER));
     expect(composerHolds(page.screen(), "kept question")).toBe(true);
@@ -2561,7 +2625,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
     yield* page.key("Enter");
     yield* page.until("the keyboard-opened History drawer", (one) => one.shows("[close]"));
     expect(page.screen().shows("Esc closes")).toBe(true);
-    expect(page.screen().shows("Tab/Shift+Tab move")).toBe(true);
+    expect(page.screen().shows("Tab regions Alt↑↓")).toBe(true);
     yield* page.key("Escape");
     yield* page.until("History closing once", (one) => !one.shows("[close]"));
     expect(composerHolds(page.screen(), "kept question")).toBe(true);
@@ -2571,7 +2635,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
   it("UH4: resizing through narrow and back keeps both texts, and narrow grows no tabs", function* () {
     const page = yield* useReplPage();
     yield* draftText(page, "kept entry");
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       const index = page.screen().index;
       yield* page.key("Backtab");
       yield* page.until("the default composer's route", (one) => one.index > index);
@@ -2667,6 +2731,7 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     yield* newConversation(page);
     yield* exchange(page, "newer ask", "Newer answer.");
     page.repl.fake.script({ reply: "ENTRY-ANSWER" });
+    yield* intoDraft(page, ["Tab", "Tab", "Tab", "Tab"]);
     yield* entryRun(page, promptEntry("kept-entry"), 1);
     yield* draftText(page, "my entry");
     yield* compose(page, "half typed");
@@ -2689,6 +2754,7 @@ describe("Sidekick original reveal and cold decision coverage", () => {
     yield* newConversation(page);
     yield* exchange(page, "newer ask", "Newer answer.");
     page.repl.fake.script({ reply: "ENTRY-ANSWER" });
+    yield* intoDraft(page, ["Tab", "Tab", "Tab", "Tab"]);
     yield* entryRun(page, promptEntry("kept-entry"), 1);
     yield* draftText(page, "my entry");
     yield* compose(page, "half typed");
@@ -2779,7 +2845,7 @@ describe("Sidekick original populated chat profiles", () => {
     }
     yield* newConversation(page);
     yield* exchange(page, "current ask", "Current answer.");
-    yield* draftText(page, "my entry");
+    yield* draftText(page, "my entry", ["Tab", "Tab", "Tab", "Tab"]);
     yield* compose(page, "my q");
     yield* reachTurn(page, "old-6 ");
     yield* page.until("the populated older reading", (one) => chatHas(one, "OLD-6"));
@@ -2808,7 +2874,7 @@ describe("Sidekick original populated chat profiles", () => {
   it("SS7: three profiles keep both sections, the window, Back and both texts", function* () {
     const page = yield* useReplPage();
     yield* exchange(page, "older ask", "Older answer.");
-    yield* draftText(page, "my entry");
+    yield* draftText(page, "my entry", ["Tab", "Tab", "Tab", "Tab"]);
     yield* compose(page, "my q");
     yield* chooseTurn(page, "older ask ");
     yield* page.until("the current chat explicitly selected", (one) =>

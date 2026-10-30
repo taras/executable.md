@@ -1828,18 +1828,6 @@ function* pointed(tree: ReplTree<ReplAction>, frame: Frame, key: string): Operat
   return dispatched.value.action;
 }
 
-/** Tab until the control this key names holds focus, the way a person reaches it. */
-function* focusTo(tree: ReplTree<ReplAction>, key: string): Operation<void> {
-  for (let press = 0; press < 400; press += 1) {
-    const node = tree.focused();
-    if (node !== undefined && tree.keyOf(node) === key) {
-      return;
-    }
-    yield* tree.dispatch({ kind: "key", key: "Tab" });
-  }
-  throw new Error(`focus never reached ${key}`);
-}
-
 /** Activate the focused control, and answer what it asked for. */
 function* activated(tree: ReplTree<ReplAction>): Operation<ReplAction> {
   const dispatched = yield* tree.dispatch({ kind: "key", key: "Enter" });
@@ -2297,13 +2285,24 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     const model = projected(events);
     const tree = yield* useReplTree<ReplAction>();
     const view = reading(initialState(EXECUTION), model, NOTHING_LIVE, NARROW);
-    const frame = yield* drawn(tree, view, NARROW);
+    let frame = yield* drawn(tree, view, NARROW);
 
     const key = (yield* catalogOf(view))[2]?.key;
     if (key === undefined) {
       throw new Error("this window places more than two catalog rows");
     }
-    yield* focusTo(tree, key);
+    const seeded = viewFor(
+      { ...view.state, restore: { kind: "reveal", key } },
+      view.model,
+      view.live,
+      view.size,
+      view.focused,
+      view.navigation,
+    );
+    if (!seeded.ok) {
+      throw seeded.error;
+    }
+    frame = yield* drawn(tree, seeded.value, NARROW);
     const pressed = yield* activated(tree);
     expect(yield* pointed(tree, frame, key)).toEqual(pressed);
     expect(pressed).toEqual({ kind: "select-scope", scopes: [key.slice("entry:".length)] });
@@ -2498,6 +2497,7 @@ function* outputText(view: ReplView): Operation<string> {
   return (yield* describedBy(view))
     .filter(
       (one) =>
+        one.key === "reading:anchor" ||
         one.key === "reading:caption:output" ||
         one.key.startsWith("reading:caption:output+") ||
         one.key.startsWith("reading:output:"),
@@ -3136,7 +3136,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
       for (const size of [WIDE, NARROW]) {
         expect([size.columns, yield* stateRow(empty, EMPTY_MODEL, NOTHING_LIVE, size)]).toEqual([
           size.columns,
-          `Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move`,
+          `Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓`,
         ]);
       }
 
@@ -3155,7 +3155,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
         "Entry 1 waiting for an answer · activate answer",
       );
       expect(yield* stateRow(state, unsettled, waiting, NARROW)).toBe(
-        "Entry 1 question · activate answer · Type here · Tab/Shift+Tab move",
+        "Entry 1 question · activate answer · Type here · Tab regions Alt↑↓",
       );
 
       // The same history with no question outstanding: running, and Enter is not
@@ -3165,7 +3165,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
         "Entry 1 running · Enter unavailable until it finishes",
       );
       expect(yield* stateRow(state, unsettled, busy, NARROW)).toBe(
-        "Entry 1 running · Enter unavailable · Type here · Tab/Shift+Tab move",
+        "Entry 1 running · Enter unavailable · Type here · Tab regions Alt↑↓",
       );
 
       // Admitted, no outcome, and nothing running it. The file is what decides
@@ -3176,7 +3176,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
         "Entry 1 unfinished · no successor can start",
       );
       expect(yield* stateRow(state, unsettled, abandoned, NARROW)).toBe(
-        "Entry 1 unfinished · no successor · Type here · Tab/Shift+Tab move",
+        "Entry 1 unfinished · no successor · Type here · Tab regions Alt↑↓",
       );
 
       // Answered, and joined.
@@ -3199,7 +3199,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
         "Entry 1 settling · Enter unavailable until teardown finishes",
       );
       expect(yield* stateRow(state, settled, tearing, NARROW)).toBe(
-        "Entry 1 settling · Enter unavailable · Type here · Tab/Shift+Tab move",
+        "Entry 1 settling · Enter unavailable · Type here · Tab regions Alt↑↓",
       );
 
       // And every one of them is a different sentence.

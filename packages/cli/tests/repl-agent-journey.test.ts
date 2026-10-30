@@ -1,6 +1,6 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, suspend, until as untilResolved, withResolvers } from "effection";
+import { scoped, sleep, spawn, suspend, until as untilResolved, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { useTempFileCompiler } from "@executablemd/core";
 import { ensureDir, writeTextFile } from "@effectionx/fs";
@@ -1789,11 +1789,14 @@ function* answerField(page: ReplPage, name: string, value: string): Operation<vo
       : name === "summary"
         ? "One-sentence description:"
         : "feedback:";
-  yield* page.press(label, name === "feedback" ? { onRow: "*feedback:" } : { rightOf: "[close]" });
+  if (name !== "project") {
+    yield* page.key("Alt+ArrowDown");
+    yield* sleep(30);
+    yield* page.key("Alt+ArrowDown");
+    yield* sleep(30);
+  }
   yield* page.type(value);
-  yield* page.until(`${name} taking the answer`, (one) =>
-    one.rows.some((row) => row.includes(": " + value)),
-  );
+  yield* page.until(`${name} taking the answer`, (one) => one.shows(`${label} ${value}`));
 }
 
 function chooseOption(page: ReplPage, _field: string, option: string): Operation<void> {

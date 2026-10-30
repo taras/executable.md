@@ -18,7 +18,7 @@ import type { Operation } from "effection";
 import { ReplTerminal } from "../../src/repl/terminal.ts";
 import { MOUNTED_DEADLINE_MS } from "./mounted-repl.ts";
 import type { Terminal } from "./mounted-repl.ts";
-import type { ReplPage, ScreenReading, ScreenScope } from "./repl-page.ts";
+import type { PageKey, ReplPage, ScreenReading, ScreenScope } from "./repl-page.ts";
 
 /** The Draft's own heading, which its Send shares a row with. */
 export const DRAFT = " DRAFT";
@@ -96,33 +96,13 @@ export function* typed(page: ReplPage, text: string): Operation<void> {
   yield* page.until(`the screen showing ${JSON.stringify(text)}`, (one) => one.shows(text));
 }
 
-/**
- * Walk the focus ring to the Draft.
- *
- * The product advertises both the route and the arrival: its guidance row says
- * "Type here" while the Draft takes the keystrokes and offers the way to it
- * otherwise. The ring wraps, so the walk is bounded.
- * Receipt: work/terminal-field-routes-2/receipts/.
- */
-export function* intoDraft(page: ReplPage): Operation<void> {
-  for (let press = 0; press < 40 && !page.screen().shows(TYPING); press += 1) {
-    yield* tab(page);
-  }
-  if (!page.screen().shows(TYPING)) {
-    // The guidance row is where this product advertises the Draft, and a
-    // refusal takes that row for itself. History is the way to put a sentence
-    // like that away: it is modal, it changes no entry, and closing it leaves
-    // the guidance row saying what the focus ring is doing again.
-    yield* page.press("[history]");
-    yield* page.until("the History drawer", (one) => one.shows("[close]"));
-    yield* page.press("[close]");
-    yield* page.until("the drawer closing", (one) => !one.shows("[close]"));
-    for (let press = 0; press < 40 && !page.screen().shows(TYPING); press += 1) {
-      yield* tab(page);
-    }
-  }
-  if (!page.screen().shows(TYPING)) {
-    throw new Error(`the Draft never took the keystrokes. ${page.describe()}`);
+/** Follow the caller's known route back to the Draft. */
+export function* intoDraft(page: ReplPage, route: readonly PageKey[] = []): Operation<void> {
+  for (const name of route) {
+    const before = page.screen().index;
+    yield* page.key(name);
+    yield* page.until(`the screen after ${name}`, (one) => one.index > before);
+    yield* sleep(30);
   }
 }
 
@@ -167,8 +147,12 @@ function* pressTab(
  * from the last line's own words rather than from the whole text: a wrapped
  * value is not on the screen as one string.
  */
-export function* pasteDraft(page: ReplPage, text: string): Operation<void> {
-  yield* intoDraft(page);
+export function* pasteDraft(
+  page: ReplPage,
+  text: string,
+  route: readonly PageKey[] = [],
+): Operation<void> {
+  yield* intoDraft(page, route);
   // The last word rather than the last line: a field fits a value into the
   // rows it has, so a long line is not on the screen as one string.
   const last = (text.trimEnd().split(/\s+/).at(-1) ?? "").slice(0, 24);
@@ -179,9 +163,13 @@ export function* pasteDraft(page: ReplPage, text: string): Operation<void> {
   );
 }
 
-/** Put this text in the Draft, wherever the keystrokes were going before. */
-export function* draftText(page: ReplPage, text: string): Operation<void> {
-  yield* intoDraft(page);
+/** Put this text in the already active Draft. */
+export function* draftText(
+  page: ReplPage,
+  text: string,
+  route: readonly PageKey[] = [],
+): Operation<void> {
+  yield* intoDraft(page, route);
   yield* typed(page, text);
 }
 
@@ -214,7 +202,7 @@ export function stopSidekick(page: ReplPage): Operation<void> {
   if (reading.shows(COMPOSER)) {
     return page.press("[stop]", SIDEKICK_CONTROLS);
   }
-  return page.press("[stop]", { rightOf: "[close]" });
+  return page.press("[stop]", { onRow: "[close]" });
 }
 
 /** Its own Send offered and its own Stop gone. */
@@ -387,14 +375,14 @@ export function* openQuestion(page: ReplPage): Operation<void> {
 /**
  * Answer a question form's second field, the one that takes text.
  *
- * Two Tabs from the opened form reach its editable line: the first selects the
- * field, the second its value. An enum field is chosen rather than typed into,
+ * Two local moves from the first editable value pass the second field's label
+ * and reach its value. An enum field is chosen rather than typed into,
  * so the text field is the second of this product's review forms.
  * Receipt: work/terminal-field-routes-2/receipts/.
  */
 export function* intoSecondField(page: ReplPage): Operation<void> {
-  yield* tab(page);
-  yield* tab(page);
+  yield* page.key("Alt+ArrowDown");
+  yield* page.key("Alt+ArrowDown");
 }
 
 /** Walk that route and type this answer, which is what says the field took it. */
@@ -459,7 +447,7 @@ export function selectPane(page: ReplPage, pane: "sidekick" | "bindings"): Opera
  * left edge: the readings behind it are left of that cell.
  */
 export function drawerShows(reading: ScreenReading, text: string): boolean {
-  return reading.shows("[close]") && reading.found(text, { rightOf: "[close]" }) > 0;
+  return drawerLines(reading).some((row) => row.includes(text));
 }
 
 /**
@@ -493,7 +481,7 @@ export function chosen(reading: ScreenReading, name: string): boolean {
 /** Press this choice, inside the drawer that offers it, and wait for its mark. */
 export function* chooseOffered(page: ReplPage, name: string): Operation<void> {
   yield* offeredChoice(page, name);
-  yield* page.press(name, { rightOf: "[close]" });
+  yield* page.press(name, { onRow: choiceRow(page.screen(), name) });
   yield* page.until(`${name} being chosen`, (one) => chosen(one, name));
 }
 
@@ -511,13 +499,11 @@ export function* closeConfigure(page: ReplPage): Operation<void> {
 /**
  * Replace the agent Configure is holding.
  *
- * One Tab from the opened drawer reaches that field — its own row carries a
- * static "> Agent: " prompt, so the cue there says nothing about focus — then
- * Backspaces take the name it holds and the replacement is typed in.
+ * Configure enters its Agent field. Backspaces take the name it holds and the
+ * replacement is typed in.
  * Receipt: work/terminal-field-routes-2/receipts/.
  */
 export function* replaceAgent(page: ReplPage, name: string): Operation<void> {
-  yield* tab(page);
   yield* retypeAgent(page, name);
 }
 
@@ -571,11 +557,19 @@ export function* scrollDrawerTo(page: ReplPage, text: string): Operation<void> {
 }
 
 /** The open drawer's own rows, from the way out it draws rightward. */
+function drawerEdge(reading: ScreenReading): number {
+  return Math.min(
+    ...["[submit]", "[stop]", "[close]"]
+      .filter((label) => reading.found(label, { onRow: "[close]" }) === 1)
+      .map((label) => reading.locate(label, { onRow: "[close]" }).column),
+  );
+}
+
 export function drawerLines(reading: ScreenReading): string[] {
   if (!reading.shows("[close]")) {
     return [];
   }
-  const edge = reading.locate("[close]").column;
+  const edge = drawerEdge(reading);
   return reading.rows.map((row) => row.slice(Math.min(edge, row.length)));
 }
 
@@ -584,7 +578,7 @@ export function besideDrawer(reading: ScreenReading): string[] {
   if (!reading.shows("[close]")) {
     return [...reading.rows];
   }
-  const edge = reading.locate("[close]").column;
+  const edge = drawerEdge(reading);
   return reading.rows.map((row) => row.slice(0, Math.min(edge, row.length)));
 }
 

@@ -80,29 +80,11 @@ function* seedCheckout(home: string): Operation<string> {
   return checkout;
 }
 
-/** Walk the focus ring until this control is the marked one. */
-export function* reach(pty: Pty, label: string): Operation<void> {
-  const deadline = Date.now() + ACT_MS;
-  while (!(yield* pty.shows()).some((line) => line.includes(`> ${label}`))) {
-    if (Date.now() > deadline) {
-      throw new Error(
-        `focus never reached ${label} under ${cliRuntime()}. screen=` +
-          JSON.stringify((yield* pty.shows()).map((one) => one.trimEnd())),
-      );
-    }
-    yield* pty.type("\t");
-    yield* sleep(250);
-  }
-}
-
 /**
  * Activate the control holding this text with a pointer.
  *
  * The screen asks for SGR mouse reporting, so a press and a release at the
- * cell the text starts in is what a person's click is. It is needed because the
- * focus ring inside the question drawer does not stop on an enum's offered
- * values: they are drawn and pointable, and a pointer is how a keyboard-only
- * harness reaches one.
+ * cell the text starts in is what a person's click is. A choice and Submit remain separate actions.
  */
 export function* click(pty: Pty, text: string): Operation<void> {
   const screen = yield* pty.shows();
@@ -224,8 +206,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     yield* showing(first, "waiting for an answer", ACT_MS);
 
     // Left through [exit], with the question still open.
-    yield* reach(first, "[exit]");
-    yield* first.type("\r");
+    yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
     const location = printedLocation((yield* first.shows()).join("\n"));
 
@@ -253,8 +234,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     // *pointer* last selected rather than the line holding focus, so an enum is
     // what a pointer alone can settle. Reported as a non-blocking observation;
     // it is not this feature's behavior.
-    yield* reach(second, "[answer]");
-    yield* second.type("\r");
+    yield* click(second, "[answer]");
     // The prompt the drawer renders carries the binding the completed read
     // produced — `first`, from a record — while the file on disk says `second`.
     // A replayed read would have bound the new text, and this is where that
@@ -269,8 +249,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     // The suffix write executed, for the first time, on the answer.
     yield* holding(join(checkout, "after.md"), "continued");
 
-    yield* reach(second, "[exit]");
-    yield* second.type("\r");
+    yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
 
     // A separate new entry, opened at the same location: its read is new work,
@@ -289,8 +268,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     yield* third.type("\r");
     yield* showing(third, "live is second", ACT_MS);
 
-    yield* reach(third, "[exit]");
-    yield* third.type("\r");
+    yield* click(third, "[exit]");
     expect(yield* ended(third)).toBe(0);
   });
 }
@@ -479,8 +457,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     expect(yield* exists(join(working, "after.md"))).toBe(false);
     yield* showing(first, "waiting for an answer", ACT_MS);
 
-    yield* reach(first, "[exit]");
-    yield* first.type("\r");
+    yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
     const location = printedLocation((yield* first.shows()).join("\n"));
 
@@ -500,8 +477,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     expect(yield* readTextFile(join(working, "obsolete.md"))).toBe("back again");
     expect(yield* exists(join(working, "after.md"))).toBe(false);
 
-    yield* reach(second, "[answer]");
-    yield* second.type("\r");
+    yield* click(second, "[answer]");
     yield* showing(second, "Recorded value: first", ACT_MS);
     yield* showing(second, "Continue this experiment?", ACT_MS);
     yield* click(second, "( ) continue");
@@ -513,8 +489,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     // checkout the restored placement named.
     yield* holding(join(working, "after.md"), "continued");
 
-    yield* reach(second, "[exit]");
-    yield* second.type("\r");
+    yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
 
     // A separate new entry, selecting the same placement afresh: its selection
@@ -527,8 +502,7 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     yield* third.type("\r");
     yield* showing(third, "live is second", ACT_MS);
 
-    yield* reach(third, "[exit]");
-    yield* third.type("\r");
+    yield* click(third, "[exit]");
     expect(yield* ended(third)).toBe(0);
   });
 }
@@ -566,8 +540,7 @@ export function replUnsupportedSelection(repl: ReplCommand): Operation<void> {
     // Nothing was placed: no managed layout was created at all.
     expect(yield* exists(join(home, ".xmd", "repositories", "repositories"))).toBe(false);
 
-    yield* reach(pty, "[exit]");
-    yield* pty.type("\r");
+    yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
 }
@@ -600,8 +573,7 @@ export function replOrdinaryFileWork(repl: ReplCommand): Operation<void> {
     // entry is waiting rather than because it has not got there yet.
     expect(yield* exists(join(checkout, "after.md"))).toBe(false);
 
-    yield* reach(pty, "[exit]");
-    yield* pty.type("\r");
+    yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
 }
@@ -829,8 +801,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     // below say something.
     expect((yield* logged(shim.log)).length > 0).toBe(true);
 
-    yield* reach(first, "[exit]");
-    yield* first.type("\r");
+    yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
     const location = printedLocation((yield* first.shows()).join("\n"));
 
@@ -865,8 +836,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     expect(yield* gitSaid(working, ["write-tree"], home)).toBe(theirIndex);
     expect(yield* exists(join(working, "after.md"))).toBe(false);
 
-    yield* reach(second, "[answer]");
-    yield* second.type("\r");
+    yield* click(second, "[answer]");
     // The saved object id, which describes the earlier commit rather than
     // today's HEAD.
     yield* showing(second, `Recorded commit: ${recorded}`, ACT_MS);
@@ -878,8 +848,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     // The suffix write executed, for the first time, on the answer.
     yield* holding(join(working, "after.md"), "continued");
 
-    yield* reach(second, "[exit]");
-    yield* second.type("\r");
+    yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
 
     // A separate new entry: its Add and its Commit are new work, so they stage
@@ -898,8 +867,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     expect(yield* gitSaid(working, ["show", "HEAD:today.md"], home)).toBe("today");
     expect(yield* gitSaid(working, ["show", "HEAD:note.md"], home)).toBe("second");
 
-    yield* reach(third, "[exit]");
-    yield* third.type("\r");
+    yield* click(third, "[exit]");
     expect(yield* ended(third)).toBe(0);
   });
 }
@@ -953,8 +921,7 @@ export function replUnsupportedGit(repl: ReplCommand): Operation<void> {
     expect(yield* gitSaid(checkout, ["write-tree"], home)).toBe(index);
     expect(yield* exists(join(home, ".xmd", "repositories"))).toBe(false);
 
-    yield* reach(pty, "[exit]");
-    yield* pty.type("\r");
+    yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
 }

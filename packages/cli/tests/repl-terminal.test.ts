@@ -565,11 +565,10 @@ describe("REPL terminal: responsive semantic frames", () => {
     expect(profiles).toEqual(["wide", "medium", "narrow", "too-small"]);
     expect(targetKeys(app.presenter, refused)).toEqual([]);
 
-    // And it recovers: growing the window back shows exactly the controls it
-    // showed before, with the focus where it was.
+    // The refusal clears focus; recovery enters the first wide region.
     const back = yield* app.commit({ size: WIDE });
     expect([...back.keys].sort()).toEqual(keys);
-    expect(focusedKey(app.presenter)).toBe("footer:input");
+    expect(focusedKey(app.presenter)).toBe("transcript:selector");
   });
 
   it("F1: what was typed, and the way to it, survive every resize and still submit", function* () {
@@ -578,8 +577,8 @@ describe("REPL terminal: responsive semantic frames", () => {
 
     // The same journey the row above measures in frames, as a person makes it:
     // through every drawable profile, past the refusal, and back. The Draft is
-    // still the field taking the keystrokes — which is what the guidance row
-    // says while it is — and it still holds what was typed.
+    // the field taking the keystrokes until refusal clears focus, and it
+    // keeps its text after recovery.
     for (const size of [MEDIUM, NARROW, TOO_SMALL, WIDE]) {
       const resized = yield* page.resize(size);
       if (size === TOO_SMALL) {
@@ -587,12 +586,16 @@ describe("REPL terminal: responsive semantic frames", () => {
         expect(resized.rows.join(" ")).toContain("larger");
         continue;
       }
-      expect(resized.shows(TYPING)).toBe(true);
+      if (size !== WIDE) {
+        expect(resized.shows(TYPING)).toBe(true);
+      }
       expect(draftShows(resized, "kept")).toBe(true);
     }
 
-    // The same control still means the same thing: Enter on the Draft submits
-    // what was typed before any of this.
+    // Transcript -> Selected work -> Draft after recovery.
+    yield* page.key("Tab");
+    yield* page.key("Tab");
+    yield* page.until("Draft input after recovery", (one) => one.shows(TYPING));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     expect(page.screen().shows("kept")).toBe(true);
@@ -2037,7 +2040,9 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
       }
 
       // A key nothing has a meaning for is dropped rather than invented into one.
-      terminal.log.feed(BYTES.encode("\x1b[A"));
+      // An arrow is named now — the tree reads it as navigation — so the key
+      // nothing has a meaning for is a function key.
+      terminal.log.feed(BYTES.encode("\x1bOP"));
       terminal.log.feed(BYTES.encode("\r"));
       expect(yield* reported(events)).toEqual({
         kind: "input",
@@ -2182,6 +2187,8 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
       ...keysInside(app.presenter, opened, opened.regionOf("box:history")),
     ]);
     expect(owned.size).toBeGreaterThan(2);
+    // Empty History has a stable reading anchor whose cell is blank.
+    owned.add("drawer:reading:anchor");
     expect(owned.has(focusedKey(app.presenter) ?? "")).toBe(true);
     const behind = opened.keys.filter((key) => !owned.has(key));
     expect(behind.length).toBeGreaterThan(0);
@@ -2245,6 +2252,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     if (closer === undefined) {
       throw new Error("the catalog's Close is mounted");
     }
+    yield* tree.dispatch({ kind: "key", key: "Backtab" });
     yield* tree.dispatch({ kind: "key", key: "Backtab" });
     expect(tree.focused()).toBe(closer);
 

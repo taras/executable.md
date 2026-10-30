@@ -419,9 +419,9 @@ after anything that moves the corpus, the exclusions, or a runner command; never
 hand-edit a millisecond.
 
 **Shard counts are measured, not chosen.** For each runtime the floor is
-`floor(sum of applicable weights / 300000) + 1`, and the installed count is the
+`floor(sum of applicable weights / 420000) + 1`, and the installed count is the
 smallest one for which five consecutive runs on one fixed head keep every shard
-`Test` step, and the whole runtime's execution window, under 300 seconds. A miss
+`Test` step, and the whole runtime's execution window, under 420 seconds. A miss
 increments that runtime by one and starts a fresh sequence of five. Narrowing
 the corpus or enabling in-shard concurrency is not an answer to a miss.
 

@@ -47,7 +47,7 @@ import { NARROW } from "../src/repl/layout.ts";
 import { flatten } from "../src/repl/layout.ts";
 import { fields, readDescription } from "../src/repl/description.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
-import type { ReplDescription } from "../src/repl/description.ts";
+import type { ReplDescription, ReplKey } from "../src/repl/description.ts";
 import { ENTRY_SCOPE, projectRepl } from "../src/repl/model.ts";
 import type { ReplElicitation, ReplModel, ReplScope } from "../src/repl/model.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
@@ -517,6 +517,32 @@ function* drive(
 }
 
 describe("F2 — invalid stays open; valid is exact", () => {
+  it("PV3: named entry fields retain independent middle carets through a rejected answer", function* () {
+    const asked = yield* askingFor(DETAILS_SCHEMA);
+    const live = asking(asked.question);
+    const first = yield* drive(opened(live), live, [
+      { kind: "type", field: "project", text: "a\u0301界" },
+      {
+        kind: "move-caret",
+        field: "project",
+        key: "ArrowLeft",
+        caret: { value: "a\u0301界", offset: 2 },
+      },
+      { kind: "type", field: "description", text: "other" },
+      { kind: "type", field: "project", text: "中" },
+      { kind: "erase", field: "project" },
+    ]);
+    expect(first.state.form.values).toEqual({ project: "a\u0301界", description: "other" });
+    expect(first.state.form.carets?.["project"]?.offset).toBe(2);
+    const rejected = {
+      ...first.state,
+      form: { ...first.state.form, messages: [{ field: "project", message: "try again" }] },
+    };
+    const continued = yield* drive(rejected, live, [{ kind: "type", field: "project", text: "!" }]);
+    expect(continued.state.form.values).toEqual({ project: "a\u0301!界", description: "other" });
+    expect(continued.state.form.messages).toEqual([]);
+  });
+
   it("F2: choosing Request changes with no feedback keeps the question and says why", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA);
     const live = asking(asked.question);
@@ -730,7 +756,7 @@ function* admissionOf(
   size = NARROW,
   engine?: ReplRenderer,
 ): Operation<ReplAdmission> {
-  const view = reading(state, live, model, size, undefined);
+  const view = reading(state, live, model, size, "drawer:reading:anchor");
   return (yield* contextOf(view, engine)).admission;
 }
 
@@ -836,7 +862,7 @@ describe("F3 — complete content and reachable navigation", () => {
     expect(keys.get("drawer:value:text")).toBe(true);
     expect(keys.get("drawer:field:stop")).toBe(true);
     // And what a person only reads inside the same drawer is not a target.
-    expect(keys.get("drawer:message:0")).toBe(false);
+    expect(keys.get("drawer:reading:anchor")).toBe(false);
   });
 
   it("F3: scrolling places every essential control in the narrow frame", function* () {
@@ -853,7 +879,7 @@ describe("F3 — complete content and reachable navigation", () => {
     for (let press = 0; press < 120; press++) {
       for (const [key, targetable] of yield* laidOutKeys(
         tree,
-        reading(state, live, EMPTY_MODEL, NARROW, undefined),
+        reading(state, live, EMPTY_MODEL, NARROW, "drawer:reading:anchor"),
       )) {
         if (targetable || !reached.has(key)) {
           reached.set(key, targetable || (reached.get(key) ?? false));
@@ -904,20 +930,17 @@ describe("F3 — complete content and reachable navigation", () => {
 
     let state = opened(live);
     const rows: string[] = [];
-    const seenKeys = new Set<string>();
     for (let press = 0; press < 160; press++) {
-      const view = reading(state, live, EMPTY_MODEL, NARROW, undefined);
-      for (const [key] of yield* laidOutKeys(tree, view)) {
-        if (key.startsWith("drawer:message:") && !seenKeys.has(key)) {
-          seenKeys.add(key);
-        }
-      }
-      for (const row of yield* framed(state, live)) {
-        if (
-          row.key.startsWith("drawer:message:") &&
-          !rows.includes(row.key + "\u0000" + row.label)
-        ) {
-          rows.push(row.key + "\u0000" + row.label);
+      const view = reading(state, live, EMPTY_MODEL, NARROW, "drawer:reading:anchor");
+      const context = yield* contextOf(view);
+      const from = context.admission.windows.get(DRAWER_WINDOW)?.from ?? 0;
+      const placed = rowsOf(presentationFor(view, context).descriptions).filter(
+        (row) => row.key === "drawer:reading:anchor" || row.key.startsWith("drawer:message:"),
+      );
+      for (const [at, row] of placed.entries()) {
+        const value = `${from + at}\u0000${row.label}`;
+        if (!rows.includes(value)) {
+          rows.push(value);
         }
       }
       const next = reduceRepl(
@@ -947,7 +970,7 @@ describe("F3 — complete content and reachable navigation", () => {
     const whole = flat(
       rows
         .map((one) => one.split("\u0000"))
-        .sort((a, b) => Number(a[0].split(":")[2]) - Number(b[0].split(":")[2]))
+        .sort((a, b) => Number(a[0]) - Number(b[0]))
         .map(([, label]) => label)
         .join(" "),
     );
@@ -958,8 +981,8 @@ describe("F3 — complete content and reachable navigation", () => {
     // nowhere to put its tail and the window has no second row to scroll to.
     // So every message row must fit the width the drawer was measured at.
     const room =
-      (yield* contextOf(reading(opened(live), live, EMPTY_MODEL, NARROW, undefined))).widths
-        ?.drawer ?? 0;
+      (yield* contextOf(reading(opened(live), live, EMPTY_MODEL, NARROW, "drawer:reading:anchor")))
+        .widths?.drawer ?? 0;
     expect(room).toBeGreaterThan(0);
     const overflowing = rows
       .map((one) => one.split("\u0000"))
@@ -985,7 +1008,7 @@ describe("F3 — complete content and reachable navigation", () => {
     for (let press = 0; press < 160; press++) {
       for (const [key, targetable] of yield* laidOutKeys(
         tree,
-        reading(at, live, EMPTY_MODEL, NARROW, undefined),
+        reading(at, live, EMPTY_MODEL, NARROW, "drawer:reading:anchor"),
       )) {
         if (targetable) {
           reached.add(key);
@@ -1006,13 +1029,19 @@ describe("F3 — complete content and reachable navigation", () => {
     expect(reached.has("drawer:form:submit")).toBe(true);
   });
 
-  it("F3: the viewport walks the whole message before the form controls", function* () {
+  it("F3: the viewport walks the whole message while Submit stays fixed", function* () {
     const asked = yield* askingFor(PLAN_SCHEMA, DRAFT);
     const live = asking(asked.question);
     const shown = (rows: readonly { readonly key: string; readonly label: string }[]): string[] =>
-      rows.filter((one) => one.key.startsWith("drawer:message:")).map((one) => one.label.trim());
+      rows
+        .filter(
+          (one) =>
+            (one.key === "drawer:reading:anchor" && DRAFT.split("\n").includes(one.label.trim())) ||
+            one.key.startsWith("drawer:message:"),
+        )
+        .map((one) => one.label.trim());
 
-    const first = yield* framed(opened(live), live);
+    const first = yield* framed(opened(live), live, NARROW, "drawer:reading:anchor");
     // Not every line at once, and the first window starts at the beginning.
     expect(shown(first).length).toBeGreaterThan(0);
     expect(shown(first).length).toBeLessThan(40);
@@ -1025,7 +1054,7 @@ describe("F3 — complete content and reachable navigation", () => {
     let sawSubmit = false;
     let submitBeforeLastLine = false;
     for (let press = 0; press < 120; press++) {
-      const rows = yield* framed(state, live);
+      const rows = yield* framed(state, live, NARROW, "drawer:reading:anchor");
       for (const label of shown(rows)) {
         if (!seenLines.includes(label)) {
           seenLines.push(label);
@@ -1054,7 +1083,7 @@ describe("F3 — complete content and reachable navigation", () => {
     expect(seenLines[0]).toBe("draft line 0");
     expect(seenLines[39]).toBe("draft line 39");
     expect(sawSubmit).toBe(true);
-    expect(submitBeforeLastLine).toBe(false);
+    expect(submitBeforeLastLine).toBe(true);
 
     // Clamped at the end rather than wrapping, and one press back moves
     // immediately because the stored offset was clamped.
@@ -1117,9 +1146,9 @@ describe("F3 — complete content and reachable navigation", () => {
     // the drawer this one control opens. The row above walks all forty lines of
     // it; this one holds the two halves together, so a trigger that stopped
     // announcing cannot be mistaken for a question that stopped being readable.
-    const opening = yield* framed(opened(live), live);
+    const opening = yield* framed(opened(live), live, NARROW, "drawer:reading:anchor");
     const message = opening
-      .filter((one) => one.key.startsWith("drawer:message:"))
+      .filter((one) => one.key === "drawer:reading:anchor" || one.key.startsWith("drawer:message:"))
       .map((one) => one.label.trim());
     expect(message[0]).toBe("draft line 0");
   });
@@ -1170,7 +1199,9 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
 
     // Answered by activating the option control the drawer mounted: Enter on
     // it is one keystroke, and what it produces is the ordinary action.
-    yield* focusTo(tree, "drawer:choice:decision:Approve");
+    yield* tree.dispatch({ kind: "key", key: "Alt+ArrowUp" });
+    yield* tree.dispatch({ kind: "key", key: "Alt+ArrowUp" });
+    expect(keyed(tree)).toBe("drawer:choice:decision:Approve");
     const dispatched = yield* tree.dispatch({ kind: "key", key: "Enter" });
     if (!dispatched.ok || dispatched.value.outcome !== "action") {
       throw new Error("the mounted option control produced no action");
@@ -1508,16 +1539,6 @@ function answers(model: ReplModel): readonly ReplElicitation[] {
 }
 
 /** Tab until the control this key names holds focus, the way a person reaches it. */
-function* focusTo(tree: ReplTree<ReplAction>, key: string): Operation<void> {
-  for (let press = 0; press < 200; press++) {
-    if (keyed(tree) === key) {
-      return;
-    }
-    yield* tree.dispatch({ kind: "key", key: "Tab" });
-  }
-  throw new Error(`focus never reached ${key}`);
-}
-
 /** One Tab, and where it left focus. */
 function* tabbed(tree: ReplTree<ReplAction>): Operation<string | undefined> {
   yield* tree.dispatch({ kind: "key", key: "Tab" });
@@ -1665,45 +1686,21 @@ describe("F3 — every placed modal control is in the ring", () => {
       .map(([key]) => key);
     expect(targetable.length).toBeGreaterThan(4);
 
-    // One complete cycle: Tab until focus returns where it started.
-    const forward: string[] = [];
-    const first = keyed(tree);
-    expect(first).toBeDefined();
-    forward.push(first ?? "");
-    for (let press = 0; press < 200; press++) {
-      const at = yield* tabbed(tree);
-      if (at === first) {
-        break;
-      }
-      expect(at).toBeDefined();
-      forward.push(at ?? "");
+    expect(keyed(tree)).toBe("drawer:value:decision");
+    const forward: (string | undefined)[] = [];
+    for (let press = 0; press < 3; press += 1) {
+      forward.push(yield* tabbed(tree));
     }
-
-    // Nothing the modal placed is missing from it.
-    for (const key of targetable) {
-      expect([key, forward.includes(key)]).toEqual([key, true]);
-    }
-    // Named, so a regression that drops one of these says which.
-    for (const key of ["drawer:close", "footer:history", "footer:exit", "drawer:form:submit"]) {
-      expect([key, forward.includes(key)]).toEqual([key, true]);
-    }
-    // And nothing outside the modal is in it: a ring that walked out of an open
-    // drawer would let a keystroke reach the screen the drawer is covering.
-    for (const key of forward) {
-      expect([key, inside.has(key), laidOut.get(key)]).toEqual([key, true, true]);
-    }
-
-    // The reverse cycle visits the same ring the other way round.
-    const backward: string[] = [];
-    for (let press = 0; press < 200; press++) {
+    expect(forward).toEqual(["drawer:form:submit", "footer:history", "drawer:value:decision"]);
+    const backward: (string | undefined)[] = [];
+    for (let press = 0; press < 3; press += 1) {
       yield* tree.dispatch({ kind: "key", key: "Backtab" });
-      const at = keyed(tree);
-      if (at === first) {
-        break;
-      }
-      backward.push(at ?? "");
+      backward.push(keyed(tree));
     }
-    expect([...backward].reverse()).toEqual(forward.slice(1));
+    expect(backward).toEqual(["footer:history", "drawer:form:submit", "drawer:value:decision"]);
+    for (const key of [...forward, ...backward]) {
+      expect([key, inside.has(key ?? ""), laidOut.get(key ?? "")]).toEqual([key, true, true]);
+    }
 
     // And what the row says while each of those nodes really holds focus. The
     // drawer reparents the footer's two controls into itself, so asking the
@@ -1718,7 +1715,18 @@ describe("F3 — every placed modal control is in the ring", () => {
       { key: "drawer:choice:decision:Approve", action: "Enter chooses" },
     ];
     for (const { key, action } of promised) {
-      yield* focusTo(tree, key);
+      yield* applied(tree, view);
+      const routes: Readonly<Record<string, readonly ReplKey[]>> = {
+        "drawer:close": ["Tab", "ArrowRight"],
+        "footer:exit": ["Backtab", "ArrowRight"],
+        "footer:history": ["Backtab"],
+        "drawer:form:submit": ["Tab"],
+        "drawer:scroll:down": ["Tab", "ArrowUp"],
+        "drawer:choice:decision:Approve": ["Alt+ArrowUp", "Alt+ArrowUp"],
+      };
+      for (const name of routes[key] ?? []) {
+        yield* tree.dispatch({ kind: "key", key: name });
+      }
       expect(keyed(tree)).toBe(key);
       const row = rowsOf(yield* seenView(reading(state, live, recorded.model, NARROW, key))).find(
         (one) => one.key === "guidance",
@@ -1728,7 +1736,7 @@ describe("F3 — every placed modal control is in the ring", () => {
       // asserted where an entry is really waiting, in the rendered journey.
       expect([key, row?.label]).toEqual([
         key,
-        `Ready for Entry 2 · ${action} · Esc closes · Tab/Shift+Tab move`,
+        `Ready for Entry 2 · ${action} · Esc closes · Tab regions Alt↑↓`,
       ]);
       expect([key, (row?.label ?? "").length <= NARROW.columns]).toEqual([key, true]);
     }
@@ -1879,7 +1887,7 @@ describe("F3 — the drawers that show a retained reading (#875 R1)", () => {
     const view = reading(state, asking(undefined), model, size);
     return (yield* seenView(view, engine))
       .flatMap((description) => flattenKeys(description))
-      .filter((key) => key.startsWith("drawer:value:"));
+      .filter((key) => key === "drawer:reading:anchor" || key.startsWith("drawer:value:"));
   }
 
   /** Every key one description tree holds, outermost first. */
@@ -1962,8 +1970,10 @@ describe("F3 — the drawers that show a retained reading (#875 R1)", () => {
 
     // The scrolled one is showing row twenty; the fresh one starts at its own
     // first row, because the offset it was handed is not its.
-    expect(scrolled[0]).toBe("drawer:value:20");
-    expect(fresh[0]).toBe("drawer:value:0");
+    expect(scrolled[0]).toBe("drawer:reading:anchor");
+    expect(scrolled[1]).toBe("drawer:value:21");
+    expect(fresh[0]).toBe("drawer:reading:anchor");
+    expect(fresh[1]).toBe("drawer:value:1");
 
     // And revisiting the first finds its own position again.
     const revisited = yield* drawerRows(
@@ -1972,7 +1982,8 @@ describe("F3 — the drawers that show a retained reading (#875 R1)", () => {
       NARROW,
       engine,
     );
-    expect(revisited[0]).toBe("drawer:value:20");
+    expect(revisited[0]).toBe("drawer:reading:anchor");
+    expect(revisited[1]).toBe("drawer:value:21");
   });
 
   it("TL3: a stored offset past the end is clamped to what the frame shows", function* () {
@@ -2027,6 +2038,56 @@ describe("F3 — the drawers that show a retained reading (#875 R1)", () => {
         name: "plan",
       }) ?? "";
     expect(after.viewports.readings[other]).toBeUndefined();
+  });
+  it("PV5: a retained JSON anchor scrolls both boundaries and keeps its owner", function* () {
+    const model = twoScopes();
+    const live = asking(undefined);
+    const engine = yield* useReplRenderer(NARROW);
+    const tree = yield* useReplTree<ReplAction>();
+    let state: ReplState = {
+      ...openBinding("entry-1", "plan"),
+      draft: "draft kept",
+      message: "message kept",
+    };
+    const route = state.route;
+    yield* applied(tree, reading(state, live, model, NARROW), engine);
+    expect(keyed(tree)).toBe("drawer:reading:anchor");
+    for (const key of [
+      "End",
+      "Home",
+      "PageDown",
+      "PageUp",
+      "ArrowDown",
+      "ArrowUp",
+    ] satisfies ReplKey[]) {
+      const result = yield* tree.dispatch({ kind: "key", key });
+      if (!result.ok || result.value.outcome !== "action") {
+        throw new Error(`the reading did not handle ${key}`);
+      }
+      state = {
+        ...reduceRepl(
+          state,
+          result.value.action,
+          model,
+          live,
+          yield* admissionOf(state, live, model, NARROW, engine),
+        ).state,
+      };
+      const view = reading(state, live, model, NARROW, keyed(tree));
+      yield* applied(tree, view, engine);
+      expect(keyed(tree)).toBe("drawer:reading:anchor");
+      const labels = rowsOf(yield* seenView(view, engine))
+        .map((one) => one.label)
+        .join(" ");
+      if (key === "End") {
+        expect(labels).toContain("line-59-entry-1");
+      }
+      if (key === "Home") {
+        expect(labels).toContain("line-00-entry-1");
+      }
+      expect(state.route).toEqual(route);
+      expect([state.draft, state.message]).toEqual(["draft kept", "message kept"]);
+    }
   });
 });
 

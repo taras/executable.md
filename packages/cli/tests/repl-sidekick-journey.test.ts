@@ -1871,7 +1871,7 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
       // The draft moves while the submission is being prepared, which is what
       // the start check refuses on: the prepared text is not the text anybody
       // is asking for any more.
-      yield* draftText(page, "!");
+      yield* draftText(page, "!", ["Tab", "Tab", "Tab", "Tab"]);
       allow.resolve();
       yield* page.until("the refused submission going back", (one) =>
         sidekickShows(one, "I did not admit an entry."),
@@ -3346,7 +3346,12 @@ describe("975 — the shipped session component journey", () => {
       expect(yield* cwd()).toBe(project);
       const sibling = yield* spawn(() => cwd());
       expect(yield* sibling).toBe(project);
-      yield* draftText(page, '<File path="manual.md">project manual</File>');
+      yield* draftText(page, '<File path="manual.md">project manual</File>', [
+        "Tab",
+        "Tab",
+        "Tab",
+        "Tab",
+      ]);
       yield* page.key("Enter");
       yield* page.until("the manual successor", (one) =>
         one.rows.some((line) => {

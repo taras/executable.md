@@ -167,7 +167,7 @@ describe("REPL.Test accepted journeys", () => {
     expect(repl.fake.prompts.join("\n")).toContain("wrong");
     yield* exchange(page, [fix, reuse]);
     expect((yield* reports(repl)).at(-1)?.status).toBe("passed");
-    yield* draftText(page, "<Greeting />");
+    yield* draftText(page, "<Greeting />", ["Tab", "Tab", "Tab", "Tab"]);
     yield* page.key("Enter");
     // The rail's own mark for the fifth entry. `entry-5` and `[ok]` are rows of
     // the Entries catalog, and the catalog is a drawer on this screen: a reader

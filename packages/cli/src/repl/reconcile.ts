@@ -36,14 +36,21 @@ import {
   current,
   focus,
   focusable,
-  advance,
   focusPush,
-  retreat,
   useFocus,
   useRoot,
 } from "./vendor/freedom/patched/index.ts";
 import type { Node, NodeDataKey, PopFocus, Root } from "./vendor/freedom/patched/index.ts";
 import { readComponent, readDescription, validateDescriptions } from "./description.ts";
+import {
+  arrowTarget,
+  focusLayout,
+  homeTarget,
+  isNavigationKey,
+  regionTarget,
+  survivorTarget,
+} from "./focus-navigation.ts";
+import type { ReplFocusLayout, ReplPlacement, ReplStop } from "./focus-navigation.ts";
 import type {
   ReplComponent,
   ReplDescription,
@@ -78,6 +85,16 @@ interface Mounted<Action> {
   claimsFocus: boolean;
   /** Whether the description that last named this node asked to be modal. */
   modal: boolean;
+  /** Where the description that last named this node placed it in navigation. */
+  navigation: ReplPlacement | undefined;
+  /**
+   * What held focus when this node's modal root was pushed, and where it sat.
+   *
+   * Freedom restores that exact control when the root pops. Where it has gone in
+   * the meantime, this is what the survivor is chosen from — rather than the
+   * first control anywhere on the screen.
+   */
+  opened: { readonly focused: string; readonly layout: ReplFocusLayout } | undefined;
   /** Set at the commit boundary: this node is on its way out. */
   retiring: boolean;
   cell: { text: string | undefined };
@@ -206,6 +223,8 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
       pop: { release: undefined },
       claimsFocus: described.focus,
       modal: described.modal,
+      navigation: described.navigation,
+      opened: undefined,
       retiring: false,
       cell: { text: undefined },
       claim: { decide: undefined },
@@ -290,6 +309,7 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
         // A preserved node whose modal intent changed pushes or pops in the
         // stack pass below, without losing the lifetime it already has.
         state.modal = described.modal;
+        state.navigation = described.navigation;
         // Inside the commit: after it, the node draws the input it was just
         // given, not the one before it.
         state.onInput.handle?.(described.input);
@@ -351,6 +371,33 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
 
   function findMounted(id: string): Node | undefined {
     return walkMounted(root.node, []).find((node) => node.id === id);
+  }
+
+  /**
+   * Every focusable control the active focus root holds, in canonical order.
+   *
+   * The innermost pushed modal's when one is open, so nothing a drawer covers
+   * is ever a destination.
+   */
+  function stops(): ReplStop[] {
+    const active = modals[modals.length - 1] ?? root.node;
+    return walkMounted(active, [])
+      .filter((node) => "focused" in node.props)
+      .map((node) => ({ id: node.id, placement: held(node)?.navigation }));
+  }
+
+  /** The id of the control holding focus, while it is one the commit keeps. */
+  function holding(): string | undefined {
+    const node = current(root.node);
+    const state = held(node);
+    return state === undefined || state.retiring ? undefined : node.id;
+  }
+
+  function focusId(id: string | undefined): void {
+    const node = id === undefined ? undefined : findMounted(id);
+    if (node !== undefined && "focused" in node.props) {
+      focus(node);
+    }
   }
 
   /**
@@ -455,6 +502,12 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
       return judged;
     }
 
+    // Where focus was, in the structure it was in, before anything moves: if
+    // the control holding it is retired here, the survivor is chosen from its
+    // own neighbours rather than from whatever the new tree happens to start with.
+    const was = holding();
+    const before = was === undefined ? undefined : focusLayout(stops());
+
     const retiring: Node[] = [];
     prepare(root.node, descriptions, retiring);
     frameId++;
@@ -463,17 +516,23 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
     // Pre-order is ancestry order, so an outer drawer is pushed before the
     // inner one it contains and popped after it.
     const wanted = walkMounted(root.node, []).filter((node) => held(node)?.modal === true);
+    let reopened: { readonly focused: string; readonly layout: ReplFocusLayout } | undefined;
     while (
       modals.length > 0 &&
       (modals.length > wanted.length || modals[modals.length - 1] !== wanted[modals.length - 1])
     ) {
+      reopened = held(modals[modals.length - 1])?.opened ?? reopened;
       popThrough(modals[modals.length - 1]);
     }
+    let pushed = false;
     for (let index = modals.length; index < wanted.length; index++) {
       const state = held(wanted[index]);
       if (state !== undefined) {
+        state.opened =
+          was !== undefined && before !== undefined ? { focused: was, layout: before } : undefined;
         state.pop.release = focusPush(wanted[index]);
         modals.push(wanted[index]);
+        pushed = true;
       }
     }
 
@@ -482,20 +541,34 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
     // member of the layout a parent chose, because the layout is opaque to
     // everyone but that parent and focus is the tree's.
     const mountedNodes = walkMounted(root.node, []);
+    let claimed = false;
     for (const node of mountedNodes) {
       if (held(node)?.claimsFocus === true && "focused" in node.props) {
         focus(node);
+        claimed = true;
       }
     }
 
     // Focus is derived from what is mounted rather than remembered across
-    // commits. Freedom seeds it when `useFocus` runs, which is before this
-    // tree has any nodes, so the first commit that brings a focusable node
-    // is what gives focus somewhere to be.
-    if (held(current(root.node)) === undefined) {
-      const first = mountedNodes.find((node) => "focused" in node.props);
-      if (first !== undefined) {
-        focus(first);
+    // commits. A claim says where it goes. A modal pushed here is entered at
+    // its first region's fixed entry, not at whatever Freedom found first. A
+    // popped modal hands focus back to its opener, or — where the opener has
+    // gone — to the opener's own survivor. And a control retired here hands
+    // focus to its survivor, so the first commit, a removal and a resize all
+    // land somewhere chosen from where focus was.
+    if (!claimed) {
+      const now = stops();
+      const after = focusLayout(now);
+      if (pushed) {
+        focusId(homeTarget(after, now));
+      } else if (reopened !== undefined && !after.where.has(reopened.focused)) {
+        focusId(survivorTarget(reopened.layout, after, now, reopened.focused));
+      } else if (holding() === undefined) {
+        focusId(
+          was !== undefined && before !== undefined
+            ? survivorTarget(before, after, now, was)
+            : homeTarget(after, now),
+        );
       }
     }
 
@@ -552,11 +625,8 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
       // chain, and a modal focus root is what keeps this inside the branch
       // that pushed it rather than reaching the tree underneath.
       if (event.kind === "key" && (event.key === "Backtab" || event.key === "Tab")) {
-        if (event.key === "Backtab") {
-          retreat(root.node);
-        } else {
-          advance(root.node);
-        }
+        const now = stops();
+        focusId(regionTarget(focusLayout(now), now, holding(), event.key === "Tab" ? 1 : -1));
         const moved = current(root.node);
         const traversed: ReplDispatched<Action> = {
           outcome: "focus",
@@ -609,6 +679,18 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
           return Ok(Object.freeze(claimed));
         }
         walk = walk.parent;
+      }
+      // Offered to the focused control first, so a field keeps its arrows for
+      // its caret and a reading keeps them for scrolling. What nothing claimed
+      // is navigation.
+      if (event.kind === "key" && isNavigationKey(event.key)) {
+        focusId(arrowTarget(focusLayout(stops()), target.id, event.key));
+        const moved = current(root.node);
+        const navigated: ReplDispatched<Action> = {
+          outcome: "focus",
+          focused: held(moved) === undefined ? undefined : moved.id,
+        };
+        return Ok(Object.freeze(navigated));
       }
       return Err(new ReplUnownedEventError(ancestry));
     },

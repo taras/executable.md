@@ -370,8 +370,9 @@ The list is windowed rather than clipped: it moves through as many rows as the
 frame can place, with `[\u2191 earlier]` and `[\u2193 later]` staying put while the
 rows move beneath them. Those two controls are spelled the same way wherever a
 reading has a window — this list, the catalog, Sessions and every drawer — and
-they are controls you activate, not keys you press: no arrow shortcut and no
-horizontal scrolling exist. What the window is not showing is not drawn, not focusable
+they remain controls you activate. Up/Down also reaches the next logical list
+row, revealing it before focus moves; Right enters nested scopes and Left returns
+to their parent. Enter selects the focused row. No horizontal scrolling exists. What the window is not showing is not drawn, not focusable
 and reaches no pointer, and every row can be scrolled to, activated by Enter and
 activated by a pointer.
 
@@ -734,6 +735,45 @@ shows the audit without offering to decide anything. Ending the command answers
 nothing: a torn-down process does not fabricate a denial, a selection or a
 cancelled audit on the person's behalf.
 
+## Move between regions and edit within them
+
+From Draft, one Tab enters the tabs at Bindings without selecting it. Continue
+with Tab to reach the right reading, Message, History, Transcript, selected work
+and Draft again. Shift+Tab reverses the same cycle. Both directions use each
+region's fixed entry; an absent region is skipped. Moving focus selects, sends
+and answers nothing.
+
+```text
+Transcript -> Selected work -> Draft -> Tabs/Configure
+    ^                                      |
+    |                                      v
+ History <- Message <- Right reading <-----+
+```
+
+Arrows move between local controls along their group's axis. Right enters a
+vertical group from its anchor; Left returns to that anchor. A group always
+enters its first admitted child. Local edges stop, and Alt+Up/Down walks the
+region's controls in their described order without wrapping. No region remembers
+its last focused child.
+
+Draft, Message, entry-answer values, Sidekick-answer values and Configure Agent
+show a caret. Left/Right and Backspace use grapheme boundaries; insertion and
+paste occur at the caret. Up/Down follows displayed rows and retains the preferred
+visual column; Home/End reaches that row's boundaries. Plain arrows stay in the
+field. Alt+Up/Down reaches its local actions, and Tab leaves its region. Each
+value keeps its own caret through focus departure, modal coverage and resize;
+an explicitly replaced value or a new question starts at its end. Enter keeps
+each field's submission or Apply meaning, and Control-J inserts a newline.
+
+Selected work, Sidekick chat, empty Bindings and drawer readings have one stable
+focusable anchor on their first visible row. The anchor adds no row or pointer
+target. Up/Down scrolls one fitted row, PageUp/PageDown moves one page less a row,
+and Home/End reaches the reading's boundaries. Enter does nothing. Reading
+scroll changes no selection, History position, text or running work. New output
+and background questions preserve focus and a reading positioned away from its
+tail. Focus, caret and navigation metadata are process-local and enter neither
+a location nor a retained record.
+
 ## Every drawer is a window
 
 A drawer shows as much of what it holds as the frame has room for, and its
@@ -762,8 +802,23 @@ answered yet — the question itself, or a pending permission request — is nam
 the accent this screen uses for waiting, so the drawer you have to act on says so
 before you have read a word of it.
 
-The title, both window controls and `[close]` stay outside the thing they move,
-and the rows below the body stay where they are — `[history]` and `[exit]` stay
+The title, both window controls and `[close]` stay outside the thing they move.
+A question's `[submit]` is fixed beside Close and any available Sidekick Stop,
+even when its fields are below the content window. Tab cycles Content -> Actions
+-> History/Exit; Shift+Tab reverses it. Content enters the first admitted editable
+value for a question, Agent for Configure, the first admitted list row for
+History/catalog, the first offered permission option, or a reading anchor.
+Actions enters Submit for a question and Close otherwise. Local arrows and
+Alt+Up/Down reach the other controls. Opening a question reveals its first
+editable value. Escape closes the top drawer, including the catalog.
+
+History over a held form or Configure contains input in its own modal and closes
+to the exact surviving opener. Form values and carets remain held underneath.
+Permission close settles its denial before restoring its waiting turn; entry
+question close discards its values, Sidekick question close keeps them, and
+Configure close discards unapplied choices. Successful answers retain their own
+existing destinations when visible. No background update can issue a late
+restoration. The rows below the body stay where they are — `[history]` and `[exit]` stay
 reachable from inside an open drawer, where they belong to that drawer.
 
 A route drawer begins below the whole contextual guidance block, so the screen
@@ -881,8 +936,8 @@ and the message itself in the rows the pane's measured width cut it into
 beneath them. The name stays put, so you can still see what you are typing into
 while the text scrolls inside it. An empty message is one blank row. The value
 grows to at most six rows — the name is not one of them — and then shows its
-newest rows, which is where you are typing; what is above them is still in the
-message and Backspace brings it back. On a screen with less room the cap is
+caret's rows. Moving the caret reveals the corresponding part of the value;
+text outside that window remains in the message. On a screen with less room the cap is
 smaller: the composer is measured with its label and one value row, and it grows
 only as far as leaves the chat a row. Growing it takes rows from the chat, which
 keeps following its own newest messages as that room shrinks.
@@ -1031,7 +1086,7 @@ selected entry, the conversation filter and the draft.
 | --- | --- |
 | `160x36` and larger | an identity row; three columns — the Transcript of agent work, the selected work with its own Draft, and Bindings/Sidekick — each with its own surface and the divider that starts it; the drawer layer; then one compact History row and one row of guidance |
 | `120x30` and larger | the same three columns, narrower |
-| `72x20` and larger | one routed surface — the one the route selected — under the two surface controls, with the same drawer, History and guidance |
+| `72x20` and larger | one routed surface — the one the route selected — under the Sessions, Entries and Sidekick surface controls, with the same drawer, History and guidance |
 | smaller than `72x20` | a refusal saying the minimum, that growing the window recovers, and that Escape leaves; it shows nothing else, and offers no control to point at |
 
 The **Transcript** on the left is the agent work this execution has, read as
@@ -1112,11 +1167,17 @@ execution you are in, the surface you are on, what you had selected and what you
 had typed all survive it, and none of it ends the command. A size this REPL does
 not support shows the refusal above and recovers when the window grows.
 
-At narrow, the surface the route did not select is still there in the model and
-is not on the screen: it is in no cell, in no target map, and no pointer reaches
-it. What stays is the way between them: both surface controls are on the screen
-at every size, because a screen you cannot leave is not one this route may put
+At narrow, the outlets the route did not select remain in the model and
+are not on the screen: it is in no cell, in no target map, and no pointer reaches
+it. What stays is the way between them: Sessions, Entries and Sidekick are on the narrow surface bar, because a screen you cannot leave is not one this route may put
 you on.
+
+The narrow Tab cycle is Surface bar -> routed content -> composer when present
+-> History. The bar enters Sessions without selecting it. Explicit Sidekick
+selection reaches Message when available; Bindings is absent. If resize removes
+focus, recovery enters surviving routed content, then the bar. Widening retains
+the surviving destination. Below 72x20 no controls are mounted; recovery uses
+the routed content's fixed entry and then the bar, without activating either.
 
 A narrow frame has no inspection column, so the bindings and the recorded
 questions are not on it in any sense — not drawn, not something a pointer can
@@ -1198,7 +1259,8 @@ row is too narrow for all of it. It does not replace the screen.
 
 The last row says how to operate what is in front of you: where typing goes,
 what Enter does on the control that has focus, that Tab and Shift+Tab move
-between controls, that a pointer does what Enter does, and how to close a drawer
+between regions, that arrows edit fields or navigate locally and Alt+Up/Down
+reaches local actions, that a pointer does what Enter does, and how to close a drawer
 when one is open. It is read off what is mounted rather than fixed, so it never
 names an action this screen does not have — and when focus is on a control
 rather than a field it says how to get back to the draft, because that is the one
@@ -2096,17 +2158,16 @@ the key is derived from facts that survive leaving and coming back.
 Components receive immutable view data and answer with a typed semantic action.
 They hold no events, no history, no session, no repository and no host operation,
 so a keystroke cannot reach the file except through the one place that owns the
-product's state. Focus belongs to the mounted tree: Tab and Backtab traverse it,
+product's state. Focus belongs to the mounted tree: Tab and Backtab traverse its regions,
 a drawer contains it while it is open, and the control that has it is marked.
 
 Normalized input is decided once, at the host, which names an event shape and a
 position and never an action. Text is its own event and goes to whichever field
 has focus, and to nothing at all when a control has it rather than a field — so a
 keystroke never edits a field nobody is looking at, and the row above the surface
-says how to get back to the draft while that is the case. A Control or Alt chord
-is dropped whole rather than typed as the letter it was pressed with, except for
-the two the host names: the newline inside a paste, and Control-C, which arrives
-as a key the command answers by ending. A pointer is resolved against the exact frame that produced
+says how to get back to the draft while that is the case. A Control or Alt chord is dropped whole rather than typed as its letter.
+The decoder names navigation keys, including Alt+Up/Down, separately. Control-J
+is text containing a newline, and Control-C ends the command. A pointer is resolved against the exact frame that produced
 its coordinates, so a stale frame, a node that has gone and a target behind a
 drawer all reach nothing — and activating a control with a pointer produces the
 same action as pressing Enter on it.

@@ -504,3 +504,13 @@ describe("Session ownership help", () => {
     }
   });
 });
+
+describe("REPL keyboard help", () => {
+  it("names fixed regions, caret editing and the drawer cycle", function* () {
+    const { stdout } = yield* runCli(["repl", "--help"]).expect();
+    expect(stdout).toContain("Tab and Shift+Tab change regions at fixed entries");
+    expect(stdout).toContain("Fields edit at a visible caret");
+    expect(stdout).toContain("Content, Actions, History/Exit");
+    expect(stdout).toContain("Alt+Up/Down reaches local actions from a field");
+  });
+});

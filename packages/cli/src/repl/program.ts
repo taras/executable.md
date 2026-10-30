@@ -175,9 +175,10 @@ import {
   createPlainFitStore,
   fitCells,
   fitPlain,
+  fitEditor,
   prepareReading,
 } from "./fitting.ts";
-import type { ReplFittedLabel, ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
+import type { ReplEditor, ReplFittedLabel, ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
 import { prepareRail } from "./history-rail.ts";
 import { readingLines } from "./source-reading.ts";
 import { sourceRuns } from "./presentation-text.ts";
@@ -188,7 +189,10 @@ import { resolvePointer, useReplRenderer } from "./renderer.ts";
 import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./renderer.ts";
 import { useReplScreen } from "./screen.ts";
 import type { ReplScreen, ReplScreenEvent } from "./screen.ts";
-import type { ReplInputEvent } from "./description.ts";
+import { fields, readDescription } from "./description.ts";
+import type { ReplDescription, ReplInputEvent } from "./description.ts";
+import { FIELD, fieldLabel } from "./components/rows.ts";
+import { caretFor } from "./caret.ts";
 import { useReplTree } from "./reconcile.ts";
 import type { ReplTree } from "./reconcile.ts";
 import { projectRepl } from "./model.ts";
@@ -669,7 +673,7 @@ function* drive(
   let reading: ReplReading = { model: session.model, navigation: session.navigation };
   let rendered: ReplRendered | undefined;
   /**
-   * The Sidekick question whose form the frame on screen is presenting.
+   * The editable drawer and question owner presented by the frame on screen.
    *
    * Kept beside the frame it was read from, because that is the frame a person
    * is acting against: which input a key reaches depends on what was drawn when
@@ -1355,6 +1359,7 @@ function* drive(
         // the alternative is a frame marking the control the reader has just
         // left, followed by a second whole frame correcting it.
         if (dispatched.ok && dispatched.value.outcome === "focus") {
+          state = { ...state, restore: undefined };
           focused = keyOfFocus(tree);
         }
         return false;
@@ -1616,6 +1621,7 @@ function* drive(
       presenting = presentedDrawer(marked.view);
     }
 
+    let formQuestion = current.overlay.question;
     while (true) {
       const taken = yield* wakes.take();
       if (taken.length === 0) {
@@ -1742,11 +1748,11 @@ function* drive(
       // settlement elsewhere can both end one, and the drawer over it then
       // resolves to nothing — so it is withdrawn here rather than left to fail
       // resolution, and nothing becomes an answer, because none was given.
-      if (
-        state.route.drawers.some((drawer) => drawer.kind === "live-elicit") &&
-        current.overlay.question === undefined
-      ) {
-        state = elicitWithdrawn(state);
+      if (current.overlay.question !== formQuestion) {
+        if (formQuestion !== undefined) {
+          state = elicitWithdrawn(state);
+        }
+        formQuestion = current.overlay.question;
       }
 
       // A route that names a history position needs the model projected *at* that
@@ -3590,6 +3596,7 @@ export function* prepareFrame(
    */
   draftStore?: ReplPlainFitStore,
 ): Operation<Result<ReplPrepared>> {
+  view = { ...view, initialPresentation: renderer.last() === undefined };
   // No widths at all for the pass that answers what the widths are. Every row
   // whose text has to fit a region is left out of it, because a growing column
   // takes its minimum from its widest child: one unbounded row would make the
@@ -3916,16 +3923,23 @@ export function* prepareFrame(
   // an older chat is read-only and has none. The reading's own fact, not a
   // second pane rule.
   const composing = presentsChat && view.live.sidekick?.current === true;
-  const messageLines =
-    chatRoom < 1 || !composing
-      ? undefined
-      : view.state.message.split("\n").map((own, at) => ({ key: `message:${at}`, text: own }));
+  const editors = new Map<string, ReplEditor>();
   const message =
-    messageLines === undefined
+    chatRoom < 1 || !composing
       ? Ok(undefined)
-      : yield* fitPlain(renderer, view.size, messageLines, chatRoom, messageStore);
+      : yield* fitEditor(
+          renderer,
+          view.size,
+          caretFor(view.state.message, view.state.messageCaret),
+          chatRoom,
+          view.focused === "sidekick:message",
+          messageStore,
+        );
   if (!message.ok) {
     return message;
+  }
+  if (message.value !== undefined) {
+    editors.set("sidekick:message", message.value);
   }
   // How tall the composer may be on this screen, and how tall it is.
   //
@@ -3934,7 +3948,7 @@ export function* prepareFrame(
   // value rows takes `h - 1` rows from the chat, so `h` at most `C` leaves it
   // one row. Six is the accepted cap, and the fitted rows may be fewer.
   const capacity = capacityOf(third.value.boundsOf(sidekickViewportOf(measured.manifest)));
-  const fittedRows = message.value?.length ?? 0;
+  const fittedRows = message.value?.display.length ?? 0;
   const height =
     message.value === undefined
       ? 1
@@ -3943,7 +3957,14 @@ export function* prepareFrame(
   const shown =
     message.value === undefined
       ? undefined
-      : Object.freeze(message.value.slice(fittedRows - height).map((own) => own.text));
+      : Object.freeze(
+          message.value.display
+            .slice(
+              Math.max(0, Math.min(message.value.active, fittedRows - height)),
+              Math.max(0, Math.min(message.value.active, fittedRows - height)) + height,
+            )
+            .map((own) => own.text),
+        );
   // One more structural measurement when the composer is taller than the
   // minimum, so the capacity the chat is admitted against is the capacity of
   // the frame that will actually be drawn. Bounded: one pass, never a loop.
@@ -4016,17 +4037,28 @@ export function* prepareFrame(
   // The staged Draft's own value, fitted to the selected work it sits in. A
   // fixed number of rows, so no measurement above depends on it.
   //
-  // Through a store of its own, and over the lines that are drawn rather than
-  // over the whole draft: a key typed into a long draft was re-measuring every
-  // line of it through the engine, and the rows above the block were cut only
-  // to be dropped.
-  const draftLines = draftLinesOf(view);
   const drafted =
-    draftLines === undefined || widths.surfaceBody < 1
+    draftLinesOf(view) === undefined || widths.surfaceBody < 1
       ? Ok(undefined)
-      : yield* fitPlain(renderer, view.size, draftLines, widths.surfaceBody, draftStore);
+      : yield* fitEditor(
+          renderer,
+          view.size,
+          caretFor(view.state.draft, view.state.draftCaret),
+          widths.surfaceBody,
+          view.focused === "footer:input",
+          draftStore,
+          sourceRuns,
+        );
   if (!drafted.ok) {
     return drafted;
+  }
+  let draftRows: readonly string[] | undefined;
+  if (drafted.value !== undefined) {
+    editors.set("footer:input", drafted.value);
+    const count = draftRowsOf([]).length;
+    const from = Math.max(0, Math.min(drafted.value.active, drafted.value.display.length - count));
+    const shown = drafted.value.display.slice(from, from + count).map((one) => one.text);
+    draftRows = [...shown, ...Array.from({ length: count - shown.length }, () => "")];
   }
   // The drawer's own notices, fitted to the interior this frame measured. Here
   // rather than in the builder that draws them: the engine is what knows how
@@ -4068,11 +4100,67 @@ export function* prepareFrame(
     historyGap: historySpace,
     historySplit: historyParts,
     selector,
-    draft: drafted.value === undefined ? undefined : draftRowsOf(drafted.value),
+    draft: draftRows,
+    editors,
     notices: notices.value,
     queue: queued.value,
     headers: wrapped.size === 0 ? undefined : wrapped,
   };
+  const collect = function* (
+    descriptions: readonly ReplDescription<ReplAction>[],
+  ): Operation<Result<void>> {
+    for (const description of descriptions) {
+      const read = readDescription(description);
+      const input = fields(read.input);
+      if (read.component === FIELD && !editors.has(read.key)) {
+        const value = input?.["text"];
+        const prompt = input?.["prompt"];
+        const offset = input?.["caret"];
+        const column = input?.["column"];
+        const focused = input?.["focused"] === true;
+        if (typeof value === "string" && typeof prompt === "string" && typeof offset === "number") {
+          const prefix = yield* fitCells(
+            renderer,
+            view.size,
+            fieldLabel(prompt, focused),
+            "",
+            Number.POSITIVE_INFINITY,
+          );
+          if (!prefix.ok) {
+            return prefix;
+          }
+          const room = read.key.startsWith("drawer:") ? widths.drawer : widths.surfaceBody;
+          const editor = yield* fitEditor(
+            renderer,
+            view.size,
+            {
+              value,
+              offset,
+              ...(typeof column === "number" ? { column } : {}),
+              ...(input?.["backward"] === true ? { backward: true } : {}),
+            },
+            room - prefix.value.cells,
+            focused,
+            undefined,
+            input?.["purpose"] === "draft" ? sourceRuns : undefined,
+          );
+          if (!editor.ok) {
+            return editor;
+          }
+          editors.set(read.key, editor.value);
+        }
+      }
+      const result = yield* collect(read.children);
+      if (!result.ok) {
+        return result;
+      }
+    }
+    return Ok(undefined);
+  };
+  const edited = yield* collect(presentationFor(view, context).descriptions);
+  if (!edited.ok) {
+    return edited;
+  }
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }
 

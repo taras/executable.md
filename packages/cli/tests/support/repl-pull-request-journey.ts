@@ -71,7 +71,6 @@ import {
   managedCheckout,
   printedLocation,
   pushes,
-  reach,
   REACH_MS,
   remoteHolding,
   remoteRef,
@@ -317,8 +316,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     expect(yield* exists(join(working, "fresh.md"))).toBe(false);
     expect(reviewReads(service)).toBe(1);
 
-    yield* reach(first, "[exit]");
-    yield* first.type("\r");
+    yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
     const location = printedLocation((yield* first.shows()).join("\n"));
     // The screen never showed the credential.
@@ -398,8 +396,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     expect(yield* gitSaid(working, ["rev-parse", "HEAD"], home)).toBe(advanced);
     expect(yield* exists(join(working, "after.md"))).toBe(false);
 
-    yield* reach(second, "[answer]");
-    yield* second.type("\r");
+    yield* click(second, "[answer]");
     // Everything acknowledged answers historically, and the proof is the
     // question itself: its text is evaluated again as this entry is projected,
     // so the number, the URL, the state and all three counts on this screen are
@@ -446,8 +443,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     ]);
     expect(JSON.stringify(answered)).not.toContain(TOKEN);
 
-    yield* reach(second, "[exit]");
-    yield* second.type("\r");
+    yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
   });
 }
@@ -508,8 +504,7 @@ export function replUnsupportedPullRequest(repl: ReplCommand): Operation<void> {
     expect(yield* logged(shim.log)).toEqual([]);
     expect(yield* exists(join(home, ".xmd", "repositories"))).toBe(false);
 
-    yield* reach(pty, "[exit]");
-    yield* pty.type("\r");
+    yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
 }

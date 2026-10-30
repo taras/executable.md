@@ -8,6 +8,9 @@
  * adoption; a refusal preserves the standing route, selection and draft.
  */
 
+import { boundaries, caretFor, eraseAt, insertAt } from "./caret.ts";
+import type { ReplCaret } from "./caret.ts";
+
 import type { MessageOrigin } from "./sidekick/history.ts";
 import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
@@ -98,6 +101,7 @@ import {
 } from "./layout-admission.ts";
 import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
 import { ORDINARY, REPL_PALETTE, styleOf } from "./presentation-style.ts";
+import { placeScreen } from "./screen-regions.ts";
 import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts";
 import { jsonRuns, sourceRuns } from "./presentation-text.ts";
 import { HEAD_LABELS, NO_NAVIGATION, numbered, pointLabel } from "./navigation.ts";
@@ -108,6 +112,7 @@ import { entryReading, NO_READING } from "./source-reading.ts";
 import type { ReplReading } from "./source-reading.ts";
 import { readingRuns } from "./fitting.ts";
 import type {
+  ReplEditor,
   ReplFittedLabel,
   ReplFittedLine,
   ReplPreparedReading,
@@ -150,15 +155,17 @@ import type { ExpansionState } from "./expansion.ts";
 import type { ReplTree } from "./reconcile.ts";
 import {
   DRAWER,
+  READING,
   FIELD,
   fieldParts,
+  fieldLabel,
   fieldText,
   focusPrefixed,
   LINE,
   REFUSAL,
   SELECT_ROW,
 } from "./components/rows.ts";
-import type { ReplAction } from "./components/actions.ts";
+import type { ReplAction, ReplFieldPurpose } from "./components/actions.ts";
 import { NO_LIFECYCLE } from "./lifecycle.ts";
 import type { ReplLifecycleReading } from "./lifecycle.ts";
 
@@ -719,6 +726,7 @@ export interface ReplFormMessage {
  * Values are keyed by field so editing one cannot overwrite another.
  */
 export interface ReplFormState {
+  readonly carets?: Readonly<Record<string, ReplCaret>>;
   /** What has been typed into each field so far, by field name. */
   readonly values: Readonly<Record<string, string>>;
   /** Which field text and Backspace act on, or none yet. */
@@ -776,6 +784,7 @@ export interface ReplOfferedChoice {
  * being pointed at another one.
  */
 export interface ReplConfiguring {
+  readonly caret?: ReplCaret;
   readonly conversation: string | undefined;
   readonly open: boolean;
   /** The agent name as typed, exactly — never a value chosen from a list. */
@@ -905,7 +914,14 @@ export type ReplFocusRestore =
    * sentence to their document. Cold default visibility states no such thing:
    * the pane is simply the one showing, and the draft still holds focus.
    */
-  | { readonly kind: "message" };
+  | { readonly kind: "message" }
+  /**
+   * A row of a windowed list somebody moved to past the window's edge.
+   *
+   * Spent by the commit that focuses it, like every restoration: the window
+   * moves to show it in the frame that focuses it, and keeps that position.
+   */
+  | { readonly kind: "reveal"; readonly key: string };
 
 /**
  * The saved turn a selection asked to be shown, until a frame can show it.
@@ -1006,6 +1022,9 @@ export const AT_TOP: ReplViewports = Object.freeze({
 
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
+  readonly heldHistory?: true;
+  readonly draftCaret?: ReplCaret;
+  readonly messageCaret?: ReplCaret;
   readonly route: ReplRoute;
   /**
    * The text of the entry that would be submitted next.
@@ -1299,6 +1318,8 @@ export interface ReplView {
    * rather than something the renderer decorates.
    */
   readonly focused: string | undefined;
+  /** Whether this renderer has yet to commit a frame. */
+  readonly initialPresentation?: boolean;
   /**
    * The staged workspace composition's own presentation, where a caller gave one.
    *
@@ -1920,6 +1941,7 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
  */
 export function readsGeometry(action: ReplAction): boolean {
   return (
+    action.kind === "reading-key" ||
     action.kind === "scroll" ||
     // The Sidekick form's own window, for the same reason: how far it may
     // travel is what this frame measured, and an unmeasured frame has admitted
@@ -1952,7 +1974,7 @@ export function reduceRepl(
   // unmeasured frame has admitted nothing.
   admission: ReplAdmission = NOTHING_ADMITTED,
   /**
-   * The Sidekick question whose form that frame presented, or none.
+   * The editable drawer that frame presented, including its question owner.
    *
    * A frame-derived fact like the admission beside it, and for the same reason:
    * what a key means depends on what was on the screen when it was pressed, and
@@ -1984,43 +2006,51 @@ export function reduceRepl(
   const configuring = presented?.kind === "configure" && state.configuring.open;
 
   switch (action.kind) {
+    case "noop":
+      return settled(state);
+    case "reading-key": {
+      const name =
+        action.reading === "selected"
+          ? READING_WINDOW
+          : action.reading === "chat"
+            ? SIDEKICK_WINDOW
+            : DRAWER_WINDOW;
+      const window = admission.windows.get(name);
+      if (window === undefined || action.reading === "empty") {
+        return settled(state);
+      }
+      const delta =
+        action.key === "Home"
+          ? -window.total
+          : action.key === "End"
+            ? window.total
+            : (action.key === "ArrowUp" || action.key === "PageUp" ? -1 : 1) *
+              (action.key === "PageUp" || action.key === "PageDown"
+                ? Math.max(1, window.capacity - 1)
+                : 1);
+      const kind =
+        action.reading === "selected"
+          ? "scroll-reading"
+          : action.reading === "chat"
+            ? "scroll-sidekick"
+            : presented?.kind === "configure"
+              ? "scroll-configure"
+              : asking !== undefined
+                ? "scroll-sidekick-question"
+                : state.catalog
+                  ? "scroll-entries"
+                  : "scroll";
+      return reduceRepl(state, { kind, delta }, model, live, admission, presented);
+    }
     // Typing is always typing the *next* entry. Which entry is selected, and
     // whether one is running, decide nothing here: an admitted entry is
     // immutable, so there is never an entry these keystrokes could be editing.
-    case "type": {
-      if (configuring) {
-        return renaming(state, state.configuring.agent + action.text);
-      }
-      // The Sidekick's form first, while its drawer is the one holding focus.
-      // Before the message box deliberately: a form field may be *named*
-      // `message`, and a reduction that matched the name before the owner would
-      // type somebody's answer into the composer.
-      if (asking !== undefined) {
-        return filling(state, asking, live, action.field, (value) => value + action.text);
-      }
-      if (answering) {
-        return editing(state, live, action.field, (value) => value + action.text);
-      }
-      if (action.field === MESSAGE_FIELD) {
-        return messaging(state, state.message + action.text);
-      }
-      return drafting(state, state.draft + action.text);
-    }
-    case "erase": {
-      if (configuring) {
-        return renaming(state, shortened(state.configuring.agent));
-      }
-      if (asking !== undefined) {
-        return filling(state, asking, live, action.field, shortened);
-      }
-      if (answering) {
-        return editing(state, live, action.field, shortened);
-      }
-      if (action.field === MESSAGE_FIELD) {
-        return messaging(state, shortened(state.message));
-      }
-      return drafting(state, shortened(state.draft));
-    }
+    case "type":
+    case "erase":
+    case "move-caret":
+      return editCaret(state, live, action, configuring, asking, answering, presented);
+    case "reveal":
+      return settled({ ...state, restore: Object.freeze({ kind: "reveal", key: action.key }) });
     case "submit": {
       // The one gate, over the part of its facts this reduction can see.
       // Inspection freezes durable state, not the draft, and submitting from a
@@ -2204,8 +2234,14 @@ export function reduceRepl(
       // screen it was never in front of.
       const owning = surfaceForDrawer(action.drawer);
       const crossing = owning !== state.route.surface;
+      const heldHistory =
+        action.drawer.kind === "history" &&
+        (state.route.drawers.length > 0 ||
+          state.configuring.open ||
+          state.asking?.open === true ||
+          state.catalog);
       return navigate(
-        state,
+        heldHistory ? { ...state, heldHistory: true } : state,
         model,
         {
           ...state.route,
@@ -2224,6 +2260,9 @@ export function reduceRepl(
       );
     }
     case "close-drawer": {
+      if (state.route.drawers.length === 0 && state.catalog) {
+        return settled({ ...state, catalog: false });
+      }
       if (state.route.drawers.length === 0) {
         // Escape over Configure closes Configure, by the one transition its own
         // Close control produces. Two ways out of a modal that disagreed about
@@ -2269,7 +2308,15 @@ export function reduceRepl(
         };
       }
       const remaining = Object.freeze(state.route.drawers.slice(0, -1));
-      const closed = navigate(state, model, { ...state.route, drawers: remaining }, live);
+      const closed = navigate(
+        {
+          ...state,
+          heldHistory: remaining.at(-1)?.kind === "history" ? state.heldHistory : undefined,
+        },
+        model,
+        { ...state.route, drawers: remaining },
+        live,
+      );
       // Dismissing the question's drawer discards what was typed into it. It is
       // not an answer, and keeping it would offer it again as though it were.
       return closing.kind === "live-elicit"
@@ -3039,42 +3086,81 @@ function openAsking(
   return { key: held.key, held, question };
 }
 
-/**
- * One field of the Sidekick's own form, edited.
- *
- * The entry's {@link editing} with the other owner's state: the field is
- * resolved against *this* question's declared fields, so a name the form does
- * not have edits nothing rather than inventing a value the schema never asked
- * for.
- */
-function filling(
+function editCaret(
   state: ReplState,
-  asking: { readonly held: ReplAsking; readonly question: ReplSidekickQuestion },
   live: ReplLive,
-  named: string | undefined,
-  change: (value: string) => string,
+  action: Extract<ReplAction, { readonly kind: "type" | "erase" | "move-caret" }>,
+  configuring: boolean,
+  asking: ReturnType<typeof openAsking>,
+  answering: boolean,
+  presented: ReplPresented | undefined,
 ): ReplTransition {
-  const fields = asking.question.form.fields;
-  const field =
-    named === undefined
-      ? (fields.find((one) => one.name === asking.held.form.field) ?? fields[0])
-      : fields.find((one) => one.name === named);
-  if (field === undefined) {
-    return refuse(state, "this question has no such field.");
+  if (action.purpose !== undefined) {
+    const top = state.route.drawers.at(-1);
+    const available =
+      !state.heldHistory &&
+      !state.catalog &&
+      (action.purpose === "sidekick-answer"
+        ? top === undefined &&
+          asking !== undefined &&
+          action.question === asking.key &&
+          live.sidekick?.current !== false
+        : action.purpose === "answer"
+          ? top?.kind === "live-elicit" &&
+            live.question !== undefined &&
+            presented?.kind === "entry-question" &&
+            presented.question === live.question
+          : action.purpose === "configure-agent"
+            ? top === undefined && configuring
+            : top === undefined && presented === undefined && asking === undefined && !configuring);
+    if (
+      !available ||
+      ((action.purpose === "answer" || action.purpose === "sidekick-answer") &&
+        action.field === undefined)
+    ) {
+      return refuse(state, "this field is no longer presented for its owner.");
+    }
   }
-  const form = written(
-    asking.held.form,
-    field.name,
-    change(asking.held.form.values[field.name] ?? ""),
-  );
-  return settled({
-    ...state,
-    asking: Object.freeze({
-      ...asking.held,
-      form: Object.freeze({ ...form, field: field.name }),
-    }),
-    refusal: undefined,
-  });
+  const change = (value: string, saved: ReplCaret | undefined): ReplCaret => {
+    const caret = caretFor(value, saved);
+    if (action.kind === "type") {
+      return insertAt(caret, action.text);
+    }
+    if (action.kind === "erase") {
+      return eraseAt(caret);
+    }
+    return action.caret?.value === value ? caretFor(value, action.caret) : caret;
+  };
+  if (configuring) {
+    const caret = change(state.configuring.agent, state.configuring.caret);
+    const next = action.kind === "move-caret" ? state : renaming(state, caret.value).state;
+    return settled({ ...next, configuring: { ...next.configuring, caret } });
+  }
+  if (asking !== undefined || answering) {
+    const form = asking?.held.form ?? state.form;
+    const declared = asking?.question.form.fields ?? live.question?.form.fields ?? [];
+    const field =
+      action.field === undefined
+        ? (declared.find((one) => one.name === form.field) ?? declared[0])
+        : declared.find((one) => one.name === action.field);
+    if (field === undefined) {
+      return refuse(state, "this question has no such field.");
+    }
+    const caret = change(form.values[field.name] ?? "", form.carets?.[field.name]);
+    const next = action.kind === "move-caret" ? form : written(form, field.name, caret.value);
+    const edited = { ...next, field: field.name, carets: { ...next.carets, [field.name]: caret } };
+    return asking === undefined
+      ? settled({ ...state, form: edited })
+      : settled({ ...state, asking: { ...asking.held, form: edited } });
+  }
+  if (action.field === MESSAGE_FIELD) {
+    const caret = change(state.message, state.messageCaret);
+    const next = action.kind === "move-caret" ? state : messaging(state, caret.value).state;
+    return settled({ ...next, messageCaret: caret });
+  }
+  const caret = change(state.draft, state.draftCaret);
+  const next = action.kind === "move-caret" ? state : drafting(state, caret.value).state;
+  return settled({ ...next, draftCaret: caret });
 }
 
 /**
@@ -3347,49 +3433,16 @@ export function askingFor(state: ReplState, question: ReplSidekickQuestion | und
 
 /** One field's value replaced, leaving every other field alone. */
 function written(form: ReplFormState, field: string, value: string): ReplFormState {
+  const carets = { ...form.carets };
+  delete carets[field];
   return Object.freeze({
+    carets,
     ...form,
     values: Object.freeze({ ...form.values, [field]: value }),
     // A value that has changed makes the last verdict about the old one stale,
     // so the messages go rather than sitting under a form they no longer
     // describe.
     messages: Object.freeze([]),
-  });
-}
-
-/**
- * The field text and Backspace act on.
- *
- * Whichever field has focus, or the first one the question declares — so a
- * person who starts typing before selecting anything edits the field they are
- * looking at rather than nothing.
- */
-function fieldNamed(live: ReplLive, name: string): ReplFormField | undefined {
-  return live.question?.form.fields.find((one) => one.name === name);
-}
-
-function focused(state: ReplState, live: ReplLive): ReplFormField | undefined {
-  const fields = live.question?.form.fields ?? [];
-  const named = fields.find((one) => one.name === state.form.field);
-  return named ?? fields[0];
-}
-
-/** Edit the focused field, and only it. */
-function editing(
-  state: ReplState,
-  live: ReplLive,
-  named: string | undefined,
-  change: (value: string) => string,
-): ReplTransition {
-  const field = named === undefined ? focused(state, live) : fieldNamed(live, named);
-  if (field === undefined) {
-    return refuse(state, "nothing is being asked right now.");
-  }
-  const form = written(state.form, field.name, change(state.form.values[field.name] ?? ""));
-  return settled({
-    ...state,
-    form: Object.freeze({ ...form, field: field.name }),
-    refusal: undefined,
   });
 }
 
@@ -4035,6 +4088,7 @@ function sidekickControls(
   items.push(
     field("sidekick:message", "> Message Sidekick: ", state.message, "message", styleOf("draft"), {
       field: MESSAGE_FIELD,
+      caret: state.messageCaret,
       here: view.focused,
       block: true,
       ...(claiming ? { focus: true } : {}),
@@ -4085,7 +4139,7 @@ function messaging(state: ReplState, message: string): ReplTransition {
 
 /** The state after the Sidekick filled the shared draft with exactly this. */
 export function filled(state: ReplState, source: string): ReplState {
-  return Object.freeze(drafting(state, source, "sidekick").state);
+  return Object.freeze({ ...drafting(state, source, "sidekick").state, draftCaret: undefined });
 }
 
 /**
@@ -4129,25 +4183,6 @@ function navigate(
   }
   return settled({ ...state, route, refusal: undefined });
 }
-
-/** One text unit shorter, counted in scalar values rather than code units. */
-function shortened(text: string): string {
-  // One grapheme, which is what a person pressed Backspace to remove. Code
-  // points are not it: `e` with two combining marks is one thing on the screen
-  // and three of them, so a reduction counting code points took three presses
-  // to remove one character and left two readings of it on the way — and a
-  // joined emoji came apart into the two it is joined from. `Intl.Segmenter` is
-  // the same boundary the fitter breaks rows on, so what a person deletes and
-  // what a row is cut at are one answer.
-  let last = 0;
-  for (const { index } of GRAPHEMES.segment(text)) {
-    last = index;
-  }
-  return text.slice(0, last);
-}
-
-/** Where one grapheme ends and the next begins, for text somebody is editing. */
-const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** How a value reads in one line of a list. */
 function summarize(value: Json): string {
@@ -4323,6 +4358,12 @@ export function focusClaim(view: ReplView): string | undefined {
   if (state.restore === undefined) {
     return undefined;
   }
+  if (state.restore.kind === "reveal") {
+    return state.restore.key;
+  }
+  if (modalOpen(view)) {
+    return undefined;
+  }
   if (state.restore.kind === "asked") {
     return live.question === undefined || state.route.at !== undefined ? undefined : "footer:asked";
   }
@@ -4381,8 +4422,13 @@ export function focusClaim(view: ReplView): string | undefined {
   // claim stays silent while that outlet is showing the other surface, exactly as
   // it does for any row this view does not draw.
   if (profileFor(view.size) === "narrow") {
-    const owner = selection.entry?.key;
-    return owner === undefined ? undefined : `entry:${owner}`;
+    if (staged(view) === undefined) {
+      const owner = selection.entry?.key;
+      return owner === undefined ? undefined : `entry:${owner}`;
+    }
+    return state.route.surface === "entries" && state.route.view !== "sidekick"
+      ? "entries:heading"
+      : undefined;
   }
   return `elicit:${caused.marker}`;
 }
@@ -4410,23 +4456,77 @@ export function focusSettled(
    */
   admission?: ReplAdmission,
 ): ReplState {
+  let state = view.state;
+  const from = admission?.windows.get(DRAWER_WINDOW)?.from;
+  if (from !== undefined && focused?.startsWith("drawer:value:")) {
+    if (view.selection.drawers.at(-1)?.kind === "live-elicit" && state.form.offset !== from) {
+      state = Object.freeze({ ...state, form: Object.freeze({ ...state.form, offset: from }) });
+    } else if (
+      presentedAsking(view) !== undefined &&
+      state.asking !== undefined &&
+      state.asking.form.offset !== from
+    ) {
+      state = Object.freeze({
+        ...state,
+        asking: Object.freeze({
+          ...state.asking,
+          form: Object.freeze({ ...state.asking.form, offset: from }),
+        }),
+      });
+    }
+  }
   const claim = focusClaim(view);
-  if (view.state.restore === undefined || claim === undefined || focused !== claim) {
-    return view.state;
+  if (state.restore === undefined) {
+    return state;
+  }
+  if (claim === undefined || focused !== claim) {
+    return state.restore.kind === "answered"
+      ? state
+      : Object.freeze({ ...state, restore: undefined });
   }
   // The reveal this frame presented, retained before the claim that caused it is
   // spent. Only a claim on a catalog row can have moved that window, and only
   // the window's own admitted start is kept — the offset this process holds
   // becomes the one a person is actually looking at, so the next frame asks the
   // same question and gets the same answer without a claim to ask it for.
-  const revealed = claim.startsWith("entry:")
-    ? admission?.windows.get(ENTRIES_WINDOW)?.from
-    : undefined;
+  const revealed =
+    claim.startsWith("entry:") || claim.startsWith("scope:")
+      ? admission?.windows.get(presentedCatalog(view) ? DRAWER_WINDOW : ENTRIES_WINDOW)?.from
+      : undefined;
   const viewports =
-    revealed === undefined || revealed === view.state.viewports.entries
-      ? view.state.viewports
-      : Object.freeze({ ...view.state.viewports, entries: revealed });
-  return Object.freeze({ ...view.state, restore: undefined, viewports });
+    revealed === undefined || revealed === state.viewports.entries
+      ? state.viewports
+      : Object.freeze({ ...state.viewports, entries: revealed });
+  if (state.restore.kind === "reveal" && admission !== undefined) {
+    if (claim.startsWith("sessions:")) {
+      return Object.freeze({
+        ...state,
+        restore: undefined,
+        viewports: {
+          ...viewports,
+          sessions: admission.windows.get(SESSIONS_WINDOW)?.from ?? viewports.sessions,
+        },
+      });
+    }
+    if (claim.startsWith("drawer:")) {
+      const from = admission.windows.get(DRAWER_WINDOW)?.from;
+      if (from !== undefined) {
+        const open = state.route.drawers.at(-1);
+        const key = open === undefined ? undefined : readingKeyOf(state, open);
+        return Object.freeze({
+          ...state,
+          restore: undefined,
+          viewports: {
+            ...viewports,
+            configure: presentedConfiguring(view) === undefined ? viewports.configure : from,
+            readings:
+              key === undefined ? viewports.readings : { ...viewports.readings, [key]: from },
+          },
+        });
+      }
+    }
+  }
+  return Object.freeze({ ...state, restore: undefined, viewports });
 }
 
 /** Every answer this history already holds, wherever in its entries it holds it. */
@@ -4593,7 +4693,7 @@ export function admitsSubmission(readiness: ReplReadiness): boolean {
  * First in the row, and before any key guidance, because the row is as wide as
  * the terminal and the terminal decides where it stops: a sentence truncated
  * after "Entry 1 running" still told somebody the thing they could not have
- * worked out, while one truncated after "Tab/Shift+Tab move" told them what the
+ * worked out, while one truncated after "Tab regions Alt↑↓" told them what the
  * keys do and left them pressing Enter at an entry that cannot accept it.
  */
 function statePhrase(readiness: ReplReadiness, narrow: boolean): string {
@@ -4702,13 +4802,13 @@ function drawerState(view: ReplView, readiness: ReplReadiness): string {
  */
 function primaryAction(view: ReplView, narrow: boolean): string {
   const focused = view.focused;
-  if (focused === "footer:history") {
+  if (focused === "footer:history" || focused === "footer:top:history") {
     // Shortened where the row is 72 columns and not otherwise. The control under
     // the cursor is labelled `[history]`, so the narrow form is not vague — it is
     // the one word the label already supplies, given back to the keys.
     return narrow ? "Enter opens" : "Enter opens History";
   }
-  if (focused === "footer:exit") {
+  if (focused === "footer:exit" || focused === "footer:top:exit") {
     return "Enter exits";
   }
   if (focused === "drawer:close") {
@@ -4869,7 +4969,7 @@ function guidanceParts(
   const modal = modalOpen(view);
   const editing = focused === undefined || focused === "footer:input";
   const narrow = view.size.columns <= NARROW.columns;
-  const move: GuidancePart = { text: "Tab/Shift+Tab move" };
+  const move: GuidancePart = { text: "Tab regions Alt↑↓" };
   if (modal) {
     // A drawer holds focus, so `Esc closes` is required and movement is not: Tab
     // is discoverable by pressing it, and being shut inside a modal whose way out
@@ -4939,11 +5039,12 @@ function field(
   key: string,
   prompt: string,
   text: string,
-  purpose: "draft" | "answer" | "sidekick-answer" | "configure-agent" | "message",
+  purpose: ReplFieldPurpose,
   style: ReplRowStyle,
   options: {
     readonly focus?: true;
     readonly here?: string | undefined;
+    readonly caret?: ReplCaret;
     /** The form field this line edits, for a line that edits one. */
     readonly field?: string;
     /** The Sidekick question this line answers, for a line that answers one. */
@@ -4985,6 +5086,9 @@ function field(
         prompt,
         text,
         purpose,
+        caret: caretFor(text, options.caret).offset,
+        ...(options.caret?.backward === true ? { backward: true } : {}),
+        ...(options.caret?.column === undefined ? {} : { column: options.caret.column }),
         ...(options.block === undefined ? {} : { block: options.block }),
         ...(options.field === undefined ? {} : { field: options.field }),
         ...(options.question === undefined ? {} : { question: options.question }),
@@ -5026,6 +5130,9 @@ interface DescribedScreen {
 }
 
 function described(view: ReplView, context: ReplPresentationContext): DescribedScreen {
+  if (profileFor(view.size) === "too-small") {
+    return { items: [], rows: [] };
+  }
   if (view.refusal !== undefined) {
     // A reason as long as its sentence, over rows that fit: a refusal is the only
     // thing on this screen, and one clipped to a single row is a refusal that has
@@ -5139,9 +5246,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   const inspected = state.route.at !== undefined;
   const toSessions = row(
     "sessions:heading",
-    `${selected(routed === "sessions")}Sessions`,
+    `${selected(routed === "sessions" && !(narrow && showSidekick))}Sessions`,
     { select: "surface", surface: "sessions" },
-    styleOf("pane-heading", { selected: routed === "sessions" }),
+    styleOf("pane-heading", { selected: routed === "sessions" && !(narrow && showSidekick) }),
     { here: view.focused },
   );
   // The staged screen has no permanent catalog column, so its way to the
@@ -5149,9 +5256,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // to its own Entries surface, where the column is already drawn.
   const toEntries = row(
     "entries:heading",
-    `${selected(routed === "entries")}Entries`,
+    `${selected(routed === "entries" && !(narrow && showSidekick))}Entries`,
     workspace === undefined ? { select: "surface", surface: "entries" } : { select: "catalog" },
-    styleOf("pane-heading", { selected: routed === "entries" }),
+    styleOf("pane-heading", { selected: routed === "entries" && !(narrow && showSidekick) }),
     { here: view.focused },
   );
   // The way between surfaces belongs to neither of them. A narrow frame mounts
@@ -5166,6 +5273,29 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // looks for it.
   if (narrow) {
     items.push(toEntries);
+    items.push(
+      row(
+        "surface:sidekick",
+        `${selected(showSidekick)}Sidekick`,
+        { select: "pane", pane: "sidekick" },
+        styleOf("pane-heading", { selected: showSidekick }),
+        { here: view.focused },
+      ),
+    );
+  }
+  if (workspace !== undefined) {
+    // Each heading belongs to the surface it names, so a narrow frame describes
+    // only the one its route is showing: a heading for an outlet this frame has
+    // no region for would be a row mounted nowhere. Described ahead of the
+    // reading under it, because the order controls are described in is the
+    // order the arrows move through them.
+    items.push(
+      ...workspaceHeadings(view, context.selector, {
+        transcript: !narrow || routed === "sessions",
+        work: !narrow || (routed === "entries" && !showSidekick),
+        entries: !narrow,
+      }),
+    );
   }
   if (!showSessions) {
     // Nothing: this frame is showing the other surface.
@@ -5206,7 +5336,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         },
       ),
     );
-    items.push(...shown(content, context, SESSIONS_WINDOW));
+    const window = context.admission.windows.get(SESSIONS_WINDOW);
+    const reveal =
+      window === undefined ? undefined : transcriptReveals(content, window.from, window.count);
+    items.push(
+      ...shown(content, context, SESSIONS_WINDOW).map((one) => {
+        const target = reveal?.get(one.key);
+        return target === undefined ? one : revealing(one, target);
+      }),
+    );
     items.push(
       row(
         "sessions:later",
@@ -5219,18 +5357,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       ),
     );
   }
-  if (workspace !== undefined) {
-    // Each heading belongs to the surface it names, so a narrow frame describes
-    // only the one its route is showing: a heading for an outlet this frame has
-    // no region for would be a row mounted nowhere.
-    items.push(
-      ...workspaceHeadings(view, context.selector, {
-        transcript: !narrow || routed === "sessions",
-        work: !narrow || (routed === "entries" && !showSidekick),
-        entries: !narrow,
-      }),
-    );
-  } else if (!narrow) {
+  if (workspace === undefined && !narrow) {
     items.push(toEntries);
   }
   if (showEntry && workspace === undefined) {
@@ -5357,10 +5484,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         ),
       );
       items.push(
-        ...shown(
-          sidekickReadingRows(live.sidekick, view.focused, context.chat, chatStagingOf(view)),
-          context,
-          SIDEKICK_WINDOW,
+        ...anchored(
+          shown(
+            sidekickReadingRows(live.sidekick, view.focused, context.chat, chatStagingOf(view)),
+            context,
+            SIDEKICK_WINDOW,
+          ),
+          "sidekick:anchor",
+          "chat",
+          view.focused,
         ),
       );
       items.push(
@@ -5417,7 +5549,14 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       ),
     );
     if (prepared !== undefined) {
-      items.push(...shown(readingRows(prepared), context, READING_WINDOW));
+      items.push(
+        ...anchored(
+          shown(readingRows(prepared), context, READING_WINDOW),
+          "reading:anchor",
+          "selected",
+          view.focused,
+        ),
+      );
     }
     items.push(
       row(
@@ -5482,6 +5621,21 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         ),
       );
     }
+  }
+
+  if (
+    !narrow &&
+    !showSidekick &&
+    !items.some((one) => one.key.startsWith("binding:") || one.key.startsWith("elicit:"))
+  ) {
+    items.push(
+      ...anchored(
+        [line("binding:empty", " ", styleOf("metadata"))],
+        "binding:anchor",
+        "empty",
+        view.focused,
+      ),
+    );
   }
 
   // The way into history. The band above shows where the positions are; choosing
@@ -5648,7 +5802,10 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // A restoration claim is somebody else's: exactly one description may claim
   // focus, and a drawer that just went says which one it is.
   const claiming =
-    state.route.drawers.length === 0 && view.focused === undefined && claim === undefined;
+    view.initialPresentation !== false &&
+    !modalOpen(view) &&
+    view.focused === undefined &&
+    claim === undefined;
   if (workspace !== undefined) {
     // With the selected work, which is the surface it is part of. A narrow
     // frame showing the Transcript or the Sidekick has no region to draw it in.
@@ -5668,8 +5825,8 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "draft",
         styleOf("draft"),
         claiming
-          ? { focus: true, here: view.focused, classify: sourceRuns }
-          : { here: view.focused, classify: sourceRuns },
+          ? { focus: true, here: view.focused, classify: sourceRuns, caret: state.draftCaret }
+          : { here: view.focused, classify: sourceRuns, caret: state.draftCaret },
       ),
     );
   }
@@ -5683,6 +5840,45 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // they are collected here: a box built for one of them has to be able to ask
   // what that row meant.
   return { items, rows: [...items, ...drawer.rows] };
+}
+
+function anchored(
+  rows: readonly Described[],
+  key: string,
+  reading: "selected" | "chat" | "drawer" | "empty",
+  focused: string | undefined,
+): readonly Described[] {
+  const at = rows.findIndex((one) => readDescription(one.description).component === LINE);
+  if (at < 0) {
+    return rows;
+  }
+  return rows.map((one, index) => {
+    if (index !== at) {
+      return one;
+    }
+    const read = readDescription(one.description);
+    const label = fields(read.input)?.["label"];
+    if (typeof label !== "string") {
+      return one;
+    }
+    const end = boundaries(label)[1] ?? 0;
+    return {
+      ...one,
+      key,
+      runs:
+        focused === key
+          ? tokenRuns([
+              { text: label.slice(0, end) || " ", token: "caret" },
+              { text: label.slice(end), token: one.style.role },
+            ])
+          : one.runs,
+      description: describeNode<ReplAction>({
+        key,
+        component: READING,
+        input: { label: label || " ", reading },
+      }),
+    };
+  });
 }
 
 /**
@@ -6235,7 +6431,7 @@ function entryContent(
           fitControl([{ text: "    " }, { text: scope.label, elide: true }], width),
           { select: "scope", scopes: scope.path },
           styleOf("metadata"),
-          { here: focused },
+          { here: focused, claim },
         ),
       );
     }
@@ -6380,17 +6576,25 @@ function currentChat(view: ReplView): boolean {
 }
 
 /**
- * Which of the Sidekick's own drawers this committed view is presenting.
+ * Which editable drawer this committed view is presenting.
  *
  * One fact rather than two, because what it decides is one thing: where a
  * keystroke goes. A form held open in state while the screen shows something
  * else owns nothing — what owns typing is what is drawn.
  */
 export type ReplPresented =
+  | { readonly kind: "entry-question"; readonly question: ReplQuestion }
   | { readonly kind: "question"; readonly question: string }
   | { readonly kind: "configure" };
 
 export function presentedDrawer(view: ReplView): ReplPresented | undefined {
+  if (
+    !view.state.heldHistory &&
+    view.selection.drawers.at(-1)?.kind === "live-elicit" &&
+    view.live.question !== undefined
+  ) {
+    return { kind: "entry-question", question: view.live.question };
+  }
   const asking = presentedAsking(view);
   if (asking !== undefined) {
     return { kind: "question", question: asking.question.key };
@@ -6535,6 +6739,8 @@ function drawerFor(
   const catalog = presentedCatalog(view);
   const asking = presentedAsking(view)?.question.key;
   const configuring = presentedConfiguring(view) !== undefined;
+  const overHeld =
+    view.selection.drawers.at(-1)?.kind === "history" && view.state.heldHistory === true;
   const rows: Described[] = [];
   rows.push(
     row(
@@ -6553,7 +6759,24 @@ function drawerFor(
       { here: view.focused },
     ),
   );
-  for (const placed of windowed(content, context, entering, view.focused, asking)) {
+  const reveals = catalog
+    ? (from: number, count: number) => catalogReveals(content, from, count)
+    : (from: number, count: number) =>
+        flatReveals(
+          content.map((one) => one.described),
+          from,
+          count,
+        );
+  const admitted = windowed(content, context, entering, view.focused, asking, reveals);
+  const readings =
+    configuring &&
+    admitted.some((one) => {
+      const read = readDescription(one.description);
+      return isControl(read.component, read.input);
+    })
+      ? admitted
+      : anchored(admitted, "drawer:reading:anchor", "drawer", view.focused);
+  for (const placed of readings) {
     rows.push(placed);
   }
   rows.push(
@@ -6579,21 +6802,32 @@ function drawerFor(
   //
   // Reparented, but still admitted: the action row is where their cells land, so
   // a control that row cannot hold whole is not described here either.
-  const offered = (key: string): boolean => context.measuring || context.admission.actions.has(key);
+  const offered = (key: string): boolean =>
+    context.measuring ||
+    context.admission.actions.has(overHeld ? key.replace("footer:", "footer:top:") : key);
   // Stop, where the Sidekick's own pane would have offered it. Its own row of
   // this form rather than the pane's row mounted inside it: a reparented node
   // keeps its focus stop and loses its cell, and a control somebody cannot see
   // is not a control. One node either way — while the form is in front of that
   // pane, the pane describes none of its body.
-  if ((asking !== undefined || configuring) && view.live.sidekick?.busy === true) {
+  if (asking !== undefined || view.selection.drawers.at(-1)?.kind === "live-elicit") {
     rows.push(
       row(
-        "drawer:sidekick:stop",
-        padControl("[stop]", width),
-        { select: "stop-sidekick" },
+        "drawer:form:submit",
+        "[submit]",
+        asking === undefined
+          ? { select: "form-submit" }
+          : { select: "sidekick-form-submit", question: asking },
         styleOf("action"),
         { here: view.focused },
       ),
+    );
+  }
+  if ((asking !== undefined || configuring) && view.live.sidekick?.busy === true) {
+    rows.push(
+      row("drawer:sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("action"), {
+        here: view.focused,
+      }),
     );
   }
   if (offered("footer:history")) {
@@ -6605,7 +6839,7 @@ function drawerFor(
   rows.push(
     row(
       "drawer:close",
-      padControl("[close]", width),
+      "[close]",
       dismissing !== undefined
         ? { select: "permission-dismiss", request: dismissing }
         : catalog
@@ -6625,6 +6859,45 @@ function drawerFor(
       { here: view.focused },
     ),
   );
+  const visibleRows = overHeld
+    ? rows.map((one) => {
+        if (one.key !== "footer:history" && one.key !== "footer:exit") {
+          return one;
+        }
+        const read = readDescription(one.description);
+        const key = one.key.replace("footer:", "footer:top:");
+        return {
+          ...one,
+          key,
+          description: describeNode<ReplAction>({
+            key,
+            component: read.component,
+            input: read.input,
+          }),
+        };
+      })
+    : rows;
+  const covered = (one: Described) => {
+    const read = readDescription(one.description);
+    return describeNode<ReplAction>({
+      key: read.key,
+      component: read.component,
+      input: { ...fields(read.input), covered: true },
+    });
+  };
+  const children = overHeld
+    ? [
+        covered(history),
+        covered(exit),
+        describeNode<ReplAction>({
+          key: "drawer:history",
+          component: DRAWER,
+          input: { label: "" },
+          modal: true,
+          children: visibleRows.map((one) => one.description),
+        }),
+      ]
+    : visibleRows.map((one) => one.description);
   const drawer: Described = {
     key: "drawer:open",
     style: titleStyle,
@@ -6632,11 +6905,11 @@ function drawerFor(
       key: "drawer:open",
       component: DRAWER,
       input: { label: width < 1 ? title : title.padEnd(width, " ") },
-      children: rows.map((one) => one.description),
+      children,
       modal: true,
     }),
   };
-  return { drawer, rows };
+  return { drawer, rows: visibleRows };
 }
 
 /** What one drawer reading holds, before any window decides what is shown. */
@@ -6828,6 +7101,9 @@ function drawerContent(
     content.push(...built.content);
   }
 
+  if (content.length === 0) {
+    content.push({ described: drawerLine("drawer:empty", " ", width, styleOf("metadata")) });
+  }
   return { title, titleStyle, dismissing, entering, content };
 }
 
@@ -6891,7 +7167,12 @@ function formContent(
   }
   // The same rule inside the modal: the first control claims focus when the
   // drawer opens, and afterwards traversal inside the drawer owns it.
-  const entering = focused === undefined || !focused.startsWith("drawer:");
+  const entering =
+    focused === undefined ||
+    (!focused.startsWith("drawer:") &&
+      focused !== "footer:history" &&
+      focused !== "footer:exit" &&
+      !focused.startsWith("footer:top:"));
   for (const one of form.fields) {
     const value = held.values[one.name] ?? "";
     const marked = requiredNow(form, held.values, one) ? "*" : " ";
@@ -6970,8 +7251,8 @@ function formContent(
         asking === undefined ? "answer" : "sidekick-answer",
         styleOf("field-value"),
         asking === undefined
-          ? { here: focused }
-          : { here: focused, field: one.name, question: asking },
+          ? { here: focused, field: one.name, caret: held.carets?.[one.name] }
+          : { here: focused, field: one.name, question: asking, caret: held.carets?.[one.name] },
       ),
       field: { name: one.name, value },
     });
@@ -6987,17 +7268,6 @@ function formContent(
       ),
     });
   }
-  content.push({
-    described: row(
-      "drawer:form:submit",
-      padControl("[submit]", width),
-      asking === undefined
-        ? { select: "form-submit" }
-        : { select: "sidekick-form-submit", question: asking },
-      styleOf("action"),
-      { here: focused },
-    ),
-  });
   return {
     title: form.title ?? "Answer",
     titleStyle: styleOf("question-title"),
@@ -7051,7 +7321,13 @@ function settingLine(settings: SessionConfiguration | undefined): string {
  * control: there is nothing to go to.
  */
 function catalogContent(view: ReplView, width: number): DrawerContent {
-  const rows = entryContent(view.model, view.focused, view.selection.entry?.key, width);
+  const rows = entryContent(
+    view.model,
+    view.focused,
+    view.selection.entry?.key,
+    width,
+    focusClaim(view),
+  );
   const content: DrawerRow[] =
     rows.length > 0
       ? rows.map((described) => ({ described }))
@@ -7152,7 +7428,7 @@ function configureContent(
       held.agent,
       "configure-agent",
       styleOf("field-value"),
-      { here: focused },
+      { here: focused, caret: held.caret },
     ),
   });
   // Exactly what was asked for, and exactly what was verified. The second is
@@ -7398,6 +7674,8 @@ function windowed(
   focused: string | undefined,
   /** The Sidekick question these rows answer, or none for the entry's. */
   asking: string | undefined,
+  /** Which admitted rows have logical neighbours the window is not showing. */
+  reveals?: (from: number, count: number) => ReadonlyMap<string, Readonly<Record<string, string>>>,
 ): readonly Described[] {
   if (context.measuring) {
     return [];
@@ -7408,22 +7686,203 @@ function windowed(
   }
   const rows = content.slice(held.from, held.from + held.count);
   const index = entering ? rows.findIndex((candidate) => candidate.field !== undefined) : -1;
+  const beyond = reveals?.(held.from, held.count);
   return rows.map((candidate, at) => {
     const named = candidate.field;
     if (at !== index || named === undefined) {
-      return candidate.described;
+      const reveal = beyond?.get(candidate.described.key);
+      return reveal === undefined ? candidate.described : revealing(candidate.described, reveal);
     }
-    return field(
-      `drawer:value:${named.name}`,
-      "  = ",
-      named.value,
-      asking === undefined ? "answer" : "sidekick-answer",
-      styleOf("field-value"),
-      asking === undefined
-        ? { focus: true, here: focused }
-        : { focus: true, here: focused, field: named.name, question: asking },
-    );
+    const read = readDescription(candidate.described.description);
+    return {
+      ...candidate.described,
+      description: describeNode<ReplAction>({
+        key: read.key,
+        component: read.component,
+        input: {
+          ...fields(read.input),
+          ...(beyond?.get(candidate.described.key) === undefined
+            ? {}
+            : { reveal: beyond.get(candidate.described.key) }),
+        },
+        focus: true,
+      }),
+    };
   });
+}
+
+/** The same row, told which keys reach a neighbour outside its window. */
+function revealing(described: Described, reveal: Readonly<Record<string, string>>): Described {
+  const read = readDescription(described.description);
+  return {
+    ...described,
+    description: describeNode<ReplAction>({
+      key: read.key,
+      component: read.component,
+      input: { ...fields(read.input), reveal },
+      layout: read.layout,
+      ...(read.focus ? { focus: true } : {}),
+    }),
+  };
+}
+
+function flatReveals(
+  rows: readonly Described[],
+  from: number,
+  count: number,
+): ReadonlyMap<string, Readonly<Record<string, string>>> {
+  const controls = rows
+    .map((one, at) => ({ one, at }))
+    .filter(({ one }) => {
+      const read = readDescription(one.description);
+      return isControl(read.component, read.input);
+    });
+  const found = new Map<string, Readonly<Record<string, string>>>();
+  for (const [index, row] of controls.entries()) {
+    if (row.at < from || row.at >= from + count) {
+      continue;
+    }
+    const targets: Record<string, string> = {};
+    for (const [step, arrow, alt] of [
+      [-1, "ArrowUp", "Alt+ArrowUp"],
+      [1, "ArrowDown", "Alt+ArrowDown"],
+    ] satisfies readonly (readonly [number, string, string])[]) {
+      const other = controls[index + step];
+      if (other !== undefined && (other.at < from || other.at >= from + count)) {
+        targets[arrow] = other.one.key;
+        targets[alt] = other.one.key;
+      }
+    }
+    found.set(row.one.key, targets);
+  }
+  return found;
+}
+
+function transcriptReveals(rows: readonly Described[], from: number, count: number) {
+  const found = new Map(flatReveals(rows, from, count));
+  const turns = rows
+    .map((one, at) => ({ one, at }))
+    .filter(({ one }) => {
+      const read = readDescription(one.description);
+      const input = fields(read.input);
+      return (
+        isControl(read.component, read.input) &&
+        (one.key.startsWith("sessions:turn:") || input?.["select"] === "sidekick-turn")
+      );
+    });
+  for (const [index, row] of turns.entries()) {
+    if (row.at < from || row.at >= from + count) {
+      continue;
+    }
+    const targets = { ...found.get(row.one.key) };
+    delete targets["ArrowUp"];
+    delete targets["ArrowDown"];
+    for (const [step, key] of [
+      [-1, "ArrowUp"],
+      [1, "ArrowDown"],
+    ] satisfies readonly (readonly [number, string])[]) {
+      const other = turns[index + step];
+      if (other !== undefined && (other.at < from || other.at >= from + count)) {
+        targets[key] = other.one.key;
+      }
+    }
+    const end = turns[index + 1]?.at ?? rows.length;
+    const childAt = rows.findIndex(
+      (one, at) => at > row.at && at < end && one.key.startsWith("sessions:request:"),
+    );
+    const child = rows[childAt];
+    if (child !== undefined && (childAt < from || childAt >= from + count)) {
+      targets["ArrowRight"] = child.key;
+    }
+    found.set(row.one.key, targets);
+  }
+  for (const [at, row] of rows.entries()) {
+    if (!row.key.startsWith("sessions:request:") || at < from || at >= from + count) {
+      continue;
+    }
+    const targets = { ...found.get(row.key) };
+    delete targets["ArrowUp"];
+    delete targets["ArrowDown"];
+    const parent = turns.findLast((one) => one.at < at);
+    if (parent !== undefined && (parent.at < from || parent.at >= from + count)) {
+      targets["ArrowLeft"] = parent.one.key;
+    }
+    found.set(row.key, targets);
+  }
+  return found;
+}
+
+/** One catalog row's path: its entry, then each scope down to its own. */
+function catalogPath(key: string): readonly string[] | undefined {
+  if (key.startsWith("entry:")) {
+    return [key.slice("entry:".length)];
+  }
+  return key.startsWith("scope:") ? key.slice("scope:".length).split("/") : undefined;
+}
+
+/**
+ * Which admitted catalog rows have a logical neighbour outside the window.
+ *
+ * The neighbours are the catalog's own structure, read from the whole ordered
+ * list: the next and previous row under the same parent for Down and Up, the
+ * first scope beneath for Right, the parent for Left, and the next and previous
+ * row in the list for Alt+Down and Alt+Up. Only a neighbour the window does not
+ * hold is named; one it holds is mounted, and the tree moves to it itself.
+ */
+function catalogReveals(
+  content: readonly DrawerRow[],
+  from: number,
+  count: number,
+): ReadonlyMap<string, Readonly<Record<string, string>>> {
+  const keys = content.map((one) => one.described.key);
+  const paths = keys.map(catalogPath);
+  const shown = (at: number): boolean => at >= from && at < from + count;
+  const parentOf = (path: readonly string[]): string => path.slice(0, -1).join("/");
+  const found = new Map<string, Readonly<Record<string, string>>>();
+  for (let at = from; at < from + count && at < keys.length; at += 1) {
+    const path = paths[at];
+    if (path === undefined) {
+      continue;
+    }
+    const sibling = (step: -1 | 1): number | undefined => {
+      for (let other = at + step; other >= 0 && other < keys.length; other += step) {
+        const there = paths[other];
+        if (there === undefined || there.length < path.length) {
+          return undefined;
+        }
+        if (there.length === path.length) {
+          return parentOf(there) === parentOf(path) ? other : undefined;
+        }
+      }
+      return undefined;
+    };
+    const child = paths[at + 1]?.length === path.length + 1 ? at + 1 : undefined;
+    let parent: number | undefined;
+    for (let other = at - 1; other >= 0 && path.length > 1; other -= 1) {
+      if (paths[other]?.join("/") === parentOf(path)) {
+        parent = other;
+        break;
+      }
+    }
+    const targets: Record<string, number | undefined> = {
+      ArrowDown: sibling(1),
+      ArrowUp: sibling(-1),
+      ArrowRight: child,
+      ArrowLeft: parent,
+      "Alt+ArrowDown": at + 1 < keys.length ? at + 1 : undefined,
+      "Alt+ArrowUp": at > 0 ? at - 1 : undefined,
+    };
+    const reveal: Record<string, string> = {};
+    for (const [key, target] of Object.entries(targets)) {
+      if (target !== undefined && !shown(target)) {
+        reveal[key] = keys[target];
+      }
+    }
+    if (Object.keys(reveal).length > 0) {
+      found.set(keys[at], Object.freeze(reveal));
+    }
+  }
+  return found;
 }
 
 /**
@@ -8040,6 +8499,7 @@ export interface ReplMeasuredWidths {
  * scroll clamps against is what the screen is showing.
  */
 export interface ReplPresentationContext {
+  readonly editors?: ReadonlyMap<string, ReplEditor>;
   /**
    * The region widths this frame measured, or none before it has measured any.
    *
@@ -8397,6 +8857,7 @@ type ReplSlot =
   | "inspection"
   | "drawer-above"
   | "drawer-below"
+  | "drawer-actions"
   | "drawer"
   | "drawer-title"
   | "action"
@@ -8420,7 +8881,10 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:scroll:up") {
     return "drawer-above";
   }
-  if (key === "drawer:scroll:down" || key === "drawer:close" || key === "drawer:sidekick:stop") {
+  if (key === "drawer:close" || key === "drawer:sidekick:stop" || key === "drawer:form:submit") {
+    return "drawer-actions";
+  }
+  if (key === "drawer:scroll:down") {
     // Below the window with the other fixed controls, never inside it: a
     // control that scrolled away from whoever was reaching for it is the one
     // thing this drawer's layout exists to prevent.
@@ -8442,7 +8906,7 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key.startsWith("footer:")) {
     return "action";
   }
-  if (key === "sessions:heading" || key === "entries:heading") {
+  if (key === "sessions:heading" || key === "entries:heading" || key === "surface:sidekick") {
     return "navigation";
   }
   if (key === "transcript:heading") {
@@ -8576,7 +9040,12 @@ function candidatesOf(
   const found: ReplCandidate[] = [];
   const walk = (description: ReplDescription<ReplAction>): void => {
     const read = readDescription(description);
-    const slot = catalogRows?.has(read.key) === true ? "drawer" : slotOf(read.key);
+    const slot =
+      fields(read.input)?.["covered"] === true
+        ? undefined
+        : catalogRows?.has(read.key) === true
+          ? "drawer"
+          : slotOf(read.key);
     if (slot !== undefined) {
       found.push({
         key: read.key,
@@ -8608,6 +9077,10 @@ function measurementTextOf(component: ReplComponent<ReplAction>, input: ReplView
   const named = fields(input);
   const focused = named?.["focused"] === true;
   if (component === FIELD) {
+    const shown = named?.["shown"];
+    if (typeof shown === "string") {
+      return shown;
+    }
     const prompt = typeof named?.["prompt"] === "string" ? named["prompt"] : "";
     const text = typeof named?.["text"] === "string" ? named["text"] : "";
     return fieldText(prompt, text, focused);
@@ -8656,6 +9129,26 @@ function isControl(component: ReplComponent<ReplAction>, input: ReplViewData): b
  * header does cost is one row for its edge, which belongs to the band these rows
  * sit in and is measured there.
  */
+function drawerActions(candidates: readonly ReplCandidate[]): ReplBox {
+  return box({
+    id: "box:drawer:actions",
+    region: "drawer",
+    props: inlineActionRowProps(),
+    children: candidates.map((candidate) =>
+      box({
+        id: `box:drawer:${candidate.key}`,
+        key: candidate.key,
+        region: "drawer",
+        props: CONTROL_PROPS,
+        text: candidate.text,
+        control: candidate.control,
+        style: candidate.style,
+        runs: candidate.runs,
+      }),
+    ),
+  });
+}
+
 function rowBox(
   candidate: ReplCandidate,
   region: ReplRegion,
@@ -8674,6 +9167,80 @@ function rowBox(
   });
 }
 
+function editorDescription(
+  description: ReplDescription<ReplAction>,
+  context: ReplPresentationContext,
+): ReplDescription<ReplAction> {
+  if (context.editors === undefined) {
+    return description;
+  }
+  const read = readDescription(description);
+  const editor = context.editors.get(read.key);
+  const input = fields(read.input);
+  const prompt = input?.["prompt"];
+  const focused = input?.["focused"] === true;
+  const shown =
+    editor === undefined || typeof prompt !== "string" || input?.["block"] === true
+      ? undefined
+      : fieldLabel(prompt, focused) + editor.display[editor.active].text;
+  return describeNode<ReplAction>({
+    key: read.key,
+    component: read.component,
+    input:
+      editor === undefined
+        ? read.input
+        : {
+            ...input,
+            caret: editor.caret.offset,
+            caretRows: editor.rows
+              .slice(Math.max(0, editor.active - 1), editor.active + 2)
+              .map((row) => ({ stops: row.stops.map((stop) => ({ ...stop })) })),
+            ...(shown === undefined ? {} : { shown }),
+          },
+    layout: read.layout,
+    children: read.children.map((child) => editorDescription(child, context)),
+    ...(read.modal ? { modal: true } : {}),
+    ...(read.focus ? { focus: true } : {}),
+  });
+}
+
+function editorRuns(
+  description: ReplDescription<ReplAction>,
+  context: ReplPresentationContext,
+): readonly ReplTokenRun[] | undefined {
+  const read = readDescription(description);
+  const input = fields(read.input);
+  const editor = context.editors?.get(read.key);
+  const prompt = input?.["prompt"];
+  if (editor !== undefined && typeof prompt === "string" && input?.["block"] !== true) {
+    const focused = input?.["focused"] === true;
+    const own = editor.display[editor.active];
+    const role = input?.["purpose"] === "draft" ? "draft" : "field-value";
+    return tokenRuns([
+      { text: fieldLabel(prompt, focused).slice(0, 1), token: focused ? "focus-marker" : role },
+      { text: fieldLabel(prompt, focused).slice(1), token: role },
+      ...own.runs,
+    ]);
+  }
+  for (const [prefix, key, count] of [
+    ["draft:value:", "footer:input", context.draft?.length ?? 0],
+    ["sidekick:message:value:", "sidekick:message", context.message?.length ?? 0],
+  ] satisfies readonly (readonly [string, string, number])[]) {
+    if (!read.key.startsWith(prefix)) {
+      continue;
+    }
+    const editor = context.editors?.get(key);
+    if (editor === undefined) {
+      return undefined;
+    }
+    const at = Number(read.key.slice(prefix.length));
+    const from = Math.max(0, Math.min(editor.active, editor.display.length - count));
+    const own = editor.display[from + at];
+    return own?.runs;
+  }
+  return undefined;
+}
+
 /**
  * One reading's descriptions and the constraints that place them.
  *
@@ -8687,13 +9254,44 @@ export function presentationFor(
   context: ReplPresentationContext,
 ): ReplPresentation {
   const screen = described(view, context);
-  const descriptions = screen.items.map((item) => item.description);
+  const composed = screen.items.map((item) => editorDescription(item.description, context));
+  // Placed only where the tree will hold them: a measuring pass mounts nothing.
+  const placedDescriptions = context.measuring
+    ? composed
+    : placeScreen(composed, { narrow: profileFor(view.size) === "narrow" }, (one) => {
+        const read = readDescription(one);
+        return read.component === READING || isControl(read.component, read.input);
+      });
+  const requested = view.state.restore?.kind === "reveal" ? view.state.restore.key : undefined;
+  const containsRequest = (items: readonly ReplDescription<ReplAction>[]): boolean =>
+    items.some((one) => {
+      const read = readDescription(one);
+      return read.key === requested || containsRequest(read.children);
+    });
+  const requestedDescription = (one: ReplDescription<ReplAction>): ReplDescription<ReplAction> => {
+    const read = readDescription(one);
+    return describeNode<ReplAction>({
+      key: read.key,
+      component: read.component,
+      input: read.input,
+      layout: read.layout,
+      children: read.children.map(requestedDescription),
+      ...(read.modal ? { modal: true } : {}),
+      ...(read.key === requested ? { focus: true } : {}),
+      ...(read.navigation === undefined ? {} : { navigation: read.navigation }),
+    });
+  };
+  const descriptions =
+    requested !== undefined && containsRequest(placedDescriptions)
+      ? placedDescriptions.map(requestedDescription)
+      : placedDescriptions;
   const styles = new Map<string, ReplRowStyle>();
   const runs = new Map<string, readonly ReplTokenRun[]>();
   for (const one of screen.rows) {
     styles.set(one.key, one.style);
-    if (one.runs !== undefined) {
-      runs.set(one.key, one.runs);
+    const edited = editorRuns(one.description, context);
+    if (edited !== undefined || one.runs !== undefined) {
+      runs.set(one.key, edited ?? one.runs ?? []);
     }
   }
   const size = view.size;
@@ -9128,6 +9726,7 @@ export function presentationFor(
           // an outlet cannot be inside it.
           ...heading("sessions:heading", "content"),
           ...heading("entries:heading", "content"),
+          ...heading("surface:sidekick", "content"),
           ...routed,
         ],
       }),
@@ -9272,6 +9871,7 @@ export function presentationFor(
           ...of("drawer-below").map((candidate) =>
             rowBox(candidate, "drawer", context.widths?.drawer),
           ),
+          drawerActions(of("drawer-actions")),
         ],
       }),
     );
@@ -9399,7 +9999,7 @@ export function admissionFor(input: {
     windows.set(
       slot.window,
       admitRows({
-        offset: offsetFor(view, slot.window, capacity, total, chat),
+        offset: offsetFor(view, slot.window, capacity, total, chat, widths, preview, notices),
         total,
         capacity,
       }),
@@ -9447,6 +10047,9 @@ function offsetFor(
   capacity: number,
   total: number,
   chat: readonly ReplFittedLine[] | undefined,
+  widths: ReplMeasuredWidths,
+  preview: readonly ReplFittedLine[] | undefined,
+  notices: ReplPreparedNotices | undefined,
 ): number {
   const held = offsetOf(view, window);
   if (window === SIDEKICK_WINDOW) {
@@ -9474,11 +10077,46 @@ function offsetFor(
     }
     return held;
   }
-  if (window !== ENTRIES_WINDOW || capacity < 1) {
+  const requested = view.state.restore;
+  if (
+    requested?.kind === "reveal" &&
+    capacity > 0 &&
+    (window === SESSIONS_WINDOW || window === DRAWER_WINDOW)
+  ) {
+    const rows =
+      window === SESSIONS_WINDOW
+        ? sessionRows(
+            view.state,
+            chronology(view.model, view.live),
+            undefined,
+            undefined,
+            widths.listBody,
+            view.live.sidekick,
+            staged(view) !== undefined,
+          )
+        : (drawerContent(view, widths.drawer, preview, notices)?.content.map(
+            (one) => one.described,
+          ) ?? []);
+    const at = rows.findIndex((one) => one.key === requested.key);
+    if (at >= 0) {
+      return Math.min(Math.max(held, at - capacity + 1), at);
+    }
+  }
+  if (window === DRAWER_WINDOW && capacity > 0) {
+    const content = drawerContent(view, widths.drawer, preview, notices);
+    if (content?.entering === true) {
+      const at = content.content.findIndex((one) => one.field !== undefined);
+      if (at >= 0) {
+        return Math.min(Math.max(held, at - capacity + 1), at);
+      }
+    }
+  }
+  const catalog = window === ENTRIES_WINDOW || (window === DRAWER_WINDOW && presentedCatalog(view));
+  if (!catalog || capacity < 1) {
     return held;
   }
   const claimed = focusClaim(view);
-  if (claimed === undefined || !claimed.startsWith("entry:")) {
+  if (claimed === undefined || !(claimed.startsWith("entry:") || claimed.startsWith("scope:"))) {
     return held;
   }
   const at = entryContent(view.model, undefined, undefined, undefined).findIndex(
@@ -10231,17 +10869,17 @@ function workspaceControls(
   // offered at all. A build without the shared queue draws no QUEUE tab and no
   // Follow checkbox: a control for behaviour that is not here is a choice
   // somebody can make and nothing happens, however it is drawn.
+  // A tray's name is a heading while it is the only tray, not a stop: TODO is
+  // inactive until the shared TODO ships, and a control that does nothing is a
+  // Tab stop somebody has to step past. Indented as a row is, so it reads in
+  // the same cells it always has.
   for (const tray of traysOf(workspace)) {
     const here = workspace.tray === tray;
     items.push(
-      row(
+      line(
         `tray:${tray}`,
-        tray.toUpperCase(),
-        {},
+        focusPrefixed(tray.toUpperCase(), false),
         styleOf(here ? "pane-heading" : "metadata", { selected: here }),
-        {
-          here: view.focused,
-        },
       ),
     );
   }
@@ -10346,6 +10984,7 @@ function workspaceControls(
       styleOf("draft"),
       {
         field: MESSAGE_FIELD,
+        caret: state.messageCaret,
         here: view.focused,
         block: true,
         ...(claiming ? { focus: true } : {}),
@@ -10378,6 +11017,7 @@ function workspaceDraft(
   const items: Described[] = [];
   items.push(
     field("footer:input", " DRAFT", view.state.draft, "draft", styleOf("field-label"), {
+      caret: view.state.draftCaret,
       here: view.focused,
       block: true,
       ...(claiming ? { focus: true } : {}),
@@ -11460,7 +12100,11 @@ function workspacePresentation(input: {
             id: "box:content:surfaces",
             region: "content",
             props: workspaceHeaderProps(header, TAB_GAP),
-            children: parts(["sessions:heading", "entries:heading"], "content", header),
+            children: parts(
+              ["sessions:heading", "entries:heading", "surface:sidekick"],
+              "content",
+              header,
+            ),
           }),
           ...routedRows,
         ],
@@ -11562,6 +12206,7 @@ function workspacePresentation(input: {
             children: of("drawer").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
           }),
           ...of("drawer-below").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
+          drawerActions(of("drawer-actions")),
         ],
       }),
     );

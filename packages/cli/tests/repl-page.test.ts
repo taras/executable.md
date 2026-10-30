@@ -301,9 +301,8 @@ describe("REPL page — reaching a field the claim names, by keyboard", () => {
     // offering the way back rather than by naming a field.
     expect(page.screen().shows(TYPING)).toBe(false);
 
-    // Tab is the product's own route to the Draft, and the row it advertises is
-    // what says the Draft has them. Bounded by the ring, which wraps.
-    for (let press = 0; press < 40 && !page.screen().shows(TYPING); press += 1) {
+    // Message -> History -> Transcript -> Selected work -> Draft.
+    for (let press = 0; press < 4; press += 1) {
       yield* tab(page);
     }
     expect(page.screen().shows(TYPING)).toBe(true);
@@ -333,11 +332,7 @@ describe("REPL page — reaching a field the claim names, by keyboard", () => {
 
     yield* page.press("[configure scribe]");
     yield* page.until("Configure", (one) => one.shows("[refresh]"));
-    // The drawer opens with its scroll control selected, so one Tab reaches the
-    // Agent field. Its own row carries a static "> Agent: " prompt, which is
-    // why the cue there says nothing about focus; what says the field has the
-    // keystrokes is that it takes them.
-    yield* tab(page);
+    // Agent is the drawer's fixed Content entry.
     for (let press = 0; press < "scribe".length; press += 1) {
       const before = page.screen().index;
       yield* page.key("Backspace");
@@ -362,11 +357,9 @@ describe("REPL page — reaching a field the claim names, by keyboard", () => {
     yield* page.press("[answer sidekick]");
     yield* page.until("the form", (one) => one.shows("[submit]"));
 
-    // decision is an enum, so the product draws it as options to choose; the
-    // second field is the text one. Two Tabs reach its editable line: the
-    // first selects the field, the second its value.
-    yield* tab(page);
-    yield* tab(page);
+    // First editable value -> second field label -> second editable value.
+    yield* page.key("Alt+ArrowDown");
+    yield* page.key("Alt+ArrowDown");
     yield* typed(page, "okay");
     const answered = page.screen();
     expect(answered.rows.some((row) => row.includes("*message: okay"))).toBe(true);

@@ -83,27 +83,10 @@ function* holding(path: string, content: string): Operation<void> {
   }
 }
 
-/** Walk the focus ring until this control is the marked one. */
-function* reach(pty: Pty, label: string): Operation<void> {
-  const deadline = Date.now() + ACT_MS;
-  while (!(yield* pty.shows()).some((line) => line.includes(`> ${label}`))) {
-    if (Date.now() > deadline) {
-      throw new Error(
-        `focus never reached ${label} under ${cliRuntime()}. screen=` +
-          JSON.stringify((yield* pty.shows()).map((one) => one.trimEnd())),
-      );
-    }
-    yield* pty.type("\t");
-    yield* sleep(250);
-  }
-}
-
 /**
  * Activate the control holding this text with a pointer.
  *
- * The focus ring inside the question drawer does not stop on an enum's offered
- * values: they are drawn and pointable, and a pointer is how a keyboard-only
- * harness reaches one.
+ * The pointer selects the named offered value without submitting the form.
  */
 function* click(pty: Pty, text: string): Operation<void> {
   const screen = yield* pty.shows();
@@ -198,8 +181,7 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     // And the write after the question has not happened.
     yield* showing(first, "waiting for an answer", ACT_MS);
 
-    yield* reach(first, "[exit]");
-    yield* first.type("\r");
+    yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
     const location = printedLocation((yield* first.shows()).join("\n"));
 
@@ -217,8 +199,7 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     // Answered through the real drawer, which is where the prompt is rendered.
     // What it carries is the URL the completed read bound — from a record, in a
     // process whose credential this tracker rejects.
-    yield* reach(second, "[answer]");
-    yield* second.type("\r");
+    yield* click(second, "[answer]");
     yield* showing(second, `Recorded issue: ${TRACKER}/issues/1`, ACT_MS);
     yield* click(second, "( ) continue");
     // The rail's own mark for the first entry. `[ok] entry-1` is a row of the
@@ -232,8 +213,7 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     expect(server.issues[0]?.body ?? "").toBe(mark);
     expect(creates(server)).toBe(1);
 
-    yield* reach(second, "[exit]");
-    yield* second.type("\r");
+    yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
   });
 }
@@ -280,8 +260,7 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
 
     // Left while the request is in flight: the entry is cancelled and the
     // command still prints the location it ended at.
-    yield* reach(first, "[exit]");
-    yield* first.type("\r");
+    yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
     const location = printedLocation((yield* first.shows()).join("\n"));
     release.resolve();
@@ -294,8 +273,7 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
     expect(server.issues.length).toBe(1);
     expect(server.issues[0]?.body ?? "").toBe(mark);
 
-    yield* reach(second, "[exit]");
-    yield* second.type("\r");
+    yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
   });
 }
@@ -331,8 +309,7 @@ export function replIssuesUnsupported(repl: ReplCommand): Operation<void> {
     // that would have installed a lifecycle, not the operator's configuration.
     expect(server.requests).toEqual([]);
 
-    yield* reach(pty, "[exit]");
-    yield* pty.type("\r");
+    yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
 }

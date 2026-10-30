@@ -12,20 +12,72 @@
  * and a component's copy of one could be a frame out of date.
  */
 
+import type { ReplCaret } from "../caret.ts";
+
 import type { ReplDrawerRef, ReplPane, ReplSurface } from "../route.ts";
 
+/** The keys a field keeps for its own caret. */
+export type ReplCaretKey = "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "Home" | "End";
+
+export type ReplFieldPurpose =
+  | "draft"
+  | "message"
+  | "answer"
+  | "sidekick-answer"
+  | "configure-agent";
+
 export type ReplAction =
+  | {
+      readonly kind: "reading-key";
+      readonly reading: "selected" | "chat" | "drawer" | "empty";
+      readonly key: "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" | "Home" | "End";
+    }
+  | { readonly kind: "noop" }
   /**
    * Text for one named field, or for the entry draft when it names none.
    *
    * The name travels with the text because focus belongs to the mounted tree
    * and this vocabulary does not: a control that emitted bare text would have
    * its characters delivered to whichever field the application last recorded,
-   * which is not necessarily the one under the cursor.
+   * which is not necessarily the one under the cursor. Mounted fields also
+   * name their purpose and question so expiry cannot redirect an edit.
    */
-  | { readonly kind: "type"; readonly text: string; readonly field?: string }
-  /** Remove the last Unicode scalar value from one named field, or the draft. */
-  | { readonly kind: "erase"; readonly field?: string }
+  | {
+      readonly kind: "type";
+      readonly text: string;
+      readonly field?: string;
+      readonly purpose?: ReplFieldPurpose;
+      readonly question?: string;
+    }
+  /** Remove the grapheme before the caret in one named field, or the draft. */
+  | {
+      readonly kind: "erase";
+      readonly field?: string;
+      readonly purpose?: ReplFieldPurpose;
+      readonly question?: string;
+    }
+  /**
+   * A caret key pressed in one named field, or in the draft when it names none.
+   *
+   * Handled by the field so the arrow stays in it rather than becoming
+   * navigation. Its measured rows determine the requested value position.
+   */
+  | {
+      readonly kind: "move-caret";
+      readonly key: ReplCaretKey;
+      readonly purpose?: ReplFieldPurpose;
+      readonly question?: string;
+      readonly field?: string;
+      readonly caret?: ReplCaret;
+    }
+  /**
+   * Bring one row of a windowed list into view and give it focus.
+   *
+   * Asked by the row whose logical neighbour the window is not showing, when an
+   * arrow names that neighbour. Moving focus is all it does: nothing is
+   * selected, and the window moves only as far as showing that row takes.
+   */
+  | { readonly kind: "reveal"; readonly key: string }
   /** Admit the draft as this execution's next entry. */
   | { readonly kind: "submit" }
   /**

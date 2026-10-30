@@ -584,26 +584,6 @@ function focusKeyOf(presenter: Presenter): string | undefined {
   return node === undefined ? undefined : presenter.tree.keyOf(node);
 }
 
-/** Move focus until it reaches one key, or say where it got to instead. */
-function* focusOn(presenter: Presenter, key: string, limit = 400): Operation<void> {
-  const visited: string[] = [];
-  for (let step = 0; step < limit; step += 1) {
-    const moved = yield* presenter.tree.dispatch({ kind: "key", key: "Tab" });
-    if (!moved.ok || moved.value.outcome !== "focus" || moved.value.focused === undefined) {
-      break;
-    }
-    const at = presenter.tree.keyOf(moved.value.focused);
-    if (at === key) {
-      return;
-    }
-    if (at === undefined || visited.includes(at)) {
-      break;
-    }
-    visited.push(at);
-  }
-  throw new Error(`Tab never reached ${key}; it visited ${visited.join(", ")}`);
-}
-
 /** The directory the journeys include their `Checklist` component from. */
 const COMPONENTS = fileURLToPath(new URL("./fixtures/repl/", import.meta.url));
 
@@ -783,7 +763,7 @@ function* reachOutcomes(size: ReplTerminalSize): Operation<ReplPage> {
     yield* exchange(page, at + 1, one);
   }
   page.repl.fake.script(HELD_AGENT);
-  yield* pasteDraft(page, `${RUNNING_SOURCE}\n${AGENT_TAIL}`);
+  yield* pasteDraft(page, `${RUNNING_SOURCE}\n${AGENT_TAIL}`, ["Tab", "Tab", "Tab", "Tab"]);
   yield* page.key("Enter");
   yield* page.until(
     "Entry 4 running",
@@ -800,7 +780,7 @@ function* reachOutcomes(size: ReplTerminalSize): Operation<ReplPage> {
 function* typedInto(page: ReplPage): Operation<void> {
   yield* intoComposer(page);
   yield* typed(page, CHECKPOINT_MESSAGE);
-  yield* pasteDraft(page, CHECKPOINT_DRAFT);
+  yield* pasteDraft(page, CHECKPOINT_DRAFT, ["Tab", "Tab", "Tab", "Tab"]);
 }
 
 /** Open the Entries catalog through the control the sidebar draws for it. */
@@ -1106,7 +1086,7 @@ describe("REPL appearance - the archive's inks, from the mounted terminal", () =
     const viewOf = (focused?: string): ReplView =>
       withWorkspace(reading(state, model, live, WIDE, focused), workspaceOf(model));
     yield* presenter.commit(viewOf());
-    yield* focusOn(presenter, "footer:input");
+    expect(focusKeyOf(presenter)).toBe("footer:input");
     const observed = yield* presenter.commit(viewOf(focusKeyOf(presenter)));
     const foreground = (at: { x: number; y: number }): number | undefined =>
       grid.styleAt(at.x, at.y).foreground;
@@ -1237,8 +1217,8 @@ describe("REPL presentation: what one row's cells say it is", () => {
     expect(inkOfSpan(grid, first, said).foreground).toBe(REPL_PALETTE.output);
     expect(inkOfSpan(grid, first, said).foreground).not.toBe(REPL_PALETTE.success);
     // And it is labelled as the retained result rather than as live text.
-    expect(textOf(grid, placed(observed, "reading:caption:output"))).toContain("Output");
-    expect(textOf(grid, placed(observed, "reading:caption:output"))).not.toContain("live");
+    expect(textOf(grid, placed(observed, "reading:anchor"))).toContain("Output");
+    expect(textOf(grid, placed(observed, "reading:anchor"))).not.toContain("live");
 
     // The outcome keeps its accent where an outcome is what is shown.
     expect(inkOf(grid, placed(observed, `entry:${settled.key}`)).foreground).toBe(
@@ -1268,9 +1248,7 @@ describe("REPL presentation: what one row's cells say it is", () => {
     // Re-anchored for #881 PR 2 onto the reading's Output half; both claims and
     // both accents are unchanged, and the caption now says that the absence of
     // rendered text is what is being reported.
-    expect(textOf(grid, placed(observed, "reading:caption:output"))).toContain(
-      "No rendered output.",
-    );
+    expect(textOf(grid, placed(observed, "reading:anchor"))).toContain("No rendered output.");
     const closed = placed(observed, "reading:output:outcome:0");
     expect(textOf(grid, closed)).toContain("closed err");
     expect(inkOfSpan(grid, closed, "closed err").foreground).toBe(REPL_PALETTE.failure);
@@ -1300,7 +1278,7 @@ describe("REPL presentation: what one row's cells say it is", () => {
     const live = placed(observed, "reading:output:live:0");
     expect(textOf(grid, live)).toContain("building the plan");
     expect(inkOfSpan(grid, live, "building the plan").foreground).toBe(REPL_PALETTE.output);
-    expect(textOf(grid, placed(observed, "reading:caption:output"))).toContain("live");
+    expect(textOf(grid, placed(observed, "reading:anchor"))).toContain("live");
   });
 
   it("G1: an empty screen's placeholders are subordinate, and the draft is a surface", function* () {
@@ -1385,7 +1363,8 @@ describe("REPL presentation: selection and focus are two different facts", () =>
     // One commit to mount the tree, so there is something for Tab to move
     // through, and a second to draw what that move settled.
     yield* presenter.commit(reading(state, model));
-    yield* focusOn(presenter, "sessions:heading");
+    yield* presenter.tree.dispatch({ kind: "key", key: "Backtab" });
+    yield* presenter.tree.dispatch({ kind: "key", key: "Backtab" });
     // Carried into the next view the way the program carries it: a view that
     // said nothing held focus would let the draft claim it straight back.
     const observed = yield* presenter.commit(
@@ -1425,7 +1404,15 @@ describe("REPL presentation: selection and focus are two different facts", () =>
     const state = selecting(stateWith({}), "entry-1");
 
     yield* presenter.commit(reading(state, model));
-    yield* focusOn(presenter, "entry:entry-1");
+    yield* presenter.commit(
+      reading(
+        { ...state, restore: { kind: "reveal", key: "entry:entry-1" } },
+        model,
+        NOTHING_LIVE,
+        WIDE,
+        focusKeyOf(presenter),
+      ),
+    );
     const observed = yield* presenter.commit(
       reading(state, model, NOTHING_LIVE, WIDE, focusKeyOf(presenter)),
     );
@@ -1457,7 +1444,15 @@ describe("REPL presentation: selection and focus are two different facts", () =>
       target: observed.committed.rendered.map.at(bounds.x, bounds.y) ?? "",
       frame: observed.committed.rendered.tree,
     });
-    yield* focusOn(presenter, "entry:entry-2");
+    yield* presenter.commit(
+      reading(
+        { ...stateWith({}), restore: { kind: "reveal", key: "entry:entry-2" } },
+        model,
+        NOTHING_LIVE,
+        WIDE,
+        focusKeyOf(presenter),
+      ),
+    );
     const pressed = yield* presenter.tree.dispatch({ kind: "key", key: "Enter" });
     if (!pointed.ok || !pressed.ok) {
       throw new Error("one of the two activations was refused");
@@ -1763,7 +1758,7 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
       expect(draft.width).toBe(size.columns);
       const text = textOf(grid, draft);
       expect(text.startsWith(">> Draft: ")).toBe(true);
-      expect(text).toContain("[2 lines] third line");
+      expect(text).toContain("third line");
 
       // The band keeps its own five rows and now says which band it is.
       const band = observed.regionOf("box:footer:band");
@@ -1780,7 +1775,7 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
     const presenter = yield* usePresenter(WIDE);
     const state = selecting(stateWith({ draft: "typed" }), "entry-1");
     yield* presenter.commit(reading(state, model));
-    yield* focusOn(presenter, "entries:heading");
+    yield* presenter.tree.dispatch({ kind: "key", key: "Backtab" });
     const observed = yield* presenter.commit(
       reading(state, model, NOTHING_LIVE, WIDE, focusKeyOf(presenter)),
     );
@@ -1851,7 +1846,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     // and it sits on the surface an editable value sits on, across the whole row
     // the drawer measured for it, so what holds a value is visible before it is
     // read.
-    const value = placed(observed, "drawer:value:0");
+    const value = placed(observed, "drawer:reading:anchor");
     expect(textOf(grid, value).trimEnd()).toBe(JSON.stringify(binding.value, undefined, 2));
     expect(inkOf(grid, value).foreground).toBe(REPL_PALETTE.string);
     expect(inkOf(grid, value).foreground).not.toBe(REPL_PALETTE.heading);
@@ -1883,7 +1878,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
 
     // What was asked is a label, what was answered is a value, and the two are
     // not the same reading.
-    const schema = placed(observed, "drawer:schema");
+    const schema = placed(observed, "drawer:reading:anchor");
     expect(inkOf(grid, schema).attrs).toContain(BOLD);
     expect(inkOf(grid, placed(observed, "drawer:schema:0")).foreground).toBe(REPL_PALETTE.muted);
 
@@ -1947,7 +1942,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     const presenter = yield* usePresenter(WIDE);
     const state = opening(selecting(stateWith({}), "entry-1"));
     yield* presenter.commit(reading(state, model));
-    yield* focusOn(presenter, "drawer:close");
+    yield* presenter.tree.dispatch({ kind: "key", key: "Tab" });
     const observed = yield* presenter.commit(
       reading(state, model, NOTHING_LIVE, WIDE, focusKeyOf(presenter)),
     );
@@ -2125,7 +2120,7 @@ describe("REPL presentation: the one guidance row", () => {
       expect([size.columns, said.startsWith("Ready for Entry ")]).toEqual([size.columns, true]);
       expect([size.columns, said.includes("Enter")]).toEqual([size.columns, true]);
       expect([size.columns, /Tab to (the )?draft/.test(said)]).toEqual([size.columns, true]);
-      expect([size.columns, said.includes("Tab/Shift+Tab move")]).toEqual([size.columns, true]);
+      expect([size.columns, said.includes("Tab regions Alt↑↓")]).toEqual([size.columns, true]);
       expect([size.columns, said.includes("\u2026")]).toEqual([size.columns, false]);
 
       // At the narrow size the compact sentences already fit, so the block is
@@ -2293,7 +2288,9 @@ function inkOfSpan(grid: TerminalGrid, bounds: ReplBounds, span: string, from = 
 function messageRows(observed: Observed): readonly ReplBounds[] {
   const found: ReplBounds[] = [];
   for (let offset = 0; ; offset += 1) {
-    const bounds = observed.boundsOf(`drawer:message:${offset}`);
+    const bounds = observed.boundsOf(
+      offset === 0 ? "drawer:reading:anchor" : `drawer:message:${offset}`,
+    );
     if (bounds === undefined) {
       return found;
     }
@@ -2366,7 +2363,9 @@ describe("REPL presentation: what the characters of a reading are", () => {
 
     // The complete parsed value, line for line, exactly as it serializes.
     const serialized = (JSON.stringify(binding.value, undefined, 2) ?? "null").split("\n");
-    const rows = serialized.map((_, offset) => placed(observed, `drawer:value:${offset}`));
+    const rows = serialized.map((_, offset) =>
+      placed(observed, offset === 0 ? "drawer:reading:anchor" : `drawer:value:${offset}`),
+    );
     expect(rows.map((bounds) => textOf(grid, bounds).trimEnd())).toEqual(serialized);
 
     const of = (needle: string): ReplBounds => {
@@ -2422,7 +2421,7 @@ describe("REPL presentation: focus marks the row without repainting it", () => {
     const state = selecting(stateWith({ draft: typed }), "entry-1");
 
     yield* presenter.commit(reading(state, model, NOTHING_LIVE, WIDE));
-    yield* focusOn(presenter, "footer:input");
+    expect(focusKeyOf(presenter)).toBe("footer:input");
     const observed = yield* presenter.commit(
       reading(state, model, NOTHING_LIVE, WIDE, focusKeyOf(presenter)),
     );
@@ -2887,7 +2886,10 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
       for (let x = edited.x; x < edited.x + edited.width; x += 1) {
         expect(presenter.grid.styleAt(x, edited.y).background).toBe(SURFACE.field);
       }
-      const closed = yield* presenter.commit(reading(stateWith({}), model, live, WIDE));
+      const closed = yield* presenter.commit(
+        reading(stateWith({ restore: { kind: "reveal", key: "footer:input" } }), model, live, WIDE),
+      );
+      expect(focusKeyOf(presenter)).toBe("footer:input");
       return {
         cells: presenter.grid.styledIn({ x: 0, y: 0, width: WIDE.columns, height: WIDE.rows }),
         keys: closed.keys.slice().sort(),
@@ -2896,7 +2898,10 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
 
     const fresh = yield* scoped(function* () {
       const presenter = yield* usePresenter(WIDE);
-      const first = yield* presenter.commit(reading(stateWith({}), model, live, WIDE));
+      const first = yield* presenter.commit(
+        reading(stateWith({ restore: { kind: "reveal", key: "footer:input" } }), model, live, WIDE),
+      );
+      expect(focusKeyOf(presenter)).toBe("footer:input");
       return {
         cells: presenter.grid.styledIn({ x: 0, y: 0, width: WIDE.columns, height: WIDE.rows }),
         keys: first.keys.slice().sort(),
@@ -3003,7 +3008,9 @@ describe("REPL presentation: decoration the frame measured", () => {
 
     // Exactly the admitted rows mounted; the ones past the window are in no
     // cell, so they are in no pointer target and no Tab stop either.
-    const shown = observed.keys.filter((key) => key.startsWith("drawer:value:"));
+    const shown = observed.keys.filter(
+      (key) => key === "drawer:reading:anchor" || key.startsWith("drawer:value:"),
+    );
     expect(shown.length).toBe(admitted.count);
     expect(observed.boundsOf(`drawer:value:${admitted.total - 1}`)).toBe(undefined);
     for (const key of shown) {
@@ -3032,7 +3039,7 @@ describe("REPL presentation: a row the frame cannot hold whole", () => {
     );
     const { grid } = presenter;
 
-    const row = placed(observed, "drawer:message:0");
+    const row = placed(observed, "drawer:reading:anchor");
     const written = textOf(grid, row).replace(/\s+$/, "");
     // Whatever the row shows is a prefix of the line it was given, with no gap
     // where a stretch wrapped away: every written cell is the next character of
@@ -3067,10 +3074,10 @@ describe("REPL presentation: a row the frame cannot hold whole", () => {
     const presenter = yield* usePresenter(NARROW);
     // A draft wider than the narrowest supported frame, with focus on it.
     const typed = `<Plan as="draft">{answers}</Plan> ${"and more source ".repeat(6)}`;
-    const state = stateWith({ draft: typed });
+    const state = { ...stateWith({ draft: typed }), draftCaret: { value: typed, offset: 0 } };
 
     yield* presenter.commit(reading(state, model, NOTHING_LIVE, NARROW));
-    yield* focusOn(presenter, "footer:input");
+    expect(focusKeyOf(presenter)).toBe("footer:input");
     const observed = yield* presenter.commit(
       reading(state, model, NOTHING_LIVE, NARROW, focusKeyOf(presenter)),
     );
@@ -5194,7 +5201,7 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     const viewOf = (focused?: string): ReplView =>
       withWorkspace(reading(state, model, live, WIDE, focused), workspaceOf(model));
     yield* presenter.commit(viewOf());
-    yield* focusOn(presenter, "footer:input");
+    expect(focusKeyOf(presenter)).toBe("footer:input");
     const observed = yield* presenter.commit(viewOf(focusKeyOf(presenter)));
     const { grid } = presenter;
 
@@ -5831,6 +5838,10 @@ describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => 
     yield* intoDraft(page);
     // The entry surface: the selected work, its reading and its Draft.
     yield* page.resize(SMALL);
+    yield* page.until(
+      "the narrow surface bar",
+      (one) => one.shows("Sessions") && one.shows("Entries") && one.shows("Sidekick"),
+    );
     yield* page.press("Entries", { onRow: "Sessions" });
     yield* page.until("the Entries catalog", drawerOpen);
     yield* closeDrawer(page);

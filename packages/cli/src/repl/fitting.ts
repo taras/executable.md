@@ -33,6 +33,9 @@
  * recovers on resize.
  */
 
+import { boundaries, caretRow } from "./caret.ts";
+import type { ReplCaret, ReplCaretRow } from "./caret.ts";
+
 import { close, fit, open, text } from "@bomb.sh/tty";
 import type { Op } from "@bomb.sh/tty";
 import { Err, Ok } from "effection";
@@ -208,6 +211,19 @@ export interface ReplPlainFitStore {
    * finished is not published as one.
    */
   settle(texts: readonly string[], room: number, size: ReplTerminalSize): void;
+  /** Measured stops relative to one fitted row, independent of its source offset. */
+  heldCaret(
+    text: string,
+    indent: number,
+    room: number,
+    size: ReplTerminalSize,
+  ): ReplCaretRow | undefined;
+  /** Retain only the rows of the editor this preparation completed. */
+  keepCarets(
+    rows: readonly { readonly text: string; readonly indent: number; readonly row: ReplCaretRow }[],
+    room: number,
+    size: ReplTerminalSize,
+  ): void;
 }
 
 /**
@@ -220,6 +236,8 @@ export interface ReplPlainFitStore {
 export function createPlainFitStore(): ReplPlainFitStore {
   let at: { readonly room: number; readonly columns: number; readonly rows: number } | undefined;
   let cuts = new Map<string, readonly ReplRowCut[]>();
+  let carets = new Map<string, ReplCaretRow>();
+  const caretKey = (text: string, indent: number): string => JSON.stringify([text, indent]);
   const here = (room: number, size: ReplTerminalSize): boolean =>
     at !== undefined && at.room === room && at.columns === size.columns && at.rows === size.rows;
   const moveTo = (room: number, size: ReplTerminalSize): void => {
@@ -227,6 +245,7 @@ export function createPlainFitStore(): ReplPlainFitStore {
       return;
     }
     cuts = new Map();
+    carets = new Map();
     at = { room, columns: size.columns, rows: size.rows };
   };
   return {
@@ -247,6 +266,13 @@ export function createPlainFitStore(): ReplPlainFitStore {
         }
       }
       cuts = kept;
+    },
+    heldCaret(text, indent, room, size) {
+      return here(room, size) ? carets.get(caretKey(text, indent)) : undefined;
+    },
+    keepCarets(rows, room, size) {
+      moveTo(room, size);
+      carets = new Map(rows.map((one) => [caretKey(one.text, one.indent), one.row]));
     },
   };
 }
@@ -1069,4 +1095,89 @@ export function readingRuns(
     parts.push({ text: run.text, token: run.token });
   }
   return tokenRuns(parts);
+}
+
+export interface ReplEditor {
+  readonly caret: ReplCaret;
+  readonly rows: readonly ReplCaretRow[];
+  readonly display: readonly { readonly text: string; readonly runs: readonly ReplTokenRun[] }[];
+  readonly active: number;
+}
+
+export function* fitEditor(
+  renderer: ReplRenderer,
+  size: ReplTerminalSize,
+  caret: ReplCaret,
+  room: number,
+  focused: boolean,
+  store?: ReplPlainFitStore,
+  classify: (text: string) => readonly ReplTokenRun[] = (text) => [{ text, token: "field-value" }],
+): Operation<Result<ReplEditor>> {
+  const lines = caret.value.split("\n").map((text, at) => ({ key: `edit:${at}`, text }));
+  // Reserve a blank cell for a caret after the last grapheme of a fitted row.
+  const fitted = yield* fitPlain(renderer, size, lines, Math.max(1, room - 1), store);
+  if (!fitted.ok) {
+    return fitted;
+  }
+  const offsets = new Map<string, number>();
+  let source = 0;
+  for (const line of lines) {
+    offsets.set(line.key, source);
+    source += line.text.length + 1;
+  }
+  const rows: ReplCaretRow[] = [];
+  const retained: { text: string; indent: number; row: ReplCaretRow }[] = [];
+  const display: { text: string; runs: readonly ReplTokenRun[] }[] = [];
+  for (const line of fitted.value) {
+    const from = offsets.get(line.line) ?? 0;
+    let geometry = store?.heldCaret(line.text, line.indent, Math.max(1, room - 1), size);
+    if (geometry === undefined) {
+      const stops = boundaries(line.text);
+      const measured = yield* widths(
+        renderer,
+        size,
+        stops.map((at) => line.text.slice(0, at)),
+      );
+      if (!measured.ok) {
+        return measured;
+      }
+      geometry = {
+        stops: stops.map((offset, index) => ({
+          offset,
+          column: line.indent + measured.value[index],
+        })),
+      };
+    }
+    retained.push({ text: line.text, indent: line.indent, row: geometry });
+    rows.push({
+      stops: geometry.stops.map((stop) => ({ offset: from + stop.offset, column: stop.column })),
+    });
+    const own = `${" ".repeat(line.indent)}${line.text}`;
+    display.push({ text: own, runs: classify(own) });
+    offsets.set(line.line, from + line.text.length);
+  }
+  store?.keepCarets(retained, Math.max(1, room - 1), size);
+  const active = caretRow(rows, caret.offset, caret.backward);
+  const line = fitted.value[active];
+  if (focused && line !== undefined) {
+    const from = rows[active].stops[0]?.offset ?? 0;
+    const at = caret.offset - from;
+    const end = boundaries(line.text).find((one) => one > at) ?? at;
+    const before = `${" ".repeat(line.indent)}${line.text.slice(0, at)}`;
+    const glyph = line.text.slice(at, end) || " ";
+    const after = line.text.slice(end);
+    display[active] = {
+      text: before + glyph + after,
+      runs: tokenRuns([
+        ...slicedRuns(classify(before + glyph + after), 0, before.length),
+        { text: glyph, token: "caret" },
+        ...slicedRuns(
+          classify(before + glyph + after),
+          before.length + glyph.length,
+          before.length + glyph.length + after.length,
+        ),
+      ]),
+    };
+  }
+  return Ok({ caret, rows, display, active });
 }
