@@ -1943,3 +1943,125 @@ describe("REPL original complete History and cold catalog", () => {
 function referencePageFor(dataRoot: string): Operation<ReplPage> {
   return useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], size: WIDE });
 }
+
+describe("REPL original visible guidance and controlled typing", () => {
+  it("UI1: the guidance teaches the ring that is mounted, at both sizes", function* () {
+    for (const size of [WIDE, NARROW]) {
+      yield* scoped(function* () {
+        const page = yield* useReplPage({ size });
+        expect(directions(page.screen())).toBe("Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move");
+        expect(page.screen().shows("Esc closes")).toBe(false);
+        yield* page.key("Backtab");
+        yield* page.until("the way out's guidance", (one) => one.shows("Enter exits"));
+        expect(page.screen().shows("Enter submits")).toBe(false);
+        expect(page.screen().shows("Ready for Entry 1")).toBe(true);
+        expect(page.screen().shows(size.columns === 72 ? "Tab to draft" : "Tab to the draft to type")).toBe(true);
+        yield* page.key("Backtab");
+        yield* page.until("History's guidance", (one) => one.shows("Enter opens"));
+        yield* page.key("Enter");
+        yield* page.until("History's closing instruction", (one) => one.shows("[close]") && one.shows("Esc closes"));
+      });
+    }
+  });
+
+  it("UI9: typing at a control never reaches the draft, and the screen says why", function* () {
+    const page = yield* useReplPage();
+    yield* tab(page);
+    yield* page.until("control guidance", (one) => !one.shows("Enter submits"));
+    expect(page.screen().shows("Enter submits")).toBe(false);
+    expect(page.screen().shows("Tab to the draft to type")).toBe(true);
+    yield* page.type("discarded typing");
+    yield* page.key("Backtab");
+    yield* page.until("the Draft's own guidance", (one) => one.shows("Type here"));
+    yield* draftText(page, "kept typing");
+    expect(page.screen().shows("discarded typing")).toBe(false);
+    expect(yield* journalRecords(page)).toEqual([]);
+    expect(route(yield* leaveWithLocation(page)).draft).toBe("kept typing");
+  });
+
+  it("J1: a long draft stays exact and usable at medium, and no row crosses its region", function* () {
+    const size = { columns: 120, rows: 30 };
+    const page = yield* useReplPage({ size });
+    const source = yield* referenceSource();
+    yield* pasteDraft(page, source);
+    expect(page.screen().found(source.trimEnd().split(/\s+/).at(-1) ?? "", DRAFT_VALUE)).toBeGreaterThan(0);
+    expect(page.screen().rows.every((row) => row.length <= size.columns)).toBe(true);
+    expect(route(yield* leaveWithLocation(page)).draft).toBe(source);
+  });
+
+  it("UI12: a lifecycle refusal keeps the draft and goes when the entry it named ends, untouched", function* () {
+    const host = yield* useMountedHost();
+    const release = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    yield* API.Fetch.around({
+      *fetch() {
+        yield* release.operation;
+        return { status: 200, headers: new Headers(), *text() { return "done"; } };
+      },
+    });
+    const page = yield* useReplPage({ host });
+    yield* runSource(page, '```js eval\nyield* fetch("https://held.invalid/finish");\n```');
+    yield* page.until("the running first entry", (one) => one.shows("Entry 1 running") && one.found("fetch(\"https://held.invalid/finish\")", DRAFT_VALUE) === 0 && one.found("```", DRAFT_VALUE) === 0);
+    const text = "second entry, typed while the first is running";
+    yield* runSource(page, text);
+    yield* page.until("the temporary lifecycle refusal", (one) => one.shows("has not finished"));
+    expect(page.screen().found(text, DRAFT_VALUE)).toBe(1);
+    expect((yield* retainedModel(page)).entries).toHaveLength(1);
+    const fed = page.repl.terminal.fed;
+    release.resolve();
+    yield* page.until("the refusal expiring with its entry", (one) => one.shows("Ready for Entry 2"));
+    expect(page.repl.terminal.fed).toBe(fed);
+    expect(page.screen().shows("has not finished")).toBe(false);
+    expect(route(yield* leaveWithLocation(page)).draft).toBe(text);
+  });
+});
+
+describe("REPL original held reading and canonical startup", () => {
+  it("J1: run, hold at a gate, inspect a prefix, return live, continue, answer, settle", function* () {
+    const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
+    const gate = preparationGate();
+    yield* gate.install();
+    const page = yield* useReplPage({ host, size: WIDE });
+    const source = yield* referenceSource();
+    yield* runSource(page, source);
+    yield* gate.reached;
+    yield* pausedAt(page, "preparing");
+    yield* requestPause(page);
+    gate.release();
+    yield* pausedAt(page, "paused");
+    const records = yield* journalRecords(page);
+    const reading = page.screen();
+    yield* sleep(25);
+    expect(yield* journalRecords(page)).toEqual(records);
+    expect(page.screen().index).toBe(reading.index);
+    expect(page.screen().rows).toEqual(reading.rows);
+    expect(page.screen().shows("[answer]")).toBe(false);
+    yield* openHistory(page);
+    yield* page.press("Entry 1 admitted");
+    yield* page.until("the recorded prefix", (one) => one.shows("[live]"));
+    expect(page.screen().shows("[pause]")).toBe(false);
+    expect(page.screen().rows.some((row) => row.trim().startsWith("…"))).toBe(false);
+    yield* closeDrawer(page);
+    yield* page.press("[live]");
+    yield* page.until("the held live head", (one) => !one.shows("[live]") && one.shows("[continue]"));
+    yield* page.press("[continue]");
+    yield* page.until("the authored question", (one) => one.shows("[answer]"));
+    yield* answerReference(page);
+    yield* readTo(page, "Decision: approve");
+    expect(page.screen().shows("Decision: approve")).toBe(true);
+    const model = yield* retainedModel(page);
+    const generated = model.transcript.find((row) => row.kind === "generated");
+    expect(generated?.kind).toBe("generated");
+    expect(model.entries[0]?.source).toBe(source);
+    expect(model.entries[0]?.terminal?.status).toBe("ok");
+    yield* leaveWithLocation(page);
+    released(page.repl.terminal);
+  });
+  it("J1: an untouched fresh command returns its exact empty canonical location", function* () {
+    const page = yield* referencePage();
+    const execution = yield* mountedExecution(page.repl);
+    expect(yield* journalRecords(page)).toEqual([]);
+    expect(yield* leaveWithLocation(page)).toBe(`xmd://repl/${execution}/entries`);
+    released(page.repl.terminal);
+  });
+});
