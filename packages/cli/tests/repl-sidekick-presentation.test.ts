@@ -21,6 +21,7 @@ import {
   SIDEKICK_FILE,
   readSidekickRecords,
 } from "../src/repl/sidekick/history.ts";
+import { renderReceipt } from "../src/repl/sidekick/controls.ts";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import { projectRepl } from "../src/repl/model.ts";
 import { sidekickChatRows } from "../src/repl/program.ts";
@@ -54,6 +55,7 @@ import {
   DRAFT,
   draftHolds,
   intoComposer,
+  intoDraft,
   sendMessage,
   SIDEKICK,
   SIDEKICK_CONTROLS,
@@ -1875,5 +1877,274 @@ describe("Sidekick original provider membership and cancelled append", () => {
     const refusal = yield* refusedLocation(cold, prefix + encodeURIComponent(entryKey));
     expect(refusal).toContain(entryKey);
     expect(refusal).toContain("had started at this history position");
+  });
+});
+
+function composerRows(one: ScreenReading, anchor?: string): string[] {
+  const prompt = one.locate(COMPOSER);
+  const edge = anchor === undefined ? 0 : one.locate(anchor, { after: COMPOSER }).column;
+  const footer = one.locate("HISTORY");
+  return one.rows.slice(prompt.row + 1, footer.row).map((row) => row.slice(edge).trimEnd());
+}
+
+function* composerPaste(page: ReplPage, text: string, visible = (text.split("\n").at(-1) ?? "").split(/\s+/).at(-1) ?? ""): Operation<void> {
+  const index = page.screen().index;
+  yield* page.type(text);
+  yield* page.until("the composer's newest line", (one) => one.index > index && one.found(visible, { after: COMPOSER }) > 0);
+}
+
+function* populateChat(page: ReplPage, count: number, prefix = "SAID"): Operation<void> {
+  for (let number = 1; number <= count; number += 1) {
+    yield* exchange(page, `ask-${number}`, `${prefix}-${number}`);
+  }
+}
+
+describe("Sidekick original multiline composer ownership", () => {
+  it("MC5: the value wraps into rows of its own, and the chat gives them room", function* () {
+    const page = yield* useReplPage();
+    yield* populateChat(page, 10);
+    yield* intoComposer(page);
+    expect(composerRows(page.screen())).toHaveLength(1);
+    yield* composerPaste(page, "a question whose words have to wrap onto another row of the pane");
+    const wrapped = composerRows(page.screen(), "a question");
+    expect(wrapped.length).toBeGreaterThan(1);
+    expect(wrapped.join(" ")).toContain("a question whose words");
+    expect(wrapped.join(" ")).toContain("another row of the pane");
+    yield* composerPaste(page, "\nx\n\né́ 広い", "い");
+    const pasted = composerRows(page.screen(), "a question");
+    expect(pasted.length).toBeGreaterThan(wrapped.length);
+    expect(pasted).toContain("x");
+    expect(pasted).toContain("");
+    expect(pasted.join(" ")).toContain("広");
+    expect(pasted.join(" ")).toContain("い");
+    expect(chatHas(page.screen(), "SAID-10")).toBe(true);
+    for (const label of [COMPOSER, "[history]", "[exit]"]) { expect(page.screen().shows(label)).toBe(true); }
+    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    for (let i = 0; i < 12; i += 1) { yield* page.key("Backspace"); }
+    yield* page.until("the value shrinking", (one) => composerRows(one).length < pasted.length);
+    expect(yield* finishDraft(page)).toBeUndefined();
+  });
+
+  it("MC6: six rows at most, and Send carries the original text once", function* () {
+    const gate = appendGate();
+    const page = yield* useReplPage({ gate });
+    page.repl.fake.script({ reply: "<Output>Understood.</Output>\n" });
+    yield* intoComposer(page);
+    const text = Array.from({ length: 9 }, (_, i) => `LINE-${i + 1}`).join("\n");
+    yield* composerPaste(page, text);
+    const shown = composerRows(page.screen(), "LINE-9");
+    expect(shown).toHaveLength(6);
+    expect(shown.at(-1)).toBe("LINE-9");
+    expect(shown).not.toContain("LINE-1");
+    const hold = gate.holdNext((path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"message"'));
+    yield* sendComposed(page);
+    yield* hold.started();
+    yield* composerPaste(page, "NEWER-1\nNEWER-2\nNEWER-3");
+    const newer = composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy");
+    expect(newer.length).toBeGreaterThan(1);
+    hold.release();
+    yield* page.until("the acknowledged multiline message", (one) => chatHas(one, "Understood."));
+    expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual([text]);
+    expect(page.repl.fake.prompts).toHaveLength(1);
+    expect(page.repl.fake.prompts[0]).toContain("LINE-1");
+    expect(page.repl.fake.prompts[0]).toContain("LINE-9");
+    expect(page.repl.fake.prompts[0]).not.toContain("NEWER-1");
+    expect(composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy")).toEqual(newer);
+  });
+
+  it("MC6: control — an acknowledged Send leaves one blank value row", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ reply: "<Output>Done.</Output>\n" });
+    yield* intoComposer(page);
+    yield* composerPaste(page, "one\ntwo\nthree");
+    expect(composerRows(page.screen()).length).toBeGreaterThan(1);
+    yield* sendComposed(page);
+    yield* page.until("the value acknowledged", (one) => chatHas(one, "Done."));
+    expect(composerRows(page.screen())).toHaveLength(1);
+    expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["one\ntwo\nthree"]);
+  });
+
+  it("MC7: the value, its focus and its height survive every size and a held turn", function* () {
+    const page = yield* useReplPage();
+    yield* populateChat(page, 8);
+    yield* intoComposer(page);
+    const original = Array.from({ length: 8 }, (_, i) => `ROW-${i + 1}`).join("\n");
+    yield* composerPaste(page, original);
+    expect(composerRows(page.screen())).toHaveLength(6);
+    for (const size of [{ columns: 120, rows: 30 }, NARROW]) {
+      yield* page.resize(size);
+      expect(composerRows(page.screen()).join("\n")).toContain("ROW-8");
+      expect(composerRows(page.screen()).length).toBeGreaterThanOrEqual(1);
+      expect(composerRows(page.screen()).length).toBeLessThanOrEqual(6);
+      expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+      expect(chatHas(page.screen(), "SAID-8")).toBe(true);
+    }
+    const refused = yield* page.resize(TOO_SMALL);
+    expect(refused.shows("72x20")).toBe(true);
+    expect(refused.shows("[send]")).toBe(false);
+    yield* page.resize(WIDE);
+    expect(composerRows(page.screen())).toHaveLength(6);
+    yield* selectPane(page, "bindings");
+    yield* selectPane(page, "sidekick");
+    expect(composerRows(page.screen()).join("\n")).toContain("ROW-8");
+    page.repl.fake.script({ held: true, reply: "<Output>Held answer.</Output>\n" });
+    yield* intoComposer(page);
+    yield* composerPaste(page, "go");
+    yield* sendComposed(page);
+    yield* page.repl.fake.holdingTurns(1);
+    yield* composerPaste(page, "while busy\nline two");
+    const newer = composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy");
+    page.repl.fake.releaseTurn();
+    yield* page.until("the held reply arriving", (one) => chatHas(one, "Held answer."));
+    expect(composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy")).toEqual(newer);
+    expect(page.repl.fake.prompts).toHaveLength(9);
+    expect(page.repl.fake.prompts[8]).not.toContain("while busy");
+    expect(yield* finishDraft(page)).toBeUndefined();
+  });
+});
+
+function submitting(source: string): string {
+  return ['<Let as="code" select="code">', "````xmd", source, "````", "</Let>", "<REPL.EntryInput>{code}</REPL.EntryInput>", "<REPL.Submit />", ""].join("\n");
+}
+
+const HI_FIRST = "<Output>the first entry</Output>";
+const HI_SECOND = "<Output>the second entry</Output>";
+const HI_THIRD = "<Output>the third entry</Output>";
+const HI_FAILING = '```js eval\nthrow new Error("the third entry failed");\n```';
+
+function* entryRun(page: ReplPage, source: string, ordinal: number): Operation<void> {
+  yield* pasteDraft(page, source);
+  yield* page.key("Enter");
+  yield* entrySettles(page, ordinal, "ok");
+}
+
+function* freezeFirst(page: ReplPage): Operation<void> {
+  yield* openHistory(page);
+  yield* page.press("2 · Entry outcome recorded");
+  yield* page.until("the first entry's outcome selected", (one) => one.shows("[live]"));
+}
+
+function* leaveLocation(page: ReplPage): Operation<string> {
+  page.repl.terminal.end();
+  yield* awaited("the command returning its location", () => page.repl.outcome() !== undefined);
+  const result = page.repl.outcome();
+  if (result === undefined || !result.ok) { throw new Error("the command returned no successful location"); }
+  return result.value.location;
+}
+
+function* recordedReceipt(page: ReplPage, said: string): Operation<void> {
+  yield* awaitedFact(`the saved receipt ${said}`, function* () {
+    return (yield* settledReading(page.repl)).chat.some((one) => one.kind === "feedback" && one.text.includes(said));
+  });
+}
+
+function submitIntent(chat: readonly SidekickRecord[]) {
+  for (const one of [...chat].reverse()) {
+    if (one.kind === "control" && one.submit !== undefined) { return one.submit; }
+  }
+  throw new Error("no Submit intent was retained");
+}
+
+function* historicalSubmit(historical: boolean, failed: boolean): Operation<void> {
+  const dataRoot = yield* useTemporary("xmd-hi-submit-");
+  const location = yield* scoped(function* () {
+    const page = yield* useReplPage({ dataRoot });
+    yield* entryRun(page, HI_FIRST, 1);
+    yield* entryRun(page, HI_SECOND, 2);
+    if (historical) { yield* freezeFirst(page); }
+    return yield* leaveLocation(page);
+  });
+  const page = yield* useReplPage({ dataRoot, location });
+  if (historical) {
+    yield* closeDrawer(page);
+    yield* page.press("[live]");
+    yield* page.until("the acknowledged head", (one) => !one.shows("[live]"));
+  }
+  const source = failed ? HI_FAILING : HI_THIRD;
+  page.repl.fake.script({ reply: submitting(source) });
+  yield* compose(page, "run one more");
+  yield* sendComposed(page);
+  yield* entrySettles(page, 3, failed ? "err" : "ok");
+  const receipt = `Entry entry-3 ${failed ? "failed" : "completed"}.`;
+  yield* recordedReceipt(page, receipt);
+  const read = yield* settledReading(page.repl);
+  expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
+  expect(read.model.entries.map((one) => one.terminal?.status)).toEqual(["ok", "ok", failed ? "err" : "ok"]);
+  expect(read.model.entries[2]?.source).toBe(source);
+  const intent = submitIntent(read.chat);
+  expect([intent.entry, intent.ordinal, intent.source]).toEqual(["entry-3", 2, source]);
+  const feedback = read.chat.flatMap((one) => one.kind === "feedback" ? [one.text] : []).join("\n");
+  expect(feedback).toContain(receipt);
+  expect(feedback).toContain(failed
+    ? "Inspect its saved evidence with <REPL.Entry.Journal entry={3} />."
+    : "Read what it printed with <REPL.Entry.Output entry={3} />.");
+  expect(feedback).not.toContain("entry={1}");
+  expect(feedback).not.toContain("entry={2}");
+  if (failed) { expect(feedback).toContain("It failed:"); }
+}
+
+describe("Sidekick original acknowledged history submission identity", () => {
+  for (const arm of [{ name: "opened at the first entry", historical: true }, { name: "control: opened at the head", historical: false }]) {
+    it(`HI1: ${arm.name}, a reply's Submit names the entry it actually ran`, function* () {
+      yield* historicalSubmit(arm.historical, false);
+    });
+  }
+  it("HI2: a failed entry's intent, receipt and read target all name that entry", function* () {
+    yield* historicalSubmit(true, true);
+  });
+  it("HI2b: a failure released while an earlier position is selected still names its own entry", function* () {
+    const gate = appendGate();
+    const page = yield* useReplPage({ gate });
+    yield* entryRun(page, HI_FIRST, 1);
+    yield* entryRun(page, HI_SECOND, 2);
+    const hold = gate.holdNext((path, record) => path.endsWith(ENTRIES_FILE) && record.includes('"type":"close"'));
+    page.repl.fake.script({ reply: submitting(HI_FAILING) });
+    page.repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
+    yield* compose(page, "run one that fails");
+    yield* sendComposed(page);
+    yield* hold.started();
+    yield* freezeFirst(page);
+    yield* closeDrawer(page);
+    hold.release();
+    yield* page.until("the failure's followup", (one) => sidekickShows(one, "Noted."));
+    expect(page.screen().shows("[live]")).toBe(true);
+    const read = yield* settledReading(page.repl);
+    expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
+    expect(read.model.entries[2]?.terminal?.status).toBe("err");
+    expect(submitIntent(read.chat).entry).toBe("entry-3");
+    const feedback = read.chat.flatMap((one) => one.kind === "feedback" ? [one.text] : []).join("\n");
+    expect(feedback).toContain("Entry entry-3 failed.");
+    expect(feedback).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
+    expect(feedback).not.toContain("entry={1}");
+    expect(feedback).not.toContain("entry={2}");
+    expect(renderReceipt({ entry: "entry-3", status: "failed", failure: "the third entry failed", read: { entry: "entry-3" } })).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
+  });
+  it("HI3: frozen, Run establishes nothing; live, it admits the next entry", function* () {
+    const dataRoot = yield* useTemporary("xmd-hi-person-");
+    const location = yield* scoped(function* () {
+      const page = yield* useReplPage({ dataRoot });
+      yield* entryRun(page, HI_FIRST, 1);
+      yield* entryRun(page, HI_SECOND, 2);
+      yield* freezeFirst(page);
+      return yield* leaveLocation(page);
+    });
+    const page = yield* useReplPage({ dataRoot, location });
+    yield* closeDrawer(page);
+    for (let press = 0; press < 40 && !page.screen().shows("Enter unavailable"); press += 1) { yield* tab(page); }
+    yield* page.type(HI_THIRD);
+    yield* page.until("the frozen Draft holding its source", (one) => one.found(HI_THIRD, DRAFT_VALUE) === 1);
+    yield* page.key("Enter");
+    yield* page.until("the frozen Run refusal", (one) => one.shows("live head"));
+    expect((yield* settledReading(page.repl)).model.entries).toHaveLength(2);
+    expect(page.screen().found(HI_THIRD, DRAFT_VALUE)).toBe(1);
+    yield* page.press("[live]");
+    yield* page.until("the live head restored", (one) => !one.shows("[live]"));
+    yield* intoDraft(page);
+    yield* page.key("Enter");
+    yield* entrySettles(page, 3, "ok");
+    expect(page.screen().found(HI_THIRD, DRAFT_VALUE)).toBe(0);
+    const read = yield* settledReading(page.repl);
+    expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
+    expect(read.model.entries[2]?.source).toBe(HI_THIRD);
   });
 });

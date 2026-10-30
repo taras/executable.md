@@ -1377,3 +1377,70 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
     }
   });
 });
+
+describe("Owned renderer outcomes retained from the original journeys", () => {
+  it("J1: Continue is refused while a pause is still being taken", function* () {
+    const model = yield* entriesModel(0);
+    const live: ReplLive = { ...IDLE, expansion: "pausing", pausable: true, running: true };
+    const pending = reduceRepl(initialState("owned"), { kind: "continue" }, model, live);
+    expect(pending.intent.kind).toBe("none");
+    expect(pending.state.refusal).toContain("not paused");
+    const held = reduceRepl(initialState("owned"), { kind: "continue" }, model, { ...live, expansion: "paused" });
+    expect(held.intent.kind).toBe("continue");
+    expect(held.state.refusal).toBeUndefined();
+  });
+
+  it("TL6/J1: a drawer is opaque from narrow startup through the wide round trip", function* () {
+    const model = yield* entriesModel(4);
+    const presenter = yield* usePresenter(NARROW);
+    for (const size of [NARROW, WIDE, MEDIUM, NARROW]) {
+      const closed = viewOf(model, size);
+      yield* presenter.commit(closed);
+      const before = presenter.grid.rows();
+      const state = reduceRepl(closed.state, { kind: "open-drawer", drawer: { kind: "history" } }, model, IDLE).state;
+      const open = yield* presenter.commit(viewOf(model, size, { state }));
+      const layer = open.regionOf("box:drawer:layer");
+      const exit = open.boundsOf("footer:exit");
+      const draft = open.boundsOf("footer:input");
+      if (layer === undefined || exit === undefined || draft === undefined) { throw new Error("the drawer lost its layer or footer"); }
+      const covered = before.slice(layer.y, layer.y + layer.height).map((row) => row.slice(layer.x, layer.x + layer.width).trim());
+      const inside = presenter.grid.textIn(layer).join("\n");
+      expect(covered.some((row) => row.length > 4)).toBe(true);
+      expect(inside).toContain("History");
+      for (const row of covered) {
+        if (row.length >= 4 && !["[↑ earlier]", "[↓ later]", "[close]"].some((label) => label.includes(row))) {
+          expect([size.columns, row, inside.includes(row)]).toEqual([size.columns, row, false]);
+        }
+      }
+      expect(exit.y).toBeGreaterThanOrEqual(layer.y + layer.height);
+      expect(draft.y).toBeGreaterThanOrEqual(layer.y + layer.height);
+    }
+  });
+
+  it("MC5/MC7: growing value rows take room from the chat, keep a row, and retain the narrow gutter", function* () {
+    const model = yield* entriesModel(0);
+    const live: ReplLive = { ...IDLE, sidekick: KERNEL_SIDEKICK };
+    for (const size of [WIDE, MEDIUM, NARROW]) {
+      const presenter = yield* usePresenter(size);
+      let state = reduceRepl(initialState("owned"), { kind: "select-pane", pane: "sidekick" }, model, live).state;
+      const view = (one: ReplState) => {
+        const resolved = viewFor(one, model, live, size, "sidekick:message");
+        if (!resolved.ok) { throw resolved.error; }
+        return withWorkspace(resolved.value, workspaceOf(model));
+      };
+      const empty = yield* presenter.commit(view(state));
+      const before = empty.regionOf("box:inspection:viewport") ?? empty.regionOf("box:content:viewport");
+      state = reduceRepl(state, { kind: "type", field: "message", text: Array.from({ length: 8 }, (_, i) => `ROW-${i + 1}`).join("\n") }, model, live).state;
+      const full = yield* presenter.commit(view(state));
+      const after = full.regionOf("box:inspection:viewport") ?? full.regionOf("box:content:viewport");
+      const field = full.boundsOf("sidekick:message");
+      if (before === undefined || after === undefined || field === undefined) { throw new Error(`no chat or field at ${size.columns}`); }
+      expect(after.height).toBeLessThan(before.height);
+      expect(after.height).toBeGreaterThanOrEqual(1);
+      if (size.columns === 72) {
+        expect(field.x).toBe(1);
+        expect(presenter.grid.at(0, field.y)).toBe(" ");
+      }
+    }
+  });
+});
