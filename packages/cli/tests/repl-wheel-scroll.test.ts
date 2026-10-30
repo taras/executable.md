@@ -35,6 +35,168 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 }
 
 describe("wheel real consumers", () => {
+  it("selected work scrolls under Draft and keeps its exact keyboard route", function* () {
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    yield* page.type(Array.from({ length: 70 }, (_, at) => `Work row ${at}`).join("\n"));
+    yield* page.until("source ready", (one) => one.shows("Work row 69"));
+    yield* page.key("Enter");
+    yield* page.until("work settled", (one) => one.shows("Ready for Entry 2"));
+    yield* typed(page, "draft-kept");
+    const at = page.screen().locate("Work row 0");
+    yield* wheel(page, "down", at);
+    expect(page.screen().shows("Work row 0")).toBe(false);
+    expect(page.screen().shows("Work row 3")).toBe(true);
+    yield* wheel(page, "up", at);
+    expect(page.screen().shows("Work row 0")).toBe(true);
+    yield* key(page, "Backtab");
+    yield* key(page, "Alt+ArrowDown");
+    yield* key(page, "End");
+    expect(page.screen().shows("Work row 69")).toBe(true);
+    yield* key(page, "Home");
+    expect(page.screen().shows("Work row 0")).toBe(true);
+    yield* key(page, "PageDown");
+    yield* key(page, "PageUp");
+    expect(page.screen().shows("Work row 0")).toBe(true);
+    expect(page.screen().shows("draft-kept")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(0);
+  });
+
+  it("Configure keeps its Agent caret under wheel and nested History", function* () {
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    page.repl.fake.configuration({
+      model: {
+        selected: "model-0",
+        choices: Array.from({ length: 40 }, (_, at) => ({
+          id: `model-${at}`,
+          name: `Model choice ${at}`,
+        })),
+      },
+      effort: { "model-0": { selected: "medium", choices: [{ id: "medium", name: "Medium" }] } },
+    });
+    yield* page.press("[configure scribe]");
+    yield* page.until("Configure open", (one) => one.shows("Agent: scribe"));
+    yield* key(page, "ArrowLeft");
+    yield* key(page, "Tab");
+    const cell = page.screen().locate("Agent: scribe");
+    yield* wheel(page, "down", cell);
+    expect(page.screen().shows("Agent: scribe")).toBe(false);
+    yield* wheel(page, "up", cell);
+    expect(page.screen().shows("Agent: scribe")).toBe(true);
+    yield* key(page, "Backtab");
+    yield* page.type("X");
+    yield* page.until("Agent retained caret", (one) => one.shows("Agent: scribXe"));
+    yield* page.press("[history]");
+    yield* page.until(
+      "nested History",
+      (one) => one.shows("History") && !one.shows("Agent: scribXe"),
+    );
+    yield* page.key("Escape");
+    yield* page.until("Configure restored", (one) => one.shows("Agent: scribXe"));
+    yield* key(page, "Tab");
+    yield* key(page, "Backtab");
+    yield* page.type("Y");
+    yield* page.until("Agent caret after coverage", (one) => one.shows("Agent: scribXYe"));
+    expect(page.repl.fake.prompts).toHaveLength(0);
+  });
+
+  it("Sidekick question retains values while scrolling and closing its held form", function* () {
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    const preview = Array.from({ length: 45 }, (_, at) => `Side question ${at}`).join("\n");
+    page.repl.fake.script({
+      reply: `<Elicit as="response" schema={{type:"object",properties:{value:{type:"string"}},required:["value"],additionalProperties:false}}>${preview}</Elicit>`,
+    });
+    for (let at = 0; at < 3; at += 1) {
+      yield* key(page, "Tab");
+    }
+    yield* typed(page, "question please");
+    yield* page.key("Enter");
+    yield* page.until("Sidekick waiting", (one) => one.shows("[answer sidekick]"));
+    yield* page.press("[answer sidekick]");
+    yield* page.until("Sidekick form", (one) => one.shows("[submit]"));
+    yield* typed(page, "held-value");
+    yield* key(page, "Tab");
+    const cell = page.screen().locate("= held-value");
+    yield* wheel(page, "up", cell);
+    expect(page.screen().shows("held-value")).toBe(false);
+    yield* wheel(page, "down", cell);
+    expect(page.screen().shows("held-value")).toBe(true);
+    yield* page.key("Escape");
+    yield* page.until("closed held question", (one) => one.shows("[answer sidekick]"));
+    yield* page.press("[answer sidekick]");
+    yield* page.until("reopened held value", (one) => one.shows("held-value"));
+    expect(page.screen().shows("[submit]")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(1);
+  });
+
+  it("Transcript scrolls independently and keyboard reveals its last real turn", function* () {
+    const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
+    for (let at = 0; at < 3; at += 1) {
+      yield* key(page, "Tab");
+    }
+    for (let at = 0; at < 18; at += 1) {
+      page.repl.fake.script({ reply: `<Output>Reply witness ${at}</Output>` });
+      yield* typed(page, `turn-${String(at).padStart(2, "0")}`);
+      yield* page.key("Enter");
+      yield* page.until(
+        `turn ${at} completed`,
+        (one) => one.shows(`Reply witness ${at}`) && !one.shows("[stop]"),
+      );
+    }
+    yield* typed(page, "message-kept");
+    const cell = page.screen().locate("turn-00");
+    yield* wheel(page, "down", cell);
+    expect(page.screen().shows("turn-00")).toBe(false);
+    yield* wheel(page, "up", cell);
+    expect(page.screen().shows("turn-00")).toBe(true);
+    for (let tick = 0; tick < 30; tick += 1) {
+      yield* wheel(page, "down", cell);
+    }
+    expect(page.screen().found("turn-17")).toBeGreaterThan(0);
+    for (let tick = 0; tick < 30; tick += 1) {
+      yield* wheel(page, "up", cell);
+    }
+    expect(page.screen().shows("turn-00")).toBe(true);
+    expect(page.screen().shows("message-kept")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(18);
+  });
+
+  it("retained binding reads both ends and reopens at its own position", function* () {
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    const value = Array.from({ length: 60 }, (_, at) => `Binding row ${at}`);
+    yield* page.type(`<Let as="retained" value={${JSON.stringify(value)}} />`);
+    yield* page.until("binding source ready", (one) => one.shows("Binding row 59"));
+    yield* page.key("Enter");
+    yield* page.until("binding retained", (one) => one.shows("Ready for Entry 2"));
+    yield* page.press("Entries");
+    yield* page.until("catalog", (one) => one.shows("[close]"));
+    yield* page.press("1. [");
+    yield* page.until("entry selected", (one) => !one.shows("[close]"));
+    yield* page.press("BINDINGS");
+    yield* page.until("binding opener", (one) => one.shows("retained ="));
+    yield* page.press("retained =");
+    yield* page.until(
+      "binding drawer",
+      (one) => one.shows("Binding row 0") && one.shows("[close]"),
+    );
+    const cell = page.screen().locate('"Binding row 0"', { after: "Binding · retained" });
+    yield* wheel(page, "down", cell);
+    expect(page.screen().found('"Binding row 0"', { after: "Binding · retained" }) > 0).toBe(false);
+    yield* wheel(page, "up", cell);
+    expect(page.screen().found('"Binding row 0"', { after: "Binding · retained" }) > 0).toBe(true);
+    yield* key(page, "End");
+    expect(page.screen().shows('"Binding row 59"')).toBe(true);
+    yield* page.key("Escape");
+    yield* page.until("binding closed", (one) => !one.shows("[close]"));
+    yield* page.press("retained =");
+    yield* page.until(
+      "binding held end",
+      (one) => one.shows('"Binding row 59"') && one.shows("[close]"),
+    );
+    yield* key(page, "Home");
+    expect(page.screen().found('"Binding row 0"', { after: "Binding · retained" }) > 0).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(0);
+  });
+
   for (const size of [
     { columns: 160, rows: 36 },
     { columns: 120, rows: 30 },

@@ -186,9 +186,6 @@ function screenPlacement(
   if (key === "sessions:all" || key.startsWith("sessions:conversation:")) {
     return { region: transcript, groups: [CHOICES] };
   }
-  if (key === "sessions:earlier" || key === "sessions:later") {
-    return { region: transcript };
-  }
   if (key.startsWith("sessions:request:")) {
     return turn === undefined
       ? { region: transcript, groups: [TURNS] }
@@ -206,9 +203,6 @@ function screenPlacement(
   }
   if (key === "reading:anchor") {
     return { region: selected, entry: 1 };
-  }
-  if (key === "reading:earlier" || key === "reading:later") {
-    return { region: selected };
   }
   if (key === "footer:input") {
     return { region: DRAFT_REGION, entry: 0 };
@@ -256,8 +250,6 @@ function turnRow(key: string): boolean {
     !key.startsWith("sessions:request:") &&
     !key.startsWith("sessions:conversation:") &&
     key !== "sessions:all" &&
-    key !== "sessions:earlier" &&
-    key !== "sessions:later" &&
     key !== "sessions:heading"
   );
 }

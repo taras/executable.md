@@ -5360,19 +5360,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       live.sidekick,
       workspace !== undefined,
     );
-    // Outside the thing they move, like the drawer's: a control inside the
-    // window would scroll away from whoever was reaching for it.
-    items.push(
-      row(
-        "sessions:earlier",
-        `  ${EARLIER}`,
-        { select: "scroll-sessions", delta: -1 },
-        styleOf("navigate"),
-        {
-          here: view.focused,
-        },
-      ),
-    );
     const window = context.admission.windows.get(SESSIONS_WINDOW);
     const reveal =
       window === undefined ? undefined : transcriptReveals(content, window.from, window.count);
@@ -5381,17 +5368,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         const target = reveal?.get(one.key);
         return target === undefined ? one : revealing(one, target);
       }),
-    );
-    items.push(
-      row(
-        "sessions:later",
-        `  ${LATER}`,
-        { select: "scroll-sessions", delta: 1 },
-        styleOf("navigate"),
-        {
-          here: view.focused,
-        },
-      ),
     );
   }
   if (workspace === undefined && !narrow) {
@@ -5422,29 +5398,8 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       // admitted would take a row the measurement had already given away.
       items.push(line("entry:none", "  1. (not submitted)", styleOf("metadata")));
     }
-    if (context.entriesWindowed) {
-      items.push(
-        row(
-          "entries:earlier",
-          `  ${EARLIER}`,
-          { select: "scroll-entries", delta: -1 },
-          styleOf("navigate"),
-          { here: view.focused },
-        ),
-      );
-    }
+
     items.push(...shown(catalog, context, ENTRIES_WINDOW));
-    if (context.entriesWindowed) {
-      items.push(
-        row(
-          "entries:later",
-          `  ${LATER}`,
-          { select: "scroll-entries", delta: 1 },
-          styleOf("navigate"),
-          { here: view.focused },
-        ),
-      );
-    }
   }
 
   // What each shared column is, said once at the top of it. A pane that named
@@ -5553,20 +5508,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // from the fitted rows, because the pass that reserves these controls is the
   // pass that has not fitted any.
   if (inspectable && model.entries.length > 0) {
-    // Both controls, always, exactly as the Sessions reading does it. They
-    // consume their capacity *before* the rows do: the pass that measures how
-    // many rows the window holds has to be the pass that already has them in
-    // it, or the window is measured two rows too tall and the control it then
-    // grows is drawn over the last row of the reading. Measured: it was.
-    items.push(
-      row(
-        "reading:earlier",
-        `  ${EARLIER}`,
-        { select: "scroll-reading", delta: -1 },
-        styleOf("navigate"),
-        { here: view.focused },
-      ),
-    );
     if (prepared !== undefined) {
       items.push(
         ...anchored(
@@ -5577,15 +5518,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         ),
       );
     }
-    items.push(
-      row(
-        "reading:later",
-        `  ${LATER}`,
-        { select: "scroll-reading", delta: 1 },
-        styleOf("navigate"),
-        { here: view.focused },
-      ),
-    );
   }
 
   // The inspection controls, and only where there is an inspection region to put
@@ -8366,19 +8298,6 @@ function failedLine(message: string, width: number): string {
   return `${line.slice(0, Math.max(FAILED_PREFIX.length, width - 1))}…`;
 }
 
-/**
- * What the two window controls are called, wherever a reading has a window.
- *
- * One spelling, so Sessions, the catalog, a drawer and the entry reading
- * cannot drift apart — and arrows rather than the ASCII they replaced, which
- * is what the accepted presentation states. The semantic actions behind them
- * are unchanged, and no keyboard shortcut is introduced: these are controls a
- * person activates the way they always did.
- */
-export const EARLIER = "[\u2191 earlier]";
-/** The other one. */
-export const LATER = "[\u2193 later]";
-
 /** The Sessions reading's window. */
 export const SESSIONS_WINDOW = "sessions";
 
@@ -8865,9 +8784,8 @@ type ReplSlot =
   | "inspection-below"
   /** The chat window's own two controls, which surround it. */
   /** The staged composition's own rows, placed by key. */
-  | "workspace"
-  /** The tray window's two controls, which surround it rather than move in it. */
-  | "queue-fixed";
+  | "workspace";
+/** The tray window's two controls, which surround it rather than move in it. */
 
 function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:open") {
@@ -8900,22 +8818,17 @@ function slotOf(key: string): ReplSlot | undefined {
   }
   // The empty placeholder and both window controls stay put around the window
   // rather than inside it, so a measured viewport is the moving part alone.
-  if (key === "sessions:empty" || key === "sessions:earlier" || key === "sessions:later") {
+  if (key === "sessions:empty") {
     return "sessions-fixed";
   }
   if (key.startsWith("sessions:")) {
     return "sessions";
   }
-  if (key === "entries:earlier" || key === "entries:later" || key === "entry:none") {
+  if (key === "entry:none") {
     return "entries-fixed";
   }
   if (key.startsWith("entries:") || key.startsWith("entry:") || key.startsWith("scope:")) {
     return "entries";
-  }
-  // The reading's own window controls stay put around it, so a measured
-  // viewport is the moving part alone.
-  if (key === "reading:earlier" || key === "reading:later") {
-    return "reading-fixed";
   }
   if (key.startsWith("reading:")) {
     return "reading";
@@ -8945,9 +8858,7 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "guidance" || key.startsWith("guidance:row:")) {
     return "located";
   }
-  if (key === "queue:earlier" || key === "queue:later") {
-    return "queue-fixed";
-  }
+
   if (
     key === "transcript:title" ||
     key === "transcript:selector" ||
@@ -9242,17 +9153,34 @@ export function presentationFor(
     showingSidekick(view) &&
     view.live.sidekick !== undefined &&
     presentedAsking(view) === undefined;
-  const chatRows = chat ? screen.items.filter((item) => slotOf(item.key) === "inspection") : [];
-  const chatKeys = new Set(chatRows.map((one) => one.key));
-  const items = screen.items.filter((item) => !chatKeys.has(item.key));
-  const composed = items.map((item) => editorDescription(item.description, context));
-  if (chat) {
+  const active = profileFor(view.size) !== "too-small" && view.refusal === undefined;
+  const narrow = profileFor(view.size) === "narrow";
+  const work =
+    active && (!narrow || (view.state.route.surface === "entries" && !showingSidekick(view)));
+  const composed: ReplDescription<ReplAction>[] = [];
+  const owners = [
+    ...(work ? [{ slot: "reading", window: READING_WINDOW }] : []),
+    ...(active && (!narrow || (view.state.route.surface === "sessions" && !showingSidekick(view)))
+      ? [{ slot: "sessions", window: SESSIONS_WINDOW }]
+      : []),
+    ...(work && staged(view) === undefined ? [{ slot: "entries", window: ENTRIES_WINDOW }] : []),
+    ...(chat ? [{ slot: "inspection", window: SIDEKICK_WINDOW }] : []),
+  ];
+  const grouped = new Set(owners.map((one) => one.slot));
+  for (const item of screen.items) {
+    if (!grouped.has(slotOf(item.key) ?? "")) {
+      composed.push(editorDescription(item.description, context));
+    }
+  }
+  for (const owner of owners) {
     composed.push(
       describeNode<ReplAction>({
-        key: "viewport:sidekick",
+        key: `viewport:${owner.window}`,
         component: VIEWPORT,
-        input: { window: SIDEKICK_WINDOW },
-        children: chatRows.map((one) => editorDescription(one.description, context)),
+        input: { window: owner.window },
+        children: screen.items
+          .filter((one) => slotOf(one.key) === owner.slot)
+          .map((one) => editorDescription(one.description, context)),
       }),
     );
   }
@@ -9415,26 +9343,17 @@ export function presentationFor(
     room?: number,
   ): readonly ReplBox[] => {
     const fixed = of(fixedSlot);
-    // The window controls sit outside the thing they move, so they are siblings
-    // of the viewport rather than rows inside it.
-    const above = fixed.filter((candidate) => candidate.key.endsWith(":earlier"));
-    const below = fixed.filter((candidate) => candidate.key.endsWith(":later"));
-    const rest = fixed.filter(
-      (candidate) => !candidate.key.endsWith(":earlier") && !candidate.key.endsWith(":later"),
-    );
     const id = `box:${window}:viewport`;
     const inside = room ?? bodyWidthOfRegion(region);
-    viewports.push(Object.freeze({ id, region, window }));
+    viewports.push(Object.freeze({ id, region, window, owner: `viewport:${window}` }));
     return [
-      ...rest.map((candidate) => rowBox(candidate, region, inside)),
-      ...above.map((candidate) => rowBox(candidate, region, inside)),
+      ...fixed.map((candidate) => rowBox(candidate, region, inside)),
       box({
         id,
         region,
         props: viewportProps(rows),
         children: of(rowSlot).map((candidate) => rowBox(candidate, region, inside)),
       }),
-      ...below.map((candidate) => rowBox(candidate, region, inside)),
     ];
   };
 
@@ -9991,7 +9910,19 @@ export function admissionFor(input: {
         ? drawerContent(view, widths.drawer, preview, notices)?.content.map((one) => one.described)
         : slot.window === SIDEKICK_WINDOW
           ? sidekickReadingRows(view.live.sidekick, view.focused, chat, chatStagingOf(view))
-          : undefined;
+          : slot.window === SESSIONS_WINDOW
+            ? sessionRows(
+                view.state,
+                chronology(view.model, view.live),
+                view.focused,
+                undefined,
+                widths.listBody,
+                view.live.sidekick,
+                staged(view) !== undefined,
+              )
+            : slot.window === ENTRIES_WINDOW
+              ? entryContent(view.model, view.focused, view.selection.entry?.key, widths.listBody)
+              : undefined;
     const focused = rows?.findIndex((one) => one.key === view.focused) ?? -1;
     windows.set(slot.window, {
       ...admitRows({
@@ -10912,14 +10843,6 @@ function workspaceControls(
       (one) => one.key === "sidekick:back" || one.key === "sidekick:answer",
     ).length;
     const overflowing = trayAllocation(view, context, beside) !== undefined;
-    // Both controls where the tray holds more than it can show, and neither
-    // where it does not: a control that scrolls nothing is a Tab stop and a
-    // pointer target over a reading that is already whole.
-    if (overflowing) {
-      items.push(
-        row("queue:earlier", `  ${EARLIER}`, {}, styleOf("navigate"), { here: view.focused }),
-      );
-    }
     // Which rows this pass puts in the tray.
     //
     // A tray whose rows fit has no window and no viewport: its rows are its
@@ -10966,9 +10889,6 @@ function workspaceControls(
           ),
         );
       }
-    }
-    if (overflowing) {
-      items.push(row("queue:later", `  ${LATER}`, {}, styleOf("navigate"), { here: view.focused }));
     }
   }
   const claiming = claim === "sidekick:message";
@@ -11388,18 +11308,13 @@ function trayAllocation(
   }
   const wrapped = (id: string): number => (context.headers?.has(`header:${id}`) === true ? 2 : 1);
   const composer = 1 + messageValueRows(context).length;
-  const navigation = 2;
   const held = queueSequence(workspace, context.queue).length;
-  const column =
-    workspaceBodyRows(view.size) - wrapped("conversation") - 1 - navigation - 1 - extras;
-  const queue = Math.max(
-    0,
-    Math.min(WORKSPACE_QUEUE_ROWS, column - wrapped("tray") - navigation - composer),
-  );
+  const column = workspaceBodyRows(view.size) - wrapped("conversation") - 1 - 1 - extras;
+  const queue = Math.max(0, Math.min(WORKSPACE_QUEUE_ROWS, column - wrapped("tray") - composer));
   if (held <= queue) {
     return undefined;
   }
-  return { tray: wrapped("tray") + navigation + queue + composer, queue };
+  return { tray: wrapped("tray") + queue + composer, queue };
 }
 
 /** One drawn row of the tray, and the message whose text it carries. */
@@ -11961,10 +11876,7 @@ function workspacePresentation(input: {
     // rows placed are exactly the rows the window admitted. A box per message
     // reports its whole rectangle even where the window clipped it, and the
     // row after it is then placed over the control below.
-    const described = candidates.filter(
-      (one) =>
-        one.key.startsWith("queue:") && one.key !== "queue:earlier" && one.key !== "queue:later",
-    );
+    const described = candidates.filter((one) => one.key.startsWith("queue:"));
     let named = false;
     const queueRows: ReplBox[] = [];
     for (const [at, one] of described.entries()) {
@@ -12052,7 +11964,6 @@ function workspacePresentation(input: {
               ),
               children: [
                 ...headerRows("tray", region, REPL_PALETTE.composerSurface),
-                ...byKey("queue:earlier").map((one) => rowBox(one, region, room)),
                 // A tray whose rows fit places them where the accepted screen
                 // has them. One that does not is a window of the rows it was
                 // allocated, whose room the engine measures like any other.
@@ -12066,7 +11977,6 @@ function workspacePresentation(input: {
                       }),
                     ]
                   : queueRows),
-                ...byKey("queue:later").map((one) => rowBox(one, region, room)),
                 ...composer.map((one) => rowBox(one, region, room)),
               ],
             }),
