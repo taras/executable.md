@@ -369,6 +369,53 @@ describe("region navigation: the mounted tree", () => {
     expect(focusedKey(tree)).toBe("history");
   });
 
+  it("T5: closing a nested modal restores its removed opener's surviving sibling", function* () {
+    const tree = yield* useReplTree<Act>();
+    const content: ReplFocusRegion = { key: "content", rank: 1, axis: "horizontal" };
+    const actions: ReplFocusRegion = { key: "actions", rank: 2, axis: "horizontal" };
+    const exits: ReplFocusRegion = { key: "exit", rank: 3, axis: "horizontal" };
+    const history: ReplFocusRegion = { key: "history-content", rank: 1, axis: "horizontal" };
+    const configured = (opener: boolean, nested: boolean): readonly ReplDescription<Act>[] => [
+      placed("draft", { region: FIELD_REGION }),
+      describeNode<Act>({
+        key: "configure",
+        component: DRAWER,
+        input: null,
+        modal: true,
+        children: [
+          placed("agent", { region: content }),
+          placed("close", { region: actions }),
+          ...(opener ? [placed("history", { region: exits })] : []),
+          placed("exit", { region: exits }),
+          ...(nested
+            ? [
+                describeNode<Act>({
+                  key: "history-drawer",
+                  component: DRAWER,
+                  input: null,
+                  modal: true,
+                  children: [placed("position", { region: history })],
+                }),
+              ]
+            : []),
+        ],
+      }),
+    ];
+
+    committed(yield* tree.apply([placed("draft", { region: FIELD_REGION }, { focus: true })]));
+    committed(yield* tree.apply(configured(true, false)));
+    expect(focusedKey(tree)).toBe("agent");
+    yield* press(tree, "Tab");
+    yield* press(tree, "Tab");
+    expect(focusedKey(tree)).toBe("history");
+    committed(yield* tree.apply(configured(true, true)));
+    expect(focusedKey(tree)).toBe("position");
+    committed(yield* tree.apply(configured(false, true)));
+    expect(focusedKey(tree)).toBe("position");
+    committed(yield* tree.apply(configured(false, false)));
+    expect(focusedKey(tree)).toBe("exit");
+  });
+
   it("T3: a removed control hands focus to its sibling, not to the first control", function* () {
     const tree = yield* useReplTree<Act>();
     committed(yield* tree.apply(page(true)));

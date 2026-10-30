@@ -529,9 +529,7 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
       const state = held(wanted[index]);
       if (state !== undefined) {
         state.opened =
-          index === 0 && was !== undefined && before !== undefined
-            ? { focused: was, layout: before }
-            : undefined;
+          was !== undefined && before !== undefined ? { focused: was, layout: before } : undefined;
         state.pop.release = focusPush(wanted[index]);
         modals.push(wanted[index]);
         pushed = true;
