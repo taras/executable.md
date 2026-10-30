@@ -400,9 +400,26 @@ export function submitForm(page: ReplPage): Operation<void> {
 }
 
 /** Open Configure from the Sidekick's own header and wait for what it draws. */
-export function* openConfigure(page: ReplPage, agent: string): Operation<void> {
-  yield* page.press(`[configure ${agent}]`);
+export function* openConfigure(page: ReplPage): Operation<void> {
+  yield* page.press(configureLabel(page.screen()));
   yield* page.until("Configure", (one) => one.shows("[refresh]"));
+}
+
+/**
+ * The pane's own way to configure, as it is drawn.
+ *
+ * It names the agent this conversation holds, and a replacement changes that
+ * name — so the control is read from the screen rather than spelled out by a
+ * case that would then be naming an agent instead of a control.
+ */
+export function configureLabel(reading: ScreenReading): string {
+  const row = reading.rows.find((one) => one.includes("[configure ")) ?? "";
+  const from = row.indexOf("[configure ");
+  const to = row.indexOf("]", from);
+  if (from === -1 || to === -1) {
+    throw new Error("this screen draws no way to configure the Sidekick");
+  }
+  return row.slice(from, to + 1);
 }
 
 /** Choose one of Configure's own offers, which it draws as options. */
@@ -416,4 +433,158 @@ export function selectPane(page: ReplPage, pane: "sidekick" | "bindings"): Opera
   return pane === "sidekick"
     ? pressTab(page, SIDEKICK, (one) => one.shows(COMPOSER))
     : pressTab(page, BINDINGS, (one) => !one.shows(COMPOSER));
+}
+
+/**
+ * Whether the open drawer shows this text in its own cells.
+ *
+ * At or right of the way out every drawer draws, which is the drawer's own
+ * left edge: the readings behind it are left of that cell.
+ */
+export function drawerShows(reading: ScreenReading, text: string): boolean {
+  return reading.shows("[close]") && reading.found(text, { rightOf: "[close]" }) > 0;
+}
+
+/**
+ * The open drawer's own row offering this choice, or none.
+ *
+ * A choice is drawn as its mark and its name, and a grouped one carries its
+ * group before the name — "( ) Speed \u00b7 Fast" — so the row is found by the
+ * mark and the name together rather than by one string.
+ */
+function choiceRow(reading: ScreenReading, name: string): string | undefined {
+  return drawerLines(reading).find(
+    (row) => (row.includes("( ) ") || row.includes("(x) ")) && row.includes(name),
+  );
+}
+
+/** Wait until the open drawer offers this choice. */
+export function offeredChoice(page: ReplPage, name: string): Operation<ScreenReading> {
+  return page.until(`the choice of ${name}`, (one) => choiceRow(one, name) !== undefined);
+}
+
+/** Whether this choice is offered at all. */
+export function offered(reading: ScreenReading, name: string): boolean {
+  return choiceRow(reading, name) !== undefined;
+}
+
+/** Whether this choice wears the mark the chosen one wears. */
+export function chosen(reading: ScreenReading, name: string): boolean {
+  return choiceRow(reading, name)?.includes("(x) ") ?? false;
+}
+
+/** Press this choice, inside the drawer that offers it, and wait for its mark. */
+export function* chooseOffered(page: ReplPage, name: string): Operation<void> {
+  yield* offeredChoice(page, name);
+  yield* page.press(name, { rightOf: "[close]" });
+  yield* page.until(`${name} being chosen`, (one) => chosen(one, name));
+}
+
+/** Wait for the open drawer to go, however it was asked to. */
+export function drawerGone(page: ReplPage): Operation<ScreenReading> {
+  return page.until("the drawer closing", (one) => !one.shows("[close]"));
+}
+
+/** Press the drawer's own way out and wait for it to go. */
+export function* closeConfigure(page: ReplPage): Operation<void> {
+  yield* page.press("[close]");
+  yield* drawerGone(page);
+}
+
+/**
+ * Replace the agent Configure is holding.
+ *
+ * One Tab from the opened drawer reaches that field — its own row carries a
+ * static "> Agent: " prompt, so the cue there says nothing about focus — then
+ * Backspaces take the name it holds and the replacement is typed in.
+ * Receipt: work/terminal-field-routes-2/receipts/.
+ */
+export function* replaceAgent(page: ReplPage, name: string): Operation<void> {
+  yield* tab(page);
+  yield* retypeAgent(page, name);
+}
+
+/**
+ * Type a name over the one that field already holds.
+ *
+ * For a second replacement in the same drawer session, where the field has the
+ * keystrokes already: walking its route again would walk away from it.
+ */
+export function* retypeAgent(page: ReplPage, name: string): Operation<void> {
+  yield* clearAgentField(page);
+  yield* page.type(name);
+  yield* page.until(
+    `the Agent field holding ${JSON.stringify(name)}`,
+    (one) => agentName(one) === name,
+  );
+}
+
+/** The name Configure's Agent field is drawn holding, after its own prompt. */
+export function agentName(reading: ScreenReading): string {
+  const row = drawerLines(reading).find((one) => one.includes("Agent:")) ?? "";
+  return row.slice(row.indexOf("Agent:") + "Agent:".length).trim();
+}
+
+/**
+ * Take the name that field holds, one Backspace at a time.
+ *
+ * Read from the field's own value rather than from a count of characters: the
+ * name it holds is whatever an earlier replacement left there, and the field
+ * clips a name wider than its own room.
+ */
+export function* clearAgentField(page: ReplPage): Operation<void> {
+  for (let press = 0; press < 80 && agentName(page.screen()) !== ""; press += 1) {
+    yield* backspace(page);
+  }
+  if (agentName(page.screen()) !== "") {
+    throw new Error(`the Agent field still holds a name. ${page.describe()}`);
+  }
+}
+
+/** Press the drawer's own scroll-down control until it shows this text. */
+export function* scrollDrawerTo(page: ReplPage, text: string): Operation<void> {
+  for (let press = 0; press < 60 && !drawerShows(page.screen(), text); press += 1) {
+    const before = page.screen().index;
+    yield* page.press("[\u2193 scroll down]");
+    yield* page.until("the drawer scrolling", (one) => one.index > before);
+  }
+  if (!drawerShows(page.screen(), text)) {
+    throw new Error(`the drawer never showed ${JSON.stringify(text)}. ${page.describe()}`);
+  }
+}
+
+/** The open drawer's own rows, from the way out it draws rightward. */
+export function drawerLines(reading: ScreenReading): string[] {
+  if (!reading.shows("[close]")) {
+    return [];
+  }
+  const edge = reading.locate("[close]").column;
+  return reading.rows.map((row) => row.slice(Math.min(edge, row.length)));
+}
+
+/** The rows to the left of the open drawer, which is what it does not cover. */
+export function besideDrawer(reading: ScreenReading): string[] {
+  if (!reading.shows("[close]")) {
+    return [...reading.rows];
+  }
+  const edge = reading.locate("[close]").column;
+  return reading.rows.map((row) => row.slice(0, Math.min(edge, row.length)));
+}
+
+/**
+ * Press the control that adopts what Configure is holding.
+ *
+ * It is Apply, except while what it would do is a replacement — then this
+ * drawer draws the way to start the conversation that replacement needs, in
+ * its place. Waits for nothing: what adopting does is the case's question.
+ */
+export function* applyConfigure(page: ReplPage): Operation<void> {
+  // Apply, except while what it would do is a replacement: then the drawer
+  // draws the way to start the conversation that replacement needs, and says
+  // so with "stop and" while a turn of the old one is still running.
+  const offers = ["[apply]", "[start new conversation]", "[stop and start new conversation]"];
+  const drawn = yield* page.until("the way to adopt what Configure holds", (one) =>
+    offers.some((label) => one.shows(label)),
+  );
+  yield* page.press(offers.find((label) => drawn.shows(label)) ?? offers[0]);
 }

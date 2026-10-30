@@ -1669,7 +1669,7 @@ describe("Tier CFG — a preference being written when the command leaves", () =
 
   /** Open Configure from the pane's own header. */
   function configure(page: ReplPage): Operation<void> {
-    return openConfigure(page, MOUNTED_AGENT);
+    return openConfigure(page);
   }
 
   /** Where this execution's chat history is. */

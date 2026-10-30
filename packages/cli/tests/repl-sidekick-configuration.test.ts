@@ -47,21 +47,51 @@ import {
 } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
-import { useReplPage } from "./support/mounted-page.ts";
-import type { PageFrame, ReplPage } from "./support/mounted-page.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import {
-  configure,
-  draft,
+  applyConfigure,
+  agentName,
+  chooseOffered,
+  clearAgentField,
+  retypeAgent,
+  chosen,
+  composerHolds,
+  COMPOSER,
+  draftHolds,
+  closeConfigure,
+  drawerGone,
+  besideDrawer,
+  drawerLines,
+  drawerShows,
+  draftText,
   entrySettles,
-  paste,
+  intoComposer,
+  offered,
+  offeredChoice,
+  openConfigure,
+  pasteDraft,
+  replaceAgent,
   saidByPerson,
   saidBySidekick,
+  scrollDrawerTo,
   selectPane,
-  shows,
-  sidekick,
+  sendMessage,
+  SIDEKICK_CONTROLS,
   sidekickIdle,
-} from "./support/repl-page-adapters.ts";
-import type { PageConfigure } from "./support/repl-page-adapters.ts";
+  stopSidekick,
+  tab,
+  typed,
+} from "./support/screen-journeys.ts";
+
+/** The names the provider advertises for the ids these rows choose by. */
+const NAMED: Readonly<Record<string, string>> = Object.freeze({
+  balanced: "Balanced",
+  fast: "Fast",
+  medium: "Medium",
+  high: "High",
+  low: "Low",
+});
 import {
   PAIRED_DIRECTORY,
   readSidekickRecords,
@@ -70,6 +100,17 @@ import {
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { until } from "effection";
+
+/**
+ * Choose the offer these rows name by its id, through the label it is drawn as.
+ *
+ * The screen offers a provider's own names; the ids below are what the records
+ * and the provider's own configuration call them, so this is the one place
+ * that turns one into the other.
+ */
+function chooseNamed(page: ReplPage, id: string): Operation<void> {
+  return chooseOffered(page, NAMED[id] ?? id);
+}
 
 /** The preference this execution's chat last holds, or none. */
 function* savedPreference(repl: MountedRepl): Operation<Record<string, unknown> | undefined> {
@@ -794,24 +835,24 @@ function* lingering(): Operation<void> {
 
 /** One message, its reply drawn, and the Sidekick at rest again. */
 function* conversed(page: ReplPage, text: string, reply: string): Operation<void> {
-  yield* sidekick(page).send(text);
-  yield* page.until(`the reply ${JSON.stringify(reply)}`, (one) => shows(one, reply));
+  yield* sendMessage(page, text);
+  yield* page.until(`the reply ${JSON.stringify(reply)}`, (one) => one.shows(reply));
   yield* page.until("the Sidekick at rest", sidekickIdle);
 }
 
-/** Whether the drawer's Apply control wears this label. */
-function applyReads(frame: PageFrame, label: string): boolean {
-  return frame.control("drawer:configure:apply")?.text.includes(label) ?? false;
+/** Whether the drawer's own Apply control wears this label. */
+function applyReads(reading: ScreenReading, label: string): boolean {
+  return drawerShows(reading, label);
 }
 
 /** Whether the pane's header names this agent, which it does once the drawer has gone. */
-function headerNames(frame: PageFrame, agent: string): boolean {
-  return frame.control("sidekick:configure")?.text.includes(`[configure ${agent}]`) ?? false;
+function headerNames(reading: ScreenReading, agent: string): boolean {
+  return reading.shows(`[configure ${agent}]`);
 }
 
-/** The control that asks the failed request again, or none where this frame offers none. */
-function retryOf(frame: PageFrame): string | undefined {
-  return frame.keys().find((key) => key.startsWith("sidekick:retry:"));
+/** Whether this screen offers to ask the failed request again. */
+function retryOffered(reading: ScreenReading): boolean {
+  return reading.shows("[retry]");
 }
 
 /**
@@ -822,23 +863,15 @@ function retryOf(frame: PageFrame): string | undefined {
  * the owner or the route.
  */
 function* readOwnChat(page: ReplPage, title: string): Operation<void> {
-  const rowOf = (frame: PageFrame): string | undefined =>
-    frame
-      .area("box:sessions:viewport")
-      ?.controls()
-      .find((key) => frame.control(key)?.text.includes(title));
-  const seen = yield* page.until(`a Sessions row showing ${title}`, (one) => {
-    return rowOf(one) !== undefined;
-  });
-  const row = rowOf(seen);
-  if (row === undefined) {
-    throw new Error(`no Sessions row shows ${title}. ${page.describe()}`);
-  }
-  yield* page.press(row);
-  yield* page.until("the chat selector standing", (one) => shows(one, "[Back to current chat]"));
+  // The sidebar's own row for this chat: it carries the turn's state after the
+  // title, which the pane's copy of the same words does not.
+  const own = `${title} \u00b7`;
+  yield* page.until(`a Sessions row showing ${title}`, (one) => one.shows(own));
+  yield* page.press(title, { onRow: own });
+  yield* page.until("the chat selector standing", (one) => one.shows("[Back to current chat]"));
   // The current chat keeps its usual controls even when it is the chat
   // somebody explicitly selected: it *is* the active association.
-  expect(page.frame().has("sidekick:message")).toBe(true);
+  expect(page.screen().shows(COMPOSER)).toBe(true);
 }
 
 /** The text with every space taken out, so wrapped prose compares as it was written. */
@@ -847,29 +880,20 @@ function bare(text: string): string {
 }
 
 /** Whether this notice's whole text is recoverable from the drawer's rows. */
-function saysWhole(config: PageConfigure, text: string): boolean {
-  const rows = config.area().rows();
+function saysWhole(reading: ScreenReading, text: string): boolean {
+  const rows = drawerLines(reading);
   const wanted = bare(text);
   return rows.some((_, at) => bare(rows.slice(at, at + 8).join("")).includes(wanted));
 }
 
 /** Wait until the replacement notice this name produces has been drawn. */
-function* noticed(page: ReplPage, config: PageConfigure, text: string): Operation<void> {
-  yield* page.until("the replacement notice", () => saysWhole(config, text));
+function* noticed(page: ReplPage, text: string): Operation<void> {
+  yield* page.until("the replacement notice", (one) => saysWhole(one, text));
 }
 
-/** The cells of this frame outside the drawer's own rectangle, to its left and to its right. */
-function outside(page: ReplPage, config: PageConfigure): string[] {
-  const frame = page.frame();
-  const layer = config.area().bounds;
-  const { columns, rows } = frame.size;
-  const right = layer.x + layer.width;
-  return [
-    ...frame.within({ x: 0, y: 0, width: layer.x, height: rows }).rows(),
-    ...(right < columns
-      ? frame.within({ x: right, y: 0, width: columns - right, height: rows }).rows()
-      : []),
-  ];
+/** The rows beside the open drawer, which is the part of the screen it leaves. */
+function outside(page: ReplPage): string[] {
+  return besideDrawer(page.screen());
 }
 
 describe("Tier CFG — Configure in the Sidekick's pane", () => {
@@ -897,12 +921,12 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
   it("CFG1: Configure shows what the agent really offers, and nothing asks before it", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
     // Their own text in both composers first, which none of this may touch.
-    yield* draft(page).type("mine");
-    yield* sidekick(page).composer.type("later");
+    yield* draftText(page, "mine");
+    // The send left the keystrokes in the composer, so this needs no route.
+    yield* typed(page, "later");
 
     // Before opening it: nothing inspected, nothing established, nothing
     // written. Looking at the pane, changing tabs and resizing all cost
@@ -922,73 +946,78 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
 
     // Opening it is the explicit act that reads, and it reads through the
     // provider rather than from anything remembered.
-    yield* config.open();
-    yield* config.offered("balanced");
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
     // The provider's own words: its names, its descriptions and the heading it
     // filed a choice under.
-    expect(config.shows("Even-handed.")).toBe(true);
-    expect(config.shows("Speed · Fast")).toBe(true);
+    expect(drawerShows(page.screen(), "Even-handed.")).toBe(true);
+    expect(drawerShows(page.screen(), "Speed · Fast")).toBe(true);
     // And no turn: an inspection takes a session of its own and sends nothing.
     expect(repl.fake.prompts).toEqual([]);
     // Nothing has been asked for yet, and nothing has been verified.
-    expect(config.shows("Requested: none")).toBe(true);
-    expect(config.shows("Verified: none")).toBe(true);
+    expect(drawerShows(page.screen(), "Requested: none")).toBe(true);
+    expect(drawerShows(page.screen(), "Verified: none")).toBe(true);
 
     // Both composers still hold exactly what was typed into them.
-    yield* config.close();
-    expect(draft(page).text()).toBe("mine");
-    expect(sidekick(page).composer.text().includes("later")).toBe(true);
+    yield* closeConfigure(page);
+    expect(draftHolds(page.screen(), "mine")).toBe(true);
+    expect(composerHolds(page.screen(), "later")).toBe(true);
   });
 
   it("CFG2: a chosen model brings its own effort levels, and Apply saves them", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Under the new settings.</Output>\n" });
 
-    yield* config.open();
-    yield* config.offered("balanced");
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
     // Nothing is selected and nothing is requested, so there is no effort
     // section at all: effort belongs to a model, and none has been chosen.
-    expect(config.shows("Effort")).toBe(false);
+    expect(drawerShows(page.screen(), "Effort")).toBe(false);
 
     // One model, chosen through its own control.
-    yield* config.chooseModel("fast");
+    yield* chooseNamed(page, "fast");
     // Its levels have not been read, and nothing is invented from the model
     // before it: this says so rather than offering another model's list.
-    expect(config.shows("Effort for fast")).toBe(true);
-    expect(config.shows("Medium")).toBe(false);
+    expect(drawerShows(page.screen(), "Effort for fast")).toBe(true);
+    expect(drawerShows(page.screen(), "Medium")).toBe(false);
 
     // Read explicitly, for the model selected now.
-    yield* config.refresh();
-    yield* page.until("this model's own levels", (one) => one.has("drawer:configure:effort:high"));
+    yield* page.press("[refresh]");
+    yield* page.until(
+      "this model's own levels",
+      (one) => drawerShows(one, "( ) High") || drawerShows(one, "(x) High"),
+    );
     // `fast`'s levels, which `balanced` does not have.
-    expect(config.shows("Low")).toBe(true);
-    expect(config.shows("Medium")).toBe(false);
-    yield* config.chooseEffort("high");
+    expect(drawerShows(page.screen(), "Low")).toBe(true);
+    expect(drawerShows(page.screen(), "Medium")).toBe(false);
+    yield* chooseNamed(page, "high");
 
     // Closed without applying: nothing was saved, so reopening starts from the
     // saved preference again rather than from what was chosen and abandoned.
-    yield* config.close();
+    yield* closeConfigure(page);
     expect((yield* chatKinds(repl)).includes("preferences")).toBe(false);
-    yield* config.open();
-    yield* config.offered("fast");
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["fast"]);
     // Nothing of what was chosen and abandoned: no model marked, and still no
     // request saved.
-    expect(config.modelMarked("fast")).toBe(false);
-    expect(config.shows("Requested: none")).toBe(true);
+    expect(chosen(page.screen(), NAMED["fast"])).toBe(false);
+    expect(drawerShows(page.screen(), "Requested: none")).toBe(true);
 
     // Chosen again and applied, which saves and closes.
-    yield* config.chooseModel("fast");
-    yield* config.refresh();
-    yield* page.until("this model's own levels", (one) => one.has("drawer:configure:effort:high"));
-    yield* config.chooseEffort("high");
+    yield* chooseNamed(page, "fast");
+    yield* page.press("[refresh]");
+    yield* page.until(
+      "this model's own levels",
+      (one) => drawerShows(one, "( ) High") || drawerShows(one, "(x) High"),
+    );
+    yield* chooseNamed(page, "high");
     const askingBefore = repl.fake.configCalls.length;
-    yield* config.apply();
+    yield* applyConfigure(page);
     // Apply closes Configure on success, which is what says the preference was
     // acknowledged: a drawer still open would be one whose save had not landed.
-    yield* config.closed();
+    yield* drawerGone(page);
 
     // Saved, and nothing else: a preference is a record, so Apply asked the
     // agent for nothing and sent no turn.
@@ -998,15 +1027,17 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
 
     // Reopening shows what was saved, and says it is a request rather than
     // something an agent has run under.
-    yield* config.open();
+    yield* openConfigure(page);
     // The label and the model, which is what the pane's width holds: the
     // assertion below reads the whole of what was saved out of the history,
     // where nothing clips it.
-    yield* page.until("the saved request", () => config.shows("Requested: model=fast"));
+    yield* page.until("the saved request", () =>
+      drawerShows(page.screen(), "Requested: model=fast"),
+    );
     // And the whole of what was saved, read out of the history rather than off
     // a row the pane's width may clip.
     expect(yield* savedPreference(repl)).toMatchObject({ model: "fast", effort: "high" });
-    yield* config.close();
+    yield* closeConfigure(page);
 
     // And the next real message is what applies it: the model first, read back,
     // then the effort, read back, all before the prompt. Counted from here,
@@ -1025,29 +1056,32 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // What was verified now says the same thing the request did — and it says
     // it because Core saved it against a turn that started, not because this
     // screen remembered asking.
-    yield* config.open();
-    yield* page.until("the verified settings", () => config.shows("Verified: model=fast"));
+    yield* openConfigure(page);
+    yield* page.until("the verified settings", () =>
+      drawerShows(page.screen(), "Verified: model=fast"),
+    );
   });
 
   it("CFG2: a stale inspection cannot replace a newer selection", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
-    yield* config.open();
-    yield* config.offered("balanced");
-    yield* config.chooseModel("fast");
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
+    yield* chooseNamed(page, "fast");
 
     // One inspection held open, for `fast`.
     const holding = repl.fake.holdStatus();
-    yield* config.refresh();
+    yield* page.press("[refresh]");
     yield* holding.reached;
-    yield* page.until("the read in flight", () => config.shows("Reading what this agent"));
+    yield* page.until("the read in flight", () =>
+      drawerShows(page.screen(), "Reading what this agent"),
+    );
 
     // The selection moves underneath it, to a model whose levels this read is
     // not about.
-    yield* config.chooseModel("balanced");
+    yield* chooseNamed(page, "balanced");
 
     holding.release();
     // Waited for the held read to be *applied*, not for a row that was already
@@ -1057,47 +1091,47 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // nothing about what the answer did.
     yield* page.until(
       "the stale read being applied",
-      () => config.shows("Effort for balanced") && !config.shows("Reading what this agent"),
+      () =>
+        drawerShows(page.screen(), "Effort for balanced") &&
+        !drawerShows(page.screen(), "Reading what this agent"),
     );
     // It changed nothing it should not: it is an answer about `fast`, and
     // `fast` is not what is selected any more. No level from it is offered
     // under the model that is, and the drawer is where the person left it.
-    expect(config.shows("High")).toBe(false);
-    expect(config.shows("( ) Low")).toBe(false);
-    expect(config.modelMarked("balanced")).toBe(true);
+    expect(drawerShows(page.screen(), "High")).toBe(false);
+    expect(drawerShows(page.screen(), "( ) Low")).toBe(false);
+    expect(chosen(page.screen(), NAMED["balanced"])).toBe(true);
   });
 
   it("CFG2: control — a read of the selected model offers that model's own levels", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
-    yield* config.open();
-    yield* config.offered("balanced");
-    yield* config.chooseModel("fast");
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
+    yield* chooseNamed(page, "fast");
 
     // The same held read, released with the selection left where it was. This
     // is the discriminating half: the levels do arrive, so the row above is
     // about ownership rather than about reads never being applied at all.
     const holding = repl.fake.holdStatus();
-    yield* config.refresh();
+    yield* page.press("[refresh]");
     yield* holding.reached;
     holding.release();
     // Once the levels are known the heading is just "Effort": the "Effort for
     // <model>: not read yet." sentence is what stands in for a list nobody has.
     yield* page.until(
       "the read being applied",
-      (one) => one.has("drawer:configure:effort:high") && !config.shows("Reading what this agent"),
+      (one) => offered(one, "High") && !drawerShows(page.screen(), "Reading what this agent"),
     );
-    expect(config.shows("( ) Low")).toBe(true);
-    expect(config.shows("not read yet")).toBe(false);
+    expect(drawerShows(page.screen(), "( ) Low")).toBe(true);
+    expect(drawerShows(page.screen(), "not read yet")).toBe(false);
   });
 
   it("CFG2: an inspection in flight refuses a new message instead of retaining one", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Should never be asked.</Output>\n" });
 
@@ -1105,16 +1139,21 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // again behind it: what stands in the way is the job, not the drawer.
     const holding = repl.fake.holdStatus();
     try {
-      yield* config.open();
+      yield* openConfigure(page);
       yield* holding.reached;
-      yield* config.close();
+      yield* closeConfigure(page);
 
-      // Send, while that job is still the one thing the Sidekick is doing.
-      yield* sidekick(page).composer.type("during");
-      yield* page.until("the Sidekick offering its own Send", (one) => one.has("sidekick:send"));
-      yield* page.press("sidekick:send");
+      // Send, while that job is still the one thing the Sidekick is doing. The
+      // drawer took the keystrokes, so the composer's own route is walked.
+      yield* intoComposer(page);
+      yield* typed(page, "during");
+      yield* page.until(
+        "the Sidekick offering its own Send",
+        (one) => one.found("[send]", SIDEKICK_CONTROLS) === 1,
+      );
+      yield* page.press("[send]", SIDEKICK_CONTROLS);
       yield* page.until("the refusal Send is given", (one) =>
-        shows(one, "already doing something you asked for"),
+        one.shows("already doing something you asked for"),
       );
 
       // Refused before anything was retained: no person message in the
@@ -1123,7 +1162,7 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
       const read = yield* settledReading(repl);
       expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(0);
       expect(repl.fake.prompts).toEqual([]);
-      expect(sidekick(page).composer.text().includes("during")).toBe(true);
+      expect(composerHolds(page.screen(), "during")).toBe(true);
     } finally {
       holding.release();
     }
@@ -1132,20 +1171,18 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
   it("CFG2: control — with no job admitted, the same Send is taken", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Asked and answered.</Output>\n" });
 
     // The same opening and closing of Configure, with its read allowed to
     // finish. This is what makes the row above about the admitted job rather
     // than about Configure having been opened at all.
-    yield* config.open();
+    yield* openConfigure(page);
     yield* page.until(
       "the read finishing",
-      (one) =>
-        one.has("drawer:configure:model:balanced") && !config.shows("Reading what this agent"),
+      (one) => offered(one, "Balanced") && !drawerShows(one, "Reading what this agent"),
     );
-    yield* config.close();
+    yield* closeConfigure(page);
 
     yield* conversed(page, "during", "Asked and answered.");
     const read = yield* settledReading(repl);
@@ -1156,7 +1193,6 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
   it("CFG2: while a turn runs, effort cannot be refreshed but a model can be saved", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Hello back.</Output>\n" });
     // Generation held open, so the conversation is doing something throughout.
@@ -1168,45 +1204,45 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
 
     // Then one read, so there are advertised choices in hand for this exact
     // conversation when it goes busy.
-    yield* config.open();
-    yield* config.offered("balanced");
-    yield* config.close();
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
+    yield* closeConfigure(page);
 
-    yield* sidekick(page).send("think");
+    yield* sendMessage(page, "think");
     yield* repl.fake.holdingTurns(1);
     const asking = repl.fake.configCalls.length;
 
     // Opened while busy. The models already advertised for this conversation
     // stay usable, so one of them can still be chosen.
-    yield* config.open();
-    yield* config.offered("fast");
-    yield* config.chooseModel("fast");
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["fast"]);
+    yield* chooseNamed(page, "fast");
 
     // Its effort levels have not been read, and they cannot be: an inspection
     // is something this conversation does one at a time, and the root refuses
     // it before the agent is reached. Said rather than filled in from another
     // model's list.
-    expect(config.shows("Effort for fast")).toBe(true);
-    expect(config.shows("Low")).toBe(false);
-    yield* config.refresh();
+    expect(drawerShows(page.screen(), "Effort for fast")).toBe(true);
+    expect(drawerShows(page.screen(), "Low")).toBe(false);
+    yield* page.press("[refresh]");
     yield* page.until("the refusal a busy refresh gives", () =>
       // Said in the drawer that was pressed, and the beginning of the reason is
       // what this pane's width holds.
-      config.shows("the Sidekick is already working"),
+      drawerShows(page.screen(), "the Sidekick is already working"),
     );
     // Nothing was asked of the agent by trying.
     expect(repl.fake.configCalls).toHaveLength(asking);
 
     // A model-only preference saves while the turn runs, with no effort
     // requested and no silent choice made for it.
-    yield* config.apply();
-    yield* config.closed();
+    yield* applyConfigure(page);
+    yield* drawerGone(page);
     expect(yield* savedPreference(repl)).toMatchObject({ model: "fast", effort: null });
     // And the turn in flight was not reconfigured under it.
     expect(repl.fake.configCalls).toHaveLength(asking);
 
     repl.fake.releaseTurn();
-    yield* page.until("the held turn finishing", (one) => shows(one, "Done."));
+    yield* page.until("the held turn finishing", (one) => one.shows("Done."));
   });
 
   /**
@@ -1221,7 +1257,6 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     const gate = appendGate();
     const page = yield* useReplPage({ gate });
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Ready.</Output>\n" });
     repl.fake.script({ reply: SUBMITS });
@@ -1230,28 +1265,28 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // A conversation, and one read of what it offers, so the drawer has
     // advertised choices for this conversation while it is busy.
     yield* conversed(page, "hello", "Ready.");
-    yield* config.open();
-    yield* config.offered("balanced");
-    yield* config.close();
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
+    yield* closeConfigure(page);
 
     // The entry's own closing record, held open: the entry has run and has not
     // settled, so the reply's Submit is still waiting for its outcome.
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* sidekick(page).send("run it");
+    yield* sendMessage(page, "run it");
     yield* closing.started();
-    yield* page.until("the entry's output", (one) => shows(one, "the entry ran"));
+    yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
     const asking = repl.fake.configCalls.length;
 
     if (changing) {
       // Applied while the entry is held. A preference is a record, so this asks
       // the agent for nothing and stops nothing.
-      yield* config.open();
-      yield* config.offered("fast");
-      yield* config.chooseModel("fast");
-      yield* config.apply();
-      yield* config.closed();
+      yield* openConfigure(page);
+      yield* offeredChoice(page, NAMED["fast"]);
+      yield* chooseNamed(page, "fast");
+      yield* applyConfigure(page);
+      yield* drawerGone(page);
       expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
       // Nothing of the agent's was touched by saving, and the entry is still
       // held: the save coexists with the work rather than interrupting it.
@@ -1262,7 +1297,7 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // Released: the entry settles, the Submit it was waiting for answers, and
     // the automatic turn that reports it runs.
     closing.release();
-    yield* page.until("the turn that follows the entry", (one) => shows(one, "Both done."));
+    yield* page.until("the turn that follows the entry", (one) => one.shows("Both done."));
     return repl.fake.configCalls.slice(asking);
   }
 
@@ -1290,19 +1325,20 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
   it("CFG1: control — an agent that offers no model choice says so", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     // `null` from the provider: no model selector at all, which is a different
     // answer from a selector with nothing in it.
     repl.fake.configuration(undefined);
 
-    yield* config.open();
+    yield* openConfigure(page);
     // Said in the pane's own width, which clips a longer sentence: what the row
     // asserts is the sentence this screen actually shows.
-    yield* page.until("Configure saying there is no choice", () => config.shows("offers no model"));
+    yield* page.until("Configure saying there is no choice", () =>
+      drawerShows(page.screen(), "offers no model"),
+    );
     // Nothing fabricated: no empty list of models, and no effort section for a
     // model nobody selected.
-    expect(config.shows("( )")).toBe(false);
-    expect(config.shows("Effort")).toBe(false);
+    expect(drawerShows(page.screen(), "( )")).toBe(false);
+    expect(drawerShows(page.screen(), "Effort")).toBe(false);
     expect(repl.fake.prompts).toEqual([]);
   });
 
@@ -1317,18 +1353,18 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
   function* exiting(by: "escape" | "close"): Operation<void> {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
-    // Their own text in both composers, which closing a drawer may not touch.
-    yield* draft(page).type("mine");
-    yield* sidekick(page).composer.type("later");
+    // Their own text in both fields, which closing a drawer may not touch.
+    yield* draftText(page, "mine");
+    yield* intoComposer(page);
+    yield* typed(page, "later");
 
-    yield* config.open();
-    yield* config.offered("balanced");
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
     // A real choice, made and deliberately not applied: this is what the
     // discard rule below is about, and what a close that saved would save.
-    yield* config.chooseModel("fast");
+    yield* chooseNamed(page, "fast");
     const asked = repl.fake.configCalls.length;
     const ensured = repl.fake.ensured.length;
     const records = (yield* chatKinds(repl)).length;
@@ -1337,13 +1373,11 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
       // One Escape, through the real input path — no action dispatched here.
       yield* page.key("Escape");
     } else {
-      // And the visible control, reached by real traversal and activated with
-      // Enter.
-      yield* page.focus("drawer:close");
-      yield* page.key("Enter");
+      // And the visible control, pressed where this screen draws it.
+      yield* page.press("[close]");
     }
-    yield* config.closed();
-    expect(page.frame().has("drawer:configure:refresh")).toBe(false);
+    yield* drawerGone(page);
+    expect(page.screen().shows("[refresh]")).toBe(false);
 
     // Nothing was saved and nobody was asked: closing is not applying.
     expect((yield* chatKinds(repl)).length).toBe(records);
@@ -1353,18 +1387,18 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     expect(repl.fake.ensured).toHaveLength(ensured);
     expect(repl.fake.prompts).toEqual([]);
     // Both composers hold exactly what was typed into them.
-    expect(draft(page).text()).toBe("mine");
-    expect(sidekick(page).composer.text().includes("later")).toBe(true);
-    // And focus is back on the one control this drawer is about, which is where
-    // somebody who closed it is standing.
-    expect(page.frame().focused).toBe("sidekick:configure");
+    expect(draftHolds(page.screen(), "mine")).toBe(true);
+    expect(composerHolds(page.screen(), "later")).toBe(true);
+    // And the control this drawer is about is on the screen again, with the
+    // pane's own header naming the agent it holds.
+    expect(headerNames(page.screen(), MOUNTED_AGENT)).toBe(true);
 
     // The choice went with the drawer: reopening starts from the saved
     // preference, which is the only thing a next turn would use.
-    yield* config.open();
-    yield* config.offered("balanced");
-    expect(config.modelMarked("fast")).toBe(false);
-    expect(config.shows("Requested: none")).toBe(true);
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
+    expect(chosen(page.screen(), NAMED["fast"])).toBe(false);
+    expect(drawerShows(page.screen(), "Requested: none")).toBe(true);
   }
 
   it("CX1: one Escape closes Configure, saving nothing and asking nobody", function* () {
@@ -1387,7 +1421,6 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
   it("CX2: Close stays reachable past an off-window choice, and while a turn runs", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     const repl = page.repl;
-    const config = configure(page);
     // More models than this drawer draws at once, which is what puts choices
     // and Apply below the window.
     const many = Array.from({ length: 24 }, (_, at) => ({
@@ -1399,56 +1432,57 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
 
     // Opened without asserting its controls: with a list this long they are
     // below the window too, which is the state this row is about.
-    yield* config.open();
-    yield* config.offered("model-1");
-    const last = `model-${many.length}`;
+    yield* openConfigure(page);
+    yield* offeredChoice(page, "Model 1");
+    const last = `Model ${many.length}`;
     // Genuinely below the window before it is scrolled to.
-    expect(page.frame().has(`drawer:configure:model:${last}`)).toBe(false);
-    yield* config.scrollTo(`drawer:configure:model:${last}`);
-    yield* config.chooseModel(last);
+    expect(offered(page.screen(), last)).toBe(false);
+    yield* scrollDrawerTo(page, last);
+    yield* chooseNamed(page, last);
     // Apply is below the window too, which is the state this is about: the
     // window has been moved a long way, and the way out is still on the screen.
-    yield* config.scrollTo("drawer:configure:apply");
-    expect(page.frame().has("drawer:close")).toBe(true);
+    yield* scrollDrawerTo(page, "[apply]");
+    expect(page.screen().shows("[close]")).toBe(true);
 
     // Reached by real traversal from wherever that scrolling left focus.
     const closing = function* (): Operation<void> {
-      yield* page.focus("drawer:close");
+      yield* page.press("[close]");
       yield* page.key("Enter");
-      yield* config.closed();
+      yield* drawerGone(page);
     };
     yield* closing();
-    expect(page.frame().has("drawer:configure:apply")).toBe(false);
+    expect(page.screen().shows("[apply]")).toBe(false);
     expect((yield* chatKinds(repl)).includes("preferences")).toBe(false);
 
     // Again, with a real message held in flight. Both composers hold their own
     // text across it, and the turn that is running is not what was dismissed.
-    yield* draft(page).type("kept draft");
-    yield* sidekick(page).send("work on it");
+    yield* draftText(page, "kept draft");
+    yield* sendMessage(page, "work on it");
     yield* repl.fake.holdingTurns(1);
-    yield* page.until("the Sidekick working", (one) => one.has("sidekick:stop"));
+    yield* page.until(
+      "the Sidekick working",
+      (one) => one.found("[stop]", SIDEKICK_CONTROLS) === 1,
+    );
     // Opened over a working Sidekick, which refuses to inspect while a turn is
     // running — so what is waited for is the drawer, not its choices. That
     // refusal is the established behaviour and is not what this row is about:
     // the question here is whether the way out is still reachable.
-    yield* config.open();
-    yield* page.until("the drawer over a working Sidekick", (one) =>
-      one.has("drawer:configure:apply"),
-    );
+    yield* openConfigure(page);
+    yield* page.until("the drawer over a working Sidekick", (one) => one.shows("[apply]"));
     // Read across the drawer's rows: it is the Sidekick's own pane, 30 cells of
     // interior at this size, and a sentence that long is wrapped prose there
     // rather than one row.
     yield* page.until("the drawer saying the Sidekick is working", () =>
-      config.area().rows().join(" ").replace(/\s+/g, " ").includes("already working"),
+      drawerLines(page.screen()).join(" ").replace(/\s+/g, " ").includes("already working"),
     );
     yield* closing();
     // The drawer is gone, the turn is not: nothing stopped it, and it finishes
     // on its own when the provider is released.
-    expect(page.frame().has("drawer:configure:apply")).toBe(false);
+    expect(page.screen().shows("[apply]")).toBe(false);
     expect(repl.outcome()).toBe(undefined);
     repl.fake.releaseTurn();
-    yield* page.until("the reply that was never stopped", (one) => shows(one, "Done at last."));
-    expect(draft(page).text()).toBe("kept draft");
+    yield* page.until("the reply that was never stopped", (one) => one.shows("Done at last."));
+    expect(draftHolds(page.screen(), "kept draft")).toBe(true);
   });
 });
 
@@ -1475,7 +1509,6 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
   it("CFG4: an idle replacement keeps the old chat and runs the next message under the new agent", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ reply: "<Output>Second agent.</Output>\n" });
@@ -1483,16 +1516,16 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     yield* conversed(page, "hello", "First agent.");
     const before = repl.fake.prompts.length;
 
-    yield* config.open();
-    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* openConfigure(page);
+    yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
     // The control says what it will do, because a different agent is a
     // different conversation and somebody has to know that before pressing it.
     yield* page.until("the control saying it starts a new conversation", (one) =>
       applyReads(one, "[start new conversation]"),
     );
 
-    yield* config.apply();
-    yield* config.closed();
+    yield* applyConfigure(page);
+    yield* drawerGone(page);
 
     // Switching sent no turn: a replacement opens a conversation, it does not
     // say anything in it.
@@ -1502,7 +1535,7 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     // nothing of the old one is replayed into its successor.
     expect(yield* chatKinds(repl)).toContain("message");
     yield* page.until("the new conversation starting empty", (one) =>
-      shows(one, "No messages yet."),
+      one.shows("No messages yet."),
     );
 
     // And the next explicit message really runs under the new agent.
@@ -1524,26 +1557,27 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
   function* replacing(saving: boolean): Operation<void> {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
-    yield* config.open();
-    yield* config.offered("balanced");
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
     if (saving) {
-      yield* config.chooseModel("fast");
-      yield* config.apply();
-      yield* config.closed();
+      yield* chooseNamed(page, "fast");
+      yield* applyConfigure(page);
+      yield* drawerGone(page);
       expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
       // Reopened deliberately, on the preference that was just saved.
-      yield* config.open();
-      yield* page.until("the saved model in the reopened drawer", () => config.modelMarked("fast"));
+      yield* openConfigure(page);
+      yield* page.until("the saved model in the reopened drawer", () =>
+        chosen(page.screen(), NAMED["fast"]),
+      );
     }
 
-    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
     yield* page.until("the control saying it starts a new conversation", (one) =>
       applyReads(one, "[start new conversation]"),
     );
-    yield* config.apply();
+    yield* applyConfigure(page);
 
     // The new conversation was really activated — read from the history rather
     // than inferred from the screen.
@@ -1561,7 +1595,7 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     yield* page.until("Configure closing on the replacement", (one) =>
       headerNames(one, OTHER_MOUNTED_AGENT),
     );
-    expect(page.frame().has("drawer:configure:refresh")).toBe(false);
+    expect(page.screen().shows("[refresh]")).toBe(false);
   }
 
   it("CFG4: a replacement closes Configure although the old conversation had a preference", function* () {
@@ -1576,24 +1610,23 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     const gate = appendGate();
     const page = yield* useReplPage({ gate });
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
 
-    yield* config.open();
-    yield* config.offered("balanced");
-    yield* config.chooseModel("fast");
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
+    yield* chooseNamed(page, "fast");
 
     // The record this save writes, held open inside the host, so the answer
     // arrives after the drawer has moved on.
     const writing = gate.holdNext((_path, record) => record.includes('"kind":"preferences"'));
     try {
-      yield* config.apply();
+      yield* applyConfigure(page);
       yield* writing.started();
 
       // Another agent typed into the field while it is in flight. The model and
       // the effort are untouched, so this is a drawer whose *values* still
       // match the Apply that is running.
-      yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+      yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
 
       writing.release();
       yield* awaitedFact("the preference landing", function* (): Operation<boolean> {
@@ -1605,11 +1638,11 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
       // in the middle of is still theirs: still open, still naming the agent
       // they typed, and nothing of it applied by somebody else's answer.
       expect(yield* savedPreference(repl)).toMatchObject({ model: "fast" });
-      expect(page.frame().has("drawer:configure:refresh")).toBe(true);
-      expect(config.agent.text()).toBe(OTHER_MOUNTED_AGENT);
+      expect(page.screen().shows("[refresh]")).toBe(true);
+      expect(agentName(page.screen())).toBe(OTHER_MOUNTED_AGENT);
       // And no replacement happened: that is still something to press.
       expect(repl.fake.ensured.map((one) => one.agent)).not.toContain(OTHER_MOUNTED_AGENT);
-      expect(applyReads(page.frame(), "[start new conversation]")).toBe(true);
+      expect(applyReads(page.screen(), "[start new conversation]")).toBe(true);
     } finally {
       writing.release();
     }
@@ -1618,41 +1651,37 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
   it("CFG4: a busy replacement stops the turn and joins it before the new agent", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     // Generation genuinely in flight, and the cancellation it will be sent held
     // open: this is what makes the join observable rather than inferred.
     repl.fake.script({ held: true, reply: "<Output>Never seen.</Output>\n" });
     repl.fake.script({ reply: "<Output>Second agent.</Output>\n" });
 
-    yield* sidekick(page).send("held message");
+    yield* sendMessage(page, "held message");
     yield* repl.fake.holdingTurns(1);
     const cancelling = repl.fake.holdCancellation();
     try {
-      yield* config.open();
+      yield* openConfigure(page);
       // Stop is drawn inside the drawer that covers the pane. The pane's own
       // control is behind a modal, and a way to stop that somebody cannot
       // reach is not one.
-      yield* page.until(
-        "Stop drawn inside the drawer",
-        (one) => one.area("box:drawer:layer")?.contains("drawer:sidekick:stop") ?? false,
-      );
+      yield* page.until("Stop drawn inside the drawer", (one) => drawerShows(one, "[stop]"));
 
-      yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+      yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
       // The choices read from the agent this conversation is with are not
       // offered for another one, and the drawer says why rather than leaving
       // controls that could do nothing.
       yield* page.until("the other agent's own settings being said", () =>
-        config.shows("has its own settings"),
+        drawerShows(page.screen(), "has its own settings"),
       );
-      expect(config.shows("( ) Balanced")).toBe(false);
-      expect(config.shows("Effort for")).toBe(false);
+      expect(drawerShows(page.screen(), "( ) Balanced")).toBe(false);
+      expect(drawerShows(page.screen(), "Effort for")).toBe(false);
       yield* page.until("the control saying it stops first", (one) =>
         applyReads(one, "[stop and start new conversation"),
       );
 
       const before = repl.fake.ensured.length;
-      yield* config.apply();
+      yield* applyConfigure(page);
       // It really asked the agent to stop, and it is waiting for that: nothing
       // of the replacement has been started while the cancellation is held.
       yield* cancelling.reached;
@@ -1660,7 +1689,7 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
       // A second activation of the same control while it waits starts no
       // second replacement: one explicit job at a time, reserved before the
       // first one was spawned.
-      yield* config.apply();
+      yield* applyConfigure(page);
       yield* lingering();
       expect(repl.fake.ensured).toHaveLength(before);
 
@@ -1682,7 +1711,6 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     const gate = appendGate();
     const page = yield* useReplPage({ gate });
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: SUBMITS });
     // Two scripted replies and no third: the follow-up turn the old
@@ -1695,16 +1723,16 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* sidekick(page).send("run it");
+    yield* sendMessage(page, "run it");
     yield* closing.started();
-    yield* page.until("the entry's output", (one) => shows(one, "the entry ran"));
+    yield* page.until("the entry's output", (one) => one.shows("the entry ran"));
 
-    yield* config.open();
-    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* openConfigure(page);
+    yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
     yield* page.until("the control saying it stops first", (one) =>
       applyReads(one, "[stop and start new conversation"),
     );
-    yield* config.apply();
+    yield* applyConfigure(page);
     yield* page.until("the new agent after the join", (one) =>
       headerNames(one, OTHER_MOUNTED_AGENT),
     );
@@ -1720,7 +1748,7 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
       gate.reached.some((one) => one.endsWith("entries.jsonl")),
     );
     yield* entrySettles(page, 1, "ok");
-    expect(shows(page.frame(), "the entry ran")).toBe(true);
+    expect(page.screen().shows("the entry ran")).toBe(true);
     // And the new conversation is the one a message now goes to.
     yield* page.until("the Sidekick at rest", sidekickIdle);
     yield* conversed(page, "and you?", "Second agent.");
@@ -1729,7 +1757,6 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
   it("CFG4: an unreachable agent keeps the old association and says why", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ reply: "<Output>Still the first.</Output>\n" });
@@ -1739,27 +1766,28 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
 
     yield* conversed(page, "hello", "First agent.");
 
-    yield* config.open();
-    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* openConfigure(page);
+    yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
     yield* page.until("the control saying it starts a new conversation", (one) =>
       applyReads(one, "[start new conversation]"),
     );
-    yield* config.apply();
+    yield* applyConfigure(page);
 
     // The drawer stays open with the reason: a failed setup is something to
     // correct rather than something to be dropped out of.
-    yield* page.until("the reason in the drawer", () => config.shows("will not start"));
-    expect(page.frame().has("drawer:configure:refresh")).toBe(true);
+    yield* page.until("the reason in the drawer", () =>
+      drawerShows(page.screen(), "will not start"),
+    );
+    expect(page.screen().shows("[refresh]")).toBe(true);
 
     // And the old conversation is still the active one: it takes a real message.
-    yield* config.close();
+    yield* closeConfigure(page);
     yield* conversed(page, "still there?", "Still the first.");
   });
 
   it("SS4: a successful replacement returns to the new current chat", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ reply: "<Output>Second agent.</Output>\n" });
@@ -1767,27 +1795,26 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     yield* conversed(page, "hello", "First agent.");
     yield* readOwnChat(page, "hello");
 
-    yield* config.open();
-    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* openConfigure(page);
+    yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
     yield* page.until("the replacement control", (one) =>
       applyReads(one, "[start new conversation]"),
     );
-    yield* config.apply();
-    yield* config.closed();
+    yield* applyConfigure(page);
+    yield* drawerGone(page);
     yield* page.until("the new conversation starting empty", (one) =>
-      shows(one, "No messages yet."),
+      one.shows("No messages yet."),
     );
 
     // The selector is cleared, so the reading is the new current chat — which
     // is the conversation the next message would go to anyway.
-    expect(shows(page.frame(), "[Back to current chat]")).toBe(false);
+    expect(page.screen().shows("[Back to current chat]")).toBe(false);
     yield* conversed(page, "and you?", "Second agent.");
   });
 
   it("SS4: a failed replacement preserves the reading and the association", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ reply: "<Output>Still the first.</Output>\n" });
@@ -1796,20 +1823,22 @@ describe("Tier CFG — replacing the Sidekick's agent", () => {
     yield* conversed(page, "hello", "First agent.");
     yield* readOwnChat(page, "hello");
 
-    yield* config.open();
-    yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+    yield* openConfigure(page);
+    yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
     yield* page.until("the replacement control", (one) =>
       applyReads(one, "[start new conversation]"),
     );
-    yield* config.apply();
-    yield* page.until("the reason in the drawer", () => config.shows("will not start"));
-    yield* config.close();
+    yield* applyConfigure(page);
+    yield* page.until("the reason in the drawer", () =>
+      drawerShows(page.screen(), "will not start"),
+    );
+    yield* closeConfigure(page);
 
     // The reading is exactly where it was, and so is the association: this
     // conversation still takes a real message under the agent it was opened
     // with.
-    expect(shows(page.frame(), "[Back to current chat]")).toBe(true);
-    expect(headerNames(page.frame(), MOUNTED_AGENT)).toBe(true);
+    expect(page.screen().shows("[Back to current chat]")).toBe(true);
+    expect(headerNames(page.screen(), MOUNTED_AGENT)).toBe(true);
     yield* conversed(page, "still there?", "Still the first.");
   });
 });
@@ -1846,16 +1875,15 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     const gate = appendGate();
     const page = yield* useReplPage({ gate });
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Written down.</Output>\n" });
 
     // One read first, so the drawer has this conversation's choices while the
     // reply below is being written.
     yield* conversed(page, "hello", "Written down.");
-    yield* config.open();
-    yield* config.offered("balanced");
-    yield* config.close();
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["balanced"]);
+    yield* closeConfigure(page);
 
     // The record the next reply is written as, held open inside the host: the
     // writer is genuinely occupied by somebody else's append.
@@ -1863,16 +1891,16 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
       (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"response"'),
     );
     repl.fake.script({ reply: "<Output>And this one.</Output>\n" });
-    yield* sidekick(page).send("again");
+    yield* sendMessage(page, "again");
     yield* writing.started();
 
     // A preference applied while that write is in flight. It is admitted —
     // a save is a record of this history rather than work the conversation
     // does — and it waits for the writer rather than overtaking it.
-    yield* config.open();
-    yield* config.offered("fast");
-    yield* config.chooseModel("fast");
-    yield* config.apply();
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["fast"]);
+    yield* chooseNamed(page, "fast");
+    yield* applyConfigure(page);
     yield* lingering();
     // Nothing of it reached the file while the other append was inside the
     // host, and the held write is still held.
@@ -1880,7 +1908,7 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     expect(writing.released).toBe(false);
 
     writing.release();
-    yield* page.until("the reply that was being written", (one) => shows(one, "And this one."));
+    yield* page.until("the reply that was being written", (one) => one.shows("And this one."));
     yield* awaitedFact("the preference landing", function* (): Operation<boolean> {
       return (yield* savedPreference(repl)) !== undefined;
     });
@@ -1898,7 +1926,6 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
   it("CFG8: a replacement owns the drawer while it runs, and rebinds what Apply saves", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>First agent.</Output>\n" });
     repl.fake.script({ held: true, reply: "<Output>Never seen.</Output>\n" });
@@ -1908,14 +1935,14 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     // and read while it is idle, because inspection is something a working
     // conversation cannot do.
     yield* conversed(page, "hello", "First agent.");
-    yield* config.open();
-    yield* config.offered("fast");
-    yield* config.chooseModel("fast");
-    yield* config.apply();
+    yield* openConfigure(page);
+    yield* offeredChoice(page, NAMED["fast"]);
+    yield* chooseNamed(page, "fast");
+    yield* applyConfigure(page);
     yield* awaitedFact("the first conversation's preference", function* (): Operation<boolean> {
       return (yield* savedPreference(repl)) !== undefined;
     });
-    yield* config.closed();
+    yield* drawerGone(page);
     const first = yield* settledReading(repl);
     const before = first.chat.filter((record) => record.kind === "preferences");
     expect(before).toHaveLength(1);
@@ -1924,30 +1951,31 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
 
     // Then a turn in flight, so the replacement below really has something to
     // stop.
-    yield* sidekick(page).send("again");
+    yield* sendMessage(page, "again");
     yield* repl.fake.holdingTurns(1);
 
     // A replacement started and held inside its own Stop: this job owns the
     // drawer while it runs.
     const cancelling = repl.fake.holdCancellation();
     try {
-      yield* config.open();
-      yield* config.agent.replace(OTHER_MOUNTED_AGENT);
+      yield* openConfigure(page);
+      yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
       yield* page.until("the control saying it stops first", (one) =>
         applyReads(one, "[stop and start new conversation"),
       );
-      yield* config.apply();
+      yield* applyConfigure(page);
       yield* cancelling.reached;
 
       // The name typed back, so the drawer offers a save again — and that save
       // is refused, in the drawer, because the replacement is the one explicit
-      // thing this Sidekick is doing.
-      yield* config.agent.replace(MOUNTED_AGENT);
+      // thing this Sidekick is doing. The field still has the keystrokes from
+      // the replacement above, so this types over what it holds.
+      yield* retypeAgent(page, MOUNTED_AGENT);
       yield* page.until("Apply being offered again", (one) => applyReads(one, "[apply]"));
-      yield* config.apply();
+      yield* applyConfigure(page);
       yield* page.until("the refusal the drawer gives", () =>
         // The beginning of it, which is what this pane's width holds.
-        config.shows("the Sidekick is already doing"),
+        drawerShows(page.screen(), "the Sidekick is already doing"),
       );
       const during = yield* settledReading(repl);
       expect(during.chat.filter((record) => record.kind === "preferences")).toHaveLength(1);
@@ -1957,9 +1985,9 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
       // field is not the agent that was set up any more, so the outcome is not
       // the one this drawer asked for and it does not close on it.
       yield* page.until("the new conversation in the drawer", () =>
-        config.shows("Requested: none"),
+        drawerShows(page.screen(), "Requested: none"),
       );
-      yield* config.close();
+      yield* closeConfigure(page);
       yield* page.until("the new agent in the pane", (one) =>
         headerNames(one, OTHER_MOUNTED_AGENT),
       );
@@ -1970,11 +1998,11 @@ describe("Tier CFG — one order for everything this conversation writes", () =>
     // The new conversation starts with nothing requested — the old agent's
     // preference is not its — and a save made now belongs to it.
     yield* page.until("the Sidekick at rest", sidekickIdle);
-    yield* config.open();
-    yield* page.until("nothing requested", () => config.shows("Requested: none"));
-    yield* config.offered("balanced");
-    yield* config.chooseModel("balanced");
-    yield* config.apply();
+    yield* openConfigure(page);
+    yield* page.until("nothing requested", () => drawerShows(page.screen(), "Requested: none"));
+    yield* offeredChoice(page, NAMED["balanced"]);
+    yield* chooseNamed(page, "balanced");
+    yield* applyConfigure(page);
     yield* awaitedFact("the second conversation's preference", function* (): Operation<boolean> {
       const read = yield* settledReading(repl);
       return read.chat.filter((record) => record.kind === "preferences").length === 2;
@@ -2004,27 +2032,24 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     repl.fake.script({ reply: "", stopReason: "refusal" });
     repl.fake.script({ reply: "<Output>Second time lucky.</Output>\n" });
 
-    yield* sidekick(page).send("inspect it");
-    const failed = yield* page.until(
-      "the failed attempt and its retry",
-      (one) => retryOf(one) !== undefined,
+    yield* sendMessage(page, "inspect it");
+    const failed = yield* page.until("the failed attempt and its retry", (one) =>
+      retryOffered(one),
     );
-    const retry = retryOf(failed);
-    if (retry === undefined) {
-      throw new Error(`no retry is offered. ${page.describe()}`);
-    }
+    expect(retryOffered(failed)).toBe(true);
 
     // Unrelated newer text in the box, and a newer draft edit: neither is what
     // Retry sends, and neither is consumed by it.
-    yield* sidekick(page).composer.type("something else");
-    yield* draft(page).type("mine");
+    // The send left the keystrokes in the composer, so this needs no route.
+    yield* typed(page, "something else");
+    yield* draftText(page, "mine");
 
     // Two activations in one burst: the same one cycle a Send reserves, so the
     // second finds it held rather than starting a second turn.
-    yield* page.press(retry);
-    yield* page.press(retry);
+    yield* page.press("[retry]");
+    yield* page.press("[retry]");
     yield* page.until("the retried request being answered", (one) =>
-      shows(one, "Second time lucky."),
+      one.shows("Second time lucky."),
     );
 
     // One new message, carrying the old request's own literal text.
@@ -2047,8 +2072,8 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
 
     // And the texts a person had typed are still theirs: Retry sent neither and
     // cleared neither.
-    expect(sidekick(page).composer.text().includes("something else")).toBe(true);
-    expect(draft(page).text()).toBe("mine");
+    expect(composerHolds(page.screen(), "something else")).toBe(true);
+    expect(draftHolds(page.screen(), "mine")).toBe(true);
   });
 
   it("CFG5: a message that worked retires the retry an older failure left", function* () {
@@ -2057,25 +2082,25 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     repl.fake.script({ reply: "", stopReason: "refusal" });
     repl.fake.script({ reply: "<Output>This one worked.</Output>\n" });
 
-    yield* sidekick(page).send("inspect it");
+    yield* sendMessage(page, "inspect it");
     // Offered first, which is what makes the rest of this row a transition
     // rather than a control that was never there.
-    yield* page.until("the failed attempt and its retry", (one) => retryOf(one) !== undefined);
+    yield* page.until("the failed attempt and its retry", (one) => retryOffered(one));
 
     // Something else asked, and answered. The failure is still in the history
     // and still readable, but it is behind a reply now: resending it would put
     // it out of order with what the agent has already been told.
-    yield* sidekick(page).send("try this");
+    yield* sendMessage(page, "try this");
     yield* page.until(
       "the later reply, with the older retry retired",
-      (one) => shows(one, "This one worked.") && sidekickIdle(one) && retryOf(one) === undefined,
+      (one) => one.shows("This one worked.") && sidekickIdle(one) && !retryOffered(one),
     );
-    expect(shows(page.frame(), "[retry]")).toBe(false);
+    expect(page.screen().shows("[retry]")).toBe(false);
     // The attempt itself was kept: this is about what is offered, not about
     // rewriting what happened.
     const read = yield* settledReading(repl);
     expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(2);
-    expect(shows(page.frame(), "(unfinished)")).toBe(true);
+    expect(page.screen().shows("(unfinished)")).toBe(true);
     expect(repl.fake.prompts).toHaveLength(2);
   });
 
@@ -2117,9 +2142,9 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
       // one — but there is no control to ask it again, because this history
       // cannot say whether the agent already has it. A control that refused
       // when it was pressed would be offering a decision nothing can make.
-      yield* page.until("the chat this history holds", (one) => shows(one, "inspect it"));
-      expect(shows(page.frame(), "[retry]")).toBe(false);
-      expect(retryOf(page.frame())).toBeUndefined();
+      yield* page.until("the chat this history holds", (one) => one.shows("inspect it"));
+      expect(page.screen().shows("[retry]")).toBe(false);
+      expect(retryOffered(page.screen())).toBe(false);
 
       // And reading it cost nothing: no turn, no session, and not one byte
       // added to the file it was read from.
@@ -2142,8 +2167,8 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
 
     // A request that was answered has nothing to ask again, so there is no
     // control for it at all.
-    expect(shows(page.frame(), "[retry]")).toBe(false);
-    expect(retryOf(page.frame())).toBeUndefined();
+    expect(page.screen().shows("[retry]")).toBe(false);
+    expect(retryOffered(page.screen())).toBe(false);
     expect(repl.fake.prompts).toHaveLength(1);
   });
 });
@@ -2187,9 +2212,9 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     // One ordinary entry asking one Agent, with no agent named in it: the
     // default is what is under test, and naming it here would bypass it.
     repl.fake.script({ reply: `${ANSWERED}\n` });
-    yield* paste(page, draft(page), ASKING);
+    yield* pasteDraft(page, ASKING);
     yield* page.key("Enter");
-    yield* page.until("the entry's own Agent answering", (one) => shows(one, ANSWERED));
+    yield* page.until("the entry's own Agent answering", (one) => one.shows(ANSWERED));
 
     // Then a Sidekick message, which is the other selection's own turn.
     repl.fake.script({ reply: "<Output>Sidekick here.</Output>\n" });
@@ -2218,7 +2243,7 @@ describe("Tier TE — the two configured agents each do their own work", () => {
     // Read by the attribution mark this pane spells its origins with: the
     // staged chat is one list of utterances, so who said a row is a mark in
     // front of it rather than a name prefix inside the words.
-    expect(saidBySidekick(page.frame(), "Sidekick here.")).toBe(true);
+    expect(saidBySidekick(page.screen(), "Sidekick here.")).toBe(true);
   });
 });
 
@@ -2262,83 +2287,85 @@ describe("Configure notice fitting", () => {
   it("the whole of a long unbroken token is drawn, inside the drawer's own rows", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     yield* page.until("the Sidekick at rest", sidekickIdle);
-    yield* sidekick(page).send("hello");
+    yield* sendMessage(page, "hello");
     yield* page.until(
       "the first turn over",
       (one) => saidByPerson(one, "hello") && sidekickIdle(one),
     );
-    yield* config.open();
+    yield* openConfigure(page);
     // The drawer as it stands before any of this: its own way out, the way to
     // apply a choice and the way to read the agent again.
-    expect(page.frame().has("drawer:close")).toBe(true);
-    expect(page.frame().has("drawer:configure:apply")).toBe(true);
-    expect(page.frame().has("drawer:configure:refresh")).toBe(true);
+    expect(page.screen().shows("[close]")).toBe(true);
+    expect(page.screen().shows("[apply]")).toBe(true);
+    expect(page.screen().shows("[refresh]")).toBe(true);
 
     // Seventy characters with nothing to break on, inside an interior of
     // thirty: the notice has to be paid out over rows, and every one of its
     // characters has to be on one of them.
     const LONG = "x".repeat(70);
-    yield* config.agent.clear();
-    yield* config.agent.enter(LONG);
-    yield* noticed(page, config, `${LONG} has its own settings.`);
+    yield* tab(page);
+    yield* clearAgentField(page);
+    yield* page.type(LONG);
+    yield* noticed(page, `${LONG} has its own settings.`);
 
     // And none of it is drawn outside the drawer. A row reaching past the
     // drawer's own width is a row written over the pane behind.
-    const { width } = config.area().bounds;
+    const width = page.screen().size.columns - page.screen().locate("[close]").column;
     expect(width).toBeGreaterThan(0);
-    for (const row of config.area().rows()) {
+    for (const row of drawerLines(page.screen())) {
       expect(row.length).toBeLessThanOrEqual(width);
     }
-    expect(outside(page, config).filter((row) => row.includes("x".repeat(8)))).toEqual([]);
+    expect(outside(page).filter((row) => row.includes("x".repeat(8)))).toEqual([]);
 
     // The way out and the way to read again are where they were, and a name
     // this long has not moved them: fitting a sentence moves no control. Apply
     // is deliberately not among them while a replacement is what it would do —
     // that is this drawer's established semantics, not an effect of fitting.
-    expect(page.frame().has("drawer:close")).toBe(true);
-    expect(page.frame().has("drawer:configure:refresh")).toBe(true);
-    expect(applyReads(page.frame(), "[start new conversation]")).toBe(true);
+    expect(page.screen().shows("[close]")).toBe(true);
+    expect(page.screen().shows("[refresh]")).toBe(true);
+    expect(applyReads(page.screen(), "[start new conversation]")).toBe(true);
   });
 
   it("wide, combining and joined graphemes survive, and a shorter notice erases the longer", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
     // One message first, so this conversation has an agent of its own: the
     // notice these rows are about is the one that says a *replacement* would
     // start another conversation, and there is nothing to replace until then.
-    yield* sidekick(page).send("hello");
+    yield* sendMessage(page, "hello");
     yield* page.until(
       "the first turn over",
       (one) => saidByPerson(one, "hello") && sidekickIdle(one),
     );
-    yield* config.open();
+    yield* openConfigure(page);
 
     // Twelve spaced wide words, a doubly combined letter and a joined emoji.
     // Each is one grapheme that is not one cell, and none of them may be cut
     // apart, dropped, or left behind when the notice that carries them goes.
     const WIDE = `${"界界 ".repeat(12).trim()} é́ \u{1F469}‍\u{1F4BB}`;
-    yield* config.agent.clear();
-    yield* config.agent.enter(WIDE);
+    yield* tab(page);
+    yield* clearAgentField(page);
+    yield* page.type(WIDE);
     // Recovered as the grid can hold it: a cell carries a base character, and
     // the zero-width joiner and the combining marks are not cells of their own.
     // Every wide word is there, in order, and so is the whole of the sentence
     // the name is in — which is what the builder this replaced drew none of.
     const DRAWN = `${"界界 ".repeat(12).trim()} e \u{1F469}\u{1F4BB} has its own settings.`;
-    yield* noticed(page, config, DRAWN);
+    yield* noticed(page, DRAWN);
 
     // Paid out over the drawer's own rows rather than clipped to one: the
     // builder this replaced gave a notice this long a single row.
-    const wide = config.area().rows();
+    const wide = drawerLines(page.screen());
     expect(wide.filter((row) => row.includes("界")).length).toBeGreaterThan(1);
     for (const row of wide) {
-      expect(row.length).toBeLessThanOrEqual(config.area().bounds.width);
+      expect(row.length).toBeLessThanOrEqual(
+        page.screen().size.columns - page.screen().locate("[close]").column,
+      );
     }
-    expect(outside(page, config).filter((row) => row.includes("界"))).toEqual([]);
+    expect(outside(page).filter((row) => row.includes("界"))).toEqual([]);
     // Each cluster is whole where it is drawn, in the form the grid holds: the
     // base character occupies its cells and the zero-width joiner and the
     // combining marks occupy none of their own. `DRAWN` above is that form,
@@ -2346,26 +2373,24 @@ describe("Configure notice fitting", () => {
 
     // Replaced by a short name: every cell the long one occupied is blank or
     // the new notice's, rather than a tail of the old one left underneath.
-    yield* config.agent.clear();
-    yield* config.agent.enter("ag");
-    yield* noticed(page, config, "ag has its own settings.");
-    const after = config.area().rows();
+    yield* retypeAgent(page, "ag");
+    yield* noticed(page, "ag has its own settings.");
+    const after = drawerLines(page.screen());
     expect(after.filter((row) => row.includes("界"))).toEqual([]);
     expect(after.filter((row) => row.includes("\u{1F469}"))).toEqual([]);
 
     // Closing still chooses nothing: no preference was written by any of this.
-    yield* config.close();
-    expect(page.frame().has("drawer:configure:apply")).toBe(false);
+    yield* closeConfigure(page);
+    expect(page.screen().shows("[apply]")).toBe(false);
     expect(yield* savedPreference(repl)).toBe(undefined);
   });
 
   it("Backspace removes one grapheme, not one code point", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     const repl = page.repl;
-    const config = configure(page);
     repl.fake.configuration(ADVERTISED);
-    yield* config.open();
-    yield* config.agent.replace("a");
+    yield* openConfigure(page);
+    yield* replaceAgent(page, "a");
 
     // A letter under two combining marks and a joined emoji are each one thing
     // on this screen and three code points underneath. One press takes one of
@@ -2377,19 +2402,25 @@ describe("Configure notice fitting", () => {
     // and the zero-width joiner and the combining marks are not cells of their
     // own. What is compared is therefore the cluster being there and then
     // being gone in one press, not the code points it is spelled with.
-    const agent = config.agent;
-    yield* agent.enter("\u{1F469}‍\u{1F4BB}");
-    yield* page.until("the joined emoji typed", () => agent.text() === "a\u{1F469}\u{1F4BB}");
-    expect(agent.text()).toBe("a\u{1F469}\u{1F4BB}");
-    yield* page.key("Backspace");
-    yield* page.until("the joined emoji gone in one press", () => agent.text() === "a");
-    expect(agent.text()).toBe("a");
 
-    yield* agent.enter("é́");
-    yield* page.until("the accented letter typed", () => agent.text() === "ae");
-    expect(agent.text()).toBe("ae");
+    yield* page.type("\u{1F469}‍\u{1F4BB}");
+    yield* page.until(
+      "the joined emoji typed",
+      () => agentName(page.screen()) === "a\u{1F469}\u{1F4BB}",
+    );
+    expect(agentName(page.screen())).toBe("a\u{1F469}\u{1F4BB}");
     yield* page.key("Backspace");
-    yield* page.until("the accented letter gone in one press", () => agent.text() === "a");
-    expect(agent.text()).toBe("a");
+    yield* page.until("the joined emoji gone in one press", () => agentName(page.screen()) === "a");
+    expect(agentName(page.screen())).toBe("a");
+
+    yield* page.type("é́");
+    yield* page.until("the accented letter typed", () => agentName(page.screen()) === "ae");
+    expect(agentName(page.screen())).toBe("ae");
+    yield* page.key("Backspace");
+    yield* page.until(
+      "the accented letter gone in one press",
+      () => agentName(page.screen()) === "a",
+    );
+    expect(agentName(page.screen())).toBe("a");
   });
 });
