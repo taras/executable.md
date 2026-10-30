@@ -20,6 +20,10 @@ import {
   SIDEKICK_FILE,
   readSidekickRecords,
 } from "../src/repl/sidekick/history.ts";
+import { projectSidekick } from "../src/repl/sidekick/model.ts";
+import { projectRepl } from "../src/repl/model.ts";
+import { sidekickChatRows } from "../src/repl/program.ts";
+import type { MountedHost } from "./support/mounted-repl.ts";
 import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
@@ -117,8 +121,13 @@ function chatLines(reading: ScreenReading, anchor: string): string[] {
     anchor,
     reading.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined,
   ).column;
-  const start = reading.locate("[↑ earlier]", SIDEKICK_CONTROLS).row;
-  const end = reading.locate("[↓ later]", SIDEKICK_CONTROLS).row;
+  const controls = reading.shows(COMPOSER)
+    ? SIDEKICK_CONTROLS
+    : reading.shows("DRAFT")
+      ? { rightOf: "DRAFT" }
+      : undefined;
+  const start = reading.locate("[↑ earlier]", controls).row;
+  const end = reading.locate("[↓ later]", controls).row;
   return reading.rows.slice(start + 1, end).map((row) => row.slice(column).trim());
 }
 
@@ -1260,5 +1269,420 @@ describe("Sidekick resize ownership", () => {
     expect(page.screen().shows("Balanced")).toBe(true);
     expect(page.screen().shows("scribe-more")).toBe(false);
     expect(yield* finishDraft(page)).toBe("note-more");
+  });
+});
+
+const LONG_FIELDS = [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "eleven",
+  "twelve",
+  "last",
+];
+const LONG_SCHEMA = {
+  type: "object",
+  properties: Object.fromEntries(
+    LONG_FIELDS.map((name) => [name, { type: "string", description: `What ${name} is for.` }]),
+  ),
+  required: ["one"],
+  additionalProperties: false,
+};
+
+function* scrollFormTo(page: ReplPage, label: string, direction: "up" | "down"): Operation<void> {
+  for (let press = 0; press < 100 && !page.screen().shows(label); press += 1) {
+    const before = page.screen().index;
+    yield* page.press(direction === "down" ? "[↓ later]" : "[↑ earlier]", { rightOf: "[close]" });
+    yield* page.until("the form scrolling", (one) => one.index > before);
+  }
+  expect(page.screen().shows(label)).toBe(true);
+}
+
+function atSize(page: ReplPage, size: { columns: number; rows: number }): Operation<ScreenReading> {
+  return page.screen().size.columns === size.columns && page.screen().size.rows === size.rows
+    ? (function* () {
+        return page.screen();
+      })()
+    : page.resize(size);
+}
+
+describe("Sidekick drawers across every supported size", () => {
+  it("MQ4: the form stays inside its own pane at every size, and survives a refusal", function* () {
+    const page = yield* useReplPage();
+    yield* draftText(page, "mine");
+    yield* pendingQuestion(page, "Fill this in.", LONG_SCHEMA);
+    yield* compose(page, "later");
+    yield* page.press("[answer sidekick]");
+    yield* page.until(
+      "the long form opening",
+      (one) => one.shows("Fill this in.") && one.shows("one:"),
+    );
+    yield* page.type("first");
+    yield* page.until("the partial value", (one) => one.shows("one: first"));
+    expect(page.screen().shows("last:")).toBe(false);
+    expect(page.screen().shows("[submit]")).toBe(false);
+    yield* scrollFormTo(page, "[submit]", "down");
+    expect(page.screen().shows("last:")).toBe(true);
+    yield* scrollFormTo(page, "Fill this in.", "up");
+    for (const size of PROFILES) {
+      const reading = yield* atSize(page, size);
+      expect(reading.shows("Fill this in.")).toBe(true);
+      expect(reading.shows("one: first")).toBe(true);
+      expect(reading.occurrences("[close]")).toBe(1);
+      expect(reading.shows("[exit]")).toBe(true);
+      if (size.columns > NARROW.columns) {
+        expect(reading.found("mine", DRAFT_VALUE)).toBe(1);
+      } else {
+        expect(reading.shows("DRAFT")).toBe(false);
+      }
+    }
+    const refused = yield* page.resize(TOO_SMALL);
+    expect(refused.shows("needs at least 72x20")).toBe(true);
+    expect(refused.shows("[")).toBe(false);
+    for (const size of [NARROW, WIDE]) {
+      yield* page.resize(size);
+      yield* page.until("the partial form returning", (one) => one.shows("one: first"));
+    }
+    expect(page.screen().found("mine", DRAFT_VALUE)).toBe(1);
+    yield* page.press("[close]");
+    yield* page.until("the question notice returning", (one) => one.shows("[answer sidekick]"));
+    expect(page.screen().shows("[close]")).toBe(false);
+    yield* selectPane(page, "bindings");
+    for (const absent of ["[close]", "[answer sidekick]", "Fill this in."]) {
+      expect(page.screen().shows(absent)).toBe(false);
+    }
+    yield* selectPane(page, "sidekick");
+    expect(page.screen().shows("[close]")).toBe(false);
+    expect(composerHolds(page.screen(), "later")).toBe(true);
+    yield* page.press("[answer sidekick]");
+    yield* page.until("the same partial form reopening", (one) => one.shows("one: first"));
+    expect(yield* finishDraft(page)).toBe("mine");
+  });
+
+  it("CFG6: Configure stays inside its pane at every size, and survives a refusal", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    yield* draftText(page, "note");
+    yield* compose(page, "ask");
+    yield* configureOpened(page);
+    yield* chooseOffered(page, "Fast");
+    for (const size of PROFILES) {
+      const reading = yield* atSize(page, size);
+      expect(reading.shows("(x) Fast")).toBe(true);
+      expect(reading.shows("[refresh]")).toBe(true);
+      expect(reading.occurrences("[close]")).toBe(1);
+      expect(reading.shows("[exit]")).toBe(true);
+      if (size.columns > NARROW.columns) {
+        expect(reading.found("note", DRAFT_VALUE)).toBe(1);
+      } else {
+        expect(reading.shows("DRAFT")).toBe(false);
+      }
+    }
+    const refused = yield* page.resize(TOO_SMALL);
+    expect(refused.shows("needs at least 72x20")).toBe(true);
+    expect(refused.shows("[refresh]")).toBe(false);
+    yield* page.resize(WIDE);
+    yield* page.until("Configure restoring its unapplied choice", (one) => one.shows("(x) Fast"));
+    expect(page.screen().found("note", DRAFT_VALUE)).toBe(1);
+    yield* page.key("Escape");
+    yield* configured(page);
+    expect(composerHolds(page.screen(), "ask")).toBe(true);
+    yield* page.key("Enter");
+    yield* page.until("the restored opener activating", (one) => one.shows("[refresh]"));
+    expect(yield* finishDraft(page)).toBe("note");
+  });
+
+  it("CX4: Configure says scroll, the readings around it still say earlier", function* () {
+    const many = Array.from({ length: 64 }, (_, at) => ({
+      id: `model-${at + 1}`,
+      name: `Model ${at + 1}`,
+    }));
+    const page = yield* useReplPage();
+    page.repl.fake.configuration({ model: { selected: "model-1", choices: many }, effort: {} });
+    yield* page.press("[configure scribe]");
+    yield* page.until("the advertised models", (one) => one.shows("Model 1"));
+    for (const { size, choice } of [
+      { size: WIDE, choice: 64 },
+      { size: { columns: 120, rows: 30 }, choice: 63 },
+    ]) {
+      yield* atSize(page, size);
+      expect(page.screen().found("[↑ scroll up]", { rightOf: "[close]" })).toBe(1);
+      expect(page.screen().found("[↓ scroll down]", { rightOf: "[close]" })).toBe(1);
+      expect(page.screen().found("[↑ earlier]", { rightOf: "[close]" })).toBe(0);
+      expect(page.screen().found("[↓ later]", { rightOf: "[close]" })).toBe(0);
+      expect(transcriptHas(page.screen(), "[↑ earlier]")).toBe(true);
+      expect(page.screen().shows(`( ) Model ${choice}`)).toBe(false);
+      yield* scrollDrawerTo(page, `( ) Model ${choice}`);
+      yield* chooseOffered(page, `Model ${choice}`);
+      expect(page.screen().shows(`(x) Model ${choice}`)).toBe(true);
+      for (let press = 0; press < 100 && !page.screen().shows("Model 1"); press += 1) {
+        const before = page.screen().index;
+        yield* page.press("[↑ scroll up]");
+        yield* page.until("the choices scrolling back", (one) => one.index > before);
+      }
+      expect(page.screen().shows("Model 1")).toBe(true);
+    }
+  });
+});
+
+function* pairBytes(
+  root: string,
+  execution: string,
+): Operation<{ entries: string; sidekick: string }> {
+  const directory = join(root, PAIRED_DIRECTORY, execution);
+  return {
+    entries: yield* readTextFile(join(directory, ENTRIES_FILE)),
+    sidekick: yield* readTextFile(join(directory, SIDEKICK_FILE)),
+  };
+}
+
+function* refusedLocation(host: MountedHost, location: string): Operation<string> {
+  return yield* scoped(function* () {
+    const page = yield* useReplPage({ host, location });
+    expect(page.screen().shows("[exit]")).toBe(true);
+    yield* page.press("[exit]");
+    yield* awaited("the refused command returning", () => page.repl.outcome() !== undefined);
+    const result = page.repl.outcome();
+    if (result === undefined || result.ok) {
+      throw new Error("this location did not refuse");
+    }
+    return result.error.message;
+  });
+}
+
+describe("Older chats retain their identity across failure and cold opening", () => {
+  it("SS2: a current failure read beside an older chat leaves its items alone", function* () {
+    const page = yield* useReplPage();
+    yield* twoChats(page, true);
+    page.repl.fake.script({
+      deltas: ["<Output>Current half.</Output>\n", "<REPL.Bindings />\n"],
+      holdAfter: 1,
+      stopReason: "refusal",
+    });
+    yield* sendMessage(page, "goes wrong");
+    yield* page.repl.fake.streamingTurns(1);
+    yield* chooseTurn(page, "older ask");
+    yield* page.until("the older answer", (one) => sidekickShows(one, "Older answer."));
+    const olderRows = function* () {
+      const read = projectSidekick((yield* settledReading(page.repl)).chat);
+      if (!read.ok) {
+        throw read.error;
+      }
+      const older = read.value.conversations[0]?.id;
+      return sidekickChatRows(read.value, undefined).filter((one) => one.conversation === older);
+    };
+    const before = yield* olderRows();
+    expect(before.map((one) => one.kind)).toEqual(["person", "reply", "person", "incomplete"]);
+    expect(new Set(before.map((one) => one.key)).size).toBe(before.length);
+    for (const absent of ["goes wrong", "Current half."]) {
+      expect(sidekickShows(page.screen(), absent)).toBe(false);
+    }
+    expect(sidekickShows(page.screen(), "(unfinished)")).toBe(true);
+    expect(chatLines(page.screen(), "[S] Older answer.").join(" ")).toContain("max_tokens");
+    const looking = chatLines(page.screen(), "[S] Older answer.").filter(
+      (line) => line !== "" && line !== "[S] working",
+    );
+    page.repl.fake.releaseDeltas();
+    yield* page.until("the current failure being saved", (one) =>
+      transcriptHas(one, "goes wrong · failed"),
+    );
+    expect(yield* olderRows()).toEqual(before);
+    expect(
+      chatLines(page.screen(), "[S] Older answer.").filter(
+        (line) => line !== "" && line !== "[S] working",
+      ),
+    ).toEqual(looking);
+    for (const absent of ["goes wrong", "Current half."]) {
+      expect(sidekickShows(page.screen(), absent)).toBe(false);
+    }
+    yield* backToCurrent(page, "goes wrong");
+    expect(chatLines(page.screen(), "[U] goes wrong").join(" ")).toContain("refusal");
+  });
+
+  it("SS5: the same older chat is selected read-only, with no provider work and no writes", function* () {
+    const dataRoot = yield* useTemporary("xmd-ss5-cold-");
+    let root = "";
+    let execution = "";
+    const location = yield* scoped(function* () {
+      const host = yield* useMountedHost({ dataRoot });
+      root = host.root;
+      const page = yield* useReplPage({ host });
+      yield* twoChats(page);
+      yield* chooseTurn(page, "older ask");
+      yield* page.until("the older chat", (one) => sidekickShows(one, "Older answer."));
+      execution = yield* mountedExecution(page.repl);
+      yield* page.press("[exit]");
+      yield* awaited("the first command returning", () => page.repl.outcome() !== undefined);
+      const outcome = page.repl.outcome();
+      if (outcome === undefined || !outcome.ok) {
+        throw new Error("the first command did not return its location");
+      }
+      return outcome.value.location;
+    });
+    const before = yield* pairBytes(root, execution);
+    expect(location).toContain("sidekick=");
+    expect(location).toContain("view=sidekick");
+    const cold = yield* useMountedHost({ dataRoot });
+    const page = yield* useReplPage({ host: cold, location });
+    expect(sidekickShows(page.screen(), "Older answer.")).toBe(true);
+    expect(sidekickShows(page.screen(), "Newer answer.")).toBe(false);
+    assertReadOnly(page.screen());
+    expect(cold.fake.created).toEqual([]);
+    expect(cold.fake.ensured).toEqual([]);
+    expect(cold.fake.prompts).toEqual([]);
+    expect(yield* pairBytes(root, execution)).toEqual(before);
+  });
+
+  it("SS5: selecting another surface and coming back does not forget the pinned chat", function* () {
+    const page = yield* useReplPage();
+    yield* exchange(page, "only ask", "Only answer.");
+    yield* chooseTurn(page, "only ask");
+    yield* page.until("the explicit selection", (one) => one.shows("[Back to current chat]"));
+    expect(page.screen().shows(COMPOSER)).toBe(true);
+    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    yield* selectPane(page, "bindings");
+    yield* selectPane(page, "sidekick");
+    yield* page.until("the pinned chat returning", (one) => sidekickShows(one, "Only answer."));
+    expect(page.screen().shows("[Back to current chat]")).toBe(true);
+    yield* openEntryCatalog(page);
+    yield* closeDrawer(page);
+    yield* selectPane(page, "sidekick");
+    expect(sidekickShows(page.screen(), "Only answer.")).toBe(true);
+    expect(page.screen().shows("[Back to current chat]")).toBe(true);
+  });
+
+  it("SS2: a chat whose setup failed opens read-only, saying what became of it", function* () {
+    const dataRoot = yield* useTemporary("xmd-ss2-setup-");
+    let root = "";
+    let execution = "";
+    yield* scoped(function* () {
+      const first = yield* useMountedHost({ dataRoot });
+      root = first.root;
+      const page = yield* useReplPage({ host: first });
+      first.fake.configuration(ADVERTISED);
+      first.fake.unavailable(OTHER_MOUNTED_AGENT, new Error("that agent will not start here"));
+      yield* exchange(page, "only ask", "The only answer.");
+      yield* openConfigure(page);
+      yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
+      yield* applyConfigure(page);
+      yield* page.until("the setup failure", (one) => one.shows("will not start"));
+      execution = yield* mountedExecution(page.repl);
+      yield* finishDraft(page);
+    });
+    const before = yield* pairBytes(root, execution);
+    const read = projectSidekick(
+      yield* readSidekickRecords(join(root, PAIRED_DIRECTORY, execution, SIDEKICK_FILE)),
+    );
+    if (!read.ok) {
+      throw read.error;
+    }
+    const broken = read.value.conversations.find((one) => one.phase === "failed");
+    expect(broken?.failure).toContain("will not start");
+    expect(read.value.turns.filter((one) => one.conversation === broken?.id)).toEqual([]);
+    if (broken === undefined) {
+      throw new Error("the failed setup is missing from the history");
+    }
+    const cold = yield* useMountedHost({ dataRoot });
+    const page = yield* useReplPage({
+      host: cold,
+      location: `xmd://repl/${execution}/sessions?view=sidekick&right=sidekick&sidekick=${encodeURIComponent(broken.id)}`,
+    });
+    yield* page.until("the failed chat's status", (one) => sidekickShows(one, "Setup failed:"));
+    expect(sidekickShows(page.screen(), "Setup failed: that agent will")).toBe(true);
+    expect(sidekickShows(page.screen(), "The only answer.")).toBe(false);
+    assertReadOnly(page.screen());
+    expect([cold.fake.created, cold.fake.ensured, cold.fake.prompts]).toEqual([[], [], []]);
+    expect(yield* pairBytes(root, execution)).toEqual(before);
+    yield* backToCurrent(page, "The only answer.");
+    expect(page.screen().shows(`[configure ${MOUNTED_AGENT}]`)).toBe(true);
+    expect(yield* pairBytes(root, execution)).toEqual(before);
+  });
+
+  it("SS2: an unknown chat refuses cold before an unfinished entry could resume", function* () {
+    const dataRoot = yield* useTemporary("xmd-ss2-unfinished-");
+    let root = "";
+    let execution = "";
+    yield* scoped(function* () {
+      const first = yield* useMountedHost({ dataRoot });
+      root = first.root;
+      const page = yield* useReplPage({ host: first });
+      yield* exchange(page, "chat ask", "Chat answer.");
+      first.fake.script({ held: true, reply: "ENTRY-NEVER" });
+      yield* pasteDraft(
+        page,
+        '<Session name="planner"><Prompt text="unfinished-entry" /></Session>\n',
+      );
+      yield* page.key("Enter");
+      yield* first.fake.holdingTurns(1);
+      execution = yield* mountedExecution(page.repl);
+    });
+    const before = yield* pairBytes(root, execution);
+    const cold = yield* useMountedHost({ dataRoot });
+    const opened = yield* cold.repository.open(execution);
+    const projected = projectRepl(yield* opened.stream.readAll());
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    const unfinished = projected.value.entries.filter((entry) => !entry.settled);
+    expect(unfinished).toHaveLength(1);
+    expect(unfinished[0]?.source).toContain("unfinished-entry");
+    expect(
+      yield* refusedLocation(
+        cold,
+        `xmd://repl/${execution}/entries?view=sidekick&sidekick=never-held`,
+      ),
+    ).toContain("never-held");
+    expect([cold.fake.created, cold.fake.ensured, cold.fake.prompts]).toEqual([[], [], []]);
+    expect(yield* pairBytes(root, execution)).toEqual(before);
+    const page = yield* useReplPage({
+      host: cold,
+      location: `xmd://repl/${execution}/entries?view=sidekick`,
+    });
+    yield* page.until("the valid location reaching its screen", (one) => one.shows("Chat answer."));
+    expect(page.repl.outcome()).toBeUndefined();
+  });
+
+  it("SS2: an unknown or unselectable chat refuses cold, before anything can run", function* () {
+    const dataRoot = yield* useTemporary("xmd-ss2-unselectable-");
+    let root = "";
+    let execution = "";
+    yield* scoped(function* () {
+      const first = yield* useMountedHost({ dataRoot });
+      root = first.root;
+      const page = yield* useReplPage({ host: first });
+      yield* exchange(page, "only ask", "Only answer.");
+      yield* pasteDraft(page, TWO_STEP_ENTRY);
+      yield* page.key("Enter");
+      yield* entrySettles(page, 1, "ok");
+      execution = yield* mountedExecution(page.repl);
+      yield* finishDraft(page);
+    });
+    const before = yield* pairBytes(root, execution);
+    const cold = yield* useMountedHost({ dataRoot });
+    const legacy = join(cold.root, "legacy-selector.jsonl");
+    yield* writeTextFile(legacy, "");
+    for (const scenario of [
+      {
+        location: `xmd://repl/${execution}/entries?view=sidekick&sidekick=never-held`,
+        reason: "never-held",
+      },
+      {
+        location: "xmd://repl/legacy-selector/entries?sidekick=anything",
+        reason: "no Sidekick history",
+      },
+    ]) {
+      expect(yield* refusedLocation(cold, scenario.location)).toContain(scenario.reason);
+      expect([cold.fake.created, cold.fake.ensured, cold.fake.prompts]).toEqual([[], [], []]);
+      expect(yield* pairBytes(root, execution)).toEqual(before);
+      expect(yield* readTextFile(legacy)).toBe("");
+    }
+    expect(yield* publishedPairs(root)).toEqual([execution]);
   });
 });
