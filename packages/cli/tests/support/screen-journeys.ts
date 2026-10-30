@@ -185,12 +185,6 @@ export function* draftText(page: ReplPage, text: string): Operation<void> {
   yield* typed(page, text);
 }
 
-/** Put this text in the Draft and submit it as an entry. */
-export function* submitDraft(page: ReplPage, text: string): Operation<void> {
-  yield* draftText(page, text);
-  yield* page.key("Enter");
-}
-
 /** Send the composer's text with the Sidekick's own Send, once it is offered. */
 export function* sendMessage(page: ReplPage, text: string): Operation<void> {
   yield* intoComposer(page);

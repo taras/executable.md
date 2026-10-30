@@ -6,27 +6,50 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { useTempFileCompiler } from "@executablemd/core";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
+import { navigationOf } from "../src/repl/navigation.ts";
+import {
+  initialState,
+  NO_AGENT,
+  viewFor,
+  withWorkspace,
+  workspaceOf,
+} from "../src/repl/application.ts";
+import { REPL_PALETTE } from "../src/repl/presentation-style.ts";
+import { usePresenter } from "./fixtures/repl/presentation.ts";
+import { emptyModel } from "./fixtures/repl/journals.ts";
 
 import { useReplPage } from "./support/repl-page.ts";
 import {
   BINDINGS,
+  closeDrawer,
   COMPOSER,
   DRAFT,
   DRAFT_VALUE,
-  SIDEKICK,
-  SIDEKICK_PANE,
-  TYPING,
-  closeDrawer,
   draftHolds,
   draftText,
   intoComposer,
   openHistory,
+  SIDEKICK,
+  SIDEKICK_PANE,
+  TYPING,
 } from "./support/screen-journeys.ts";
 
 const WIDE = { columns: 160, rows: 36 };
 const MEDIUM = { columns: 120, rows: 30 };
 const NARROW = { columns: 72, rows: 20 };
 const BELOW = { columns: 60, rows: 15 };
+
+const IDLE = Object.freeze({
+  output: "",
+  question: undefined,
+  expansion: "playing" as const,
+  pausable: false,
+  running: false,
+  agent: NO_AGENT,
+  lifecycle: NO_LIFECYCLE,
+});
 
 describe("REPL presentation: the screen says what is placed", () => {
   it("keeps the shell and its readable surfaces at the supported sizes", function* () {
@@ -84,5 +107,38 @@ describe("REPL presentation: the screen says what is placed", () => {
     const reading = page.screen();
     expect(reading.found("[send]", SIDEKICK_PANE)).toBe(1);
     expect(reading.found("[send]", { onRow: DRAFT })).toBe(1);
+  });
+
+  it("keeps terminal surfaces on the accepted palette", function* () {
+    yield* useTempFileCompiler();
+    const model = yield* emptyModel();
+    const presenter = yield* usePresenter(WIDE);
+    const view = viewFor(
+      initialState("reference"),
+      model,
+      IDLE,
+      WIDE,
+      undefined,
+      navigationOf(model.checkpoints, "live"),
+    );
+    if (!view.ok) {
+      throw view.error;
+    }
+    const observed = yield* presenter.commit(
+      withWorkspace(view.value, workspaceOf(model)),
+    );
+    const draft = observed.boundsOf("footer:input");
+    const history = observed.regionOf("box:history");
+    if (draft === undefined || history === undefined) {
+      throw new Error(
+        "the empty frame did not publish its Draft and History surfaces",
+      );
+    }
+    expect(presenter.grid.styleAt(draft.x, draft.y + 1).background).toBe(
+      REPL_PALETTE.draftSurface,
+    );
+    expect(presenter.grid.styleAt(history.x, history.y).background).toBe(
+      REPL_PALETTE.historySurface,
+    );
   });
 });
