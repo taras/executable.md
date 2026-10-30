@@ -1359,8 +1359,9 @@ none.
   created its handle, and every turn, close, detach and teardown goes through
   that one — reaching for "the" runtime afterwards would open a second child for
   a session the first already owns. The released runtime snapshots the
-  child-only `agentProcessEnv`; its independent compatibility adaptation and
-  retirement are recorded in `packages/acp/vendor/acpx/PROVENANCE.md`.
+  child-only `agentProcessEnv`. Protected authentication values outrank session
+  and transient overlays; `CLAUDE_CODE_EXECUTABLE` remains a transient binding
+  that outranks a session value. No local environment patch remains.
 - **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
   rather than a document, decides: `advertiseNativeLaunch` and
   `advertiseClientNativeAttachment` are two separate lists, and a profile whose

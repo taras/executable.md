@@ -2,8 +2,8 @@
 
 `generated/` is the ACP runtime XMD executes: the runtime closure from npm
 `acpx@0.21.1`, with the existing first-turn materialization contract ported to
-the released session owner. The local environment and metadata compatibility
-adaptations remain separately identified below.
+the released session owner. The local metadata compatibility adaptation remains separately identified
+below.
 
 - Repository: https://github.com/openclaw/acpx
 - Release commit: `e6c782459a18a5b22d06210fde61d75003883ab0`
@@ -66,13 +66,15 @@ the runtime XMD uses; the released shared/queue runtime is not an XMD provider.
 | `ipc-BbYFsKOj.js` | Read and write the existing `session_materialization` disk marker. |
 | `runtime.d.ts`, `session-options-BlnP3WAc.d.ts` | Declare the ensure input, barrier and pending record. |
 
-## Environment compatibility adaptation (#566)
+## Released environment seam (#566)
 
 The released runtime snapshots `agentProcessEnv`, delivers it to every child and
-never persists it or mutates the parent. The local difference retains the old
-overlay-last behavior for authentication keys in `buildAgentEnvironment()`;
-its independent retirement qualifies the released protected-auth precedence.
-The executable binding key `CLAUDE_CODE_EXECUTABLE` is not an authentication key.
+never persists it or mutates the parent. No local environment patch remains.
+Released protected authentication values outrank both session and transient
+overlays; the executable binding key `CLAUDE_CODE_EXECUTABLE` is not an
+authentication key and still outranks a session value. Real-child controls
+verify that binding, authentication precedence, construction-time snapshot,
+sibling isolation, absence and non-retention.
 
 ## Metadata compatibility adaptation (#629)
 

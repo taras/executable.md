@@ -1427,7 +1427,7 @@ function buildAgentEnvironment(authCredentials, sessionEnv, agentProcessEnv, inh
 		assignAuthCredentialEnv(env, methodId, credential);
 	}
 	for (const overlay of [sessionEnv, agentProcessEnv]) for (const [key, value] of Object.entries(overlay ?? {})) {
-		if (typeof value !== "string" || overlay !== agentProcessEnv && protectedAuthEnvKeys.has(protectedEnvKey(key))) continue;
+		if (typeof value !== "string" || protectedAuthEnvKeys.has(protectedEnvKey(key))) continue;
 		assignSessionEnv(env, key, value);
 	}
 	return env;

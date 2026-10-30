@@ -11,7 +11,7 @@ import {
   useScope,
   withResolvers,
 } from "effection";
-import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,7 +61,13 @@ process.stdin.on("data", chunk => {
 function handle(request) {
   if (request.id === undefined) return;
   if (request.method === "initialize") {
-    reply(request.id, {protocolVersion: 1, agentCapabilities: {loadSession: true, promptCapabilities: {}}, authMethods: []});
+    const initialize = () => reply(request.id, {protocolVersion: 1, agentCapabilities: {loadSession: true, promptCapabilities: {}}, authMethods: []});
+    if (process.env.XMD_RELEASE_ENV_LOG) {
+      require("node:fs").writeFile(process.env.XMD_RELEASE_ENV_LOG, JSON.stringify({
+        bound: process.env.CLAUDE_CODE_EXECUTABLE ?? null,
+        auth: process.env.XMD_TEST_AUTH ?? null,
+      }), error => { if (error) throw error; initialize(); });
+    } else initialize();
   } else if (request.method === "session/new" || request.method === "session/load") {
     sessionId = request.params.sessionId ?? "session-" + process.pid;
     reply(request.id, {sessionId, configOptions: options(), _meta: {agentSessionId: "native-" + sessionId}});
@@ -119,6 +125,89 @@ describe(
   "released ACPX production consumers",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
+    it("released child environments are snapshots, isolated and absent from retained state", function* () {
+      const current = yield* world();
+      const parent = process.env.CLAUDE_CODE_EXECUTABLE;
+      const auth = process.env.ACPX_AUTH_XMD_TEST_AUTH;
+      yield* ensure(() => {
+        if (auth === undefined) {
+          delete process.env.ACPX_AUTH_XMD_TEST_AUTH;
+        } else {
+          process.env.ACPX_AUTH_XMD_TEST_AUTH = auth;
+        }
+      });
+      process.env.ACPX_AUTH_XMD_TEST_AUTH = "protected-auth";
+      const overlay = {
+        CLAUDE_CODE_EXECUTABLE: "bound-first",
+        XMD_TEST_AUTH: "overlay-auth",
+        XMD_RELEASE_ENV_LOG: join(current.dir, "first-env.json"),
+      };
+      const first = createAcpRuntime({
+        cwd: current.dir,
+        sessionStore: current.store,
+        agentRegistry: current.registry,
+        permissionMode: "deny-all",
+        agentProcessEnv: overlay,
+      });
+      yield* ensure(() => until(first.shutdown()));
+      overlay.CLAUDE_CODE_EXECUTABLE = "mutated-after-construction";
+      const handle = yield* until(
+        first.ensureSession({
+          sessionKey: "env-first",
+          agent: "scribe",
+          mode: "persistent",
+          sessionOptions: {
+            env: { CLAUDE_CODE_EXECUTABLE: "session-binding", XMD_TEST_AUTH: "session-auth" },
+          },
+        }),
+      );
+      const observed: unknown = JSON.parse(yield* readTextFile(overlay.XMD_RELEASE_ENV_LOG));
+      expect(observed).toEqual({ bound: "bound-first", auth: "protected-auth" });
+      const turn = first.startTurn({ handle, text: "hello", mode: "prompt", requestId: "env" });
+      const events = [];
+      for (const event of yield* each(stream(turn.events))) {
+        events.push(event);
+        yield* each.next();
+      }
+      yield* until(turn.result);
+      const retained = JSON.stringify({
+        record: yield* until(current.store.load("env-first")),
+        status: yield* until(first.getStatus({ handle })),
+        events,
+      });
+      expect(retained).not.toContain("bound-first");
+      expect(retained).not.toContain("protected-auth");
+      expect(retained).not.toContain("overlay-auth");
+      expect(retained).not.toContain("XMD_RELEASE_ENV_LOG");
+      for (const binding of ["bound-second", undefined]) {
+        const log = join(current.dir, binding ?? "absent");
+        const runtime = createAcpRuntime({
+          cwd: current.dir,
+          sessionStore: current.store,
+          agentRegistry: current.registry,
+          permissionMode: "deny-all",
+          agentProcessEnvAllow: ["PATH", "SystemRoot", "WINDIR"],
+          agentProcessEnv: {
+            XMD_RELEASE_ENV_LOG: log,
+            ...(binding === undefined ? {} : { CLAUDE_CODE_EXECUTABLE: binding }),
+          },
+        });
+        yield* ensure(() => until(runtime.shutdown()));
+        yield* until(
+          runtime.ensureSession({
+            sessionKey: binding ?? "env-absent",
+            agent: "scribe",
+            mode: "persistent",
+          }),
+        );
+        expect(JSON.parse(yield* readTextFile(log))).toEqual({
+          bound: binding ?? null,
+          auth: "protected-auth",
+        });
+      }
+      expect(process.env.CLAUDE_CODE_EXECUTABLE).toBe(parent);
+    });
+
     it("the provider commits real first-turn acceptance before exposing output", function* () {
       const current = yield* world();
       const retained: string[] = [];
