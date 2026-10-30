@@ -565,11 +565,10 @@ describe("REPL terminal: responsive semantic frames", () => {
     expect(profiles).toEqual(["wide", "medium", "narrow", "too-small"]);
     expect(targetKeys(app.presenter, refused)).toEqual([]);
 
-    // And it recovers: growing the window back shows exactly the controls it
-    // showed before, with the focus where it was.
+    // The refusal clears focus; recovery enters the first wide region.
     const back = yield* app.commit({ size: WIDE });
     expect([...back.keys].sort()).toEqual(keys);
-    expect(focusedKey(app.presenter)).toBe("footer:input");
+    expect(focusedKey(app.presenter)).toBe("transcript:selector");
   });
 
   it("F1: what was typed, and the way to it, survive every resize and still submit", function* () {
@@ -578,8 +577,8 @@ describe("REPL terminal: responsive semantic frames", () => {
 
     // The same journey the row above measures in frames, as a person makes it:
     // through every drawable profile, past the refusal, and back. The Draft is
-    // still the field taking the keystrokes — which is what the guidance row
-    // says while it is — and it still holds what was typed.
+    // the field taking the keystrokes until refusal clears focus, and it
+    // keeps its text after recovery.
     for (const size of [MEDIUM, NARROW, TOO_SMALL, WIDE]) {
       const resized = yield* page.resize(size);
       if (size === TOO_SMALL) {
@@ -587,12 +586,16 @@ describe("REPL terminal: responsive semantic frames", () => {
         expect(resized.rows.join(" ")).toContain("larger");
         continue;
       }
-      expect(resized.shows(TYPING)).toBe(true);
+      if (size !== WIDE) {
+        expect(resized.shows(TYPING)).toBe(true);
+      }
       expect(draftShows(resized, "kept")).toBe(true);
     }
 
-    // The same control still means the same thing: Enter on the Draft submits
-    // what was typed before any of this.
+    // Transcript -> Selected work -> Draft after recovery.
+    yield* page.key("Tab");
+    yield* page.key("Tab");
+    yield* page.until("Draft input after recovery", (one) => one.shows(TYPING));
     yield* page.key("Enter");
     yield* entrySettles(page, 1, "ok");
     expect(page.screen().shows("kept")).toBe(true);

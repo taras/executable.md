@@ -2886,7 +2886,10 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
       for (let x = edited.x; x < edited.x + edited.width; x += 1) {
         expect(presenter.grid.styleAt(x, edited.y).background).toBe(SURFACE.field);
       }
-      const closed = yield* presenter.commit(reading(stateWith({}), model, live, WIDE));
+      const closed = yield* presenter.commit(
+        reading(stateWith({ restore: { kind: "reveal", key: "footer:input" } }), model, live, WIDE),
+      );
+      expect(focusKeyOf(presenter)).toBe("footer:input");
       return {
         cells: presenter.grid.styledIn({ x: 0, y: 0, width: WIDE.columns, height: WIDE.rows }),
         keys: closed.keys.slice().sort(),
@@ -2895,7 +2898,10 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
 
     const fresh = yield* scoped(function* () {
       const presenter = yield* usePresenter(WIDE);
-      const first = yield* presenter.commit(reading(stateWith({}), model, live, WIDE));
+      const first = yield* presenter.commit(
+        reading(stateWith({ restore: { kind: "reveal", key: "footer:input" } }), model, live, WIDE),
+      );
+      expect(focusKeyOf(presenter)).toBe("footer:input");
       return {
         cells: presenter.grid.styledIn({ x: 0, y: 0, width: WIDE.columns, height: WIDE.rows }),
         keys: first.keys.slice().sort(),

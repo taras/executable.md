@@ -44,10 +44,13 @@ export function eraseAt(caret: ReplCaret): ReplCaret {
 }
 
 export function caretRow(rows: readonly ReplCaretRow[], offset: number, backward = false): number {
-  const at = Math.max(
-    0,
-    rows.findLastIndex((row) => (row.stops[0]?.offset ?? 0) <= offset),
-  );
+  let at = 0;
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if ((rows[index].stops[0]?.offset ?? 0) <= offset) {
+      at = index;
+      break;
+    }
+  }
   // End retains the preceding row at a shared soft-wrap boundary.
   return backward && rows[at - 1]?.stops.at(-1)?.offset === offset ? at - 1 : at;
 }
