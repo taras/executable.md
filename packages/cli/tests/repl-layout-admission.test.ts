@@ -22,7 +22,8 @@ import { collect, inlineSource, useTempFileCompiler } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { scoped } from "effection";
+import { readQuestionForm } from "../src/repl/elicitation.ts";
+import { Ok, scoped } from "effection";
 import type { Operation } from "effection";
 
 import { skeletonOps } from "../src/repl/layout.ts";
@@ -33,11 +34,17 @@ import { navigationOf } from "../src/repl/navigation.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplActionCandidate, ReplBounds } from "../src/repl/layout.ts";
 import { admitActions } from "../src/repl/layout-admission.ts";
-import type { ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
+import type {
+  ReplSidekickReading,
+  ReplLive,
+  ReplState,
+  ReplView,
+} from "../src/repl/application.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { prepareFrame } from "../src/repl/program.ts";
 import {
   ACTION_ROW,
+  offering,
   DRAWER_WINDOW,
   initialState,
   NO_AGENT,
@@ -1153,5 +1160,220 @@ describe("REPL layout: what the application admits at each size", () => {
     expect(presenter.grid.textIn(history).join(" ")).toContain("[history]");
     // And focus is the mounted tree's own answer, read back rather than set.
     expect({ focused: focused !== undefined }).toEqual({ focused: true });
+  });
+});
+
+const KERNEL_SIDEKICK: ReplSidekickReading = {
+  chat: [],
+  busy: false,
+  agent: "scribe",
+  refusal: undefined,
+  question: undefined,
+  requested: undefined,
+  verified: undefined,
+  conversation: "owned",
+  reading: "owned",
+  current: true,
+  turns: [],
+  availability: { chats: ["owned"], sessions: [], refusal: undefined },
+};
+
+describe("Owned renderer claims moved out of mounted journeys", () => {
+  it("B3/J1: an ancestor is keyboard reachable and a refused navigation keeps owned focus and targets", function* () {
+    const model = yield* referenceModel();
+    const selected = reduceRepl(
+      initialState("reference"),
+      { kind: "select-scope", scopes: ["entry-1", "Checklist-1"] },
+      model,
+      IDLE,
+    ).state;
+    const presenter = yield* usePresenter(WIDE);
+    yield* presenter.commit(viewOf(model, WIDE, { state: selected }));
+    yield* focusKey(presenter, "work:crumb:0");
+    expect(focusedKey(presenter)).toBe("work:crumb:0");
+    const entered = yield* presenter.tree.dispatch({ kind: "key", key: "Enter" });
+    if (!entered.ok) {
+      throw entered.error;
+    }
+    expect(entered.value.outcome).toBe("action");
+    if (entered.value.outcome !== "action") {
+      throw new Error("the ancestor produced no action");
+    }
+    const ancestor = reduceRepl(selected, entered.value.action, model, IDLE).state;
+    expect(ancestor.route.scopes).toEqual(["entry-1"]);
+    const history = reduceRepl(
+      selected,
+      { kind: "open-drawer", drawer: { kind: "history" } },
+      model,
+      IDLE,
+    ).state;
+    yield* presenter.commit(
+      viewOf(model, WIDE, { state: history, focused: focusedKey(presenter) }),
+    );
+    const marker = `drawer:marker:${model.checkpoints[0]?.marker ?? ""}`;
+    yield* focusKey(presenter, marker);
+    const before = yield* presenter.commit(
+      viewOf(model, WIDE, { state: history, focused: focusedKey(presenter) }),
+    );
+    const closeAt = before.boundsOf("drawer:close");
+    expect(closeAt).toBeDefined();
+    const refused = reduceRepl(
+      history,
+      { kind: "select-scope", scopes: ["entry-1", "Nowhere-9"] },
+      model,
+      IDLE,
+    ).state;
+    expect(refused.route).toEqual(history.route);
+    expect(refused.refusal).toBeDefined();
+    const after = yield* presenter.commit(
+      viewOf(model, WIDE, { state: refused, focused: focusedKey(presenter) }),
+    );
+    expect(focusedKey(presenter)).toBe(marker);
+    expect(after.boundsOf("drawer:close")).toEqual(closeAt);
+    expect(after.keys).toEqual(before.keys);
+  });
+
+  it("Q-P1: three Backtabs reach the default composer without activating a pane", function* () {
+    const model = yield* entriesModel(0);
+    const live: ReplLive = { ...IDLE, sidekick: KERNEL_SIDEKICK };
+    const view = viewFor(initialState("owned"), model, live, WIDE);
+    if (!view.ok) {
+      throw view.error;
+    }
+    const presenter = yield* usePresenter(WIDE);
+    yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
+    yield* focusKey(presenter, "footer:input");
+    const walked = yield* ring(presenter, "Backtab");
+    expect(walked.indexOf("sidekick:message")).toBe(3);
+    expect(view.value.state.route.view).toBeUndefined();
+  });
+
+  it("MQ4/CFG6: each Sidekick drawer and its targets stay inside the independent pane envelope and above the footer", function* () {
+    const model = yield* entriesModel(0);
+    const question = {
+      key: "pending",
+      message: "Fill this in.",
+      form: readQuestionForm({
+        type: "object",
+        properties: Object.fromEntries(
+          [
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "last",
+          ].map((name) => [name, { type: "string", description: `What ${name} is for.` }]),
+        ),
+        required: ["one"],
+        additionalProperties: false,
+      }),
+    };
+    const quiet: ReplSidekickReading = {
+      chat: [],
+      busy: false,
+      agent: "scribe",
+      refusal: undefined,
+      question: undefined,
+      requested: undefined,
+      verified: undefined,
+      conversation: "owned",
+      reading: "owned",
+      current: true,
+      turns: [],
+      availability: { chats: ["owned"], sessions: [], refusal: undefined },
+    };
+    for (const size of [WIDE, MEDIUM, NARROW]) {
+      for (const kind of ["question", "configure"]) {
+        yield* scoped(function* () {
+          const live: ReplLive = {
+            ...IDLE,
+            sidekick: kind === "question" ? { ...quiet, busy: true, question } : quiet,
+          };
+          let state = reduceRepl(
+            initialState("owned"),
+            { kind: "select-pane", pane: "sidekick" },
+            model,
+            live,
+          ).state;
+          if (kind === "question") {
+            state = reduceRepl(
+              state,
+              { kind: "open-sidekick-question", question: question.key },
+              model,
+              live,
+            ).state;
+          } else {
+            state = reduceRepl(
+              state,
+              { kind: "open-configure", conversation: "owned" },
+              model,
+              live,
+            ).state;
+            state = offering(
+              state,
+              "owned",
+              undefined,
+              Ok({
+                agent: "scribe",
+                model: {
+                  selected: "balanced",
+                  options: [
+                    { id: "balanced", name: "Balanced", description: null, group: null },
+                    { id: "fast", name: "Fast", description: null, group: null },
+                  ],
+                },
+                effort: null,
+              }),
+              "scribe",
+            );
+          }
+          const view = viewFor(
+            state,
+            model,
+            live,
+            size,
+            kind === "question" ? "sidekick:answer" : "sidekick:configure",
+          );
+          if (!view.ok) {
+            throw view.error;
+          }
+          const presenter = yield* usePresenter(size);
+          const observed = yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
+          const layer = observed.regionOf("box:drawer:layer");
+          const pane = observed.regionOf(
+            size.columns === NARROW.columns ? "box:content" : "box:inspection",
+          );
+          const exit = observed.boundsOf("footer:exit");
+          if (layer === undefined || pane === undefined || exit === undefined) {
+            throw new Error(`${kind} at ${size.columns}x${size.rows} has no layer, pane or footer`);
+          }
+          const envelope = size.columns >= 160 ? 102 : size.columns >= 120 ? 88 : 0;
+          expect([kind, size.columns, layer.x >= envelope]).toEqual([kind, size.columns, true]);
+          expect(layer.x + layer.width).toBeLessThanOrEqual(size.columns);
+          expect(layer.y + layer.height).toBeLessThanOrEqual(exit.y);
+          const keys =
+            kind === "question"
+              ? ["drawer:close", "drawer:scroll:up", "drawer:value:one"]
+              : ["drawer:close", "drawer:configure:refresh"];
+          for (const key of keys) {
+            expect([kind, key, within(layer, observed.boundsOf(key))]).toEqual([kind, key, true]);
+            expect([kind, key, within(pane, observed.boundsOf(key))]).toEqual([kind, key, true]);
+          }
+          expect(observed.keys.filter((key) => key === "drawer:close")).toHaveLength(1);
+          if (kind === "question") {
+            expect(observed.keys).not.toContain("drawer:value:last");
+            expect(observed.keys).not.toContain("drawer:form:submit");
+          }
+        });
+      }
+    }
   });
 });

@@ -1189,3 +1189,76 @@ describe("Transcript ownership and immutable older chat readings", () => {
     expect(yield* finishDraft(page)).toBe("my entry");
   });
 });
+
+function* questionThroughKeyboard(explicit: boolean): Operation<ReplPage> {
+  const page = yield* useReplPage();
+  page.repl.fake.script({ reply: askingReply("Sidekick asks.", ONE_FIELD) });
+  if (explicit) {
+    yield* intoComposer(page);
+  } else {
+    for (let press = 0; press < 3; press += 1) {
+      yield* page.key("Backtab");
+    }
+  }
+  yield* page.type("ask");
+  yield* page.until("the composer reached by keyboard", (one) => composerHolds(one, "ask"));
+  expect(draftHolds(page.screen(), "ask")).toBe(false);
+  yield* sendComposed(page);
+  yield* page.until("the question notice", (one) => one.shows("[answer sidekick]"));
+  yield* openedQuestion(page);
+  yield* page.type("partial");
+  yield* page.until("the partial answer", (one) => one.shows("message: partial"));
+  return page;
+}
+
+describe("Sidekick resize ownership", () => {
+  it("Q-P1: a form hidden by a resize does not consume Draft typing", function* () {
+    const page = yield* questionThroughKeyboard(false);
+    const narrow = yield* page.resize(NARROW);
+    expect(narrow.shows("[submit]")).toBe(false);
+    yield* draftText(page, "ordinary");
+    yield* page.until(
+      "the visible Draft taking text",
+      (one) => one.found("ordinary", { after: "DRAFT" }) === 1,
+    );
+    yield* page.resize(WIDE);
+    yield* page.until("the form returning", (one) => one.shows("[submit]"));
+    expect(page.screen().shows("partialordinary")).toBe(false);
+    expect(page.screen().shows("message: partial")).toBe(true);
+    expect(page.screen().found("ordinary", DRAFT_VALUE)).toBe(1);
+    expect(yield* finishDraft(page)).toBe("ordinary");
+  });
+
+  it("Q-P1: control — an explicitly selected form still edits its own field", function* () {
+    const page = yield* questionThroughKeyboard(true);
+    const narrow = yield* page.resize(NARROW);
+    expect(narrow.shows("[submit]")).toBe(true);
+    expect(narrow.shows("DRAFT")).toBe(false);
+    yield* page.type(" more");
+    yield* page.until("the visible form taking text", (one) => one.shows("message: partial more"));
+    yield* page.resize(WIDE);
+    expect(page.screen().found("partial more", DRAFT_VALUE)).toBe(0);
+    expect(yield* finishDraft(page)).toBeUndefined();
+  });
+
+  it("CFG6: History over Configure closes once, and a hidden Configure takes no keys", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    yield* draftText(page, "note");
+    yield* configureOpened(page);
+    expect(yield* historyOver(page)).toBe(false);
+    expect(page.repl.outcome()).toBeUndefined();
+    expect(page.screen().shows("[refresh]")).toBe(true);
+    expect((yield* page.resize(NARROW)).shows("[refresh]")).toBe(false);
+    yield* page.type("-more");
+    yield* page.until(
+      "the visible Draft receiving the text",
+      (one) => one.found("note-more", { after: "DRAFT" }) === 1,
+    );
+    yield* page.resize(WIDE);
+    yield* page.until("Configure returning", (one) => one.shows("[refresh]"));
+    expect(page.screen().shows("Balanced")).toBe(true);
+    expect(page.screen().shows("scribe-more")).toBe(false);
+    expect(yield* finishDraft(page)).toBe("note-more");
+  });
+});
