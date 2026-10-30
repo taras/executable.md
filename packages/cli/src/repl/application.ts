@@ -71,7 +71,6 @@ import {
   statedPartProps,
   WORKSPACE_DRAFT_GAP,
   WORKSPACE_DRAFT_ROWS,
-  WORKSPACE_CHROME_ROWS,
   WORKSPACE_LIST_GUTTER,
   WORKSPACE_QUEUE_ROWS,
   workspaceBodyRows,
@@ -4848,6 +4847,9 @@ function drawerState(view: ReplView, readiness: ReplReadiness): string {
  */
 function primaryAction(view: ReplView, narrow: boolean): string {
   const focused = view.focused;
+  if (focused?.endsWith(":anchor")) {
+    return "Enter does nothing";
+  }
   if (focused === "footer:history" || focused === "footer:top:history") {
     // Shortened where the row is 72 columns and not otherwise. The control under
     // the cursor is labelled `[history]`, so the narrow form is not vague — it is
@@ -5011,6 +5013,23 @@ function guidanceParts(
   const editing = focused === undefined || focused === "footer:input";
   const narrow = view.size.columns <= NARROW.columns;
   const move: GuidancePart = { text: "Tab regions Alt↑↓" };
+  const anchor = focused?.endsWith(":anchor") === true;
+  const scrolling: GuidancePart[] = [];
+  if (anchor) {
+    scrolling.push({
+      text: "Up/Down reads one row; PageUp/PageDown reads a page; Home/End reaches the bounds.",
+    });
+  }
+  if (modal) {
+    scrolling.push({
+      text: "In Content: PageUp/PageDown reads more content. Arrows and Home/End keep editing a field.",
+    });
+  }
+  if (anchor || modal) {
+    scrolling.push({
+      text: "Wheel scrolls the reading under your pointer, three displayed rows per tick. It stops before hiding the focused control.",
+    });
+  }
   if (modal) {
     // A drawer holds focus, so `Esc closes` is required and movement is not: Tab
     // is discoverable by pressing it, and being shut inside a modal whose way out
@@ -5021,6 +5040,7 @@ function guidanceParts(
       { text: primaryAction(view, compact), required: true },
       { text: "Esc closes", required: true },
       move,
+      ...scrolling,
     ];
   }
   const state: GuidancePart = { text: statePhrase(readiness, compact), required: true };
@@ -5034,6 +5054,7 @@ function guidanceParts(
       { text: primaryAction(view, compact), required: true },
       move,
       { text: compact ? "Tab to draft" : "Tab to the draft to type", required: true },
+      ...scrolling,
     ];
   }
   const advice = stateAdvice(readiness, compact, staged(view) !== undefined && !narrow);
@@ -6645,8 +6666,8 @@ function modalOpen(view: ReplView): boolean {
  * that block has been fitted there is nothing to clear, and the rectangle the
  * size states is what those passes measure.
  *
- * The Sidekick's pane-local rectangles are untouched by any of it. They are its
- * pane's own, they begin at the top of it, and the gap is not in that pane.
+ * Staged drawers also clear the extra fitted footer rows. Pane-local drawers
+ * keep their own origin; route drawers keep their existing inset.
  */
 function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBounds | undefined {
   // Which body this layer covers: the staged composition keeps three rows
@@ -6656,12 +6677,19 @@ function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBo
   // The catalog floats over the body, exactly where a route drawer does: it is
   // a reading of the whole execution rather than of one pane, so a pane-local
   // rectangle would put the list of every entry inside the Sidekick's column.
-  if (view.selection.drawers.length > 0 || presentedCatalog(view)) {
-    return context.drawer ?? drawerRect(view.size, workspace);
+  const rect =
+    view.selection.drawers.length > 0 || presentedCatalog(view)
+      ? (context.drawer ?? drawerRect(view.size, workspace))
+      : presentedAsking(view) !== undefined || presentedConfiguring(view) !== undefined
+        ? sidekickDrawerRect(view.size, workspace)
+        : undefined;
+  if (rect === undefined || !workspace) {
+    return rect;
   }
-  return presentedAsking(view) === undefined && presentedConfiguring(view) === undefined
-    ? undefined
-    : sidekickDrawerRect(view.size, workspace);
+  return Object.freeze({
+    ...rect,
+    height: Math.max(0, rect.height - Math.max(0, (context.guidance?.length ?? 1) - 1)),
+  });
 }
 
 /**
@@ -11674,7 +11702,7 @@ export function workspaceHeaderLines(
  * The staged workspace composition's boxes, from the same classified rows.
  *
  * One identity row, the body, and below it one compact History row carrying the
- * contextual actions and one guidance row. The wide and medium profiles give
+ * contextual actions and a measured guidance block. The wide and medium profiles give
  * the body three columns — the Transcript of agent work, the selected work with
  * its Draft, and Bindings/Sidekick with the tray above its composer. The narrow
  * profile routes one outlet instead, under the two surface controls, exactly as
@@ -12244,12 +12272,9 @@ function workspacePresentation(input: {
           box({
             id: "box:footer",
             region: "footer",
-            // Two rows, stated: the History row and the guidance row. A fitted
-            // stack takes its height from its content, and the engine's own
-            // arithmetic over that content is not always whole — measured, a
-            // fitted staged footer came back 1.9921875 tall and put every row
-            // of the body, the band and the guidance on a fraction of a cell.
-            props: stackProps(WORKSPACE_CHROME_ROWS - 1),
+            // State the fitted row count: intrinsic stack sizing can place this
+            // footer on fractional cells, invalidating every input rectangle.
+            props: stackProps(1 + (context.guidance?.length ?? 1)),
             children: [
               box({
                 id: "box:history",

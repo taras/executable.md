@@ -159,8 +159,15 @@ describe("wheel remaining migration journeys", () => {
       yield* wheel(page, "up", body);
       expect(hasCatalogRow(page, 1)).toBe(true);
     }
-    yield* ticks(page, "down", cell, 16);
-    expect(page.screen().shows("8. [")).toBe(true);
+    const catalog: string[] = [];
+    for (let tick = 0; tick < 16; tick += 1) {
+      yield* wheel(page, "down", cell);
+      catalog.push(...page.screen().rows);
+    }
+    expect(catalog.join("\n")).toContain("8. [");
+    const catalogEnd = [...page.screen().rows];
+    yield* wheel(page, "down", cell);
+    expect(page.screen().rows).toEqual(catalogEnd);
     yield* ticks(page, "up", cell, 16);
     yield* key(page, "Backtab");
     for (let at = 0; at < 7; at += 1) {

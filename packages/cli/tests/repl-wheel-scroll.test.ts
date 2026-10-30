@@ -191,7 +191,13 @@ describe("wheel real consumers", () => {
     expect(seen.join("\n")).toContain("Side question 44");
     expect(page.screen().shows("held-value")).toBe(true);
     yield* page.key("Escape");
-    yield* page.until("closed held question", (one) => one.shows("[answer sidekick]"));
+    yield* page.until(
+      "closed held question",
+      (one) =>
+        one.shows("[answer sidekick]") &&
+        !one.shows("[submit]") &&
+        one.shows("Enter or click activates"),
+    );
     yield* page.press("[answer sidekick]");
     yield* page.until("reopened held value", (one) => one.shows("held-value"));
     expect(page.screen().shows("[submit]")).toBe(true);
@@ -434,14 +440,15 @@ describe("wheel real consumers", () => {
       yield* key(page, "Backtab");
       yield* key(page, "Home");
       yield* key(page, "ArrowRight");
+      yield* wheel(page, "up", option);
       const visible = page.screen().rows.filter((row) => row.includes("( ) pick-"));
-      for (let tick = 0; tick < 3; tick += 1) {
+      for (let tick = 0; tick < 2; tick += 1) {
         yield* wheel(page, "up", option);
       }
       expect(page.screen().rows.filter((row) => row.includes("( ) pick-"))).toEqual(visible);
       yield* page.type("!");
       yield* page.until("wheel kept the field and caret", (one) => one.shows("p!ick-34"));
-      for (let pageNo = 0; pageNo < 12 && !page.screen().shows("Preview row 0"); pageNo += 1) {
+      for (let pageNo = 0; pageNo < 90 && !page.screen().shows("Preview row 0"); pageNo += 1) {
         yield* key(page, "PageUp");
       }
       expect(page.screen().shows("Preview row 0")).toBe(true);
@@ -449,12 +456,15 @@ describe("wheel real consumers", () => {
       expect(page.screen().shows("[close]")).toBe(true);
       for (
         let pageNo = 0;
-        pageNo < 16 && !page.screen().shows("Final field witness");
+        pageNo < 90 && !page.screen().shows("Final field witness");
         pageNo += 1
       ) {
         yield* key(page, "PageDown");
       }
       expect(page.screen().shows("Final field witness")).toBe(true);
+      for (let pageNo = 0; pageNo < 90 && !page.screen().shows("p!ick-34"); pageNo += 1) {
+        yield* key(page, "PageUp");
+      }
       expect(page.screen().shows("p!ick-34")).toBe(true);
       yield* key(page, "PageUp");
       yield* wheel(page, "down", { column: option.column + 15, row: option.row });

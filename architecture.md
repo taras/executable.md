@@ -7112,8 +7112,9 @@ work on the left, the selected work with its breadcrumbs, exact source, state,
 results and its own multi-row Draft in the centre, and Bindings/Sidekick on the
 right with the trays this build offers above the composer and the Sidekick's
 Send/Stop beside them, under one identity row and above one compact History row
-and one guidance row. It is selected by a view carrying the inert workspace
-presentation, and the root supplies that presentation from what this execution
+and a guidance block whose fitted rows determine its height. It is selected by
+a view carrying the inert workspace presentation, and the root supplies that
+presentation from what this execution
 actually holds: the selected tray, no queued rows because this build has no
 shared queue, and the entries its Sidekick's acknowledged Submits admitted. A
 build without the continuation Follow governs offers neither Follow nor a QUEUE

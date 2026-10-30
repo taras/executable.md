@@ -247,10 +247,10 @@ and the question's drawer opens: the whole message, and then
 every field the schema declares, with its title, its description, whether it
 is required, and exactly the values it will accept. All of that is one ordered
 whole, and it is that whole — not the message alone — that scrolls when it is
-taller than the drawer. The earlier and later controls, the title and the close
-control stay put while the content moves beneath them, so however short the
-drawer is, scrolling reaches every field, every offered value and the control
-that submits. Fill them in, or activate one of an enum's offered values, and
+taller than the drawer. Wheel input and the Content paging keys reach the rest.
+The title, Submit and Close stay outside the moving content, so every field and
+offered value remains reachable while the submission and closing actions stay
+visible. Fill them in, or activate one of an enum's offered values, and
 press Enter from any of them to offer the whole object. The answer is recorded,
 and what the document renders after it changes because of the recorded answer
 rather than because of anything this process remembered. An answer the schema
@@ -704,9 +704,9 @@ clearing the selector; one that fails preserves both the reading and the
 association it was asked of.
 
 The list is windowed rather than clipped: it moves through as many rows as the
-frame can place, with its earlier and later controls — and the way to the other
-surface — staying put while the rows move beneath them. What the window is not
-showing is not drawn, not focusable and reaches no pointer.
+frame can place. Wheel input and the reading keys move its content while the
+way to the other surface stays fixed. What the window is not showing is not
+drawn, not focusable and reaches no pointer.
 
 ## Permission: a live request, and a retained audit
 
@@ -878,8 +878,9 @@ Above the reading, one block says what the execution is doing, what the focused
 control does, the way back to the draft and how to move. It takes as many rows
 as its words need and says all of them: a direction you cannot see is a
 direction you do not have, so nothing is shortened or dropped to keep it on one
-row. The narrow profile's own shorter sentences already fit in one. A refusal's
-explanation is paid out over rows the same way, at whole words.
+row. The narrow profile uses compact state and action labels; longer reading
+directions wrap at the measured width. A refusal's explanation is paid out over
+rows the same way, at whole words.
 
 Two input destinations, named: `Draft` runs a document as this execution's next
 entry, and `Message Sidekick` asks the Sidekick. Enter in each one means its own
