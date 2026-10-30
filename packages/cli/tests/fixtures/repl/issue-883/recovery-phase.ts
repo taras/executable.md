@@ -594,9 +594,9 @@ function* phases(): Operation<unknown> {
 
   if (phase === "workspace-start" || phase === "workspace-continue") {
     const mounted = yield* until(import("../../../support/mounted-repl.ts"));
-    const { useReplPage } = yield* until(import("../../../support/mounted-page.ts"));
+    const { useReplPage } = yield* until(import("../../../support/repl-page.ts"));
     const { settledReading } = yield* until(import("../../../support/mounted-history.ts"));
-    const adapters = yield* until(import("../../../support/repl-page-adapters.ts"));
+    const journeys = yield* until(import("../../../support/screen-journeys.ts"));
     const { denoReplEntry } = yield* until(import("../../../../src/deno-repositories.ts"));
     const project = join(dataRoot, "project");
     yield* until(mkdir(project, { recursive: true }));
@@ -676,10 +676,7 @@ function* phases(): Operation<unknown> {
           source +
           "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />",
       });
-      yield* adapters.sidekick(page).send("perform workspace work and wait");
-      yield* page.until("the workspace entry's question", (one) =>
-        adapters.shows(one, "waiting for an answer"),
-      );
+      yield* journeys.asked(page, "perform workspace work and wait", "waiting for an answer");
       const read = yield* settledReading(repl);
       return {
         execution: id,
@@ -692,7 +689,7 @@ function* phases(): Operation<unknown> {
     // The History rail's own mark for the first entry. `1. [ok] entry-1` is a
     // row of the Entries catalog, which this screen keeps in a drawer — so the
     // settled state is read where the screen states it.
-    yield* adapters.entrySettles(page, 1, "ok");
+    yield* journeys.entrySettles(page, 1, "ok");
     const read = yield* settledReading(repl);
     return {
       execution: id,

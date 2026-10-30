@@ -59,7 +59,7 @@ import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { requestAttachment } from "../src/sidekick-acp/client.ts";
 import { usePosixSidekickTransport } from "../src/sidekick-acp/posix.ts";
 import { recordingTerminal, useMountedHost, MOUNTED_AGENT } from "./support/mounted-repl.ts";
-import { firstPresentation } from "./support/repl-page-adapters.ts";
+import { drawnScreen } from "./support/screen-journeys.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { PAIRED_DIRECTORY, parseEntryRecords } from "../src/repl/sidekick/history.ts";
@@ -1498,7 +1498,7 @@ describe("ACP startup bootstrap", () => {
     yield* scoped(function* () {
       const recording = recordingTerminal();
       yield* recording.install();
-      const drawn = yield* firstPresentation();
+      const drawn = yield* drawnScreen(recording.terminal);
       const starting = yield* spawn(() =>
         runReplProgram({ profile: host.profile, sidekickAcp: path }),
       );
@@ -1557,7 +1557,7 @@ describe("ACP startup bootstrap", () => {
     const first = yield* scoped(function* () {
       const recording = recordingTerminal();
       yield* recording.install();
-      const drawn = yield* firstPresentation();
+      const drawn = yield* drawnScreen(recording.terminal);
       yield* spawn(() => runReplProgram({ profile: host.profile, sidekickAcp: path }));
       yield* drawn;
       return Descriptor.parse(JSON.parse(yield* readTextFile(path)));
@@ -1567,7 +1567,7 @@ describe("ACP startup bootstrap", () => {
     yield* scoped(function* () {
       const recording = recordingTerminal();
       yield* recording.install();
-      const drawn = yield* firstPresentation();
+      const drawn = yield* drawnScreen(recording.terminal);
       yield* spawn(() =>
         runReplProgram({
           profile: host.profile,

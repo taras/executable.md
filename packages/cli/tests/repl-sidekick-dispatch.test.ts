@@ -14,8 +14,8 @@ import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
-import { useReplPage } from "./support/mounted-page.ts";
-import { shows, sidekick } from "./support/repl-page-adapters.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import { asked } from "./support/screen-journeys.ts";
 
 function service(
   held: Harness,
@@ -56,10 +56,7 @@ describe("shared Sidekick dispatch", () => {
       reply: fills("<Output>generated</Output>\n") + "\n<REPL.Submit />\n<Output>Working.</Output>",
     });
     repl.fake.script({ reply: "<Output>Done through shared dispatch.</Output>" });
-    yield* sidekick(page).send("write the controlled entry");
-    yield* page.until("the final shared-dispatch answer", (one) =>
-      shows(one, "Done through shared dispatch."),
-    );
+    yield* asked(page, "write the controlled entry", "Done through shared dispatch.");
     yield* awaitedFact("both replies being saved", function* () {
       return (
         (yield* settledReading(repl)).chat.filter((record) => record.kind === "response").length ===

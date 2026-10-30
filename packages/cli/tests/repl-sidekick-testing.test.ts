@@ -27,9 +27,15 @@ import { useHarness, useTemporary } from "./fixtures/repl/issue-883/sidekick-har
 import { awaited, awaitedFact, mountedExecution, useMountedHost } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
-import { useReplPage } from "./support/mounted-page.ts";
-import type { ReplPage } from "./support/mounted-page.ts";
-import { draft, entrySettles, shows, sidekick } from "./support/repl-page-adapters.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import type { ReplPage } from "./support/repl-page.ts";
+import {
+  draftText,
+  entrySettles,
+  sendMessage,
+  SIDEKICK_PANE,
+  stopSidekick,
+} from "./support/screen-journeys.ts";
 
 const reportSchema = z
   .object({
@@ -96,8 +102,8 @@ function* exchange(page: ReplPage, replies: readonly string[]): Operation<void> 
     page.repl.fake.script({ reply });
   }
   page.repl.fake.script({ reply: `<Output>${done}</Output>` });
-  yield* sidekick(page).send(`run batch ${serial}`);
-  yield* page.until(done, (frame) => shows(frame, done));
+  yield* sendMessage(page, `run batch ${serial}`);
+  yield* page.until(done, (one) => one.shows(done));
   yield* awaitedFact(`${done} being saved`, function* () {
     return (yield* settledReading(page.repl)).chat.some(
       (record) => record.kind === "response" && record.output.includes(done),
@@ -161,7 +167,7 @@ describe("REPL.Test accepted journeys", () => {
     expect(repl.fake.prompts.join("\n")).toContain("wrong");
     yield* exchange(page, [fix, reuse]);
     expect((yield* reports(repl)).at(-1)?.status).toBe("passed");
-    yield* draft(page).type("<Greeting />");
+    yield* draftText(page, "<Greeting />");
     yield* page.key("Enter");
     // The rail's own mark for the fifth entry. `entry-5` and `[ok]` are rows of
     // the Entries catalog, and the catalog is a drawer on this screen: a reader
@@ -625,7 +631,7 @@ describe("REPL.Test admission and joined lifetime", () => {
       yield* release.operation;
     });
     repl.fake.script({ reply: '<REPL.Test path="components/hold.test.md" />' });
-    yield* sidekick(page).send("cancel on exit");
+    yield* sendMessage(page, "cancel on exit");
     yield* entered.operation;
     repl.terminal.end();
     yield* cleaning.operation;
@@ -676,10 +682,10 @@ describe("REPL.Test retained and fatal outcomes", () => {
         function* () {},
       );
       repl.fake.script({ reply: '<REPL.Test path="components/hold.test.md" />' });
-      yield* sidekick(page).send("start interrupted tests");
+      yield* sendMessage(page, "start interrupted tests");
       yield* entered.operation;
-      yield* sidekick(page).stop();
-      yield* page.until("Stop joins", (frame) => frame.has("sidekick:send"));
+      yield* stopSidekick(page);
+      yield* page.until("Stop joins", (one) => one.found("[send]", SIDEKICK_PANE) === 1);
       expect(yield* reports(repl)).toHaveLength(1);
       repl.terminal.end();
       yield* awaited("first close", () => repl.outcome() !== undefined);
@@ -703,10 +709,8 @@ describe("REPL.Test retained and fatal outcomes", () => {
     expect(yield* readTextFile(location.entries)).toBe(entriesBefore);
     expect(yield* readTextFile(location.sidekick)).toBe(chatBefore);
     reopened.fake.script({ reply: "<Output>inspection only</Output>" });
-    yield* sidekick(reopenedPage).send("continue explicitly after interruption");
-    yield* reopenedPage.until("explicit recovery response", (frame) =>
-      shows(frame, "inspection only"),
-    );
+    yield* sendMessage(reopenedPage, "continue explicitly after interruption");
+    yield* reopenedPage.until("explicit recovery response", (one) => one.shows("inspection only"));
     expect(host.fake.prompts[prompts]).toContain("what it did is not known");
     expect(bodies).toBe(1);
     yield* writeTextFile(join(workspace, "components/pass.test.md"), passing());
@@ -768,7 +772,7 @@ describe("REPL.Test retained and fatal outcomes", () => {
           yield* writeTextFile(join(workspace, "components/a.test.md"), passing());
           yield* writeTextFile(join(workspace, "components/b.test.md"), "<Later />" + passing());
           repl.fake.script({ reply: '<REPL.Test path="components" />' });
-          yield* sidekick(page).send(`fail ${kind}`);
+          yield* sendMessage(page, `fail ${kind}`);
           if (kind === "cleanup") {
             yield* awaitedFact("the cleanup failure being recorded", function* () {
               return (yield* settledReading(repl)).chat.some(

@@ -58,8 +58,8 @@ import { denoReplEntry } from "../src/deno-repositories.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import {} from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
-import { useReplPage } from "./support/mounted-page.ts";
-import { shows, sidekick } from "./support/repl-page-adapters.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import { asked } from "./support/screen-journeys.ts";
 import { createRepositoryRoot, runPhase } from "./fixtures/repl/issue-883/host.ts";
 import {
   replRepositoryInstallation,
@@ -1200,8 +1200,7 @@ describe("975 — native Git keeps project selection and requires an authored ch
         '><Git.Files as="files" /><Json value={files} /></Dir>\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
     });
     repl.fake.script({ reply: "<Output>Read the project checkout.</Output>" });
-    yield* sidekick(page).send("read the known project checkout");
-    yield* page.until("the project read", (one) => shows(one, "Read the project checkout."));
+    yield* asked(page, "read the known project checkout", "Read the project checkout.");
     expect((yield* settledReading(repl)).model.entries[0]?.terminal?.output).toContain(
       "request.md",
     );
@@ -1210,8 +1209,7 @@ describe("975 — native Git keeps project selection and requires an authored ch
         '<Let as="code" select="code">\n```xmd\n<Git.Files as="files" />\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
     });
     repl.fake.script({ reply: "<Output>Read the checkout refusal.</Output>" });
-    yield* sidekick(page).send("read Git without entering the project");
-    yield* page.until("the checkout refusal", (one) => shows(one, "Read the checkout refusal."));
+    yield* asked(page, "read Git without entering the project", "Read the checkout refusal.");
     expect(repl.fake.prompts[3]).toContain("inside none of the checkouts");
     expect(repl.fake.prompts[3]).not.toContain("project file");
   });
