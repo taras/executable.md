@@ -1828,18 +1828,6 @@ function* pointed(tree: ReplTree<ReplAction>, frame: Frame, key: string): Operat
   return dispatched.value.action;
 }
 
-/** Tab until the control this key names holds focus, the way a person reaches it. */
-function* focusTo(tree: ReplTree<ReplAction>, key: string): Operation<void> {
-  for (let press = 0; press < 400; press += 1) {
-    const node = tree.focused();
-    if (node !== undefined && tree.keyOf(node) === key) {
-      return;
-    }
-    yield* tree.dispatch({ kind: "key", key: "Tab" });
-  }
-  throw new Error(`focus never reached ${key}`);
-}
-
 /** Activate the focused control, and answer what it asked for. */
 function* activated(tree: ReplTree<ReplAction>): Operation<ReplAction> {
   const dispatched = yield* tree.dispatch({ kind: "key", key: "Enter" });
@@ -2297,13 +2285,24 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     const model = projected(events);
     const tree = yield* useReplTree<ReplAction>();
     const view = reading(initialState(EXECUTION), model, NOTHING_LIVE, NARROW);
-    const frame = yield* drawn(tree, view, NARROW);
+    let frame = yield* drawn(tree, view, NARROW);
 
     const key = (yield* catalogOf(view))[2]?.key;
     if (key === undefined) {
       throw new Error("this window places more than two catalog rows");
     }
-    yield* focusTo(tree, key);
+    const seeded = viewFor(
+      { ...view.state, restore: { kind: "reveal", key } },
+      view.model,
+      view.live,
+      view.size,
+      view.focused,
+      view.navigation,
+    );
+    if (!seeded.ok) {
+      throw seeded.error;
+    }
+    frame = yield* drawn(tree, seeded.value, NARROW);
     const pressed = yield* activated(tree);
     expect(yield* pointed(tree, frame, key)).toEqual(pressed);
     expect(pressed).toEqual({ kind: "select-scope", scopes: [key.slice("entry:".length)] });
@@ -2498,6 +2497,7 @@ function* outputText(view: ReplView): Operation<string> {
   return (yield* describedBy(view))
     .filter(
       (one) =>
+        one.key === "reading:anchor" ||
         one.key === "reading:caption:output" ||
         one.key.startsWith("reading:caption:output+") ||
         one.key.startsWith("reading:output:"),

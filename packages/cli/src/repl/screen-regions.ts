@@ -14,8 +14,8 @@
  * keys do once these placements exist.
  */
 
-import { describe as describeNode, readDescription } from "./description.ts";
-import type { ReplDescription } from "./description.ts";
+import { describe as describeNode, readDescription, fields } from "./description.ts";
+import type { ReplDescription, ReplViewData } from "./description.ts";
 import type { ReplFocusGroup, ReplFocusRegion, ReplPlacement } from "./focus-navigation.ts";
 
 /** The facts a placement depends on besides the key. */
@@ -108,11 +108,34 @@ function catalogGroups(path: readonly string[]): readonly ReplFocusGroup[] {
   );
 }
 
-function drawerPlacement(key: string): ReplPlacement {
-  if (key === "footer:history") {
+function drawerPlacement(key: string, input: ReplViewData): ReplPlacement {
+  const field = fields(input)?.["field"];
+  if (key === "drawer:configure:agent" || key.startsWith("drawer:permission:choice:")) {
+    return { region: DRAWER_CONTENT_REGION, entry: 0 };
+  }
+  if (key === "drawer:reading:anchor") {
+    return { region: DRAWER_CONTENT_REGION, entry: 1 };
+  }
+  if (key === "drawer:form:submit") {
+    return { region: DRAWER_ACTIONS_REGION, groups: [FIXED_ACTIONS], entry: 0 };
+  }
+  if (key.startsWith("drawer:value:") && typeof field === "string") {
+    return { region: DRAWER_CONTENT_REGION, groups: [vertical(`field:${field}`)], entry: 0 };
+  }
+  if (
+    (key.startsWith("drawer:field:") || key.startsWith("drawer:choice:")) &&
+    typeof field === "string"
+  ) {
+    return {
+      region: DRAWER_CONTENT_REGION,
+      groups: [vertical(`field:${field}`)],
+      ...(key.startsWith("drawer:field:") ? { anchor: true } : {}),
+    };
+  }
+  if (key === "footer:history" || key === "footer:top:history") {
     return { region: DRAWER_EXIT_REGION, entry: 0 };
   }
-  if (key === "footer:exit") {
+  if (key === "footer:exit" || key === "footer:top:exit") {
     return { region: DRAWER_EXIT_REGION };
   }
   if (key === "drawer:scroll:up" || key === "drawer:scroll:down") {
@@ -153,7 +176,10 @@ function screenPlacement(
   facts: ReplRegionFacts,
   turn: string | undefined,
 ): ReplPlacement | undefined {
-  if (facts.narrow && (key === "sessions:heading" || key === "entries:heading")) {
+  if (
+    facts.narrow &&
+    (key === "sessions:heading" || key === "entries:heading" || key === "surface:sidekick")
+  ) {
     return { region: SURFACE_HOME, ...(key === "sessions:heading" ? { entry: 0 } : {}) };
   }
   const transcript = outlet(TRANSCRIPT_REGION, facts);
@@ -181,6 +207,9 @@ function screenPlacement(
   if (key.startsWith("work:crumb:")) {
     return { region: selected, groups: [CRUMBS] };
   }
+  if (key === "reading:anchor") {
+    return { region: selected };
+  }
   if (key === "reading:earlier" || key === "reading:later") {
     return { region: selected };
   }
@@ -194,6 +223,9 @@ function screenPlacement(
     return { region: TABS_REGION, ...(key === "tab:bindings" ? { entry: 0 } : {}) };
   }
   const reading = outlet(READING_REGION, facts);
+  if (key === "sidekick:anchor" || key === "binding:anchor") {
+    return { region: reading, entry: 0 };
+  }
   if (key === "sidekick:configure") {
     return facts.narrow ? { region: reading } : { region: TABS_REGION };
   }
@@ -257,7 +289,9 @@ export function placeScreen<Action>(
       if (!modal && turnRow(read.key)) {
         turn = read.key;
       }
-      navigation = modal ? drawerPlacement(read.key) : screenPlacement(read.key, facts, turn);
+      navigation = modal
+        ? drawerPlacement(read.key, read.input)
+        : screenPlacement(read.key, facts, turn);
     }
     if (navigation === undefined && children.every((child, at) => child === read.children[at])) {
       return description;

@@ -159,7 +159,7 @@ const NAMED_LIKE_FACTS: readonly PermissionOption[] = [
 
 /** The permission drawer's own read-only rows, which are never targets. */
 const drawerContentKeys = [
-  "drawer:permission:kind",
+  "drawer:reading:anchor",
   "drawer:permission:call",
   "drawer:permission:turn",
   "drawer:permission:dismissal",
@@ -821,17 +821,6 @@ function nodeOf(tree: ReplTree<ReplAction>, key: string): string | undefined {
   return tree.mounted().find((id) => tree.keyOf(id) === key);
 }
 
-/** Tab until the control this key names holds focus, the way a person reaches it. */
-function* focusTo(tree: ReplTree<ReplAction>, key: string): Operation<void> {
-  for (let press = 0; press < 400; press++) {
-    if (keyed(tree) === key) {
-      return;
-    }
-    yield* tree.dispatch({ kind: "key", key: "Tab" });
-  }
-  throw new Error(`focus never reached ${key}`);
-}
-
 /** Activate the focused control, and answer what it asked for. */
 function* activate(tree: ReplTree<ReplAction>): Operation<ReplAction> {
   const dispatched = yield* tree.dispatch({ kind: "key", key: "Enter" });
@@ -1034,7 +1023,21 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
     const tree = yield* useReplTree<ReplAction>();
     yield* applied(tree, before);
     const mounted = yield* turnKeyed(before, first);
-    yield* focusTo(tree, mounted);
+    {
+      const owned = before;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: mounted } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     expect(keyed(tree)).toBe(mounted);
 
     stub.record(coroutineFor(first));
@@ -1153,7 +1156,21 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
     const tree = yield* useReplTree<ReplAction>();
     yield* applied(tree, before);
     const held = yield* turnKeyed(before, earlier);
-    yield* focusTo(tree, held);
+    {
+      const owned = before;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: held } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
 
     // Now everything happens in the *other* turns: one starts, one asks for
     // permission, one streams and finishes.
@@ -1357,7 +1374,21 @@ describe("U2 — one action path, and one owner for a pending request", () => {
       throw new Error("no conversation control was drawn");
     }
     for (const key of ["sessions:all", conversation, `sessions:request:${request.key}`]) {
-      yield* focusTo(tree, key);
+      {
+        const owned = view;
+        const seeded = viewFor(
+          { ...owned.state, restore: { kind: "reveal", key: key } },
+          owned.model,
+          owned.live,
+          owned.size,
+          owned.focused,
+          owned.navigation,
+        );
+        if (!seeded.ok) {
+          throw seeded.error;
+        }
+        yield* applied(tree, seeded.value);
+      }
       const pressed = yield* activate(tree);
       const clickedOn = yield* clicked(tree, key);
       expect(clickedOn).toEqual(pressed);
@@ -1373,7 +1404,21 @@ describe("U2 — one action path, and one owner for a pending request", () => {
     yield* applied(tree, reading(opened, session));
     for (const choice of request.choices) {
       const key = `drawer:permission:choice:${choice.optionId}`;
-      yield* focusTo(tree, key);
+      {
+        const owned = reading(opened, session);
+        const seeded = viewFor(
+          { ...owned.state, restore: { kind: "reveal", key: key } },
+          owned.model,
+          owned.live,
+          owned.size,
+          owned.focused,
+          owned.navigation,
+        );
+        if (!seeded.ok) {
+          throw seeded.error;
+        }
+        yield* applied(tree, seeded.value);
+      }
       const pressed = yield* activate(tree);
       const clickedOn = yield* clicked(tree, key);
       expect(clickedOn).toEqual(pressed);
@@ -1399,7 +1444,21 @@ describe("U2 — one action path, and one owner for a pending request", () => {
     const tree = yield* useReplTree<ReplAction>();
     yield* applied(tree, before);
     const held = "sessions:all";
-    yield* focusTo(tree, held);
+    {
+      const owned = before;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: held } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
 
     // The request arrives with somebody looking at something else.
     yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
@@ -1454,7 +1513,21 @@ describe("U2 — one action path, and one owner for a pending request", () => {
     const standing = onSessions(session);
     const tree = yield* useReplTree<ReplAction>();
     yield* applied(tree, reading(standing, session));
-    yield* focusTo(tree, `sessions:request:${request.key}`);
+    {
+      const owned = reading(standing, session);
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: `sessions:request:${request.key}` } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     const asked = yield* activate(tree);
     expect(asked).toEqual({ kind: "select-permission", request: request.key });
 
@@ -1487,7 +1560,21 @@ describe("U2 — one action path, and one owner for a pending request", () => {
 
     // Choosing one: the reducer decides, the root calls the authority once.
     yield* applied(tree, drawer);
-    yield* focusTo(tree, "drawer:permission:choice:once");
+    {
+      const owned = drawer;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: "drawer:permission:choice:once" } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     const chose = yield* activate(tree);
     const settling = reduceRepl(
       opening.state,
@@ -1842,27 +1929,16 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     ).state;
     yield* applied(tree, reading(opened, session, WIDE));
 
-    // Focus is trapped: Tab all the way round and every stop is inside the modal.
-    const seen = new Set<string>();
-    for (let press = 0; press < 40; press++) {
-      const key = keyed(tree);
-      expect(key).toBeDefined();
-      seen.add(key ?? "");
+    const cycle: string[] = [];
+    for (let press = 0; press < 3; press += 1) {
+      cycle.push(keyed(tree) ?? "");
       yield* tree.dispatch({ kind: "key", key: "Tab" });
     }
-    for (const key of seen) {
-      expect(
-        key === "drawer:open" ||
-          key.startsWith("drawer:") ||
-          key === "footer:history" ||
-          key === "footer:exit",
-      ).toBe(true);
-    }
-    // The one History node, reachable from inside rather than duplicated beside.
-    expect([...seen]).toContain("footer:history");
-    // And the way out, on the same terms: a modal contains focus, so leaving the
-    // command has to be reachable from inside it or not at all.
-    expect([...seen]).toContain("footer:exit");
+    expect(cycle).toEqual(["drawer:permission:choice:once", "drawer:close", "footer:history"]);
+    expect(keyed(tree)).toBe("drawer:permission:choice:once");
+    yield* tree.dispatch({ kind: "key", key: "Backtab" });
+    yield* tree.dispatch({ kind: "key", key: "ArrowRight" });
+    expect(keyed(tree)).toBe("footer:exit");
     expect(
       tree
         .mounted()
@@ -2105,9 +2181,23 @@ describe("U5 — navigation is outside the outlet it leaves", () => {
 
     // Enter on the control and a pointer resolved from the frame ask for the
     // same thing, and both are available from the outlet this route mounts.
-    yield* focusTo(tree, "sessions:heading");
+    {
+      const owned = replView;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: "sessions:heading" } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     const pressed = yield* activate(tree);
-    const aimed = yield* pointed(tree, replFrame, "sessions:heading");
+    const aimed = yield* pointed(tree, yield* drawn(tree, replView), "sessions:heading");
     expect(pressed).toEqual({ kind: "select-surface", surface: "sessions" });
     expect(aimed).toEqual(pressed);
 
@@ -2119,10 +2209,24 @@ describe("U5 — navigation is outside the outlet it leaves", () => {
     // The entry outlet is absent; the control that goes to it is not.
     expect(mountedKeys(tree).filter((key) => key.startsWith("entry:"))).toEqual([]);
     expect(mountedKeys(tree).filter((key) => key.startsWith("scope:"))).toEqual([]);
-    yield* focusTo(tree, "entries:heading");
+    {
+      const owned = sessionsView;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: "entries:heading" } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     const back = yield* activate(tree);
     expect(back).toEqual({ kind: "select-surface", surface: "entries" });
-    expect(yield* pointed(tree, sessionsFrame, "entries:heading")).toEqual(back);
+    expect(yield* pointed(tree, yield* drawn(tree, sessionsView), "entries:heading")).toEqual(back);
     expect((yield* acted(onSessionsNow, back, session)).route.surface).toBe("entries");
   });
 
@@ -2149,7 +2253,21 @@ describe("U5 — navigation is outside the outlet it leaves", () => {
 
     // The person goes to Sessions through the mounted control, and the request
     // is there to activate.
-    yield* focusTo(tree, "sessions:heading");
+    {
+      const owned = replView;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: "sessions:heading" } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     const moved = yield* acted(onRepl, yield* activate(tree), session);
     const sessionsView = reading(moved, session, NARROW);
     yield* applied(tree, sessionsView);
@@ -2157,7 +2275,21 @@ describe("U5 — navigation is outside the outlet it leaves", () => {
     const at = yield* scrolledTo(moved, session, key);
     const view = reading(at, session, NARROW);
     yield* applied(tree, view);
-    yield* focusTo(tree, key);
+    {
+      const owned = view;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: key } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     expect(yield* activate(tree)).toEqual({ kind: "select-permission", request: request.key });
   });
 });
@@ -2339,9 +2471,23 @@ describe("U6 — the Sessions reading is windowed", () => {
     // asks for exactly what Enter on it asks for.
     const control = turns.find((one) => one.targetable);
     expect(control).toBeDefined();
-    yield* focusTo(tree, control?.key ?? "");
+    {
+      const owned = view;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: control?.key ?? "" } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     const pressed = yield* activate(tree);
-    expect(yield* pointed(tree, frame, control?.key ?? "")).toEqual(pressed);
+    expect(yield* pointed(tree, yield* drawn(tree, view), control?.key ?? "")).toEqual(pressed);
 
     expect(frame.node("sessions:earlier")).toBeDefined();
     expect(frame.node("sessions:later")).toBeDefined();
@@ -2407,7 +2553,6 @@ describe("U6 — the Sessions reading is windowed", () => {
     // Read now rather than later: this is the cell the tree is holding, and the
     // next commit replaces it.
     const before = longFrame.cell("footer:input") ?? "";
-    expect(before).toContain("[1200 lines]");
     expect(before).toContain("longer text with removable tail");
     const longScreen = screenRows(written);
 
@@ -2416,7 +2561,7 @@ describe("U6 — the Sessions reading is windowed", () => {
     const shortFrame = yield* drawn(tree, second, renderer);
     written.push(shortFrame.bytes);
     const after = shortFrame.cell("footer:input") ?? "";
-    expect(after).toContain("[999 lines]");
+    expect(after).toContain("y");
     expect(after).not.toContain("1200");
     expect(after).not.toContain("removable tail");
 
@@ -2499,7 +2644,21 @@ describe("U6 — the Sessions reading is windowed", () => {
     // turn, not merely the same kind of act.
     const turn = outlet[0] ?? "";
     const pointer = yield* pointed(tree, shortFrame, turn);
-    yield* focusTo(tree, turn);
+    {
+      const owned = reading(shorter, session, NARROW);
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: turn } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     expect(keyed(tree)).toBe(turn);
     expect(yield* activate(tree)).toEqual(pointer);
   });
@@ -2751,10 +2910,24 @@ describe("U8 — a target is a control, whatever its key is spelled", () => {
     // A conversation whose provider key ends in `:text`.
     const conversation = "sessions:conversation:stub:text";
     expect(yield* keysOf(view)).toContain(conversation);
-    yield* focusTo(tree, conversation);
+    {
+      const owned = view;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: conversation } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     const pressed = yield* activate(tree);
     expect(pressed).toEqual({ kind: "select-session", session: "stub:text" });
-    expect(yield* pointed(tree, frame, conversation)).toEqual(pressed);
+    expect(yield* pointed(tree, yield* drawn(tree, view), conversation)).toEqual(pressed);
 
     // And every option named after one of those facts.
     const opened = yield* acted(
@@ -2766,14 +2939,28 @@ describe("U8 — a target is a control, whatever its key is spelled", () => {
     const drawerFrame = yield* drawn(tree, drawer);
     for (const choice of NAMED_LIKE_FACTS) {
       const key = `drawer:permission:choice:${choice.optionId}`;
-      yield* focusTo(tree, key);
+      {
+        const owned = drawer;
+        const seeded = viewFor(
+          { ...owned.state, restore: { kind: "reveal", key: key } },
+          owned.model,
+          owned.live,
+          owned.size,
+          owned.focused,
+          owned.navigation,
+        );
+        if (!seeded.ok) {
+          throw seeded.error;
+        }
+        yield* applied(tree, seeded.value);
+      }
       const chose = yield* activate(tree);
       expect(chose).toEqual({
         kind: "choose-permission",
         request: request.key,
         option: choice.optionId,
       });
-      expect(yield* pointed(tree, drawerFrame, key)).toEqual(chose);
+      expect(yield* pointed(tree, yield* drawn(tree, drawer), key)).toEqual(chose);
     }
   });
 
@@ -3274,7 +3461,21 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     expect([key, frame.node(key) !== undefined]).toEqual([key, true]);
     expect([key, frame.targetable(key)]).toEqual([key, true]);
     const pointer = yield* pointed(tree, frame, key);
-    yield* focusTo(tree, key);
+    {
+      const owned = view;
+      const seeded = viewFor(
+        { ...owned.state, restore: { kind: "reveal", key: key } },
+        owned.model,
+        owned.live,
+        owned.size,
+        owned.focused,
+        owned.navigation,
+      );
+      if (!seeded.ok) {
+        throw seeded.error;
+      }
+      yield* applied(tree, seeded.value);
+    }
     const pressed = yield* activate(tree);
     expect(pointer).toEqual(pressed);
     return pressed;

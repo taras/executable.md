@@ -455,6 +455,12 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       // The field this line edits, read off its own description. Text reaches
       // the field the person is actually on rather than whichever one the
       // application last recorded as selected.
+      if (event.kind === "key" && (event.key === "Alt+ArrowUp" || event.key === "Alt+ArrowDown")) {
+        const beyond = revealed(node.input, event.key);
+        if (beyond !== undefined) {
+          return { kind: "reveal", key: beyond };
+        }
+      }
       const named = optional(node.input, "field");
       const owns: { readonly field?: string } = named === undefined ? {} : { field: named };
       if (event.kind === "text") {
@@ -630,3 +636,40 @@ function editorRows(input: ReplViewData): readonly ReplCaretRow[] {
   }
   return result;
 }
+
+export const READING: ReplComponent<ReplAction> = component<ReplAction>({
+  name: "reading-anchor",
+  attach(node) {
+    node.focusable();
+    node.render(textOf(node.input, "label"));
+    node.onInput((input) => node.render(textOf(input, "label")));
+    node.claim((event) => {
+      if (event.kind !== "key") {
+        return undefined;
+      }
+      if (event.key === "Enter") {
+        return { kind: "noop" };
+      }
+      const reading = fields(node.input)?.["reading"];
+      if (
+        reading !== "selected" &&
+        reading !== "chat" &&
+        reading !== "drawer" &&
+        reading !== "empty"
+      ) {
+        return undefined;
+      }
+      if (
+        event.key === "ArrowUp" ||
+        event.key === "ArrowDown" ||
+        event.key === "PageUp" ||
+        event.key === "PageDown" ||
+        event.key === "Home" ||
+        event.key === "End"
+      ) {
+        return { kind: "reading-key", reading, key: event.key };
+      }
+      return undefined;
+    });
+  },
+});

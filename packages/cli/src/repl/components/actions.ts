@@ -20,6 +20,12 @@ import type { ReplDrawerRef, ReplPane, ReplSurface } from "../route.ts";
 export type ReplCaretKey = "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "Home" | "End";
 
 export type ReplAction =
+  | {
+      readonly kind: "reading-key";
+      readonly reading: "selected" | "chat" | "drawer" | "empty";
+      readonly key: "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" | "Home" | "End";
+    }
+  | { readonly kind: "noop" }
   /**
    * Text for one named field, or for the entry draft when it names none.
    *

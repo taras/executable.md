@@ -820,20 +820,73 @@ function* configured(page: ReplPage): Operation<void> {
   yield* page.until("Configure closing", (one) => !one.shows("[refresh]"));
 }
 
+describe("PV3/PV4: question and Configure editing", () => {
+  it("keeps each value's middle caret across close and a held History drawer", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    yield* page.type("draft-kept");
+    yield* page.until("the Draft value", (one) => one.shows("draft-kept"));
+    yield* pendingQuestion(page);
+    yield* openedQuestion(page);
+    yield* page.type("ab界");
+    yield* page.until("the answer value", (one) => one.shows("message: ab界"));
+    yield* page.key("ArrowLeft");
+    yield* sleep(30);
+    yield* page.type("!");
+    yield* page.until("the answer middle caret", (one) => one.shows("message: ab!界"));
+    yield* page.key("Escape");
+    yield* page.until(
+      "the held question notice",
+      (one) => one.shows("[answer sidekick]") && !one.shows("[submit]"),
+    );
+    yield* openedQuestion(page);
+    yield* page.type("?");
+    yield* page.until("the reopened answer caret", (one) => one.shows("message: ab!?界"));
+    yield* page.key("Escape");
+    yield* page.until("the question closing", (one) => !one.shows("[submit]"));
+    yield* openConfigure(page);
+    yield* page.key("Home");
+    yield* sleep(30);
+    yield* page.key("ArrowRight");
+    yield* sleep(30);
+    yield* page.type("X");
+    yield* page.until("the Agent middle caret", (one) => one.shows("Agent: sXcribe"));
+    yield* page.key("Backspace");
+    yield* page.until("the Agent value restored", (one) => one.shows("Agent: scribe"));
+    yield* tab(page);
+    yield* tab(page);
+    yield* page.key("Enter");
+    yield* page.until(
+      "History over Configure",
+      (one) => one.shows("History") && !one.shows("[refresh]"),
+    );
+    yield* tab(page);
+    yield* page.key("Enter");
+    yield* page.until("the held Configure restored", (one) => one.shows("[refresh]"));
+    // Explicit restoration is the History opener; ordinary Content entry is Agent.
+    yield* page.key("Backtab");
+    yield* sleep(30);
+    yield* page.key("Backtab");
+    yield* sleep(30);
+    yield* page.type("!");
+    yield* page.until("the Agent caret survived History", (one) => one.shows("Agent: s!cribe"));
+    expect(page.screen().found("draft-kept", { after: "DRAFT" })).toBe(1);
+  });
+});
+
 describe("Configure keyboard, retained values and window ownership", () => {
   it("CFG6: Tab and Shift+Tab move inside Configure, and Close or Escape return to its opener", function* () {
     const page = yield* useReplPage();
     page.repl.fake.configuration(ADVERTISED);
     yield* draftText(page, "note");
     yield* configureOpened(page);
-    yield* tab(page);
-    yield* tab(page);
-    yield* tab(page);
+    yield* page.key("Alt+ArrowDown");
+    yield* page.key("Alt+ArrowDown");
     yield* page.key("Enter");
     yield* page.until("the second choice selected by keyboard", (one) => one.shows("(x) Fast"));
-    yield* page.key("Backtab");
+    yield* page.key("ArrowUp");
     yield* page.key("Enter");
-    yield* page.until("Backtab returning to the first choice", (one) => one.shows("(x) Balanced"));
+    yield* page.until("Up returning to the first choice", (one) => one.shows("(x) Balanced"));
     yield* page.type("zz");
     yield* page.key("Escape");
     yield* configured(page);
@@ -900,8 +953,8 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* openedQuestion(page);
     expect(page.screen().shows("(x) approve")).toBe(true);
     expect(page.screen().shows("message: ok")).toBe(true);
-    yield* tab(page);
-    yield* tab(page);
+    yield* page.key("Alt+ArrowDown");
+    yield* page.key("Alt+ArrowDown");
     yield* page.type("ay");
     yield* page.until("the complete value", (one) => one.shows("message: okay"));
     yield* page.press("[submit]");
@@ -920,7 +973,6 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* configureOpened(page);
     yield* page.resize(NARROW);
     expect(page.screen().shows("Balanced")).toBe(true);
-    yield* tab(page);
     yield* page.type("-two");
     yield* page.until("the narrow Agent field taking keys", (one) =>
       one.shows("Agent: scribe-two"),

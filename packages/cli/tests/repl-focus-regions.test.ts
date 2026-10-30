@@ -97,6 +97,7 @@ describe("REPL focus regions: the normal screen", () => {
     yield* page.key("Enter");
     yield* page.until("Bindings selected", (one) => !one.shows("message the sidekick"));
     yield* key(page, "Tab");
+    yield* key(page, "Tab");
     yield* key(page, "ArrowRight");
     expect(page.repl.terminal.ending).toBe(undefined);
     yield* key(page, "ArrowLeft");
@@ -161,6 +162,70 @@ describe("REPL focus regions: Unicode caret editing", () => {
     expect(page.screen().shows("é中!界")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(0);
     expect(page.screen().shows("No entry yet")).toBe(true);
+  });
+});
+
+describe("REPL focus regions: reading and narrow recovery", () => {
+  it("PV5: the selected reading reaches both boundaries without activating or editing", function* () {
+    const page = yield* useReplPage({ size: MEDIUM });
+    yield* page.type(Array.from({ length: 50 }, (_, at) => `Reading row ${at}`).join("\n"));
+    yield* page.until("the complete source", (one) => one.shows("Reading row 49"));
+    yield* page.key("Enter");
+    yield* page.until("the entry settled", (one) => one.shows("Ready for Entry 2"));
+    yield* typed(page, "kept-draft");
+    yield* key(page, "Backtab");
+    yield* key(page, "Alt+ArrowDown");
+    yield* key(page, "Alt+ArrowDown");
+    yield* key(page, "End");
+    yield* page.until("the reading's final row", (one) => one.shows("Reading row 49"));
+    yield* key(page, "Home");
+    yield* page.until("the reading's first row", (one) => one.shows("Reading row 0"));
+    yield* key(page, "PageDown");
+    yield* key(page, "ArrowUp");
+    yield* key(page, "Enter");
+    expect(page.screen().shows("kept-draft")).toBe(true);
+    expect(page.screen().shows("Ready for Entry 2")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(0);
+  });
+
+  it("PV6: running work and both texts survive narrow access and minimum-size recovery", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* page.type(
+      '<Elicit as="response" schema={{type:"object",properties:{response:{type:"string"}},required:["response"],additionalProperties:false}}>Waiting for your answer.</Elicit>',
+    );
+    yield* page.until("the source ready", (one) => one.shows("</Elicit>"));
+    yield* page.key("Enter");
+    yield* page.until("the entry waiting", (one) => one.shows("[answer]"));
+    yield* typed(page, "next-draft");
+    yield* key(page, "Tab");
+    yield* key(page, "Tab");
+    yield* key(page, "Tab");
+    yield* typed(page, "next-message");
+    yield* page.resize(MEDIUM);
+    yield* page.resize(NARROW);
+    yield* key(page, "Backtab");
+    yield* key(page, "ArrowRight");
+    yield* key(page, "ArrowRight");
+    yield* page.key("Enter");
+    yield* page.until("narrow Sidekick", (one) => one.shows("message the sidekick"));
+    yield* page.type("-narrow");
+    yield* page.until("the narrow Message", (one) => one.shows("next-message-narrow"));
+    yield* page.resize({ columns: 71, rows: 19 });
+    yield* page.until("the minimum-size refusal", (one) => one.shows("needs at least 72x20"));
+    yield* page.resize(NARROW);
+    yield* page.until("the routed reading recovered", (one) => one.shows("message the sidekick"));
+    yield* key(page, "Tab");
+    yield* page.type("-recovered");
+    yield* page.until("the recovered Message", (one) => one.shows("next-message-narrow-recovered"));
+    yield* page.resize(WIDE);
+    yield* page.type("-wide");
+    yield* page.until("no widening focus jump", (one) =>
+      one.shows("next-message-narrow-recovered-wide"),
+    );
+    expect(page.screen().shows("next-draft")).toBe(true);
+    expect(page.screen().shows("[answer]")).toBe(true);
+    expect(page.screen().shows("[stop]")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(0);
   });
 });
 
@@ -276,7 +341,7 @@ describe("REPL focus regions: owned composition invariants", () => {
       expect(focused(presenter)).toBe("footer:input");
       const entries = [
         "tab:bindings",
-        "sidekick:earlier",
+        "sidekick:anchor",
         "sidekick:message",
         "footer:history",
         "transcript:selector",
@@ -299,7 +364,7 @@ describe("REPL focus regions: owned composition invariants", () => {
         "transcript:selector",
         "footer:history",
         "sidekick:message",
-        "sidekick:earlier",
+        "sidekick:anchor",
         "tab:bindings",
         "footer:input",
       ]);

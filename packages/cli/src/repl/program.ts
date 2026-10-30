@@ -1359,6 +1359,7 @@ function* drive(
         // the alternative is a frame marking the control the reader has just
         // left, followed by a second whole frame correcting it.
         if (dispatched.ok && dispatched.value.outcome === "focus") {
+          state = { ...state, restore: undefined };
           focused = keyOfFocus(tree);
         }
         return false;
@@ -1620,6 +1621,7 @@ function* drive(
       presenting = presentedDrawer(marked.view);
     }
 
+    let formQuestion = current.overlay.question;
     while (true) {
       const taken = yield* wakes.take();
       if (taken.length === 0) {
@@ -1746,11 +1748,11 @@ function* drive(
       // settlement elsewhere can both end one, and the drawer over it then
       // resolves to nothing — so it is withdrawn here rather than left to fail
       // resolution, and nothing becomes an answer, because none was given.
-      if (
-        state.route.drawers.some((drawer) => drawer.kind === "live-elicit") &&
-        current.overlay.question === undefined
-      ) {
-        state = elicitWithdrawn(state);
+      if (current.overlay.question !== formQuestion) {
+        if (formQuestion !== undefined) {
+          state = elicitWithdrawn(state);
+        }
+        formQuestion = current.overlay.question;
       }
 
       // A route that names a history position needs the model projected *at* that

@@ -387,14 +387,14 @@ export function* openQuestion(page: ReplPage): Operation<void> {
 /**
  * Answer a question form's second field, the one that takes text.
  *
- * Two Tabs from the opened form reach its editable line: the first selects the
- * field, the second its value. An enum field is chosen rather than typed into,
+ * Two local moves from the first editable value pass the second field's label
+ * and reach its value. An enum field is chosen rather than typed into,
  * so the text field is the second of this product's review forms.
  * Receipt: work/terminal-field-routes-2/receipts/.
  */
 export function* intoSecondField(page: ReplPage): Operation<void> {
-  yield* tab(page);
-  yield* tab(page);
+  yield* page.key("Alt+ArrowDown");
+  yield* page.key("Alt+ArrowDown");
 }
 
 /** Walk that route and type this answer, which is what says the field took it. */
@@ -459,7 +459,7 @@ export function selectPane(page: ReplPage, pane: "sidekick" | "bindings"): Opera
  * left edge: the readings behind it are left of that cell.
  */
 export function drawerShows(reading: ScreenReading, text: string): boolean {
-  return reading.shows("[close]") && reading.found(text, { rightOf: "[close]" }) > 0;
+  return drawerLines(reading).some((row) => row.includes(text));
 }
 
 /**
@@ -493,7 +493,7 @@ export function chosen(reading: ScreenReading, name: string): boolean {
 /** Press this choice, inside the drawer that offers it, and wait for its mark. */
 export function* chooseOffered(page: ReplPage, name: string): Operation<void> {
   yield* offeredChoice(page, name);
-  yield* page.press(name, { rightOf: "[close]" });
+  yield* page.press(name, { onRow: choiceRow(page.screen(), name) });
   yield* page.until(`${name} being chosen`, (one) => chosen(one, name));
 }
 
@@ -511,13 +511,11 @@ export function* closeConfigure(page: ReplPage): Operation<void> {
 /**
  * Replace the agent Configure is holding.
  *
- * One Tab from the opened drawer reaches that field — its own row carries a
- * static "> Agent: " prompt, so the cue there says nothing about focus — then
- * Backspaces take the name it holds and the replacement is typed in.
+ * Configure enters its Agent field. Backspaces take the name it holds and the
+ * replacement is typed in.
  * Receipt: work/terminal-field-routes-2/receipts/.
  */
 export function* replaceAgent(page: ReplPage, name: string): Operation<void> {
-  yield* tab(page);
   yield* retypeAgent(page, name);
 }
 
@@ -571,11 +569,19 @@ export function* scrollDrawerTo(page: ReplPage, text: string): Operation<void> {
 }
 
 /** The open drawer's own rows, from the way out it draws rightward. */
+function drawerEdge(reading: ScreenReading): number {
+  return Math.min(
+    ...["[submit]", "[stop]", "[close]"]
+      .filter((label) => reading.found(label, { onRow: "[close]" }) === 1)
+      .map((label) => reading.locate(label, { onRow: "[close]" }).column),
+  );
+}
+
 export function drawerLines(reading: ScreenReading): string[] {
   if (!reading.shows("[close]")) {
     return [];
   }
-  const edge = reading.locate("[close]").column;
+  const edge = drawerEdge(reading);
   return reading.rows.map((row) => row.slice(Math.min(edge, row.length)));
 }
 
@@ -584,7 +590,7 @@ export function besideDrawer(reading: ScreenReading): string[] {
   if (!reading.shows("[close]")) {
     return [...reading.rows];
   }
-  const edge = reading.locate("[close]").column;
+  const edge = drawerEdge(reading);
   return reading.rows.map((row) => row.slice(0, Math.min(edge, row.length)));
 }
 
