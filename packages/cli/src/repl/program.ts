@@ -66,6 +66,7 @@ import {
   presentationFor,
   presentedDrawer,
   previewedMessage,
+  retainedDetailsOf,
   MESSAGE_VALUE_ROWS,
   footerSentence,
   guidanceSentence,
@@ -4081,6 +4082,14 @@ export function* prepareFrame(
   if (!notices.ok) {
     return notices;
   }
+  const detailLines = widths.drawer < 1 ? [] : retainedDetailsOf(view);
+  const details =
+    detailLines.length === 0
+      ? Ok(undefined)
+      : yield* fitPlain(renderer, view.size, detailLines, widths.drawer);
+  if (!details.ok) {
+    return details;
+  }
   const admission = admissionFor({
     view,
     manifest: placed.manifest,
@@ -4090,6 +4099,7 @@ export function* prepareFrame(
     chat: chat.value,
     queue: queued.value,
     notices: notices.value,
+    details: details.value,
     boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -4116,6 +4126,7 @@ export function* prepareFrame(
     draft: draftRows,
     editors,
     notices: notices.value,
+    details: details.value,
     queue: queued.value,
     headers: wrapped.size === 0 ? undefined : wrapped,
   };

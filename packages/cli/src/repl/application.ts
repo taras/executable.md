@@ -6684,7 +6684,13 @@ function drawerFor(
   exit: Described,
   drawable: boolean,
 ): { readonly drawer: Described; readonly rows: readonly Described[] } | undefined {
-  const held = drawerContent(view, context.widths?.drawer ?? 0, context.preview, context.notices);
+  const held = drawerContent(
+    view,
+    context.widths?.drawer ?? 0,
+    context.preview,
+    context.notices,
+    context.details,
+  );
   if (held === undefined) {
     return undefined;
   }
@@ -6909,6 +6915,7 @@ function drawerContent(
   width: number,
   preview?: readonly ReplFittedLine[] | undefined,
   notices?: ReplPreparedNotices,
+  details?: readonly ReplFittedLine[],
 ): DrawerContent | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
   if (open === undefined && presentedCatalog(view)) {
@@ -6945,17 +6952,9 @@ function drawerContent(
 
   if (open.kind === "binding") {
     title = drawerTitle("Binding", open.name, width);
-    for (const [offset, text] of detail(open.binding.value).entries()) {
-      content.push({
-        described: drawerLine(
-          `drawer:value:${offset}`,
-          text,
-          width,
-          styleOf("field-value"),
-          jsonRuns(text),
-        ),
-      });
-    }
+    content.push(
+      ...detailRows("drawer:value", open.binding.value, width, styleOf("field-value"), details),
+    );
   } else if (open.kind === "recorded-elicit") {
     title = drawerTitle("Recorded answer", open.elicitation.location, width);
     // The whole of what was asked and the whole of what was answered. A drawer is
@@ -6964,29 +6963,27 @@ function drawerContent(
     content.push({
       described: drawerLine("drawer:schema", "schema", width, styleOf("field-label")),
     });
-    for (const [offset, text] of detail(open.elicitation.schema).entries()) {
-      content.push({
-        // The schema stays the subordinate reading it already is. What was
-        // asked for is the shape of the question, not the value this drawer
-        // exists to show, and colouring it as a value would put the two
-        // readings on the same footing.
-        described: drawerLine(`drawer:schema:${offset}`, text, width, styleOf("field-hint")),
-      });
-    }
+    content.push(
+      ...detailRows(
+        "drawer:schema",
+        open.elicitation.schema,
+        width,
+        styleOf("field-hint"),
+        details,
+      ),
+    );
     content.push({
       described: drawerLine("drawer:answered", "answer", width, styleOf("field-label")),
     });
-    for (const [offset, text] of detail(open.elicitation.answer).entries()) {
-      content.push({
-        described: drawerLine(
-          `drawer:answer:${offset}`,
-          text,
-          width,
-          styleOf("field-value"),
-          jsonRuns(text),
-        ),
-      });
-    }
+    content.push(
+      ...detailRows(
+        "drawer:answer",
+        open.elicitation.answer,
+        width,
+        styleOf("field-value"),
+        details,
+      ),
+    );
   } else if (open.kind === "live-permission") {
     // The request this screen selected, read again here: a drawer draws what is
     // pending now, and the one it was opened over may have been answered or torn
@@ -8091,9 +8088,48 @@ function requiredNow(
   return condition.requires.some((one) => one.name === field.name);
 }
 
-/** One value, as the lines a drawer shows it on. */
-function detail(value: Json): readonly string[] {
-  return (JSON.stringify(value, undefined, 2) ?? "null").split("\n");
+function detailLines(key: string, value: Json, style: ReplRowStyle) {
+  return (JSON.stringify(value, undefined, 2) ?? "null").split("\n").map((text, offset) => ({
+    key: `${key}:${offset}`,
+    text,
+    runs: style.role === "field-value" ? jsonRuns(text) : tokenRuns([{ text, token: style.role }]),
+  }));
+}
+
+export function retainedDetailsOf(view: ReplView) {
+  const open = view.selection.drawers.at(-1);
+  if (open?.kind === "binding") {
+    return detailLines("drawer:value", open.binding.value, styleOf("field-value"));
+  }
+  if (open?.kind === "recorded-elicit") {
+    return [
+      ...detailLines("drawer:schema", open.elicitation.schema, styleOf("field-hint")),
+      ...detailLines("drawer:answer", open.elicitation.answer, styleOf("field-value")),
+    ];
+  }
+  return [];
+}
+
+function detailRows(
+  key: string,
+  value: Json,
+  width: number,
+  style: ReplRowStyle,
+  prepared: readonly ReplFittedLine[] | undefined,
+): readonly DrawerRow[] {
+  const rows =
+    prepared === undefined
+      ? detailLines(key, value, style).map((one) => ({ ...one, indent: 0 }))
+      : prepared.filter((one) => one.line.startsWith(`${key}:`));
+  return rows.map((one) => ({
+    described: drawerLine(
+      one.key,
+      " ".repeat(one.indent) + one.text,
+      width,
+      style,
+      tokenRuns([{ text: " ".repeat(one.indent), token: style.role }, ...one.runs]),
+    ),
+  }));
 }
 
 /**
@@ -8619,6 +8655,7 @@ export interface ReplPresentationContext {
    * interior has room for. None before the frame has measured one.
    */
   readonly notices?: ReplPreparedNotices | undefined;
+  readonly details?: readonly ReplFittedLine[] | undefined;
   /**
    * How wide the History row's map is, once its controls have been measured.
    *
@@ -9896,18 +9933,32 @@ export function admissionFor(input: {
   readonly queue?: readonly ReplFittedLine[] | undefined;
   /** The drawer's notices, fitted, which its own window admits rows of. */
   readonly notices?: ReplPreparedNotices | undefined;
+  readonly details?: readonly ReplFittedLine[] | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
-  const { view, manifest, widths, reading, preview, chat, queue, notices, boundsOf } = input;
+  const { view, manifest, widths, reading, preview, chat, queue, notices, details, boundsOf } =
+    input;
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
     // The count first, because a window that follows its newest rows needs to
     // know where they end before it can say where it is.
-    const total = totalOf(view, widths, reading, preview, chat, queue, notices, slot.window);
+    const total = totalOf(
+      view,
+      widths,
+      reading,
+      preview,
+      chat,
+      queue,
+      notices,
+      details,
+      slot.window,
+    );
     const rows =
       slot.window === DRAWER_WINDOW
-        ? drawerContent(view, widths.drawer, preview, notices)?.content.map((one) => one.described)
+        ? drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
+            (one) => one.described,
+          )
         : slot.window === SIDEKICK_WINDOW
           ? sidekickReadingRows(view.live.sidekick, view.focused, chat, chatStagingOf(view))
           : slot.window === SESSIONS_WINDOW
@@ -9926,7 +9977,17 @@ export function admissionFor(input: {
     const focused = rows?.findIndex((one) => one.key === view.focused) ?? -1;
     windows.set(slot.window, {
       ...admitRows({
-        offset: offsetFor(view, slot.window, capacity, total, chat, widths, preview, notices),
+        offset: offsetFor(
+          view,
+          slot.window,
+          capacity,
+          total,
+          chat,
+          widths,
+          preview,
+          notices,
+          details,
+        ),
         total,
         capacity,
       }),
@@ -9978,6 +10039,7 @@ function offsetFor(
   widths: ReplMeasuredWidths,
   preview: readonly ReplFittedLine[] | undefined,
   notices: ReplPreparedNotices | undefined,
+  details: readonly ReplFittedLine[] | undefined,
 ): number {
   const held = offsetOf(view, window);
   if (window === SIDEKICK_WINDOW) {
@@ -10022,7 +10084,7 @@ function offsetFor(
             view.live.sidekick,
             staged(view) !== undefined,
           )
-        : (drawerContent(view, widths.drawer, preview, notices)?.content.map(
+        : (drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
             (one) => one.described,
           ) ?? []);
     const at = rows.findIndex((one) => one.key === requested.key);
@@ -10031,7 +10093,7 @@ function offsetFor(
     }
   }
   if (window === DRAWER_WINDOW && capacity > 0) {
-    const content = drawerContent(view, widths.drawer, preview, notices);
+    const content = drawerContent(view, widths.drawer, preview, notices, details);
     if (content?.entering === true) {
       const at = content.content.findIndex((one) => one.field !== undefined);
       if (at >= 0) {
@@ -10105,6 +10167,7 @@ function totalOf(
   chat: readonly ReplFittedLine[] | undefined,
   queue: readonly ReplFittedLine[] | undefined,
   notices: ReplPreparedNotices | undefined,
+  details: readonly ReplFittedLine[] | undefined,
   window: string,
 ): number {
   if (window === QUEUE_WINDOW) {
@@ -10131,7 +10194,7 @@ function totalOf(
   }
   // The same prepared rows the drawing pass consumes, so what this window
   // admits and what it draws cannot disagree about how tall a notice is.
-  return drawerContent(view, widths?.drawer ?? 0, preview, notices)?.content.length ?? 0;
+  return drawerContent(view, widths?.drawer ?? 0, preview, notices, details)?.content.length ?? 0;
 }
 
 /**

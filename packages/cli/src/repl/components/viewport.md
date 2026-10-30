@@ -72,6 +72,29 @@ focus store. The ordered input sequence preserves mixed wheel, key, text and
 click delivery; the scanner's key/text and pointer projections remain for
 existing decoder consumers.
 
+Retained binding values and recorded schema/answers keep their existing pretty
+JSON representation, including escaped newlines inside strings. Preparation
+passes `retainedDetailsOf(view)` to the existing `fitPlain` at the measured
+drawer width before admission:
+
+```ts
+const detailLines = widths.drawer < 1 ? [] : retainedDetailsOf(view);
+const details = detailLines.length === 0
+  ? Ok(undefined)
+  : yield* fitPlain(renderer, view.size, detailLines, widths.drawer);
+```
+
+The fitted collection travels as `details` in both `admissionFor` and
+`ReplPresentationContext`. The shared `detailRows` builder uses the same pieces
+for display, row counts and offset/reveal decisions. Logical JSON lines keep
+their token runs across wrapped rows; the schema keeps its subordinate style.
+Only the presented retained drawer supplies detail lines, so ordinary composer
+typing does not prepare an inactive retained value. This adds one context input
+and two private detail helpers beside the pure line selector; no additional
+fitter, lifecycle owner, cache service or persistent representation is needed.
+When adding retained detail content, include its logical lines in
+`retainedDetailsOf` and use the fitted collection in its drawer builder.
+
 Necessary retained work: each reading still owns its offset and semantic
 reduction; composition must identify admitted descendants and keep fixed
 headings, composers and actions outside. Fitting, modal ownership, explicit turn
@@ -91,6 +114,9 @@ window contains only controls. They send real terminal sequences through
 checks live in `repl-wheel-input.test.ts` and `repl-wheel-frame.test.ts`.
 The latter also follows the actual focused drawer anchor node through a long
 preview into an all-control enum page using the production pipeline.
+`repl-wheel-scroll.test.ts` also retains a real multiline string through Let,
+entry selection and Bindings, then reads both ends with wheel/Home/End and
+reopens at its held position. The displayed value remains JSON.
 
 Run the foundation evidence with:
 

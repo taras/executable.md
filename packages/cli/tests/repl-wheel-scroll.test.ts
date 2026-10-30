@@ -197,6 +197,51 @@ describe("wheel real consumers", () => {
     expect(page.repl.fake.prompts).toHaveLength(0);
   });
 
+  it("retained multiline string fits complete JSON rows before wheel admission", function* () {
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    const value =
+      "VALUE-BEGIN\n" +
+      Array.from({ length: 180 }, (_, at) => `Value line ${at}`).join("\n") +
+      "\nVALUE-END";
+    yield* page.type(`<Let as="retained" value={${JSON.stringify(value)}} />`);
+    yield* page.until("string source ready", (one) => one.shows("VALUE-END"));
+    yield* page.key("Enter");
+    yield* page.until("string retained", (one) => one.shows("Ready for Entry 2"));
+    yield* page.press("Entries");
+    yield* page.until("string catalog", (one) => one.shows("[close]"));
+    yield* page.press("1. [");
+    yield* page.until("string entry selected", (one) => !one.shows("[close]"));
+    yield* page.press("BINDINGS");
+    yield* page.until("string opener", (one) => one.shows("retained ="));
+    yield* page.press("retained =");
+    yield* page.until("string drawer", (one) => one.shows("Binding · retained"));
+    const scope = { after: "Binding · retained" };
+    expect(page.screen().found('"VALUE-BEGIN\\n', scope)).toBe(1);
+    expect(page.screen().found("VALUE-END", scope)).toBe(0);
+    const cell = page.screen().locate("VALUE-BEGIN", scope);
+    yield* wheel(page, "down", cell);
+    expect(page.screen().found("VALUE-BEGIN", scope)).toBe(0);
+    yield* wheel(page, "up", cell);
+    expect(page.screen().found("VALUE-BEGIN", scope)).toBe(1);
+    for (let tick = 0; tick < 30; tick += 1) {
+      yield* wheel(page, "down", cell);
+    }
+    expect(page.screen().found('VALUE-END"', scope)).toBe(1);
+    yield* key(page, "End");
+    expect(page.screen().found('VALUE-END"', scope)).toBe(1);
+    yield* page.key("Escape");
+    yield* page.until("string closed", (one) => !one.shows("[close]"));
+    yield* page.press("retained =");
+    yield* page.until(
+      "string end held on reopen",
+      (one) => one.shows("Binding · retained") && one.found('VALUE-END"', scope) === 1,
+    );
+    yield* key(page, "Home");
+    expect(page.screen().found('"VALUE-BEGIN\\n', scope)).toBe(1);
+    expect(page.repl.fake.prompts).toHaveLength(0);
+    expect(page.screen().shows("[close]")).toBe(true);
+  });
+
   for (const size of [
     { columns: 160, rows: 36 },
     { columns: 120, rows: 30 },
