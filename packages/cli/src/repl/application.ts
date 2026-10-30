@@ -2541,12 +2541,15 @@ export function reduceRepl(
       // The key is taken first, because a `+permission` candidate resolves only
       // while the request it names is pending — so the state that navigates has
       // to be the one already holding it. A refusal keeps neither.
+      const first = live.agent.requests.find((request) => request.key === action.request)
+        ?.choices[0];
       const holding = Object.freeze({
         ...state,
         permission: action.request,
-        // At its first row: this is a different request, and a window left where
-        // the last one was read to would open part way down a question nobody
-        // has read the start of.
+        restore:
+          first === undefined
+            ? undefined
+            : Object.freeze({ kind: "reveal", key: `drawer:permission:choice:${first.optionId}` }),
         viewports: Object.freeze({ ...state.viewports, permission: 0 }),
       });
       // Declared, so the drawer this adds is the one the grammar defines rather
@@ -4561,6 +4564,7 @@ export function focusSettled(
           viewports: {
             ...viewports,
             configure: presentedConfiguring(view) === undefined ? viewports.configure : from,
+            permission: open?.kind === "live-permission" ? from : viewports.permission,
             readings:
               key === undefined ? viewports.readings : { ...viewports.readings, [key]: from },
           },
@@ -6483,13 +6487,16 @@ function outcomeOf(audit: ReplAgentPermission): string {
 /**
  * The message the presented drawer is fitting, or none because none is.
  *
- * Asked rather than assumed, because two owners ask questions and only one
- * form is drawn: fitting the entry's message into the Sidekick's form would
- * show somebody one question's words above another question's fields.
+ * A held question or permission behind another drawer contributes no text
+ * to that drawer's fitted preview.
  */
 export function previewedMessage(view: ReplView): string | undefined {
-  if (view.selection.drawers.length > 0) {
-    return view.live.question?.message;
+  const open = view.selection.drawers.at(-1);
+  if (open?.kind === "live-permission") {
+    return view.live.agent.requests.find((request) => request.key === view.state.permission)?.title;
+  }
+  if (open !== undefined) {
+    return open.kind === "live-elicit" ? view.live.question?.message : undefined;
   }
   return presentedAsking(view)?.question.message;
 }
@@ -7001,7 +7008,14 @@ function drawerContent(
     // bounds how many it offers: a drawer that described every choice would have
     // layout clip the last ones, which are exactly the ones a person scrolled
     // down to find.
-    for (const placed of permissionContent(view.model, view.live, request, width, view.focused)) {
+    for (const placed of permissionContent(
+      view.model,
+      view.live,
+      request,
+      width,
+      view.focused,
+      preview,
+    )) {
       content.push({ described: placed });
     }
     dismissing = request.key;
@@ -7841,10 +7855,23 @@ function permissionContent(
   request: ReplLivePermission,
   width: number,
   focused: string | undefined,
+  preview?: readonly ReplFittedLine[],
 ): readonly Described[] {
   const content: Described[] = [];
-  // What is being asked, in the provider's own words. Never `rawInput` and
-  // never the request object: a screen shows what a person decides about.
+  // Only the provider's explanation, never rawInput or the request object.
+  if (request.title !== undefined) {
+    for (const [offset, part] of messageRows({ message: request.title }, preview).entries()) {
+      content.push(
+        drawerLine(
+          `drawer:permission:message:${offset}`,
+          part.text,
+          width,
+          styleOf("source"),
+          part.runs,
+        ),
+      );
+    }
+  }
   if (request.kind !== undefined) {
     content.push(
       drawerLine("drawer:permission:kind", `  ${request.kind}`, width, styleOf("field-label")),
@@ -9925,7 +9952,7 @@ export function admissionFor(input: {
   readonly widths: ReplMeasuredWidths;
   /** The reading this frame fitted, which is what its window admits rows of. */
   readonly reading?: ReplPreparedReading | undefined;
-  /** The open question's message, fitted, which its own window admits rows of. */
+  /** The presented question or permission text, fitted before admission. */
   readonly preview?: readonly ReplFittedLine[] | undefined;
   /** The chat, fitted, which its own window admits rows of. */
   readonly chat?: readonly ReplFittedLine[] | undefined;
@@ -10089,6 +10116,13 @@ function offsetFor(
           ) ?? []);
     const at = rows.findIndex((one) => one.key === requested.key);
     if (at >= 0) {
+      if (
+        window === DRAWER_WINDOW &&
+        view.selection.drawers.at(-1)?.kind === "live-permission" &&
+        !view.focused?.startsWith("drawer:")
+      ) {
+        return at;
+      }
       return Math.min(Math.max(held, at - capacity + 1), at);
     }
   }

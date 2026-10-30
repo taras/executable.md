@@ -3883,12 +3883,8 @@ export function* prepareFrame(
   if (!reading.ok) {
     return reading;
   }
-  // The open question's message, fitted to the drawer's own width. Prepared
-  // here for the same reason the reading is: a drawer row is one row, so a
-  // long preview line is only reachable if it was cut into rows before the
-  // window counted them.
-  // Whichever question the presented drawer is showing: the entry's where a
-  // route drawer is open, and the Sidekick's own where its pane-local form is.
+  // A drawer row is one displayed row: fitting the presented question or
+  // permission text before admission keeps wrapped content reachable.
   const asked = previewedMessage(view);
   const preview =
     asked === undefined || widths.drawer < 1

@@ -35,6 +35,55 @@ function* typed(page: ReplPage, text: string): Operation<void> {
 }
 
 describe("wheel real consumers", () => {
+  it("permission explanation is readable in both directions without deciding", function* () {
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    const explanation = [
+      "PERMISSION-BEGIN",
+      ...Array.from({ length: 40 }, (_, at) => `Permission explanation ${at}`),
+      "PERMISSION-END",
+    ].join("\n");
+    page.repl.fake.script({
+      reply: "Permission turn complete",
+      requestsTool: explanation,
+      manual: true,
+    });
+    yield* page.type('<Session name="permission"><Prompt text="permission-witness" /></Session>');
+    yield* page.until("entry source ready", (one) => one.shows("</Session>"));
+    yield* page.key("Enter");
+    yield* page.until("pending permission", (one) => one.shows("asks: PERMISSION-BEGIN"));
+    yield* page.press("asks: PERMISSION-BEGIN");
+    yield* page.until("first permission choice", (one) => one.shows("> [Allow]"));
+    expect(page.screen().shows("[Reject]")).toBe(true);
+    for (let step = 0; step < 5; step += 1) {
+      yield* key(page, "PageUp");
+    }
+    expect(page.screen().shows("Permission explanation 0")).toBe(true);
+    expect(page.screen().shows("PERMISSION-END")).toBe(false);
+    const cell = page.screen().locate("Permission explanation 0");
+    yield* wheel(page, "down", cell);
+    expect(page.screen().shows("Permission explanation 0")).toBe(false);
+    expect(page.screen().shows("Permission explanation 2")).toBe(true);
+    yield* wheel(page, "up", cell);
+    expect(page.screen().shows("Permission explanation 0")).toBe(true);
+    for (let tick = 0; tick < 20; tick += 1) {
+      yield* wheel(page, "down", cell);
+    }
+    expect(page.screen().shows("Permission explanation 39")).toBe(true);
+    expect(page.screen().shows("PERMISSION-END")).toBe(true);
+    expect(page.screen().shows("[close]")).toBe(true);
+    for (let tick = 0; tick < 20; tick += 1) {
+      yield* wheel(page, "up", cell);
+    }
+    expect(page.screen().shows("Permission explanation 0")).toBe(true);
+    expect(page.screen().shows("PERMISSION-END")).toBe(false);
+    for (let step = 0; step < 8; step += 1) {
+      yield* key(page, "PageDown");
+    }
+    expect(page.screen().shows("PERMISSION-END")).toBe(true);
+    expect(page.repl.fake.decisions).toHaveLength(0);
+    expect(page.repl.fake.prompts).toHaveLength(1);
+  });
+
   it("selected work scrolls under Draft and keeps its exact keyboard route", function* () {
     const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
     yield* page.type(Array.from({ length: 70 }, (_, at) => `Work row ${at}`).join("\n"));

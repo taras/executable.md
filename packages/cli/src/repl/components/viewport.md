@@ -95,6 +95,25 @@ fitter, lifecycle owner, cache service or persistent representation is needed.
 When adding retained detail content, include its logical lines in
 `retainedDetailsOf` and use the fitted collection in its drawer builder.
 
+Permission explanations use the question preview path rather than a separate
+fitter or context input. `previewedMessage(view)` selects the presented
+request's provider title; preparation fits it at the measured drawer width.
+The permission branch passes that preview to the shared builder:
+
+```ts
+permissionContent(view.model, view.live, request, width, view.focused, preview)
+```
+
+`messageRows({ message: request.title }, preview)` supplies complete displayed
+rows above the request metadata and choices. Display and admission count the
+same collection. A hidden request contributes no preview to another drawer.
+Opening uses the existing reveal request for the first offered choice, then
+`focusSettled` retains its admitted permission offset. Keyboard paging reaches
+the explanation above it; wheel keeps its separate focused-control limit.
+Provider text, choice identity and decision/dismissal behavior stay with the
+existing request owner. Change explanation content at `previewedMessage` and
+`permissionContent` together; do not replace provider text with raw tool input.
+
 Necessary retained work: each reading still owns its offset and semantic
 reduction; composition must identify admitted descendants and keep fixed
 headings, composers and actions outside. Fitting, modal ownership, explicit turn
@@ -117,6 +136,10 @@ preview into an all-control enum page using the production pipeline.
 `repl-wheel-scroll.test.ts` also retains a real multiline string through Let,
 entry selection and Bindings, then reads both ends with wheel/Home/End and
 reopens at its held position. The displayed value remains JSON.
+The permission regression opens a real pending request, pages from its first
+choice into the explanation, reads both ends through terminal wheel input and
+checks that no decision occurred. Many-option permission navigation remains a
+separate consumer journey.
 
 Run the foundation evidence with:
 
