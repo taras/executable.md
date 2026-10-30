@@ -3,12 +3,13 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ReplHost } from "../src/repl/host.ts";
-import { sleep, scoped, spawn, suspend } from "effection";
+import { sleep, scoped, spawn, suspend, ensure, withResolvers } from "effection";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import type { Result, Operation } from "effection";
-import { Elicitation, useTempFileCompiler } from "@executablemd/core";
+import { Elicitation, Execution, useTempFileCompiler } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
+import { RootMetadata } from "@executablemd/core/api";
 import { readTextFile, readdir, writeTextFile, ensureDir } from "@effectionx/fs";
 import { serializeDurableEvent, parseDurableEvent } from "@executablemd/durable-streams";
 import { projectRepl } from "../src/repl/model.ts";
@@ -38,6 +39,7 @@ import {
   tab,
   closeDrawer,
   DRAFT_VALUE,
+  intoDraft,
   draftText,
   entrySettles,
   openHistory,
@@ -865,5 +867,380 @@ describe("REPL original retained readings and navigation", () => {
     expect((yield* commandReturned(page)).ok).toBe(false);
     expect(yield* readTextFile(path)).toBe(before);
     released(page.repl.terminal);
+  });
+});
+
+function longEntry(lines: number): string {
+  return `${Array.from({ length: lines }, (_, at) => (at % 4 === 3 ? "" : `<Json value={{ ordinal: ${at}, note: "line ${at} of a long entry" }} as="n${at}" />`)).join("\n")}\n`;
+}
+
+function* interactionCost(page: ReplPage, send: () => Operation<void>): Operation<number> {
+  const before = page.repl.terminal.sized;
+  const index = page.screen().index;
+  yield* send();
+  yield* page.until("the interaction's completed presentation", (one) => one.index > index);
+  return page.repl.terminal.sized - before;
+}
+
+describe("REPL original interaction costs and visible exit routes", () => {
+  for (const lines of [12, 222]) {
+    it(`RS3: typing and traversing beside a ${lines}-line entry read the size a fixed number of times`, function* () {
+      const page = yield* referencePage();
+      yield* pasteDraft(page, longEntry(lines));
+      yield* page.key("Enter");
+      yield* entrySettles(page, 1, "ok");
+      yield* selectCatalog(page, "entry-1");
+      yield* intoDraft(page);
+      yield* interactionCost(page, () => page.type("a"));
+      const typed = [
+        yield* interactionCost(page, () => page.type("b")),
+        yield* interactionCost(page, () => page.type("c")),
+      ];
+      const erased = yield* interactionCost(page, () => page.key("Backspace"));
+      const forward = yield* interactionCost(page, () => page.key("Tab"));
+      const backward = yield* interactionCost(page, () => page.key("Backtab"));
+      expect([lines, typed]).toEqual([lines, [4, 4]]);
+      expect([lines, erased]).toEqual([lines, 4]);
+      expect([lines, forward]).toEqual([lines, 4]);
+      expect([lines, backward]).toEqual([lines, 4]);
+      yield* leaveWithLocation(page);
+    });
+  }
+
+  it("RS1: Tab moves the cue and the focus, and presents once", function* () {
+    const page = yield* referencePage();
+    yield* pasteDraft(page, FIRST_COLD);
+    yield* page.key("Enter");
+    yield* entrySettles(page, 1, "ok");
+    yield* intoDraft(page);
+    expect(page.screen().shows("Type here")).toBe(true);
+    const before = page.repl.terminal.presented.length;
+    const index = page.screen().index;
+    yield* page.key("Tab");
+    yield* page.until(
+      "the guidance leaving Draft input",
+      (one) => one.index > index && !one.shows("Type here"),
+    );
+    expect(page.repl.terminal.presented.length - before).toBe(1);
+    const back = page.repl.terminal.presented.length;
+    yield* page.key("Backtab");
+    yield* page.until("the guidance returning to Draft input", (one) => one.shows("Type here"));
+    expect(page.repl.terminal.presented.length - back).toBe(1);
+    yield* page.type("returned draft");
+    yield* page.until(
+      "the returned field receiving input",
+      (one) => one.found("returned draft", DRAFT_VALUE) === 1,
+    );
+    expect(route(yield* leaveWithLocation(page)).draft).toBe("returned draft");
+  });
+
+  it("UI2: Enter on [exit] ends the command without touching the history", function* () {
+    const page = yield* referencePage();
+    const path = yield* executionJournal(page);
+    const before = yield* readTextFile(path);
+    yield* page.key("Backtab");
+    yield* page.key("Enter");
+    const outcome = yield* commandReturned(page);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.refusal).toBeUndefined();
+      expect(outcome.value.location).toContain("xmd://repl/");
+    }
+    expect(yield* readTextFile(path)).toBe(before);
+    released(page.repl.terminal);
+  });
+
+  it("UI2: a pointer on [exit] is the same act as Enter on it", function* () {
+    const page = yield* referencePage();
+    yield* page.press("[exit]");
+    const outcome = yield* commandReturned(page);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.refusal).toBeUndefined();
+      expect(outcome.value.location).toContain("xmd://repl/");
+    }
+    released(page.repl.terminal);
+  });
+});
+
+function preparationGate(startup = false) {
+  const entered = withResolvers<void>();
+  const gate = withResolvers<void>();
+  let used = false;
+  let holding = false;
+  function* wait(): Operation<void> {
+    used = true;
+    holding = true;
+    entered.resolve();
+    try {
+      yield* gate.operation;
+    } finally {
+      holding = false;
+    }
+  }
+  return {
+    reached: entered.operation,
+    release: () => gate.resolve(),
+    get holding() { return holding; },
+    *install(): Operation<void> {
+      yield* ensure(() => gate.resolve());
+      if (startup) {
+        yield* Execution.around({
+          *document([request], next) {
+            if (!used) { yield* wait(); }
+            return yield* next(request);
+          },
+        });
+      } else {
+        yield* API.Fs.around({
+          *readTextFile([path], next) {
+            if (!used && path.endsWith("Checklist.md")) { yield* wait(); }
+            return yield* next(path);
+          },
+        });
+      }
+    },
+  };
+}
+
+function* authoredWork(): Operation<{ invoked: number }> {
+  const counter = { invoked: 0 };
+  let wrapped = false;
+  yield* API.Env.around({
+    *compile([source, options], next) {
+      const block = yield* next(source, options);
+      if (wrapped) { return block; }
+      wrapped = true;
+      return (env: Record<string, unknown>) => {
+        counter.invoked += 1;
+        return block(env);
+      };
+    },
+  });
+  return counter;
+}
+
+function* pausedAt(page: ReplPage, phase: string): Operation<void> {
+  yield* page.until(`the submission ${phase}`, (one) => one.shows("[pause]") && one.shows(phase));
+}
+
+function* requestPause(page: ReplPage): Operation<void> {
+  yield* page.press("[pause]");
+  yield* pausedAt(page, "pausing");
+  expect(page.screen().shows("[continue]")).toBe(false);
+}
+
+function* resumeOnce(page: ReplPage, authored: { invoked: number }, performed: { asked: number }): Operation<void> {
+  yield* pausedAt(page, "paused");
+  expect(page.screen().shows("[continue]")).toBe(true);
+  expect(authored.invoked).toBe(0);
+  expect(performed.asked).toBe(0);
+  yield* page.press("[continue]");
+  yield* page.until("the first authored question", (one) => one.shows("[answer]"));
+  expect(authored.invoked).toBe(1);
+  expect(performed.asked).toBe(1);
+  expect((yield* retainedModel(page)).entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+}
+
+describe("REPL original pause-before-admission boundaries", () => {
+  for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
+    it(`PPA2/PPA5: Pause is offered, requested and applied to the exact entry at ${size.columns}x${size.rows}`, function* () {
+      const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
+      const performed = yield* performedWork();
+      const authored = yield* authoredWork();
+      const gate = preparationGate();
+      yield* gate.install();
+      const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size });
+      const source = yield* referenceSource();
+      yield* pasteDraft(page, source);
+      yield* page.key("Enter");
+      yield* gate.reached;
+      yield* pausedAt(page, "preparing");
+      expect(page.screen().rows).toHaveLength(size.rows);
+      expect(page.screen().shows("[continue]")).toBe(false);
+      expect(yield* journalRecords(page)).toEqual([]);
+      yield* page.key("Backtab");
+      yield* page.key("Enter");
+      yield* pausedAt(page, "pausing");
+      expect(gate.holding).toBe(true);
+      expect(yield* journalRecords(page)).toEqual([]);
+      gate.release();
+      yield* resumeOnce(page, authored, performed);
+      expect((yield* retainedModel(page)).entries[0]?.source).toBe(source);
+      yield* leaveWithLocation(page);
+      released(page.repl.terminal);
+    });
+  }
+
+  it("PPA1: one burst submits and requests the pause, with no frame in between", function* () {
+    const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
+    const gate = preparationGate();
+    yield* gate.install();
+    const page = yield* useReplPage({ host, size: WIDE });
+    yield* pasteDraft(page, yield* referenceSource());
+    yield* page.type("\r\x1b[Z\r");
+    yield* gate.reached;
+    yield* pausedAt(page, "pausing");
+    expect(page.repl.outcome()).toBeUndefined();
+    expect(page.screen().shows("[continue]")).toBe(false);
+    gate.release();
+    yield* pausedAt(page, "paused");
+    expect(page.screen().shows("[continue]")).toBe(true);
+    expect((yield* retainedModel(page)).entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+    yield* leaveWithLocation(page);
+  });
+
+  it("PPA3(a): a refused preflight discards its pause request, and the next entry plays", function* () {
+    const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
+    const performed = yield* performedWork();
+    const gate = preparationGate();
+    yield* gate.install();
+    const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size: WIDE });
+    const source = '<Checklist title="held" steps={1} />\n\n<Nowhere />';
+    yield* pasteDraft(page, source);
+    yield* page.key("Enter");
+    yield* gate.reached;
+    yield* pausedAt(page, "preparing");
+    yield* requestPause(page);
+    gate.release();
+    yield* page.until("the preflight refusal clearing preparation", (one) => one.shows("Nowhere") && !one.shows("[pause]"));
+    expect(yield* journalRecords(page)).toEqual([]);
+    expect(page.screen().shows("[continue]")).toBe(false);
+    yield* intoDraft(page);
+    for (const _ of source) { yield* page.key("Backspace"); }
+    const valid = yield* referenceSource();
+    yield* pasteDraft(page, valid);
+    yield* page.key("Enter");
+    yield* page.until("the successor playing", (one) => one.shows("[answer]"));
+    expect(performed.asked).toBe(1);
+    expect(page.screen().shows("[continue]")).toBe(false);
+    expect((yield* retainedModel(page)).entries.map((entry) => entry.source)).toEqual([valid]);
+    yield* leaveWithLocation(page);
+  });
+
+  it("PPA3(b): an entry armed with no hold is disarmed by its own failure", function* () {
+    const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
+    const performed = yield* performedWork();
+    const authored = yield* authoredWork();
+    const gate = preparationGate();
+    yield* gate.install();
+    let atSeam: number | undefined;
+    let refused = false;
+    yield* Execution.around({
+      *document([request], next) {
+        yield* RootMetadata.around({
+          metadata(args, delegate) {
+            if (refused) { return delegate(...args); }
+            refused = true;
+            atSeam = authored.invoked;
+            throw new Error("runtime metadata refusal after root import");
+          },
+        });
+        return yield* next(request);
+      },
+    });
+    const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size: WIDE });
+    const source = yield* referenceSource();
+    yield* pasteDraft(page, source);
+    yield* page.key("Enter");
+    yield* gate.reached;
+    yield* pausedAt(page, "preparing");
+    yield* requestPause(page);
+    gate.release();
+    yield* entrySettles(page, 1, "err");
+    yield* page.until("no failed mode remaining", (one) => !one.shows("[pause]"));
+    expect(atSeam).toBe(0);
+    expect(performed.asked).toBe(0);
+    expect(page.screen().shows("[continue]")).toBe(false);
+    yield* pasteDraft(page, source);
+    yield* page.key("Enter");
+    yield* page.until("the next entry playing", (one) => one.shows("[answer]"));
+    expect(performed.asked).toBe(1);
+    expect(authored.invoked).toBe(1);
+    expect((yield* retainedModel(page)).entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+    yield* leaveWithLocation(page);
+  });
+
+  it("PPA3(c): Pause during startup waits for the entry it names", function* () {
+    const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
+    const performed = yield* performedWork();
+    const authored = yield* authoredWork();
+    const gate = preparationGate(true);
+    yield* gate.install();
+    const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size: WIDE });
+    yield* pasteDraft(page, yield* referenceSource());
+    yield* page.key("Enter");
+    yield* gate.reached;
+    expect(yield* journalRecords(page)).toEqual([]);
+    yield* pausedAt(page, "preparing");
+    yield* requestPause(page);
+    expect(yield* journalRecords(page)).toEqual([]);
+    expect(authored.invoked).toBe(0);
+    gate.release();
+    yield* resumeOnce(page, authored, performed);
+    yield* leaveWithLocation(page);
+  });
+
+  it("PPA3(d): walking away from the head while a preflight is held admits nothing", function* () {
+    const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
+    const gate = preparationGate();
+    yield* gate.install();
+    const page = yield* useReplPage({ host, size: WIDE });
+    const first = "<Output>one</Output>";
+    const second = '<Checklist title="second" steps={1} />';
+    yield* pasteDraft(page, first);
+    yield* page.key("Enter");
+    yield* entrySettles(page, 1, "ok");
+    yield* pasteDraft(page, second);
+    yield* page.key("Enter");
+    yield* gate.reached;
+    yield* openHistory(page);
+    yield* page.press("Entry 1 admitted");
+    yield* page.until("the earlier position", (one) => one.shows("[live]"));
+    gate.release();
+    yield* page.until("the changed-head refusal", (one) => one.shows("moved away from the live head"));
+    expect((yield* retainedModel(page)).entries.map((entry) => entry.source)).toEqual([first]);
+    yield* closeDrawer(page);
+    yield* page.press("[live]");
+    yield* page.until("the live draft", (one) => !one.shows("[live]"));
+    expect(route(yield* leaveWithLocation(page)).draft).toBe(second);
+  });
+
+  it("PPA4: the keyboard still works while a preflight is held, and closing discards the request", function* () {
+    const dataRoot = yield* useTemporary("xmd-preflight-cold-");
+    const source = '<Checklist title="held" steps={1} />';
+    const location = yield* scoped(function* () {
+      const host = yield* useMountedHost({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+      const performed = yield* performedWork();
+      const gate = preparationGate();
+      yield* gate.install();
+      const page = yield* useReplPage({ host, includes: [REFERENCE_DIRECTORY], size: WIDE });
+      yield* pasteDraft(page, source);
+      yield* page.key("Enter");
+      yield* gate.reached;
+      yield* pausedAt(page, "preparing");
+      yield* requestPause(page);
+      yield* draftText(page, " and more");
+      expect(gate.holding).toBe(true);
+      const location = yield* leaveWithLocation(page);
+      expect(gate.holding).toBe(false);
+      expect(yield* journalRecords(page)).toEqual([]);
+      expect(performed.asked).toBe(0);
+      expect(route(location).draft).toBe(source + " and more");
+      released(page.repl.terminal);
+      return location;
+    });
+    const host = yield* useMountedHost({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+    yield* noNewExecution();
+    const performed = yield* performedWork();
+    const cold = yield* useReplPage({ host, location, includes: [REFERENCE_DIRECTORY], size: WIDE });
+    for (const label of ["[pause]", "[continue]", "preparing", "pausing"]) {
+      expect(cold.screen().shows(label)).toBe(false);
+    }
+    expect(cold.screen().shows(source + " and more")).toBe(true);
+    expect(performed.asked).toBe(0);
+    expect(performed.compiles).toBe(0);
+    expect(yield* journalRecords(cold)).toEqual([]);
+    expect(yield* leaveWithLocation(cold)).toBe(location);
   });
 });
