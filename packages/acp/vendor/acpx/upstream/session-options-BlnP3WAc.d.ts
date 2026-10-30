@@ -1,15 +1,14 @@
-import { AgentCapabilities, AnyMessage, ContentBlock, McpServer, McpServer as McpServer$1, RequestPermissionRequest, SessionConfigOption, SessionNotification, SetSessionConfigOptionResponse, ToolKind } from "@agentclientprotocol/sdk";
-
-//#region src/prompt-content.d.ts
+import { AgentCapabilities, AnyMessage, ContentBlock, CreateElicitationRequest, ElicitationContentValue, JsonRpcId, McpServer, McpServer as McpServer$1, RequestPermissionRequest, SessionConfigOption, SessionNotification, SetSessionConfigOptionResponse, ToolKind } from "@agentclientprotocol/sdk";
 type PromptInput = ContentBlock[];
-//#endregion
-//#region src/types.d.ts
 type AcpPermissionRequest = {
   sessionId: string;
   raw: RequestPermissionRequest;
   inferredKind: ToolKind | undefined;
 };
 type AcpPermissionDecision = {
+  outcome: "selected";
+  optionId: string;
+} | {
   outcome: "allow_once";
 } | {
   outcome: "allow_always";
@@ -20,6 +19,30 @@ type AcpPermissionDecision = {
 } | {
   outcome: "cancel";
 };
+type AcpPermissionHandler = (request: AcpPermissionRequest, context: {
+  signal: AbortSignal;
+}) => Promise<AcpPermissionDecision | undefined>;
+declare const ACP_ELICITATION_MODES: readonly ["form", "url"];
+type AcpElicitationMode = (typeof ACP_ELICITATION_MODES)[number];
+type AcpElicitationRequest = CreateElicitationRequest;
+type AcpElicitationContext = {
+  /** Exact JSON-RPC id of the outer `elicitation/create` request. */
+  requestId: JsonRpcId;
+  /** Aborts with the request itself or its owning prompt turn/session. */
+  signal: AbortSignal;
+};
+type AcpElicitationResponseMeta = {
+  _meta?: Record<string, unknown> | null;
+};
+type AcpElicitationResponse = ({
+  action: "accept";
+  content?: Record<string, ElicitationContentValue> | null;
+} & AcpElicitationResponseMeta) | ({
+  action: "decline";
+} & AcpElicitationResponseMeta) | ({
+  action: "cancel";
+} & AcpElicitationResponseMeta);
+type AcpElicitationHandler = (request: AcpElicitationRequest, context: AcpElicitationContext) => Promise<AcpElicitationResponse>;
 declare const PERMISSION_MODES: readonly ["approve-all", "approve-reads", "deny-all"];
 type PermissionMode = (typeof PERMISSION_MODES)[number];
 declare const AUTH_POLICIES: readonly ["skip", "fail"];
@@ -55,7 +78,7 @@ type PermissionStats = {
   denied: number;
   cancelled: number;
 };
-type ClientOperationMethod = "fs/read_text_file" | "fs/write_text_file" | "terminal/create" | "terminal/output" | "terminal/wait_for_exit" | "terminal/kill" | "terminal/release";
+type ClientOperationMethod = "session/request_permission" | "fs/read_text_file" | "fs/write_text_file" | "terminal/create" | "terminal/output" | "terminal/wait_for_exit" | "terminal/kill" | "terminal/release";
 type ClientOperationStatus = "running" | "completed" | "failed";
 type ClientOperation = {
   method: ClientOperationMethod;
@@ -72,8 +95,60 @@ type SessionEventLog = {
   last_write_at?: string;
   last_write_error?: string | null;
 };
+type AcpProcessLaunchScope = Readonly<{
+  kind: "client";
+}> | Readonly<{
+  kind: "runtime-session";
+  sessionKey: string;
+}> | Readonly<{
+  kind: "runtime-probe";
+  agent: string;
+}>;
+type AcpProcessLaunch = Readonly<{
+  launchId: string;
+  scope: AcpProcessLaunchScope;
+  command: string;
+  args: readonly string[];
+  cwd: string;
+}>;
+type AcpProcessStarted = AcpProcessLaunch & Readonly<{
+  pid: number;
+  startedAt: string;
+}>;
+type AcpProcessSpawnFailure = AcpProcessLaunch & Readonly<{
+  error: unknown;
+  failedAt: string;
+}>;
+type AcpProcessExit = AcpProcessStarted & Readonly<{
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  exitedAt: string;
+}>;
+/**
+ * Optional process lifecycle seam for embedding hosts that persist their own
+ * launch ownership. Pre-spawn and spawned hooks are admission boundaries:
+ * rejecting either aborts startup, and a process rejected after spawn is
+ * terminated before the error is returned. Failure and exit hooks are
+ * best-effort observations and cannot replace the launch or exit outcome.
+ */
+type AcpProcessLifecycle = {
+  onBeforeSpawn?: (launch: AcpProcessLaunch) => Promise<void> | void;
+  onSpawned?: (process: AcpProcessStarted) => Promise<void> | void;
+  onSpawnFailed?: (failure: AcpProcessSpawnFailure) => Promise<void> | void;
+  onExit?: (exit: AcpProcessExit) => Promise<void> | void;
+};
 type AcpClientOptions = {
   agentCommand: string;
+  agentArgv?: string[];
+  /** Trusted child-only environment overlay; never persisted as session options. */
+  agentProcessEnv?: Record<string, string>;
+  /**
+   * Opt-in allowlist: agent children, probes and terminals inherit only process essentials,
+   * these parent names and `ACPX_AUTH_*` grants.
+   */
+  agentProcessEnvAllow?: readonly string[];
+  /** Parent environment names that agent children, probes and terminals do not inherit. */
+  agentProcessEnvBlock?: readonly string[];
   cwd: string;
   mcpServers?: McpServer[];
   permissionMode: PermissionMode;
@@ -81,7 +156,11 @@ type AcpClientOptions = {
   permissionPolicy?: PermissionPolicy;
   authCredentials?: Record<string, string>;
   authPolicy?: AuthPolicy;
+  fs?: boolean;
   terminal?: boolean;
+  elicitationModes?: readonly AcpElicitationMode[];
+  processLifecycle?: AcpProcessLifecycle;
+  processLaunchScope?: AcpProcessLaunchScope;
   suppressSdkConsoleErrors?: boolean;
   verbose?: boolean;
   sessionOptions?: {
@@ -98,19 +177,12 @@ type AcpClientOptions = {
   onSessionUpdate?: (notification: SessionNotification) => void;
   onClientOperation?: (operation: ClientOperation) => void;
   onPermissionEscalation?: (event: PermissionEscalationEvent) => void;
-  onPermissionRequest?: (req: AcpPermissionRequest, ctx: {
-    signal: AbortSignal;
-  }) => Promise<AcpPermissionDecision | undefined>;
-  /**
-   * Environment merged last into this client's agent child. Transient: never
-   * persisted to a session record and never applied to this process. Local
-   * patch; see vendor/acpx/PROVENANCE.md.
-   */
-  agentProcessEnv?: Record<string, string>;
+  onPermissionRequest?: AcpPermissionHandler;
 };
 declare const SESSION_RECORD_SCHEMA: "acpx.session.v1";
 type SessionMessageImage = {
   source: string;
+  mime_type?: string;
   size?: {
     width: number;
     height: number;
@@ -196,12 +268,14 @@ type SessionAvailableCommand = {
   has_input?: boolean;
 };
 type SessionAcpxState = {
+  session_origin?: "new" | "resume";
   reset_on_next_ensure?: boolean;
   current_mode_id?: string;
   desired_mode_id?: string;
   desired_config_options?: Record<string, string>;
   current_model_id?: string;
   available_models?: string[];
+  available_model_names?: Record<string, string>;
   model_control?: "config_option" | "legacy_set_model";
   available_commands?: SessionAvailableCommand[];
   config_options?: SessionConfigOption[];
@@ -227,6 +301,7 @@ type SessionRecord = {
   acpSessionId: string;
   agentSessionId?: string;
   agentCommand: string;
+  agentArgv?: string[];
   cwd: string;
   name?: string;
   createdAt: string;
@@ -252,21 +327,8 @@ type SessionRecord = {
   cumulative_cost?: SessionUsageCost;
   request_token_usage: Record<string, SessionTokenUsage>;
   acpx?: SessionAcpxState;
-  /**
-   * Deferred first-turn materialization, while it is still awaited.
-   *
-   * Present makes this record occupancy rather than an assertion: it names
-   * where a session will live, `agentSessionId` is absent, and the next
-   * ensure creates fresh backend state rather than resuming it.
-   */
-  sessionMaterialization?: {
-    state: "pending";
-    contract: string;
-  };
   importedFrom?: SessionImportedFrom;
 };
-//#endregion
-//#region src/runtime/engine/session-options.d.ts
 type SystemPromptOption = string | {
   append: string;
 };
@@ -286,5 +348,5 @@ type SessionAgentOptions = {
    */
   env?: Record<string, string>;
 };
-//#endregion
-export { AcpPermissionRequest as a, NonInteractivePermissionPolicy as c, PermissionStats as d, SessionRecord as f, AcpPermissionDecision as i, PermissionMode as l, SystemPromptOption as n, AuthPolicy as o, PromptInput as p, AcpClientOptions as r, McpServer$1 as s, SessionAgentOptions as t, PermissionPolicy as u };
+export { PermissionPolicy as C, PromptInput as E, PermissionMode as S, SessionRecord as T, AcpProcessSpawnFailure as _, AcpElicitationHandler as a, McpServer$1 as b, AcpElicitationResponse as c, AcpPermissionHandler as d, AcpPermissionRequest as f, AcpProcessLifecycle as g, AcpProcessLaunchScope as h, AcpElicitationContext as i, AcpJsonRpcMessage as l, AcpProcessLaunch as m, SystemPromptOption as n, AcpElicitationMode as o, AcpProcessExit as p, AcpClientOptions as r, AcpElicitationRequest as s, SessionAgentOptions as t, AcpPermissionDecision as u, AcpProcessStarted as v, PermissionStats as w, NonInteractivePermissionPolicy as x, AuthPolicy as y };
+//# sourceMappingURL=session-options-BlnP3WAc.d.ts.map

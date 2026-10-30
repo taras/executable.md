@@ -41,7 +41,7 @@ const SEAM_PROXIMITY_LINES = 8;
 /**
  * Undo the two packaging adaptations, so what remains is behavior.
  *
- * The snapshot is five files rather than a published package: it carries no
+ * The snapshot is nine files rather than a published package: it carries no
  * `.js` for declaration-only modules, no sourcemaps for anything, and ends
  * every file with a newline. All three adaptations are declared in
  * PROVENANCE.md and none can change what runs.
@@ -257,7 +257,7 @@ describe("Tier AV — vendored ACPX snapshot", () => {
     // this file, and a check that depends on the spelling stops checking.
     const pkg = JSON.parse(yield* until(readFile("packages/acp/package.json", "utf8")));
     const dependencies = (pkg as Record<string, Record<string, string>>).dependencies ?? {};
-    expect(dependencies.acpx).toBe("0.12.0");
+    expect(dependencies.acpx).toBe("0.21.1");
     // Sibling packages resolve through the workspace, as they always have.
     // What must not appear is a local protocol standing in for ACPX, or any
     // dependency reaching into the snapshot: either makes the runtime

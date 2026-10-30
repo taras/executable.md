@@ -149,7 +149,7 @@ describe("Tier AM — embedded adapter materialization", () => {
     // Everything else is ACPX's, byte for byte. Carrying a Codex adapter is not
     // a reason for a run to stop being able to use Gemini, and a registry that
     // refused one would be making a far larger claim than this work needs.
-    expect(registry.resolve("gemini")).toBe(baseline.resolve("gemini"));
+    expect(registry.resolve("gemini")).toEqual(baseline.resolve("gemini"));
     // Names, not a new namespace: every built-in is still listed, and the
     // embedded two are among them rather than instead of them.
     const listed = registry.list();
@@ -191,7 +191,7 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(refused).toBeInstanceOf(AdapterSnapshotError);
     // And the refusal is local to the override: a non-embedded agent still
     // resolves, so one broken snapshot does not take the registry with it.
-    expect(registry.resolve("gemini")).toBe(baseline.resolve("gemini"));
+    expect(registry.resolve("gemini")).toEqual(baseline.resolve("gemini"));
   });
 
   it("AM4: an abandoned tree is replaced rather than adopted or wedged", function* () {

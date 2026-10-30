@@ -11,9 +11,9 @@
     "@agentclientprotocol/sdk": "1.9.0",
     "@executablemd/core": "workspace:*",
     "@executablemd/runtime": "workspace:*",
+    "@openclaw/fs-safe": "0.26.13",
     "acpx": "0.21.1",
     "effection": "4.1.0",
-    "@openclaw/fs-safe": "0.26.13",
     "zod": "4.6.7"
   }
 }

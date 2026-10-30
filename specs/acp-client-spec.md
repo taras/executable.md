@@ -1224,7 +1224,10 @@ prompt failure.
 
 ## ACPX provider
 
-`@executablemd/acp` implements the `rootProvider` seam over the `acpx` runtime.
+`@executablemd/acp` implements the `rootProvider` seam over the ACPX 0.21.1
+runtime source closure. The explicit first-turn materialization barrier remains
+a local patch; the released `promptStarted` transport acknowledgement is not
+backend acceptance.
 `createAcpxProvider()` returns an `AgentProviderFactory` supplied directly to
 `installAgentComponents({ rootProvider: { factory: createAcpxProvider(), options } })`;
 `useAcpxProvider` exposes the same operations without the Agent install, so
@@ -1312,7 +1315,11 @@ none.
   for output-stream deltas only (thought/status/tool/usage stay private), and one
   `terminal`, then the stream closes with the full concatenated text (including
   partial text on failure). A completed turn with an absent stop reason is treated
-  as `end_turn`; any other stop reason is a failure.
+  as `end_turn`; any other stop reason is a failure. The completing response
+  carries its own opaque `_meta`, including a real response arriving during
+  timeout drain. A deadline that receives no response fails and supplies no
+  checkpoint. XMD associates a checkpoint only with a successful completed
+  terminal; cancellation and failure never acquire one.
 - **Serialization.** Prompts for one session run FIFO on that session's queue;
   different sessions run concurrently. A subscription enters that queue before
   any route, ensure or runtime creation for its session, and re-reads the
@@ -1351,9 +1358,9 @@ none.
   sessions a caller can reach. A managed session retains the partition that
   created its handle, and every turn, close, detach and teardown goes through
   that one — reaching for "the" runtime afterwards would open a second child for
-  a session the first already owns. `agentProcessEnv` is a local patch to the
-  vendored ACP runtime; `packages/acp/vendor/acpx/PROVENANCE.md` records why it
-  exists and what removes it.
+  a session the first already owns. The released runtime snapshots the
+  child-only `agentProcessEnv`; its independent compatibility adaptation and
+  retirement are recorded in `packages/acp/vendor/acpx/PROVENANCE.md`.
 - **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
   rather than a document, decides: `advertiseNativeLaunch` and
   `advertiseClientNativeAttachment` are two separate lists, and a profile whose

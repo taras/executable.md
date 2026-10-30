@@ -14,7 +14,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, until } from "effection";
+import { allSettled, ensure, until, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { chmod } from "node:fs/promises";
@@ -401,6 +401,93 @@ describe(
       expect(outcome.materialized?.agentSessionId).toBe(asserted);
       yield* until(runtime.close({ handle, reason: "test" }));
       yield* until(quiet.close({ handle: again, reason: "test" }));
+    });
+
+    it("TM8: a held promotion gates the barrier and finalization's asserting save", function* () {
+      const world = yield* useWorld();
+      const runtime = runtimeFor(world, ["accept", "text"]);
+      const handle = yield* openSession(world, runtime, "tm-held");
+      const entered = withResolvers<void>();
+      const release = withResolvers<void>();
+      const scope = yield* useScope();
+      const save = world.store.save;
+      world.store.save = (record) =>
+        scope.run(function* () {
+          if (record.agentSessionId !== undefined) {
+            entered.resolve();
+            yield* release.operation;
+          }
+          yield* until(save(record));
+        });
+      yield* ensure(function* () {
+        release.resolve();
+        yield* until(runtime.close({ handle, reason: "test" }));
+      });
+      const turn = runtime.startTurn({ handle, text: "hello", mode: "prompt", requestId: "held" });
+      let materialized = false;
+      turn.materialized.then(
+        () => {
+          materialized = true;
+        },
+        () => {},
+      );
+      yield* entered.operation;
+      yield* until(turn.promptStarted);
+      expect(materialized).toBe(false);
+      expect(yield* pending(world, "tm-held")).toBe(true);
+      expect(yield* assertedIdentity(world, "tm-held")).toBe(undefined);
+      release.resolve();
+      const accepted = yield* until(turn.materialized);
+      yield* until(turn.result);
+      expect(yield* assertedIdentity(world, "tm-held")).toBe(accepted.agentSessionId);
+      expect(world.saves.at(-1)?.sessionMaterialization).toBe(undefined);
+    });
+
+    it("TM9: a rejected promotion cannot be overwritten by finalization", function* () {
+      const world = yield* useWorld();
+      const runtime = runtimeFor(world, ["accept", "text"]);
+      const handle = yield* openSession(world, runtime, "tm-refused-save");
+      const save = world.store.save;
+      world.store.save = (record) =>
+        record.agentSessionId === undefined
+          ? save(record)
+          : Promise.reject(new Error("promotion write refused"));
+      const turn = runtime.startTurn({
+        handle,
+        text: "hello",
+        mode: "prompt",
+        requestId: "refused-save",
+      });
+      const [promotion] = yield* allSettled([until(turn.materialized)]);
+      expect(promotion.ok).toBe(false);
+      if (!promotion.ok) {
+        expect(promotion.error.message).toBe("promotion write refused");
+      }
+      yield* until(turn.result);
+      expect(yield* pending(world, "tm-refused-save")).toBe(true);
+      expect(yield* assertedIdentity(world, "tm-refused-save")).toBe(undefined);
+      yield* until(runtime.close({ handle, reason: "test" }));
+    });
+
+    it("TM10: cancellation before dispatch leaves non-asserting occupancy", function* () {
+      const world = yield* useWorld();
+      const runtime = runtimeFor(world, ["accept", "text"]);
+      const handle = yield* openSession(world, runtime, "tm-cancel");
+      const cancellation = new AbortController();
+      cancellation.abort();
+      const turn = runtime.startTurn({
+        handle,
+        text: "hello",
+        mode: "prompt",
+        requestId: "cancel",
+        signal: cancellation.signal,
+      });
+      const [promotion] = yield* allSettled([until(turn.materialized)]);
+      expect(promotion.ok).toBe(false);
+      expect((yield* until(turn.result)).status).toBe("cancelled");
+      expect(yield* pending(world, "tm-cancel")).toBe(true);
+      expect(yield* assertedIdentity(world, "tm-cancel")).toBe(undefined);
+      yield* until(runtime.close({ handle, reason: "test" }));
     });
   },
 );

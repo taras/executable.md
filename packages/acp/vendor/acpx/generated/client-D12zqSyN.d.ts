@@ -1,7 +1,9 @@
-import { c as NonInteractivePermissionPolicy, d as PermissionStats, l as PermissionMode, p as PromptInput, r as AcpClientOptions } from "./session-options-jkYbBxGE.js";
+import { E as PromptInput, S as PermissionMode, a as AcpElicitationHandler, d as AcpPermissionHandler, r as AcpClientOptions, w as PermissionStats, x as NonInteractivePermissionPolicy } from "./session-options-BlnP3WAc.d.ts";
 import { AnyMessage, InitializeResponse, ListSessionsRequest, ListSessionsResponse, PromptResponse, SessionConfigOption, SetSessionConfigOptionResponse } from "@agentclientprotocol/sdk";
-
-//#region src/acp/model-support.d.ts
+type AcpControlAuthority = {
+  signal?: AbortSignal;
+  assertActive?: () => void;
+};
 type SessionModelState = {
   configId?: string;
   currentModelId: string;
@@ -10,19 +12,8 @@ type SessionModelState = {
     name: string;
   }>;
 };
-declare const REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE: "ACP_MODEL_UNSUPPORTED";
-type RequestedModelUnsupportedErrorCode = typeof REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE;
-declare const REQUESTED_MODEL_UNSUPPORTED_REASONS: readonly ["missing-capability", "unadvertised-model"];
-type RequestedModelUnsupportedReason = (typeof REQUESTED_MODEL_UNSUPPORTED_REASONS)[number];
-declare class RequestedModelUnsupportedError extends Error {
-  readonly code: "ACP_MODEL_UNSUPPORTED";
-  readonly reason: RequestedModelUnsupportedReason;
-  constructor(message: string, reason: RequestedModelUnsupportedReason);
-}
-declare function isRequestedModelUnsupportedError(value: unknown): value is RequestedModelUnsupportedError;
-//#endregion
-//#region src/acp/client.d.ts
 type LoadSessionOptions = {
+  authority?: AcpControlAuthority;
   suppressReplayUpdates?: boolean;
   replayIdleMs?: number;
   replayDrainTimeoutMs?: number;
@@ -44,7 +35,6 @@ type SessionLoadResult = {
 };
 type SessionResumeResult = SessionLoadResult;
 type AgentDisconnectReason = "process_exit" | "process_close" | "pipe_close" | "connection_close";
-type ModelControlOverride = Pick<SessionModelState, "configId"> & Partial<Pick<SessionModelState, "availableModels">>;
 type AgentExitInfo = {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
@@ -62,6 +52,9 @@ declare class AcpClient {
   private options;
   private connection?;
   private agent?;
+  private readonly agentDescendants;
+  private readonly agentCleanups;
+  private readonly commandProbes;
   private initResult?;
   private loadedSessionId?;
   private eventHandlers;
@@ -74,16 +67,17 @@ declare class AcpClient {
   private suppressSessionUpdates;
   private suppressReplaySessionUpdateMessages;
   private activePrompt?;
+  private readonly pendingPromptOwners;
   private readonly cancellingSessionIds;
   private readonly permissionAbortControllers;
   private closing;
+  private closeTask?;
+  private closeEpoch;
   private agentStartedAt?;
   private lastAgentExit?;
   private lastKnownPid?;
   private readonly promptPermissionFailures;
   private readonly pendingConnectionRequests;
-  private readonly modelConfigIds;
-  private readonly legacyModelSessionIds;
   constructor(options: AcpClientOptions);
   get initializeResult(): InitializeResponse | undefined;
   getAgentPid(): number | undefined;
@@ -99,51 +93,74 @@ declare class AcpClient {
     permissionMode?: PermissionMode;
     nonInteractivePermissions?: NonInteractivePermissionPolicy;
     permissionPolicy?: AcpClientOptions["permissionPolicy"];
+    fs?: boolean;
     terminal?: boolean;
     suppressSdkConsoleErrors?: boolean;
     verbose?: boolean;
   }): void;
+  private updateClientCapabilityPreferences;
   private refreshRuntimePermissionPolicy;
+  private hasLiveConnection;
   hasReusableSession(sessionId: string): boolean;
   hasActivePrompt(sessionId?: string): boolean;
-  start(): Promise<void>;
+  hasUnresolvedPrompt(): boolean;
+  private abortSessionRequests;
+  start(authority?: AcpControlAuthority, options?: Pick<AcpClientOptions, "sessionOptions">): Promise<void>;
+  private waitForPreviousClose;
   private resolveAgentLaunchPlan;
   private logAgentLaunch;
   private ensureLaunchSupport;
+  private prepareProcessLaunch;
+  private startedProcess;
   private spawnAgentProcess;
+  private assertCommandProbeActive;
+  private readAgentCommandOutput;
+  private admitAndObserveSpawnedProcess;
+  private admitSpawnedProcess;
   private createConnection;
   private initializeAgentConnection;
   private initializeProtocolConnection;
   private handleInitializeFailure;
   private createTappedStream;
-  createSession(cwd?: string): Promise<SessionCreateResult>;
+  private sessionMeta;
+  createSession(cwd?: string, authority?: AcpControlAuthority): Promise<SessionCreateResult>;
   loadSession(sessionId: string, cwd?: string): Promise<SessionLoadResult>;
   loadSessionWithOptions(sessionId: string, cwd?: string, options?: LoadSessionOptions): Promise<SessionLoadResult>;
-  resumeSession(sessionId: string, cwd?: string): Promise<SessionResumeResult>;
+  resumeSession(sessionId: string, cwd?: string, authority?: AcpControlAuthority): Promise<SessionResumeResult>;
   private applySessionUpdateSuppression;
   private restoreSessionUpdateSuppression;
-  prompt(sessionId: string, prompt: PromptInput | string): Promise<PromptResponse>;
+  prompt(sessionId: string, prompt: PromptInput | string, onRequestWritten?: () => Promise<void> | void, onElicitation?: AcpElicitationHandler, onPermissionRequest?: AcpPermissionHandler, authority?: AcpControlAuthority): Promise<PromptResponse>;
+  private beginActivePrompt;
+  private bindPromptOwner;
+  private assertPromptActive;
+  private onPromptRequestWritten;
+  private clearActivePrompt;
   private normalizePromptForAgent;
   private returnPromptResponseOrPermissionFailure;
   private throwPromptPermissionFailureIfPresent;
-  setSessionMode(sessionId: string, modeId: string): Promise<void>;
-  setSessionConfigOption(sessionId: string, configId: string, value: string): Promise<SetSessionConfigOptionResponse>;
-  setSessionModel(sessionId: string, modelId: string, controlOverride?: ModelControlOverride): Promise<SetSessionConfigOptionResponse | undefined>;
+  setSessionMode(sessionId: string, modeId: string, authority?: AcpControlAuthority): Promise<void>;
+  setSessionConfigOption(sessionId: string, configId: string, value: string, models: SessionModelState | undefined, authority?: AcpControlAuthority): Promise<SetSessionConfigOptionResponse>;
+  setSessionModel(sessionId: string, modelId: string, models: SessionModelState | undefined, authority?: AcpControlAuthority): Promise<SetSessionConfigOptionResponse | undefined>;
+  private resolveSessionModelId;
   private setSessionModelThroughConfig;
   private setSessionModelThroughLegacyMethod;
   private throwSessionModelError;
-  private resolveModelControl;
-  private rememberSessionModels;
-  private updateRememberedSessionModels;
   cancel(sessionId: string): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
   listSessions(params?: ListSessionsRequest): Promise<ListSessionsResponse>;
   requestCancelActivePrompt(): Promise<boolean>;
   cancelActivePrompt(waitMs?: number): Promise<PromptResponse | undefined>;
   close(): Promise<void>;
+  private finishClose;
+  private retireNativeResources;
+  private stopIfClosedDuringLaunch;
+  private abortActiveElicitation;
+  private closeConnection;
+  private captureAgentDescendants;
   private terminateAgentProcess;
+  private cleanupAgentProcess;
   private endAgentStdin;
-  private killAgentIfRunning;
+  private signalAgentAndDescendants;
   private detachAgentHandles;
   private getConnection;
   private log;
@@ -152,18 +169,33 @@ declare class AcpClient {
   private createStartupFailureWatcher;
   private normalizeInitializeError;
   private selectAuthMethod;
+  private inheritedEnvPolicy;
   private readAgentSpecificEnvCredential;
   private selectAgentManagedAuthMethod;
   private isGrokBuildAcpCommand;
   private authenticateIfRequired;
   private handlePermissionRequest;
+  private finishPermissionRequest;
+  private hasPermissionOwner;
+  private handleElicitationRequest;
+  private resolveElicitationOwner;
+  private resolveElicitationScope;
+  private isElicitationSessionCancelling;
+  private captureDelegatedRequestOwner;
+  private isDelegatedRequestActive;
   private tryHandlePermissionRequestWithHost;
   private hostPermissionDecisionResponse;
   private hostPermissionErrorResponse;
   private resolvePermissionRequestFromMode;
+  private explainPermissionRefusal;
   private emitPermissionEscalation;
   private handleModePermissionError;
   private attachAgentLifecycleObservers;
+  private attachProcessExitObserver;
+  private handleAgentDisconnect;
+  private notifyProcessSpawnFailure;
+  private notifyProcessExit;
+  private logProcessLifecycleError;
   private recordAgentExit;
   private notePromptPermissionFailure;
   private consumePromptPermissionFailure;
@@ -172,12 +204,9 @@ declare class AcpClient {
   private handleReadTextFile;
   private handleWriteTextFile;
   private handleCreateTerminal;
-  private handleTerminalOutput;
-  private handleWaitForTerminalExit;
-  private handleKillTerminal;
-  private handleReleaseTerminal;
+  private runDelegatedOperation;
   private cancellationSignalForSession;
-  private abortAndDropPermissionSignal;
+  private takePermissionAbortController;
   private recordPermissionDecision;
   private recordPermissionError;
   private handleSessionUpdate;
@@ -187,6 +216,4 @@ declare class AcpClient {
     timeoutMs?: number;
   }): Promise<void>;
 }
-//#endregion
-export { RequestedModelUnsupportedErrorCode as a, RequestedModelUnsupportedError as i, REQUESTED_MODEL_UNSUPPORTED_ERROR_CODE as n, RequestedModelUnsupportedReason as o, REQUESTED_MODEL_UNSUPPORTED_REASONS as r, isRequestedModelUnsupportedError as s, AcpClient as t };
-//# sourceMappingURL=client-DwNyFauq.d.ts.map
+export { AcpControlAuthority as n, AcpClient as t };

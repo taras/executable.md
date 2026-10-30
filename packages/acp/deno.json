@@ -13,8 +13,6 @@
     "zod": "npm:zod@4.6.7"
   },
   "publish": {
-    "exclude": [
-      "!vendor/acpx/generated/**/*.d.ts"
-    ]
+    "exclude": ["!vendor/acpx/generated/**/*.d.ts"]
   }
 }
