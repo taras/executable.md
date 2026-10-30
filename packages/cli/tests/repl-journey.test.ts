@@ -2,7 +2,8 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, suspend } from "effection";
+import { ReplHost } from "../src/repl/host.ts";
+import { sleep, scoped, spawn, suspend } from "effection";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import type { Result, Operation } from "effection";
@@ -314,8 +315,8 @@ function* retainedModel(page: ReplPage) {
   return projected.value;
 }
 
-function* referencePage(): Operation<ReplPage> {
-  return yield* useReplPage({ size: WIDE, includes: [REFERENCE_DIRECTORY] });
+function referencePage(): Operation<ReplPage> {
+  return useReplPage({ size: WIDE, includes: [REFERENCE_DIRECTORY] });
 }
 
 function* referenceAsking(page: ReplPage): Operation<string> {
@@ -674,5 +675,195 @@ describe("REPL original refusals before replay and terminal ownership", () => {
     expect(yield* readTextFile(path)).toBe(kept);
     expect(performed.asked).toBe(0);
     expect(performed.compiles).toBe(0);
+  });
+});
+
+function* noNewExecution(): Operation<void> {
+  yield* ReplHost.around(
+    {
+      *identify(): Operation<string> {
+        throw new Error("a cold open creates no execution identity");
+      },
+      *createExclusive(): Operation<void> {
+        throw new Error("a cold open creates no history");
+      },
+    },
+    { at: "max" },
+  );
+}
+
+function* readTo(page: ReplPage, text: string): Operation<void> {
+  if (page.screen().shows(text)) {
+    return;
+  }
+  yield* catalog(page);
+  yield* closeDrawer(page);
+  yield* page.resize(NARROW);
+  for (let press = 0; press < 100 && !page.screen().shows(text); press += 1) {
+    const before = page.screen().index;
+    yield* page.press("[↓ later]");
+    yield* page.until("the retained reading moving", (one) => one.index > before);
+  }
+  expect(page.screen().shows(text)).toBe(true);
+}
+
+function* missingEntryRefusal() {
+  const dataRoot = yield* useTemporary("xmd-missing-entry-");
+  let path = "";
+  const location = yield* scoped(function* () {
+    const first = yield* useReplPage({ dataRoot });
+    path = yield* executionJournal(first);
+    return yield* leaveWithLocation(first);
+  });
+  const before = yield* readTextFile(path);
+  const page = yield* useReplPage({ dataRoot, location: location + "/entry-9" });
+  return { page, path, before };
+}
+
+describe("REPL original retained readings and navigation", () => {
+  it("J1: a second process reconstructs the view from the URL and the journal alone", function* () {
+    const dataRoot = yield* useTemporary("xmd-binding-cold-");
+    let path = "";
+    const location = yield* scoped(function* () {
+      const page = yield* useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+      yield* referenceAsking(page);
+      yield* answerReference(page);
+      path = yield* executionJournal(page);
+      const model = yield* retainedModel(page);
+      const entry = model.entries[0]?.scope;
+      const binding = entry?.bindings[0];
+      const nested = entry?.scopes[0];
+      const marker = model.checkpoints.at(-1)?.marker;
+      if (
+        entry === undefined ||
+        binding === undefined ||
+        nested === undefined ||
+        marker === undefined
+      ) {
+        throw new Error("the retained run needs an entry, nested scope, binding and checkpoint");
+      }
+      const base = route(yield* leaveWithLocation(page));
+      released(page.repl.terminal);
+      return {
+        url: encodeLocation({
+          ...base,
+          scopes: [entry.key],
+          drawers: [{ kind: "binding", name: binding.name }],
+          at: marker,
+          inspect: true,
+        }),
+        binding: binding.name,
+        entry: entry.name,
+        nested: nested.name,
+      };
+    });
+    const before = yield* readTextFile(path);
+    yield* scoped(function* () {
+      yield* noNewExecution();
+      const performed = yield* performedWork();
+      const page = yield* useReplPage({
+        dataRoot,
+        includes: [REFERENCE_DIRECTORY],
+        location: location.url,
+      });
+      expect(page.screen().shows("[close]")).toBe(true);
+      expect(page.screen().shows(`Binding · ${location.binding}`)).toBe(true);
+      expect(page.screen().shows('"title": "Ship the REPL"')).toBe(true);
+      yield* page.key("Escape");
+      yield* page.until("the binding drawer closing", (one) => !one.shows("[close]"));
+      yield* catalog(page);
+      expect(page.screen().shows(location.entry)).toBe(true);
+      expect(page.screen().shows(location.nested)).toBe(true);
+      yield* closeDrawer(page);
+      expect(trail(page.screen())).toContain("Entry 1");
+      yield* readTo(page, "Decision: approve");
+      expect(yield* leaveWithLocation(page)).toBe(
+        encodeLocation({ ...route(location.url), drawers: [] }),
+      );
+      expect(performed).toEqual({ reads: [], compiles: 0, asked: 0 });
+      released(page.repl.terminal);
+    });
+    expect(yield* readTextFile(path)).toBe(before);
+  });
+
+  it("B3: an ancestor in the trail is a control, and it selects its own prefix", function* () {
+    const page = yield* referencePage();
+    yield* referenceAsking(page);
+    yield* selectCatalog(page, "component Checklist");
+    const before = trail(page.screen());
+    expect(before).toContain("Entry 1");
+    expect(before).toContain("Checklist");
+    expect(before.indexOf("Entry 1")).toBeLessThan(before.indexOf("Checklist"));
+    yield* page.press("Entry 1", { onRow: before });
+    yield* page.until(
+      "the ancestor selecting its prefix",
+      (one) => !trail(one).includes("Checklist"),
+    );
+    expect(trail(page.screen())).toContain("Entry 1");
+    yield* catalog(page);
+    expect(page.screen().shows("1. [unfinished] entry-1")).toBe(true);
+    yield* closeDrawer(page);
+    expect(route(yield* leaveWithLocation(page)).scopes).toEqual(["entry-1"]);
+  });
+
+  it("J1: an invalid navigation leaves the standing route, tree, focus and targets", function* () {
+    const page = yield* referencePage();
+    yield* referenceAsking(page);
+    yield* selectCatalog(page, "component Checklist");
+    expect(trail(page.screen())).toContain("Checklist");
+    const before = yield* journalRecords(page);
+    yield* openHistory(page);
+    const closeAt = page.screen().locate("[close]");
+    yield* page.press("Entry 1 admitted");
+    yield* page.until("the navigation refusal", (one) => one.shows("!"));
+    expect(page.screen().shows("History")).toBe(true);
+    expect(page.screen().shows("[live]")).toBe(false);
+    expect(yield* journalRecords(page)).toEqual(before);
+    expect(page.screen().locate("[close]")).toEqual(closeAt);
+    yield* page.press("[close]");
+    yield* page.until("the same target still closing the drawer", (one) => !one.shows("[close]"));
+    expect(trail(page.screen())).toContain("Checklist");
+    const standing = route(yield* leaveWithLocation(page));
+    expect(standing.scopes).toEqual(["entry-1", "Checklist-1"]);
+    expect(standing.at).toBeUndefined();
+  });
+
+  it("UI2: below the minimum there is no exit to aim at, and Escape leaves", function* () {
+    const page = yield* useReplPage({ size: { columns: 60, rows: 18 } });
+    expect(page.screen().shows("60x18")).toBe(true);
+    expect(page.screen().shows("larger")).toBe(true);
+    expect(page.screen().shows("Escape")).toBe(true);
+    expect(page.screen().shows("[")).toBe(false);
+    yield* page.key("Enter");
+    yield* sleep(100);
+    expect(page.repl.outcome()).toBeUndefined();
+    expect(page.repl.terminal.resets).toBe(0);
+    yield* page.key("Escape");
+    const result = yield* commandReturned(page);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.location).toContain("xmd://repl/");
+    }
+    released(page.repl.terminal);
+  });
+
+  it("UI2: a normal-sized refusal is left by its own visible control", function* () {
+    const { page, path, before } = yield* missingEntryRefusal();
+    expect(page.screen().shows("admitted")).toBe(true);
+    expect(page.screen().shows("[exit]")).toBe(true);
+    expect(page.screen().shows("[history]")).toBe(false);
+    expect(page.screen().shows("DRAFT")).toBe(false);
+    expect((yield* leaveRefusal(page)).ok).toBe(false);
+    expect(yield* readTextFile(path)).toBe(before);
+    released(page.repl.terminal);
+  });
+
+  it("UI2: Enter on the refusal's control leaves it too", function* () {
+    const { page, path, before } = yield* missingEntryRefusal();
+    expect(page.screen().shows("admitted")).toBe(true);
+    yield* page.key("Enter");
+    expect((yield* commandReturned(page)).ok).toBe(false);
+    expect(yield* readTextFile(path)).toBe(before);
+    released(page.repl.terminal);
   });
 });

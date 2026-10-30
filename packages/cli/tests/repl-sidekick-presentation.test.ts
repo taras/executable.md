@@ -1,11 +1,18 @@
 /** Read Sidekick work from the pane and controls the terminal actually shows. */
 
-import { awaited, appendGate, useMountedHost } from "./support/mounted-repl.ts";
+import {
+  MOUNTED_AGENT,
+  OTHER_MOUNTED_AGENT,
+  mountedExecution,
+  awaited,
+  appendGate,
+  useMountedHost,
+} from "./support/mounted-repl.ts";
 import { FsApi, ensureDir, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 import { API } from "@executablemd/runtime";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { ensure, withResolvers, sleep } from "effection";
+import { ensure, withResolvers, scoped, sleep } from "effection";
 import { decodeLocation } from "../src/repl/route.ts";
 import {
   ENTRIES_FILE,
@@ -24,6 +31,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { useReplPage } from "./support/repl-page.ts";
 import {
   COMPOSER,
+  replaceAgent,
   openHistory,
   openConfigure,
   tab,
@@ -937,5 +945,247 @@ describe("Configure keyboard, retained values and window ownership", () => {
     yield* configureOpened(page);
     expect(page.screen().shows("(x) Fast")).toBe(false);
     expect(yield* finishDraft(page)).toBe("note");
+  });
+});
+
+function transcriptLines(reading: ScreenReading): string[] {
+  const heading = reading.locate("Entries");
+  return reading.rows.map((row) => row.slice(0, heading.column));
+}
+
+function transcriptHas(reading: ScreenReading, text: string): boolean {
+  return transcriptLines(reading).some((row) => row.includes(text));
+}
+
+function* chooseTurn(page: ReplPage, text: string): Operation<void> {
+  const row = transcriptLines(page.screen()).find((one) => one.includes(text));
+  if (row === undefined) {
+    throw new Error(`no Transcript row says ${text}. ${page.describe()}`);
+  }
+  yield* page.press(text, { onRow: row.trim() });
+}
+
+function* newConversation(page: ReplPage): Operation<void> {
+  yield* openConfigure(page);
+  yield* replaceAgent(page, OTHER_MOUNTED_AGENT);
+  yield* page.until("the new conversation offer", (one) => one.shows("[start new conversation]"));
+  yield* applyConfigure(page);
+  yield* configured(page);
+  yield* page.until("the new empty conversation", (one) => one.shows("No messages yet."));
+}
+
+function* twoChats(page: ReplPage, withOlderFailure = false): Operation<void> {
+  page.repl.fake.configuration(ADVERTISED);
+  page.repl.fake.script({ reply: "<Output>Older answer.</Output>\n" });
+  if (withOlderFailure) {
+    page.repl.fake.script({ reply: "<Output>Older attempt.</Output>\n", stopReason: "max_tokens" });
+  }
+  page.repl.fake.script({ reply: "<Output>Newer answer.</Output>\n" });
+  yield* sendMessage(page, "older ask");
+  yield* page.until("the older answer", (one) => sidekickShows(one, "Older answer."));
+  yield* page.until("the first chat idle", sidekickIdle);
+  if (withOlderFailure) {
+    yield* sendMessage(page, "older failed");
+    yield* page.until("the older failure", (one) => transcriptHas(one, "older failed · failed"));
+    yield* page.until("the first chat idle", sidekickIdle);
+  }
+  yield* newConversation(page);
+  yield* sendMessage(page, "newer ask");
+  yield* page.until("the newer answer", (one) => sidekickShows(one, "Newer answer."));
+  yield* page.until("the new chat idle", sidekickIdle);
+}
+
+function assertReadOnly(reading: ScreenReading): void {
+  expect(reading.shows("[Back to current chat]")).toBe(true);
+  for (const absent of [COMPOSER, "[configure", "[retry]", "[answer sidekick]"]) {
+    expect(reading.shows(absent)).toBe(false);
+  }
+  for (const absent of ["[send]", "[stop]"]) {
+    expect(reading.found(absent, { rightOf: "[Back to current chat]" })).toBe(0);
+  }
+}
+
+function* backToCurrent(page: ReplPage, reply = "Newer answer."): Operation<void> {
+  yield* page.press("[Back to current chat]");
+  yield* page.until("the current chat", (one) => sidekickShows(one, reply));
+}
+
+describe("Transcript ownership and immutable older chat readings", () => {
+  it("SS1: both sections hold their own work, settled in the order each finishes", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ held: true, reply: "ENTRY-DONE" });
+    page.repl.fake.script({ deltas: ["<Output>Side ans", "wer.</Output>\n"], holdAfter: 1 });
+    yield* pasteDraft(page, '<Session name="planner"><Prompt text="ask-entry" /></Session>\n');
+    yield* page.key("Enter");
+    yield* page.repl.fake.holdingTurns(1);
+    yield* sendMessage(page, "ask side");
+    yield* page.repl.fake.streamingTurns(1);
+    const listed = yield* page.until(
+      "both owners listed",
+      (one) => transcriptHas(one, "ask-entry") && transcriptHas(one, "ask side"),
+    );
+    expect(transcriptHas(listed, "Entry agents")).toBe(false);
+    expect(transcriptHas(listed, MOUNTED_AGENT)).toBe(true);
+    page.repl.fake.releaseDeltas();
+    yield* page.until("the later-started turn completing first", (one) =>
+      transcriptHas(one, "ask side · completed"),
+    );
+    expect((yield* settledReading(page.repl)).model.turns).toEqual([]);
+    page.repl.fake.releaseTurn();
+    yield* page.until("the entry turn being recorded", (one) =>
+      transcriptLines(one).some(
+        (row) => row.includes("[A] ask-e") && row.includes("completed, recorded"),
+      ),
+    );
+    const lines = transcriptLines(page.screen());
+    expect(lines.filter((line) => line.includes("ask side"))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes("[A] ask-e"))).toHaveLength(1);
+    const read = yield* settledReading(page.repl);
+    expect(read.model.turns).toHaveLength(1);
+    expect(read.model.turns[0]?.input).toBe("ask-entry");
+    expect(read.chat.some((record) => record.kind === "message")).toBe(true);
+    expect(read.model.sessions).toHaveLength(1);
+  });
+
+  it("SS1: a turn that renders nothing is announced at begin and keeps its row", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ reply: "<Output>First answer.</Output>\n<REPL.Bindings />\n" });
+    page.repl.fake.script({ held: true, reply: "<REPL.Bindings />\n" });
+    yield* sendMessage(page, "read it");
+    yield* page.until("the first reply", (one) => sidekickShows(one, "First answer."));
+    yield* page.repl.fake.holdingTurns(1);
+    const fed = page.repl.terminal.fed;
+    yield* page.until("the empty follow-up announced", (one) =>
+      transcriptLines(one).some(
+        (row) => row.includes("Automatic feed") && row.includes("generating"),
+      ),
+    );
+    expect(page.repl.terminal.fed).toBe(fed);
+    expect(page.screen().shows("REPL.Bindings")).toBe(false);
+    page.repl.fake.releaseTurn();
+    yield* page.until("the empty follow-up saved", (one) =>
+      transcriptLines(one).some(
+        (row) => row.includes("Automatic feed") && row.includes("completed"),
+      ),
+    );
+    expect(page.repl.terminal.fed).toBe(fed);
+    expect(page.screen().shows("REPL.Bindings")).toBe(false);
+    expect(
+      transcriptLines(page.screen()).filter((row) => row.includes("Automatic feed")),
+    ).toHaveLength(1);
+    expect(transcriptLines(page.screen()).filter((row) => row.includes("read it"))).toHaveLength(1);
+  });
+
+  it("SS7: a fresh Transcript says nothing is retained, and an unreadable chat history is refused with its reason", function* () {
+    yield* scoped(function* () {
+      const page = yield* useReplPage();
+      expect(transcriptHas(page.screen(), "(none retained)")).toBe(true);
+      for (const label of ["Entry agents", "No entry turns", "No Sidekick turns"]) {
+        expect(transcriptHas(page.screen(), label)).toBe(false);
+      }
+      expect(page.screen().shows("No messages yet.")).toBe(true);
+    });
+    const host = yield* useMountedHost();
+    const first = yield* useReplPage({ host });
+    yield* exchange(first, "say once", "Said once.");
+    const execution = yield* mountedExecution(first.repl);
+    yield* finishDraft(first);
+    const path = join(host.root, PAIRED_DIRECTORY, execution, SIDEKICK_FILE);
+    yield* writeTextFile(path, (yield* readTextFile(path)) + "{not a record\n");
+    const page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
+    yield* page.until(
+      "the unreadable chat reason",
+      (one) => one.shows("chat history holds a record this") && one.shows("cannot read (record"),
+    );
+    expect(page.screen().shows("[exit]")).toBe(true);
+    expect(page.screen().shows(COMPOSER)).toBe(false);
+    expect(page.screen().shows("No messages yet.")).toBe(false);
+    expect(page.screen().shows("(none retained)")).toBe(false);
+  });
+
+  it("SS4: activating an older turn opens its chat read-only, and Back comes home", function* () {
+    const page = yield* useReplPage();
+    yield* twoChats(page);
+    yield* compose(page, "not sent yet");
+    const before = {
+      prompts: page.repl.fake.prompts.length,
+      ensured: page.repl.fake.ensured.length,
+      chat: (yield* settledReading(page.repl)).chat.length,
+    };
+    expect((yield* settledReading(page.repl)).model.entries).toHaveLength(0);
+    yield* chooseTurn(page, "older ask");
+    const reading = yield* page.until("the older chat", (one) =>
+      sidekickShows(one, "[S] Older answer."),
+    );
+    expect(sidekickShows(reading, "Newer answer.")).toBe(false);
+    assertReadOnly(reading);
+    expect(page.repl.fake.prompts).toHaveLength(before.prompts);
+    expect(page.repl.fake.ensured).toHaveLength(before.ensured);
+    expect((yield* settledReading(page.repl)).chat).toHaveLength(before.chat);
+    expect((yield* settledReading(page.repl)).model.entries).toHaveLength(0);
+    yield* backToCurrent(page);
+    expect(composerHolds(page.screen(), "not sent yet")).toBe(true);
+    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(page.screen().shows("[Back to current chat]")).toBe(false);
+  });
+
+  it("SS4: the active chat keeps its controls, and a current update leaves the reading alone", function* () {
+    const page = yield* useReplPage();
+    yield* twoChats(page);
+    page.repl.fake.script({ held: true, reply: "<Output>Arrived later.</Output>\n" });
+    yield* sendMessage(page, "one more");
+    yield* page.repl.fake.holdingTurns(1);
+    yield* chooseTurn(page, "older ask");
+    yield* page.until("the older chat", (one) => sidekickShows(one, "Older answer."));
+    const fed = page.repl.terminal.fed;
+    page.repl.fake.releaseTurn();
+    yield* page.until("the current reply recorded", (one) =>
+      transcriptHas(one, "one more · completed"),
+    );
+    expect(page.repl.terminal.fed).toBe(fed);
+    expect(sidekickShows(page.screen(), "Older answer.")).toBe(true);
+    expect(sidekickShows(page.screen(), "Arrived later.")).toBe(false);
+    expect(page.screen().shows(COMPOSER)).toBe(false);
+    yield* backToCurrent(page, "Arrived later.");
+    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+    expect(page.screen().shows(`[configure ${OTHER_MOUNTED_AGENT}]`)).toBe(true);
+  });
+
+  it("SS4: a pending question and its partial answer survive reading an older chat", function* () {
+    const page = yield* useReplPage();
+    yield* twoChats(page);
+    yield* pendingQuestion(page, "Approve the plan?", REVIEW_SCHEMA);
+    page.repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
+    yield* openedQuestion(page);
+    yield* page.type("appr");
+    yield* page.until("the partial decision", (one) => one.shows("decision: appr"));
+    yield* closeDrawer(page);
+    const answer = page.screen().locate("[answer sidekick]");
+    yield* chooseTurn(page, "older ask");
+    yield* page.until("the older chat", (one) => sidekickShows(one, "Older answer."));
+    for (const absent of [
+      "Approve the plan?",
+      "decision: appr",
+      "[submit]",
+      "[answer sidekick]",
+      COMPOSER,
+    ]) {
+      expect(page.screen().shows(absent)).toBe(false);
+    }
+    assertReadOnly(page.screen());
+    page.repl.terminal.feed(`\x1b[<0;${answer.column + 1};${answer.row + 1}M`);
+    yield* sleep(100);
+    expect(page.screen().shows("[submit]")).toBe(false);
+    expect(sidekickShows(page.screen(), "Older answer.")).toBe(true);
+    expect(page.screen().shows("Noted.")).toBe(false);
+    yield* draftText(page, "my entry");
+    yield* page.press("[Back to current chat]");
+    yield* page.until("the question notice coming home", (one) => one.shows("[answer sidekick]"));
+    expect(page.screen().shows("[submit]")).toBe(false);
+    yield* openedQuestion(page);
+    expect(page.screen().shows("decision: appr")).toBe(true);
+    expect(page.screen().shows("Noted.")).toBe(false);
+    expect(page.screen().found("my entry", DRAFT_VALUE)).toBe(1);
+    expect(yield* finishDraft(page)).toBe("my entry");
   });
 });
