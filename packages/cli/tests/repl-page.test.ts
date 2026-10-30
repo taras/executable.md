@@ -248,3 +248,142 @@ describe("REPL page — a column is a terminal cell, not a string offset", () =>
     expect(glyphs.some((one) => one.row === first.row && one.column === first.column)).toBe(true);
   });
 });
+
+/** The guidance row says this while the Draft takes keystrokes, and not otherwise. */
+const TYPING = "Type here";
+
+/** What a question form asks for, so its second field is a real text field. */
+const REVIEW = {
+  type: "object",
+  properties: {
+    decision: { type: "string", enum: ["approve", "reject"] },
+    message: { type: "string", minLength: 4 },
+  },
+  required: ["decision", "message"],
+  additionalProperties: false,
+} as const;
+
+/** Send one Tab and wait for the screen it draws. */
+function* tab(page: ReplPage): Operation<void> {
+  const before = page.screen().index;
+  yield* page.key("Tab");
+  yield* page.until("the screen after a Tab", (one) => one.index > before);
+}
+
+/**
+ * Select the Sidekick, which is what gives its composer the keystrokes.
+ *
+ * Its own tab is the route: pressing the composer's prompt does not move
+ * focus, which the retired harness hid behind an internal key.
+ */
+function* intoComposer(page: ReplPage): Operation<void> {
+  yield* page.press("BINDINGS");
+  yield* page.until("the Bindings reading", (one) => !one.shows(COMPOSER));
+  yield* page.press(SIDEKICK);
+  yield* page.until("the Sidekick reading", (one) => one.shows(COMPOSER));
+}
+
+/** Ask the Sidekick something and wait for what it answers. */
+function* asked(page: ReplPage, text: string, shown: string): Operation<void> {
+  yield* intoComposer(page);
+  yield* typed(page, text);
+  yield* page.press("[send]", SIDEKICK_SEND);
+  yield* page.until(`the reply showing ${JSON.stringify(shown)}`, (one) => one.shows(shown));
+}
+
+describe("REPL page — reaching a field the claim names, by keyboard", () => {
+  it("puts a person's own entry in the Draft after a Sidekick exchange", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    page.repl.fake.script({ reply: "<Output>AUTHORED</Output>\n" });
+    yield* asked(page, "author a component", "AUTHORED");
+
+    // The composer holds the keystrokes now, which the guidance row says by
+    // offering the way back rather than by naming a field.
+    expect(page.screen().shows(TYPING)).toBe(false);
+
+    // Tab is the product's own route to the Draft, and the row it advertises is
+    // what says the Draft has them. Bounded by the ring, which wraps.
+    for (let press = 0; press < 40 && !page.screen().shows(TYPING); press += 1) {
+      yield* tab(page);
+    }
+    expect(page.screen().shows(TYPING)).toBe(true);
+
+    yield* typed(page, "<Output>the first entry</Output>");
+    const drafted = page.screen();
+    expect(drafted.found("the first entry", { after: DRAFT })).toBe(1);
+    expect(drafted.found("the first entry", SIDEKICK_SEND)).toBe(0);
+
+    yield* page.key("Enter");
+    yield* page.until("entry 1 settling", (one) => one.shows("1 ✓"));
+    expect(page.screen().shows("the first entry")).toBe(true);
+  });
+
+  it("replaces the agent Configure is holding", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    page.repl.fake.configuration({
+      model: {
+        selected: "balanced",
+        choices: [
+          { id: "balanced", name: "Balanced" },
+          { id: "fast", name: "Fast" },
+        ],
+      },
+      effort: { balanced: { selected: "medium", choices: [{ id: "medium", name: "Medium" }] } },
+    });
+
+    yield* page.press("[configure scribe]");
+    yield* page.until("Configure", (one) => one.shows("[refresh]"));
+    // The drawer opens with its scroll control selected, so one Tab reaches the
+    // Agent field. Its own row carries a static "> Agent: " prompt, which is
+    // why the cue there says nothing about focus; what says the field has the
+    // keystrokes is that it takes them.
+    yield* tab(page);
+    for (let press = 0; press < "scribe".length; press += 1) {
+      const before = page.screen().index;
+      yield* page.key("Backspace");
+      yield* page.until("the screen after a Backspace", (one) => one.index > before);
+    }
+    yield* typed(page, "scrivener");
+    expect(page.screen().shows("Agent: scrivener")).toBe(true);
+    expect(page.screen().shows("Agent: scribe")).toBe(false);
+
+    // What the drawer then offers is the outcome a replacement has: this agent
+    // has its own settings, so the way to adopt it is a conversation of its own.
+    expect(page.screen().shows("scrivener has its own settings.")).toBe(true);
+    yield* page.press("[start new conversation]");
+    yield* page.until("Configure closing over the replacement", (one) => !one.shows("[refresh]"));
+  });
+
+  it("answers the second field of a question form and submits it", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    page.repl.fake.script({
+      reply: `<Elicit schema={${JSON.stringify(REVIEW)}} as="answer">Approve the plan?</Elicit>\n`,
+    });
+    yield* asked(page, "review it", "[answer sidekick]");
+    yield* page.press("[answer sidekick]");
+    yield* page.until("the form", (one) => one.shows("[submit]"));
+
+    // decision is an enum, so the product draws it as options to choose; the
+    // second field is the text one. Two Tabs reach its editable line: the
+    // first selects the field, the second its value.
+    yield* tab(page);
+    yield* tab(page);
+    yield* typed(page, "okay");
+    const answered = page.screen();
+    expect(answered.rows.some((row) => row.includes("*message: okay"))).toBe(true);
+    expect(answered.rows.some((row) => row.includes("*decision: okay"))).toBe(false);
+
+    // Submitted with the required choice still unmade, the form keeps what was
+    // typed and says what is missing rather than answering.
+    yield* page.press("[submit]");
+    const refused = yield* page.until("the form saying what is missing", (one) =>
+      one.shows("must have required property"),
+    );
+    expect(refused.rows.some((row) => row.includes("*message: okay"))).toBe(true);
+
+    // Making the choice the refusal named completes the answer: the form goes
+    // and the Sidekick carries on with what it was given.
+    yield* page.press("( ) approve");
+    yield* page.until("the form being answered", (one) => !one.shows("[submit]"));
+  });
+});
