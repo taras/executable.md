@@ -6,6 +6,7 @@ import {
   mountedExecution,
   awaited,
   appendGate,
+  operationGate,
   useMountedHost,
 } from "./support/mounted-repl.ts";
 import { FsApi, ensureDir, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
@@ -1684,5 +1685,195 @@ describe("Older chats retain their identity across failure and cold opening", ()
       expect(yield* readTextFile(legacy)).toBe("");
     }
     expect(yield* publishedPairs(root)).toEqual([execution]);
+  });
+});
+
+function* conversationChoices(page: ReplPage): Operation<string[]> {
+  yield* page.press(" ▾");
+  yield* page.until("the offered conversations", (one) => one.shows("All conversations"));
+  return page.screen().rows.filter((row) => row.trimStart().startsWith("xmd:v1:")).flatMap((row) => {
+    const match = row.match(/xmd:v1:[a-z0-9:]+…?/);
+    return match === null ? [] : [match[0]];
+  });
+}
+
+function* filterChoice(page: ReplPage, choice: string): Operation<void> {
+  const row = page.screen().rows.find((one) => one.trimStart().startsWith(choice));
+  if (row === undefined) { throw new Error(`no choice for ${choice}: ${page.describe()}`); }
+  yield* page.press(choice, { onRow: row });
+  yield* page.until("the chosen filter", (one) => !one.shows("All conversations"));
+}
+
+function selectedFilter(one: ScreenReading): string | undefined {
+  return one.rows.find((row) => row.includes(" ▾"))?.match(/xmd:v1:[a-z0-9:]+…?/)?.[0];
+}
+
+function promptEntry(text: string): string {
+  return `<Session name="planner"><Prompt text="${text}" /></Session>\n`;
+}
+
+function* appendBoundary(stopped: boolean): Operation<void> {
+  const dataRoot = yield* useTemporary("xmd-ss3-boundary-");
+  const operations = operationGate();
+  let execution = "";
+  let observed = "";
+  yield* scoped(function* () {
+    const host = yield* useMountedHost({ dataRoot, operations });
+    const page = yield* useReplPage({ host });
+    page.repl.fake.script({ reply: "<Output>Never saved.</Output>\n", turnId: "sk-turn-stop" });
+    const hold = operations.holdNext((path, record) => {
+      if (!path.endsWith(SIDEKICK_FILE) || !record.includes("agent_prompt")) { return false; }
+      observed = /xmd:v1:[0-9a-f:]+/.exec(record)?.[0] ?? "";
+      return true;
+    });
+    yield* compose(page, "stop me");
+    yield* sendComposed(page);
+    yield* hold.started();
+    expect(observed).not.toBe("");
+    expect(hold.holding).toBe(true);
+    const offered = yield* conversationChoices(page);
+    expect(offered).toHaveLength(1);
+    yield* filterChoice(page, offered[0]);
+    const standing = selectedFilter(page.screen());
+    expect(standing).toBeDefined();
+    expect(transcriptHas(page.screen(), "stop me")).toBe(true);
+    if (stopped) {
+      yield* stopSidekick(page);
+      yield* awaited("the operation abandoning its append", () => hold.abandoned);
+      expect(hold.holding).toBe(false);
+    } else {
+      hold.release();
+      yield* page.until("the released turn completed", (one) => transcriptHas(one, "stop me · completed"));
+      yield* page.until("the released cycle idle", sidekickIdle);
+    }
+    expect(operations.appended.some((one) => one.path.endsWith(SIDEKICK_FILE) && one.record.includes("agent_prompt"))).toBe(!stopped);
+    const saved = yield* settledReading(page.repl);
+    expect(personMessages(saved.chat)).toEqual(["stop me"]);
+    expect(saved.chat.filter((one) => one.kind === "event" && one.event.includes("agent_prompt"))).toHaveLength(stopped ? 0 : 1);
+    const projected = projectSidekick(saved.chat);
+    if (!projected.ok) { throw projected.error; }
+    expect(projected.value.turns).toHaveLength(stopped ? 0 : 1);
+    expect(selectedFilter(page.screen())).toBe(standing);
+    execution = yield* mountedExecution(page.repl);
+    yield* finishDraft(page);
+  });
+  const cold = yield* useMountedHost({ dataRoot });
+  const location = `xmd://repl/${execution}/sessions?session=${encodeURIComponent(observed)}`;
+  if (stopped) {
+    expect(yield* refusedLocation(cold, location)).toContain(observed);
+  } else {
+    const page = yield* useReplPage({ host: cold, location });
+    expect(selectedFilter(page.screen())).toBeDefined();
+    expect(transcriptHas(page.screen(), "stop me")).toBe(true);
+  }
+  expect(cold.fake.created).toEqual([]);
+  expect(cold.fake.prompts).toEqual([]);
+}
+
+describe("Sidekick original provider membership and cancelled append", () => {
+  it("SS3: Stop before the canonical append leaves the key local and nothing saved", function* () {
+    yield* appendBoundary(true);
+  });
+  it("SS3: control — released rather than stopped, that boundary saves its turn", function* () {
+    yield* appendBoundary(false);
+  });
+  it("SS3: each owner's provider key is one choice of its own, and filters to that owner's row", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ reply: "ENTRY-REPLY" });
+    page.repl.fake.script({ reply: "<Output>Shared answer.</Output>\n", turnId: "sk-turn-1" });
+    yield* pasteDraft(page, promptEntry("entry-ask"));
+    yield* page.key("Enter");
+    yield* page.until("the entry turn recorded", (one) => transcriptHas(one, "entry") && transcriptHas(one, "completed, recorded"));
+    yield* compose(page, "chat ask");
+    yield* sendComposed(page);
+    yield* page.until("the chat turn saved", (one) => transcriptHas(one, "chat ask · completed"));
+    yield* page.until("the cycle idle", sidekickIdle);
+    yield* page.resize(NARROW);
+    yield* page.press("Sessions");
+    yield* page.until("the full Transcript outlet", (one) => one.shows("All sessions"));
+    const choices = yield* conversationChoices(page);
+    expect(choices).toHaveLength(2);
+    expect(new Set(choices).size).toBe(2);
+    yield* filterChoice(page, choices[0]);
+    expect(transcriptHas(page.screen(), "entry")).toBe(true);
+    expect(transcriptHas(page.screen(), "chat ask")).toBe(false);
+    yield* conversationChoices(page);
+    yield* filterChoice(page, choices[1]);
+    expect(transcriptHas(page.screen(), "chat ask")).toBe(true);
+    expect(transcriptHas(page.screen(), "entry")).toBe(false);
+    yield* conversationChoices(page);
+    yield* page.press("All conversations");
+    yield* page.until("both owners' rows", (one) => transcriptHas(one, "entry") && transcriptHas(one, "chat ask"));
+  });
+
+  it("SS3: a live key filters its own unsaved row, and survives the cycle ending", function* () {
+    const gate = appendGate();
+    const host = yield* useMountedHost({ gate });
+    const page = yield* useReplPage({ host });
+    page.repl.fake.script({ reply: "<Output>Said it.</Output>\n", turnId: "sk-turn-1" });
+    const hold = gate.holdNext((path, record) => path.endsWith(SIDEKICK_FILE) && record.includes("agent_prompt"));
+    yield* compose(page, "say it");
+    yield* sendComposed(page);
+    yield* hold.started();
+    const choices = yield* conversationChoices(page);
+    expect(choices).toHaveLength(1);
+    yield* filterChoice(page, choices[0]);
+    const standing = selectedFilter(page.screen());
+    expect(standing).toBeDefined();
+    expect(transcriptHas(page.screen(), "say it")).toBe(true);
+    expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["say it"]);
+    hold.release();
+    yield* stopSidekick(page);
+    yield* page.until("idle after the saved append", sidekickIdle);
+    expect(selectedFilter(page.screen())).toBe(standing);
+    expect(page.screen().shows("xmd:v1:")).toBe(true);
+  });
+
+  it("SS3: a Sidekick key is selectable at an entry checkpoint that precedes it", function* () {
+    const dataRoot = yield* useTemporary("xmd-ss3-prefix-");
+    let execution = "";
+    let marker = "";
+    let entryKey = "";
+    let chatKey = "";
+    yield* scoped(function* () {
+      const host = yield* useMountedHost({ dataRoot });
+      const page = yield* useReplPage({ host });
+      yield* pasteDraft(page, TWO_STEP_ENTRY);
+      yield* page.key("Enter");
+      yield* entrySettles(page, 1, "ok");
+      const first = yield* settledReading(page.repl);
+      marker = first.model.checkpoints.at(-1)?.marker ?? "";
+      expect(marker).not.toBe("");
+      page.repl.fake.script({ reply: "ENTRY-REPLY" });
+      page.repl.fake.script({ reply: "<Output>Chat answer.</Output>\n" });
+      yield* pasteDraft(page, promptEntry("later-entry"));
+      yield* page.key("Enter");
+      yield* page.until("the second entry recorded", (one) => transcriptHas(one, "later") && transcriptHas(one, "completed, recorded"));
+      yield* compose(page, "chat ask");
+      yield* sendComposed(page);
+      yield* page.until("the chat idle", (one) => chatHas(one, "Chat answer.") && sidekickIdle(one));
+      execution = yield* mountedExecution(page.repl);
+      const read = yield* settledReading(page.repl);
+      entryKey = read.model.turns.map((one) => one.sessionKey).find((one) => one.length > 0) ?? "";
+      const chat = projectSidekick(read.chat);
+      if (!chat.ok) { throw chat.error; }
+      chatKey = chat.value.turns.map((one) => one.sessionKey).find((one) => one !== undefined) ?? "";
+      expect(entryKey).not.toBe("");
+      expect(chatKey).not.toBe("");
+      expect(entryKey).not.toBe(chatKey);
+      yield* finishDraft(page);
+    });
+    const cold = yield* useMountedHost({ dataRoot });
+    const prefix = `xmd://repl/${execution}/sessions?at=${encodeURIComponent(marker)}&inspect&session=`;
+    yield* scoped(function* () {
+      const page = yield* useReplPage({ host: cold, location: prefix + encodeURIComponent(chatKey) });
+      expect(selectedFilter(page.screen())).toBeDefined();
+      expect(transcriptHas(page.screen(), "chat ask")).toBe(true);
+      expect(transcriptHas(page.screen(), "later-")).toBe(false);
+      yield* finishDraft(page);
+    });
+    const refusal = yield* refusedLocation(cold, prefix + encodeURIComponent(entryKey));
+    expect(refusal).toContain(entryKey);
+    expect(refusal).toContain("had started at this history position");
   });
 });
