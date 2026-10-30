@@ -1244,3 +1244,540 @@ describe("REPL original pause-before-admission boundaries", () => {
     expect(yield* leaveWithLocation(cold)).toBe(location);
   });
 });
+
+const JOURNEY_ONE = [
+  "```js eval",
+  'const token = "alpha";',
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Ready?</Elicit>',
+  "",
+  "One: {token}/{answer.decision}",
+  "",
+].join("\n");
+
+const JOURNEY_TWO = [
+  "```js eval",
+  "const seen = `${token}-two`;",
+  "```",
+  "",
+  "Two: {seen}",
+  "",
+  "```js eval",
+  "const lost = nothingDeclaredAnywhere;",
+  "```",
+  "",
+].join("\n");
+
+const JOURNEY_THREE = [
+  "```js eval",
+  "const after = `${token}-three`;",
+  "```",
+  "",
+  "Three: {after}",
+  "",
+].join("\n");
+
+const STOPPED_ENTRY = [
+  "```js eval",
+  'const token = "held";',
+  'output("printed before the question");',
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+  "One: {answer.decision}",
+  "",
+].join("\n");
+
+const SIBLING_FAILS = [
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  "<All>",
+  "<Spawn>",
+  '<Elicit schema={schema} as="answer">Ready?</Elicit>',
+  "</Spawn>",
+  "<Spawn>",
+  "```js eval",
+  'yield* fetch("https://held.invalid/sibling");',
+  "```",
+  "</Spawn>",
+  "</All>",
+  "",
+].join("\n");
+
+const SHORT_QUESTION = [
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+  "Decision: {answer.decision}",
+  "",
+].join("\n");
+
+const LONG_QUESTION = [
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">' +
+    "Would you like to approve the plan that was drafted for this execution, " +
+    "including every file it proposes to write and every command it proposes to run?" +
+    "</Elicit>",
+  "",
+  "Decision: {answer.decision}",
+  "",
+].join("\n");
+
+function* runSource(page: ReplPage, source: string): Operation<void> {
+  yield* pasteDraft(page, source);
+  yield* page.key("Enter");
+}
+
+function* answerGo(page: ReplPage): Operation<void> {
+  yield* page.press("[answer]");
+  yield* page.until("the go question", (one) => one.shows("[submit]"));
+  yield* page.press("( ) go");
+  yield* page.press("[submit]");
+  yield* entrySettles(page, 1, "ok");
+}
+
+describe("REPL original live output and entry lifecycle", () => {
+  it("J1: text the Journal has not settled is drawn while the run is held", function* () {
+    const host = yield* useMountedHost();
+    const release = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    let held = false;
+    yield* Elicitation.around({
+      *elicit([request], next) {
+        held = true;
+        yield* release.operation;
+        return yield* next(request);
+      },
+    });
+    const page = yield* useReplPage({ host });
+    const printed = "the-last-thing-this-document-prints";
+    const source = `\`\`\`js eval\nconst schema = {type:"object", properties:{decision:{type:"string",enum:["yes"]}}, required:["decision"],additionalProperties:false};\n\`\`\`\n\n${printed}\n\n<Elicit schema={schema} as="answer">Decide?</Elicit>\n`;
+    yield* runSource(page, source);
+    yield* awaited("the unpublished question held", () => held);
+    yield* page.until("the unrecorded output", (one) => one.shows(printed));
+    expect(page.screen().shows("[answer]")).toBe(false);
+    expect(page.screen().shows(printed)).toBe(true);
+    release.resolve();
+    yield* page.until("the question registering", (one) => one.shows("[answer]"));
+    expect((yield* journalRecords(page)).length).toBeGreaterThan(0);
+  });
+
+  it("ER1: the invalid entry clears, and the draft, surface and position stand", function* () {
+    const page = yield* referencePage();
+    for (const [i, source] of ["One.\n", "Two.\n"].entries()) {
+      yield* runSource(page, source);
+      yield* entrySettles(page, i + 1, "ok");
+    }
+    yield* draftText(page, "Three.");
+    yield* selectCatalog(page, "entry-2");
+    yield* openHistory(page);
+    yield* page.press("Entry 1 admitted");
+    yield* page.until("the prefix before entry two", (one) => one.shows("[live]"));
+    yield* closeDrawer(page);
+    yield* catalog(page);
+    expect(page.screen().shows("entry-1")).toBe(true);
+    expect(page.screen().shows("entry-2")).toBe(false);
+    expect(page.screen().shows("[unfinished] entry-1")).toBe(true);
+    yield* closeDrawer(page);
+    const standing = route(yield* leaveWithLocation(page));
+    expect(standing.scopes).toEqual([]);
+    expect(standing.at).toBeDefined();
+    expect(standing.inspect).toBe(true);
+    expect(standing.surface).toBe("entries");
+    expect(standing.draft).toBe("Three.");
+  });
+
+  it("EJ1: a draft survives a refusal, inherits, fails, and is followed", function* () {
+    const page = yield* referencePage();
+    yield* runSource(page, JOURNEY_ONE);
+    yield* page.until("entry one's question", (one) => one.shows("[answer]"));
+    yield* pasteDraft(page, JOURNEY_TWO);
+    const held = yield* journalRecords(page);
+    yield* page.key("Enter");
+    yield* page.until("the retained successor refused", (one) => one.shows("has not finished"));
+    expect(yield* journalRecords(page)).toEqual(held);
+    yield* answerGo(page);
+    expect(page.screen().shows("One: alpha/go")).toBe(true);
+    yield* intoDraft(page);
+    yield* page.key("Enter");
+    yield* entrySettles(page, 2, "err");
+    const failed = yield* retainedModel(page);
+    expect(failed.entries[1]?.source).toBe(JOURNEY_TWO);
+    expect(failed.entries[1]?.bindings.find((one) => one.name === "seen")?.value).toBe("alpha-two");
+    expect(failed.entries[0]?.bindings.find((one) => one.name === "token")?.value).toBe("alpha");
+    yield* runSource(page, JOURNEY_THREE);
+    yield* entrySettles(page, 3, "ok");
+    yield* selectCatalog(page, "entry-3");
+    expect(page.screen().shows("Three: alpha-three")).toBe(true);
+    const settled = yield* retainedModel(page);
+    expect(settled.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
+    expect(settled.entries.map((one) => one.terminal?.status)).toEqual(["ok", "err", "ok"]);
+    yield* catalog(page);
+    for (const [index, status] of ["ok", "err", "ok"].entries()) {
+      expect(page.screen().shows(`${index + 1}. [${status}] entry-${index + 1}`)).toBe(true);
+    }
+    yield* page.press("entry-1");
+    yield* page.until("the first entry restored", (one) => trail(one).includes("Entry 1"));
+    expect(page.screen().shows("One: alpha/go")).toBe(true);
+    expect(page.screen().shows("Three: alpha-three")).toBe(false);
+    yield* leaveWithLocation(page);
+    released(page.repl.terminal);
+  });
+
+  it("EL2: Draft Stop admits no successor until the stopped entry's cleanup joins", function* () {
+    const host = yield* useMountedHost();
+    const release = withResolvers<void>();
+    let entering = false;
+    yield* Execution.around({
+      *document([request], next) {
+        yield* ensure(function* () {
+          entering = true;
+          yield* release.operation;
+        });
+        return yield* next(request);
+      },
+    });
+    const page = yield* useReplPage({ host });
+    yield* ensure(() => release.resolve());
+    yield* runSource(page, STOPPED_ENTRY);
+    yield* page.until("the stopped entry's question", (one) => one.shows("[answer]"));
+    yield* page.press("[stop]", { onRow: "DRAFT" });
+    yield* awaited("the entry's own held teardown", () => entering);
+    yield* runSource(page, FIRST_COLD);
+    yield* tab(page);
+    expect((yield* retainedModel(page)).entries.map((one) => one.key)).toEqual(["entry-1"]);
+    release.resolve();
+    yield* page.until("joined and ready", (one) => one.shows("Ready for Entry 2"));
+    yield* intoDraft(page);
+    yield* page.key("Enter");
+    yield* entrySettles(page, 2, "ok");
+    const model = yield* retainedModel(page);
+    expect(model.entries.map((one) => one.terminal?.status)).toEqual(["cancelled", "ok"]);
+    expect(model.entries[0]?.transcript.some((one) => one.kind === "output" && one.text.includes("printed before the question"))).toBe(true);
+    expect(model.entries[1]?.source).toBe(FIRST_COLD);
+    yield* leaveWithLocation(page);
+    released(page.repl.terminal);
+  });
+
+  it("UI3: a question that disappears takes its drawer, and answers nothing", function* () {
+    const host = yield* useMountedHost();
+    const release = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    yield* API.Fetch.around({
+      *fetch(): Operation<never> {
+        yield* release.operation;
+        throw new Error("the sibling could not finish");
+      },
+    });
+    const page = yield* useReplPage({ host });
+    yield* runSource(page, SIBLING_FAILS);
+    yield* page.until("the sibling's question", (one) => one.shows("[answer]"));
+    yield* page.press("[answer]");
+    yield* page.until("the live drawer", (one) => one.shows("[submit]"));
+    release.resolve();
+    yield* page.until("the question withdrawing", (one) => !one.shows("[close]"));
+    yield* entrySettles(page, 1, "err");
+    expect((yield* journalRecords(page)).filter((one) => one.includes("elicit"))).toEqual([]);
+    yield* runSource(page, FIRST_COLD);
+    yield* entrySettles(page, 2, "ok");
+  });
+});
+
+function* sessions(page: ReplPage): Operation<void> {
+  if (page.screen().size.columns === 72) {
+    yield* page.press("Sessions");
+    yield* page.until("the Transcript outlet", (one) => one.shows("All sessions"));
+  } else {
+    expect(page.screen().shows("TRANSCRIPT")).toBe(true);
+  }
+}
+
+function directions(one: ScreenReading): string {
+  return one.rows.find((row) => row.includes("Tab/Shift+Tab move"))?.trim() ?? "";
+}
+
+describe("REPL original first-use paths and question ownership", () => {
+  for (const size of [WIDE, NARROW]) {
+    it(size.columns === 72
+      ? "C1: submit, answer, dismiss, reopen, settle, Sessions, History, live and exit at 72x20"
+      : "UI8: the whole first-use path, using only what the screen says", function* () {
+      const page = yield* useReplPage({ size });
+      expect(directions(page.screen())).toBe("Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move");
+      yield* runSource(page, SHORT_QUESTION);
+      yield* page.until("the waiting announcement", (one) => one.shows("[answer]"));
+      if (size.columns === 72) {
+        expect(directions(page.screen())).toBe("Entry 1 question · activate answer · Type here · Tab/Shift+Tab move");
+      }
+      yield* sessions(page);
+      expect(page.screen().shows("[submit]")).toBe(false);
+      yield* page.press("[answer]");
+      yield* page.until("the question drawer", (one) => one.shows("[submit]"));
+      yield* page.key("Escape");
+      yield* page.until("the question dismissed", (one) => !one.shows("[close]"));
+      expect(page.screen().shows("[answer]")).toBe(true);
+      yield* page.key("Enter");
+      yield* page.until("Enter reopening the unanswered question", (one) => one.shows("[submit]"));
+      yield* page.press("( ) go");
+      yield* page.press("[submit]");
+      yield* entrySettles(page, 1, "ok");
+      expect(page.screen().shows("[close]")).toBe(false);
+      yield* catalog(page);
+      expect(page.screen().shows("1. [ok] entry-1")).toBe(true);
+      yield* closeDrawer(page);
+      yield* sessions(page);
+      yield* catalog(page);
+      yield* closeDrawer(page);
+      yield* draftText(page, "entry two");
+      yield* openHistory(page);
+      yield* page.press("Entry 1 admitted");
+      yield* page.until("the frozen drawer", (one) => one.shows("[live]"));
+      expect(directions(page.screen())).toContain("Esc closes");
+      yield* closeDrawer(page);
+      for (let press = 0; press < 40 && !directions(page.screen()).startsWith("History · Enter unavailable"); press += 1) { yield* tab(page); }
+      yield* page.until("the frozen Draft guidance", (one) => directions(one).startsWith("History · Enter unavailable"));
+      expect(directions(page.screen())).toContain("activate live");
+      expect(page.screen().shows("entry two")).toBe(true);
+      expect(page.screen().shows("Enter submits")).toBe(false);
+      yield* page.press("[live]");
+      yield* page.until("the live head", (one) => !one.shows("[live]"));
+      yield* intoDraft(page);
+      yield* page.key("Enter");
+      yield* entrySettles(page, 2, "ok");
+      expect((yield* retainedModel(page)).entries[1]?.source).toBe("entry two");
+      expect(yield* leaveWithLocation(page)).toContain("xmd://repl/");
+      released(page.repl.terminal);
+    });
+  }
+
+  it("UI1: the longest question still has a placed, targetable control at 72x20", function* () {
+    const page = yield* useReplPage({ size: NARROW });
+    yield* runSource(page, LONG_QUESTION);
+    yield* page.until("the long question announcing", (one) => one.shows("[answer]"));
+    yield* sessions(page);
+    const answer = page.screen().locate("[answer]");
+    const row = page.screen().rows[answer.row] ?? "";
+    for (const label of ["[history]", "[exit]", "[pause]", "[answer]"]) { expect(row).toContain(label); }
+    expect(answer.column + "[answer]".length).toBeLessThanOrEqual(NARROW.columns);
+    yield* page.press("[answer]");
+    yield* page.until("the long question's form", (one) => one.shows("[close]") && one.shows("decision: go"));
+    yield* closeDrawer(page);
+    expect(trail(page.screen())).toContain("Entry 1");
+    yield* catalog(page);
+    expect(page.screen().shows("1. [unfinished] entry-1")).toBe(true);
+    yield* closeDrawer(page);
+    yield* page.press("[answer]");
+    yield* page.until("the long question still pending", (one) => one.shows("[close]") && one.shows("decision: go"));
+  });
+
+  it("UI4: a live question's drawer is refused wherever it cannot belong", function* () {
+    const page = yield* referencePage();
+    yield* runSource(page, SHORT_QUESTION);
+    yield* page.until("the live question", (one) => one.shows("[answer]"));
+    const before = yield* journalRecords(page);
+    yield* openHistory(page);
+    yield* page.press("Entry 1 admitted");
+    yield* page.until("the frozen question absent", (one) => one.shows("[live]") && !one.shows("[answer]"));
+    yield* closeDrawer(page);
+    expect(page.screen().shows("[submit]")).toBe(false);
+    yield* page.press("[live]");
+    yield* page.until("the live question returning", (one) => one.shows("[answer]") && !one.shows("[live]"));
+    expect(yield* journalRecords(page)).toEqual(before);
+    expect(page.screen().shows("[submit]")).toBe(false);
+  });
+
+  it("UI6: the draft stays visible and intact under a drawer, and is not editable through it", function* () {
+    for (const size of [WIDE, NARROW]) {
+      yield* scoped(function* () {
+        const page = yield* useReplPage({ size });
+        yield* runSource(page, SHORT_QUESTION);
+        yield* page.until("the question waiting", (one) => one.shows("[answer]"));
+        yield* draftText(page, "next entry");
+        yield* page.press("[answer]");
+        yield* page.until("the question field", (one) => one.shows("[submit]"));
+        expect(page.screen().found("next entry", DRAFT_VALUE)).toBe(1);
+        yield* page.type("go");
+        yield* page.until("the modal field taking the keystrokes", (one) => one.shows("decision: go"));
+        expect(page.screen().found("next entry", DRAFT_VALUE)).toBe(1);
+        yield* closeDrawer(page);
+        expect(route(yield* leaveWithLocation(page)).draft).toBe("next entry");
+      });
+    }
+  });
+
+  it("UI7: leaving strips the drawers only this process could mount", function* () {
+    const dataRoot = yield* useTemporary("xmd-live-drawer-exit-");
+    const kept = yield* scoped(function* () {
+      const page = yield* useReplPage({ dataRoot });
+      yield* runSource(page, SHORT_QUESTION);
+      yield* page.until("the pending question", (one) => one.shows("[answer]"));
+      yield* page.press("[answer]");
+      yield* page.until("the live drawer", (one) => one.shows("[submit]"));
+      const path = yield* executionJournal(page);
+      const bytes = yield* readTextFile(path);
+      yield* page.press("[exit]");
+      const outcome = yield* commandReturned(page);
+      if (!outcome.ok) { throw outcome.error; }
+      const location = outcome.value.location;
+      expect(location).not.toContain("+elicit");
+      expect(location).not.toContain("+permission");
+      expect(location).toContain("/entry-1");
+      expect(yield* readTextFile(path)).toBe(bytes);
+      expect((yield* retainedModel(page)).entries[0]?.terminal).toBeUndefined();
+      expect((yield* journalRecords(page)).filter((one) => one.includes("elicit"))).toEqual([]);
+      return { location, path, bytes };
+    });
+    const cold = yield* useReplPage({ dataRoot, location: kept.location });
+    expect(trail(cold.screen())).toContain("Entry 1");
+    yield* leaveWithLocation(cold);
+  });
+});
+
+describe("REPL original completed-screen lifecycle", () => {
+  it("reads typing, diffs and every profile off completed presentations", function* () {
+    const page = yield* referencePage();
+    const terminal = page.repl.terminal;
+    const top = page.screen().rows[0];
+    const session = top.trim().split(/\s+/).at(-1) ?? "";
+    expect(session.length).toBeGreaterThan(0);
+    const before = terminal.drawn;
+    yield* draftText(page, "abc");
+    expect(terminal.drawn).toBeGreaterThan(before);
+    expect(terminal.presented.some((bytes) => new TextDecoder().decode(bytes).includes(session))).toBe(true);
+    expect(new TextDecoder().decode(terminal.presented.at(-1) ?? new Uint8Array())).not.toContain(session);
+    expect(page.screen().rows[0]).toBe(top);
+    for (const size of [{ columns: 120, rows: 30 }, NARROW, WIDE]) {
+      const one = yield* page.resize(size);
+      expect(one.rows).toHaveLength(size.rows);
+      expect(one.rows.filter((row) => row.length > size.columns)).toEqual([]);
+      expect(one.found("abc", DRAFT_VALUE)).toBe(1);
+    }
+    expect(page.repl.outcome()).toBeUndefined();
+  });
+
+  it("puts a held write on the screen only once it completes, and a cancelled one never", function* () {
+    const page = yield* scoped(function* () {
+      const page = yield* referencePage();
+      const terminal = page.repl.terminal;
+      yield* draftText(page, "abc");
+      const before = page.screen().index;
+      terminal.holdNextPresent();
+      yield* page.type("x");
+      yield* awaited("the first held write", () => terminal.holdPresent !== undefined);
+      expect(page.screen().index).toBe(before);
+      expect(page.screen().found("abcx", DRAFT_VALUE)).toBe(0);
+      terminal.holdPresent?.release();
+      yield* page.until("the released reading", (one) => one.found("abcx", DRAFT_VALUE) === 1);
+      terminal.holdPresent = undefined;
+      terminal.holdNextPresent();
+      yield* page.type("y");
+      yield* awaited("the cancelled held write", () => terminal.holdPresent !== undefined);
+      yield* spawn(() => page.until("the cancelled reading", () => false));
+      yield* awaited("the subscribed wait", () => terminal.waiting === 1);
+      return { page, index: page.screen().index, drawn: terminal.drawn, fed: terminal.fed };
+    });
+    expect(page.page.screen().index).toBe(page.index);
+    expect(page.page.repl.terminal.drawn).toBe(page.drawn);
+    expect(page.page.repl.terminal.fed).toBe(page.fed);
+    expect(page.page.screen().found("abcx", DRAFT_VALUE)).toBe(1);
+    released(page.page.repl.terminal);
+  });
+
+  it("hands a failed write to the command's owner unchanged and releases the screen", function* () {
+    const failure = new Error("this terminal stopped accepting writes");
+    let terminal: MountedRepl["terminal"] | undefined;
+    let fed = 0;
+    let caught: unknown;
+    try {
+      yield* scoped(function* () {
+        const page = yield* referencePage();
+        terminal = page.repl.terminal;
+        yield* spawn(() => page.until("a draft holding z", () => false));
+        yield* awaited("a subscribed wait", () => page.repl.terminal.waiting === 1);
+        terminal.failNextPresent(failure);
+        yield* page.type("z");
+        fed = terminal.fed;
+        yield* suspend();
+      });
+    } catch (error) { caught = error; }
+    expect(caught).toBe(failure);
+    expect(terminal?.fed).toBe(fed);
+    if (terminal === undefined) { throw new Error("the command never mounted its terminal"); }
+    released(terminal);
+  });
+
+  it("ends a wait the screen can no longer satisfy when the command exits", function* () {
+    const page = yield* referencePage();
+    const waiting = yield* spawn(function* () {
+      try { yield* page.until("something never drawn", () => false); }
+      catch (error) { return error; }
+      return undefined;
+    });
+    yield* awaited("the subscribed wait", () => page.repl.terminal.waiting === 1);
+    page.repl.terminal.end();
+    expect(String(yield* waiting)).toContain("the command ended before something never drawn");
+    expect(page.repl.outcome()?.ok).toBe(true);
+    released(page.repl.terminal);
+  });
+
+  it("J2: a window dragged while a frame is being prepared keeps the command", function* () {
+    const page = yield* referencePage();
+    yield* draftText(page, "resize me");
+    const execution = yield* mountedExecution(page.repl);
+    const before = page.screen().index;
+    page.repl.terminal.resizeAfterRead(3, NARROW);
+    yield* page.type("!");
+    const first = yield* page.until("the first completed resized write", (one) => one.index > before);
+    expect(first.size).toEqual(NARROW);
+    expect(first.found("resize me!", DRAFT_VALUE)).toBe(1);
+    const churned = page.screen().index;
+    page.repl.terminal.churnSize(60, NARROW);
+    yield* page.type("?");
+    yield* awaited("the drag ending", () => page.repl.terminal.churning() === 0);
+    const last = yield* page.until("the settled resize", (one) => one.found("resize me!?", DRAFT_VALUE) === 1);
+    expect(last.size).toEqual(NARROW);
+    expect(last.index - churned).toBeLessThanOrEqual(1);
+    expect(last.shows("needs at least")).toBe(false);
+    expect(page.repl.outcome()).toBeUndefined();
+    const location = route(yield* leaveWithLocation(page));
+    expect(location.execution).toBe(execution);
+    expect(location.draft).toBe("resize me!?");
+    released(page.repl.terminal);
+  });
+});
