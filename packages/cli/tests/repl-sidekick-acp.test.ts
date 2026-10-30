@@ -1211,20 +1211,29 @@ if(process.env.CONTROL==='bare')reply({stopReason:'end_turn'});
           () => true,
           () => false,
         );
-        // The result settles before final store writes; the event stream joins them.
         const events = turn.events[Symbol.asyncIterator]();
         let event = yield* until(events.next());
         while (!event.done) {
           event = yield* until(events.next());
         }
         const result = yield* until(turn.result);
-        expect(result.status).toBe("completed");
-        if (result.status !== "completed") {
-          throw new Error("No controlled ending.");
+        if (control === "bare") {
+          expect(result.status).toBe("completed");
+          if (result.status !== "completed") {
+            throw new Error("No controlled response.");
+          }
+          expect(result.stopReason).toBe("end_turn");
+        } else {
+          expect(result.status).toBe("failed");
+          if (result.status !== "failed") {
+            throw new Error("No controlled timeout.");
+          }
+          expect(result.error.code).toBe("TIMEOUT");
+          expect(result).not.toHaveProperty("stopReason");
         }
-        expect(result.stopReason).toBe("end_turn");
-        expect(result._meta?.["executablemd.sidekick-exchange/v1"]).toBe(undefined);
+        expect(result).not.toHaveProperty("_meta");
         expect(yield* until(accepted)).toBe(control === "timeout");
+        yield* until(runtime.close({ handle, reason: "controlled fixture completion" }));
       });
     }
   });
