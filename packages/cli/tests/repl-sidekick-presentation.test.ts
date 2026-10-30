@@ -2148,3 +2148,149 @@ describe("Sidekick original acknowledged history submission identity", () => {
     expect(read.model.entries[2]?.source).toBe(HI_THIRD);
   });
 });
+
+function chatControls(one: ScreenReading) {
+  return one.shows(COMPOSER) ? SIDEKICK_CONTROLS : { rightOf: "[Back to current chat]" };
+}
+function shownChat(one: ScreenReading): string[] {
+  const controls = chatControls(one);
+  const upper = one.locate("[↑ earlier]", controls).row;
+  const lower = one.locate("[↓ later]", controls).row;
+  const anchor = one.rows.slice(upper + 1, lower).flatMap((row) => [...row.matchAll(/\[[US]\] /g)].map((match) => row.slice(match.index).trimEnd())).find((label) => one.found(label, one.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined) === 1);
+  if (anchor === undefined) { throw new Error(`no visible chat item: ${one.rows.join("\n")}`); }
+  return chatLines(one, anchor);
+}
+function* chatScroll(page: ReplPage, direction: "up" | "down", until: (one: ScreenReading) => boolean): Operation<void> {
+  for (let press = 0; press < 150 && !until(page.screen()); press += 1) {
+    const index = page.screen().index;
+    yield* page.press(direction === "up" ? "[↑ earlier]" : "[↓ later]", chatControls(page.screen()));
+    yield* page.until("the chat's new reading", (one) => one.index > index);
+  }
+  expect(until(page.screen())).toBe(true);
+}
+function* savedResponses(page: ReplPage, count: number): Operation<void> {
+  yield* awaitedFact(`${count} saved responses`, function* () {
+    return (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response").length >= count;
+  });
+  yield* page.until("the saved cycle idle", sidekickIdle);
+}
+function* reachTurn(page: ReplPage, label: string, direction: "up" | "down" = "down"): Operation<void> {
+  if (!transcriptHas(page.screen(), label)) {
+    yield* atSize(page, NARROW);
+    yield* page.press("Sessions");
+    yield* page.until("the Sessions outlet", (one) => one.shows("All sessions") || one.shows("All sessions ▾"));
+    for (let press = 0; press < 150 && !transcriptHas(page.screen(), label); press += 1) {
+      const index = page.screen().index;
+      yield* page.press(direction === "up" ? "[↑ earlier]" : "[↓ later]");
+      yield* page.until("the Transcript's next rows", (one) => one.index > index);
+    }
+  }
+  yield* chooseTurn(page, label);
+  yield* page.until("the selected chat opening", (one) => one.shows("[Back to current chat]"));
+  yield* atSize(page, WIDE);
+}
+function* twoOverflowingChats(page: ReplPage): Operation<void> {
+  page.repl.fake.configuration(ADVERTISED);
+  for (let i = 1; i <= 10; i += 1) { yield* exchange(page, `old-${i}`, `OLD-${i}\nmore`); }
+  yield* newConversation(page);
+  for (let i = 1; i <= 10; i += 1) { yield* exchange(page, `new-${i}`, `NEW-${i}\nmore`); }
+}
+
+describe("Sidekick original independent readings and streaming rows", () => {
+  it("CF-P1: scrolling an older chat leaves the current chat's own reading alone", function* () {
+    const page = yield* useReplPage();
+    yield* twoOverflowingChats(page);
+    expect(chatHas(page.screen(), "NEW-10")).toBe(true);
+    yield* reachTurn(page, "old-1 ", "up");
+    yield* chatScroll(page, "up", (one) => !chatHas(one, "OLD-10"));
+    yield* backToCurrent(page, "NEW-10");
+    expect(chatHas(page.screen(), "NEW-10")).toBe(true);
+  });
+  it("CF-P1: control — a deliberate current reading also survives the visit", function* () {
+    const page = yield* useReplPage();
+    yield* twoOverflowingChats(page);
+    yield* chatScroll(page, "up", (one) => !chatHas(one, "NEW-10"));
+    const held = shownChat(page.screen());
+    yield* reachTurn(page, "old-1 ", "up");
+    yield* page.press("[Back to current chat]");
+    yield* page.until("the current controls returning", (one) => one.shows(COMPOSER));
+    expect(shownChat(page.screen())).toEqual(held);
+  });
+  it("CF3: a reading somebody scrolled to stays put while the next reply saves", function* () {
+    const page = yield* useReplPage();
+    yield* populateChat(page, 12, "ANSWER");
+    yield* chatScroll(page, "up", (one) => !chatHas(one, "ANSWER-12"));
+    const held = shownChat(page.screen());
+    page.repl.fake.script({ held: true, reply: "<Output>ANSWER-13</Output>\n" });
+    yield* compose(page, "ask-13");
+    yield* sendComposed(page);
+    yield* page.repl.fake.holdingTurns(1);
+    page.repl.fake.releaseTurn();
+    yield* savedResponses(page, 13);
+    expect(JSON.stringify((yield* settledReading(page.repl)).chat)).toContain("ANSWER-13");
+    expect(chatHas(page.screen(), "ANSWER-13")).toBe(false);
+    expect(shownChat(page.screen())).toEqual(held);
+    yield* chatScroll(page, "down", (one) => chatHas(one, "ANSWER-13"));
+    yield* exchange(page, "ask-14", "ANSWER-14");
+  });
+  it("CF-E1: a held reply grows into another row, and settles in the same item", function* () {
+    const page = yield* useReplPage();
+    yield* draftText(page, "mine");
+    const first = `<Output>BEGIN\n${Array.from({ length: 30 }, (_, i) => `ROW-${i + 1}`).join("\n")}`;
+    page.repl.fake.script({ deltas: [first, "\nTAIL-LAST</Output>\n"], holdsEachPiece: true, holdAfter: 2 });
+    yield* compose(page, "grow");
+    yield* sendComposed(page);
+    yield* page.repl.fake.streamingTurns(1);
+    yield* composerPaste(page, "later");
+    yield* page.until("the preview's newest row", (one) => chatHas(one, "ROW-30"));
+    const fed = page.repl.terminal.fed;
+    expect((yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response")).toHaveLength(0);
+    expect(chatHas(page.screen(), "BEGIN")).toBe(false);
+    page.repl.fake.releaseDeltas();
+    yield* page.until("the preview growing", (one) => chatHas(one, "TAIL-LAST"));
+    expect(page.repl.terminal.fed).toBe(fed);
+    expect((yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response")).toHaveLength(0);
+    page.repl.fake.releaseDeltas();
+    yield* savedResponses(page, 1);
+    const responses = (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response");
+    expect(responses).toHaveLength(1);
+    expect(responses[0]).toMatchObject({ response: "response:1", hasOutput: true });
+    expect(chatHas(page.screen(), "TAIL-LAST")).toBe(true);
+    expect(page.repl.terminal.fed).toBe(fed);
+    expect(composerHolds(page.screen(), "later")).toBe(true);
+    expect(yield* finishDraft(page)).toBe("mine");
+  });
+
+  it("SS7: a held turn's every material fact arrives with nothing pressed", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ deltas: ["<Output>Half", " said.</Output>\n"], holdsEachPiece: true });
+    yield* compose(page, "hold it");
+    yield* sendComposed(page);
+    yield* page.repl.fake.streamingTurns(1);
+    const fed = page.repl.terminal.fed;
+    yield* page.until("the generating status", (one) => transcriptHas(one, "hold it · generating"));
+    expect(page.repl.terminal.fed).toBe(fed);
+    yield* page.until("the acknowledged composer clearing", (one) => !composerHolds(one, "hold it"));
+    page.repl.fake.releaseDeltas();
+    yield* page.until("the completed status", (one) => transcriptHas(one, "hold it · completed"));
+    expect(chatHas(page.screen(), "Half said.")).toBe(true);
+    expect(page.repl.terminal.fed).toBe(fed);
+  });
+  it("SS7: a saved Prompt and a reply still being evaluated are two facts, unpressed", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ reply: submitting(promptEntry("held entry")) });
+    page.repl.fake.script({ held: true, reply: "ENTRY-ANSWER" });
+    yield* compose(page, "evaluate it");
+    yield* sendComposed(page);
+    yield* page.repl.fake.holdingTurns(1);
+    const fed = page.repl.terminal.fed;
+    yield* page.until("the evaluation status", (one) => transcriptHas(one, "evaluating the reply"));
+    const read = yield* settledReading(page.repl);
+    expect(read.chat.filter((one) => one.kind === "event" && one.event.includes("agent_prompt"))).toHaveLength(1);
+    expect(read.chat.some((one) => one.kind === "response")).toBe(false);
+    page.repl.fake.releaseTurn();
+    yield* page.until("the completed evaluation", (one) => transcriptHas(one, "evaluate it · completed"));
+    expect(page.screen().found("evaluate it", { rightOf: "TRANSCRIPT" })).toBeGreaterThan(0);
+    expect(page.repl.terminal.fed).toBe(fed);
+  });
+});
