@@ -15,10 +15,12 @@ import { API } from "@executablemd/runtime";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { ensure, withResolvers, scoped, sleep } from "effection";
 import { decodeLocation } from "../src/repl/route.ts";
+import { ReplHost } from "../src/repl/host.ts";
 import {
   ENTRIES_FILE,
   PAIRED_DIRECTORY,
   SIDEKICK_FILE,
+  SidekickHistoryError,
   readSidekickRecords,
 } from "../src/repl/sidekick/history.ts";
 import { renderReceipt } from "../src/repl/sidekick/controls.ts";
@@ -331,11 +333,26 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     yield* ensureDir(host.root);
     yield* writeTextFile(legacy, "");
     host.fake.script({ reply: "<Output>Noted.</Output>\n" });
-    const page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
     const pair = {
       entries: join(host.root, PAIRED_DIRECTORY, execution, ENTRIES_FILE),
       sidekick: join(host.root, PAIRED_DIRECTORY, execution, SIDEKICK_FILE),
     };
+    // A native append can expose its body before its final newline reaches disk.
+    yield* ReplHost.around(
+      {
+        *appendRecord([path, record], next) {
+          if (path === pair.sidekick && record.startsWith('{"kind":"response"')) {
+            yield* next(path, record.slice(0, -1));
+            yield* next(path, "\n");
+          } else {
+            yield* next(path, record);
+          }
+        },
+      },
+      { at: "max" },
+    );
+    const finishing = gate.holdNext((path, record) => path === pair.sidekick && record === "\n");
+    const page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
     const running = gate.holdNext((path) => path === legacy && gate.reaching(legacy) >= 1);
     yield* pasteDraft(page, TWO_STEP_ENTRY);
     yield* page.key("Enter");
@@ -355,7 +372,22 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(composerHolds(page.screen(), "explain!")).toBe(true);
     yield* draftText(page, "next", ["Tab", "Tab", "Tab", "Tab"]);
     running.release();
-    yield* awaited("the pair being published", () => gate.reaching(pair.sidekick) > 0);
+    yield* page.until("the reply arriving", (one) => one.shows("Noted."));
+    yield* finishing.started();
+    expect(sidekickIdle(page.screen())).toBe(false);
+    let refusal: unknown;
+    try {
+      yield* readSidekickRecords(pair.sidekick);
+    } catch (caught) {
+      refusal = caught;
+    }
+    expect(refusal).toBeInstanceOf(SidekickHistoryError);
+    expect(refusal).toMatchObject({
+      message: "this execution's chat history ends in a record that was never finished writing.",
+    });
+    finishing.release();
+    yield* page.until("the Sidekick finishing its saved reply", sidekickIdle);
+    yield* entrySettles(page, 1, "ok");
     expect(yield* publishedPairs(host.root)).toEqual([execution]);
     const retained = yield* readTextFile(legacy);
     const records = retained.split("\n").filter((line) => line.length > 0);
@@ -367,7 +399,6 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
       execution,
       origin: { bytes: new TextEncoder().encode(retained).length, records: records.length },
     });
-    yield* page.until("the reply arriving", (one) => one.shows("Noted."));
     expect(host.fake.prompts).toHaveLength(1);
     expect(host.fake.ensured).toHaveLength(1);
     expect(host.fake.prompts[0]).toContain("explain");
