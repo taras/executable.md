@@ -20,7 +20,9 @@ reopening the same conversation without knowing ACPX's private session owner.
 Import runtime values and types through `src/acpx-runtime.ts`.
 
 **Friction removed:** child-only environment delivery and opaque response
-metadata transport are supplied by the released base. Configuration reads and
+metadata transport are supplied by the released base, with no local patches
+for either. Released cancelled results may carry metadata; XMD's existing
+completed-terminal filter keeps checkpoint retention unchanged. Configuration reads and
 writes use that base's retained owner and reconnect behavior. No XMD writer
 patch repairs the reproduced same-millisecond temporary-file collision.
 

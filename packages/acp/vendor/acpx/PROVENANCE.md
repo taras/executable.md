@@ -2,8 +2,7 @@
 
 `generated/` is the ACP runtime XMD executes: the runtime closure from npm
 `acpx@0.21.1`, with the existing first-turn materialization contract ported to
-the released session owner. The local metadata compatibility adaptation remains separately identified
-below.
+the released session owner. The environment and metadata behavior are supplied by the released base.
 
 - Repository: https://github.com/openclaw/acpx
 - Release commit: `e6c782459a18a5b22d06210fde61d75003883ab0`
@@ -76,13 +75,16 @@ authentication key and still outranks a session value. Real-child controls
 verify that binding, authentication precedence, construction-time snapshot,
 sibling isolation, absence and non-retention.
 
-## Metadata compatibility adaptation (#629)
+## Released metadata seam (#629)
 
 The released runtime carries the exact response's own `_meta`, including a
 response recovered during timeout drain. It never invents metadata from session
-updates. The local `checkpointMeta` difference suppresses metadata on cancelled
-results, as the previous snapshot did; its independent retirement retains XMD's
-checkpoint exclusion in `src/checkpoint.ts` and `src/events.ts`.
+updates. No local metadata transport or cancellation-filter patch remains.
+Released cancelled results may carry their response metadata. XMD preserves its
+checkpoint boundary explicitly in `src/checkpoint.ts` and `src/events.ts`: a
+cancelled or failed terminal never acquires a checkpoint, whatever raw metadata
+the runtime returned. A deadline without a response fails rather than
+reconstructing a success from session updates.
 
 ## Session writer (#933)
 
@@ -101,7 +103,7 @@ adaptations reproduces every otherwise unpatched upstream file exactly.
 Refresh only from an exact integrity-verified npm artifact. Copy its transitive
 runtime closure into `upstream/`, apply the declared local changes to
 `generated/`, refresh the manifest and run Tier AV plus the behavioral tiers.
-Remove each compatibility adaptation independently after its contract passes.
+The environment and metadata adaptations are retired independently.
 Keep the materialization patch and packaging exceptions until a released API
 preserves explicit backend acceptance, non-asserting occupancy and the joined
 asserting-save barrier. Two released seams never authorize deleting that third

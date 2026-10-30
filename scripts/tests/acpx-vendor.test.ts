@@ -33,7 +33,7 @@ const ACP_SRC = "packages/acp/src";
  * named after something upstream already says — `_meta`, for one — would open a
  * permissive window at every unrelated mention of it.
  */
-const SEAMS: readonly string[] = ["checkpointMeta", "materialization"];
+const SEAMS: readonly string[] = ["materialization"];
 
 /** How far an introduced line may sit from one that names the seam. */
 const SEAM_PROXIMITY_LINES = 8;

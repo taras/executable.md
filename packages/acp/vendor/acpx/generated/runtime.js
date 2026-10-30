@@ -1752,11 +1752,10 @@ var AcpRuntimeManager = class {
 				else {
 					const response = await this.runRuntimePrompt(task, turn, sessionId);
 					this.updateCompletedRuntimeTurn(turn);
-					const checkpointMeta = response.stopReason === "cancelled" ? void 0 : response._meta;
 					terminalResult = {
 						status: response.stopReason === "cancelled" ? "cancelled" : "completed",
 						...response.stopReason ? { stopReason: response.stopReason } : {},
-						...checkpointMeta === void 0 ? {} : { _meta: checkpointMeta }
+						...response._meta === void 0 ? {} : { _meta: response._meta }
 					};
 				}
 			}

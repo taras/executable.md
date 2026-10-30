@@ -346,6 +346,12 @@ describe(
         } else {
           expect(checkpointFromResult(result)).toBe(undefined);
           expect(checkpoints).toEqual([]);
+          if (result.status === "cancelled") {
+            expect(result._meta).toEqual({
+              codex: { turnId: "turn-cancel" },
+              opaque: { left: [3, null] },
+            });
+          }
         }
       }
     });

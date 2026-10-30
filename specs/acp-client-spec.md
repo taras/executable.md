@@ -1318,8 +1318,10 @@ none.
   as `end_turn`; any other stop reason is a failure. The completing response
   carries its own opaque `_meta`, including a real response arriving during
   timeout drain. A deadline that receives no response fails and supplies no
-  checkpoint. XMD associates a checkpoint only with a successful completed
-  terminal; cancellation and failure never acquire one.
+  checkpoint. Released cancelled results can carry raw response metadata; XMD
+  associates a checkpoint only with a successful completed terminal in
+  `checkpoint.ts` and `events.ts`. Cancellation and failure never acquire one,
+  and no local runtime metadata patch remains.
 - **Serialization.** Prompts for one session run FIFO on that session's queue;
   different sessions run concurrently. A subscription enters that queue before
   any route, ensure or runtime creation for its session, and re-reads the
