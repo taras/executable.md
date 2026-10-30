@@ -69,20 +69,14 @@ import {
 } from "./fixtures/repl/issue-883/host.ts";
 import type { RepositoryRoot } from "./fixtures/repl/issue-883/host.ts";
 import {
-  awaiting,
   awaited,
   mountedExecution,
-  mountedReading,
-  sendMessage,
-  useMountedHost,
-  click,
-  focusDraft,
   operationGate,
-  settledEntry,
-  shows,
-  typing,
-  useMountedRepl,
-} from "./fixtures/repl/issue-883/mounted-program.ts";
+  useMountedHost,
+} from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import { draftText, entrySettles, sendMessage } from "./support/screen-journeys.ts";
 import { encodeLocation } from "../src/repl/route.ts";
 import { initialState } from "../src/repl/application.ts";
 import { projectRepl } from "../src/repl/model.ts";
@@ -2136,7 +2130,8 @@ describe("Tier HI — a reopening reconciles against the acknowledged history", 
       const operations = operationGate();
 
       yield* scoped(function* (): Operation<void> {
-        const repl = yield* useMountedRepl({ dataRoot: root.data, location, operations });
+        const page = yield* useReplPage({ dataRoot: root.data, location, operations });
+        const repl = page.repl;
 
         // Opening is a reading. Both files are byte-identical afterwards —
         // not merely the same record kinds — and no provider work happened at
@@ -2163,11 +2158,10 @@ describe("Tier HI — a reopening reconciles against the acknowledged history", 
 
         // This location names a position and no drawer, so the way back is
         // reachable straight away.
-        yield* click(repl.terminal, "[live]");
-        yield* awaiting(repl.terminal, "the live head coming back", (one) => !shows(one, "[live]"));
-        yield* focusDraft(repl.terminal);
-        yield* typing(repl.terminal, ORDINARY);
-        repl.terminal.feed("\r");
+        yield* page.press("[live]");
+        yield* page.until("the live head coming back", (one) => !one.shows("[live]"));
+        yield* draftText(page, ORDINARY);
+        yield* page.key("Enter");
         yield* admission.started();
 
         // Before the successor is admitted: the finding is on disk, it is the
@@ -2186,15 +2180,13 @@ describe("Tier HI — a reopening reconciles against the acknowledged history", 
         );
 
         admission.release();
-        yield* awaiting(repl.terminal, "the ordinary entry printing", (one) =>
-          shows(one, "an ordinary entry"),
-        );
+        yield* page.until("the ordinary entry printing", (one) => one.shows("an ordinary entry"));
         // Settled, not merely printed: the boundary the reads below need is the
         // entry's outcome being in the journal. Read from the History rail,
         // which marks every entry this file holds with the state it reached —
         // the catalog spells the same fact `[ok]`, and the catalog is a drawer
         // nobody opened here.
-        yield* settledEntry(repl.terminal, row.entriesWhenFound.length + 1, "ok");
+        yield* entrySettles(page, row.entriesWhenFound.length + 1, "ok");
 
         // The successor took the next slot with its own source, the finding was
         // not written twice, and the reserved work was neither resubmitted nor
@@ -2548,7 +2540,8 @@ describe("975 — placement survives cold Submit reconciliation", () => {
       const source =
         '<Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">Continue?</Elicit>\n<File path="suffix.md">continued</File>';
       yield* scoped(function* () {
-        const repl = yield* useMountedRepl({ host });
+        const page = yield* useReplPage({ host });
+        const repl = page.repl;
         execution = yield* mountedExecution(repl);
         repl.fake.script({
           reply:
@@ -2556,9 +2549,9 @@ describe("975 — placement survives cold Submit reconciliation", () => {
             source +
             "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />",
         });
-        yield* sendMessage(repl, "start and wait");
+        yield* sendMessage(page, "start and wait");
         yield* awaited("the admitted entry to wait", () => observed.length === 1);
-        const read = yield* mountedReading(repl);
+        const read = yield* settledReading(repl);
         expect(read.model.entries[0]?.source).toBe(source);
         expect(read.model.entries[0]?.settled).toBe(false);
       });
@@ -2579,15 +2572,14 @@ describe("975 — placement survives cold Submit reconciliation", () => {
       const prefix = yield* until(readFile(location.entries, "utf8"));
       waiting = withResolvers<void>();
       yield* scoped(function* () {
-        const repl = yield* useMountedRepl({ host, location: coldLocation });
+        const page = yield* useReplPage({ host, location: coldLocation });
         yield* awaited("the first cold continuation", () => observed.length === 2);
         expect(observed.at(-1)).toBe(where);
         expect(yield* until(readFile(location.entries, "utf8"))).toBe(prefix);
-        yield* focusDraft(repl.terminal);
-        yield* typing(repl.terminal, "manual successor waits");
-        repl.terminal.feed("\r");
-        yield* awaiting(repl.terminal, "the refused successor after reconciliation", (one) =>
-          shows(one, "has not finished"),
+        yield* draftText(page, "manual successor waits");
+        yield* page.key("Enter");
+        yield* page.until("the refused successor after reconciliation", (one) =>
+          one.shows("has not finished"),
         );
         const reading = projectSidekick(yield* readSidekickRecords(location.sidekick));
         if (!reading.ok) {
@@ -2604,16 +2596,17 @@ describe("975 — placement survives cold Submit reconciliation", () => {
       answer = true;
       waiting = withResolvers<void>();
       yield* scoped(function* () {
-        const repl = yield* useMountedRepl({ host, location: coldLocation });
+        const page = yield* useReplPage({ host, location: coldLocation });
+        const repl = page.repl;
         yield* awaited("the second cold continuation", () => observed.length === 3);
         // The reserved entry ran and settled here, read from the History rail.
         // `1. [ok] entry-1` is a catalog row, and the catalog is a drawer
         // nobody opened in this reading.
-        yield* settledEntry(repl.terminal, 1, "ok");
+        yield* entrySettles(page, 1, "ok");
         expect(observed.at(-1)).toBe(where);
         expect(yield* until(readFile(join(where, "suffix.md"), "utf8"))).toBe("continued");
         expect(yield* cwd()).toBe(project);
-        const read = yield* mountedReading(repl);
+        const read = yield* settledReading(repl);
         expect(read.model.entries[0]?.source).toBe(source);
       });
     });

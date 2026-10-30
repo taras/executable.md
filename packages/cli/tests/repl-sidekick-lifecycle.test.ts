@@ -23,7 +23,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { SidekickOperation } from "../src/repl/sidekick/model.ts";
-import { ensure, Ok, spawn, suspend, until, withResolvers } from "effection";
+import { ensure, Ok, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
 
 import { Execution } from "@executablemd/core";
@@ -42,79 +42,39 @@ import type { ReplElicitations, ReplQuestion } from "../src/repl/elicitation.ts"
 import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import {
-  activate,
   appendGate,
   awaited,
-  awaiting,
-  click,
-  draftText,
-  focusDraft,
-  focusFormValue,
-  focusMessage,
-  messageText,
   MOUNTED_AGENT,
   mountedExecution,
-  mountedReading,
+  useMountedHost,
+} from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
+import type { MountedRepl } from "./support/mounted-repl.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
+import {
+  answerField,
+  chooseOffer,
+  composerHolds,
+  DRAFT,
+  draftHolds,
+  draftText,
+  formOpen,
+  intoComposer,
+  intoSecondField,
+  openConfigure,
+  openQuestion,
+  pasteDraft,
   saidByPerson,
   saidBySidekick,
+  selectPane,
   sendMessage,
-  settled,
-  settledEntry,
-  panePresented,
-  screenOf,
-  rowsShow,
-  shows,
-  typing,
-  useMountedHost,
-  useMountedRepl,
-} from "./fixtures/repl/issue-883/mounted-program.ts";
-import type { MountedRepl, Terminal } from "./fixtures/repl/issue-883/mounted-program.ts";
-import { workspaceConversationWidth } from "../src/repl/layout.ts";
-
-/**
- * Where the Sidekick's own column begins, whatever is drawn over it.
- *
- * Asked of the size rather than found by the composer. A composer is one thing
- * that column holds and it is not always drawn in it: the Sidekick's question
- * opens a drawer over that pane, and its own Stop is then a control of the
- * drawer rather than a control beside the box. A narrow frame routes one
- * outlet, so where the Sidekick is being read the column is the frame.
- */
-function sidekickEdge(terminal: Terminal): number {
-  const width = workspaceConversationWidth(terminal.size);
-  return width === undefined ? 0 : Math.max(0, terminal.size.columns - width);
-}
-
-/**
- * The Sidekick's own Stop, pressed where it is.
- *
- * This screen has two. The entry draft wears one while its entry runs, in the
- * centre column, and it is the leftmost — so a press that went looking for
- * `[stop]` on the screen stops the document's work and never reaches the
- * generation it meant to. Measured: with both on screen the draft's was at
- * column 94 and the Sidekick's at 105.
- */
-function* stopSidekick(terminal: Terminal): Operation<void> {
-  yield* click(terminal, "[stop]", sidekickEdge(terminal));
-}
-
-/**
- * Whether the Sidekick is at rest: its own Send offered, its own Stop gone.
- *
- * Both asked of its column. The entry draft has a Send beside its field and it
- * is there whatever the Sidekick is doing, so a Send found anywhere on the
- * screen says nothing about whether this generation has finished.
- */
-function sidekickIdle(terminal: Terminal): boolean {
-  const pane = sidekickRows(terminal);
-  return rowsShow(pane, "[send]") && !rowsShow(pane, "[stop]");
-}
-
-/** That column's own rows, which is where its controls are read. */
-function sidekickRows(terminal: Terminal): readonly string[] {
-  const from = sidekickEdge(terminal);
-  return screenOf(terminal).map((line) => line.slice(from));
-}
+  SIDEKICK_CONTROLS,
+  sidekickIdle,
+  stopSidekick,
+  submitForm,
+  typed,
+} from "./support/screen-journeys.ts";
 
 import {
   ENTRIES_FILE,
@@ -125,6 +85,17 @@ import {
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
+
+/**
+ * Real time for an assertion that something did not happen.
+ *
+ * A command that has not returned, and a record that was not written, change
+ * nothing on the screen and publish no event: there is nothing to wait for, so
+ * the assertion is given a window in which to be wrong.
+ */
+function* lingering(): Operation<void> {
+  yield* sleep(100);
+}
 
 /** An entry that publishes nothing and stays open until it is torn down. */
 const RUNS_ON = ["```js eval", "yield* suspend();", "```", ""].join("\n");
@@ -898,143 +869,6 @@ describe("Tier R6 — a reply asks, and the Sidekick owns the answer", () => {
 });
 
 /**
- * Tier R6/MP — Stop as the control a person actually presses.
- *
- * The rows above drive the owner directly, because what Stop leaves alone is
- * the same whether or not anything is drawing it. These add the half that only
- * the mounted command has: the control is reached through the tree, the work is
- * spawned on the screen's own task, and the keyboard has to stay usable while
- * Stop joins everything the Sidekick had in flight.
- */
-describe("Tier R6 — Stop, pressed on the screen", () => {
-  /** A reply that prepares an entry and submits it. */
-  const SUBMITTING_REPLY = [
-    '<Let as="code" select="code">',
-    "````xmd",
-    "```js eval",
-    'const held = "the entry kept running";',
-    "```",
-    "",
-    "<Output>{held}</Output>",
-    "````",
-    "</Let>",
-    "<REPL.EntryInput>{code}</REPL.EntryInput>",
-    "<REPL.Submit />",
-    "",
-  ].join("\n");
-
-  it("M6: Stop withdraws the wait and leaves the entry it admitted running", function* () {
-    const gate = appendGate();
-    const repl = yield* useMountedRepl({ gate });
-    repl.fake.script({ reply: SUBMITTING_REPLY });
-
-    // The entry's own closing record, held open: the entry has run and has not
-    // settled, which is where the submission is still waiting for its outcome.
-    const closing = gate.holdNext(
-      (path, record) => path.endsWith(ENTRIES_FILE) && record.includes('"type":"close"'),
-    );
-
-    yield* sendMessage(repl, "run it");
-    yield* closing.started();
-    // The entry is admitted and has produced what it produced.
-    yield* awaiting(repl.terminal, "the entry's output arriving", (one) =>
-      shows(one, "the entry kept running"),
-    );
-    expect(rowsShow(sidekickRows(repl.terminal), "[stop]")).toBe(true);
-
-    // Stop, through its own control — the Sidekick's, in the pane that owns it.
-    yield* stopSidekick(repl.terminal);
-    yield* awaiting(repl.terminal, "Stop joining and the Sidekick coming to rest", (one) =>
-      sidekickIdle(one),
-    );
-
-    // No turn followed. One message, one turn: whatever the entry does later,
-    // nothing automatic is waiting to tell the agent about it.
-    expect(repl.fake.prompts).toHaveLength(1);
-    // The submission's intent is retained with no outcome, which is exactly
-    // what it is: an operation that began and whose result nobody knows.
-    const stopped = yield* mountedReading(repl);
-    const controls = stopped.chat.filter((record) => record.kind === "control");
-    const answered = new Set(
-      stopped.chat
-        .filter((record) => record.kind === "control-outcome")
-        .map((record) => (record.kind === "control-outcome" ? record.order : -1)),
-    );
-    expect(controls.map((record) => (record.kind === "control" ? record.component : ""))).toEqual([
-      "REPL.EntryInput",
-      "REPL.Submit",
-    ]);
-    // The fill answered; the submission did not. An intent with no outcome is
-    // an operation that began and whose result nobody knows, which is exactly
-    // the state Stop leaves a wait in.
-    expect(
-      controls
-        .filter((record) => !answered.has(record.kind === "control" ? record.order : -1))
-        .map((record) => (record.kind === "control" ? record.component : "")),
-    ).toEqual(["REPL.Submit"]);
-    // The chat a person was reading is still there, and so is the draft the
-    // reply filled.
-    expect(saidByPerson(repl.terminal, "run it")).toBe(true);
-    expect(draftText(repl.terminal)).toBe("");
-
-    // The entry was never among what came down: it is still running, and it
-    // settles when its own record lands rather than when Stop said so.
-    expect(stopped.model.entries.map((entry) => entry.terminal)).toEqual([undefined]);
-    closing.release();
-    // Settled, read from the History rail, which marks every entry this file
-    // holds with the state it reached. `[ok]` is a catalog row, and the catalog
-    // is a drawer nobody opened here.
-    yield* settledEntry(repl.terminal, 1, "ok");
-
-    // And a later explicit message is possible: Stop ended the asking, not the
-    // conversation.
-    repl.fake.script({ reply: "<Output>Still here.</Output>\n" });
-    yield* sendMessage(repl, "again");
-    yield* awaiting(repl.terminal, "the next message being answered", (one) =>
-      saidBySidekick(one, "Still here."),
-    );
-    expect(repl.fake.prompts).toHaveLength(2);
-  });
-
-  it("M6: Stop reports nothing and enables no successor while its cleanup is held", function* () {
-    const repl = yield* useMountedRepl();
-    // Generation that has been accepted and is saying nothing, and whose
-    // cancellation this case holds: the only way to tell a Stop that returned
-    // early from one that returned late.
-    repl.fake.script({ held: true, reply: "<Output>Never said.</Output>\n" });
-    const cancelling = repl.fake.holdCancellation();
-
-    yield* sendMessage(repl, "stop me");
-    yield* repl.fake.holdingTurns(1);
-    yield* stopSidekick(repl.terminal);
-    yield* cancelling.reached;
-
-    // Stop is inside the teardown it asked for. The row still says the Sidekick
-    // is working, and there is no Send to start a successor with — a screen
-    // that offered one here would be claiming the Sidekick had stopped while it
-    // was still unwinding. Asked of that pane: the entry draft has a Send of
-    // its own beside its field, and it is there whatever the Sidekick is doing.
-    const paneNow = sidekickRows(repl.terminal);
-    expect(rowsShow(paneNow, "[stop]")).toBe(true);
-    expect(rowsShow(paneNow, "[send]")).toBe(false);
-    expect(repl.fake.prompts).toHaveLength(1);
-
-    // And ordinary typing still works, because the join is on the screen's own
-    // task rather than on the keyboard's.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "meanwhile");
-    expect(draftText(repl.terminal)).toBe("meanwhile");
-
-    cancelling.release();
-    yield* awaiting(repl.terminal, "Stop returning once its cleanup joined", (one) =>
-      sidekickIdle(one),
-    );
-    expect(draftText(repl.terminal)).toBe("meanwhile");
-    expect(repl.fake.prompts).toHaveLength(1);
-  });
-});
-
-/**
  * Tier R6/MP — the command ending while the Sidekick is still working.
  *
  * Stop ends the asking; these end the command. The difference is what M6 above
@@ -1071,32 +905,30 @@ describe("Tier PV — generation that ended without a reply", () => {
   ];
 
   it("PV3: a provider that fails after saying something leaves an unfinished attempt", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     // It streams, then the backend reports the turn failed: the record holds
     // what it had said, which is what the attempt is projected from.
     repl.fake.script({ deltas: CANDIDATE, holdAfter: 1, stopReason: "refusal" });
     repl.fake.script({ reply: "<Output>A fresh start.</Output>\n" });
 
-    yield* sendMessage(repl, "try it");
+    yield* sendMessage(page, "try it");
     yield* repl.fake.streamingTurns(1);
     // Said in this pane's own width, which clips the rest of the sentence.
-    yield* awaiting(repl.terminal, "the preview", (one) =>
-      shows(one, `${MOUNTED_AGENT} (preview): As far as I`),
-    );
+    yield* page.until("the preview", (one) => one.shows(`${MOUNTED_AGENT} (preview): As far as I`));
     repl.fake.releaseDeltas();
 
     // The saved failed turn is the account now: said as unfinished, with the
     // literal Output it had managed and the reason it stopped.
-    yield* awaiting(repl.terminal, "the unfinished attempt", (one) =>
-      shows(one, `${MOUNTED_AGENT} (unfinished)`),
+    yield* page.until("the unfinished attempt", (one) =>
+      one.shows(`${MOUNTED_AGENT} (unfinished)`),
     );
-    yield* settled(40);
-    expect(shows(repl.terminal, "(preview)")).toBe(false);
-    expect(shows(repl.terminal, "As far as I")).toBe(true);
+    yield* page.until("the preview replaced by the attempt", (one) => !one.shows("(preview)"));
+    expect(page.screen().shows("As far as I")).toBe(true);
 
     // None of its controls ran: no entry, no control pair, no reply — and no
     // automatic successor turn either.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.model.entries).toEqual([]);
     expect(read.chat.filter((record) => record.kind === "control")).toEqual([]);
     expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
@@ -1104,10 +936,12 @@ describe("Tier PV — generation that ended without a reply", () => {
 
     // A following explicit message is its own item, and the stopped candidate
     // does not update it.
-    yield* sendMessage(repl, "again");
-    yield* awaiting(repl.terminal, "the next reply", (one) => shows(one, "A fresh start."));
-    expect(shows(repl.terminal, "(preview)")).toBe(false);
-    expect(shows(repl.terminal, `${MOUNTED_AGENT} (unfinished)`)).toBe(true);
+    yield* sendMessage(page, "again");
+    yield* page.until(
+      "the next reply, with no preview left",
+      (one) => one.shows("A fresh start.") && !one.shows("(preview)"),
+    );
+    expect(page.screen().shows(`${MOUNTED_AGENT} (unfinished)`)).toBe(true);
   });
 
   /** An entry of this person's own, which says something and then closes. */
@@ -1123,7 +957,8 @@ describe("Tier PV — generation that ended without a reply", () => {
   it("PV3: Stop keeps what was said as an attempt, and claims nothing that was not saved", function* () {
     const gate = appendGate();
     const host = yield* useMountedHost({ gate });
-    const repl = yield* useMountedRepl({ host });
+    const page = yield* useReplPage({ host });
+    const repl = page.repl;
     repl.fake.script({ deltas: CANDIDATE, holdAfter: 1 });
 
     // An entry this person admitted, held open before it closes: it is the
@@ -1131,17 +966,13 @@ describe("Tier PV — generation that ended without a reply", () => {
     const closing = gate.holdNext(
       (path, record) => path.endsWith("entries.jsonl") && record.includes('"type":"close"'),
     );
-    yield* focusDraft(repl.terminal);
-    repl.terminal.bytes(new TextEncoder().encode(OWN_ENTRY));
-    yield* settled(60);
-    repl.terminal.feed("\r");
+    yield* pasteDraft(page, OWN_ENTRY);
+    yield* page.key("Enter");
     yield* closing.started();
 
-    yield* sendMessage(repl, "try it");
+    yield* sendMessage(page, "try it");
     yield* repl.fake.streamingTurns(1);
-    yield* awaiting(repl.terminal, "the preview", (one) =>
-      shows(one, `${MOUNTED_AGENT} (preview): As far as I`),
-    );
+    yield* page.until("the preview", (one) => one.shows(`${MOUNTED_AGENT} (preview): As far as I`));
 
     // Stopped, with the provider's own cancellation held: this is what says
     // Stop joined what it asked for rather than returning over the top of it.
@@ -1150,20 +981,20 @@ describe("Tier PV — generation that ended without a reply", () => {
     // wearing a Stop too — and it is the leftmost, so a press that went looking
     // for `[stop]` on the screen would stop the document's work and never reach
     // the generation this row is about.
-    yield* stopSidekick(repl.terminal);
+    yield* stopSidekick(page);
     yield* cancelling.reached;
     expect(repl.outcome()).toBe(undefined);
     cancelling.release();
 
     // What the agent said stays, as the attempt it is — and it claims nothing:
     // no turn, no response, no acceptance, no recorded failure.
-    yield* awaiting(repl.terminal, "the attempt Stop left", (one) =>
-      shows(one, `${MOUNTED_AGENT} (unfinished): As far as I`),
+    yield* page.until("the attempt Stop left", (one) =>
+      one.shows(`${MOUNTED_AGENT} (unfinished): As far as I`),
     );
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(read.chat.filter((record) => record.kind === "control")).toEqual([]);
-    expect(shows(repl.terminal, "[retry]")).toBe(false);
+    expect(page.screen().shows("[retry]")).toBe(false);
     // None of the candidate's controls ran, and no successor turn started.
     expect(repl.fake.prompts).toHaveLength(1);
 
@@ -1171,22 +1002,20 @@ describe("Tier PV — generation that ended without a reply", () => {
     // document's own work to finish.
     expect(closing.released).toBe(false);
     closing.release();
-    yield* awaiting(repl.terminal, "the entry finishing on its own", (one) =>
-      shows(one, "my own entry"),
-    );
+    yield* page.until("the entry finishing on its own", (one) => one.shows("my own entry"));
 
     // And nothing of that attempt was persisted to preserve a screen: a cold
     // reopen of this same history has no account of it.
     const execution = yield* mountedExecution(repl);
-    yield* click(repl.terminal, "[exit]");
+    yield* page.press("[exit]");
     yield* awaited("the command returning", () => repl.outcome() !== undefined);
-    const again = yield* useMountedRepl({
+    const againPage = yield* useReplPage({
       host,
       location: `xmd://repl/${execution}/entries`,
     });
-    yield* awaiting(again.terminal, "the reopened chat", (one) => saidByPerson(one, "try it"));
-    expect(shows(again.terminal, "(unfinished)")).toBe(false);
-    expect(shows(again.terminal, "As far as I")).toBe(false);
+    yield* againPage.until("the reopened chat", (one) => saidByPerson(one, "try it"));
+    expect(againPage.screen().shows("(unfinished)")).toBe(false);
+    expect(againPage.screen().shows("As far as I")).toBe(false);
   });
 
   /**
@@ -1203,28 +1032,28 @@ describe("Tier PV — generation that ended without a reply", () => {
    */
   function* failedSuccessor(gap: boolean): Operation<void> {
     const host = yield* useMountedHost();
-    let repl = yield* useMountedRepl({ host });
+    let page = yield* useReplPage({ host });
+    let repl = page.repl;
     if (gap) {
       repl.fake.script({ held: true, reply: "<Output>Unrecorded.</Output>\n" });
-      yield* sendMessage(repl, "unrecorded");
+      yield* sendMessage(page, "unrecorded");
       yield* repl.fake.holdingTurns(1);
-      yield* stopSidekick(repl.terminal);
-      yield* awaiting(repl.terminal, "Stop finishing", (one) => sidekickIdle(one));
+      yield* stopSidekick(page);
+      yield* page.until("Stop finishing", (one) => sidekickIdle(one));
       const execution = yield* mountedExecution(repl);
-      yield* click(repl.terminal, "[exit]");
+      yield* page.press("[exit]");
       yield* awaited("the first command closing", () => repl.outcome() !== undefined);
-      repl = yield* useMountedRepl({ host, location: `xmd://repl/${execution}/entries` });
+      page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
+      repl = page.repl;
     }
 
     repl.fake.script({ reply: "<Output>First reply.</Output>\n" });
-    yield* sendMessage(repl, "saved");
-    yield* awaiting(repl.terminal, "the successful predecessor", (one) =>
-      saidBySidekick(one, "First reply."),
-    );
-    yield* awaiting(repl.terminal, "the box being ready again", (one) => sidekickIdle(one));
+    yield* sendMessage(page, "saved");
+    yield* page.until("the successful predecessor", (one) => saidBySidekick(one, "First reply."));
+    yield* page.until("the box being ready again", (one) => sidekickIdle(one));
     // Which response that reply was recorded as, and which turn it actually
     // ran as — read out of the history the command wrote.
-    const preceding = (yield* mountedReading(repl)).chat.flatMap((record) =>
+    const preceding = (yield* settledReading(repl)).chat.flatMap((record) =>
       record.kind === "response" ? [{ response: record.response, turn: record.turn }] : [],
     );
     expect(preceding).toHaveLength(1);
@@ -1235,23 +1064,20 @@ describe("Tier PV — generation that ended without a reply", () => {
       holdAfter: 1,
       stopReason: "refusal",
     });
-    yield* sendMessage(repl, "failed");
+    yield* sendMessage(page, "failed");
     yield* repl.fake.streamingTurns(1);
-    yield* awaiting(repl.terminal, "the successor's preview", (one) =>
-      shows(one, "(preview): Second attempt."),
-    );
+    yield* page.until("the successor's preview", (one) => one.shows("(preview): Second attempt."));
     repl.fake.releaseDeltas();
 
     // Both items stand: the reply that was answered and the attempt that was
     // not. Drawing them is what a duplicated row would have crashed.
-    yield* awaiting(repl.terminal, "the failed successor", (one) => shows(one, "(unfinished)"));
-    yield* settled(60);
+    yield* page.until("the failed successor", (one) => one.shows("(unfinished)"));
     expect(repl.outcome()).toBe(undefined);
-    expect(shows(repl.terminal, "First reply.")).toBe(true);
-    expect(shows(repl.terminal, "Second attempt.")).toBe(true);
+    expect(page.screen().shows("First reply.")).toBe(true);
+    expect(page.screen().shows("Second attempt.")).toBe(true);
     // And the attempt is addressed by the turn it really became, which is the
     // one its own record holds.
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     const attempts = read.chat.flatMap((record) =>
       record.kind === "message" ? [record.turn] : [],
     );
@@ -1269,39 +1095,40 @@ describe("Tier PV — generation that ended without a reply", () => {
 
   it("PV3: a reopened history shows that attempt from its own record, reading nothing live", function* () {
     const host = yield* useMountedHost();
-    const first = yield* useMountedRepl({ host });
+    const firstPage = yield* useReplPage({ host });
+    const first = firstPage.repl;
     first.fake.script({ deltas: CANDIDATE, stopReason: "refusal" });
 
-    yield* sendMessage(first, "try it");
-    yield* awaiting(first.terminal, "the unfinished attempt", (one) =>
-      shows(one, `${MOUNTED_AGENT} (unfinished)`),
+    yield* sendMessage(firstPage, "try it");
+    yield* firstPage.until("the unfinished attempt", (one) =>
+      one.shows(`${MOUNTED_AGENT} (unfinished)`),
     );
     const execution = yield* mountedExecution(first);
     // What this host's provider was asked for by the command that really ran.
     // The reopen below shares the same fake, so what it must add is nothing.
     const asked = first.fake.prompts.length;
     const opened = first.fake.ensured.length;
-    yield* click(first.terminal, "[exit]");
+    yield* firstPage.press("[exit]");
     yield* awaited("the first command returning", () => first.outcome() !== undefined);
     const written = yield* until(
       readFile(join(host.root, PAIRED_DIRECTORY, execution, SIDEKICK_FILE), "utf8"),
     );
 
     // The same history, opened cold by another command.
-    const again = yield* useMountedRepl({
+    const againPage = yield* useReplPage({
       host,
       location: `xmd://repl/${execution}/entries`,
     });
-    yield* awaiting(again.terminal, "the attempt as this history holds it", (one) =>
-      shows(one, `${MOUNTED_AGENT} (unfinished)`),
+    yield* againPage.until("the attempt as this history holds it", (one) =>
+      one.shows(`${MOUNTED_AGENT} (unfinished)`),
     );
     // Its literal Output, projected from the saved source — and nothing a live
     // process remembered: this command never saw that generation.
-    expect(shows(again.terminal, "As far as I")).toBe(true);
-    expect(shows(again.terminal, "(preview)")).toBe(false);
+    expect(againPage.screen().shows("As far as I")).toBe(true);
+    expect(againPage.screen().shows("(preview)")).toBe(false);
     // Reading it cost nothing: no turn, no session, not one byte.
-    expect(again.fake.prompts).toHaveLength(asked);
-    expect(again.fake.ensured).toHaveLength(opened);
+    expect(againPage.repl.fake.prompts).toHaveLength(asked);
+    expect(againPage.repl.fake.ensured).toHaveLength(opened);
     expect(
       yield* until(readFile(join(host.root, PAIRED_DIRECTORY, execution, SIDEKICK_FILE), "utf8")),
     ).toBe(written);
@@ -1316,26 +1143,25 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
    * One command with an entry running and a Sidekick turn accepted, left by
    * whichever of the two ways out this row is about.
    */
-  function* leaving(leave: (terminal: Terminal) => Operation<void>): Operation<void> {
-    const repl = yield* useMountedRepl();
+  function* leaving(leave: (page: ReplPage) => Operation<void>): Operation<void> {
+    const page = yield* useReplPage();
+    const repl = page.repl;
     repl.fake.script({ held: true, reply: "<Output>Never said.</Output>\n" });
 
     // An ordinary entry of this person's, admitted and still open.
-    yield* focusDraft(repl.terminal);
-    repl.terminal.bytes(new TextEncoder().encode(SUSPENDS));
-    yield* settled(60);
-    repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the entry being admitted", (one) => shows(one, "Entry 1"));
+    yield* pasteDraft(page, SUSPENDS);
+    yield* page.key("Enter");
+    yield* page.until("the entry being admitted", (one) => one.shows("Entry 1"));
 
     // And a Sidekick turn the agent has accepted and not answered.
-    yield* sendMessage(repl, "hold on");
+    yield* sendMessage(page, "hold on");
     yield* repl.fake.holdingTurns(1);
 
     // The provider's own teardown, held: this is what says the command joined
     // its work rather than returning over the top of it.
     const cancelling = repl.fake.holdCancellation();
     const restored = repl.terminal.resets;
-    yield* leave(repl.terminal);
+    yield* leave(page);
     yield* cancelling.reached;
 
     // Inside the teardown it asked for: nothing has been returned and the
@@ -1359,15 +1185,14 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
   }
 
   it("M8: Exit joins the owner and the entry before the command returns", function* () {
-    yield* leaving(function* (terminal: Terminal): Operation<void> {
-      yield* click(terminal, "[exit]");
+    yield* leaving(function* (page: ReplPage): Operation<void> {
+      yield* page.press("[exit]");
     });
   });
 
   it("M8: Control-C joins the same work, without another key", function* () {
-    yield* leaving(function* (terminal: Terminal): Operation<void> {
-      terminal.feed("\x03");
-      yield* settled(30);
+    yield* leaving(function* (page: ReplPage): Operation<void> {
+      page.repl.terminal.feed("\x03");
     });
   });
 });
@@ -1404,11 +1229,11 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
    */
   function* answeringJourney(interrupted: boolean): Operation<{
     readonly chat: readonly SidekickRecord[];
-    readonly draft: string;
-    readonly message: string;
+    readonly screen: ScreenReading;
     readonly prompts: readonly string[];
   }> {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     repl.fake.script({
       reply: `<Elicit schema={${JSON.stringify(REVIEW)}} as="answer">Approve the plan?</Elicit>\n`,
     });
@@ -1416,81 +1241,74 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
 
     // Their own text in the draft before any of this, which the question must
     // leave alone.
-    yield* focusDraft(repl.terminal);
-    yield* typing(repl.terminal, "mine");
+    yield* draftText(page, "mine");
 
-    yield* sendMessage(repl, "review it");
+    yield* sendMessage(page, "review it");
     // And a message typed while the Sidekick is working, which is unsent and
     // stays unsent: answering a question is not sending what is in the box.
-    yield* focusMessage(repl.terminal);
-    yield* typing(repl.terminal, "later");
+    // The send leaves the keystrokes in the composer, so this needs no route.
+    yield* typed(page, "later");
 
-    yield* awaiting(repl.terminal, "the question announcing itself", (one) =>
+    yield* page.until("the question announcing itself", (one) =>
       // The notice this screen gives: the control that opens the question, in
       // the pane that owns it. The prose naming the agent belongs to the
       // screen this one replaced.
-      shows(one, "[answer sidekick]"),
+      one.shows("[answer sidekick]"),
     );
-    yield* click(repl.terminal, "[answer sidekick]");
-    yield* awaiting(repl.terminal, "the form opening", (one) => shows(one, "[submit]"));
+    yield* openQuestion(page);
 
     // The enum, chosen by typing the offered value into the line the form
     // opened on and pressing Enter. That is an answer attempt, and it is
     // invalid: the reason is required and there is none.
-    yield* typing(repl.terminal, "approve");
-    repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the issue the schema reported", (one) => shows(one, "message"));
-    expect(shows(repl.terminal, "[submit]")).toBe(true);
+    yield* page.type("approve");
+    yield* page.key("Enter");
+    yield* page.until("the issue the schema reported", (one) => one.shows("message"));
+    expect(formOpen(page.screen())).toBe(true);
 
     // A field named `message`, edited through the form. It must reach the form
     // and not the Sidekick's own composer, which still holds what was typed
     // into it.
-    yield* focusFormValue(repl.terminal, 1);
-    yield* typing(repl.terminal, "ok");
-    expect(shows(repl.terminal, "message: ok")).toBe(true);
+    yield* answerField(page, "message", "ok");
+    expect(page.screen().shows("message: ok")).toBe(true);
 
     if (interrupted) {
       // Away, and back. Closing hides the form and keeps the question; the pane
       // change keeps both.
-      yield* click(repl.terminal, "[close]");
-      yield* awaiting(repl.terminal, "the form closing", (one) => !shows(one, "[submit]"));
-      expect(shows(repl.terminal, "[answer sidekick]")).toBe(true);
-      yield* activate(repl.terminal, "Bindings");
-      yield* awaiting(
-        repl.terminal,
-        "Bindings being selected",
-        (one) => panePresented(one) === "bindings",
-      );
-      yield* activate(repl.terminal, "Sidekick");
-      yield* awaiting(repl.terminal, "the notice still in the pane", (one) =>
-        shows(one, "[answer sidekick]"),
-      );
-      yield* click(repl.terminal, "[answer sidekick]");
-      yield* awaiting(repl.terminal, "the form reopening", (one) => shows(one, "[submit]"));
+      yield* page.press("[close]");
+      yield* page.until("the form closing", (one) => !formOpen(one));
+      expect(page.screen().shows("[answer sidekick]")).toBe(true);
+      yield* selectPane(page, "bindings");
+      yield* selectPane(page, "sidekick");
+      yield* page.until("the notice still in the pane", (one) => one.shows("[answer sidekick]"));
+      yield* page.press("[answer sidekick]");
+      yield* page.until("the form reopening", () => formOpen(page.screen()));
       // Exactly what was in it: the choice, the partial reason and what the
       // schema said about it.
-      expect(shows(repl.terminal, "decision: approve")).toBe(true);
-      expect(shows(repl.terminal, "message: ok")).toBe(true);
+      expect(page.screen().shows("decision: approve")).toBe(true);
+      expect(page.screen().shows("message: ok")).toBe(true);
     }
 
-    // Long enough now, submitted through its own control.
-    yield* focusFormValue(repl.terminal, 1);
-    yield* typing(repl.terminal, "ay");
-    expect(shows(repl.terminal, "message: okay")).toBe(true);
-    yield* click(repl.terminal, "[submit]");
+    // Long enough now, submitted through its own control. A reopened form has
+    // the keystrokes somewhere else, so its route is walked again; otherwise
+    // the field still has them and typing goes on where it left off.
+    if (interrupted) {
+      yield* intoSecondField(page);
+    }
+    yield* typed(page, "ay");
+    expect(page.screen().shows("message: okay")).toBe(true);
+    yield* submitForm(page);
 
-    yield* awaiting(repl.terminal, "the reply answering once the question was", (one) =>
+    yield* page.until("the reply answering once the question was", (one) =>
       saidBySidekick(one, "Thanks for deciding."),
     );
     // The form and its way in are both gone, because the question is.
-    expect(shows(repl.terminal, "[submit]")).toBe(false);
-    expect(shows(repl.terminal, "[answer]")).toBe(false);
+    expect(formOpen(page.screen())).toBe(false);
+    expect(page.screen().shows("[answer]")).toBe(false);
 
-    const read = yield* mountedReading(repl);
+    const read = yield* settledReading(repl);
     return {
       chat: read.chat,
-      draft: draftText(repl.terminal),
-      message: messageText(repl.terminal),
+      screen: page.screen(),
       prompts: repl.fake.prompts,
     };
   }
@@ -1528,8 +1346,10 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
       message: "okay",
     });
     // Both composers are untouched by any of it.
-    expect(done.draft).toBe("mine");
-    expect(done.message).toBe("later");
+    // Both fields still hold exactly what was typed into them: the Draft its
+    // own word, the composer the message nobody sent.
+    expect(draftHolds(done.screen, "mine")).toBe(true);
+    expect(composerHolds(done.screen, "later")).toBe(true);
   });
 
   it("MQ2: control — the same answer without closing or changing panes", function* () {
@@ -1540,8 +1360,10 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
       decision: "approve",
       message: "okay",
     });
-    expect(done.draft).toBe("mine");
-    expect(done.message).toBe("later");
+    // Both fields still hold exactly what was typed into them: the Draft its
+    // own word, the composer the message nobody sent.
+    expect(draftHolds(done.screen, "mine")).toBe(true);
+    expect(composerHolds(done.screen, "later")).toBe(true);
   });
 });
 
@@ -1580,101 +1402,90 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
   }
 
   it("MQ3: answering the Sidekick leaves the entry's question pending, and vice versa", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     repl.fake.script({ reply: asks(SIDEKICK_ASKS, "Shall I go on?") });
     repl.fake.script({ reply: "<Output>Sidekick heard yes.</Output>\n" });
 
     // The entry's question first, so both are pending at once.
-    yield* focusDraft(repl.terminal);
-    repl.terminal.bytes(new TextEncoder().encode(ENTRY_ASKS));
-    yield* settled(60);
-    repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the entry's question announcing itself", (one) =>
-      shows(one, "[answer]"),
-    );
+    yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Enter");
+    yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
-    yield* sendMessage(repl, "go on?");
-    yield* awaiting(repl.terminal, "the Sidekick's question announcing itself", (one) =>
+    yield* sendMessage(page, "go on?");
+    yield* page.until("the Sidekick's question announcing itself", (one) =>
       // The notice this screen gives: the control that opens the question, in
       // the pane that owns it. The prose naming the agent belongs to the
       // screen this one replaced.
-      shows(one, "[answer sidekick]"),
+      one.shows("[answer sidekick]"),
     );
 
     // The Sidekick's own, opened from its own pane and answered through its own
     // form. Its enum offers values the entry's does not, so an answer that
     // reached the other form could not be mistaken for this one.
-    yield* click(repl.terminal, "[answer sidekick]");
-    yield* awaiting(repl.terminal, "the Sidekick's form", (one) => shows(one, "Shall I go on?"));
-    expect(shows(repl.terminal, "choice: yes | no")).toBe(true);
-    yield* typing(repl.terminal, "yes");
-    repl.terminal.feed("\r");
+    yield* page.press("[answer sidekick]");
+    yield* page.until("the Sidekick's form", (one) => formOpen(one) && one.shows("Shall I go on?"));
+    expect(page.screen().shows("choice: yes | no")).toBe(true);
+    yield* page.type("yes");
+    yield* page.key("Enter");
 
-    yield* awaiting(repl.terminal, "the reply hearing it", (one) =>
-      saidBySidekick(one, "Sidekick heard yes."),
-    );
+    yield* page.until("the reply hearing it", (one) => saidBySidekick(one, "Sidekick heard yes."));
 
     // The entry's question is untouched: still waiting, still its own. Read
     // from its announcement rather than from its text — the entry's source is
     // drawn in the transcript, so its words are on the screen either way.
-    expect(shows(repl.terminal, "[submit]")).toBe(false);
-    yield* awaiting(repl.terminal, "the entry's question still waiting", (one) =>
-      shows(one, "[answer]"),
-    );
+    expect(formOpen(page.screen())).toBe(false);
+    yield* page.until("the entry's question still waiting", (one) => one.shows("[answer]"));
 
     // And answered independently, with its own values, producing its own result.
-    yield* click(repl.terminal, "[answer]");
-    yield* awaiting(repl.terminal, "the entry's own form", (one) =>
-      shows(one, "The entry is asking."),
+    yield* page.press("[answer]");
+    yield* page.until(
+      "the entry's own form",
+      (one) => formOpen(one) && one.shows("The entry is asking."),
     );
-    expect(shows(repl.terminal, "choice: left | right")).toBe(true);
-    yield* typing(repl.terminal, "left");
-    repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the entry rendering what it was told", (one) =>
-      shows(one, "Entry said left."),
+    expect(page.screen().shows("choice: left | right")).toBe(true);
+    yield* page.type("left");
+    yield* page.key("Enter");
+    yield* page.until("the entry rendering what it was told", (one) =>
+      one.shows("Entry said left."),
     );
     // One turn for the message and one for its feedback, and nothing extra.
     expect(repl.fake.prompts).toHaveLength(2);
   });
 
   it("MQ3: Stop withdraws the Sidekick's question and invents no answer", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     repl.fake.script({ reply: asks(SIDEKICK_ASKS, "Shall I go on?") });
 
     // The entry's question, pending throughout: Stop is the Sidekick's and must
     // not reach it.
-    yield* focusDraft(repl.terminal);
-    repl.terminal.bytes(new TextEncoder().encode(ENTRY_ASKS));
-    yield* settled(60);
-    repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the entry's question announcing itself", (one) =>
-      shows(one, "[answer]"),
-    );
+    yield* pasteDraft(page, ENTRY_ASKS);
+    yield* page.key("Enter");
+    yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
-    yield* sendMessage(repl, "go on?");
-    yield* awaiting(repl.terminal, "the Sidekick's question announcing itself", (one) =>
+    yield* sendMessage(page, "go on?");
+    yield* page.until("the Sidekick's question announcing itself", (one) =>
       // The notice this screen gives: the control that opens the question, in
       // the pane that owns it. The prose naming the agent belongs to the
       // screen this one replaced.
-      shows(one, "[answer sidekick]"),
+      one.shows("[answer sidekick]"),
     );
     // Open, and half filled in, so Stop is reaching a form somebody is using.
-    yield* click(repl.terminal, "[answer sidekick]");
-    yield* awaiting(repl.terminal, "the Sidekick's form", (one) => shows(one, "Shall I go on?"));
-    yield* typing(repl.terminal, "yes");
+    yield* page.press("[answer sidekick]");
+    yield* page.until("the Sidekick's form", (one) => formOpen(one) && one.shows("Shall I go on?"));
+    yield* page.type("yes");
 
     // Stop, through its own control. The form was open; it goes without an
     // answer.
-    yield* stopSidekick(repl.terminal);
-    yield* awaiting(repl.terminal, "Stop joining and the Sidekick coming to rest", (one) =>
-      sidekickIdle(one),
-    );
-    expect(shows(repl.terminal, "Shall I go on?")).toBe(false);
-    expect(shows(repl.terminal, "[answer sidekick]")).toBe(false);
+    yield* stopSidekick(page);
+    yield* page.until("Stop joining and the Sidekick coming to rest", (one) => sidekickIdle(one));
+    expect(page.screen().shows("Shall I go on?")).toBe(false);
+    expect(page.screen().shows("[answer sidekick]")).toBe(false);
 
     // Nothing was answered and nothing followed: the intent stands with no
     // outcome beside it, which is what an interrupted question is.
-    const stopped = yield* mountedReading(repl);
+    const stopped = yield* settledReading(repl);
     const intents = stopped.chat.filter(
       (record) => record.kind === "control" && record.component === "Elicit",
     );
@@ -1689,33 +1500,34 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     expect(repl.fake.prompts).toHaveLength(1);
 
     // The entry's question is still there, and still answerable.
-    yield* click(repl.terminal, "[answer]");
-    yield* awaiting(repl.terminal, "the entry's own form", (one) =>
-      shows(one, "The entry is asking."),
+    yield* page.press("[answer]");
+    yield* page.until(
+      "the entry's own form",
+      (one) => formOpen(one) && one.shows("The entry is asking."),
     );
-    yield* typing(repl.terminal, "right");
-    repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the entry rendering what it was told", (one) =>
-      shows(one, "Entry said right."),
+    yield* page.type("right");
+    yield* page.key("Enter");
+    yield* page.until("the entry rendering what it was told", (one) =>
+      one.shows("Entry said right."),
     );
 
     // And a later message asks a new question, with the same field names and an
     // empty form: the values typed into the stopped one are not an answer to it.
     repl.fake.script({ reply: asks(SIDEKICK_ASKS, "Asking again.") });
-    yield* sendMessage(repl, "ask again");
-    yield* awaiting(repl.terminal, "the next question announcing itself", (one) =>
+    yield* sendMessage(page, "ask again");
+    yield* page.until("the next question announcing itself", (one) =>
       // The notice this screen gives: the control that opens the question, in
       // the pane that owns it. The prose naming the agent belongs to the
       // screen this one replaced.
-      shows(one, "[answer sidekick]"),
+      one.shows("[answer sidekick]"),
     );
-    yield* click(repl.terminal, "[answer sidekick]");
-    yield* awaiting(repl.terminal, "the new form", (one) => shows(one, "Asking again."));
+    yield* page.press("[answer sidekick]");
+    yield* page.until("the new form", (one) => formOpen(one) && one.shows("Asking again."));
     // Empty: no option is marked at all, which is what an untouched form of
     // this shape looks like. Read from the markers rather than from the field
     // row, whose label collides with the line naming what the field accepts.
-    expect(shows(repl.terminal, "(x)")).toBe(false);
-    expect(shows(repl.terminal, "( ) yes")).toBe(true);
+    expect(page.screen().shows("(x)")).toBe(false);
+    expect(page.screen().shows("( ) yes")).toBe(true);
   });
 });
 
@@ -1746,36 +1558,33 @@ describe("Tier MQ — leaving with questions pending, and the cold reopen after"
   ].join("\n");
 
   /** One command left with a half-filled Sidekick form and an entry question. */
-  function* leavingWithQuestions(leave: (terminal: Terminal) => Operation<void>): Operation<void> {
+  function* leavingWithQuestions(leave: (page: ReplPage) => Operation<void>): Operation<void> {
     const host = yield* useMountedHost();
     host.fake.script({
       reply: `<Elicit schema={${JSON.stringify(ASKS)}} as="answer">Shall I?</Elicit>\n`,
     });
-    const repl = yield* useMountedRepl({ host });
+    const page = yield* useReplPage({ host });
+    const repl = page.repl;
 
     // The entry's question, pending and unanswered throughout.
-    yield* focusDraft(repl.terminal);
-    repl.terminal.bytes(new TextEncoder().encode(ENTRY_WAITS));
-    yield* settled(60);
-    repl.terminal.feed("\r");
-    yield* awaiting(repl.terminal, "the entry's question announcing itself", (one) =>
-      shows(one, "[answer]"),
-    );
+    yield* pasteDraft(page, ENTRY_WAITS);
+    yield* page.key("Enter");
+    yield* page.until("the entry's question announcing itself", (one) => one.shows("[answer]"));
 
     // And the Sidekick's, opened and half filled in.
-    yield* sendMessage(repl, "shall you?");
-    yield* awaiting(repl.terminal, "the Sidekick's question announcing itself", (one) =>
+    yield* sendMessage(page, "shall you?");
+    yield* page.until("the Sidekick's question announcing itself", (one) =>
       // The notice this screen gives: the control that opens the question, in
       // the pane that owns it. The prose naming the agent belongs to the
       // screen this one replaced.
-      shows(one, "[answer sidekick]"),
+      one.shows("[answer sidekick]"),
     );
-    yield* click(repl.terminal, "[answer sidekick]");
-    yield* awaiting(repl.terminal, "the form opening", (one) => shows(one, "Shall I?"));
-    yield* typing(repl.terminal, "ye");
+    yield* page.press("[answer sidekick]");
+    yield* page.until("the form opening", (one) => formOpen(one) && one.shows("Shall I?"));
+    yield* page.type("ye");
 
     const restored = repl.terminal.resets;
-    yield* leave(repl.terminal);
+    yield* leave(page);
     yield* awaited("the command returning", () => repl.outcome() !== undefined);
 
     // Once, and with everything released.
@@ -1811,29 +1620,28 @@ describe("Tier MQ — leaving with questions pending, and the cold reopen after"
       ensured: host.fake.ensured.length,
       prompts: host.fake.prompts.length,
     };
-    const again = yield* useMountedRepl({
+    const againPage = yield* useReplPage({
       host,
       location: `xmd://repl/${execution}/entries`,
     });
-    expect(shows(again.terminal, "[answer sidekick]")).toBe(false);
-    expect(shows(again.terminal, "Shall I?")).toBe(false);
-    expect(shows(again.terminal, "[close]")).toBe(false);
+    expect(againPage.screen().shows("[answer sidekick]")).toBe(false);
+    expect(againPage.screen().shows("Shall I?")).toBe(false);
+    expect(againPage.screen().shows("[close]")).toBe(false);
     // And the chat it does project holds what the stopped process wrote.
-    expect(saidByPerson(again.terminal, "shall you?")).toBe(true);
+    expect(saidByPerson(againPage.screen(), "shall you?")).toBe(true);
     expect(host.fake.ensured).toHaveLength(before.ensured);
     expect(host.fake.prompts).toHaveLength(before.prompts);
   }
 
   it("MQ5: Exit answers neither question and restores the terminal once", function* () {
-    yield* leavingWithQuestions(function* (terminal: Terminal): Operation<void> {
-      yield* click(terminal, "[exit]");
+    yield* leavingWithQuestions(function* (page: ReplPage): Operation<void> {
+      yield* page.press("[exit]");
     });
   });
 
   it("MQ5: Control-C does the same, without another key", function* () {
-    yield* leavingWithQuestions(function* (terminal: Terminal): Operation<void> {
-      terminal.feed("\x03");
-      yield* settled(30);
+    yield* leavingWithQuestions(function* (page: ReplPage): Operation<void> {
+      page.repl.terminal.feed("\x03");
     });
   });
 });
@@ -1860,10 +1668,8 @@ describe("Tier CFG — a preference being written when the command leaves", () =
   } as const;
 
   /** Open Configure from the pane's own header. */
-  function* configure(repl: MountedRepl): Operation<void> {
-    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
-    yield* settled(60);
-    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+  function configure(page: ReplPage): Operation<void> {
+    return openConfigure(page);
   }
 
   /** Where this execution's chat history is. */
@@ -1873,29 +1679,31 @@ describe("Tier CFG — a preference being written when the command leaves", () =
 
   it("CFG9: Exit waits for a preference already reaching the file", function* () {
     const gate = appendGate();
-    const repl = yield* useMountedRepl({ gate });
+    const page = yield* useReplPage({ gate });
+    const repl = page.repl;
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Hello back.</Output>\n" });
 
     // A conversation to save a preference for.
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the reply", (one) => shows(one, "Hello back."));
+    yield* sendMessage(page, "hello");
+    yield* page.until("the reply", (one) => one.shows("Hello back."));
+    yield* page.until("the Sidekick at rest", sidekickIdle);
 
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Fast"));
-    yield* click(repl.terminal, "( ) Fast", 96);
-    yield* awaiting(repl.terminal, "the model being chosen", (one) => shows(one, "(x) Fast"));
+    yield* configure(page);
+    yield* page.until("the advertised models", (one) => one.shows("Fast"));
+    yield* chooseOffer(page, "Fast");
+    yield* page.until("the model being chosen", (one) => one.shows("(x) Fast"));
 
     // The record this save writes, held open inside the host: the bytes are on
     // their way and this writer's memory of them is not there yet, which is the
     // one window the ordering is about.
     const saving = gate.holdNext((_path, record) => record.includes('"kind":"preferences"'));
-    yield* click(repl.terminal, "[apply]", 96);
+    yield* page.press("[apply]");
     yield* saving.started();
 
     // Leave while it is in flight.
-    yield* click(repl.terminal, "[exit]");
-    yield* settled(60);
+    yield* page.press("[exit]");
+    yield* lingering();
 
     // The command has not returned: it is waiting for the record it admitted.
     expect(repl.outcome()).toBe(undefined);
@@ -1924,33 +1732,35 @@ describe("Tier CFG — a preference being written when the command leaves", () =
 
   it("CFG9: a save still waiting for the writer is cancelled, and appends nothing", function* () {
     const gate = appendGate();
-    const repl = yield* useMountedRepl({ gate });
+    const page = yield* useReplPage({ gate });
+    const repl = page.repl;
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Hello back.</Output>\n" });
     repl.fake.script({ reply: "<Output>And again.</Output>\n" });
 
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the reply", (one) => shows(one, "Hello back."));
+    yield* sendMessage(page, "hello");
+    yield* page.until("the reply", (one) => one.shows("Hello back."));
+    yield* page.until("the Sidekick at rest", sidekickIdle);
     // One read of this conversation's choices, so the drawer has them later
     // while the Sidekick is busy.
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Fast"));
-    yield* click(repl.terminal, "[close]", 96);
-    yield* awaiting(repl.terminal, "the pane again", (one) => sidekickIdle(one));
+    yield* configure(page);
+    yield* page.until("the advertised models", (one) => one.shows("Fast"));
+    yield* page.press("[close]");
+    yield* page.until("the pane again", (one) => sidekickIdle(one));
 
     // Somebody else's record held inside the host, so the writer is occupied
     // by an append that is not this save's.
     const writing = gate.holdNext((_path, record) => record.includes('"kind":"response"'));
-    yield* sendMessage(repl, "again");
+    yield* sendMessage(page, "again");
     yield* writing.started();
 
     // And now the save, which is admitted and then *waits*: it is behind that
     // append in the one order this history has.
-    yield* configure(repl);
-    yield* click(repl.terminal, "( ) Fast", 96);
-    yield* awaiting(repl.terminal, "the model being chosen", (one) => shows(one, "(x) Fast"));
-    yield* click(repl.terminal, "[apply]", 96);
-    yield* settled(60);
+    yield* configure(page);
+    yield* chooseOffer(page, "Fast");
+    yield* page.until("the model being chosen", (one) => one.shows("(x) Fast"));
+    yield* page.press("[apply]");
+    yield* lingering();
     const before = yield* readSidekickRecords(savedAt(repl, yield* mountedExecution(repl)));
     expect(before.filter((record) => record.kind === "preferences")).toEqual([]);
 
@@ -1964,22 +1774,21 @@ describe("Tier CFG — a preference being written when the command leaves", () =
 
     // Nothing of it reached the file, then or later: a cancelled waiter writes
     // no record, and no record arrives after the command has gone.
-    yield* settled(40);
+    yield* lingering();
     const written = yield* readSidekickRecords(savedAt(repl, yield* mountedExecution(repl)));
     expect(written.filter((record) => record.kind === "preferences")).toEqual([]);
   });
 
   it("CFG9: an inspection in flight is cancelled, and its result reaches nothing", function* () {
-    const repl = yield* useMountedRepl();
+    const page = yield* useReplPage();
+    const repl = page.repl;
     repl.fake.configuration(ADVERTISED);
 
     // One explicit inspection, admitted and held inside the provider.
     const reading = repl.fake.holdStatus();
-    yield* configure(repl);
+    yield* configure(page);
     yield* reading.reached;
-    yield* awaiting(repl.terminal, "the read in flight", (one) =>
-      shows(one, "Reading what this agent"),
-    );
+    yield* page.until("the read in flight", (one) => one.shows("Reading what this agent"));
     const asked = repl.fake.configCalls.length;
 
     // Control-C while it is in flight.
@@ -1996,7 +1805,7 @@ describe("Tier CFG — a preference being written when the command leaves", () =
     // command had restored it.
     const drawn = repl.terminal.presented.length;
     reading.release();
-    yield* settled(60);
+    yield* lingering();
     expect(repl.fake.configCalls).toHaveLength(asked);
     expect(repl.terminal.presented.length).toBe(drawn);
     expect(repl.terminal.resets).toBe(1);
@@ -2007,18 +1816,20 @@ describe("Tier CFG — a preference being written when the command leaves", () =
 
   it("CFG9: control — Control-C with no save in flight leaves nothing behind", function* () {
     const gate = appendGate();
-    const repl = yield* useMountedRepl({ gate });
+    const page = yield* useReplPage({ gate });
+    const repl = page.repl;
     repl.fake.configuration(ADVERTISED);
     repl.fake.script({ reply: "<Output>Hello back.</Output>\n" });
 
-    yield* sendMessage(repl, "hello");
-    yield* awaiting(repl.terminal, "the reply", (one) => shows(one, "Hello back."));
+    yield* sendMessage(page, "hello");
+    yield* page.until("the reply", (one) => one.shows("Hello back."));
+    yield* page.until("the Sidekick at rest", sidekickIdle);
 
     // Chosen and *not* applied, so nothing was ever admitted to write.
-    yield* configure(repl);
-    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Fast"));
-    yield* click(repl.terminal, "( ) Fast", 96);
-    yield* awaiting(repl.terminal, "the model being chosen", (one) => shows(one, "(x) Fast"));
+    yield* configure(page);
+    yield* page.until("the advertised models", (one) => one.shows("Fast"));
+    yield* chooseOffer(page, "Fast");
+    yield* page.until("the model being chosen", (one) => one.shows("(x) Fast"));
 
     repl.terminal.feed("\x03");
     yield* awaited("the command returning", () => repl.outcome() !== undefined);

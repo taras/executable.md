@@ -1,172 +1,359 @@
 /**
- * What a person does at the mounted REPL, each act finished by what the screen shows.
+ * The running REPL as a page a test drives through the terminal and reads from
+ * what the terminal shows.
  *
- * Every act is real input — keystrokes and pointer presses through the
- * terminal's own input — and every wait is a question about a completed
- * presentation, asked again each time another one completes. Nothing here
- * reaches the owner, holds an append or joins a teardown: a case that is about
- * one of those says so in its own body.
+ * Every act is terminal input: keystrokes, and pointer presses at the first
+ * cell of a label a person can read. Every reading is the emulator's screen
+ * after one write the command completed — captured by middleware this scope
+ * installs around the existing `ReplTerminal.write`, which delegates to the
+ * real write first and copies the cells only once it returns. A held write
+ * suspends inside that delegation and a failed one throws out of it, so
+ * neither publishes a reading: holding and failing stay observable exactly as
+ * the terminal double already made them.
+ *
+ * A reading is **not** a frame. The first one is the mode-apply sequence on an
+ * empty screen, and a completed write is not a committed frame, so
+ * `index` counts writes and proves nothing about frame counts. Keys, focus,
+ * region rectangles and window offsets are not here at all: they are not in the
+ * bytes, and the tests that own those invariants hold them with explicit
+ * renderer and tree handles instead.
+ *
+ * A control is found by its visible label inside a scope stated from other
+ * visible text. A locator refuses zero matches and refuses more than one, so a
+ * reply that echoes `[send]`, or two panes that both draw it, fails loudly with
+ * the rows it saw rather than pressing whichever came first.
  */
 
+import { action, race, sleep } from "effection";
 import type { Operation } from "effection";
 
-import { NARROW } from "../../src/repl/layout.ts";
+import { ReplTerminal } from "../../src/repl/terminal.ts";
 import type { ReplTerminalSize } from "../../src/repl/terminal.ts";
-import {
-  coordinateOf,
-  DRAFT_PROMPT,
-  draftText,
-  focusedField,
-  focusedOn,
-  MESSAGE_PROMPT,
-  messageText,
-  rowsShow,
-  screenOf,
-  sidekickColumn,
-  sidekickPaneIn,
-  untilShown,
-} from "../fixtures/repl/issue-883/mounted-program.ts";
-import type { Terminal } from "../fixtures/repl/issue-883/mounted-program.ts";
+import { MOUNTED_DEADLINE_MS, useMountedRepl } from "./mounted-repl.ts";
+import type { MountedRepl } from "./mounted-repl.ts";
 
-/** Send these bytes, and wait until the screen shows what they were for. */
-export function* pressed(
-  terminal: Terminal,
-  bytes: string,
-  what: string,
-  shows: (terminal: Terminal) => boolean,
-): Operation<void> {
-  terminal.feed(bytes);
-  yield* untilShown(terminal, what, shows);
-}
-
-/** Where the focus cue is drawn: every `>` on the screen, by row and column. */
-function cue(terminal: Terminal): string {
-  return screenOf(terminal)
-    .map((line) => [...line.matchAll(/>/g)].map((found) => found.index).join(","))
-    .join("|");
+/** One cell of the screen, counted from zero. */
+export interface ScreenCell {
+  readonly column: number;
+  readonly row: number;
 }
 
 /**
- * Move focus one press at a time until it reaches what this names.
+ * Where a label may be looked for, stated from other visible text.
  *
- * Where focus lands is drawn by a frame after the one that first shows a
- * screen — at startup, after a resize, when a drawer closes — so a traversal
- * starts once the cue is drawn, and each press is done when the cue has moved.
+ * `onRow` is the row some heading or prompt is drawn on, which is where a
+ * control beside that heading lives. `after` is the rows below it. `rightOf`
+ * is the columns at or right of that text's own first cell — the one bounded
+ * layout statement this file makes, and it says only what it says: a label
+ * left of that column is not in the scope. It does not state where a pane
+ * begins.
  */
-export function* traverse(
-  terminal: Terminal,
-  what: string,
-  reached: (terminal: Terminal) => boolean,
-  key = "\t",
-): Operation<void> {
-  yield* untilShown(terminal, `the focus cue, before moving it toward ${what}`, (one) =>
-    screenOf(one).some((line) => /(?:^|\s)>(?:>|\s*\S)/.test(line)),
-  );
-  for (let press = 0; press < 240; press += 1) {
-    if (reached(terminal)) {
-      return;
+export interface ScreenScope {
+  readonly onRow?: string;
+  readonly after?: string;
+  readonly rightOf?: string;
+}
+
+/** The screen after one write the command completed. */
+export interface ScreenReading {
+  /** How many writes had completed when this was captured, from one. */
+  readonly index: number;
+  /** The size the terminal had while this was captured. */
+  readonly size: ReplTerminalSize;
+  readonly rows: readonly string[];
+  shows(text: string): boolean;
+  /** How many times the text appears, over every row, counting repeats in one row. */
+  occurrences(text: string): number;
+  /** The same count inside a scope. */
+  found(text: string, scope?: ScreenScope): number;
+  /**
+   * The first cell of the one match in this scope.
+   *
+   * Refuses zero matches and refuses more than one, naming the label, the
+   * scope and the rows it read.
+   */
+  locate(text: string, scope?: ScreenScope): ScreenCell;
+}
+
+export type PageKey = "Enter" | "Escape" | "Tab" | "Backtab" | "Backspace";
+
+const KEYS: Readonly<Record<PageKey, string>> = Object.freeze({
+  Enter: "\r",
+  Escape: "\x1b",
+  Tab: "\t",
+  Backtab: "\x1b[Z",
+  Backspace: "\x7f",
+});
+
+export interface ReplPage {
+  /** The mounted command: its terminal, scripted agent, gates and outcome. */
+  readonly repl: MountedRepl;
+  /** The latest reading. */
+  screen(): ScreenReading;
+  /**
+   * Wait for a reading this holds of, asking the latest one first.
+   *
+   * Fails with what the last reading showed when the command ends or the
+   * deadline passes first.
+   */
+  until(what: string, holds: (reading: ScreenReading) => boolean): Operation<ScreenReading>;
+  /** Press the pointer at the first cell of this label. Waits for nothing. */
+  press(label: string, scope?: ScreenScope): Operation<void>;
+  /** Send one named key. Waits for nothing. */
+  key(name: PageKey): Operation<void>;
+  /** Send text to whatever holds focus. Waits for nothing. */
+  type(text: string): Operation<void>;
+  /** Resize the terminal and wait for a reading the new size produced. */
+  resize(size: ReplTerminalSize): Operation<ScreenReading>;
+  /** The latest reading as a refusal reports it. */
+  describe(): string;
+}
+
+/** Every offset into this row's text where it holds this text, including repeats. */
+function offsetsIn(row: string, text: string): number[] {
+  const found: number[] = [];
+  let at = row.indexOf(text);
+  while (at !== -1) {
+    found.push(at);
+    at = row.indexOf(text, at + 1);
+  }
+  return found;
+}
+
+/**
+ * The terminal column each character of this row's text was drawn in.
+ *
+ * A cell is a column and a character is not: a double-width glyph occupies two
+ * columns and the emulator reports the second of them as nothing at all, so a
+ * row holding one is shorter as text than it is wide on the screen. Pressing
+ * needs the column, and every offset this file resolves goes through here
+ * before it becomes one. A grapheme the emulator reports as several characters
+ * in one cell maps all of them to that cell.
+ */
+function columnsOf(cells: readonly string[]): number[] {
+  const columns: number[] = [];
+  for (const [column, cell] of cells.entries()) {
+    for (let index = 0; index < cell.length; index += 1) {
+      columns.push(column);
     }
-    const before = cue(terminal);
-    yield* pressed(
-      terminal,
-      key,
-      `a press moving focus toward ${what}`,
-      (one) => cue(one) !== before,
-    );
   }
-  throw new Error(`focus never reached ${what} in 240 presses`);
+  return columns;
 }
 
-/** Press at the cell this label is drawn in, at or right of `from`. */
-export function* pointAt(terminal: Terminal, label: string, from = 0): Operation<void> {
-  const at = coordinateOf(terminal, label, from);
-  if (at === undefined) {
+/** The one row this text is drawn on, or a refusal naming how many there were. */
+function rowOf(rows: readonly string[], text: string, what: string): number {
+  const matched = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => row.includes(text));
+  if (matched.length !== 1) {
     throw new Error(
-      `no control labelled ${label} is on the screen. rows=` +
-        JSON.stringify(screenOf(terminal).filter((line) => line.trim().length > 0)),
+      `${what} needs exactly one row showing ${JSON.stringify(text)} and ${matched.length} ` +
+        `were shown. rows=${JSON.stringify(visible(rows))}`,
     );
   }
-  const before = terminal.drawn;
-  yield* pressed(
-    terminal,
-    `\x1b[<0;${at.column + 1};${at.row + 1}M`,
-    `the frame after pressing ${label}`,
-    (one) => one.drawn > before,
-  );
+  return matched[0].index;
 }
 
-/** Tab to the Draft and type this into it. */
-export function* typeDraft(terminal: Terminal, text: string): Operation<void> {
-  yield* traverse(terminal, "the Draft", (one) => focusedField(one, DRAFT_PROMPT));
-  const held = draftText(terminal);
-  yield* pressed(
-    terminal,
-    text,
-    `the Draft holding ${JSON.stringify(held + text)}`,
-    (one) => draftText(one) === held + text,
-  );
+/** The rows anything is drawn on, trimmed, for a refusal to quote. */
+function visible(rows: readonly string[]): string[] {
+  return rows.map((row) => row.trim()).filter((row) => row.length > 0);
 }
 
-/**
- * Tab to the Draft, put this source in it and press Enter.
- *
- * Done when the Draft has taken the source; whether an entry was admitted is
- * the case's own question.
- */
-export function* submitDraft(terminal: Terminal, source: string): Operation<void> {
-  yield* traverse(terminal, "the Draft", (one) => focusedField(one, DRAFT_PROMPT));
-  const held = draftText(terminal);
-  yield* pressed(terminal, source, "the Draft taking the source", (one) => draftText(one) !== held);
-  terminal.feed("\r");
+function reading(index: number, size: ReplTerminalSize, cells: string[][]): ScreenReading {
+  const rows = cells.map((line) => line.join("").trimEnd());
+  const columns = cells.map((line) => columnsOf(line));
+  /** The column one offset into a row's text was drawn in. */
+  const columnAt = (row: number, offset: number): number => columns[row]?.[offset] ?? offset;
+  /** The cells this scope admits: a row range, and a column floor. */
+  const bounded = (scope: ScreenScope | undefined, what: string) => {
+    let from = 0;
+    let to = rows.length;
+    let floor = 0;
+    if (scope?.onRow !== undefined) {
+      const at = rowOf(rows, scope.onRow, what);
+      from = at;
+      to = at + 1;
+    }
+    if (scope?.after !== undefined) {
+      from = Math.max(from, rowOf(rows, scope.after, what) + 1);
+    }
+    if (scope?.rightOf !== undefined) {
+      const at = rowOf(rows, scope.rightOf, what);
+      floor = columnAt(at, rows[at].indexOf(scope.rightOf));
+    }
+    return { from, to, floor };
+  };
+  const matches = (text: string, scope: ScreenScope | undefined, what: string): ScreenCell[] => {
+    const { from, to, floor } = bounded(scope, what);
+    const found: ScreenCell[] = [];
+    for (let row = from; row < to; row += 1) {
+      for (const offset of offsetsIn(rows[row] ?? "", text)) {
+        const column = columnAt(row, offset);
+        if (column >= floor) {
+          found.push({ column, row });
+        }
+      }
+    }
+    return found;
+  };
+  return {
+    index,
+    size,
+    rows,
+    shows: (text) => rows.some((row) => row.includes(text)),
+    occurrences: (text) => rows.reduce((count, row) => count + offsetsIn(row, text).length, 0),
+    found: (text, scope) => matches(text, scope, `looking for ${JSON.stringify(text)}`).length,
+    locate(text, scope) {
+      const what = `pressing ${JSON.stringify(text)}`;
+      const found = matches(text, scope, what);
+      if (found.length !== 1) {
+        throw new Error(
+          `${JSON.stringify(text)} is shown ${found.length} times in ${scopeOf(scope)} and one ` +
+            `was needed${
+              found.length === 0
+                ? ""
+                : ` (at ${found.map((one) => `${one.column},${one.row}`).join("; ")})`
+            }. rows=${JSON.stringify(visible(rows))}`,
+        );
+      }
+      return found[0];
+    },
+  };
 }
 
-/** Select the Sidekick by its tab, which gives its message box the focus. */
-export function* selectSidekick(terminal: Terminal): Operation<void> {
-  yield* traverse(terminal, "the Sidekick tab", (one) => focusedOn(one, "Sidekick"));
-  yield* pressed(terminal, "\r", "the message box taking the focus its tab claimed", (one) =>
-    focusedField(one, MESSAGE_PROMPT),
-  );
-}
-
-/** Tab to the Sidekick's message box and type this into it. */
-export function* typeMessage(terminal: Terminal, text: string): Operation<void> {
-  yield* traverse(terminal, "the message box", (one) => focusedField(one, MESSAGE_PROMPT));
-  const held = messageText(terminal);
-  yield* pressed(terminal, text, `the message box holding ${JSON.stringify(held + text)}`, (one) =>
-    messageText(one).includes(held + text),
-  );
-}
-
-/**
- * Type a message and press the Sidekick pane's own Send, once the pane offers it.
- *
- * A reply can be drawn before its cycle ends, and until then the pane offers
- * Stop where Send was.
- */
-export function* send(terminal: Terminal, text: string): Operation<void> {
-  if (!focusedField(terminal, MESSAGE_PROMPT)) {
-    yield* selectSidekick(terminal);
+function scopeOf(scope: ScreenScope | undefined): string {
+  if (scope === undefined) {
+    return "the whole screen";
   }
-  yield* typeMessage(terminal, text);
-  yield* untilShown(terminal, "the Sidekick pane offering Send", (one) =>
-    rowsShow(sidekickPane(one), "[send]"),
-  );
-  yield* pointAt(terminal, "[send]", sidekickColumn(terminal));
+  const parts = [
+    scope.onRow === undefined ? undefined : `the row showing ${JSON.stringify(scope.onRow)}`,
+    scope.after === undefined ? undefined : `below ${JSON.stringify(scope.after)}`,
+    scope.rightOf === undefined ? undefined : `at or right of ${JSON.stringify(scope.rightOf)}`,
+  ].filter((part) => part !== undefined);
+  return parts.join(", ");
 }
 
-/** The Sidekick pane's own rows, beside nothing else. */
-export function sidekickPane(terminal: Terminal): readonly string[] {
-  return sidekickPaneIn(screenOf(terminal));
-}
+/**
+ * Mount the real command and wait for a screen a person could act on.
+ *
+ * Takes the same options as `useMountedRepl`. The middleware is installed in
+ * this scope before the command is spawned, so every write it completes is
+ * read; the terminal double feeds the emulator inside that write, so the cells
+ * copied here are the ones that write left and nothing later.
+ */
+export function* useReplPage(
+  options: Parameters<typeof useMountedRepl>[0] = {},
+): Operation<ReplPage> {
+  let latest: ScreenReading | undefined;
+  let count = 0;
+  const wakers = new Set<() => void>();
+  let mounted: MountedRepl | undefined;
 
-/** Shrink below the minimum, and hand back the refusal that size draws. */
-export function* refusedAt(terminal: Terminal, size: ReplTerminalSize): Operation<string[]> {
-  const before = terminal.drawn;
-  terminal.resized(size);
-  yield* untilShown(
-    terminal,
-    `the refusal at ${size.columns}x${size.rows}`,
-    (one) => one.drawn > before && rowsShow(screenOf(one), `${NARROW.columns}x${NARROW.rows}`),
+  yield* ReplTerminal.around({
+    *write([bytes], next) {
+      yield* next(bytes);
+      const screen = mounted?.terminal.screen;
+      if (screen !== undefined) {
+        count += 1;
+        latest = reading(count, screen.size, screen.cells());
+        for (const wake of Array.from(wakers)) {
+          wake();
+        }
+      }
+    },
+  });
+
+  const repl = yield* useMountedRepl(options);
+  mounted = repl;
+
+  const captured = (seen: number): Operation<void> =>
+    action<void>((resolve) => {
+      if (count > seen) {
+        resolve();
+        return () => {};
+      }
+      const one = (): void => resolve();
+      wakers.add(one);
+      return () => {
+        wakers.delete(one);
+      };
+    });
+  function* ended(): Operation<void> {
+    while (repl.terminal.ending === undefined) {
+      yield* repl.terminal.after(repl.terminal.drawn);
+    }
+  }
+  const next = (seen: number): Operation<void> => race([captured(seen), ended()]);
+
+  const describe = (): string => {
+    if (latest === undefined) {
+      return "no write has completed yet";
+    }
+    const { columns, rows } = latest.size;
+    return `reading ${latest.index} at ${columns}x${rows}, rows ${JSON.stringify(
+      visible(latest.rows),
+    )}`;
+  };
+
+  const screen = (): ScreenReading => {
+    if (latest === undefined) {
+      throw new Error("the command has completed no write yet");
+    }
+    return latest;
+  };
+
+  function* until(what: string, holds: (one: ScreenReading) => boolean): Operation<ScreenReading> {
+    return yield* race([
+      (function* (): Operation<ScreenReading> {
+        while (true) {
+          const seen = count;
+          if (latest !== undefined && holds(latest)) {
+            return latest;
+          }
+          const ending = repl.terminal.ending;
+          if (ending !== undefined) {
+            throw ending.failure ?? new Error(`the command ended before ${what}. ${describe()}`);
+          }
+          yield* next(seen);
+        }
+      })(),
+      (function* (): Operation<ScreenReading> {
+        yield* sleep(MOUNTED_DEADLINE_MS);
+        throw new Error(`${what} was never shown within ${MOUNTED_DEADLINE_MS}ms. ${describe()}`);
+      })(),
+    ]);
+  }
+
+  function* press(label: string, scope?: ScreenScope): Operation<void> {
+    const at = screen().locate(label, scope);
+    repl.terminal.feed(`\x1b[<0;${at.column + 1};${at.row + 1}M`);
+  }
+
+  function* sendKey(name: PageKey): Operation<void> {
+    repl.terminal.feed(KEYS[name]);
+  }
+
+  function* type(text: string): Operation<void> {
+    repl.terminal.feed(text);
+  }
+
+  function* resize(size: ReplTerminalSize): Operation<ScreenReading> {
+    const from = count;
+    repl.terminal.resized(size);
+    return yield* until(
+      `a screen at ${size.columns}x${size.rows}`,
+      (one) => one.index > from && one.size.columns === size.columns && one.size.rows === size.rows,
+    );
+  }
+
+  // A screen a person can act on. Usually that is the footer's way out; at a
+  // terminal below the minimum it is the refusal naming the size, which draws
+  // no control at all and is still a screen to act on — grow the window, or
+  // press Escape.
+  yield* until(
+    "a screen a person can act on",
+    (one) => one.shows("[exit]") || one.shows("needs at least"),
   );
-  return screenOf(terminal);
+
+  return { repl, screen, until, press, key: sendKey, type, resize, describe };
 }

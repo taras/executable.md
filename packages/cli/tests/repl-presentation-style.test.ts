@@ -32,7 +32,6 @@ import {
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { fileURLToPath } from "node:url";
-import { readTextFile } from "@effectionx/fs";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { scoped, sleep, spawn } from "effection";
 import type { Operation } from "effection";
@@ -48,6 +47,7 @@ import {
   reduceRepl,
   workspaceOf,
   viewFor,
+  withWorkspace,
 } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { useReplElicitation } from "../src/repl/elicitation.ts";
@@ -67,14 +67,14 @@ import type { ReplDrawerRef } from "../src/repl/route.ts";
 import {
   COLUMN_TOP_GAP,
   drawerRect,
+  flatten,
   FOOTER_ROWS,
-  HISTORY_ROWS,
   inspectionWidth,
   NARROW,
   sidebarWidth,
   BODY_GUTTER,
 } from "../src/repl/layout.ts";
-import { HISTORY_TITLE } from "../src/repl/history-rail.ts";
+import { HISTORY_ROWS, HISTORY_TITLE } from "../src/repl/history-rail.ts";
 import {
   ACTION_ROW,
   DRAWER_WINDOW,
@@ -87,6 +87,7 @@ import {
   TRANSCRIPT_BODY,
 } from "../src/repl/application.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
+import { SELECTOR_MARK } from "../src/repl/application.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { BOLD, REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import {
@@ -108,40 +109,40 @@ import {
   viewportBounds,
   windowOf,
 } from "./fixtures/repl/presentation.ts";
+import { emptyModel } from "./fixtures/repl/journals.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
-import {
-  CHECKPOINT_DRAFT,
-  CHECKPOINT_LIVE,
-  CHECKPOINT_MEDIUM,
-  CHECKPOINT_MESSAGE,
-  CHECKPOINT_NARROW,
-  CHECKPOINT_CURRENT_WORKSPACE,
-  CHECKPOINT_SIDEKICK,
-  CHECKPOINT_SIZE,
-  CHECKPOINT_SIZES,
-  CHECKPOINT_ASKING,
-  chatAt,
-  checkpointModel,
-  checkpointState,
-  checkpointViewOf,
-  checkpointScopes,
-  checkpointStateModel,
-  commitCheckpoint,
-  RUNNING_SOURCE,
-  WRAPPING_LINE,
-} from "./fixtures/repl/workspace-checkpoint.ts";
-import { chatLinesFor, QUEUE_WINDOW } from "../src/repl/application.ts";
+import { QUEUE_WINDOW } from "../src/repl/application.ts";
 import { readDescription } from "../src/repl/description.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
+import { useReplRenderer } from "../src/repl/renderer.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import {
-  appearanceJournal,
-  appearanceModel,
-  appearanceRecord,
-  readAppearanceRecord,
-  differences,
-  screenOf,
-  sizeOf,
-} from "./fixtures/repl/appearance.ts";
+  BINDINGS,
+  COMPOSER,
+  COMPOSER_VALUE,
+  DRAFT,
+  DRAFT_VALUE,
+  closeDrawer,
+  draftHolds,
+  draftText,
+  openHistory,
+  SIDEKICK_PANE,
+  TYPING,
+  drawerLines,
+  drawerOpen,
+  entrySettles,
+  intoComposer,
+  intoDraft,
+  pasteDraft,
+  saidBySidekick,
+  sendMessage,
+  SIDEKICK,
+  SIDEKICK_CONTROLS,
+  sidekickIdle,
+  typed,
+} from "./support/screen-journeys.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import { createFitStore, createPlainFitStore, fitPlain } from "../src/repl/fitting.ts";
 import type { ReplFittedLine } from "../src/repl/fitting.ts";
@@ -193,6 +194,18 @@ const SIDEKICK_QUIET = Object.freeze({
   busy: false,
   agent: "stub-agent",
   refusal: undefined,
+  question: undefined,
+  requested: undefined,
+  verified: undefined,
+  conversation: "quiet",
+  reading: "quiet",
+  current: true,
+  turns: Object.freeze([]),
+  availability: {
+    chats: Object.freeze(["quiet"]),
+    sessions: Object.freeze([]),
+    refusal: undefined,
+  },
 });
 
 const NOTHING_LIVE: ReplLive = Object.freeze({
@@ -591,168 +604,542 @@ function* focusOn(presenter: Presenter, key: string, limit = 400): Operation<voi
   throw new Error(`Tab never reached ${key}; it visited ${visited.join(", ")}`);
 }
 
+/** The directory the journeys include their `Checklist` component from. */
+const COMPONENTS = fileURLToPath(new URL("./fixtures/repl/", import.meta.url));
+
+/** The narrow review size, which routes one outlet. */
+const SMALL: ReplTerminalSize = { columns: 72, rows: 20 };
+
+/** The completed entry: it binds a value and renders output of its own. */
+const COMPLETED = [
+  "```js eval",
+  'const subtotal = "40.00";',
+  'output("cart.total is now computed from subtotal and tax.");',
+  "```",
+  "",
+  "Subtotal: {subtotal}",
+  "",
+].join("\n");
+
 /**
- * What the three accepted profiles look like, and nothing else.
+ * The running entry's exact source.
  *
- * One recorded input, three stored records, and a comparison that reports rows
- * and style runs a person can read. No route, ancestry, target list or box id
- * is asserted here: those are the behaviour tiers' own subject, and a screen
- * that drew the accepted words in the accepted inks over the wrong tree is a
- * failure those tiers catch, in their own language.
+ * It invokes one component, so the entry admits a nested scope the screen can
+ * select and show as a breadcrumb. One line is longer than the selected work's
+ * pane, so it wraps at a measured word boundary, and a run of spaces inside it
+ * must survive the reading.
  */
-describe("REPL appearance - reviewed shipping profiles", () => {
-  for (const profile of ["160x36", "120x30", "72x20"] as const) {
-    it(`${profile}: every row and style run is the reviewed record's`, function* () {
-      const record = yield* appearanceRecord(profile);
-      const journal = yield* appearanceJournal();
-      // The record says which input it describes, and this is that input. A
-      // record left behind by a re-recording fails here, on the digest, rather
-      // than further down as a row that stopped matching.
-      expect([profile, record.input.journalSha256]).toEqual([profile, journal.sha256]);
-      const model = yield* appearanceModel();
-      const size = sizeOf(record);
-      yield* scoped(function* (): Operation<void> {
-        const presenter = yield* usePresenter(size);
-        const frame = yield* commitCheckpoint(presenter, {
-          model,
-          size,
-          workspace: workspaceOf(model, CHECKPOINT_SIDEKICK),
-        });
-        const screen = screenOf(presenter.grid, size);
-        const found = differences(record, screen.rows, screen.runs);
-        if (found.length > 0) {
-          throw new Error(
-            [
-              `${profile}: ${found.length} difference(s) from the reviewed record`,
-              `expected data ${record.expectedSha256}, input ${record.input.journalSha256}`,
-              ...found.slice(0, 12),
-            ].join("\n"),
-          );
-        }
-        // The record describes a screen whose Draft took focus on its own.
-        expect([profile, frame.focused]).toEqual([profile, record.input.focused]);
-        expect([profile, screen.rows.length]).toEqual([profile, record.size.rows]);
-      });
-    });
+const RUNNING_SOURCE = [
+  "# Review the checkout total",
+  "",
+  "```js eval",
+  'output("Reading checkout.md and architecture.md");',
+  "```",
+  "",
+  '<Checklist title="Checkout total" steps={3} />',
+  "",
+  "Compute the total once,    after the items are summed, so that checkout.md and cart.md can never disagree about what the customer pays.",
+  "",
+].join("\n");
+
+/** The line of {@link RUNNING_SOURCE} that must wrap, exactly as written. */
+const WRAPPING_LINE =
+  "Compute the total once,    after the items are summed, so that checkout.md and cart.md can never disagree about what the customer pays.";
+
+/** What keeps the running entry running: one agent turn the case holds. */
+const AGENT_TAIL = [
+  '<Session name="architect">',
+  '<Prompt text="Review checkout.md against architecture.md and list each requested change." />',
+  "</Session>",
+  "",
+].join("\n");
+
+/** The Draft: three rows of value, the middle one blank. */
+const CHECKPOINT_DRAFT = [
+  "<Checkout cart={cart} />",
+  "",
+  '<PriceSummary items={cart.items} currency="USD" />',
+].join("\n");
+
+/** What is typed in the Sidekick's composer and has not been sent. */
+const CHECKPOINT_MESSAGE = "Also say what an empty cart renders.";
+
+/** A question in the REPL's own form language, which nobody answers. */
+const ROUNDING_QUESTION =
+  '<Elicit schema={{ type: "object", additionalProperties: false, required: ["rule"], properties: { rule: { type: "string", title: "Rounding rule" } } }} as="rule">Which rounding rule should the tax use?</Elicit>';
+
+/** An entry that prints, then waits on the question above until it is stopped. */
+const STOPPABLE = [
+  "```js eval",
+  'output("Rounding tax once, after the items are summed.");',
+  "```",
+  "",
+  ROUNDING_QUESTION,
+  "",
+].join("\n");
+
+/** One message a person sends, whose reply submits an entry. */
+interface Exchange {
+  readonly asked: string;
+  readonly source: string;
+  /** What the turn that receives the entry's outcome says. */
+  readonly said: string;
+  readonly outcome: "ok" | "err" | "cancelled";
+}
+
+const FIRST: Exchange = {
+  asked: "first request",
+  source: COMPLETED,
+  said: "one done",
+  outcome: "ok",
+};
+const SECOND: Exchange = {
+  asked: "second request",
+  source: FAILING,
+  said: "two failed",
+  outcome: "err",
+};
+const THIRD: Exchange = {
+  asked: "third request",
+  source: STOPPABLE,
+  said: "three stopped",
+  outcome: "cancelled",
+};
+
+/** The reply that prepares this source and submits it as the next entry. */
+function submitting(source: string): string {
+  return [
+    '<Let as="code" select="code">',
+    "````xmd",
+    source,
+    "````",
+    "</Let>",
+    "<REPL.EntryInput>{code}</REPL.EntryInput>",
+    "<REPL.Submit />",
+    "<Output>Submitted it.</Output>",
+    "",
+  ].join("\n");
+}
+
+/**
+ * One message, its entry running to the outcome it has, and the turn that
+ * answers with that outcome.
+ *
+ * An entry that waits on its question is stopped from the Draft's own Stop, which
+ * is how a person leaves an entry interrupted.
+ */
+function* exchange(page: ReplPage, order: number, one: Exchange): Operation<void> {
+  const { fake } = page.repl;
+  fake.script({ reply: submitting(one.source) });
+  fake.script({ reply: `<Output>${one.said}</Output>\n` });
+  yield* sendMessage(page, one.asked);
+  if (one.outcome === "cancelled") {
+    yield* page.until(
+      `Entry ${order} waiting`,
+      (reading) => reading.found("[stop]", { onRow: DRAFT }) === 1,
+    );
+    yield* page.press("[stop]", { onRow: DRAFT });
   }
+  yield* entrySettles(page, order, one.outcome);
+  yield* page.until(`the Sidekick saying ${one.said}`, (reading) =>
+    saidBySidekick(reading, one.said),
+  );
+  yield* page.until("the Sidekick at rest", sidekickIdle);
+}
+
+/** The reply that goes on running once the second entry has begun. */
+const HELD_AGENT = { held: true, reply: "Reading checkout.md and architecture.md" } as const;
+
+/**
+ * The workspace a person reaches by working: one entry the Sidekick submitted
+ * and finished, then a second, with a nested Checklist, that it submitted and
+ * is waiting on. Its agent turn is in flight, so the Draft and the Sidekick
+ * both offer their own Stop.
+ */
+function* reachWorkspace(size: ReplTerminalSize): Operation<ReplPage> {
+  const page = yield* useReplPage({ size, includes: [COMPONENTS] });
+  yield* exchange(page, 1, FIRST);
+  page.repl.fake.script({ reply: submitting(`${RUNNING_SOURCE}\n${AGENT_TAIL}`) });
+  page.repl.fake.script(HELD_AGENT);
+  yield* sendMessage(page, "second request");
+  yield* page.until(
+    "Entry 2 running",
+    (reading) => reading.found("[stop]", { onRow: DRAFT }) === 1,
+  );
+  yield* page.repl.fake.holdingTurns(1);
+  return page;
+}
+
+/**
+ * Every outcome a reading can hold, and a question waiting.
+ *
+ * Three entries the Sidekick submitted — settled, failed and stopped — then a
+ * fourth the person submits from the Draft that is still running, then a
+ * Sidekick reply that asks.
+ */
+function* reachOutcomes(size: ReplTerminalSize): Operation<ReplPage> {
+  const page = yield* useReplPage({ size, includes: [COMPONENTS] });
+  for (const [at, one] of [FIRST, SECOND, THIRD].entries()) {
+    yield* exchange(page, at + 1, one);
+  }
+  page.repl.fake.script(HELD_AGENT);
+  yield* pasteDraft(page, `${RUNNING_SOURCE}\n${AGENT_TAIL}`);
+  yield* page.key("Enter");
+  yield* page.until(
+    "Entry 4 running",
+    (reading) => reading.found("[stop]", { onRow: DRAFT }) === 1,
+  );
+  yield* page.repl.fake.holdingTurns(1);
+  page.repl.fake.script({ reply: `${ROUNDING_QUESTION}\n` });
+  yield* sendMessage(page, "fifth request");
+  yield* page.until("the Sidekick's question", (reading) => reading.shows("[answer sidekick]"));
+  return page;
+}
+
+/** Both composers holding text nobody has sent, the Draft last so it holds focus. */
+function* typedInto(page: ReplPage): Operation<void> {
+  yield* intoComposer(page);
+  yield* typed(page, CHECKPOINT_MESSAGE);
+  yield* pasteDraft(page, CHECKPOINT_DRAFT);
+}
+
+/** Open the Entries catalog through the control the sidebar draws for it. */
+function* openCatalog(page: ReplPage): Operation<void> {
+  yield* page.press("Entries", { onRow: "Entries" });
+  yield* page.until("the catalog opening", drawerOpen);
+}
+
+/** Choose the nested Checklist in the Entries catalog, which closes behind the choice. */
+function* selectChecklist(page: ReplPage): Operation<void> {
+  yield* openCatalog(page);
+  yield* page.until("the catalog offering its scope", (reading) =>
+    drawerLines(reading).some((row) => row.includes("Checklist")),
+  );
+  yield* page.press("Checklist");
+  yield* page.until("the catalog closing", (reading) => !drawerOpen(reading));
+}
+
+/** One region of a committed frame, or a failure naming the frame that did not place it. */
+function regionOf(observed: Observed, id: string): ReplBounds {
+  const bounds = observed.regionOf(id);
+  if (bounds === undefined) {
+    throw new Error(`this frame placed no ${id}`);
+  }
+  return bounds;
+}
+
+/** What one cell of the mounted terminal was drawn with. */
+function inkAt(page: ReplPage, at: { readonly column: number; readonly row: number }): CellStyle {
+  const screen = page.repl.terminal.screen;
+  if (screen === undefined) {
+    throw new Error("the mounted terminal has no screen");
+  }
+  return screen.styleAt(at.column, at.row);
+}
+
+/** Where a phrase starts inside a region of this frame, or none where it shows no such phrase. */
+function cellIn(
+  observed: Observed,
+  grid: TerminalGrid,
+  id: string,
+  phrase: string,
+): { x: number; y: number } | undefined {
+  const bounds = observed.regionOf(id);
+  if (bounds === undefined) {
+    return undefined;
+  }
+  const rows = grid.textIn(bounds);
+  const at = rows.findIndex((row) => row.includes(phrase));
+  return at < 0 ? undefined : { x: bounds.x + (rows[at]?.indexOf(phrase) ?? 0), y: bounds.y + at };
+}
+
+/** As {@link cellIn}, with a failure naming the region and the rows it did show. */
+function cellOf(
+  observed: Observed,
+  grid: TerminalGrid,
+  id: string,
+  phrase: string,
+): { x: number; y: number } {
+  const found = cellIn(observed, grid, id, phrase);
+  if (found === undefined) {
+    const bounds = observed.regionOf(id);
+    const rows = bounds === undefined ? [] : grid.textIn(bounds);
+    throw new Error(`${id} shows no ${JSON.stringify(phrase)}. ${JSON.stringify(rows)}`);
+  }
+  return found;
+}
+
+/**
+ * What the three columns, a header row and the Draft are each painted with.
+ *
+ * Read from blank cells: the gutter beside a body holds nothing, so its ground
+ * is the pane's own.
+ */
+function groundsOf(observed: Observed, grid: TerminalGrid): (number | undefined)[] {
+  const ground = (id: string): number | undefined => {
+    const gutter = regionOf(observed, id);
+    const at = { x: gutter.x, y: gutter.y + Math.floor(gutter.height / 2) };
+    expect([id, grid.at(at.x, at.y)]).toEqual([id, " "]);
+    return grid.styleAt(at.x, at.y).background;
+  };
+  const box = regionOf(observed, "box:draft");
+  return [
+    ground("box:sidebar:body:gutter"),
+    ground("box:transcript:body:gutter"),
+    ground("box:inspection:body:gutter"),
+    grid.styleAt(0, regionOf(observed, "box:sidebar:header").y).background,
+    grid.styleAt(box.x + box.width - 2, box.y + 2).background,
+  ];
+}
+
+/** The four rows every size keeps: the identity row, the body, History and guidance. */
+function chromeOf(observed: Observed): Record<string, ReplBounds> {
+  return {
+    identity: regionOf(observed, "box:identity"),
+    body: regionOf(observed, "box:body"),
+    history: regionOf(observed, "box:history"),
+    guidance: regionOf(observed, "box:guidance"),
+  };
+}
+
+/**
+ * What the specification gives every size: three rows of chrome around the body,
+ * words in each of them, and nothing placed or drawn past the screen.
+ */
+function expectChrome(presenter: Presenter, observed: Observed, size: ReplTerminalSize): void {
+  const where = `${size.columns}x${size.rows}`;
+  const { grid } = presenter;
+  expect({ where, chrome: chromeOf(observed) }).toEqual({
+    where,
+    chrome: {
+      identity: { x: 0, y: 0, width: size.columns, height: 1 },
+      body: { x: 0, y: 1, width: size.columns, height: size.rows - 3 },
+      history: { x: 0, y: size.rows - 2, width: size.columns, height: 1 },
+      guidance: { x: 0, y: size.rows - 1, width: size.columns, height: 1 },
+    },
+  });
+  const rows = grid.rows();
+  expect({
+    where,
+    rows: rows.length,
+    past: rows.filter((row) => Array.from(row).length > size.columns),
+    outside: flatten(observed.committed.manifest.root)
+      .map((box) => ({ id: box.id, bounds: observed.regionOf(box.id) }))
+      .filter(
+        (one) =>
+          one.bounds !== undefined &&
+          (one.bounds.x < 0 ||
+            one.bounds.y < 0 ||
+            one.bounds.x + one.bounds.width > size.columns ||
+            one.bounds.y + one.bounds.height > size.rows),
+      )
+      .map((one) => one.id),
+  }).toEqual({ where, rows: size.rows, past: [], outside: [] });
+  const shown = (id: string): string => grid.textIn(regionOf(observed, id)).join(" ");
+  expect({
+    where,
+    identity: shown("box:identity").includes("XMD REPL"),
+    history: shown("box:history").includes("HISTORY"),
+    guidance: grid.textIn(regionOf(observed, "box:guidance")).join("").trim().length > 0,
+    controls: [
+      within(placed(observed, "footer:history"), regionOf(observed, "box:history")),
+      within(placed(observed, "footer:exit"), regionOf(observed, "box:history")),
+    ],
+  }).toEqual({ where, identity: true, history: true, guidance: true, controls: [true, true] });
+}
+
+/** Whether every placed control is whole, inside the screen and clear of the others. */
+function placement(
+  observed: Observed,
+  size: ReplTerminalSize,
+): { count: boolean; whole: boolean; inside: boolean; apart: boolean } {
+  const boxes = observed.targets.map((one) => one.bounds);
+  return {
+    count: boxes.length > 0,
+    whole: boxes.every((one) => [one.x, one.y, one.width, one.height].every(Number.isInteger)),
+    inside: boxes.every(
+      (one) =>
+        one.x >= 0 &&
+        one.y >= 0 &&
+        one.x + one.width <= size.columns &&
+        one.y + one.height <= size.rows,
+    ),
+    apart: boxes.every((one, at) =>
+      boxes
+        .slice(at + 1)
+        .every(
+          (other) =>
+            one.x + one.width <= other.x ||
+            other.x + other.width <= one.x ||
+            one.y + one.height <= other.y ||
+            other.y + other.height <= one.y,
+        ),
+    ),
+  };
+}
+
+/** The three columns of a wide profile, as the rectangles they were placed in. */
+function columnsOf(observed: Observed): Record<string, ReplBounds> {
+  return {
+    sidebar: regionOf(observed, "box:sidebar"),
+    transcript: regionOf(observed, "box:transcript"),
+    inspection: regionOf(observed, "box:inspection"),
+  };
+}
+
+/** The Draft keeps four rows at the foot of its column, ending where History begins. */
+function expectDraft(observed: Observed, column: ReplBounds): void {
+  const box = regionOf(observed, "box:draft");
+  expect([box.height, box.y + box.height]).toEqual([4, regionOf(observed, "box:history").y]);
+  expect([box.x >= column.x, box.x + box.width <= column.x + column.width]).toEqual([true, true]);
+}
+
+/**
+ * What the specification says each shipping profile looks like, from the
+ * running command, and nothing else.
+ *
+ * One mounted workspace per size: the Transcript, the selected work and the
+ * Bindings/Sidekick pane at the two wide sizes, one routed surface at the
+ * narrow one, each under the identity row and above the compact History row
+ * and the one row of guidance. The numbers are the specification's — the
+ * first composition at 160x36 gives the columns 36, 66 and 58 cells, dividers
+ * included, a body of 33 rows and a four-row Draft; 120x30 follows it and 72x20
+ * routes one surface. A region comes from the frame the command presented, and
+ * a cell comes from the terminal that frame was written to; no row is compared
+ * with a stored picture.
+ */
+describe("REPL appearance - the shipping profiles' geometry", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("160x36: columns of 36, 66 and 58, a body of 33 rows and a four-row Draft", function* () {
+    const model = yield* runningReading();
+    const presenter = yield* usePresenter(WIDE);
+    const observed = yield* presenter.commit(stagedView(model, WIDE));
+    expectChrome(presenter, observed, WIDE);
+    expect(columnsOf(observed)).toEqual({
+      sidebar: { x: 0, y: 1, width: 36, height: 33 },
+      transcript: { x: 36, y: 1, width: 66, height: 33 },
+      inspection: { x: 102, y: 1, width: 58, height: 33 },
+    });
+    expectDraft(observed, regionOf(observed, "box:transcript"));
+    expect(placement(observed, WIDE)).toEqual({
+      count: true,
+      whole: true,
+      inside: true,
+      apart: true,
+    });
+  });
+
+  it("120x30: the same three columns, narrower", function* () {
+    const model = yield* runningReading();
+    const presenter = yield* usePresenter(MEDIUM);
+    const observed = yield* presenter.commit(stagedView(model, MEDIUM));
+    expectChrome(presenter, observed, MEDIUM);
+    expect(columnsOf(observed)).toEqual({
+      sidebar: { x: 0, y: 1, width: 36, height: 27 },
+      transcript: { x: 36, y: 1, width: 52, height: 27 },
+      inspection: { x: 88, y: 1, width: 32, height: 27 },
+    });
+    expectDraft(observed, regionOf(observed, "box:transcript"));
+    expect(placement(observed, MEDIUM)).toEqual({
+      count: true,
+      whole: true,
+      inside: true,
+      apart: true,
+    });
+  });
+
+  it("72x20: one routed surface under the two surface controls", function* () {
+    const model = yield* runningReading();
+    const presenter = yield* usePresenter(SMALL);
+    const observed = yield* presenter.commit(stagedView(model, SMALL));
+    expectChrome(presenter, observed, SMALL);
+    expect(regionOf(observed, "box:content")).toEqual({ x: 0, y: 1, width: 72, height: 17 });
+    expect([observed.regionOf("box:sidebar"), observed.regionOf("box:inspection")]).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect([
+      observed.keys.includes("sessions:heading"),
+      observed.keys.includes("entries:heading"),
+    ]).toEqual([true, true]);
+    expectDraft(observed, regionOf(observed, "box:content"));
+    expect(placement(observed, SMALL)).toEqual({
+      count: true,
+      whole: true,
+      inside: true,
+      apart: true,
+    });
+  });
 });
 
 /**
- * What the recorded input actually is, before anything is drawn from it.
+ * The inks the archive states, read from the cells the running command drew.
  *
- * The first recording of this journal was taken without the compiler
- * installed: every eval closed `err` with "compiler not installed", the first
- * entry settled nothing, and the nested child was never imported. The records
- * drawn from it were a consistent description of a broken reading. This says
- * what the reading has to be — a first entry that completed, a second still
- * running, and the nested scope the second one admits — so a journal that
- * loses it fails here, where the message is about the input.
+ * A position is taken from a region or a control the presented frame placed and
+ * the ink from the terminal that frame was written to, in a state reached by
+ * working: an entry the Sidekick finished, one it is waiting on, and text
+ * typed into both fields. Every expected value is a literal in
+ * `fixtures/repl/reference-style.ts`, so a role the product drifted from the
+ * archive on cannot be satisfied by asking the product what it chose.
  */
-describe("REPL appearance - the recorded input", () => {
-  it("the journal parses, settles its first entry and admits the nested Checklist", function* () {
-    const journal = yield* appearanceJournal();
-    expect(journal.events.length).toBeGreaterThan(0);
-    const model = yield* appearanceModel();
+describe("REPL appearance - the archive's inks, from the mounted terminal", () => {
+  beforeAll(() => useTempFileCompiler());
 
-    // Two entries: the first completed, the second has not closed.
-    expect(model.entries.map((one) => one.terminal?.status ?? "unfinished")).toEqual([
-      "ok",
-      "unfinished",
-    ]);
-    // The first one's own output is there, which is what it closed `ok` with.
-    const settled = model.entries[0];
-    expect({ key: settled.key, outcome: settled.terminal?.status }).toEqual({
-      key: settled.key,
-      outcome: "ok",
-    });
-    // And the running entry admitted its nested child: one scope checkpoint,
-    // belonging to the second entry, from a component this journal really
-    // imported. Recorded without the compiler, that import never happened and
-    // there was no scope to select.
-    const scopes = model.checkpoints.filter((one) => one.kind === "scope");
-    expect({
-      scopes: scopes.length,
-      of: scopes.every((one) => one.marker.startsWith(`${model.entries[1].key}:`)),
-      imported: journal.events.some(
-        (event) =>
-          event.type === "yield" &&
-          event.description.type === "import_component" &&
-          event.description.name === "Checklist",
-      ),
-    }).toEqual({ scopes: 1, of: true, imported: true });
+  it("an outcome, a syntax role and the field surfaces are the archive's, and the grounds differ", function* () {
+    // The same screen the appearance rows read, composed from a journal that
+    // really ran: one entry settled, one failed, one still running, with both
+    // fields holding text nobody has sent. The inks come from the cells the
+    // frame's own bytes left, and every expected value is the archive's literal.
+    const model = yield* settledFailedAndRunning();
+    const presenter = yield* usePresenter(WIDE);
+    const live: ReplLive = {
+      ...streaming("Reading checkout.md and architecture.md"),
+      sidekick: SIDEKICK_QUIET,
+    };
+    const state = stateWith({ draft: CHECKPOINT_DRAFT, message: CHECKPOINT_MESSAGE });
+    const { grid } = presenter;
+    const catalog = yield* presenter.commit(reading(state, model, live, WIDE));
+    expect(inkOf(grid, placed(catalog, "entry:entry-1")).foreground).toBe(SEMANTIC.tick);
+    expect(inkOf(grid, placed(catalog, "entry:entry-3")).foreground).toBe(REPL_PALETTE.waiting);
+    expect(inkOf(grid, placed(catalog, "entry:entry-3")).foreground).not.toBe(SEMANTIC.tick);
+    const viewOf = (focused?: string): ReplView =>
+      withWorkspace(reading(state, model, live, WIDE, focused), workspaceOf(model));
+    yield* presenter.commit(viewOf());
+    yield* focusOn(presenter, "footer:input");
+    const observed = yield* presenter.commit(viewOf(focusKeyOf(presenter)));
+    const foreground = (at: { x: number; y: number }): number | undefined =>
+      grid.styleAt(at.x, at.y).foreground;
 
-    // Every record describes this journal and no other.
-    for (const profile of ["160x36", "120x30", "72x20"] as const) {
-      const record = yield* appearanceRecord(profile);
-      expect([profile, record.input.journalSha256]).toEqual([profile, journal.sha256]);
-    }
-  });
-
-  /**
-   * A record is parsed, so the shapes it could have lost are refused.
-   *
-   * The members a reader reaches for are the ones worth naming: a null where a
-   * member should be, a number where a string should be, a run missing its
-   * width. Each of these is a record that would otherwise be handed on with a
-   * type written over it and fail later as a row that did not match.
-   */
-  it("a malformed record is refused by name rather than read as one", function* () {
-    // Read through the reader itself, so the seed every counterexample is built
-    // from is a record rather than whatever JSON.parse returned — and so the
-    // callbacks below know what a style line and a run are without being told.
-    const sound = readAppearanceRecord(
-      "72x20",
-      yield* readTextFile(
-        fileURLToPath(new URL("./fixtures/repl/appearance/72x20.json", import.meta.url)),
-      ),
+    // The Draft is read as source: delimiters, a tag's name, an attribute's name,
+    // the braces around a reference and what it names are each their own.
+    expect(inkIn(observed, grid, "box:transcript:header", "● ACTIVE").foreground).toBe(
+      LIFECYCLE.active.colour,
     );
-    const broken: readonly { readonly what: string; readonly make: () => unknown }[] = [
-      { what: "a null input", make: () => ({ ...sound, input: null }) },
-      {
-        what: "a null member of the input",
-        make: () => ({ ...sound, input: { ...sound.input, journalSha256: null } }),
-      },
-      {
-        what: "an authority value that is not a string",
-        make: () => ({ ...sound, authority: { ...sound.authority, reviewedCapture: 7 } }),
-      },
-      { what: "a null size", make: () => ({ ...sound, size: null }) },
-      {
-        what: "a size whose columns went missing",
-        make: () => ({ ...sound, size: { rows: sound.size.rows } }),
-      },
-      {
-        what: "a style line that is not an object",
-        make: () => ({ ...sound, styleRuns: [...sound.styleRuns.slice(1), "line"] }),
-      },
-      {
-        what: "a run missing its width",
-        make: () => ({
-          ...sound,
-          styleRuns: sound.styleRuns.map((line, at) =>
-            at === 0
-              ? { y: line.y, runs: line.runs.map((run) => ({ ...run, width: undefined })) }
-              : line,
-          ),
-        }),
-      },
-      { what: "rows that are not strings", make: () => ({ ...sound, rows: [1, 2, 3] }) },
-      { what: "a row count the size does not agree with", make: () => ({ ...sound, rows: [] }) },
-    ];
-    for (const one of broken) {
-      let refused: unknown;
-      try {
-        readAppearanceRecord("72x20", JSON.stringify(one.make()));
-      } catch (error) {
-        refused = error;
-      }
-      expect({ what: one.what, refused: refused instanceof Error }).toEqual({
-        what: one.what,
-        refused: true,
-      });
-    }
-    // And the record on disk is read without complaint.
-    expect(readAppearanceRecord("72x20", JSON.stringify(sound)).profile).toBe("72x20");
+    const tag = cellOf(observed, grid, "box:draft", "<Checkout cart={cart} />");
+    expect([0, 1, 10, 15, 16].map((offset) => foreground({ x: tag.x + offset, y: tag.y }))).toEqual(
+      [SYNTAX.del, SYNTAX.tag, SYNTAX.attr, SYNTAX.brace, SYNTAX.ref],
+    );
+    const quoted = cellOf(observed, grid, "box:draft", '"USD"');
+    expect([0, 1, 4].map((offset) => foreground({ x: quoted.x + offset, y: quoted.y }))).toEqual([
+      SYNTAX.str,
+      SYNTAX.str,
+      SYNTAX.str,
+    ]);
+
+    // Both fields a keystroke reaches are the archive's input surface, in every
+    // cell of every row they hold, blank ones included.
+    const box = regionOf(observed, "box:draft");
+    const composer = regionOf(observed, "box:tray");
+    const surfaces = [
+      ...[1, 2, 3].map((row) => grid.styleAt(box.x + box.width - 2, box.y + row)),
+      grid.styleAt(composer.x + composer.width - 2, composer.y + 2),
+    ].map((style) => style.background);
+    expect(surfaces).toEqual([SURFACE.input, SURFACE.input, SURFACE.input, SURFACE.input]);
+
+    // And the three columns, a header row and the Draft are each their own
+    // ground.
+    expect(new Set(groundsOf(observed, grid)).size).toBe(5);
   });
 });
 
@@ -2862,9 +3249,9 @@ describe("REPL responsiveness: a complete frame after a keystroke", () => {
  * **Ordinary kernel.** These frames are `reading()`, which is `viewFor` with no
  * workspace: the production renderer draws them, but the composition is the
  * kernel's rather than the staged screen a person is offered. That is why the
- * three shipping appearance records do not stand in for any of it — they hold
- * one input with one tab selected, and this asks about roles under both tabs
- * and about outlets they never route.
+ * mounted workspace rows do not stand in for any of it — they hold one input
+ * with one tab selected, and this asks about roles under both tabs and about
+ * outlets they never route.
  */
 describe("Tier TE kernel — pane roles, edges and routed outlets", () => {
   /** The two sizes that draw three columns. */
@@ -3570,10 +3957,10 @@ describe("REPL responsiveness: a chat the keystroke did not change", () => {
  *
  * **Ordinary kernel.** This is `reading()` again — `viewFor` with no workspace —
  * so what it pins is the column primitive, not the screen a person is offered.
- * The shipping appearance of the three accepted profiles is the appearance
- * records' subject; this one also asks about an odd 161 column, which is not a
- * profile and not the odd History remainder, and about the Bindings body, which
- * those records never select.
+ * The shipping geometry of the three accepted profiles is the mounted
+ * appearance rows' subject; this one also asks about an odd 161 column, which
+ * is not a profile and not the odd History remainder, and about the Bindings
+ * body, which those rows never select.
  */
 describe("REPL kernel — ordinary column shares and pane bodies", () => {
   // The fixture entry publishes its binding from an eval block, and the
@@ -4582,92 +4969,276 @@ describe("Tier BP5 — header space, the inset title and pane navigation", () =>
   });
 });
 
+/** The four outcomes the screen's words give an entry, as the words themselves. */
+const OUTCOMES = ["✓ COMPLETED", "× FAILED", "- INTERRUPTED", "● ACTIVE"] as const;
+
+/** The rows a long line was wrapped across, rejoined with one space where each row ended. */
+function wrappedRows(rows: readonly string[], start: string): string[] {
+  const first = rows.findIndex((row) => row.includes(start));
+  expect(first).toBeGreaterThanOrEqual(0);
+  const column = rows[first]?.indexOf(start) ?? 0;
+  const pieces: string[] = [];
+  for (
+    let at = first;
+    at < rows.length && pieces.join(" ").length < WRAPPING_LINE.length;
+    at += 1
+  ) {
+    pieces.push((rows[at] ?? "").slice(column).trimEnd());
+  }
+  return pieces;
+}
+
+/** The trail the selected work is read through, wherever this size draws it. */
+function trailOf(reading: ScreenReading): string {
+  return reading.rows.filter((row) => row.includes("›")).join(" ");
+}
+
+/** The lines the checkpoint Draft holds, each of which the field draws as its own row. */
+const DRAFT_LINES = CHECKPOINT_DRAFT.split("\n").filter((line) => line.length > 0);
+
+/** One cell's ink inside a region of a committed frame. */
+function inkIn(observed: Observed, grid: TerminalGrid, id: string, phrase: string): CellStyle {
+  const at = cellOf(observed, grid, id, phrase);
+  return grid.styleAt(at.x, at.y);
+}
+
+/** A chat holding what a person asked, what the agent replied, and what it is saying now. */
+function talking(): ReplSidekickReading {
+  const conversation = "chat-971";
+  const row = (
+    at: number,
+    kind: "person" | "reply" | "preview",
+    text: string,
+  ): ReplSidekickChatRow =>
+    Object.freeze({
+      key: `${conversation}:row:${at}`,
+      conversation,
+      turn: at,
+      kind,
+      text,
+      hasOutput: kind !== "person",
+      failure: undefined,
+    });
+  return Object.freeze({
+    agent: "scribe",
+    busy: true,
+    refusal: undefined,
+    question: undefined,
+    requested: undefined,
+    verified: undefined,
+    conversation,
+    reading: conversation,
+    current: true,
+    turns: [],
+    availability: { chats: [conversation], sessions: [], refusal: undefined },
+    chat: Object.freeze([
+      row(1, "person", "second request"),
+      row(2, "reply", "one done"),
+      row(3, "preview", "working"),
+    ]),
+  });
+}
+
+/** Where a word is first drawn on the screen, or none where no row holds it. */
+function wordAt(reading: ScreenReading, word: string): { column: number; row: number } | undefined {
+  const row = reading.rows.findIndex((one) => one.includes(word));
+  return row < 0 ? undefined : { column: (reading.rows[row] ?? "").indexOf(word), row };
+}
+
 /**
- * #971 checkpoint C1/C2: the staged workspace screen, drawn by the production
- * pipeline at 160x36 from one controlled reading.
+ * What a walk through the Sidekick's chat found.
  *
- * The geometry asserted here is the plan's proposal — columns of 36, 66 and 58
- * cells, one identity row, 33 body rows, a four-row Draft, one History row and
- * one guidance row — not a reviewed image. Colours are asserted only as the
- * distinctions the screen has to keep; the palette itself waits for the
- * Product Owner's image review.
+ * Each outcome's ink is read the first time that outcome is on the screen; the
+ * readings are how many screens the walk actually read, which is how far its
+ * own controls moved it; the work rows are the entries a reply admitted, by
+ * their order.
  */
-describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
+interface ChatWalk {
+  readonly readings: number;
+  readonly works: Set<number>;
+}
+
+/**
+ * Walk the chat from its first row to its last through its own controls.
+ *
+ * A following chat sits at its own end, so the walk goes up first and then down,
+ * and every step waits for the screen the press produced.
+ */
+function* walkChat(page: ReplPage, inks: Map<string, CellStyle>): Operation<ChatWalk> {
+  const works = new Set<number>();
+  let readings = 0;
+  const read = (): void => {
+    readings += 1;
+    const reading = page.screen();
+    for (const word of OUTCOMES) {
+      const at = wordAt(reading, word);
+      if (!inks.has(word) && at !== undefined) {
+        inks.set(word, inkAt(page, at));
+      }
+    }
+    for (const row of reading.rows) {
+      for (const match of row.matchAll(/\[R\] Entry (\d+) · /g)) {
+        works.add(Number(match[1]));
+      }
+    }
+  };
+  read();
+  for (const control of ["[↑ earlier]", "[↓ later]"]) {
+    for (let press = 0; press < 24; press += 1) {
+      const before = page.screen();
+      if (before.found(control, SIDEKICK_CONTROLS) !== 1) {
+        break;
+      }
+      yield* page.press(control, SIDEKICK_CONTROLS);
+      const after = yield* page.until(
+        `the chat after ${control}`,
+        (one) => one.index > before.index,
+      );
+      read();
+      if (after.rows.join("\n") === before.rows.join("\n")) {
+        break;
+      }
+    }
+  }
+  return { readings, works };
+}
+
+/** The outcome words this screen shows right now, with the ink each is drawn in. */
+function outcomesNow(page: ReplPage, inks: Map<string, CellStyle>): void {
+  const reading = page.screen();
+  for (const word of OUTCOMES) {
+    const at = wordAt(reading, word);
+    if (!inks.has(word) && at !== undefined) {
+      inks.set(word, inkAt(page, at));
+    }
+  }
+}
+
+/** A real run of the running entry's source, cut where its root has not closed. */
+function* runningReading(): Operation<ReplModel> {
+  const physical = new InMemoryStream();
+  try {
+    const execution = yield* executeInstalled(
+      {
+        ...inlineSource(RUNNING_SOURCE),
+        stream: new EntrySegmentStream(physical),
+        includes: [COMPONENTS],
+      },
+      [],
+    );
+    yield* collect(execution);
+  } catch {
+    // How far an entry got is the record the catalog reads.
+  }
+  const whole = yield* physical.readAll();
+  const closes = whole
+    .map((event, at) => ({ event, at }))
+    .filter((one) => one.event.type === "close");
+  const last = closes[closes.length - 1];
+  if (last === undefined) {
+    throw new Error("the running entry's run closed nothing");
+  }
+  return projected(whole.slice(0, last.at));
+}
+
+/** The staged screen of that reading: its nested scope selected, its output still arriving. */
+function stagedView(model: ReplModel, size: ReplTerminalSize): ReplView {
+  const entry = model.entries[model.entries.length - 1];
+  const nested = entry?.scope.scopes[0];
+  if (entry === undefined || nested === undefined) {
+    throw new Error("the running entry admitted no nested scope");
+  }
+  return withWorkspace(
+    reading(
+      selecting(stateWith({}), entry.key, nested.key),
+      model,
+      streaming("Reading checkout.md and architecture.md"),
+      size,
+    ),
+    workspaceOf(model),
+  );
+}
+
+/**
+ * #971 C1/C2: the workspace screen at 160x36, reached by working.
+ *
+ * The geometry asserted here is the specification's: columns of 36, 66 and 58
+ * cells, one identity row, 33 body rows, a four-row Draft, one History row and
+ * one guidance row. Colours are asserted only as the distinctions the screen has
+ * to keep; the archive's own inks are the appearance rows above.
+ */
+describe("Checkpoint #971 — the workspace screen at 160x36", () => {
   beforeAll(() => useTempFileCompiler());
 
   it("C1/C2: every surface is placed whole, wraps inside its region and keeps its styles", function* () {
     expect(RUNNING_SOURCE.includes(WRAPPING_LINE)).toBe(true);
-    const presenter = yield* usePresenter(CHECKPOINT_SIZE);
-    const committed = yield* commitCheckpoint(presenter);
-    const { model, view, observed } = committed;
-    const { grid } = presenter;
-    const region = (id: string): ReplBounds => {
-      const found = observed.regionOf(id);
-      if (found === undefined) {
-        throw new Error(`this frame placed no ${id}`);
-      }
-      return found;
+    // The staged workspace, composed from the journal that really ran it: the
+    // nested scope selected, its output still arriving, and both fields holding
+    // text nobody has sent.
+    const model = yield* runningReading();
+    const presenter = yield* usePresenter(WIDE);
+    const entry = model.entries[model.entries.length - 1];
+    const nested = entry?.scope.scopes[0];
+    if (entry === undefined || nested === undefined) {
+      throw new Error("the running entry admitted no nested scope");
+    }
+    const live: ReplLive = {
+      ...streaming("Reading checkout.md and architecture.md"),
+      sidekick: talking(),
     };
+    const state = selecting(
+      stateWith({ draft: CHECKPOINT_DRAFT, message: CHECKPOINT_MESSAGE }),
+      entry.key,
+      nested.key,
+    );
+    const viewOf = (focused?: string): ReplView =>
+      withWorkspace(reading(state, model, live, WIDE, focused), workspaceOf(model));
+    yield* presenter.commit(viewOf());
+    yield* focusOn(presenter, "footer:input");
+    const observed = yield* presenter.commit(viewOf(focusKeyOf(presenter)));
+    const { grid } = presenter;
 
-    // C1: the rows above, inside and below the body.
-    expect(region("box:identity")).toEqual({ x: 0, y: 0, width: 160, height: 1 });
-    expect(region("box:body")).toEqual({ x: 0, y: 1, width: 160, height: 33 });
-    expect(region("box:history")).toEqual({ x: 0, y: 34, width: 160, height: 1 });
-    expect(region("box:guidance")).toEqual({ x: 0, y: 35, width: 160, height: 1 });
-    // The three columns, dividers included, side by side and whole.
-    expect(regionBounds(observed, "sidebar")).toEqual({ x: 0, y: 1, width: 36, height: 33 });
-    expect(regionBounds(observed, "transcript")).toEqual({ x: 36, y: 1, width: 66, height: 33 });
-    expect(regionBounds(observed, "inspection")).toEqual({ x: 102, y: 1, width: 58, height: 33 });
-    // The Draft is four rows at the foot of the selected work.
-    const draft = region("box:draft");
-    expect(draft.height).toBe(4);
-    expect(draft.y + draft.height).toBe(34);
-    expect(draft.x).toBeGreaterThanOrEqual(36);
-    expect(draft.x + draft.width).toBeLessThanOrEqual(102);
+    // C1: the rows above, inside and below the body, and the three columns.
+    expectChrome(presenter, observed, WIDE);
+    expect(columnsOf(observed)).toEqual({
+      sidebar: { x: 0, y: 1, width: 36, height: 33 },
+      transcript: { x: 36, y: 1, width: 66, height: 33 },
+      inspection: { x: 102, y: 1, width: 58, height: 33 },
+    });
+    expectDraft(observed, regionOf(observed, "box:transcript"));
 
     // C1: a real nested scope is selected, and the breadcrumb beside Entries
-    // says the ancestry it actually resolved to.
-    const entry = model.entries[model.entries.length - 1];
-    const scopes = checkpointScopes(model);
-    expect(scopes.length).toBe(2);
-    expect(scopes[0]).toBe(entry.key);
-    expect(view.state.route.scopes).toEqual(scopes);
-    const ancestry = view.selection.ancestry;
-    expect(ancestry.map((one) => one.key)).toEqual(scopes);
-    expect(view.selection.scope?.key).toBe(scopes[1]);
-    expect(view.selection.scope?.key).not.toBe(entry.scope.key);
-    expect(view.selection.scope?.kind).toBe("component");
-    // The breadcrumb, as the parts it is drawn in. Every name but the innermost
-    // is a control that goes to it — the reading is already at the last one —
-    // so the trail is one node per ancestor and one row for where the reading
-    // is, each on the same row as the Entries control and in the order the
-    // scopes were selected.
-    const ancestors = observed.keys
-      .filter((key) => key.startsWith("work:crumb:"))
-      .sort((left, right) => placed(observed, left).x - placed(observed, right).x);
-    expect(ancestors).toHaveLength(ancestry.length - 1);
-    const crumbRow = placed(observed, "work:crumbs");
-    const entries = placed(observed, "entries:heading");
-    const crumbText = (key: string): string => observed.cells.get(key) ?? "";
-    const targeted = (key: string): boolean => {
-      const node = observed.nodeOf(key);
-      return node !== undefined && observed.targets.some((one) => one.node === node);
-    };
-    // The entry is the one ancestor here, and it is where this trail starts.
-    expect(crumbText(ancestors[0])).toContain(`Entry ${entry.order}`);
-    // The innermost is the reading itself, and it is not a way to anywhere.
-    expect(crumbText("work:crumbs")).toContain(ancestry[1].name);
-    expect(targeted("work:crumbs")).toBe(false);
-    // And each ancestor is reachable: it publishes a target of its own, inside
-    // the row, in front of the reading it leads to.
+    // says the ancestry it resolved to. The scope is read from the history the
+    // run wrote, so a run that stopped admitting it fails here.
+    expect(nested.kind).toBe("component");
+    const heading = placed(observed, "entries:heading");
+    const innermost = cellOf(observed, grid, "box:transcript:header", nested.name);
+    // Every name but the innermost is a control that goes to it, in front of the
+    // reading it leads to and on the row of the Entries control.
+    const ancestors = observed.keys.filter((key) => key.startsWith("work:crumb:"));
+    expect(ancestors).toHaveLength(1);
     for (const key of ancestors) {
       const at = placed(observed, key);
-      expect([key, at.y]).toEqual([key, entries.y]);
-      expect([key, at.x > entries.x && at.x < crumbRow.x]).toEqual([key, true]);
-      expect([key, targeted(key)]).toEqual([key, true]);
+      expect(textOf(grid, at)).toContain(`Entry ${entry.order}`);
+      expect([key, at.y]).toEqual([key, heading.y]);
+      expect([key, at.x > heading.x && at.x < innermost.x]).toEqual([key, true]);
     }
-    expect(crumbRow.y).toBe(entries.y);
-    expect(entries.x).toBeLessThan(crumbRow.x);
+    // The innermost is the reading itself, and it is not a way to anywhere.
+    expect(
+      observed.targets
+        .filter(
+          (one) =>
+            one.bounds.y === innermost.y &&
+            one.bounds.x <= innermost.x &&
+            innermost.x < one.bounds.x + one.bounds.width,
+        )
+        .flatMap((one) => {
+          const key = presenter.tree.keyOf(one.node);
+          return key === undefined ? [] : [key];
+        }),
+    ).toEqual([]);
+    expect(innermost.y).toBe(heading.y);
+    expect(heading.x).toBeLessThan(innermost.x);
 
     // The old composition's surfaces are not on this screen at all.
     for (const key of observed.keys) {
@@ -4677,137 +5248,94 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
     expect(observed.regionOf("box:band:0")).toBe(undefined);
 
     // The Draft's own Stop shares its heading row, at the right of the field.
+    const draftBox = regionOf(observed, "box:draft");
     const input = placed(observed, "footer:input");
     const draftStop = placed(observed, "draft:stop");
-    expect(input.y).toBe(draft.y);
-    expect(draftStop.y).toBe(draft.y);
+    expect(input.y).toBe(draftBox.y);
+    expect(draftStop.y).toBe(draftBox.y);
     expect(draftStop.x).toBeGreaterThan(input.x);
-    expect(draftStop.x + draftStop.width).toBeLessThanOrEqual(draft.x + draft.width);
+    expect(draftStop.x + draftStop.width).toBeLessThanOrEqual(draftBox.x + draftBox.width);
 
     // The inactive TODO tray on the left and the Sidekick's own Stop on the
-    // right, on one row above the composer. QUEUE and the Follow checkbox that
-    // used to sit between them are DQ0 and DF1 in
-    // `fixtures/repl/deferred-presentation.json`: this build offers neither, so
-    // neither is drawn, measured or mounted.
+    // right, on one row above the composer. This build offers no shared queue
+    // and no Follow control, so neither is placed.
     const todo = placed(observed, "tray:todo");
     const sidekickStop = placed(observed, "sidekick:stop");
     expect(sidekickStop.y).toBe(todo.y);
     expect(todo.x).toBeLessThan(sidekickStop.x);
     expect(sidekickStop.x + sidekickStop.width).toBeGreaterThan(155);
     for (const key of ["tray:queue", "follow"]) {
-      expect({ key, mounted: observed.nodeOf(key) !== undefined }).toEqual({
-        key,
-        mounted: false,
-      });
+      expect({ key, placed: observed.keys.includes(key) }).toEqual({ key, placed: false });
     }
     expect(placed(observed, "sidekick:message").y).toBeGreaterThan(todo.y);
 
-    // The pending-message rows this screen used to draw beside the composer —
-    // their order, their origin marks, each row's own withdrawal control and
-    // the way a long one wrapped between its origin and its X — are DQ1 in
-    // `fixtures/repl/deferred-presentation.json`. This build offers no shared
-    // queue, so there is nothing here to place them against.
-
     // Mounted controls are whole, inside the screen, and never overlap.
-    const targets = observed.targets.map((one) => one.bounds);
-    for (const one of targets) {
-      expect(Number.isInteger(one.x) && Number.isInteger(one.y)).toBe(true);
-      expect(one.x).toBeGreaterThanOrEqual(0);
-      expect(one.x + one.width).toBeLessThanOrEqual(160);
-      expect(one.y + one.height).toBeLessThanOrEqual(36);
-    }
-    for (const [at, one] of targets.entries()) {
-      for (const other of targets.slice(at + 1)) {
-        const apart =
-          one.x + one.width <= other.x ||
-          other.x + other.width <= one.x ||
-          one.y + one.height <= other.y ||
-          other.y + other.height <= one.y;
-        expect(apart).toBe(true);
-      }
-    }
+    expect(placement(observed, WIDE)).toEqual({
+      count: true,
+      whole: true,
+      inside: true,
+      apart: true,
+    });
 
-    // C2: the exact source wraps at measured word boundaries inside the
-    // selected work, and the run of spaces in it survives.
-    const body = region(TRANSCRIPT_BODY);
+    // C2: the exact source wraps at measured word boundaries inside the selected
+    // work, and the run of spaces in it survives.
+    const body = regionOf(observed, "box:transcript:body");
     for (const key of observed.keys.filter((one) => one.startsWith("reading:"))) {
-      const row = placed(observed, key);
-      expect(row.x).toBeGreaterThanOrEqual(body.x);
-      expect(row.x + row.width).toBeLessThanOrEqual(body.x + body.width);
+      expect([key, within(placed(observed, key), body)]).toEqual([key, true]);
     }
-    const centre = grid.textIn(body);
-    const start = centre.findIndex((one) => one.includes("Compute the total once,    after"));
-    expect(start).toBeGreaterThanOrEqual(0);
-    const column = centre[start].indexOf("Compute");
-    const pieces: string[] = [];
-    for (
-      let at = start;
-      at < centre.length && pieces.join(" ").length < WRAPPING_LINE.length;
-      at += 1
-    ) {
-      pieces.push(centre[at].slice(column).trimEnd());
-    }
+    const pieces = wrappedRows(grid.textIn(body), "Compute the total");
     expect(pieces.length).toBeGreaterThan(1);
     expect(pieces.join(" ")).toBe(WRAPPING_LINE);
+    // And nothing of it is drawn past the body, in the column's own right gutter.
+    const column = regionOf(observed, "box:transcript");
+    expect(
+      grid
+        .textIn({
+          x: body.x + body.width,
+          y: body.y,
+          width: column.x + column.width - (body.x + body.width),
+          height: body.height,
+        })
+        .join("")
+        .trim(),
+    ).toBe("");
 
-    // Surfaces: the three columns, a header row and the Draft are each their
-    // own ground, blank cells included.
-    const left = grid.styleAt(30, 30).background;
-    const middle = grid.styleAt(80, 26).background;
-    const right = grid.styleAt(150, 22).background;
-    const heading = grid.styleAt(30, 1).background;
-    const drafted = grid.styleAt(draft.x + draft.width - 2, draft.y + 2).background;
-    expect(new Set([left, middle, right, heading, drafted]).size).toBe(5);
-    for (const key of ["draft:value:0", "draft:value:1", "draft:value:2"]) {
-      const row = placed(observed, key);
-      expect(grid.styleAt(row.x + row.width - 1, row.y).background).toBe(drafted);
+    // Surfaces: the three columns, a header row and the Draft are each their own
+    // ground, and every value row of the Draft is the Draft's, blank ones too.
+    const grounds = groundsOf(observed, grid);
+    expect(new Set(grounds).size).toBe(5);
+    for (const row of [1, 2, 3]) {
+      expect([
+        row,
+        grid.styleAt(draftBox.x + draftBox.width - 2, draftBox.y + row).background,
+      ]).toEqual([row, grounds[4]]);
     }
-    // C2: the Draft is the control the mounted tree holds focus on, and the
-    // cue is drawn on that same control. A cue for a control that does not hold
-    // focus would say the next keystroke lands somewhere it does not.
-    expect(committed.focused).toBe("footer:input");
+
+    // C2: the Draft is the control the frame holds focus on, and the cue is
+    // drawn on that same control: bold on the focused field's first cell and not
+    // on the composer, which is not where the next keystroke lands.
     expect(focusKeyOf(presenter)).toBe("footer:input");
-    expect(view.focused).toBe("footer:input");
-    const marker = grid.styleAt(input.x, input.y);
-    expect(grid.at(input.x, input.y)).toBe(">");
-    expect(marker.attrs.includes(BOLD)).toBe(true);
-    const value = placed(observed, "draft:value:0");
+    expect(grid.styleAt(input.x, input.y).attrs.includes(BOLD)).toBe(true);
+    const message = placed(observed, "sidekick:message");
+    expect(grid.styleAt(message.x, message.y).attrs.includes(BOLD)).toBe(false);
+    const value = cellOf(observed, grid, "box:draft", "<Checkout");
     expect(grid.styleAt(value.x, value.y).foreground).not.toBe(
       grid.styleAt(value.x + 1, value.y).foreground,
     );
+
     // What a person asked, what the agent replied, what this execution is doing
-    // and what is still being typed all read differently from one another. The
-    // queued rows and their origin marks this used to compare are DQ1 in
-    // `fixtures/repl/deferred-presentation.json`.
-    const asked = placed(observed, "sidekick:chat:message:1");
-    const replied = placed(observed, "sidekick:chat:response:1");
-    const askedInk = grid.styleAt(asked.x, asked.y).foreground;
-    const repliedInk = grid.styleAt(replied.x, replied.y).foreground;
+    // and what is still being typed all read differently from one another.
+    const chatInk = (phrase: string): number | undefined =>
+      inkIn(observed, grid, "box:inspection:viewport", phrase).foreground;
+    const askedInk = chatInk("[U] second request");
+    const repliedInk = chatInk("[S] one done");
     expect(askedInk).not.toBe(repliedInk);
-    const composer = placed(observed, "sidekick:message:value:0");
-    expect(grid.styleAt(composer.x, composer.y).foreground).not.toBe(askedInk);
-    const working = placed(observed, "sidekick:work:entry-1");
-    expect(grid.styleAt(working.x, working.y).foreground).not.toBe(askedInk);
-    const state = placed(observed, "work:state");
-    expect(grid.styleAt(state.x, state.y).foreground).not.toBe(
-      grid.styleAt(placed(observed, "work:crumbs").x, state.y).foreground,
+    expect(inkIn(observed, grid, "box:tray", "Also say").foreground).not.toBe(askedInk);
+    expect(inkIn(observed, grid, "box:transcript:header", "● ACTIVE").foreground).not.toBe(
+      inkIn(observed, grid, "box:transcript:header", "› Entry").foreground,
     );
   });
 
-  /**
-   * #971: the Transcript is one list, and the conversations are its filter.
-   *
-   * The person who accepted this screen asked for exactly that — one list
-   * rather than two headed sections, with All sessions filtering it
-   * (`human-transcript-single-list-20261027-1706.json`). Every fact here is the
-   * reading's own: two owners that really did work under two different provider
-   * session keys, and the keys themselves read from those records rather than
-   * named here.
-   *
-   * One displayed list is not one lifetime. The owners keep their own authority
-   * and their own recorded order — this asserts what a reader sees and what the
-   * selector does to it, and nothing about merging the two histories.
-   */
   /**
    * #971 B1: the Entries catalog, opened over the reading it navigates.
    *
@@ -4816,290 +5344,180 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
    * the catalog as a drawer over the body, the way every other whole-execution
    * reading is opened. What this holds it to is that the overlay is a
    * *presentation*: it selects nothing by existing, it changes nothing by
-   * closing, and the rows in it are the same rows, under the same keys, that
-   * the permanent column draws.
+   * closing, and the rows in it are the entries and scopes the history holds.
    */
   it("A6: Entries opens a catalog over the reading, and only a row in it navigates", function* () {
-    const model = yield* checkpointModel();
-    for (const size of CHECKPOINT_SIZES) {
+    const page = yield* reachWorkspace(WIDE);
+    yield* typedInto(page);
+    const holding = (): Record<string, unknown> => {
+      const reading = page.screen();
+      return {
+        draft: DRAFT_LINES.map((line) => reading.found(line, DRAFT_VALUE)),
+        message: reading.shows(COMPOSER) ? reading.found(CHECKPOINT_MESSAGE, COMPOSER_VALUE) : 0,
+        filter: reading.shows("All sessions ▾"),
+        frozen: reading.shows("[live]"),
+      };
+    };
+    const standing = function* () {
+      const read = yield* settledReading(page.repl);
+      return {
+        entries: read.model.entries.length,
+        chat: read.chat.length,
+        prompts: page.repl.fake.prompts.length,
+      };
+    };
+    const began = yield* standing();
+
+    for (const size of [WIDE, MEDIUM, SMALL]) {
       const where = `${size.columns}x${size.rows}`;
-      yield* scoped(function* (): Operation<void> {
-        const presenter = yield* usePresenter(size);
-        // The shipping root's own presentation, not the staged fixture's.
-        const shipping = { model, size, workspace: workspaceOf() };
-        const base = yield* commitCheckpoint(presenter, shipping);
+      if (size !== WIDE) {
+        // The catalog is a reading somebody opened, not a property of the frame
+        // that drew it: it is still open when the window changes size.
+        const resized = yield* page.resize(size);
+        expect([where, drawerOpen(resized)]).toEqual([where, true]);
+        yield* closeDrawer(page);
+      }
+      const kept = holding();
 
-        // Closed, there is no catalog on the screen and no drawer layer.
-        expect([where, base.observed.keys.includes("drawer:open")]).toEqual([where, false]);
-        expect([where, base.observed.keys.some((key) => key.startsWith("entry:"))]).toEqual([
+      // Closed, there is no catalog on the screen.
+      expect([where, drawerOpen(page.screen())]).toEqual([where, false]);
+      expect([where, page.screen().shows("entry-1")]).toEqual([where, false]);
+
+      // The control a person presses asks for the catalog.
+      yield* openCatalog(page);
+
+      // Every entry this history holds, in admission order, with its own nested
+      // scope, and each of them drawn in the catalog's own rows rather than
+      // somewhere nothing drew them.
+      const rows = drawerLines(page.screen());
+      const ordered = rows.join("\n");
+      expect([where, ordered.indexOf("entry-1") < ordered.indexOf("entry-2")]).toEqual([
+        where,
+        true,
+      ]);
+      for (const row of ["entry-1", "entry-2", "Checklist"]) {
+        expect([where, row, rows.some((one) => one.includes(row))]).toEqual([where, row, true]);
+      }
+      // Its own window controls and its way out, in the drawer with them.
+      for (const control of ["[↑", "[↓", "[close]"]) {
+        expect([where, control, rows.some((one) => one.includes(control))]).toEqual([
           where,
-          false,
+          control,
+          true,
         ]);
+      }
 
-        // The control a person actually presses asks for the catalog. Reached
-        // through the mounted tree at the cell it was drawn in, so what this
-        // asserts is the control on the screen rather than a description.
-        const opener = placed(base.observed, "entries:heading");
-        const pressed = yield* presenter.tree.dispatch({
-          kind: "pointer",
-          target: base.observed.committed.rendered.map.at(opener.x, opener.y) ?? "",
-          frame: base.observed.committed.rendered.tree,
-        });
-        if (!pressed.ok) {
-          throw new Error(`${where}: the Entries control refused its own activation`);
-        }
-        expect([where, asked(pressed.value)]).toEqual([where, { kind: "open-catalog" }]);
+      // A nested scope, by its exact name. The reading moves to that exact entry
+      // and child, and the catalog closes behind the choice it was opened to make.
+      yield* page.press("Checklist");
+      yield* page.until("the catalog closing", (reading) => !drawerOpen(reading));
+      expect([where, trailOf(page.screen()).includes("Entry 2")]).toEqual([where, true]);
+      expect([where, trailOf(page.screen()).includes("Checklist")]).toEqual([where, true]);
+      expect([where, holding()]).toEqual([where, kept]);
 
-        const next = reduceRepl(base.view.state, { kind: "open-catalog" }, model, base.view.live);
-        // Opening is navigation and nothing else: no provider work, no append,
-        // no submission.
-        expect([where, next.intent]).toEqual([where, { kind: "none" }]);
-        const open = yield* presenter.commit(
-          checkpointViewOf(model, base.focused, { ...shipping, state: next.state }),
-        );
+      // An older entry, by its own name, from the same open catalog.
+      yield* openCatalog(page);
+      yield* page.press("entry-1");
+      yield* page.until("the catalog closing", (reading) => !drawerOpen(reading));
+      expect([where, trailOf(page.screen()).includes("Entry 1")]).toEqual([where, true]);
+      expect([where, trailOf(page.screen()).includes("Checklist")]).toEqual([where, false]);
+      // Nothing a person was holding moved, by either route: both texts, the
+      // conversation filter and the history position stand.
+      expect([where, holding()]).toEqual([where, kept]);
 
-        // A floating layer over the body, whole-celled, inside the frame and
-        // clear of the footer the identity and History rows keep.
-        const layer = open.regionOf("box:drawer:layer");
-        if (layer === undefined) {
-          throw new Error(`${where}: the catalog drew no drawer layer`);
-        }
-        for (const edge of [layer.x, layer.y, layer.width, layer.height]) {
-          expect([where, Number.isInteger(edge)]).toEqual([where, true]);
-        }
-        expect([where, layer.x + layer.width <= size.columns]).toEqual([where, true]);
-        expect([where, layer.y + layer.height < size.rows - 1]).toEqual([where, true]);
+      // And closing chooses nothing. The scope being read is the one that was
+      // being read before the catalog opened.
+      yield* openCatalog(page);
+      yield* closeDrawer(page);
+      expect([where, trailOf(page.screen()).includes("Entry 1")]).toEqual([where, true]);
+      expect([where, holding()]).toEqual([where, kept]);
 
-        // The same rows the permanent column builds, under the same keys: an
-        // entry is one identity however a reader reached it. Every entry this
-        // prefix retained, in admission order, with its own nested scope.
-        const rows = open.keys.filter(
-          (key) => key.startsWith("entry:") || key.startsWith("scope:"),
-        );
-        expect([where, rows]).toEqual([
-          where,
-          ["entry:entry-1", "entry:entry-2", "scope:entry-2/Checklist-1"],
-        ]);
-        // And they are inside the drawer, not mounted somewhere nothing drew
-        // them: each one has a box, and each box is inside that layer.
-        for (const key of rows) {
-          const at = open.boundsOf(key);
-          if (at === undefined) {
-            throw new Error(`${where}: the catalog mounted ${key} and drew it nowhere`);
-          }
-          expect([where, key, at.x >= layer.x && at.x + at.width <= layer.x + layer.width]).toEqual(
-            [where, key, true],
-          );
-          expect([
-            where,
-            key,
-            at.y >= layer.y && at.y + at.height <= layer.y + layer.height,
-          ]).toEqual([where, key, true]);
-        }
-        // Its own window controls and its way out, outside the moving rows.
-        for (const key of ["drawer:scroll:up", "drawer:scroll:down", "drawer:close"]) {
-          expect([where, key, open.boundsOf(key) !== undefined]).toEqual([where, key, true]);
-        }
-
-        // A nested scope, by its exact path. The reading moves to that exact
-        // entry and child, and the catalog closes behind the choice it was
-        // opened to make.
-        const chose = reduceRepl(
-          next.state,
-          { kind: "select-scope", scopes: ["entry-2", "Checklist-1"] },
-          model,
-          base.view.live,
-        );
-        expect([where, chose.intent]).toEqual([where, { kind: "none" }]);
-        expect([where, chose.state.route.scopes]).toEqual([where, ["entry-2", "Checklist-1"]]);
-        expect([where, chose.state.catalog]).toEqual([where, false]);
-
-        // An older entry, by its own key, from the same open catalog.
-        const older = reduceRepl(
-          next.state,
-          { kind: "select-scope", scopes: ["entry-1"] },
-          model,
-          base.view.live,
-        );
-        expect([where, older.state.route.scopes]).toEqual([where, ["entry-1"]]);
-        expect([where, older.state.catalog]).toEqual([where, false]);
-
-        // Nothing a person was holding moved, by either route: both texts, the
-        // conversation filter, the history marker and the saved chat stand.
-        for (const after of [chose.state, older.state, next.state]) {
-          expect([where, after.draft]).toEqual([where, base.view.state.draft]);
-          expect([where, after.message]).toEqual([where, base.view.state.message]);
-          expect([where, after.route.session]).toEqual([where, base.view.state.route.session]);
-          expect([where, after.route.at]).toEqual([where, base.view.state.route.at]);
-          expect([where, after.route.sidekick]).toEqual([where, base.view.state.route.sidekick]);
-        }
-
-        // And closing chooses nothing. The scope being read is the one that was
-        // being read before the catalog opened.
-        const shut = reduceRepl(next.state, { kind: "close-catalog" }, model, base.view.live);
-        expect([where, shut.state.catalog]).toEqual([where, false]);
-        expect([where, shut.state.route.scopes]).toEqual([where, base.view.state.route.scopes]);
-        expect([where, shut.state.draft]).toEqual([where, base.view.state.draft]);
-
-        // The catalog survives a resize: it is a reading somebody opened, not a
-        // property of the frame that drew it.
-        const grown = yield* presenter.commit(
-          checkpointViewOf(model, base.focused, {
-            ...shipping,
-            size: CHECKPOINT_SIZE,
-            state: next.state,
-          }),
-        );
-        expect([where, grown.keys.includes("drawer:open")]).toEqual([where, true]);
-      });
+      if (size !== SMALL) {
+        yield* openCatalog(page);
+      }
     }
+    // Opening is navigation and nothing else: no provider work, no append, no
+    // submission, at any size.
+    expect(yield* standing()).toEqual(began);
   });
 
   it("A5: one Transcript list, with the conversations as its filter", function* () {
-    const entryTurn = CHECKPOINT_LIVE.agent.turns[0];
-    const chatTurn = CHECKPOINT_SIDEKICK.turns[0];
-    if (entryTurn === undefined || chatTurn === undefined) {
-      throw new Error("this reading holds no turn for one of its two owners");
-    }
-    // Two owners, two provider conversations: a filter that kept both rows
-    // under either key would prove nothing about filtering.
-    const entryKey = entryTurn.sessionKey;
-    const chatKey = chatTurn.sessionKey;
-    if (entryKey === undefined || chatKey === undefined || entryKey === chatKey) {
-      throw new Error("this reading does not hold two separate provider conversations");
-    }
-    const entryRow = `sessions:turn:${entryTurn.key}`;
-    const chatRow = `sessions:${chatTurn.key}`;
-
-    const presenter = yield* usePresenter(CHECKPOINT_SIZE);
-    const opened = yield* commitCheckpoint(presenter);
-    const { model } = opened;
-
-    /** What activating one drawn row asks for, as the pointer reaches it. */
-    function* activated(observed: Observed, key: string): Operation<ReplAction> {
-      const bounds = placed(observed, key);
-      const pointed = yield* presenter.tree.dispatch({
-        kind: "pointer",
-        target: observed.committed.rendered.map.at(bounds.x, bounds.y) ?? "",
-        frame: observed.committed.rendered.tree,
-      });
-      if (!pointed.ok) {
-        throw new Error(`activating ${key} was refused`);
-      }
-      return asked(pointed.value);
-    }
-
-    /** The next frame of this same screen, after one action was reduced. */
-    function* acted(
-      state: ReplState,
-      action: ReplAction,
-    ): Operation<{ readonly state: ReplState; readonly observed: Observed }> {
-      const next = reduceRepl(state, action, model, CHECKPOINT_LIVE);
-      // Filtering is a reading, not work: no provider is started and no record
-      // is written by any of these.
-      expect(next.intent).toEqual({ kind: "none" });
-      const observed = yield* presenter.commit(
-        checkpointViewOf(model, presenter.tree.keyOf(presenter.tree.focused() ?? "") ?? undefined, {
-          state: next.state,
-        }),
-      );
-      return { state: next.state, observed };
-    }
+    const page = yield* reachOutcomes(WIDE);
+    yield* intoComposer(page);
+    yield* typed(page, CHECKPOINT_MESSAGE);
+    const typedNow = (): Record<string, unknown> => {
+      const reading = page.screen();
+      return {
+        draft: DRAFT_LINES.map((line) => reading.found(line, DRAFT_VALUE)),
+        message: reading.shows(COMPOSER) ? reading.found(CHECKPOINT_MESSAGE, COMPOSER_VALUE) : 0,
+      };
+    };
+    const kept = typedNow();
+    /** Whose work the one list is showing, read from the row that heads each group. */
+    const owners = (): { entry: boolean; chat: boolean } => {
+      const rows = page.screen().rows;
+      return {
+        entry: rows.some((row) => row.includes("scribe · xmd:v1:")),
+        chat: rows.some((row) => /scribe · (?!xmd:v1:)\S/.test(row)),
+      };
+    };
+    /** The row the selector is drawn on, which says what is chosen. */
+    const selector = (): string =>
+      page.screen().rows.find((row) => row.includes(SELECTOR_MARK.trim())) ?? "";
 
     // One list. A row from each owner is in it, and there is no heading over
     // either of them and no per-owner placeholder beneath either.
-    expect(opened.observed.keys).toContain(entryRow);
-    expect(opened.observed.keys).toContain(chatRow);
-    for (const gone of [
-      "sessions:section:entries",
-      "sessions:section:sidekick",
-      "sessions:entries:none",
-      "sessions:sidekick:none",
-    ]) {
-      expect({ key: gone, drawn: opened.observed.keys.includes(gone) }).toEqual({
-        key: gone,
-        drawn: false,
-      });
-    }
-    // Each row still says whose work it is, which is where owner authority is
-    // read now that no heading says it.
-    expect(opened.observed.cells.get(`${entryRow}:whose`) ?? "").toContain(entryKey);
-    expect(opened.observed.cells.get(`${chatRow}:whose`) ?? "").toContain(chatTurn.conversation);
-    // And each goes where it always did.
-    const toEntry = yield* activated(opened.observed, entryRow);
-    const toChat = yield* activated(opened.observed, chatRow);
-    expect(toChat).toEqual({
-      kind: "read-sidekick-turn",
-      conversation: chatTurn.conversation,
-      turn: chatTurn.turn,
-    });
-
-    // The selector is a control a keystroke reaches, not a caption — and it
-    // draws no choices while it is closed.
-    yield* focusOn(presenter, "transcript:selector");
-    const pressed = yield* presenter.tree.dispatch({ kind: "key", key: "Enter" });
-    if (!pressed.ok) {
-      throw new Error("the Transcript selector refused its own activation");
-    }
-    expect(asked(pressed.value)).toEqual({ kind: "toggle-session-filter" });
-    expect(opened.observed.keys.some((key) => key.startsWith("sessions:conversation:"))).toBe(
-      false,
+    expect(owners()).toEqual({ entry: true, chat: true });
+    expect(page.screen().rows.filter((row) => /^(entries|sidekick)\b/i.test(row.trim()))).toEqual(
+      [],
     );
+
+    // The chat row goes where it always did: the Sidekick reads that turn.
+    yield* page.press("first request");
+    yield* page.until(
+      "the chat reading that turn",
+      (reading) => reading.shows("[U] first request") && reading.shows("[Back to current chat]"),
+    );
+
+    // The selector is a control a pointer reaches, not a caption — and it
+    // draws no choices while it is closed.
+    expect(selector()).toContain(`All sessions${SELECTOR_MARK}`);
+    expect(page.screen().shows("All conversations")).toBe(false);
+    yield* page.press(`All sessions${SELECTOR_MARK}`);
+    yield* page.until("the choices", (reading) => reading.shows("All conversations"));
 
     // Opened, it offers the conversations this reading actually holds, once
     // each, with the way back to all of them.
-    const showing = yield* acted(opened.view.state, { kind: "toggle-session-filter" });
-    expect(showing.observed.keys).toContain("sessions:all");
-    expect(showing.observed.keys).toContain(`sessions:conversation:${entryKey}`);
-    expect(showing.observed.keys).toContain(`sessions:conversation:${chatKey}`);
+    const offered = page
+      .screen()
+      .rows.map((row) => row.trim())
+      .filter((row) => /^>?\s*xmd:v1:|^>?\s*chat-/.test(row));
+    expect(offered.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(offered).size).toBe(offered.length);
     // Both owners' rows are still in the list behind the open chooser.
-    expect(showing.observed.keys).toContain(entryRow);
-    expect(showing.observed.keys).toContain(chatRow);
+    expect(owners()).toEqual({ entry: true, chat: true });
 
-    // Choosing one is the key that row names, and it filters the whole list:
+    // Choosing one is the row that names it, and it filters the whole list:
     // only that conversation's rows remain, across both owners.
-    const chose = yield* activated(showing.observed, `sessions:conversation:${entryKey}`);
-    expect(chose).toEqual({ kind: "select-session", session: entryKey });
-    const filtered = yield* acted(showing.state, chose);
-    expect(filtered.state.route.session).toBe(entryKey);
-    expect(filtered.observed.keys).toContain(entryRow);
-    expect(filtered.observed.keys).not.toContain(chatRow);
+    const chosen = offered[0] ?? "";
+    yield* page.press(chosen);
+    yield* page.until("the list filtered", (reading) => !reading.shows("All conversations"));
+    const first = owners();
+    expect(first.entry).not.toBe(first.chat);
     // The choice closes the chooser behind it, and the selector says what is
-    // chosen.
-    expect(filtered.observed.keys.some((key) => key.startsWith("sessions:conversation:"))).toBe(
-      false,
-    );
-    expect(filtered.observed.cells.get("transcript:selector") ?? "").toContain(entryKey);
-    // The entry row goes exactly where it went unfiltered.
-    expect(yield* activated(filtered.observed, entryRow)).toEqual(toEntry);
+    // chosen rather than all of them.
+    expect(selector()).not.toContain(`All sessions${SELECTOR_MARK}`);
     // Nothing anybody was typing moved.
-    expect(filtered.state.draft).toBe(CHECKPOINT_DRAFT);
-    expect(filtered.state.message).toBe(CHECKPOINT_MESSAGE);
+    expect(typedNow()).toEqual(kept);
 
-    // All sessions restores both owners' rows to the one list.
-    const restored = yield* acted(filtered.state, { kind: "all-sessions" });
-    expect(restored.state.route.session).toBe(undefined);
-    expect(restored.observed.keys).toContain(entryRow);
-    expect(restored.observed.keys).toContain(chatRow);
-
-    // The other conversation filters to its own owner's rows, so the filter is
-    // the key rather than a section this list no longer has.
-    const theirs = yield* acted(restored.state, { kind: "select-session", session: chatKey });
-    expect(theirs.observed.keys).toContain(chatRow);
-    expect(theirs.observed.keys).not.toContain(entryRow);
-
-    // And closing the chooser without choosing changes no selection: the
-    // conversation stands, the list stands, and both texts stand.
-    const reopened = yield* acted(theirs.state, { kind: "toggle-session-filter" });
-    const closed = yield* acted(reopened.state, { kind: "toggle-session-filter" });
-    expect(closed.state.route).toEqual(theirs.state.route);
-    expect(closed.observed.keys.some((key) => key.startsWith("sessions:conversation:"))).toBe(
-      false,
-    );
-    expect(closed.observed.keys).toContain(chatRow);
-    expect(closed.observed.keys).not.toContain(entryRow);
-    expect(closed.state.draft).toBe(CHECKPOINT_DRAFT);
-    expect(closed.state.message).toBe(CHECKPOINT_MESSAGE);
+    // All conversations restores both owners' rows to the one list.
+    yield* page.press(selector().trim().split("  ")[0] ?? SELECTOR_MARK.trim());
+    yield* page.until("the choices", (reading) => reading.shows("All conversations"));
+    yield* page.press("All conversations");
+    yield* page.until("the whole list", (reading) => !reading.shows("All conversations"));
+    expect(owners()).toEqual({ entry: true, chat: true });
+    expect(selector()).toContain(`All sessions${SELECTOR_MARK}`);
+    expect(typedNow()).toEqual(kept);
   });
 
   /**
@@ -5119,6 +5537,10 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
    *
    * The ASCII key is here beside them because it passed throughout: a row that
    * only held ASCII is what let the other three through.
+   *
+   * The running command derives its session keys, so no input produces these
+   * names: this is the fitting of the label, over a real journal with a turn
+   * whose key is the name under test.
    */
   it("A5 selector: the name is fitted in cells, whole graphemes, inside its column", function* () {
     const named: readonly { readonly what: string; readonly key: string }[] = [
@@ -5137,36 +5559,53 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
     const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
     const graphemes = (text: string): readonly string[] =>
       [...segmenter.segment(text)].map((one) => one.segment);
+    const model = yield* settledAndFailed();
 
-    for (const size of [CHECKPOINT_SIZE, { columns: 120, rows: 30 }]) {
+    for (const size of [WIDE, MEDIUM]) {
       for (const one of named) {
         const where = `${one.what} at ${size.columns}`;
         const presenter = yield* usePresenter(size);
-        const model = yield* checkpointModel();
-        // A key this reading can actually be filtered by: the live turns name
-        // it, which is what makes it a conversation this route may select.
+        // A key this reading can actually be filtered by: a live turn names it,
+        // which is what makes it a conversation this route may select.
         const live: ReplLive = Object.freeze({
-          ...CHECKPOINT_LIVE,
+          ...NOTHING_LIVE,
+          running: true,
+          pausable: true,
           agent: Object.freeze({
-            ...CHECKPOINT_LIVE.agent,
-            turns: Object.freeze(
-              CHECKPOINT_LIVE.agent.turns.map((turn) =>
-                Object.freeze({ ...turn, sessionKey: one.key }),
-              ),
-            ),
+            ...NO_AGENT,
+            turns: Object.freeze([
+              Object.freeze({
+                key: "turn:architect:1",
+                entry: "entry-2",
+                prompt:
+                  "Review checkout.md against architecture.md and list each requested change.",
+                state: "active" as const,
+                text: "Reading checkout.md and architecture.md",
+                agent: "codex",
+                sessionKey: one.key,
+                agentSessionId: undefined,
+                status: undefined,
+                stopReason: undefined,
+                failure: undefined,
+              }),
+            ]),
+            slots: Object.freeze([
+              Object.freeze({
+                key: "turn:architect:1",
+                entry: "entry-2",
+                order: 1,
+                durable: undefined,
+                last: undefined,
+              }),
+            ]),
           }),
         });
-        const base = checkpointState(model, { size });
-        const committed = yield* commitCheckpoint(presenter, {
-          size,
-          model,
-          live,
-          state: Object.freeze({
-            ...base,
-            route: Object.freeze({ ...base.route, session: one.key }),
-          }),
+        const state = stateWith({
+          route: Object.freeze({ ...initialState(EXECUTION).route, session: one.key }),
         });
-        const observed = committed.observed;
+        const observed = yield* presenter.commit(
+          withWorkspace(reading(state, model, live, size), workspaceOf(model)),
+        );
         const label = observed.cells.get("transcript:selector") ?? "";
         const target = observed.boundsOf("transcript:selector");
         if (target === undefined) {
@@ -5212,13 +5651,13 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
         ]).toEqual([where, true]);
 
         // The mark that says it opens survives whatever the name costs.
-        expect([where, label.endsWith(" \u25be")]).toEqual([where, true]);
+        expect([where, label.endsWith(" ▾")]).toEqual([where, true]);
 
         // And the name itself is whole graphemes of the key, in order: a cut
         // inside a sequence is a glyph its author never wrote. The marker room
         // in front and the mark behind are the row's, not the name's.
         const said = label.slice(2, label.length - 2);
-        const shown = said.endsWith("\u2026") ? said.slice(0, -1) : said;
+        const shown = said.endsWith("…") ? said.slice(0, -1) : said;
         expect([where, graphemes(shown)]).toEqual([
           where,
           graphemes(one.key).slice(0, graphemes(shown).length),
@@ -5232,103 +5671,43 @@ describe("Checkpoint #971 — the staged workspace screen at 160x36", () => {
   });
 });
 
-/**
- * #971 A1 is now read in the places each of its fields belongs.
- *
- * What the screen looks like — every row of text, every style run under it and
- * the blank backgrounds a surface paints — is the three appearance records and
- * the cases above them. Where the frame put its regions, pane bodies and whole
- * contained targets is A2 and the admission boundary. Which reading it is of,
- * which scope is selected and which control a keystroke reaches are A6 and the
- * mounted-focus cases. The accepted capture itself stays in the history at
- * `accepted-160.ts`, blob 83dd9453 at f0232b3e, recoverable with `git show`.
- *
- * It was one case asserting six different kinds of thing about a composition
- * this build no longer draws — the staged screen it pinned still had the shared
- * queue in it.
- */
-describe("Checkpoint #971 A2 — the staged screen at the two smaller sizes", () => {
+describe("Checkpoint #971 A2 — the workspace at the two smaller sizes", () => {
   beforeAll(() => useTempFileCompiler());
 
-  /** Every mounted control's box, by the key that owns it. */
-  function targetsOf(presenter: Presenter, observed: Observed): ReadonlyMap<string, ReplBounds> {
-    return new Map(
-      observed.targets.flatMap((one) => {
-        const key = presenter.tree.keyOf(one.node);
-        return key === undefined ? [] : [[key, one.bounds] as const];
-      }),
-    );
-  }
-
   it("A2: every size places whole controls inside the frame and keeps its routes", function* () {
-    for (const size of CHECKPOINT_SIZES) {
+    const model = yield* runningReading();
+    for (const size of [WIDE, MEDIUM, SMALL]) {
       const where = `${size.columns}x${size.rows}`;
       const presenter = yield* usePresenter(size);
-      const observed = (yield* commitCheckpoint(presenter, { size })).observed;
-
+      const observed = yield* presenter.commit(stagedView(model, size));
       // Three rows of chrome at every size: the identity row above the body,
-      // then the compact History row and the guidance row below it.
-      expect({ where, bounds: observed.regionOf("box:identity") }).toEqual({
+      // then the compact History row and the guidance row below it; whole cells,
+      // inside the frame, and no two controls over one another.
+      expectChrome(presenter, observed, size);
+      expect({ where, placed: placement(observed, size) }).toEqual({
         where,
-        bounds: { x: 0, y: 0, width: size.columns, height: 1 },
+        placed: { count: true, whole: true, inside: true, apart: true },
       });
-      expect({ where, bounds: observed.regionOf("box:body") }).toEqual({
-        where,
-        bounds: { x: 0, y: 1, width: size.columns, height: size.rows - 3 },
-      });
-      expect({ where, bounds: observed.regionOf("box:history") }).toEqual({
-        where,
-        bounds: { x: 0, y: size.rows - 2, width: size.columns, height: 1 },
-      });
-      expect({ where, bounds: observed.regionOf("box:guidance") }).toEqual({
-        where,
-        bounds: { x: 0, y: size.rows - 1, width: size.columns, height: 1 },
-      });
-
-      // Whole cells, inside the frame, and no two controls over one another.
-      const targets = [...targetsOf(presenter, observed).values()];
-      expect({ where, count: targets.length > 0 }).toEqual({ where, count: true });
-      for (const one of targets) {
-        expect({ where, whole: Number.isInteger(one.x) && Number.isInteger(one.y) }).toEqual({
-          where,
-          whole: true,
-        });
-        expect({
-          where,
-          inside:
-            one.x >= 0 &&
-            one.y >= 0 &&
-            one.x + one.width <= size.columns &&
-            one.y + one.height <= size.rows,
-        }).toEqual({ where, inside: true });
-      }
-      for (const [at, one] of targets.entries()) {
-        for (const other of targets.slice(at + 1)) {
-          const apart =
-            one.x + one.width <= other.x ||
-            other.x + other.width <= one.x ||
-            one.y + one.height <= other.y ||
-            other.y + other.height <= one.y;
-          expect({ where, apart }).toEqual({ where, apart: true });
-        }
-      }
     }
   });
 
   it("A2: medium gives the selected work room its reading can use", function* () {
-    const presenter = yield* usePresenter(CHECKPOINT_MEDIUM);
-    const committed = yield* commitCheckpoint(presenter, { size: CHECKPOINT_MEDIUM });
-    const { observed } = committed;
+    const model = yield* runningReading();
+    const presenter = yield* usePresenter(MEDIUM);
+    const observed = yield* presenter.commit(stagedView(model, MEDIUM));
     // The corrected medium proportions, dividers included: the selected work
     // takes the remainder because it is the column whose room is spent on a
     // reserved rail and badge column before a reader sees any source.
-    expect(regionBounds(observed, "sidebar")).toEqual({ x: 0, y: 1, width: 36, height: 27 });
-    expect(regionBounds(observed, "transcript")).toEqual({ x: 36, y: 1, width: 52, height: 27 });
-    expect(regionBounds(observed, "inspection")).toEqual({ x: 88, y: 1, width: 32, height: 27 });
+    expect(columnsOf(observed)).toEqual({
+      sidebar: { x: 0, y: 1, width: 36, height: 27 },
+      transcript: { x: 36, y: 1, width: 52, height: 27 },
+      inspection: { x: 88, y: 1, width: 32, height: 27 },
+    });
 
     // What that buys is source room, measured through the reading's own
     // reservation rather than counted from the column's width.
-    const prepared = yield* prepareFrame(presenter.renderer, committed.view);
+    const renderer = yield* useReplRenderer(MEDIUM);
+    const prepared = yield* prepareFrame(renderer, stagedView(model, MEDIUM));
     if (!prepared.ok) {
       throw prepared.error;
     }
@@ -5351,30 +5730,85 @@ describe("Checkpoint #971 A2 — the staged screen at the two smaller sizes", ()
     }
 
     // The Draft keeps its four rows at the foot of that column.
-    const draft = observed.regionOf("box:draft");
-    expect(draft?.height).toBe(4);
-    expect((draft?.y ?? 0) + (draft?.height ?? 0)).toBe(CHECKPOINT_MEDIUM.rows - 2);
+    expectDraft(observed, regionOf(observed, "box:transcript"));
   });
 
   it("A2: the selected work's source wraps at word boundaries and stays exact", function* () {
-    const presenter = yield* usePresenter(CHECKPOINT_MEDIUM);
-    const committed = yield* commitCheckpoint(presenter, { size: CHECKPOINT_MEDIUM });
-    const prepared = yield* prepareFrame(presenter.renderer, committed.view);
+    const model = yield* runningReading();
+    const presenter = yield* usePresenter(MEDIUM);
+    const observed = yield* presenter.commit(stagedView(model, MEDIUM));
+    const { grid } = presenter;
+    const body = regionOf(observed, "box:transcript:body");
+    const rows = grid.textIn(body);
+
+    // The output line breaks between whole words, and neither filename is cut,
+    // and the next row begins where this one did rather than with somebody
+    // else's whitespace.
+    const opened = rows.findIndex((row) => row.trimEnd().endsWith("Reading checkout.md and"));
+    expect(opened).toBeGreaterThanOrEqual(0);
+    const column = rows[opened]?.indexOf("Reading") ?? 0;
+    expect(rows[opened + 1]?.slice(column).trimEnd()).toBe("architecture.md");
+
+    // The long source line reconstructs exactly, four spaces included.
+    let state = selecting(
+      stateWith({}),
+      model.entries[0].key,
+      model.entries[0].scope.scopes[0].key,
+    );
+    const viewOf = (): ReplView =>
+      withWorkspace(
+        reading(state, model, streaming("Reading checkout.md and architecture.md"), MEDIUM),
+        workspaceOf(model),
+      );
+    let visible = rows;
+    for (
+      let press = 0;
+      press < 24 && visible.findIndex((row) => row.includes("Compute the total")) > 2;
+      press += 1
+    ) {
+      state = reduceRepl(
+        state,
+        { kind: "scroll-reading", delta: 1 },
+        model,
+        streaming("Reading checkout.md and architecture.md"),
+        yield* presenter.prepare(viewOf()),
+      ).state;
+      const next = yield* presenter.commit(viewOf());
+      visible = grid.textIn(regionOf(next, "box:transcript:body"));
+    }
+    const pieces = wrappedRows(visible, "Compute the total");
+    expect(pieces.join(" ")).toBe(WRAPPING_LINE);
+    expect(pieces.join(" ")).toContain("once,    after");
+    // The last row of that line is its whole remainder: what fits a row stays
+    // on it, which is the behaviour D10's own regressions hold the fitter to.
+    expect(pieces[pieces.length - 1]).toBe("customer pays.");
+    // Each drawn row fits the room the body has: nothing of it is drawn in the
+    // column's right gutter.
+    const gutterOf = regionOf(observed, "box:transcript");
+    expect(
+      grid
+        .textIn({
+          x: body.x + body.width,
+          y: body.y,
+          width: gutterOf.x + gutterOf.width - (body.x + body.width),
+          height: body.height,
+        })
+        .join("")
+        .trim(),
+    ).toBe("");
+
+    // The fitter's own rows for the same reading: whitespace belongs to the line
+    // it ends, and each row fits the room the reading reserved for its content.
+    const renderer = yield* useReplRenderer(MEDIUM);
+    const prepared = yield* prepareFrame(renderer, stagedView(model, MEDIUM));
     if (!prepared.ok) {
       throw prepared.error;
     }
-    const rows = prepared.value.context.reading?.rows ?? [];
-    const texts = rows.map((one) => one.text);
-
-    // The output line breaks between whole words, and neither filename is cut.
-    // The boundary space stays on the row that ends with it: whitespace is
-    // part of the line, and the next row does not begin with somebody else's.
-    const opened = texts.indexOf("Reading checkout.md and ");
-    expect(opened).toBeGreaterThanOrEqual(0);
-    expect(texts[opened + 1]).toBe("architecture.md");
-
-    // The long source line reconstructs exactly, four spaces included, and the
-    // remainder that fits a row stays whole on it.
+    const preparedRows = prepared.value.context.reading?.rows ?? [];
+    const texts = preparedRows.map((one) => one.text);
+    const kept = texts.indexOf("Reading checkout.md and ");
+    expect(kept).toBeGreaterThanOrEqual(0);
+    expect(texts[kept + 1]).toBe("architecture.md");
     const started = texts.findIndex((one) => WRAPPING_LINE.startsWith(one.trimEnd()) && one !== "");
     expect(started).toBeGreaterThanOrEqual(0);
     let said = "";
@@ -5385,84 +5819,67 @@ describe("Checkpoint #971 A2 — the staged screen at the two smaller sizes", ()
     }
     expect(said).toBe(WRAPPING_LINE);
     expect(said).toContain("once,    after");
-    // The last row of that line is its whole remainder: what fits a row stays
-    // on it, which is the behaviour D10's own regressions hold the fitter to.
     expect(texts[at - 1]).toBe("customer pays.");
-    // Each drawn row fits the room the reading reserved for its content.
     const content = prepared.value.context.reading?.reservation.content ?? 0;
-    for (const row of rows) {
+    for (const row of preparedRows) {
       expect(row.width + row.indent).toBeLessThanOrEqual(content);
     }
   });
 
   it("A2: narrow routes one outlet, keeps both surface controls and the Draft", function* () {
-    const model = yield* checkpointModel();
+    const page = yield* reachWorkspace(WIDE);
+    yield* intoDraft(page);
     // The entry surface: the selected work, its reading and its Draft.
-    const work = yield* usePresenter(CHECKPOINT_NARROW);
-    const entries = (yield* commitCheckpoint(work, { size: CHECKPOINT_NARROW, model })).observed;
-    expect(regionBounds(entries, "content")).toEqual({ x: 0, y: 1, width: 72, height: 17 });
-    // Neither of the other two columns exists at this size.
-    expect(regionBounds(entries, "sidebar")).toBe(undefined);
-    expect(regionBounds(entries, "inspection")).toBe(undefined);
-    for (const key of ["sessions:heading", "entries:heading", "footer:input", "draft:stop"]) {
-      expect({ key, drawn: entries.boundsOf(key) !== undefined }).toEqual({ key, drawn: true });
+    yield* page.resize(SMALL);
+    yield* page.press("Entries", { onRow: "Sessions" });
+    yield* page.until("the Entries catalog", drawerOpen);
+    yield* closeDrawer(page);
+    const entries = page.screen();
+    expect(entries.shows("DRAFT")).toBe(true);
+    expect(entries.found("[stop]", { onRow: "DRAFT" })).toBe(1);
+    for (const control of ["Sessions", "Entries"]) {
+      expect({ control, shown: entries.shows(control) }).toEqual({ control, shown: true });
     }
     // The Sidekick's own rows are on no other surface's screen.
-    for (const key of ["tray:queue", "follow", "sidekick:message"]) {
-      expect({ key, drawn: entries.keys.includes(key) }).toEqual({ key, drawn: false });
-    }
+    expect(entries.shows(COMPOSER)).toBe(false);
+    expect(entries.shows(SIDEKICK)).toBe(false);
 
     // The Sessions surface: the Transcript's own reading, and no Draft.
-    const sessions = yield* usePresenter(CHECKPOINT_NARROW);
-    const read = (yield* commitCheckpoint(sessions, {
-      size: CHECKPOINT_NARROW,
-      model,
-      surface: "sessions",
-    })).observed;
-    expect(read.keys.includes("transcript:title")).toBe(true);
-    expect(read.keys.includes("footer:input")).toBe(false);
-    expect(read.boundsOf("sessions:heading")).not.toBe(undefined);
+    yield* page.press("Sessions", { onRow: "Entries" });
+    const sessions = yield* page.until("the Sessions surface", (reading) =>
+      reading.shows("TRANSCRIPT"),
+    );
+    expect(sessions.shows("TRANSCRIPT")).toBe(true);
+    expect(sessions.shows("Sessions")).toBe(true);
 
     // The Sidekick surface: its chat, its tray and its composer, reached by the
-    // route rather than by a tab this size does not draw.
-    const chat = yield* usePresenter(CHECKPOINT_NARROW);
-    const talking = (yield* commitCheckpoint(chat, {
-      size: CHECKPOINT_NARROW,
-      model,
-      sidekick: true,
-    })).observed;
-    for (const key of ["tray:todo", "sidekick:stop", "sidekick:message"]) {
-      expect({ key, drawn: talking.boundsOf(key) !== undefined }).toEqual({ key, drawn: true });
-    }
-    // Neither offer this build does not have reaches a narrow outlet either.
-    for (const key of ["tray:queue", "follow"]) {
-      expect({ key, drawn: talking.boundsOf(key) !== undefined }).toEqual({ key, drawn: false });
-    }
-    expect(talking.keys.includes("tab:bindings")).toBe(false);
-    expect(talking.keys.includes("footer:input")).toBe(false);
+    // chat row of the list rather than by a tab this size does not draw.
+    yield* page.press("second request");
+    const talkingNow = yield* page.until("the Sidekick surface", (reading) =>
+      reading.shows(COMPOSER),
+    );
+    expect(talkingNow.shows("[stop]")).toBe(true);
+    expect(talkingNow.shows(DRAFT)).toBe(false);
+    expect(talkingNow.shows(BINDINGS)).toBe(false);
   });
 });
 
 /**
  * #971 A4: every outcome a reading can hold, on one screen, at each size.
  *
- * One controlled reading rather than one per state: four entries that really
- * ran — settled, failed, stopped and still running — a Sidekick question
- * waiting, and a queue longer than the tray can show. Asking for a screen per
- * state would be asking for the same frame fifteen times.
+ * One reading rather than one per state: four entries that really ran —
+ * settled, failed, stopped and still running — and a Sidekick question waiting.
+ * Asking for a screen per state would be asking for the same frame fifteen
+ * times.
  *
  * What this proves is fitting and state: that each outcome is on the screen,
  * that they read differently, and that nothing the window holds is unreachable.
  * Whether it looks right is the image review's answer, not a test's.
  */
 describe("Checkpoint #971 A4 — current outcomes, work and the waiting question", () => {
-  beforeAll(() => useTempFileCompiler());
-
-  /** The four outcomes this reading holds, as the words the screen says. */
-  const OUTCOMES = ["✓ COMPLETED", "× FAILED", "- INTERRUPTED", "● ACTIVE"] as const;
-
   it("A4: every outcome, work identity and the waiting question read from the current screen", function* () {
-    const model = yield* checkpointStateModel();
+    const page = yield* reachOutcomes(WIDE);
+    const { model } = yield* settledReading(page.repl);
     expect(model.entries.map((one) => one.terminal?.status ?? "unfinished")).toEqual([
       "ok",
       "err",
@@ -5470,90 +5887,81 @@ describe("Checkpoint #971 A4 — current outcomes, work and the waiting question
       "unfinished",
     ]);
 
-    for (const size of CHECKPOINT_SIZES) {
+    for (const size of [WIDE, MEDIUM, SMALL]) {
       const where = `${size.columns}x${size.rows}`;
-      const narrow = size.columns === CHECKPOINT_NARROW.columns;
-      const presenter = yield* usePresenter(size);
-      // The composition this build offers: the same staged work rows and
-      // conversation, with no shared queue tray, no queued rows and no Follow.
-      const workspace = CHECKPOINT_CURRENT_WORKSPACE;
-      const committed = yield* commitCheckpoint(presenter, {
-        model,
-        size,
-        live: CHECKPOINT_ASKING,
-        workspace,
-        // A narrow frame routes one outlet, and the conversation is the outlet
-        // these readings are in.
-        ...(narrow ? { sidekick: true } : {}),
-      });
-      const { observed } = committed;
-      const { admission } = observed.committed;
+      if (size !== WIDE) {
+        yield* page.resize(size);
+      }
+      // The running entry's outcome is the selected work's own header; a narrow
+      // frame routes one outlet, and the conversation is the outlet the rest
+      // are read in.
+      const inks = new Map<string, CellStyle>();
+      if (size === SMALL) {
+        yield* page.press("Entries", { onRow: "Sessions" });
+        yield* page.until("the Entries catalog", drawerOpen);
+        yield* closeDrawer(page);
+      }
+      outcomesNow(page, inks);
+      if (size === SMALL) {
+        yield* page.press("Sessions", { onRow: "Entries" });
+        yield* page.until("the Sessions surface", (reading) => reading.shows("TRANSCRIPT"));
+        yield* page.press("Sessions", { onRow: "Sessions" });
+        yield* page.until("the Sessions list", (reading) => reading.shows("TRANSCRIPT"));
+        yield* page.press("first request");
+        yield* page.until("the Sidekick surface", (reading) => reading.shows(COMPOSER));
+      }
 
       // Every outcome is in the reading this screen is showing, whatever its
       // window has room for: a smaller screen scrolls to them rather than
-      // losing them. The rows come from the production builder, so this is the
-      // reading the frame draws from rather than a second account of it.
-      const reading = chatLinesFor(committed.view)
-        .map((one) => one.text)
-        .join("\n");
-      for (const word of OUTCOMES) {
-        expect({ where, word, held: reading.includes(word) }).toEqual({
-          where,
-          word,
-          held: true,
-        });
-      }
-      // And what this window is not showing is reachable rather than gone.
-      const whole = windowOf(admission, SIDEKICK_WINDOW);
+      // losing them.
+      const walk = yield* walkChat(page, inks);
+      // Each list is sorted in the copy that was just spread, because the Node
+      // typecheck's `lib` is ES2022 and `toSorted` is ES2023.
+      expect({ where, words: [...inks.keys()].sort() }).toEqual({
+        where,
+        words: [...OUTCOMES].sort(),
+      });
+      // And what this window was not showing was reached rather than gone: the
+      // walk moved the chat with its own controls and read rows it had not.
+      expect({ where, reached: walk.readings > 1 }).toEqual({ where, reached: true });
+
+      // The outcomes read differently from one another: no two in the same ink,
+      // and the three the archive names are its own.
       expect({
         where,
-        reachable: whole.total >= whole.count && whole.from + whole.count <= whole.total,
-      }).toEqual({ where, reachable: true });
-
-      // The outcomes this frame is actually showing read differently from one
-      // another: no two of them in the same ink.
-      const said = presenter.grid
-        .textIn({ x: 0, y: 0, width: size.columns, height: size.rows })
-        .join("\n");
-      const shown = OUTCOMES.filter((word) => said.includes(word));
-      const inks = new Set<number | undefined>();
-      for (const word of shown) {
-        const at = said.indexOf(word);
-        const before = said.slice(0, at).split("\n");
-        const y = before.length - 1;
-        const x = before[before.length - 1].length;
-        inks.add(presenter.grid.styleAt(x, y).foreground);
-      }
-      expect({ where, distinct: inks.size }).toEqual({ where, distinct: shown.length });
-
-      // The question announces itself where it can be answered, and answering
-      // it is a control rather than a sentence.
-      if (!narrow || committed.view.state.route.view === "sidekick") {
-        expect({ where, asked: observed.boundsOf("sidekick:answer") !== undefined }).toEqual({
-          where,
-          asked: true,
-        });
-      }
-
-      // Each work row this screen carries is an identity this history already
-      // holds: a message this conversation acknowledged, paired with the entry
-      // that message admitted. Nothing is shown for an entry this reading does
-      // not hold.
-      expect({ where, work: workspace.work.length > 0 }).toEqual({ where, work: true });
-      for (const one of workspace.work) {
-        expect({
-          where,
-          message: CHECKPOINT_SIDEKICK.chat.some((row) => row.key === one.message),
-          entry: model.entries.some((entry) => entry.key === one.entry),
-        }).toEqual({ where, message: true, entry: true });
-      }
-      // And the tray this build offers is the inactive one, with no shared
-      // queue behind it.
+        distinct: new Set([...inks.values()].map((one) => one.foreground)).size,
+      }).toEqual({
+        where,
+        distinct: OUTCOMES.length,
+      });
       expect({
         where,
-        todo: observed.nodeOf("tray:todo") !== undefined || narrow,
-        queue: observed.nodeOf("tray:queue") !== undefined,
-      }).toEqual({ where, todo: true, queue: false });
+        roles: [
+          inks.get("✓ COMPLETED")?.foreground,
+          inks.get("× FAILED")?.foreground,
+          inks.get("● ACTIVE")?.foreground,
+        ],
+      }).toEqual({ where, roles: [SEMANTIC.tick, SEMANTIC.exit, SEMANTIC.active] });
+
+      // The question announces itself where it can be answered, and answering it
+      // is a control rather than a sentence.
+      expect({ where, asked: page.screen().shows("[answer sidekick]") }).toEqual({
+        where,
+        asked: true,
+      });
+
+      // Each work row this screen carries is an entry this history holds, after
+      // the message that admitted it. The entry the person submitted from the
+      // Draft was admitted by no message and has none.
+      expect({ where, works: [...walk.works].sort() }).toEqual({ where, works: [1, 2, 3] });
+      for (const order of walk.works) {
+        expect({ where, entry: model.entries.some((one) => one.key === `entry-${order}`) }).toEqual(
+          {
+            where,
+            entry: true,
+          },
+        );
+      }
     }
   });
 });
@@ -5563,110 +5971,135 @@ describe("Checkpoint #971 A4 — current outcomes, work and the waiting question
  *
  * The chat holds more than it can show, and the question is the same one a
  * window always asks: is what it is not showing reachable, and is what it *is*
- * showing something a person can act on? So this walks it — down to the
- * outcomes its first window cuts off — and reads the answers off the committed
- * frame rather than off the description that produced it.
+ * showing something a person can act on? So this walks it — through the
+ * outcomes its first window cuts off — and reads the answers off the screen
+ * rather than off the description that produced it.
  *
- * One presenter, one tree and one grid throughout: the screen under test is
- * what the frames have left in the grid together, which is also the only way a
- * row that stopped being drawn can be told from a row that is still there.
- *
- * The shared message queue this case used to traverse beside the chat is not
- * offered by this build. Its rows, its withdrawal controls and its own window
- * are recorded in `fixtures/repl/deferred-presentation.json` under DQ1, with
- * the case they came from and what has to exist before they come back.
+ * The shared message queue is not offered by this build, so no window, control
+ * or tray of it is placed.
  */
 describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
-  beforeAll(() => useTempFileCompiler());
-
-  /** The four outcomes this reading holds, as the words the screen says. */
-  const OUTCOMES = ["✓ COMPLETED", "× FAILED", "- INTERRUPTED", "● ACTIVE"] as const;
-
   it("R2: current chat traversal reads every outcome and keeps its composer", function* () {
-    const model = yield* checkpointStateModel();
-    // The size whose conversation still holds more than it shows. Without the
-    // shared queue's tray the widest screen has room for the whole chat, and a
-    // window with nothing outside it is not a traversal.
-    const size = CHECKPOINT_MEDIUM;
-    const presenter = yield* usePresenter(size);
-    const asking = {
-      model,
-      size,
-      live: CHECKPOINT_ASKING,
-      workspace: CHECKPOINT_CURRENT_WORKSPACE,
-    } as const;
+    const page = yield* reachOutcomes(WIDE);
+    // The size whose conversation still holds more than it shows.
+    const resized = yield* page.resize(MEDIUM);
 
-    const opening = yield* commitCheckpoint(presenter, asking);
+    // No shared queue is offered here, so nothing of it is drawn: a window over
+    // rows this build has none of would be chrome over a reading that does not
+    // exist.
+    expect(resized.shows("QUEUE")).toBe(false);
 
-    // No shared queue is offered here, so nothing of it is measured, mounted or
-    // drawn: a window over rows this build has none of would be chrome over a
-    // reading that does not exist.
-    expect(opening.observed.committed.admission.windows.get(QUEUE_WINDOW)).toBe(undefined);
-    for (const key of ["queue:earlier", "queue:later", "tray:queue"]) {
-      expect({ key, mounted: opening.observed.nodeOf(key) !== undefined }).toEqual({
-        key,
-        mounted: false,
-      });
-    }
-
-    // What the column does offer is all there: the inactive tray, the
-    // conversation's own composer, and the controls that move the chat.
-    for (const key of ["tray:todo", "sidekick:message", "sidekick:earlier", "sidekick:later"]) {
-      expect({ key, drawn: opening.observed.boundsOf(key) !== undefined }).toEqual({
-        key,
-        drawn: true,
-      });
-    }
-    const chat = windowOf(opening.observed.committed.admission, SIDEKICK_WINDOW);
-    expect({ rows: chat.count >= 1 }).toEqual({ rows: true });
+    // What the column does offer is all there: the conversation's own composer,
+    // and the controls that move the chat.
+    expect(resized.shows(COMPOSER)).toBe(true);
+    expect(resized.found("[↑ earlier]", { rightOf: COMPOSER })).toBe(1);
+    expect(resized.found("[↓ later]", { rightOf: COMPOSER })).toBe(1);
 
     // One traversal of the chat's own window, which holds more rows than it
     // shows: each outcome's ink is read the first time that outcome is on the
-    // screen, and the walk stops once all four have been.
-    const inks = new Map<string, number | undefined>();
-    // Where the window actually sat at each step. A following chat sits at its
-    // own end, so this walk moves it down from there rather than up.
-    const visited = new Set<number>([chat.from]);
-    for (let offset = 0; offset <= chat.total && inks.size < OUTCOMES.length; offset += 1) {
-      const at = yield* commitCheckpoint(presenter, {
-        ...asking,
-        state: chatAt(model, offset),
-        focused: opening.focused,
-      });
-      visited.add(windowOf(at.observed.committed.admission, SIDEKICK_WINDOW).from);
-      const said = presenter.grid
-        .textIn({ x: 0, y: 0, width: size.columns, height: size.rows })
-        .join("\n");
-      for (const word of OUTCOMES) {
-        const found = said.indexOf(word);
-        if (found < 0 || inks.has(word)) {
-          continue;
-        }
-        const before = said.slice(0, found).split("\n");
-        const y = before.length - 1;
-        const x = before[before.length - 1]?.length ?? 0;
-        inks.set(word, presenter.grid.styleAt(x, y).foreground);
-      }
-    }
-    // The walk moved the window rather than redrawing the same rows.
-    expect({ moved: visited.size > 1 }).toEqual({ moved: true });
+    // screen.
+    const sourceColumn = resized.locate(COMPOSER).column;
+    const sourceBefore = resized.rows.map((row) => row.slice(0, sourceColumn));
+    const inks = new Map<string, CellStyle>();
+    const walk = yield* walkChat(page, inks);
+    // The walk moved the chat rather than redrawing the same rows.
+    expect({ moved: walk.readings > 1 }).toEqual({ moved: true });
     // All four were rendered, and no two of them in the same ink.
-    expect({ read: [...inks.keys()].sort() }).toEqual({
-      read: [...OUTCOMES].sort(),
-    });
-    expect({ distinct: new Set(inks.values()).size }).toEqual({
+    outcomesNow(page, inks);
+    expect({ read: [...inks.keys()].sort() }).toEqual({ read: [...OUTCOMES].sort() });
+    expect({ distinct: new Set([...inks.values()].map((one) => one.foreground)).size }).toEqual({
       distinct: OUTCOMES.length,
     });
 
     // The composer the conversation is answered in is still there afterwards,
-    // and the chat's own offset moved without the source or the saved reading
-    // following it.
-    expect({
-      composer: opening.observed.boundsOf("sidekick:message") !== undefined,
-      source: opening.observed.committed.admission.windows.get(READING_WINDOW)?.from,
-    }).toEqual({
-      composer: true,
-      source: windowOf(opening.observed.committed.admission, READING_WINDOW).from,
-    });
+    // and what the Draft holds did not follow the chat's own movement.
+    expect(page.screen().shows(COMPOSER)).toBe(true);
+    expect(page.screen().rows.map((row) => row.slice(0, sourceColumn))).toEqual(sourceBefore);
+  });
+});
+
+describe("REPL presentation: the screen says what is placed", () => {
+  it("keeps the shell and its readable surfaces at the supported sizes", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    const wide = page.screen();
+    expect(wide.shows("XMD REPL")).toBe(true);
+    expect(wide.shows("TRANSCRIPT")).toBe(true);
+    expect(wide.shows(BINDINGS)).toBe(true);
+    expect(wide.shows(SIDEKICK)).toBe(true);
+    expect(wide.shows("HISTORY")).toBe(true);
+    expect(wide.occurrences("[send]")).toBe(2);
+
+    const medium = yield* page.resize(MEDIUM);
+    expect(medium.shows("XMD REPL")).toBe(true);
+    expect(medium.shows("HISTORY")).toBe(true);
+    expect(medium.shows(TYPING)).toBe(true);
+
+    const narrow = yield* page.resize(SMALL);
+    expect(narrow.shows("XMD REPL")).toBe(true);
+    expect(narrow.shows("HISTORY")).toBe(true);
+    expect(narrow.occurrences("[send]")).toBe(1);
+    expect(narrow.shows(SIDEKICK)).toBe(false);
+    expect(narrow.shows(COMPOSER)).toBe(false);
+
+    const refused = yield* page.resize({ columns: 60, rows: 15 });
+    expect(refused.shows("needs at least 72x20")).toBe(true);
+    expect(refused.occurrences("[send]")).toBe(0);
+  });
+
+  it("keeps source text in the field that draws it", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    const source = "<Checkout />";
+    yield* draftText(page, source);
+    const reading = page.screen();
+    expect(reading.found(source, DRAFT_VALUE)).toBe(1);
+    expect(draftHolds(reading, source)).toBe(true);
+    expect(reading.found(source, { after: COMPOSER })).toBe(0);
+  });
+
+  it("keeps a modal readable and leaves the Draft unchanged behind it", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* draftText(page, "keep this draft");
+    yield* openHistory(page);
+    expect(page.screen().shows("History")).toBe(true);
+    yield* page.type("ignored by the drawer");
+    yield* closeDrawer(page);
+    const closed = page.screen();
+    expect(draftHolds(closed, "keep this draft")).toBe(true);
+    expect(draftHolds(closed, "ignored by the drawer")).toBe(false);
+  });
+
+  it("keeps the Sidekick scope distinct from the Draft Send", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* intoComposer(page);
+    const reading = page.screen();
+    expect(reading.found("[send]", SIDEKICK_PANE)).toBe(1);
+    expect(reading.found("[send]", { onRow: DRAFT })).toBe(1);
+  });
+
+  it("keeps terminal surfaces on the accepted palette", function* () {
+    yield* useTempFileCompiler();
+    const model = yield* emptyModel();
+    const presenter = yield* usePresenter(WIDE);
+    const view = viewFor(
+      initialState("reference"),
+      model,
+      NOTHING_LIVE,
+      WIDE,
+      undefined,
+      navigationOf(model.checkpoints, "live"),
+    );
+    if (!view.ok) {
+      throw view.error;
+    }
+    const observed = yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
+    const draft = observed.boundsOf("footer:input");
+    const history = observed.regionOf("box:history");
+    if (draft === undefined || history === undefined) {
+      throw new Error("the empty frame did not publish its Draft and History surfaces");
+    }
+    expect(presenter.grid.styleAt(draft.x, draft.y + 1).background).toBe(REPL_PALETTE.draftSurface);
+    expect(presenter.grid.styleAt(history.x, history.y).background).toBe(
+      REPL_PALETTE.historySurface,
+    );
   });
 });

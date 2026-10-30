@@ -1072,6 +1072,21 @@ control at all. **TODO** is drawn, inactive, as the placeholder for the shared
 TODO (#901). The settings those deferred controls will carry are recorded in the
 delivery record rather than advertised on a screen that cannot honour them.
 
+No frame at any size places a `tray:queue` or `follow` control, and the running
+command's tests assert that absence at every profile. The cases that exercised
+them are not run: the populated queued rows and tray choices (DQ0), the queue
+portions of the surface, wrapping and chat-window cases (DQ1), an over-budget
+tray measured before its first fit (DQ2) and Follow's checkbox, label and
+narrow targets (DF1). Their source is recoverable from commit
+`a410786aa93e5e746d57b98ed7240c5adbbd75c2`: the staged-workspace fixture under
+`packages/cli/tests/fixtures/repl` as blob `6e73495287fd7dd8dfb7fe9797a4479a21041577`,
+`repl-presentation-style.test.ts` as `47f70755a8308e41788f674dc0022916b6444dd0`
+and `repl-layout-admission.test.ts` as
+`8fe50613bfdb299eefb68ca9863a4498001dc0ae`. They return against actual shared
+queue ownership (#964, after #895 and then #1003) and, for Follow, against
+evaluation-owned Sidekick Send continuation, compared with the profile evidence
+current then rather than with the pixels of that source.
+
 When the queue ships, QUEUE lists the messages waiting behind the active
 exchange: each row shows where it came from, its text and an `X` whose
 accessible name is *Remove message*. Its place in the list is its order, so the

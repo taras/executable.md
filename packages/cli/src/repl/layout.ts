@@ -210,9 +210,6 @@ const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
  * it offers changes while the two rows around it do not.
  */
 export const FOOTER_ROWS = 7;
-/** The History band's own five rows. */
-export { HISTORY_ROWS } from "./history-rail.ts";
-
 /** Five, at every size — imported for this module's own layout. */
 import { HISTORY_ROWS } from "./history-rail.ts";
 
@@ -469,11 +466,6 @@ export function rowProps(width: number | undefined): ReplBoxProps {
     },
   };
 }
-
-/** One row of a region whose width is not yet known. */
-export const ROW_PROPS: ReplBoxProps = Object.freeze({
-  layout: Object.freeze({ width: grow(), height: fixed(1) }),
-});
 
 /** A control of the action row: as wide as its own label. */
 export const CONTROL_PROPS: ReplBoxProps = Object.freeze({
