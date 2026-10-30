@@ -51,7 +51,7 @@ export function caretRow(rows: readonly ReplCaretRow[], offset: number, backward
       break;
     }
   }
-  // End retains the preceding row at a shared soft-wrap boundary.
+  // A row-end caret retains the preceding row at a shared soft-wrap boundary.
   return backward && rows[at - 1]?.stops.at(-1)?.offset === offset ? at - 1 : at;
 }
 
@@ -88,5 +88,10 @@ export function moveCaret(
   const closest = destination.stops.reduce((best, one) =>
     Math.abs(one.column - column) < Math.abs(best.column - column) ? one : best,
   );
-  return { value: caret.value, offset: closest.offset, column };
+  return {
+    value: caret.value,
+    offset: closest.offset,
+    column,
+    ...(closest === destination.stops.at(-1) ? { backward: true } : {}),
+  };
 }

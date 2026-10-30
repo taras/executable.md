@@ -9192,9 +9192,9 @@ function editorDescription(
         : {
             ...input,
             caret: editor.caret.offset,
-            caretRows: editor.rows.map((row) => ({
-              stops: row.stops.map((stop) => ({ ...stop })),
-            })),
+            caretRows: editor.rows
+              .slice(Math.max(0, editor.active - 1), editor.active + 2)
+              .map((row) => ({ stops: row.stops.map((stop) => ({ ...stop })) })),
             ...(shown === undefined ? {} : { shown }),
           },
     layout: read.layout,
