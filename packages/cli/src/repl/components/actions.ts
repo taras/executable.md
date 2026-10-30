@@ -19,6 +19,13 @@ import type { ReplDrawerRef, ReplPane, ReplSurface } from "../route.ts";
 /** The keys a field keeps for its own caret. */
 export type ReplCaretKey = "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "Home" | "End";
 
+export type ReplFieldPurpose =
+  | "draft"
+  | "message"
+  | "answer"
+  | "sidekick-answer"
+  | "configure-agent";
+
 export type ReplAction =
   | {
       readonly kind: "reading-key";
@@ -32,11 +39,23 @@ export type ReplAction =
    * The name travels with the text because focus belongs to the mounted tree
    * and this vocabulary does not: a control that emitted bare text would have
    * its characters delivered to whichever field the application last recorded,
-   * which is not necessarily the one under the cursor.
+   * which is not necessarily the one under the cursor. Mounted fields also
+   * name their purpose and question so expiry cannot redirect an edit.
    */
-  | { readonly kind: "type"; readonly text: string; readonly field?: string }
-  /** Remove the last Unicode scalar value from one named field, or the draft. */
-  | { readonly kind: "erase"; readonly field?: string }
+  | {
+      readonly kind: "type";
+      readonly text: string;
+      readonly field?: string;
+      readonly purpose?: ReplFieldPurpose;
+      readonly question?: string;
+    }
+  /** Remove the grapheme before the caret in one named field, or the draft. */
+  | {
+      readonly kind: "erase";
+      readonly field?: string;
+      readonly purpose?: ReplFieldPurpose;
+      readonly question?: string;
+    }
   /**
    * A caret key pressed in one named field, or in the draft when it names none.
    *
@@ -46,6 +65,8 @@ export type ReplAction =
   | {
       readonly kind: "move-caret";
       readonly key: ReplCaretKey;
+      readonly purpose?: ReplFieldPurpose;
+      readonly question?: string;
       readonly field?: string;
       readonly caret?: ReplCaret;
     }

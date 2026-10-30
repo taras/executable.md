@@ -26,7 +26,7 @@ import type { ReplCaretRow } from "../caret.ts";
 
 import { component, fields } from "../description.ts";
 import type { ReplComponent, ReplInputEvent, ReplNode, ReplViewData } from "../description.ts";
-import type { ReplAction, ReplCaretKey } from "./actions.ts";
+import type { ReplAction, ReplCaretKey, ReplFieldPurpose } from "./actions.ts";
 
 /** Read one string field, by parsing rather than by assertion. */
 export function textOf(input: ReplViewData, name: string): string {
@@ -462,7 +462,26 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
         }
       }
       const named = optional(node.input, "field");
-      const owns: { readonly field?: string } = named === undefined ? {} : { field: named };
+      const purpose = optional(node.input, "purpose");
+      const question = optional(node.input, "question");
+      if (
+        purpose !== "draft" &&
+        purpose !== "message" &&
+        purpose !== "answer" &&
+        purpose !== "sidekick-answer" &&
+        purpose !== "configure-agent"
+      ) {
+        return undefined;
+      }
+      const owns: {
+        readonly purpose: ReplFieldPurpose;
+        readonly field?: string;
+        readonly question?: string;
+      } = {
+        purpose,
+        ...(named === undefined ? {} : { field: named }),
+        ...(question === undefined ? {} : { question }),
+      };
       if (event.kind === "text") {
         return { kind: "type", text: event.text, ...owns };
       }

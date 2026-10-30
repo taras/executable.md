@@ -165,7 +165,7 @@ import {
   REFUSAL,
   SELECT_ROW,
 } from "./components/rows.ts";
-import type { ReplAction } from "./components/actions.ts";
+import type { ReplAction, ReplFieldPurpose } from "./components/actions.ts";
 import { NO_LIFECYCLE } from "./lifecycle.ts";
 import type { ReplLifecycleReading } from "./lifecycle.ts";
 
@@ -1972,7 +1972,7 @@ export function reduceRepl(
   // unmeasured frame has admitted nothing.
   admission: ReplAdmission = NOTHING_ADMITTED,
   /**
-   * The Sidekick question whose form that frame presented, or none.
+   * The editable drawer that frame presented, including its question owner.
    *
    * A frame-derived fact like the admission beside it, and for the same reason:
    * what a key means depends on what was on the screen when it was pressed, and
@@ -2046,7 +2046,7 @@ export function reduceRepl(
     case "type":
     case "erase":
     case "move-caret":
-      return editCaret(state, live, action, configuring, asking, answering);
+      return editCaret(state, live, action, configuring, asking, answering, presented);
     case "reveal":
       return settled({ ...state, restore: Object.freeze({ kind: "reveal", key: action.key }) });
     case "submit": {
@@ -3091,7 +3091,34 @@ function editCaret(
   configuring: boolean,
   asking: ReturnType<typeof openAsking>,
   answering: boolean,
+  presented: ReplPresented | undefined,
 ): ReplTransition {
+  if (action.purpose !== undefined) {
+    const top = state.route.drawers.at(-1);
+    const available =
+      !state.heldHistory &&
+      !state.catalog &&
+      (action.purpose === "sidekick-answer"
+        ? top === undefined &&
+          asking !== undefined &&
+          action.question === asking.key &&
+          live.sidekick?.current !== false
+        : action.purpose === "answer"
+          ? top?.kind === "live-elicit" &&
+            live.question !== undefined &&
+            presented?.kind === "entry-question" &&
+            presented.question === live.question
+          : action.purpose === "configure-agent"
+            ? top === undefined && configuring
+            : top === undefined && presented === undefined && asking === undefined && !configuring);
+    if (
+      !available ||
+      ((action.purpose === "answer" || action.purpose === "sidekick-answer") &&
+        action.field === undefined)
+    ) {
+      return refuse(state, "this field is no longer presented for its owner.");
+    }
+  }
   const change = (value: string, saved: ReplCaret | undefined): ReplCaret => {
     const caret = caretFor(value, saved);
     if (action.kind === "type") {
@@ -5010,7 +5037,7 @@ function field(
   key: string,
   prompt: string,
   text: string,
-  purpose: "draft" | "answer" | "sidekick-answer" | "configure-agent" | "message",
+  purpose: ReplFieldPurpose,
   style: ReplRowStyle,
   options: {
     readonly focus?: true;
@@ -6543,17 +6570,25 @@ function currentChat(view: ReplView): boolean {
 }
 
 /**
- * Which of the Sidekick's own drawers this committed view is presenting.
+ * Which editable drawer this committed view is presenting.
  *
  * One fact rather than two, because what it decides is one thing: where a
  * keystroke goes. A form held open in state while the screen shows something
  * else owns nothing — what owns typing is what is drawn.
  */
 export type ReplPresented =
+  | { readonly kind: "entry-question"; readonly question: ReplQuestion }
   | { readonly kind: "question"; readonly question: string }
   | { readonly kind: "configure" };
 
 export function presentedDrawer(view: ReplView): ReplPresented | undefined {
+  if (
+    !view.state.heldHistory &&
+    view.selection.drawers.at(-1)?.kind === "live-elicit" &&
+    view.live.question !== undefined
+  ) {
+    return { kind: "entry-question", question: view.live.question };
+  }
   const asking = presentedAsking(view);
   if (asking !== undefined) {
     return { kind: "question", question: asking.question.key };

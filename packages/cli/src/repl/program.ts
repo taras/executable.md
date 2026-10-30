@@ -673,7 +673,7 @@ function* drive(
   let reading: ReplReading = { model: session.model, navigation: session.navigation };
   let rendered: ReplRendered | undefined;
   /**
-   * The Sidekick question whose form the frame on screen is presenting.
+   * The editable drawer and question owner presented by the frame on screen.
    *
    * Kept beside the frame it was read from, because that is the frame a person
    * is acting against: which input a key reaches depends on what was drawn when
