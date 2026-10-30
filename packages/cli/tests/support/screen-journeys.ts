@@ -54,6 +54,17 @@ export const COMPOSER_VALUE: ScreenScope = { after: COMPOSER };
  */
 export const DRAFT_VALUE: ScreenScope = { after: DRAFT };
 
+/**
+ * The Sidekick's own Send and Stop, found from its composer rather than its tab.
+ *
+ * The composer's prompt is drawn once wherever that field exists, and the
+ * pane's controls are right of its own first cell while the Draft's are left of
+ * it — measured at 160x36: the prompt at column 108, this pane's Send at 153,
+ * the Draft's at 94. A drawer of this pane covers its tab but not the composer,
+ * so this scope keeps answering while {@link SIDEKICK_PANE} cannot.
+ */
+export const SIDEKICK_CONTROLS: ScreenScope = { rightOf: COMPOSER };
+
 /** The guidance row says this while the Draft takes keystrokes, and not otherwise. */
 export const TYPING = "Type here";
 
@@ -122,10 +133,31 @@ export function* intoDraft(page: ReplPage): Operation<void> {
  * real change: pressing the composer's prompt moves no focus on this product.
  */
 export function* intoComposer(page: ReplPage): Operation<void> {
-  yield* page.press(BINDINGS);
-  yield* page.until("the Bindings reading", (one) => !one.shows(COMPOSER));
-  yield* page.press(SIDEKICK);
-  yield* page.until("the Sidekick reading", (one) => one.shows(COMPOSER));
+  yield* pressTab(page, BINDINGS, (one) => !one.shows(COMPOSER));
+  yield* pressTab(page, SIDEKICK, (one) => one.shows(COMPOSER));
+}
+
+/**
+ * Press one of the pane's tabs until the pane is the one it names.
+ *
+ * Measured: with an entry running, the first press on a tab leaves the reading
+ * it draws unchanged and the second selects the pane, while on an idle screen
+ * the first is enough. Pressing a tab already selected changes nothing, so the
+ * walk is bounded and repeats are harmless.
+ */
+function* pressTab(
+  page: ReplPage,
+  tabLabel: string,
+  chosen: (reading: ScreenReading) => boolean,
+): Operation<void> {
+  for (let press = 0; press < 3 && !chosen(page.screen()); press += 1) {
+    const before = page.screen().index;
+    yield* page.press(tabLabel);
+    yield* page.until(`the screen after pressing ${tabLabel}`, (one) => one.index > before);
+  }
+  if (!chosen(page.screen())) {
+    throw new Error(`pressing ${tabLabel} never gave its pane the reading. ${page.describe()}`);
+  }
 }
 
 /**
@@ -137,7 +169,9 @@ export function* intoComposer(page: ReplPage): Operation<void> {
  */
 export function* pasteDraft(page: ReplPage, text: string): Operation<void> {
   yield* intoDraft(page);
-  const last = text.trimEnd().split("\n").at(-1) ?? "";
+  // The last word rather than the last line: a field fits a value into the
+  // rows it has, so a long line is not on the screen as one string.
+  const last = (text.trimEnd().split(/\s+/).at(-1) ?? "").slice(0, 24);
   yield* page.type(text);
   yield* page.until(
     `the Draft holding ${JSON.stringify(last)}`,
@@ -176,13 +210,29 @@ export function* asked(page: ReplPage, text: string, shown: string): Operation<v
 
 /** Press the Sidekick's own Stop. Waits for nothing: what Stop does is the case's question. */
 export function stopSidekick(page: ReplPage): Operation<void> {
-  return page.press("[stop]", SIDEKICK_PANE);
+  // Its own Stop is in its pane. A drawer of its own covers that pane's tab,
+  // and then the Stop to press is the drawer's: at or right of the way out
+  // every drawer draws, which the Draft's own Stop is left of.
+  const reading = page.screen();
+  if (reading.occurrences("[stop]") === 1) {
+    return page.press("[stop]");
+  }
+  if (reading.shows(COMPOSER)) {
+    return page.press("[stop]", SIDEKICK_CONTROLS);
+  }
+  return page.press("[stop]", { rightOf: "[close]" });
 }
 
 /** Its own Send offered and its own Stop gone. */
 export function sidekickIdle(reading: ScreenReading): boolean {
+  // A drawer of this pane covers its composer, and a pane with no composer
+  // offers no Send: asked then, the answer is that it is not at rest.
+  if (!reading.shows(COMPOSER)) {
+    return false;
+  }
   return (
-    reading.found("[send]", SIDEKICK_PANE) === 1 && reading.found("[stop]", SIDEKICK_PANE) === 0
+    reading.found("[send]", SIDEKICK_CONTROLS) === 1 &&
+    reading.found("[stop]", SIDEKICK_CONTROLS) === 0
   );
 }
 
@@ -198,6 +248,11 @@ export function sidekickIdle(reading: ScreenReading): boolean {
  * both readings draw are asked of the whole screen by count instead.
  */
 export function paneLines(reading: ScreenReading): string[] {
+  // A drawer over this pane covers its tab row, and then the pane draws none
+  // of its own rows.
+  if (!reading.shows(SIDEKICK)) {
+    return [];
+  }
   const tabs = reading.locate(SIDEKICK).row;
   const floor = reading.locate(DRAFT).column;
   return reading.rows.map((row, index) =>
@@ -299,4 +354,66 @@ export function draftHolds(reading: ScreenReading, text: string): boolean {
 /** Whether the composer holds this text. */
 export function composerHolds(reading: ScreenReading, text: string): boolean {
   return reading.found(text, COMPOSER_VALUE) > 0;
+}
+
+/** Whether a question form or Configure is open: its own submit or refresh says so. */
+export function formOpen(reading: ScreenReading): boolean {
+  return reading.shows("[submit]");
+}
+
+/** Open the Sidekick's own question and wait for the form it draws. */
+export function* openQuestion(page: ReplPage): Operation<void> {
+  yield* page.press("[answer sidekick]");
+  yield* page.until("the question's form", (one) => formOpen(one));
+}
+
+/**
+ * Answer a question form's second field, the one that takes text.
+ *
+ * Two Tabs from the opened form reach its editable line: the first selects the
+ * field, the second its value. An enum field is chosen rather than typed into,
+ * so the text field is the second of this product's review forms.
+ * Receipt: work/terminal-field-routes-2/receipts/.
+ */
+export function* intoSecondField(page: ReplPage): Operation<void> {
+  yield* tab(page);
+  yield* tab(page);
+}
+
+/** Walk that route and type this answer, which is what says the field took it. */
+export function* answerField(page: ReplPage, name: string, text: string): Operation<void> {
+  yield* intoSecondField(page);
+  yield* page.type(text);
+  yield* page.until(`${name} holding ${JSON.stringify(text)}`, (one) =>
+    one.shows(`*${name}: ${text}`),
+  );
+}
+
+/** Choose one of the options a form draws for an enum field. */
+export function* chooseOption(page: ReplPage, label: string): Operation<void> {
+  yield* page.press(`( ) ${label}`);
+}
+
+/** Submit the open form with its own control. */
+export function submitForm(page: ReplPage): Operation<void> {
+  return page.press("[submit]");
+}
+
+/** Open Configure from the Sidekick's own header and wait for what it draws. */
+export function* openConfigure(page: ReplPage, agent: string): Operation<void> {
+  yield* page.press(`[configure ${agent}]`);
+  yield* page.until("Configure", (one) => one.shows("[refresh]"));
+}
+
+/** Choose one of Configure's own offers, which it draws as options. */
+export function* chooseOffer(page: ReplPage, label: string): Operation<void> {
+  yield* page.press(`( ) ${label}`);
+  yield* page.until(`${label} being chosen`, (one) => one.shows(`(x) ${label}`));
+}
+
+/** Select one of the inspection column's two tabs and wait for its reading. */
+export function selectPane(page: ReplPage, pane: "sidekick" | "bindings"): Operation<void> {
+  return pane === "sidekick"
+    ? pressTab(page, SIDEKICK, (one) => one.shows(COMPOSER))
+    : pressTab(page, BINDINGS, (one) => !one.shows(COMPOSER));
 }
