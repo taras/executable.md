@@ -49,11 +49,7 @@ import {
   workspaceOf,
 } from "../src/repl/application.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
-import {
-  usePresenter,
-  viewportBounds,
-  windowOf,
-} from "./fixtures/repl/presentation.ts";
+import { usePresenter, viewportBounds, windowOf } from "./fixtures/repl/presentation.ts";
 import type { Observed, Presenter } from "./fixtures/repl/presentation.ts";
 import { journalModel, projected } from "./fixtures/repl/journals.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
@@ -127,10 +123,7 @@ function viewOf(
 }
 
 /** Whether one rectangle is drawn wholly inside another. */
-function within(
-  outer: ReplBounds | undefined,
-  inner: ReplBounds | undefined,
-): boolean {
+function within(outer: ReplBounds | undefined, inner: ReplBounds | undefined): boolean {
   if (outer === undefined || inner === undefined) {
     return false;
   }
@@ -154,10 +147,7 @@ function focusedKey(presenter: Presenter): string | undefined {
  * Traversal arrives as an event, the way it does from a terminal: the tree has
  * no other way in, so what this walks is the ring the product offers.
  */
-function* ring(
-  presenter: Presenter,
-  key: "Tab" | "Backtab",
-): Operation<readonly string[]> {
+function* ring(presenter: Presenter, key: "Tab" | "Backtab"): Operation<readonly string[]> {
   const first = focusedKey(presenter) ?? "";
   const walked: string[] = [first];
   for (let press = 0; press < 200; press += 1) {
@@ -183,11 +173,7 @@ function* focusKey(presenter: Presenter, key: string): Operation<void> {
 }
 
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
-function* submit(
-  page: ReplPage,
-  order: number,
-  source: string,
-): Operation<void> {
+function* submit(page: ReplPage, order: number, source: string): Operation<void> {
   yield* pasteDraft(page, source);
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
@@ -223,8 +209,7 @@ function* catalogOverEntries(): Operation<Catalog> {
   const focused = focusedKey(presenter);
   const closed = viewOf(model, NARROW, { focused });
   yield* presenter.commit(closed);
-  const state =
-    reduceRepl(closed.state, { kind: "open-catalog" }, model, IDLE).state;
+  const state = reduceRepl(closed.state, { kind: "open-catalog" }, model, IDLE).state;
   return { presenter, model, state, focused };
 }
 
@@ -263,18 +248,13 @@ function* scrolledUntil(
     observed = yield* shownAt(catalog, state);
   }
   if (!holds(observed)) {
-    throw new Error(
-      `the catalog's window never reached what was asked of it, moving ${delta}`,
-    );
+    throw new Error(`the catalog's window never reached what was asked of it, moving ${delta}`);
   }
   return { state, observed };
 }
 
 /** A reading long enough that no region holds it: forty paragraphs, one row each. */
-const LONG_READING = Array.from(
-  { length: 40 },
-  (_unused, at) => `VACATED-${at}`,
-).join("\n\n");
+const LONG_READING = Array.from({ length: 40 }, (_unused, at) => `VACATED-${at}`).join("\n\n");
 
 /** The measured extent of one control on a one-row action row. */
 const extentAt = (x: number, width: number): ReplBounds => ({
@@ -291,13 +271,11 @@ const offered = (...keys: string[]): readonly ReplActionCandidate[] =>
 /** The row's answer to "where did this control land", from literal extents. */
 const boundsIn =
   (extents: Readonly<Record<string, ReplBounds>>) =>
-  (id: string): ReplBounds | undefined => extents[id.replace(/^box:/, "")];
+  (id: string): ReplBounds | undefined =>
+    extents[id.replace(/^box:/, "")];
 
 /** The keys of the controls one frame published a pointer target for. */
-function targetKeys(
-  presenter: Presenter,
-  observed: Observed,
-): readonly string[] {
+function targetKeys(presenter: Presenter, observed: Observed): readonly string[] {
   return observed.targets.flatMap((one) => {
     const key = presenter.tree.keyOf(one.node);
     return key === undefined ? [] : [key];
@@ -305,10 +283,7 @@ function targetKeys(
 }
 
 /** The rows the reading's viewport holds on the screen this frame left. */
-function readingRows(
-  presenter: Presenter,
-  observed: Observed,
-): readonly string[] {
+function readingRows(presenter: Presenter, observed: Observed): readonly string[] {
   const viewport = viewportBounds(observed, READING_WINDOW);
   if (viewport === undefined) {
     throw new Error("this frame placed no reading viewport");
@@ -336,20 +311,12 @@ describe("REPL layout: what an empty measurement describes", () => {
 
   it("TL2: capacity describes the region, not whatever is overflowing it", function* () {
     const one = yield* journalModel(["# Entry one\n\nEntry one.\n"]);
-    const overflowing = yield* journalModel([
-      `# Entry two\n\n${LONG_READING}\n`,
-    ]);
+    const overflowing = yield* journalModel([`# Entry two\n\n${LONG_READING}\n`]);
     const presenter = yield* usePresenter(WIDE);
-    const few = windowOf(
-      yield* presenter.prepare(viewOf(one, WIDE)),
-      READING_WINDOW,
-    );
+    const few = windowOf(yield* presenter.prepare(viewOf(one, WIDE)), READING_WINDOW);
     expect(few.total).toBeLessThanOrEqual(few.capacity);
 
-    const many = windowOf(
-      yield* presenter.prepare(viewOf(overflowing, WIDE)),
-      READING_WINDOW,
-    );
+    const many = windowOf(yield* presenter.prepare(viewOf(overflowing, WIDE)), READING_WINDOW);
     expect(many.total).toBeGreaterThan(few.capacity);
     // The same region, so the same room. A capacity that moved with the length
     // of the reading would be measuring the reading.
@@ -365,17 +332,13 @@ describe("REPL layout: what an empty measurement describes", () => {
     for (const size of [WIDE, NARROW]) {
       const presenter = yield* usePresenter(size);
       const observed = yield* presenter.commit(viewOf(model, size));
-      for (
-        const [key, label] of [
-          ["footer:history", "[history]"],
-          ["footer:exit", "[exit]"],
-          ["draft:send", "[send]"],
-        ]
-      ) {
+      for (const [key, label] of [
+        ["footer:history", "[history]"],
+        ["footer:exit", "[exit]"],
+        ["draft:send", "[send]"],
+      ]) {
         expect(observed.cells.get(key)?.trim()).toBe(label);
-        expect(observed.boundsOf(key)?.width).toBe(
-          label.length + CONTROL_ROOM.length,
-        );
+        expect(observed.boundsOf(key)?.width).toBe(label.length + CONTROL_ROOM.length);
       }
     }
   });
@@ -390,10 +353,7 @@ describe("REPL layout: what a window admits", () => {
     expect(held.capacity).toBeLessThan(held.total);
     expect(held.more).toBe(true);
 
-    const orders = Array.from(
-      { length: CATALOG_ENTRIES },
-      (_unused, at) => at + 1,
-    );
+    const orders = Array.from({ length: CATALOG_ENTRIES }, (_unused, at) => at + 1);
     const shown = orders.slice(held.from, held.from + held.count);
     const hidden = orders.filter((order) => !shown.includes(order));
     expect(hidden.length).toBeGreaterThan(0);
@@ -404,11 +364,7 @@ describe("REPL layout: what a window admits", () => {
       // for traversal to stop on.
       expect(observed.keys).not.toContain(entryKey(order));
       expect(drawn).not.toContain(entryKey(order));
-      expect(
-        catalog.presenter.grid.rows().some((line) =>
-          line.includes(entryLabel(order))
-        ),
-      ).toBe(
+      expect(catalog.presenter.grid.rows().some((line) => line.includes(entryLabel(order)))).toBe(
         false,
       );
     }
@@ -434,11 +390,7 @@ describe("REPL layout: what a window admits", () => {
     const held = windowOf(observed.committed.admission, DRAWER_WINDOW);
     const rows = catalog.presenter.grid.textIn(viewport);
     expect(held.count).toBeGreaterThan(0);
-    for (
-      let order = held.from + 1;
-      order <= held.from + held.count;
-      order += 1
-    ) {
+    for (let order = held.from + 1; order <= held.from + held.count; order += 1) {
       expect(within(viewport, observed.boundsOf(entryKey(order)))).toBe(true);
       expect(rows.some((line) => line.includes(entryLabel(order)))).toBe(true);
     }
@@ -452,18 +404,12 @@ describe("REPL layout: what a window admits", () => {
 
     // Move the window to the end the way a person does, one press at a time,
     // and stop when the final row is genuinely placed.
-    const reached = yield* scrolledUntil(
-      catalog,
-      catalog.state,
-      1,
-      (one) => one.keys.includes(last),
+    const reached = yield* scrolledUntil(catalog, catalog.state, 1, (one) =>
+      one.keys.includes(last),
     );
-    expect(windowOf(reached.observed.committed.admission, DRAWER_WINDOW).from)
-      .toBeGreaterThan(0);
+    expect(windowOf(reached.observed.committed.admission, DRAWER_WINDOW).from).toBeGreaterThan(0);
     // Visible, so it is a real control with real geometry and a Tab stop.
-    expect(reached.observed.cells.get(last)?.trim()).toBe(
-      entryLabel(CATALOG_ENTRIES),
-    );
+    expect(reached.observed.cells.get(last)?.trim()).toBe(entryLabel(CATALOG_ENTRIES));
     expect(targetKeys(catalog.presenter, reached.observed)).toContain(last);
     yield* focusKey(catalog.presenter, last);
     expect(focusedKey(catalog.presenter)).toBe(last);
@@ -471,14 +417,10 @@ describe("REPL layout: what a window admits", () => {
     // And back: the first row is reachable again from the far end.
     const first = entryKey(1);
     expect(reached.observed.keys).not.toContain(first);
-    const back = yield* scrolledUntil(
-      catalog,
-      reached.state,
-      -1,
-      (one) => one.keys.includes(first),
+    const back = yield* scrolledUntil(catalog, reached.state, -1, (one) =>
+      one.keys.includes(first),
     );
-    expect(windowOf(back.observed.committed.admission, DRAWER_WINDOW).from)
-      .toBe(0);
+    expect(windowOf(back.observed.committed.admission, DRAWER_WINDOW).from).toBe(0);
   });
 
   it("TL3: the first scroll after a resize moves from the clamp that is drawn", function* () {
@@ -565,12 +507,7 @@ describe("REPL layout: what an action row admits", () => {
 
     // A contiguous prefix of the offered order, and nothing after the break.
     expect(kept).toEqual(CROWDED.slice(0, kept.length));
-    expect(kept).toEqual([
-      "footer:history",
-      "footer:exit",
-      "footer:pause",
-      "footer:continue",
-    ]);
+    expect(kept).toEqual(["footer:history", "footer:exit", "footer:pause", "footer:continue"]);
     // The way out stays, because it comes first.
     expect(admitted.has("footer:history")).toBe(true);
     expect(admitted.has("footer:exit")).toBe(true);
@@ -588,19 +525,10 @@ describe("REPL layout: what an action row admits", () => {
     };
     const { admitted } = admitActions({
       row: ROW,
-      controls: offered(
-        "footer:history",
-        "footer:exit",
-        "footer:flush",
-        "footer:beyond",
-      ),
+      controls: offered("footer:history", "footer:exit", "footer:flush", "footer:beyond"),
       boundsOf: boundsIn(extents),
     });
-    expect([...admitted]).toEqual([
-      "footer:history",
-      "footer:exit",
-      "footer:flush",
-    ]);
+    expect([...admitted]).toEqual(["footer:history", "footer:exit", "footer:flush"]);
     for (const key of admitted) {
       const bounds = extents[key];
       // Whole: its own trailing edge is inside the row's, so no part of it is
@@ -616,12 +544,11 @@ describe("REPL layout: what an action row admits", () => {
       const observed = yield* presenter.commit(viewOf(model, size));
       const actions = observed.regionOf(ACTION_ROW);
       for (const key of ["footer:history", "footer:exit"]) {
-        expect({ where, key, inside: within(actions, observed.boundsOf(key)) })
-          .toEqual({
-            where,
-            key,
-            inside: true,
-          });
+        expect({ where, key, inside: within(actions, observed.boundsOf(key)) }).toEqual({
+          where,
+          key,
+          inside: true,
+        });
       }
     }
   });
@@ -637,12 +564,7 @@ describe("REPL layout: what an action row admits", () => {
     };
     const { admitted } = admitActions({
       row: ROW,
-      controls: offered(
-        "footer:history",
-        "footer:exit",
-        "footer:wide",
-        "footer:narrow",
-      ),
+      controls: offered("footer:history", "footer:exit", "footer:wide", "footer:narrow"),
       boundsOf: boundsIn(extents),
     });
     expect(admitted.has("footer:history")).toBe(true);
@@ -676,14 +598,9 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
     const after = readingRows(presenter, second);
     // Counted rather than read with `findLastIndex`: the Node typecheck's
     // `lib` is ES2022, and that reader is ES2023. Zero where every row is blank.
-    const kept = after.reduce(
-      (last, line, at) => (line.trim().length > 0 ? at + 1 : last),
-      0,
-    );
+    const kept = after.reduce((last, line, at) => (line.trim().length > 0 ? at + 1 : last), 0);
     expect(kept).toBeGreaterThan(0);
-    expect(before.slice(kept).some((line) => line.trim().length > 0)).toBe(
-      true,
-    );
+    expect(before.slice(kept).some((line) => line.trim().length > 0)).toBe(true);
 
     // The reading becomes a short one. This is the one shape where a shared
     // measure-and-draw engine leaves the old text: the measurement skeleton
@@ -692,9 +609,7 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
     // an emulated screen, so this is what a person would be looking at rather
     // than what the frame described.
     expect(after.join("\n")).not.toContain("VACATED-");
-    expect(after.slice(kept).every((line) => line.trim().length === 0)).toBe(
-      true,
-    );
+    expect(after.slice(kept).every((line) => line.trim().length === 0)).toBe(true);
     expect(presenter.grid.rows().join("\n")).not.toContain("VACATED-");
   });
 
@@ -710,9 +625,7 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
     }
     expect(observed.cells.get("entries:heading")?.trim()).toBe("Entries");
     expect(observed.cells.get("footer:history")?.trim()).toBe("[history]");
-    expect(
-      readingRows(presenter, observed).some((line) => line.includes("Short.")),
-    ).toBe(true);
+    expect(readingRows(presenter, observed).some((line) => line.includes("Short."))).toBe(true);
   });
 
   it("TL5: the running command shows none of the longer reading afterwards", function* () {
@@ -721,15 +634,9 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
     // left showing the short one and no part of the long one.
     const page = yield* useReplPage({ size: WIDE });
     yield* submit(page, 1, LONG_READING);
-    yield* page.until(
-      "the long entry being read",
-      (one) => one.shows("VACATED-3"),
-    );
+    yield* page.until("the long entry being read", (one) => one.shows("VACATED-3"));
     yield* submit(page, 2, "Short.");
-    const settled = yield* page.until(
-      "the short entry being read",
-      (one) => one.shows("Short."),
-    );
+    const settled = yield* page.until("the short entry being read", (one) => one.shows("Short."));
     expect(settled.occurrences("VACATED-")).toBe(0);
   });
 });
@@ -737,18 +644,15 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
 describe("REPL layout: the profiles this product supports", () => {
   it("TL1: every supported size keeps its columns and its two footer rows", function* () {
     const model = yield* referenceModel();
-    for (
-      const { size, profile } of [
-        { size: WIDE, profile: "wide" },
-        { size: MEDIUM, profile: "medium" },
-        { size: NARROW, profile: "narrow" },
-      ]
-    ) {
+    for (const { size, profile } of [
+      { size: WIDE, profile: "wide" },
+      { size: MEDIUM, profile: "medium" },
+      { size: NARROW, profile: "narrow" },
+    ]) {
       const presenter = yield* usePresenter(size);
       const observed = yield* presenter.commit(viewOf(model, size));
       expect(observed.committed.manifest.profile).toBe(profile);
-      const bounds = (id: string): ReplBounds | undefined =>
-        observed.regionOf(id);
+      const bounds = (id: string): ReplBounds | undefined => observed.regionOf(id);
       // One identity row, the body between, then one compact History row and
       // one row of guidance, at every size.
       expect(bounds("box:identity")).toEqual({
@@ -776,10 +680,8 @@ describe("REPL layout: the profiles this product supports", () => {
         height: 1,
       });
       expect(presenter.grid.rows()[size.rows - 2]).toContain("HISTORY");
-      expect(within(bounds("box:history"), observed.boundsOf("footer:history")))
-        .toBe(true);
-      expect(within(bounds("box:draft"), observed.boundsOf("footer:input")))
-        .toBe(true);
+      expect(within(bounds("box:history"), observed.boundsOf("footer:history"))).toBe(true);
+      expect(within(bounds("box:draft"), observed.boundsOf("footer:input"))).toBe(true);
     }
 
     const presenter = yield* usePresenter(WIDE);
@@ -815,12 +717,8 @@ describe("REPL layout: what the application admits at each size", () => {
       // frame composed with the control the mounted tree answered for.
       yield* presenter.commit(viewOf(model, size));
       const node = presenter.tree.focused();
-      const focused = node === undefined
-        ? undefined
-        : presenter.tree.keyOf(node);
-      const observed = yield* presenter.commit(
-        viewOf(model, size, { focused }),
-      );
+      const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+      const observed = yield* presenter.commit(viewOf(model, size, { focused }));
       const { admission, manifest } = observed.committed;
 
       // A window holds whole rows, never more than its capacity, and never a
@@ -832,29 +730,25 @@ describe("REPL layout: what the application admits at each size", () => {
       for (const slot of manifest.viewports) {
         const window = windowOf(admission, slot.window);
         const bounds = observed.regionOf(slot.id);
-        expect({ where, window: slot.window, measured: bounds !== undefined })
-          .toEqual({
-            where,
-            window: slot.window,
-            measured: true,
-          });
+        expect({ where, window: slot.window, measured: bounds !== undefined }).toEqual({
+          where,
+          window: slot.window,
+          measured: true,
+        });
         expect({
           where,
           window: slot.window,
-          whole: Number.isInteger(window.capacity) &&
-            Number.isInteger(window.count),
+          whole: Number.isInteger(window.capacity) && Number.isInteger(window.count),
         }).toEqual({ where, window: slot.window, whole: true });
-        expect({ where, window: slot.window, room: window.capacity >= 0 })
-          .toEqual({
-            where,
-            window: slot.window,
-            room: true,
-          });
+        expect({ where, window: slot.window, room: window.capacity >= 0 }).toEqual({
+          where,
+          window: slot.window,
+          room: true,
+        });
         expect({
           where,
           window: slot.window,
-          within: window.count <= window.capacity &&
-            window.from + window.count <= window.total,
+          within: window.count <= window.capacity && window.from + window.count <= window.total,
         }).toEqual({ where, window: slot.window, within: true });
       }
 
@@ -911,8 +805,7 @@ describe("REPL layout: what the application admits at each size", () => {
     const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
     const closed = viewOf(model, size, { focused });
     yield* presenter.commit(closed);
-    const opened =
-      reduceRepl(closed.state, { kind: "open-catalog" }, model, IDLE).state;
+    const opened = reduceRepl(closed.state, { kind: "open-catalog" }, model, IDLE).state;
     const view = viewOf(model, size, { state: opened, focused });
     const viewport = `box:${DRAWER_WINDOW}:viewport`;
     const row = /^box:drawer:.*:row:\d+:row$/;
@@ -927,17 +820,15 @@ describe("REPL layout: what the application admits at each size", () => {
     const watching: ReplRenderer = {
       *measure(ops, measured) {
         const result = yield* delegate.measure(ops, measured);
-        const ids = ops.flatMap((
-          op,
-        ) => ("id" in op && typeof op.id === "string" ? [op.id] : []));
+        const ids = ops.flatMap((op) => ("id" in op && typeof op.id === "string" ? [op.id] : []));
         if (result.ok && ids.includes(viewport)) {
           seen.push({
             bounds: result.value.boundsOf(viewport),
             rows: ids.filter((id) => row.test(id)).length,
             earlier: ids.includes("box:drawer:drawer:scroll:up"),
             later: ids.includes("box:drawer:drawer:scroll:down"),
-            chrome: ids.includes("box:drawer:drawer:open") &&
-              ids.includes("box:drawer:drawer:close"),
+            chrome:
+              ids.includes("box:drawer:drawer:open") && ids.includes("box:drawer:drawer:close"),
           });
         }
         return result;
@@ -976,8 +867,7 @@ describe("REPL layout: what the application admits at each size", () => {
     expect({
       width: last.bounds.width > 0,
       height: last.bounds.height > 0,
-      whole: Number.isInteger(last.bounds.width) &&
-        Number.isInteger(last.bounds.height),
+      whole: Number.isInteger(last.bounds.width) && Number.isInteger(last.bounds.height),
     }).toEqual({ width: true, height: true, whole: true });
 
     // The same rectangle the finished frame places that viewport at, measured
@@ -1012,9 +902,7 @@ describe("REPL layout: what the application admits at each size", () => {
       IDLE,
       prepared.value.admission,
     ).state;
-    const after = yield* presenter.commit(
-      viewOf(model, size, { state: moved, focused }),
-    );
+    const after = yield* presenter.commit(viewOf(model, size, { state: moved, focused }));
     const reached = shown(after).filter((key) => !shown(first).includes(key));
     expect({
       hidden: shown(first).length < window.total,
@@ -1024,21 +912,21 @@ describe("REPL layout: what the application admits at each size", () => {
       reached: true,
     });
     const reachedNode = after.nodeOf(reached[0]);
-    const target = reachedNode === undefined
-      ? undefined
-      : after.targets.find((one) => one.node === reachedNode);
+    const target =
+      reachedNode === undefined ? undefined : after.targets.find((one) => one.node === reachedNode);
     const bounds = after.boundsOf(reached[0]);
     if (target === undefined || bounds === undefined) {
       throw new Error(`${reached[0]} was drawn with no target of its own`);
     }
     expect({ target: target.bounds }).toEqual({ target: bounds });
     expect({
-      whole: Number.isInteger(bounds.x) &&
+      whole:
+        Number.isInteger(bounds.x) &&
         Number.isInteger(bounds.width) &&
         Number.isInteger(bounds.y) &&
         Number.isInteger(bounds.height),
-      inside: bounds.y >= last.bounds.y &&
-        bounds.y + bounds.height <= last.bounds.y + last.bounds.height,
+      inside:
+        bounds.y >= last.bounds.y && bounds.y + bounds.height <= last.bounds.y + last.bounds.height,
     }).toEqual({ whole: true, inside: true });
   });
 
@@ -1102,9 +990,7 @@ describe("REPL layout: what the application admits at each size", () => {
         // published rectangle, because "it did not throw" is not the claim.
         const first = yield* presenter.commit(staged);
         const node = presenter.tree.focused();
-        const focused = node === undefined
-          ? undefined
-          : presenter.tree.keyOf(node);
+        const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
         const committed = yield* presenter.commit({ ...staged, focused });
 
         // Every control this state offers is admitted — Continue included, by
@@ -1126,11 +1012,9 @@ describe("REPL layout: what the application admits at each size", () => {
           const bounds = committed.boundsOf(key);
           if (bounds === undefined) {
             throw new Error(
-              `${where} drew no ${key}; its controls are ${
-                JSON.stringify(
-                  committed.keys.filter((one) => one.startsWith("footer:")),
-                )
-              }`,
+              `${where} drew no ${key}; its controls are ${JSON.stringify(
+                committed.keys.filter((one) => one.startsWith("footer:")),
+              )}`,
             );
           }
           expect([
@@ -1149,22 +1033,13 @@ describe("REPL layout: what the application admits at each size", () => {
             key,
             label.length + CONTROL_ROOM.length,
           ]);
-          expect([where, key, (committed.cells.get(key) ?? "").includes(label)])
-            .toEqual([
-              where,
-              key,
-              true,
-            ]);
-          expect([where, key, bounds.x >= actions.x]).toEqual([
+          expect([where, key, (committed.cells.get(key) ?? "").includes(label)]).toEqual([
             where,
             key,
             true,
           ]);
-          expect([
-            where,
-            key,
-            bounds.x + bounds.width <= actions.x + actions.width,
-          ]).toEqual([
+          expect([where, key, bounds.x >= actions.x]).toEqual([where, key, true]);
+          expect([where, key, bounds.x + bounds.width <= actions.x + actions.width]).toEqual([
             where,
             key,
             true,
@@ -1172,16 +1047,10 @@ describe("REPL layout: what the application admits at each size", () => {
         }
         // The phase is stated beside them, as text rather than as part of a
         // control's name.
-        expect([where, committed.keys.includes("footer:pause-state")]).toEqual([
-          where,
-          true,
-        ]);
+        expect([where, committed.keys.includes("footer:pause-state")]).toEqual([where, true]);
 
         // The split itself: whole, exhaustive, and the map is what yielded.
-        expect([
-          where,
-          Number.isInteger(map.width) && Number.isInteger(actions.width),
-        ]).toEqual([
+        expect([where, Number.isInteger(map.width) && Number.isInteger(actions.width)]).toEqual([
           where,
           true,
         ]);
@@ -1190,21 +1059,13 @@ describe("REPL layout: what the application admits at each size", () => {
 
         // And the control a keystroke reaches is one the frame actually drew.
         const holding = presenter.tree.focused();
-        const held = holding === undefined
-          ? undefined
-          : presenter.tree.keyOf(holding);
-        expect([
-          where,
-          held === undefined || committed.boundsOf(held) !== undefined,
-        ]).toEqual([
+        const held = holding === undefined ? undefined : presenter.tree.keyOf(holding);
+        expect([where, held === undefined || committed.boundsOf(held) !== undefined]).toEqual([
           where,
           true,
         ]);
         // The first frame drew the same row whole, before focus was carried in.
-        expect([
-          where,
-          Number.isInteger(first.regionOf(ACTION_ROW)?.width ?? 0.5),
-        ]).toEqual([
+        expect([where, Number.isInteger(first.regionOf(ACTION_ROW)?.width ?? 0.5)]).toEqual([
           where,
           true,
         ]);
@@ -1260,9 +1121,7 @@ describe("REPL layout: what the application admits at each size", () => {
     for (const key of ["footer:history", "footer:exit"]) {
       const bounds = committed.boundsOf(key);
       if (bounds === undefined) {
-        throw new Error(
-          `${key} was not drawn on the ordinary root's own screen`,
-        );
+        throw new Error(`${key} was not drawn on the ordinary root's own screen`);
       }
       expect({
         key,

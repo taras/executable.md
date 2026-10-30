@@ -48,11 +48,7 @@ import type { ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
 import type { ReplAction } from "../src/repl/components/actions.ts";
 import { flatten } from "../src/repl/layout.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
-import {
-  ReplRenderError,
-  resolvePointer,
-  useReplRenderer,
-} from "../src/repl/renderer.ts";
+import { ReplRenderError, resolvePointer, useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplMeasured, ReplRenderer } from "../src/repl/renderer.ts";
 import { emptyModel, journalModel } from "./fixtures/repl/journals.ts";
 import { useGrid, usePresenter } from "./fixtures/repl/presentation.ts";
@@ -61,23 +57,13 @@ import { referenceEvents } from "./fixtures/repl/reference.ts";
 import { useTerminalScreen } from "./support/terminal-screen.ts";
 import { close, fixed, open, percent, text } from "@bomb.sh/tty";
 import type { Op } from "@bomb.sh/tty";
-import {
-  nearestCommonAncestor,
-  ReplClock,
-  useReplFrames,
-} from "../src/repl/frame.ts";
+import { nearestCommonAncestor, ReplClock, useReplFrames } from "../src/repl/frame.ts";
 import type { ReplFrameSubscription } from "../src/repl/frame.ts";
 import { replModes, useReplScreen } from "../src/repl/screen.ts";
 import type { ReplScreenEvent } from "../src/repl/screen.ts";
-import {
-  installReplTerminal,
-  nodeInputStream,
-} from "../src/repl/terminal-host.ts";
+import { installReplTerminal, nodeInputStream } from "../src/repl/terminal-host.ts";
 import { readerStream } from "../src/deno-terminal-surface.ts";
-import type {
-  NodeShapedInput,
-  ReplTerminalCapabilities,
-} from "../src/repl/terminal-host.ts";
+import type { NodeShapedInput, ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplDispatched } from "../src/repl/reconcile.ts";
@@ -120,9 +106,7 @@ function* settled(): Operation<void> {
 }
 
 /** What one dispatch produced, or the failure it ended in. */
-function acted(
-  outcome: Result<ReplDispatched<ReplAction>>,
-): ReplDispatched<ReplAction> {
+function acted(outcome: Result<ReplDispatched<ReplAction>>): ReplDispatched<ReplAction> {
   if (!outcome.ok) {
     throw outcome.error;
   }
@@ -184,10 +168,7 @@ interface Application {
   }): Operation<Observed>;
 }
 
-function* useApplication(
-  model: ReplModel,
-  size: ReplTerminalSize = WIDE,
-): Operation<Application> {
+function* useApplication(model: ReplModel, size: ReplTerminalSize = WIDE): Operation<Application> {
   const presenter = yield* usePresenter(size);
   const first = initialState("reference");
   const opened = reduceRepl(first, { kind: "open-catalog" }, model, IDLE).state;
@@ -207,32 +188,21 @@ function* useApplication(
         current = at;
       }
       const node = presenter.tree.focused();
-      const focused = node === undefined
-        ? undefined
-        : presenter.tree.keyOf(node);
-      return yield* presenter.commit(
-        viewOf(model, at, { state: options.state, focused }),
-      );
+      const focused = node === undefined ? undefined : presenter.tree.keyOf(node);
+      return yield* presenter.commit(viewOf(model, at, { state: options.state, focused }));
     },
   };
 }
 
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
-function* submit(
-  page: ReplPage,
-  order: number,
-  source: string,
-): Operation<void> {
+function* submit(page: ReplPage, order: number, source: string): Operation<void> {
   yield* pasteDraft(page, source);
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
 }
 
 /** Whether one rectangle is drawn wholly inside another. */
-function within(
-  outer: ReplBounds | undefined,
-  inner: ReplBounds | undefined,
-): boolean {
+function within(outer: ReplBounds | undefined, inner: ReplBounds | undefined): boolean {
   if (outer === undefined || inner === undefined) {
     return false;
   }
@@ -258,17 +228,13 @@ function keysInside(
   observed: Observed,
   bounds: ReplBounds | undefined,
 ): string[] {
-  return targetKeys(presenter, observed).filter((key) =>
-    within(bounds, observed.boundsOf(key))
-  );
+  return targetKeys(presenter, observed).filter((key) => within(bounds, observed.boundsOf(key)));
 }
 
 /** Every region this frame placed, by the id the skeleton names it with. */
 function placedRegions(observed: Observed): string[] {
   return flatten(observed.committed.manifest.root)
-    .filter((box) =>
-      box.key === undefined && observed.regionOf(box.id) !== undefined
-    )
+    .filter((box) => box.key === undefined && observed.regionOf(box.id) !== undefined)
     .map((box) => box.id);
 }
 
@@ -285,11 +251,7 @@ function focusedKey(presenter: Presenter): string | undefined {
  * placed and did not offer, is in no target map, so reaching for its node
  * directly would prove something no pointer can do.
  */
-function* actionOf(
-  presenter: Presenter,
-  observed: Observed,
-  key: string,
-): Operation<ReplAction> {
+function* actionOf(presenter: Presenter, observed: Observed, key: string): Operation<ReplAction> {
   const { tree } = presenter;
   const target = observed.targets.find((one) => tree.keyOf(one.node) === key);
   if (target === undefined) {
@@ -309,10 +271,7 @@ function* actionOf(
 }
 
 /** The rows the reading's viewport holds on the screen one frame left. */
-function readingRows(
-  presenter: Presenter,
-  observed: Observed,
-): readonly string[] {
+function readingRows(presenter: Presenter, observed: Observed): readonly string[] {
   const viewport = observed.regionOf("box:reading:viewport");
   if (viewport === undefined) {
     throw new Error("this frame placed no reading viewport");
@@ -370,21 +329,16 @@ describe("REPL terminal: responsive semantic frames", () => {
     });
 
     // Each pane holds its own controls and no other pane's.
-    expect(within(bounds("box:sidebar"), frame.boundsOf("transcript:selector")))
-      .toBe(true);
+    expect(within(bounds("box:sidebar"), frame.boundsOf("transcript:selector"))).toBe(true);
     for (const key of ["entries:heading", "footer:input", "draft:send"]) {
-      expect([key, within(bounds("box:transcript"), frame.boundsOf(key))])
-        .toEqual([key, true]);
+      expect([key, within(bounds("box:transcript"), frame.boundsOf(key))]).toEqual([key, true]);
     }
     for (const key of ["tab:bindings", "tab:sidekick"]) {
-      expect([key, within(bounds("box:inspection"), frame.boundsOf(key))])
-        .toEqual([key, true]);
+      expect([key, within(bounds("box:inspection"), frame.boundsOf(key))]).toEqual([key, true]);
     }
     expect(frame.keys).toContain("sidekick:absent");
     for (const key of ["footer:history", "footer:exit"]) {
-      expect([key, within(bounds("box:history"), frame.boundsOf(key))]).toEqual(
-        [key, true],
-      );
+      expect([key, within(bounds("box:history"), frame.boundsOf(key))]).toEqual([key, true]);
     }
     expect(frame.keys).not.toContain("tray:queue");
     expect(frame.keys).not.toContain("follow");
@@ -396,11 +350,7 @@ describe("REPL terminal: responsive semantic frames", () => {
     const bounds = (id: string): ReplBounds | undefined => frame.regionOf(id);
 
     expect(frame.committed.manifest.profile).toBe("medium");
-    const [left, centre, right] = [
-      "box:sidebar",
-      "box:transcript",
-      "box:inspection",
-    ].map(bounds);
+    const [left, centre, right] = ["box:sidebar", "box:transcript", "box:inspection"].map(bounds);
     if (left === undefined || centre === undefined || right === undefined) {
       throw new Error("a medium frame drew fewer than three columns");
     }
@@ -503,9 +453,7 @@ describe("REPL terminal: responsive semantic frames", () => {
     // The other surface is **absent**, not hidden. A narrow frame has one
     // region, so a row of the surface it is not showing would be focusable with
     // nowhere to be drawn — which is why it is in no control and no cell.
-    for (
-      const key of ["transcript:selector", "sessions:earlier", "sessions:later"]
-    ) {
+    for (const key of ["transcript:selector", "sessions:earlier", "sessions:later"]) {
       expect([key, entries.keys.includes(key)]).toEqual([key, false]);
     }
     expect(entries.regionOf("box:sessions:viewport")).toBeUndefined();
@@ -514,19 +462,11 @@ describe("REPL terminal: responsive semantic frames", () => {
     // Routed the way a person routes it: the pointer on the surface's own
     // heading, reduced into the state the next frame is composed from.
     const routing = yield* actionOf(app.presenter, entries, "sessions:heading");
-    const routed =
-      reduceRepl(initialState("reference"), routing, model, IDLE).state;
+    const routed = reduceRepl(initialState("reference"), routing, model, IDLE).state;
     const sessions = yield* app.commit({ state: routed });
     expect(sessions.keys).toContain("transcript:selector");
     expect(sessions.regionOf("box:sessions:viewport")).toBeDefined();
-    for (
-      const key of [
-        "footer:input",
-        "draft:send",
-        "reading:earlier",
-        "reading:later",
-      ]
-    ) {
+    for (const key of ["footer:input", "draft:send", "reading:earlier", "reading:later"]) {
       expect([key, sessions.keys.includes(key)]).toEqual([key, false]);
     }
     expect(sessions.regionOf("box:reading:viewport")).toBeUndefined();
@@ -546,11 +486,7 @@ describe("REPL terminal: responsive semantic frames", () => {
   });
 
   it("F1: below the minimum the frame is an explicit refusal with nothing targetable", function* () {
-    const sizes = [
-      { columns: 71, rows: 20 },
-      { columns: 72, rows: 19 },
-      TOO_SMALL,
-    ];
+    const sizes = [{ columns: 71, rows: 20 }, { columns: 72, rows: 19 }, TOO_SMALL];
     const app = yield* useApplication(yield* emptyModel(), sizes[0]);
     for (const size of sizes) {
       const frame = yield* app.commit({ size });
@@ -617,11 +553,7 @@ describe("REPL terminal: responsive semantic frames", () => {
       profiles.push(frame.committed.manifest.profile);
       const shared = frame.keys.filter((key) => keys.includes(key));
       expect(shared).toEqual(
-        expect.arrayContaining([
-          "footer:input",
-          "footer:history",
-          "footer:exit",
-        ]),
+        expect.arrayContaining(["footer:input", "footer:history", "footer:exit"]),
       );
       expect(focusedKey(app.presenter)).toBe("footer:input");
     }
@@ -693,10 +625,7 @@ describe("REPL terminal: responsive semantic frames", () => {
       expect(rows[history.y]).toContain("HISTORY");
       expect(rows[0]).not.toContain("HISTORY");
       for (const key of ["footer:history", "footer:exit"]) {
-        expect([key, within(history, frame.boundsOf(key))]).toEqual([
-          key,
-          true,
-        ]);
+        expect([key, within(history, frame.boundsOf(key))]).toEqual([key, true]);
       }
     }
   });
@@ -729,9 +658,7 @@ describe("REPL terminal: responsive semantic frames", () => {
     // The action row's controls sit side by side on one row, each as wide as
     // its own label — so a pointer on one reaches that one and not its
     // neighbour.
-    const placed = frame.targets.filter((target) =>
-      target.bounds.y === history.y
-    );
+    const placed = frame.targets.filter((target) => target.bounds.y === history.y);
     expect(placed.length).toBeGreaterThan(1);
     for (const one of placed) {
       expect(one.bounds.height).toBe(1);
@@ -743,9 +670,7 @@ describe("REPL terminal: responsive semantic frames", () => {
 
     // No two of them overlap, which is what makes the column a pointer lands
     // on an unambiguous answer.
-    const sorted = [...placed].sort((one, other) =>
-      one.bounds.x - other.bounds.x
-    );
+    const sorted = [...placed].sort((one, other) => one.bounds.x - other.bounds.x);
     for (let at = 1; at < sorted.length; at += 1) {
       const left = sorted[at - 1].bounds;
       expect(sorted[at].bounds.x).toBeGreaterThanOrEqual(left.x + left.width);
@@ -1134,9 +1059,7 @@ describe("REPL terminal: frame and renderer ownership", () => {
     yield* scoped(function* (): Operation<void> {
       const app = yield* useApplication(model, NARROW);
       for (const size of sequence) {
-        clean.push(
-          Array.from((yield* app.commit({ size })).committed.rendered.output),
-        );
+        clean.push(Array.from((yield* app.commit({ size })).committed.rendered.output));
       }
     });
 
@@ -1148,9 +1071,7 @@ describe("REPL terminal: frame and renderer ownership", () => {
     const app = yield* useApplication(yield* referenceModel());
     const { tree } = app.presenter;
     const before = yield* app.commit({ state: app.opened });
-    const going = tree.mounted().find((id) =>
-      tree.keyOf(id) === "drawer:close"
-    );
+    const going = tree.mounted().find((id) => tree.keyOf(id) === "drawer:close");
     if (going === undefined) {
       throw new Error("the catalog's Close is mounted before the removal");
     }
@@ -1162,8 +1083,7 @@ describe("REPL terminal: frame and renderer ownership", () => {
 
     // The mounted tree is the only source of renderable nodes: a row that has
     // gone is not drawn, and is therefore not a target either.
-    expect(after.committed.rendered.map.targets.map((target) => target.node))
-      .not.toContain(going);
+    expect(after.committed.rendered.map.targets.map((target) => target.node)).not.toContain(going);
     expect(after.keys).not.toContain("drawer:close");
     expect(after.committed.rendered.map.targets.length).toBeGreaterThan(0);
   });
@@ -1279,9 +1199,7 @@ interface TerminalLog {
 }
 
 /** A terminal the test owns completely, and a host that installs it. */
-function recordingTerminal(
-  size: ReplTerminalSize = { columns: 160, rows: 36 },
-): {
+function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }): {
   log: TerminalLog;
   install(): Operation<void>;
 } {
@@ -1290,9 +1208,9 @@ function recordingTerminal(
   /** The outstanding read, which only the fake or its cleanup may settle. */
   let waiting:
     | {
-      resolve(result: IteratorResult<Uint8Array, void>): void;
-      reject(cause: Error): void;
-    }
+        resolve(result: IteratorResult<Uint8Array, void>): void;
+        reject(cause: Error): void;
+      }
     | undefined;
   let ended = false;
   let release: (() => void) | undefined;
@@ -2034,9 +1952,7 @@ function* reported(events: {
 }): Operation<ReplScreenEvent> {
   const next = yield* events.next();
   if (next.done === true) {
-    throw new Error(
-      "the screen ended while this test was waiting for an event",
-    );
+    throw new Error("the screen ended while this test was waiting for an event");
   }
   return next.value;
 }
@@ -2069,9 +1985,7 @@ function* drained(events: {
 }
 
 /** The normalized events out of a drained sequence, resizes and all else aside. */
-function normalizedFrom(
-  reported: readonly ReplScreenEvent[],
-): ReplInputEvent[] {
+function normalizedFrom(reported: readonly ReplScreenEvent[]): ReplInputEvent[] {
   const events: ReplInputEvent[] = [];
   for (const one of reported) {
     if (one.kind === "input") {
@@ -2250,10 +2164,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     expect(page.screen().shows(TYPING)).toBe(true);
 
     yield* page.key("Tab");
-    const forward = yield* page.until(
-      "focus moving forward",
-      (one) => !one.shows(TYPING),
-    );
+    const forward = yield* page.until("focus moving forward", (one) => !one.shows(TYPING));
     yield* page.key("Backtab");
     yield* page.until("focus coming back", (one) => one.shows(TYPING));
     expect(forward.shows(TYPING)).toBe(false);
@@ -2297,16 +2208,11 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     // halves are drawn on two rows of the field, each beginning where the other
     // does.
     yield* page.type("x\ny");
-    const pasted = yield* page.until(
-      "the pasted row",
-      (one) => one.shows("éx") && one.shows("y"),
-    );
+    const pasted = yield* page.until("the pasted row", (one) => one.shows("éx") && one.shows("y"));
     const first = pasted.locate("éx", DRAFT_VALUE);
     const secondRow = pasted.rows.findIndex((line) => line.includes("│  y"));
     if (secondRow === -1) {
-      throw new Error(
-        `the second pasted row was not shown. ${page.describe()}`,
-      );
+      throw new Error(`the second pasted row was not shown. ${page.describe()}`);
     }
     expect(secondRow).toBe(first.row + 1);
 
@@ -2314,9 +2220,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     yield* page.key("Backspace");
     yield* page.until(
       "both characters erased",
-      (one) =>
-        draftShows(one, "éx") &&
-        one.rows.every((line) => !line.includes("│  y")),
+      (one) => draftShows(one, "éx") && one.rows.every((line) => !line.includes("│  y")),
     );
 
     // And the named keys still mean what they meant.
@@ -2328,10 +2232,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     );
     expect(settled.shows("éx")).toBe(true);
     yield* page.key("Tab");
-    yield* page.until(
-      "focus moving off the draft",
-      (one) => !one.shows(TYPING),
-    );
+    yield* page.until("focus moving off the draft", (one) => !one.shows(TYPING));
   });
 
   it("I1: text a row does not claim passes it on the way up", function* () {
@@ -2340,9 +2241,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     yield* app.commit({ state: app.opened });
 
     // Focus is inside the drawer, on a row that has no use for text.
-    const closer = tree.mounted().find((id) =>
-      tree.keyOf(id) === "drawer:close"
-    );
+    const closer = tree.mounted().find((id) => tree.keyOf(id) === "drawer:close");
     if (closer === undefined) {
       throw new Error("the catalog's Close is mounted");
     }
@@ -2496,9 +2395,7 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
       (target) => tree.keyOf(target.node) === "transcript:selector",
     );
     if (behind === undefined) {
-      throw new Error(
-        "the Transcript's selector is drawn and targetable behind the drawer",
-      );
+      throw new Error("the Transcript's selector is drawn and targetable behind the drawer");
     }
     const pointer = resolvePointer(rendered, {
       column: behind.bounds.x,
@@ -2579,10 +2476,9 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
     }
 
     // And the frame that replaced it does not offer the node either.
-    expect(shorter.committed.rendered.map.targets.map((target) => target.node))
-      .not.toContain(
-        removed.node,
-      );
+    expect(shorter.committed.rendered.map.targets.map((target) => target.node)).not.toContain(
+      removed.node,
+    );
   });
 });
 
@@ -2590,10 +2486,7 @@ describe("REPL terminal: what a drawer covers, and what it cannot reach", () => 
   it("TL6: a drawer is visible with its way out while the footer remains readable", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* page.press("[history]");
-    const opened = yield* page.until(
-      "the History drawer",
-      (one) => one.shows("[close]"),
-    );
+    const opened = yield* page.until("the History drawer", (one) => one.shows("[close]"));
     expect(opened.shows("History")).toBe(true);
     expect(opened.shows("HISTORY")).toBe(true);
     expect(opened.shows("[exit]")).toBe(true);
@@ -2644,9 +2537,7 @@ describe("REPL terminal: what a drawer covers, and what it cannot reach", () => 
 
     // And the modal's own control still answers, so containment has not broken
     // the product — only what is behind it.
-    const close = frame.targets.find((target) =>
-      tree.keyOf(target.node) === "drawer:close"
-    );
+    const close = frame.targets.find((target) => tree.keyOf(target.node) === "drawer:close");
     expect(close).toBeDefined();
     if (close === undefined) {
       return;
@@ -2668,10 +2559,7 @@ describe("REPL terminal: what a drawer covers, and what it cannot reach", () => 
     yield* page.until("the History drawer", (one) => one.shows("[close]"));
     yield* page.type("stray");
     yield* page.press("[close]");
-    const closed = yield* page.until(
-      "the drawer closing",
-      (one) => !one.shows("[close]"),
-    );
+    const closed = yield* page.until("the drawer closing", (one) => !one.shows("[close]"));
     expect(draftShows(closed, "kept in the Draft")).toBe(true);
     expect(draftShows(closed, "stray")).toBe(false);
   });
@@ -2687,21 +2575,18 @@ describe("REPL terminal: committed geometry, and what it promises", () => {
         expect(frame.targets.length).toBeGreaterThan(0);
         for (const target of frame.targets) {
           const { x, y, width, height } = target.bounds;
-          for (
-            const [name, value] of [
-              ["x", x],
-              ["y", y],
-              ["width", width],
-              ["height", height],
-            ]
-          ) {
-            expect([size.columns, target.id, name, Number.isInteger(value)])
-              .toEqual([
-                size.columns,
-                target.id,
-                name,
-                true,
-              ]);
+          for (const [name, value] of [
+            ["x", x],
+            ["y", y],
+            ["width", width],
+            ["height", height],
+          ]) {
+            expect([size.columns, target.id, name, Number.isInteger(value)]).toEqual([
+              size.columns,
+              target.id,
+              name,
+              true,
+            ]);
           }
           // Inside the terminal, so no target names a column or row that is not
           // on the screen.
@@ -2723,21 +2608,12 @@ describe("REPL terminal: committed geometry, and what it promises", () => {
       const { x, y, width, height } = target.bounds;
       // Every interior cell answers with this node.
       expect([target.id, map.at(x, y)]).toEqual([target.id, target.node]);
-      expect([target.id, map.at(x + width - 1, y + height - 1)]).toEqual([
-        target.id,
-        target.node,
-      ]);
+      expect([target.id, map.at(x + width - 1, y + height - 1)]).toEqual([target.id, target.node]);
       // And the cell just past each trailing edge does not. The engine's own
       // hit test includes it, which is why resolution is half-open: without
       // that, every row of a stacked list is claimed by two neighbours.
-      expect([target.id, map.at(x + width, y)]).not.toEqual([
-        target.id,
-        target.node,
-      ]);
-      expect([target.id, map.at(x, y + height)]).not.toEqual([
-        target.id,
-        target.node,
-      ]);
+      expect([target.id, map.at(x + width, y)]).not.toEqual([target.id, target.node]);
+      expect([target.id, map.at(x, y + height)]).not.toEqual([target.id, target.node]);
     }
   });
 
@@ -2762,11 +2638,10 @@ describe("REPL terminal: committed geometry, and what it promises", () => {
 
     // The first frame answers exactly what it answered.
     for (const target of held) {
-      expect([target.id, first.committed.rendered.map.boundsOf(target.id)])
-        .toEqual([
-          target.id,
-          target.bounds,
-        ]);
+      expect([target.id, first.committed.rendered.map.boundsOf(target.id)]).toEqual([
+        target.id,
+        target.bounds,
+      ]);
     }
     expect(Array.from(first.committed.rendered.output)).toEqual(bytes);
   });
@@ -2857,7 +2732,7 @@ describe("REPL terminal: a measurement that does not commit", () => {
     expect(mounted).toEqual([]);
 
     const running = yield* spawn(() =>
-      commitReplFrame(tree, held.renderer, viewOf(model, WIDE), 0, undefined)
+      commitReplFrame(tree, held.renderer, viewOf(model, WIDE), 0, undefined),
     );
     yield* settled();
 
@@ -2904,13 +2779,7 @@ describe("REPL terminal: a measurement that does not commit", () => {
 
     let raised: Error | undefined;
     try {
-      const outcome = yield* commitReplFrame(
-        tree,
-        refusing,
-        viewOf(model, WIDE),
-        0,
-        undefined,
-      );
+      const outcome = yield* commitReplFrame(tree, refusing, viewOf(model, WIDE), 0, undefined);
       if (!outcome.ok) {
         raised = outcome.error;
       }
@@ -2995,10 +2864,13 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
         }
         const raw = measured.value.boundsOf("target");
         expect(raw).toBeDefined();
-        const whole = raw === undefined ? true : Number.isInteger(raw.x) &&
-          Number.isInteger(raw.y) &&
-          Number.isInteger(raw.width) &&
-          Number.isInteger(raw.height);
+        const whole =
+          raw === undefined
+            ? true
+            : Number.isInteger(raw.x) &&
+              Number.isInteger(raw.y) &&
+              Number.isInteger(raw.width) &&
+              Number.isInteger(raw.height);
         expect([shape.name, whole]).toEqual([shape.name, false]);
 
         // Drawing it is refused. A rounded hit box would disagree with the text
@@ -3036,11 +2908,7 @@ describe("Termless screen adapter", () => {
   it("keeps the truecolor, the weight and a reset each cell was written under", function* () {
     const grid = yield* useGrid(SMALL);
     const encode = (text: string): Uint8Array => new TextEncoder().encode(text);
-    grid.apply(
-      encode(
-        "\u001B[1m\u001B[38;2;127;211;232m\u001B[48;2;18;32;38m\u001B[1;1Hab",
-      ),
-    );
+    grid.apply(encode("\u001B[1m\u001B[38;2;127;211;232m\u001B[48;2;18;32;38m\u001B[1;1Hab"));
     grid.apply(encode("\u001B[0m\u001B[1;3Hc"));
     expect(grid.styleAt(0, 0)).toEqual({
       foreground: 0x7fd3e8,
@@ -3061,13 +2929,12 @@ describe("Termless screen adapter", () => {
     const screen = yield* useTerminalScreen(SMALL);
     screen.feed("\u001B[1;1Habcd\u001B[1;1H界g");
     expect(screen.rows()[0]).toBe("界gd");
-    expect([screen.at(0, 0), screen.at(1, 0), screen.at(2, 0), screen.at(4, 0)])
-      .toEqual([
-        "界",
-        "",
-        "g",
-        " ",
-      ]);
+    expect([screen.at(0, 0), screen.at(1, 0), screen.at(2, 0), screen.at(4, 0)]).toEqual([
+      "界",
+      "",
+      "g",
+      " ",
+    ]);
   });
 
   it("joins a character whose bytes arrive in two writes", function* () {

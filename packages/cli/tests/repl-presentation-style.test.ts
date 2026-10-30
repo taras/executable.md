@@ -1,7 +1,7 @@
 /**
  * Read the mounted REPL as a person does: from the cells its completed writes
  * leave on the terminal. Geometry and palette invariants stay with the
- * renderer and layout tests, where their owned handles make those claims.
+ * renderer and layout tests, where their owned handles make those checks.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -124,19 +124,13 @@ describe("REPL presentation: the screen says what is placed", () => {
     if (!view.ok) {
       throw view.error;
     }
-    const observed = yield* presenter.commit(
-      withWorkspace(view.value, workspaceOf(model)),
-    );
+    const observed = yield* presenter.commit(withWorkspace(view.value, workspaceOf(model)));
     const draft = observed.boundsOf("footer:input");
     const history = observed.regionOf("box:history");
     if (draft === undefined || history === undefined) {
-      throw new Error(
-        "the empty frame did not publish its Draft and History surfaces",
-      );
+      throw new Error("the empty frame did not publish its Draft and History surfaces");
     }
-    expect(presenter.grid.styleAt(draft.x, draft.y + 1).background).toBe(
-      REPL_PALETTE.draftSurface,
-    );
+    expect(presenter.grid.styleAt(draft.x, draft.y + 1).background).toBe(REPL_PALETTE.draftSurface);
     expect(presenter.grid.styleAt(history.x, history.y).background).toBe(
       REPL_PALETTE.historySurface,
     );

@@ -34,9 +34,7 @@ export function projected(events: readonly DurableEvent[]): ReplModel {
  * the program does: an entry that began from nothing would be a different run
  * from the one a person submits.
  */
-export function* journalModel(
-  sources: readonly string[],
-): Operation<ReplModel> {
+export function* journalModel(sources: readonly string[]): Operation<ReplModel> {
   yield* useTempFileCompiler();
   const physical = new InMemoryStream();
   for (const source of sources) {
@@ -45,9 +43,7 @@ export function* journalModel(
       { ...inlineSource(source), stream: new EntrySegmentStream(physical) },
       [],
       {
-        initialBindings: settled.length === 0
-          ? {}
-          : entryInitialBindings(projected(settled)),
+        initialBindings: settled.length === 0 ? {} : entryInitialBindings(projected(settled)),
       },
     );
     yield* collect(execution);

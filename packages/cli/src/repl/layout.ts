@@ -210,9 +210,6 @@ const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
  * it offers changes while the two rows around it do not.
  */
 export const FOOTER_ROWS = 7;
-/** The History band's own five rows. */
-export { HISTORY_ROWS } from "./history-rail.ts";
-
 /** Five, at every size — imported for this module's own layout. */
 import { HISTORY_ROWS } from "./history-rail.ts";
 

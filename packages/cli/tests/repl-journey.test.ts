@@ -53,10 +53,7 @@ describe("REPL journey: a person drives the running command", () => {
     expect(page.screen().index).toBe(before);
     expect(page.screen().shows("held until released")).toBe(false);
     terminal.holdPresent?.release();
-    yield* page.until(
-      "the held write landing",
-      (one) => one.shows("held until released"),
-    );
+    yield* page.until("the held write landing", (one) => one.shows("held until released"));
   });
 
   it("hands a failed presentation to the command owner unchanged", function* () {
@@ -67,9 +64,7 @@ describe("REPL journey: a person drives the running command", () => {
       yield* scoped(function* (): Operation<void> {
         const page = yield* useReplPage({ size: WIDE });
         mounted = page.repl;
-        yield* spawn(() =>
-          page.until("a screen that never arrives", () => false)
-        );
+        yield* spawn(() => page.until("a screen that never arrives", () => false));
         yield* awaited(
           "a wait subscribed to the next frame",
           () => page.repl.terminal.waiting === 1,

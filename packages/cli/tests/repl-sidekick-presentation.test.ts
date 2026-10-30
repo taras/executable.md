@@ -28,10 +28,7 @@ describe("Sidekick presentation: visible work owns its controls", () => {
     const page = yield* useReplPage({ size: WIDE });
     page.repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
     yield* sendMessage(page, "explain the entry");
-    yield* page.until(
-      "the Sidekick reply",
-      (one) => sidekickShows(one, "Noted."),
-    );
+    yield* page.until("the Sidekick reply", (one) => sidekickShows(one, "Noted."));
     yield* page.until("the Sidekick returning to Send", sidekickIdle);
     expect(page.screen().found("[send]", SIDEKICK_PANE)).toBe(1);
   });
@@ -65,10 +62,7 @@ describe("Sidekick presentation: visible work owns its controls", () => {
       reply: "<Output>never reached</Output>\n",
     });
     yield* sendMessage(page, "hold this turn");
-    yield* page.until(
-      "the Sidekick Stop",
-      (one) => one.found("[stop]", SIDEKICK_CONTROLS) === 1,
-    );
+    yield* page.until("the Sidekick Stop", (one) => one.found("[stop]", SIDEKICK_CONTROLS) === 1);
     yield* stopSidekick(page);
     yield* page.until("the Sidekick returning to Send", sidekickIdle);
     expect(page.screen().shows("never reached")).toBe(false);
