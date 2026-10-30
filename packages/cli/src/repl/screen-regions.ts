@@ -205,10 +205,10 @@ function screenPlacement(
     return { region: selected, groups: [CRUMBS], entry: 0 };
   }
   if (key.startsWith("work:crumb:")) {
-    return { region: selected, groups: [CRUMBS] };
+    return { region: selected, groups: [CRUMBS], entry: 0 };
   }
   if (key === "reading:anchor") {
-    return { region: selected };
+    return { region: selected, entry: 1 };
   }
   if (key === "reading:earlier" || key === "reading:later") {
     return { region: selected };

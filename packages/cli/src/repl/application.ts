@@ -1318,6 +1318,8 @@ export interface ReplView {
    * rather than something the renderer decorates.
    */
   readonly focused: string | undefined;
+  /** Whether this renderer has yet to commit a frame. */
+  readonly initialPresentation?: boolean;
   /**
    * The staged workspace composition's own presentation, where a caller gave one.
    *
@@ -5799,7 +5801,11 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // drag focus back here after every Tab and traversal would never move at all.
   // A restoration claim is somebody else's: exactly one description may claim
   // focus, and a drawer that just went says which one it is.
-  const claiming = !modalOpen(view) && view.focused === undefined && claim === undefined;
+  const claiming =
+    view.initialPresentation !== false &&
+    !modalOpen(view) &&
+    view.focused === undefined &&
+    claim === undefined;
   if (workspace !== undefined) {
     // With the selected work, which is the surface it is part of. A narrow
     // frame showing the Transcript or the Sidekick has no region to draw it in.

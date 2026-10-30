@@ -333,6 +333,63 @@ function* dispatched(presenter: Presenter, name: ReplKey) {
 }
 
 describe("REPL focus regions: owned composition invariants", () => {
+  it("enters the reading anchor when no outer breadcrumb exists", function* () {
+    const model = yield* journalModel(["# Selected work\n\nKeep reading."]);
+    const presenter = yield* usePresenter(NARROW);
+    const resolved = viewFor(initialState("selected"), model, IDLE, NARROW);
+    if (!resolved.ok) {
+      throw resolved.error;
+    }
+    const shown = yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
+    expect(shown.keys).toContain("reading:anchor");
+    expect(shown.keys.some((key) => key.startsWith("work:crumb:"))).toBe(false);
+    expect(focused(presenter)).toBe("footer:input");
+    for (let step = 0; step < 3; step += 1) {
+      yield* dispatched(presenter, "Tab");
+    }
+    expect(focused(presenter)).toBe("reading:anchor");
+  });
+
+  it("recovers from below-minimum refusal into selected content rather than Draft", function* () {
+    const model = yield* journalModel(["# Selected work\n\nKeep reading."]);
+    const presenter = yield* usePresenter(WIDE);
+    const state = { ...initialState("selected"), draft: "unsent draft" };
+    const before = viewFor(state, model, IDLE, WIDE);
+    if (!before.ok) {
+      throw before.error;
+    }
+    yield* presenter.commit(withWorkspace(before.value, workspaceOf(model)));
+    yield* dispatched(presenter, "Tab");
+    expect(focused(presenter)).toBe("tab:bindings");
+    const below = { columns: 71, rows: 19 };
+    presenter.resize(below);
+    const refused = viewFor(state, model, IDLE, below, focused(presenter));
+    if (!refused.ok) {
+      throw refused.error;
+    }
+    yield* presenter.commit(withWorkspace(refused.value, workspaceOf(model)));
+    expect(focused(presenter)).toBeUndefined();
+    expect(presenter.tree.mounted()).toEqual([]);
+    presenter.resize(NARROW);
+    const recovered = viewFor(state, model, IDLE, NARROW, focused(presenter));
+    if (!recovered.ok) {
+      throw recovered.error;
+    }
+    const shown = yield* presenter.commit(withWorkspace(recovered.value, workspaceOf(model)));
+    expect(shown.keys).toContain("reading:anchor");
+    expect(focused(presenter)).toBe("reading:anchor");
+    expect(state.draft).toBe("unsent draft");
+    expect(recovered.value.selection.entry?.key).toBe(before.value.selection.entry?.key);
+    expect(recovered.value.state.route).toEqual(before.value.state.route);
+    presenter.resize(WIDE);
+    const widened = viewFor(state, model, IDLE, WIDE, focused(presenter));
+    if (!widened.ok) {
+      throw widened.error;
+    }
+    yield* presenter.commit(withWorkspace(widened.value, workspaceOf(model)));
+    expect(focused(presenter)).toBe("reading:anchor");
+  });
+
   for (const size of [WIDE, MEDIUM]) {
     it(`R1: the seven entries in both directions at ${size.columns}x${size.rows}`, function* () {
       const model = yield* journalModel([]);

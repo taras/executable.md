@@ -3596,6 +3596,7 @@ export function* prepareFrame(
    */
   draftStore?: ReplPlainFitStore,
 ): Operation<Result<ReplPrepared>> {
+  view = { ...view, initialPresentation: renderer.last() === undefined };
   // No widths at all for the pass that answers what the widths are. Every row
   // whose text has to fit a region is left out of it, because a growing column
   // takes its minimum from its widest child: one unbounded row would make the
