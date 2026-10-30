@@ -756,7 +756,7 @@ function* admissionOf(
   size = NARROW,
   engine?: ReplRenderer,
 ): Operation<ReplAdmission> {
-  const view = reading(state, live, model, size, undefined);
+  const view = reading(state, live, model, size, "drawer:reading:anchor");
   return (yield* contextOf(view, engine)).admission;
 }
 
@@ -879,7 +879,7 @@ describe("F3 — complete content and reachable navigation", () => {
     for (let press = 0; press < 120; press++) {
       for (const [key, targetable] of yield* laidOutKeys(
         tree,
-        reading(state, live, EMPTY_MODEL, NARROW, undefined),
+        reading(state, live, EMPTY_MODEL, NARROW, "drawer:reading:anchor"),
       )) {
         if (targetable || !reached.has(key)) {
           reached.set(key, targetable || (reached.get(key) ?? false));
@@ -931,7 +931,7 @@ describe("F3 — complete content and reachable navigation", () => {
     let state = opened(live);
     const rows: string[] = [];
     for (let press = 0; press < 160; press++) {
-      const view = reading(state, live, EMPTY_MODEL, NARROW, undefined);
+      const view = reading(state, live, EMPTY_MODEL, NARROW, "drawer:reading:anchor");
       const context = yield* contextOf(view);
       const from = context.admission.windows.get(DRAWER_WINDOW)?.from ?? 0;
       const placed = rowsOf(presentationFor(view, context).descriptions).filter(
@@ -981,8 +981,8 @@ describe("F3 — complete content and reachable navigation", () => {
     // nowhere to put its tail and the window has no second row to scroll to.
     // So every message row must fit the width the drawer was measured at.
     const room =
-      (yield* contextOf(reading(opened(live), live, EMPTY_MODEL, NARROW, undefined))).widths
-        ?.drawer ?? 0;
+      (yield* contextOf(reading(opened(live), live, EMPTY_MODEL, NARROW, "drawer:reading:anchor")))
+        .widths?.drawer ?? 0;
     expect(room).toBeGreaterThan(0);
     const overflowing = rows
       .map((one) => one.split("\u0000"))
@@ -1008,7 +1008,7 @@ describe("F3 — complete content and reachable navigation", () => {
     for (let press = 0; press < 160; press++) {
       for (const [key, targetable] of yield* laidOutKeys(
         tree,
-        reading(at, live, EMPTY_MODEL, NARROW, undefined),
+        reading(at, live, EMPTY_MODEL, NARROW, "drawer:reading:anchor"),
       )) {
         if (targetable) {
           reached.add(key);
@@ -1041,7 +1041,7 @@ describe("F3 — complete content and reachable navigation", () => {
         )
         .map((one) => one.label.trim());
 
-    const first = yield* framed(opened(live), live);
+    const first = yield* framed(opened(live), live, NARROW, "drawer:reading:anchor");
     // Not every line at once, and the first window starts at the beginning.
     expect(shown(first).length).toBeGreaterThan(0);
     expect(shown(first).length).toBeLessThan(40);
@@ -1054,7 +1054,7 @@ describe("F3 — complete content and reachable navigation", () => {
     let sawSubmit = false;
     let submitBeforeLastLine = false;
     for (let press = 0; press < 120; press++) {
-      const rows = yield* framed(state, live);
+      const rows = yield* framed(state, live, NARROW, "drawer:reading:anchor");
       for (const label of shown(rows)) {
         if (!seenLines.includes(label)) {
           seenLines.push(label);
@@ -1146,7 +1146,7 @@ describe("F3 — complete content and reachable navigation", () => {
     // the drawer this one control opens. The row above walks all forty lines of
     // it; this one holds the two halves together, so a trigger that stopped
     // announcing cannot be mistaken for a question that stopped being readable.
-    const opening = yield* framed(opened(live), live);
+    const opening = yield* framed(opened(live), live, NARROW, "drawer:reading:anchor");
     const message = opening
       .filter((one) => one.key === "drawer:reading:anchor" || one.key.startsWith("drawer:message:"))
       .map((one) => one.label.trim());
@@ -1736,7 +1736,7 @@ describe("F3 — every placed modal control is in the ring", () => {
       // asserted where an entry is really waiting, in the rendered journey.
       expect([key, row?.label]).toEqual([
         key,
-        `Ready for Entry 2 · ${action} · Esc closes · Tab/Shift+Tab move`,
+        `Ready for Entry 2 · ${action} · Esc closes · Tab regions Alt↑↓`,
       ]);
       expect([key, (row?.label ?? "").length <= NARROW.columns]).toEqual([key, true]);
     }
@@ -2038,6 +2038,56 @@ describe("F3 — the drawers that show a retained reading (#875 R1)", () => {
         name: "plan",
       }) ?? "";
     expect(after.viewports.readings[other]).toBeUndefined();
+  });
+  it("PV5: a retained JSON anchor scrolls both boundaries and keeps its owner", function* () {
+    const model = twoScopes();
+    const live = asking(undefined);
+    const engine = yield* useReplRenderer(NARROW);
+    const tree = yield* useReplTree<ReplAction>();
+    let state: ReplState = {
+      ...openBinding("entry-1", "plan"),
+      draft: "draft kept",
+      message: "message kept",
+    };
+    const route = state.route;
+    yield* applied(tree, reading(state, live, model, NARROW), engine);
+    expect(keyed(tree)).toBe("drawer:reading:anchor");
+    for (const key of [
+      "End",
+      "Home",
+      "PageDown",
+      "PageUp",
+      "ArrowDown",
+      "ArrowUp",
+    ] satisfies ReplKey[]) {
+      const result = yield* tree.dispatch({ kind: "key", key });
+      if (!result.ok || result.value.outcome !== "action") {
+        throw new Error(`the reading did not handle ${key}`);
+      }
+      state = {
+        ...reduceRepl(
+          state,
+          result.value.action,
+          model,
+          live,
+          yield* admissionOf(state, live, model, NARROW, engine),
+        ).state,
+      };
+      const view = reading(state, live, model, NARROW, keyed(tree));
+      yield* applied(tree, view, engine);
+      expect(keyed(tree)).toBe("drawer:reading:anchor");
+      const labels = rowsOf(yield* seenView(view, engine))
+        .map((one) => one.label)
+        .join(" ");
+      if (key === "End") {
+        expect(labels).toContain("line-59-entry-1");
+      }
+      if (key === "Home") {
+        expect(labels).toContain("line-00-entry-1");
+      }
+      expect(state.route).toEqual(route);
+      expect([state.draft, state.message]).toEqual(["draft kept", "message kept"]);
+    }
   });
 });
 

@@ -7,7 +7,7 @@ import type { Operation } from "effection";
 import { join, parse, relative, sep } from "node:path";
 import { realpath } from "node:fs/promises";
 import { allocate, showing } from "./pty.ts";
-import { reach, click, holding, ended, printedLocation } from "./repl-files-journey.ts";
+import { click, holding, ended, printedLocation } from "./repl-files-journey.ts";
 import type { ReplCommand } from "./repl-files-journey.ts";
 
 export function replMountsJourney(repl: ReplCommand): Operation<void> {
@@ -56,8 +56,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       yield* first.type("\r");
       yield* showing(first, "waiting for an answer", 30_000);
       expect(yield* readTextFile(join(old, "process-cwd.txt"))).toBe(old);
-      yield* reach(first, "[exit]");
-      yield* first.type("\r");
+      yield* click(first, "[exit]");
       expect(yield* ended(first)).toBe(0);
       const location = printedLocation((yield* first.shows()).join("\n"));
       yield* writeTextFile(join(old, "read.md"), "changed");
@@ -65,8 +64,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       const flags = mode === "omitted" ? [] : args(selected);
       const second = yield* allocate(line([location, ...flags]), home);
       yield* showing(second, "waiting for an answer", 180_000);
-      yield* reach(second, "[answer]");
-      yield* second.type("\r");
+      yield* click(second, "[answer]");
       yield* showing(second, "Saved historical.", 30_000);
       yield* click(second, "( ) continue");
       yield* holding(join(selected, "result.md"), "historical|frontier");
@@ -75,8 +73,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
         expect(yield* exists(join(selected, "process-cwd.txt"))).toBe(false);
       }
       yield* showing(second, "Ready for Entry 2", 30_000);
-      yield* reach(second, "[exit]");
-      yield* second.type("\r");
+      yield* click(second, "[exit]");
       expect(yield* ended(second)).toBe(0);
       const nextLocation = printedLocation((yield* second.shows()).join("\n"));
       const third = yield* allocate(line([nextLocation, ...flags]), home);
@@ -94,8 +91,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       yield* showing(third, "2. [ok]", 30_000);
       yield* click(third, "2. [ok]");
       yield* showing(third, selected === old ? "fresh is changed" : "fresh is current", 30_000);
-      yield* reach(third, "[exit]");
-      yield* third.type("\r");
+      yield* click(third, "[exit]");
       expect(yield* ended(third)).toBe(0);
     }
   });

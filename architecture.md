@@ -6866,6 +6866,24 @@ validator refuses two declarations of one region, a group with two axes and a
 group with two anchors, because each would make where a key goes depend on
 mounting order.
 
+The application keeps editing state with each value owner: Draft, Message,
+each pending question's named values, and Configure Agent. The renderer's fitted
+rows supply grapheme boundaries and display columns for caret movement. The
+focused field names its destination; the root validates that owner before
+editing. Carets survive coverage and resize but add no mounted focus store,
+location member or retained record.
+
+A reading has one stable anchor over its admitted rows, with no extra row or
+pointer target. Its keys scroll only that viewport. Logical lists supply their
+own hidden-neighbour targets and use the measured admission to reveal a row
+before focusing it. A question's fixed Submit sits beside Close and any offered
+Stop; a drawer's Content, Actions and History/Exit are separate regions. Nested
+History retains the lower presentation under the same tree-owned modal lifetime.
+The narrow surface bar offers Sessions, Entries and Sidekick; only the routed
+outlet and its composer are mounted. A refusal below minimum mounts no controls,
+and recovery enters routed content before the surface bar. No background update
+selects a focus destination.
+
 Freedom is vendored from a pinned unpublished commit under
 `packages/cli/src/repl/vendor/freedom/`, as a pristine copy and a patched copy
 whose every difference belongs to one named patch. See its `PROVENANCE.md`.

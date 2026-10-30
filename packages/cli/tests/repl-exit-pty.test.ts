@@ -662,18 +662,10 @@ describe("REPL exit: a real terminal, and nothing further typed", () => {
       yield* pty.type(BURST);
       yield* showing(pty, BURST, LEAVE_MS);
 
-      // Reached the way a person reaches it: walk the ring until the control is
-      // marked. Nothing here knows how many stops that takes.
-      const reaching = Date.now() + LEAVE_MS;
-      while (!(yield* pty.shows()).some((line) => line.includes("> [exit]"))) {
-        if (Date.now() > reaching) {
-          throw new Error(
-            `focus never reached [exit] under ${cliRuntime()}. screen=` +
-              JSON.stringify((yield* pty.shows()).map((one) => one.trimEnd())),
-          );
-        }
-        yield* pty.type("\t");
-        yield* sleep(300);
+      // Draft -> Selected work -> Transcript -> History, then Exit locally.
+      for (const bytes of ["\x1b[Z", "\x1b[Z", "\x1b[Z", "\x1b[C"]) {
+        yield* pty.type(bytes);
+        yield* sleep(100);
       }
 
       // Activated. And then nothing: no byte follows, and the pty's input stays

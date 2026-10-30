@@ -16,6 +16,7 @@ import {
 } from "../src/repl/application.ts";
 import type { ReplLive, ReplState } from "../src/repl/application.ts";
 import type { ReplKey } from "../src/repl/description.ts";
+import { navigationOf } from "../src/repl/navigation.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
 import type { Presenter } from "./fixtures/repl/presentation.ts";
@@ -458,5 +459,148 @@ describe("REPL focus regions: owned composition invariants", () => {
     yield* send("Backtab");
     yield* send("Enter");
     expect(focused(presenter)).toBe("entries:heading");
+  });
+});
+
+describe("REPL focus regions: logical drawer reveal", () => {
+  it("PV5: History reaches every hidden checkpoint without selecting it", function* () {
+    const model = yield* journalModel(Array.from({ length: 8 }, (_, at) => `Reading ${at}`));
+    const presenter = yield* usePresenter(NARROW);
+    let state = initialState("reveal");
+    function* commit() {
+      const read = viewFor(
+        state,
+        model,
+        IDLE,
+        NARROW,
+        focused(presenter),
+        navigationOf(model.checkpoints, "settled"),
+      );
+      if (!read.ok) {
+        throw read.error;
+      }
+      const view = withWorkspace(read.value, workspaceOf(model));
+      const shown = yield* presenter.commit(view);
+      state = focusSettled(view, focused(presenter), shown.committed.admission);
+      return shown;
+    }
+    function* send(name: ReplKey) {
+      const result = yield* dispatched(presenter, name);
+      if (result.outcome === "action") {
+        state = reduceRepl(
+          state,
+          result.action,
+          model,
+          IDLE,
+          presenter.last()?.committed.admission,
+        ).state;
+      }
+      return yield* commit();
+    }
+    yield* commit();
+    state = reduceRepl(
+      state,
+      { kind: "open-drawer", drawer: { kind: "history" } },
+      model,
+      IDLE,
+    ).state;
+    const opened = yield* commit();
+    const markers = model.checkpoints.map((one) => `drawer:marker:${one.marker}`);
+    const last = markers.at(-1);
+    expect(last).toBeDefined();
+    expect(opened.keys).not.toContain(last);
+    for (const expected of markers) {
+      expect(focused(presenter)).toBe(expected);
+      expect(presenter.last()?.nodeOf(expected)).toBeDefined();
+      expect(state.route.at).toBeUndefined();
+      if (expected !== last) {
+        yield* send("ArrowDown");
+      }
+    }
+    expect(
+      windowOf(presenter.last()?.committed.admission ?? opened.committed.admission, DRAWER_WINDOW)
+        .from,
+    ).toBeGreaterThan(0);
+    const selected = yield* dispatched(presenter, "Enter");
+    if (selected.outcome !== "action") {
+      throw new Error("History did not select its position");
+    }
+    state = reduceRepl(
+      state,
+      selected.action,
+      model,
+      IDLE,
+      presenter.last()?.committed.admission,
+    ).state;
+    expect(state.route.at).toBe(model.checkpoints.at(-1)?.marker);
+  });
+});
+
+describe("REPL focus regions: background input ownership", () => {
+  it("PV7: a reply and question leave a middle Message caret and Draft untouched", function* () {
+    const page = yield* useReplPage({ size: MEDIUM });
+    yield* typed(page, "kept draft");
+    for (let at = 0; at < 3; at += 1) {
+      yield* key(page, "Tab");
+    }
+    page.repl.fake.script({
+      held: true,
+      reply:
+        '<Elicit as="answer" schema={{type:"object",properties:{decision:{type:"string"}},required:["decision"],additionalProperties:false}}>Background question?</Elicit>',
+    });
+    yield* typed(page, "ask");
+    yield* page.key("Enter");
+    yield* page.repl.fake.holdingTurns(1);
+    yield* typed(page, "ab界");
+    yield* key(page, "ArrowLeft");
+    page.repl.fake.releaseTurn();
+    yield* page.until("background question announced", (one) => one.shows("[answer sidekick]"));
+    yield* page.type("!");
+    yield* page.until("Message kept its middle caret", (one) => one.shows("ab!界"));
+    expect(page.screen().shows("kept draft")).toBe(true);
+    expect(page.screen().shows("[close]")).toBe(false);
+    yield* page.press("[answer sidekick]");
+    yield* page.until("question opened", (one) => one.shows("[submit]"));
+    yield* page.key("Escape");
+    yield* page.until("question closed", (one) => !one.shows("[close]"));
+    yield* key(page, "Tab");
+    yield* key(page, "Backtab");
+    yield* page.type("?");
+    yield* page.until("ordinary Message entry after close", (one) => one.shows("ab!?界"));
+    expect(page.repl.fake.prompts).toHaveLength(1);
+  });
+});
+
+describe("REPL focus regions: Sidekick reading keys", () => {
+  it("PV5: Home/End and pages preserve an unsent Message while output arrives", function* () {
+    const page = yield* useReplPage({ size: MEDIUM });
+    yield* typed(page, "draft kept");
+    for (let at = 0; at < 3; at += 1) {
+      yield* key(page, "Tab");
+    }
+    const first = Array.from({ length: 30 }, (_, at) => `Chat row ${at}`).join("\n");
+    const last = Array.from({ length: 30 }, (_, at) => `Chat row ${at + 30}`).join("\n");
+    page.repl.fake.script({ deltas: [`<Output>${first}`, `\n${last}</Output>`], holdAfter: 1 });
+    yield* typed(page, "read this");
+    yield* page.key("Enter");
+    yield* page.repl.fake.streamingTurns(1);
+    yield* page.until("the live preview", (one) => one.shows("Chat row 29"));
+    yield* typed(page, "message kept");
+    yield* key(page, "Backtab");
+    yield* key(page, "Home");
+    yield* page.until("the start of the chat", (one) => one.shows("Chat row 0"));
+    page.repl.fake.releaseDeltas();
+    yield* page.until("the response finished", (one) => !one.shows("[stop]"));
+    expect(page.screen().shows("Chat row 0")).toBe(true);
+    expect(page.screen().shows("Chat row 59")).toBe(false);
+    yield* key(page, "End");
+    yield* page.until("the chat end", (one) => one.shows("Chat row 59"));
+    yield* key(page, "PageUp");
+    yield* key(page, "PageDown");
+    yield* key(page, "ArrowUp");
+    expect(page.screen().shows("message kept")).toBe(true);
+    expect(page.screen().shows("draft kept")).toBe(true);
+    expect(page.screen().shows("No entry yet")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(1);
   });
 });

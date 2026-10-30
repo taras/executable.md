@@ -173,7 +173,7 @@ describe("REPL retained readings across every terminal size", () => {
       expect(trail(page.screen())).toContain("Checklist");
       yield* intoComposer(page);
       yield* typed(page, "and what changed");
-      for (let press = 0; press < 6; press += 1) {
+      for (let press = 0; press < 4; press += 1) {
         yield* tab(page);
       }
       yield* page.type("keep this draft");
@@ -895,7 +895,7 @@ describe("REPL original interaction costs and visible exit routes", () => {
       yield* page.key("Enter");
       yield* entrySettles(page, 1, "ok");
       yield* selectCatalog(page, "entry-1");
-      yield* intoDraft(page);
+      yield* intoDraft(page, ["Tab"]);
       yield* interactionCost(page, () => page.type("a"));
       const typed = [
         yield* interactionCost(page, () => page.type("b")),
@@ -963,7 +963,7 @@ describe("REPL original interaction costs and visible exit routes", () => {
     const page = yield* referencePage();
     const path = yield* executionJournal(page);
     const before = yield* readTextFile(path);
-    yield* page.key("Backtab");
+    yield* intoDraft(page, ["Backtab", "Backtab", "Backtab", "ArrowRight"]);
     yield* page.key("Enter");
     const outcome = yield* commandReturned(page);
     expect(outcome.ok).toBe(true);
@@ -1096,7 +1096,12 @@ describe("REPL original pause-before-admission boundaries", () => {
       expect(page.screen().rows).toHaveLength(size.rows);
       expect(page.screen().shows("[continue]")).toBe(false);
       expect(yield* journalRecords(page)).toEqual([]);
-      yield* page.key("Backtab");
+      yield* intoDraft(
+        page,
+        size.columns === 72
+          ? ["Tab", "ArrowRight", "ArrowRight"]
+          : ["Backtab", "Backtab", "Backtab", "ArrowRight", "ArrowRight"],
+      );
       yield* page.key("Enter");
       yield* pausedAt(page, "pausing");
       expect(gate.holding).toBe(true);
@@ -1115,7 +1120,7 @@ describe("REPL original pause-before-admission boundaries", () => {
     yield* gate.install();
     const page = yield* useReplPage({ host, size: WIDE });
     yield* pasteDraft(page, yield* referenceSource());
-    yield* page.type("\r\x1b[Z\r");
+    yield* page.type("\r\x1b[Z\x1b[Z\x1b[Z\x1b[C\x1b[C\r");
     yield* gate.reached;
     yield* pausedAt(page, "pausing");
     expect(page.repl.outcome()).toBeUndefined();
@@ -1539,7 +1544,7 @@ describe("REPL original live output and entry lifecycle", () => {
     expect((yield* retainedModel(page)).entries.map((one) => one.key)).toEqual(["entry-1"]);
     release.resolve();
     yield* page.until("joined and ready", (one) => one.shows("Ready for Entry 2"));
-    yield* intoDraft(page);
+    yield* intoDraft(page, ["Backtab"]);
     yield* page.key("Enter");
     yield* entrySettles(page, 2, "ok");
     const model = yield* retainedModel(page);
@@ -1588,7 +1593,7 @@ function* sessions(page: ReplPage): Operation<void> {
 }
 
 function directions(one: ScreenReading): string {
-  return one.rows.find((row) => row.includes("Tab/Shift+Tab move"))?.trim() ?? "";
+  return one.rows.find((row) => row.includes("Tab regions Alt↑↓"))?.trim() ?? "";
 }
 
 describe("REPL original first-use paths and question ownership", () => {
@@ -1600,13 +1605,13 @@ describe("REPL original first-use paths and question ownership", () => {
       function* () {
         const page = yield* useReplPage({ size });
         expect(directions(page.screen())).toBe(
-          "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move",
+          "Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓",
         );
         yield* runSource(page, SHORT_QUESTION);
         yield* page.until("the waiting announcement", (one) => one.shows("[answer]"));
         if (size.columns === 72) {
           expect(directions(page.screen())).toBe(
-            "Entry 1 question · activate answer · Type here · Tab/Shift+Tab move",
+            "Entry 1 question · activate answer · Type here · Tab regions Alt↑↓",
           );
         }
         yield* sessions(page);
@@ -1630,19 +1635,13 @@ describe("REPL original first-use paths and question ownership", () => {
         yield* sessions(page);
         yield* catalog(page);
         yield* closeDrawer(page);
+        yield* intoDraft(page, ["Tab", "Tab", "Tab"]);
         yield* draftText(page, "entry two");
         yield* openHistory(page);
         yield* page.press("Entry 1 admitted");
         yield* page.until("the frozen drawer", (one) => one.shows("[live]"));
         expect(directions(page.screen())).toContain("Esc closes");
         yield* closeDrawer(page);
-        for (
-          let press = 0;
-          press < 40 && !directions(page.screen()).startsWith("History · Enter unavailable");
-          press += 1
-        ) {
-          yield* tab(page);
-        }
         yield* page.until("the frozen Draft guidance", (one) =>
           directions(one).startsWith("History · Enter unavailable"),
         );
@@ -2108,17 +2107,22 @@ describe("REPL original visible guidance and controlled typing", () => {
       yield* scoped(function* () {
         const page = yield* useReplPage({ size });
         expect(directions(page.screen())).toBe(
-          "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move",
+          "Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓",
         );
         expect(page.screen().shows("Esc closes")).toBe(false);
-        yield* page.key("Backtab");
+        yield* intoDraft(
+          page,
+          size.columns === 72
+            ? ["Backtab", "Backtab", "ArrowRight"]
+            : ["Backtab", "Backtab", "Backtab", "ArrowRight"],
+        );
         yield* page.until("the way out's guidance", (one) => one.shows("Enter exits"));
         expect(page.screen().shows("Enter submits")).toBe(false);
         expect(page.screen().shows("Ready for Entry 1")).toBe(true);
         expect(
           page.screen().shows(size.columns === 72 ? "Tab to draft" : "Tab to the draft to type"),
         ).toBe(true);
-        yield* page.key("Backtab");
+        yield* page.key("ArrowLeft");
         yield* page.until("History's guidance", (one) => one.shows("Enter opens"));
         yield* page.key("Enter");
         yield* page.until(
@@ -2469,11 +2473,12 @@ describe("REPL original question arrival on another reading", () => {
         yield* runSource(page, JOURNEY_ONE);
         yield* entered.operation;
         yield* sessions(page);
-        for (let press = 0; press < 40 && !page.screen().shows("Enter exits"); press += 1) {
-          const index = page.screen().index;
-          yield* page.key("Backtab");
-          yield* page.until("the preceding control's guidance", (one) => one.index > index);
-        }
+        yield* intoDraft(
+          page,
+          size.columns === 72
+            ? ["Backtab", "Backtab", "ArrowRight"]
+            : ["Backtab", "Backtab", "Backtab", "ArrowRight"],
+        );
         expect(page.screen().shows("Enter exits")).toBe(true);
         release.resolve();
         yield* page.until("the newly arrived question", (one) => one.shows("[answer]"));
@@ -2548,8 +2553,10 @@ describe("REPL original surface and entry selection marks", () => {
             expect(page.screen().rows).not.toEqual(first);
           }
         }
-        yield* intoDraft(page);
-        yield* page.key("Backtab");
+        if (size.columns === 72) {
+          yield* intoDraft(page, ["Tab", "Tab"]);
+        }
+        yield* page.key("ArrowRight");
         yield* page.until("the way out keeping the entry selected", (one) =>
           one.shows("Enter exits"),
         );

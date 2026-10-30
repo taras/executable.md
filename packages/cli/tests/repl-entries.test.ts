@@ -3136,7 +3136,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
       for (const size of [WIDE, NARROW]) {
         expect([size.columns, yield* stateRow(empty, EMPTY_MODEL, NOTHING_LIVE, size)]).toEqual([
           size.columns,
-          `Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move`,
+          `Ready for Entry 1 · Enter submits · Type here · Tab regions Alt↑↓`,
         ]);
       }
 
@@ -3155,7 +3155,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
         "Entry 1 waiting for an answer · activate answer",
       );
       expect(yield* stateRow(state, unsettled, waiting, NARROW)).toBe(
-        "Entry 1 question · activate answer · Type here · Tab/Shift+Tab move",
+        "Entry 1 question · activate answer · Type here · Tab regions Alt↑↓",
       );
 
       // The same history with no question outstanding: running, and Enter is not
@@ -3165,7 +3165,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
         "Entry 1 running · Enter unavailable until it finishes",
       );
       expect(yield* stateRow(state, unsettled, busy, NARROW)).toBe(
-        "Entry 1 running · Enter unavailable · Type here · Tab/Shift+Tab move",
+        "Entry 1 running · Enter unavailable · Type here · Tab regions Alt↑↓",
       );
 
       // Admitted, no outcome, and nothing running it. The file is what decides
@@ -3176,7 +3176,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
         "Entry 1 unfinished · no successor can start",
       );
       expect(yield* stateRow(state, unsettled, abandoned, NARROW)).toBe(
-        "Entry 1 unfinished · no successor · Type here · Tab/Shift+Tab move",
+        "Entry 1 unfinished · no successor · Type here · Tab regions Alt↑↓",
       );
 
       // Answered, and joined.
@@ -3199,7 +3199,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
         "Entry 1 settling · Enter unavailable until teardown finishes",
       );
       expect(yield* stateRow(state, settled, tearing, NARROW)).toBe(
-        "Entry 1 settling · Enter unavailable · Type here · Tab/Shift+Tab move",
+        "Entry 1 settling · Enter unavailable · Type here · Tab regions Alt↑↓",
       );
 
       // And every one of them is a different sentence.

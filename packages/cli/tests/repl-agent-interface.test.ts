@@ -56,6 +56,9 @@ import {
   reduceRepl,
   presentationFor,
   viewFor,
+  withWorkspace,
+  workspaceOf,
+  SESSIONS_WINDOW,
 } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type {
@@ -87,6 +90,8 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fields, readDescription } from "../src/repl/description.ts";
 import type { ReplDescription } from "../src/repl/description.ts";
+import { usePresenter } from "./fixtures/repl/presentation.ts";
+import type { ReplKey } from "../src/repl/description.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
@@ -3834,7 +3839,7 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         // 4. Found again the way the row says to find it, and still editable: a
         // draft nobody can get back to is a draft that was not really kept.
         const EDITED = `${TYPED}-EDITED`;
-        yield* draftText(page, "-EDITED");
+        yield* draftText(page, "-EDITED", size.columns === 72 ? ["Tab"] : ["Tab", "Tab"]);
         expect(draftShows(page.screen(), EDITED)).toBe(true);
 
         // 5. And it is the thing that becomes the next entry, once the one that
@@ -3972,5 +3977,103 @@ describe("Tier BP4 — the widened sidebar holds its longest rows whole", () => 
       }
       expect([where, all.label.includes(FILTERED)]).toEqual([where, true]);
     }
+  });
+});
+
+describe("PV2: Transcript groups and logical reveal", () => {
+  beforeAll(() => useTempFileCompiler());
+  it("choices and a permission child contain arrows; hidden turns mount only when revealed", function* () {
+    const scripts = Object.fromEntries(
+      Array.from({ length: 10 }, (_, at): [string, Script] => [
+        `turn-${at}`,
+        {
+          streaming: true,
+          ...(at === 0 ? { permission: { toolCallId: "child", kind: "edit" } } : {}),
+        },
+      ]),
+    );
+    const source = `<All>${Array.from({ length: 10 }, (_, at) => `<Spawn><Session name="person-${at}"><Prompt text="turn-${at}" /></Session></Spawn>`).join("")}</All>`;
+    const { session, stub } = yield* asking(scripts, "approve-reads", source);
+    yield* until(
+      session,
+      "ten observed turns and a permission",
+      () => observed(session) === 10 && session.agent.requests.length === 1,
+    );
+    const presenter = yield* usePresenter(NARROW);
+    let state: ReplState = {
+      ...onSessions(session),
+      draft: "kept draft",
+      message: "kept message",
+      restore: { kind: "reveal", key: "transcript:selector" },
+    };
+    function currentKey() {
+      const node = presenter.tree.focused();
+      return node === undefined ? undefined : presenter.tree.keyOf(node);
+    }
+    function* commit() {
+      const view = withWorkspace(
+        reading(state, session, NARROW, currentKey()),
+        workspaceOf(session.model),
+      );
+      const frame = yield* presenter.commit(view);
+      state = focusSettled(view, currentKey(), frame.committed.admission);
+      return frame;
+    }
+    function* send(key: ReplKey) {
+      const result = yield* presenter.tree.dispatch({ kind: "key", key });
+      if (!result.ok) {
+        throw result.error;
+      }
+      if (result.value.outcome === "action") {
+        state = reduceRepl(
+          state,
+          result.value.action,
+          session.model,
+          liveReading(session),
+          presenter.last()?.committed.admission,
+        ).state;
+      }
+      return yield* commit();
+    }
+    yield* commit();
+    yield* send("Enter");
+    yield* send("ArrowRight");
+    expect(currentKey()).toBe("sessions:all");
+    yield* send("ArrowDown");
+    expect(currentKey()?.startsWith("sessions:conversation:")).toBe(true);
+    yield* send("ArrowLeft");
+    expect(currentKey()).toBe("transcript:selector");
+    yield* send("Enter");
+    yield* send("ArrowDown");
+    yield* send("ArrowDown");
+    const turns = session.agent.slots.map((one) => `sessions:turn:${one.key}`);
+    expect(currentKey()).toBe(turns[0]);
+    const request = session.agent.requests[0];
+    if (request === undefined) {
+      throw new Error("the request disappeared");
+    }
+    expect(presenter.last()?.keys).not.toContain(turns.at(-1));
+    const owner = turns.indexOf(`sessions:turn:${request.turn}`);
+    expect(owner).toBeGreaterThanOrEqual(0);
+    for (const expected of turns.slice(1, owner + 1)) {
+      yield* send("ArrowDown");
+      expect(currentKey()).toBe(expected);
+    }
+    yield* send("ArrowRight");
+    expect(currentKey()).toBe(`sessions:request:${request.key}`);
+    yield* send("ArrowLeft");
+    expect(currentKey()).toBe(turns[owner]);
+    for (const expected of turns.slice(owner + 1)) {
+      yield* send("ArrowDown");
+      expect(currentKey()).toBe(expected);
+      expect(presenter.last()?.nodeOf(expected)).toBeDefined();
+    }
+    expect(
+      presenter.last()?.committed.admission.windows.get(SESSIONS_WINDOW)?.from,
+    ).toBeGreaterThan(0);
+    expect(state.route.at).toBeUndefined();
+    expect(state.route.session).toBeUndefined();
+    expect([state.draft, state.message]).toEqual(["kept draft", "kept message"]);
+    expect(stub.outcomes.size).toBe(0);
   });
 });

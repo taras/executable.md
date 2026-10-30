@@ -2184,6 +2184,8 @@ describe("REPL terminal: what the host normalizes, and what it refuses to guess"
       ...keysInside(app.presenter, opened, opened.regionOf("box:history")),
     ]);
     expect(owned.size).toBeGreaterThan(2);
+    // Empty History has a stable reading anchor whose cell is blank.
+    owned.add("drawer:reading:anchor");
     expect(owned.has(focusedKey(app.presenter) ?? "")).toBe(true);
     const behind = opened.keys.filter((key) => !owned.has(key));
     expect(behind.length).toBeGreaterThan(0);

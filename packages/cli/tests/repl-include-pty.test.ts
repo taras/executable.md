@@ -317,46 +317,23 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
     let location = "";
     let history = "";
     let retained = "";
-    function* activateKey(pty: Pty, label: string, occurrence = 0): Operation<void> {
-      for (let step = 0; step < 160; step++) {
-        const screen = yield* pty.shows();
-        // Every row holding this label, in the order the screen draws them.
-        // The catalog is a drawer now rather than a column of its own, so the
-        // column a row lands in no longer tells its copy from another's: the
-        // occurrence does.
-        const matching = screen.filter((line) => line.includes(label));
-        const row = matching[occurrence];
-        const focused = label.startsWith("component ")
-          ? row !== undefined && row.slice(0, row.indexOf(label)).includes(">")
-          : screen.some((line) => {
-              for (let at = line.indexOf(">"); at !== -1; at = line.indexOf(">", at + 1)) {
-                if (
-                  line
-                    .slice(at + 1)
-                    .trimStart()
-                    .replace(/^\* /, "")
-                    .startsWith(label)
-                ) {
-                  return true;
-                }
-              }
-              return false;
-            });
-        if (focused) {
-          yield* pty.type("\r");
-          yield* sleep(150);
-          return;
-        }
-        yield* pty.type("\t");
-        yield* sleep(40);
+    function* activateLabel(pty: Pty, label: string, occurrence = 0): Operation<void> {
+      const screen = yield* pty.shows();
+      const matches = screen.flatMap((line, row) => {
+        const column = line.indexOf(label);
+        return column < 0 ? [] : [{ row, column }];
+      });
+      const target = matches[occurrence];
+      if (target === undefined) {
+        throw new Error(`nothing on this screen names ${label} (${occurrence})`);
       }
-      throw new Error(
-        `focus never reached ${label} (${occurrence}): ${JSON.stringify(yield* pty.shows())}`,
-      );
+      yield* pty.type(`\x1b[<0;${target.column + 1};${target.row + 1}M`);
+      yield* pty.type(`\x1b[<0;${target.column + 1};${target.row + 1}m`);
+      yield* sleep(150);
     }
     /** Open the Entries catalog, which is a drawer over the reading. */
     function* openCatalog(pty: Pty): Operation<void> {
-      yield* activateKey(pty, "Entries");
+      yield* activateLabel(pty, "Entries");
       yield* showing(pty, "1. [ok]", ACT_MS);
     }
     function* inspect(pty: Pty): Operation<void> {
@@ -364,21 +341,21 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
         // The scopes an entry holds are rows of its catalog, under the entry
         // itself — and choosing one closes the drawer, so each pass opens it.
         yield* openCatalog(pty);
-        yield* activateKey(pty, "component OwnerLeaf", index);
+        yield* activateLabel(pty, "component OwnerLeaf", index);
         yield* showingAcross(pty, '<OwnerWrapper input="first"', ACT_MS);
         yield* showingAcross(pty, '<OwnerWrapper input="second"', ACT_MS);
-        yield* activateKey(pty, "BINDINGS");
-        yield* activateKey(pty, "answered");
+        yield* activateLabel(pty, "BINDINGS");
+        yield* activateLabel(pty, "answered");
         yield* showing(pty, "[close]", ACT_MS);
         yield* showing(pty, JSON.stringify(expected), ACT_MS);
         yield* pty.type("\x1b");
         yield* sleep(150);
       }
       yield* openCatalog(pty);
-      yield* activateKey(pty, "1. [ok]");
+      yield* activateLabel(pty, "1. [ok]");
       yield* showing(pty, "first/second", ACT_MS);
       for (const name of ["first", "second"]) {
-        yield* activateKey(pty, name);
+        yield* activateLabel(pty, name);
         yield* showing(pty, "[close]", ACT_MS);
         yield* showing(pty, JSON.stringify(name), ACT_MS);
         yield* pty.type("\x1b");
@@ -386,7 +363,7 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
       }
     }
     function* finish(pty: Pty): Operation<string> {
-      yield* activateKey(pty, "[exit]");
+      yield* activateLabel(pty, "[exit]");
       const deadline = Date.now() + ACT_MS;
       while ((yield* pty.status()) === undefined) {
         if (Date.now() > deadline) {

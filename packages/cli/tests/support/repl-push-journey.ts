@@ -135,8 +135,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     expect(primary).toMatch(/^[0-9a-f]{40}$/);
     expect(primary).not.toBe(published);
 
-    yield* reach(first, "[exit]");
-    yield* first.type("\r");
+    yield* click(first, "[exit]");
     expect(yield* ended(first)).toBe(0);
     const location = printedLocation((yield* first.shows()).join("\n"));
 
@@ -163,8 +162,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     expect(yield* gitSaid(working, ["rev-parse", "HEAD"], home)).toBe(advanced);
     expect(yield* exists(join(working, "after.md"))).toBe(false);
 
-    yield* reach(second, "[answer]");
-    yield* second.type("\r");
+    yield* click(second, "[answer]");
     // The saved commit, which describes what was published rather than where
     // the branch is now.
     yield* showing(second, `Published commit: ${published}`, ACT_MS);
@@ -179,8 +177,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     expect(yield* pushes(shim.log)).toEqual([]);
     expect(yield* remoteRef(origin, BRANCH, home)).toBe(published);
 
-    yield* reach(second, "[exit]");
-    yield* second.type("\r");
+    yield* click(second, "[exit]");
     expect(yield* ended(second)).toBe(0);
 
     // A separate new entry: its publication is new work, so it resolves today's
@@ -195,8 +192,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     expect(yield* pushes(shim.log)).toHaveLength(1);
     expect(yield* remoteRef(origin, "main", home)).toBe(primary);
 
-    yield* reach(third, "[exit]");
-    yield* third.type("\r");
+    yield* click(third, "[exit]");
     expect(yield* ended(third)).toBe(0);
   });
 }
@@ -245,8 +241,7 @@ export function replUnsupportedPush(repl: ReplCommand): Operation<void> {
     expect(yield* remoteRef(origin, "main", home)).toBe(head);
     expect(yield* exists(join(home, ".xmd", "repositories"))).toBe(false);
 
-    yield* reach(pty, "[exit]");
-    yield* pty.type("\r");
+    yield* click(pty, "[exit]");
     expect(yield* ended(pty)).toBe(0);
   });
 }
@@ -487,21 +482,6 @@ function* slotsBeneath(base: string, depth: number): Operation<string[]> {
     level = next;
   }
   return level;
-}
-
-/** Walk the focus ring until this control is the marked one. */
-export function* reach(pty: Pty, label: string): Operation<void> {
-  const deadline = Date.now() + ACT_MS;
-  while (!(yield* pty.shows()).some((line) => line.includes(`> ${label}`))) {
-    if (Date.now() > deadline) {
-      throw new Error(
-        `focus never reached ${label} under ${cliRuntime()}. screen=` +
-          JSON.stringify((yield* pty.shows()).map((one) => one.trimEnd())),
-      );
-    }
-    yield* pty.type("\t");
-    yield* sleep(250);
-  }
 }
 
 /** Activate the control holding this text with a pointer. */

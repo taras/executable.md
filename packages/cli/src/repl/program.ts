@@ -3932,6 +3932,7 @@ export function* prepareFrame(
           caretFor(view.state.message, view.state.messageCaret),
           chatRoom,
           view.focused === "sidekick:message",
+          messageStore,
         );
   if (!message.ok) {
     return message;
@@ -4035,10 +4036,6 @@ export function* prepareFrame(
   // The staged Draft's own value, fitted to the selected work it sits in. A
   // fixed number of rows, so no measurement above depends on it.
   //
-  // Through a store of its own, and over the lines that are drawn rather than
-  // over the whole draft: a key typed into a long draft was re-measuring every
-  // line of it through the engine, and the rows above the block were cut only
-  // to be dropped.
   const drafted =
     draftLinesOf(view) === undefined || widths.surfaceBody < 1
       ? Ok(undefined)
@@ -4048,6 +4045,8 @@ export function* prepareFrame(
           caretFor(view.state.draft, view.state.draftCaret),
           widths.surfaceBody,
           view.focused === "footer:input",
+          draftStore,
+          sourceRuns,
         );
   if (!drafted.ok) {
     return drafted;
@@ -4141,6 +4140,8 @@ export function* prepareFrame(
             },
             room - prefix.value.cells,
             focused,
+            undefined,
+            input?.["purpose"] === "draft" ? sourceRuns : undefined,
           );
           if (!editor.ok) {
             return editor;

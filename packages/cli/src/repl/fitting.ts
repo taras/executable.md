@@ -1087,10 +1087,12 @@ export function* fitEditor(
   caret: ReplCaret,
   room: number,
   focused: boolean,
+  store?: ReplPlainFitStore,
+  classify: (text: string) => readonly ReplTokenRun[] = (text) => [{ text, token: "field-value" }],
 ): Operation<Result<ReplEditor>> {
   const lines = caret.value.split("\n").map((text, at) => ({ key: `edit:${at}`, text }));
   // Reserve a blank cell for a caret after the last grapheme of a fitted row.
-  const fitted = yield* fitPlain(renderer, size, lines, Math.max(1, room - 1));
+  const fitted = yield* fitPlain(renderer, size, lines, Math.max(1, room - 1), store);
   if (!fitted.ok) {
     return fitted;
   }
@@ -1120,7 +1122,7 @@ export function* fitEditor(
       })),
     });
     const own = `${" ".repeat(line.indent)}${line.text}`;
-    display.push({ text: own, runs: [{ text: own, token: "draft" }] });
+    display.push({ text: own, runs: classify(own) });
     offsets.set(line.line, from + line.text.length);
   }
   const active = caretRow(rows, caret.offset, caret.backward);
@@ -1135,9 +1137,13 @@ export function* fitEditor(
     display[active] = {
       text: before + glyph + after,
       runs: tokenRuns([
-        { text: before, token: "draft" },
+        ...slicedRuns(classify(before + glyph + after), 0, before.length),
         { text: glyph, token: "caret" },
-        { text: after, token: "draft" },
+        ...slicedRuns(
+          classify(before + glyph + after),
+          before.length + glyph.length,
+          before.length + glyph.length + after.length,
+        ),
       ]),
     };
   }

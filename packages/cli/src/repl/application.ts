@@ -4427,14 +4427,33 @@ export function focusSettled(
    */
   admission?: ReplAdmission,
 ): ReplState {
+  let state = view.state;
+  const from = admission?.windows.get(DRAWER_WINDOW)?.from;
+  if (from !== undefined && focused?.startsWith("drawer:value:")) {
+    if (view.selection.drawers.at(-1)?.kind === "live-elicit" && state.form.offset !== from) {
+      state = Object.freeze({ ...state, form: Object.freeze({ ...state.form, offset: from }) });
+    } else if (
+      presentedAsking(view) !== undefined &&
+      state.asking !== undefined &&
+      state.asking.form.offset !== from
+    ) {
+      state = Object.freeze({
+        ...state,
+        asking: Object.freeze({
+          ...state.asking,
+          form: Object.freeze({ ...state.asking.form, offset: from }),
+        }),
+      });
+    }
+  }
   const claim = focusClaim(view);
-  if (view.state.restore === undefined) {
-    return view.state;
+  if (state.restore === undefined) {
+    return state;
   }
   if (claim === undefined || focused !== claim) {
-    return view.state.restore.kind === "answered"
-      ? view.state
-      : Object.freeze({ ...view.state, restore: undefined });
+    return state.restore.kind === "answered"
+      ? state
+      : Object.freeze({ ...state, restore: undefined });
   }
   // The reveal this frame presented, retained before the claim that caused it is
   // spent. Only a claim on a catalog row can have moved that window, and only
@@ -4446,13 +4465,13 @@ export function focusSettled(
       ? admission?.windows.get(presentedCatalog(view) ? DRAWER_WINDOW : ENTRIES_WINDOW)?.from
       : undefined;
   const viewports =
-    revealed === undefined || revealed === view.state.viewports.entries
-      ? view.state.viewports
-      : Object.freeze({ ...view.state.viewports, entries: revealed });
-  if (view.state.restore.kind === "reveal" && admission !== undefined) {
+    revealed === undefined || revealed === state.viewports.entries
+      ? state.viewports
+      : Object.freeze({ ...state.viewports, entries: revealed });
+  if (state.restore.kind === "reveal" && admission !== undefined) {
     if (claim.startsWith("sessions:")) {
       return Object.freeze({
-        ...view.state,
+        ...state,
         restore: undefined,
         viewports: {
           ...viewports,
@@ -4463,10 +4482,10 @@ export function focusSettled(
     if (claim.startsWith("drawer:")) {
       const from = admission.windows.get(DRAWER_WINDOW)?.from;
       if (from !== undefined) {
-        const open = view.state.route.drawers.at(-1);
-        const key = open === undefined ? undefined : readingKeyOf(view.state, open);
+        const open = state.route.drawers.at(-1);
+        const key = open === undefined ? undefined : readingKeyOf(state, open);
         return Object.freeze({
-          ...view.state,
+          ...state,
           restore: undefined,
           viewports: {
             ...viewports,
@@ -4478,7 +4497,7 @@ export function focusSettled(
       }
     }
   }
-  return Object.freeze({ ...view.state, restore: undefined, viewports });
+  return Object.freeze({ ...state, restore: undefined, viewports });
 }
 
 /** Every answer this history already holds, wherever in its entries it holds it. */
@@ -4645,7 +4664,7 @@ export function admitsSubmission(readiness: ReplReadiness): boolean {
  * First in the row, and before any key guidance, because the row is as wide as
  * the terminal and the terminal decides where it stops: a sentence truncated
  * after "Entry 1 running" still told somebody the thing they could not have
- * worked out, while one truncated after "Tab/Shift+Tab move" told them what the
+ * worked out, while one truncated after "Tab regions Alt↑↓" told them what the
  * keys do and left them pressing Enter at an entry that cannot accept it.
  */
 function statePhrase(readiness: ReplReadiness, narrow: boolean): string {
@@ -4921,7 +4940,7 @@ function guidanceParts(
   const modal = modalOpen(view);
   const editing = focused === undefined || focused === "footer:input";
   const narrow = view.size.columns <= NARROW.columns;
-  const move: GuidancePart = { text: "Tab/Shift+Tab move" };
+  const move: GuidancePart = { text: "Tab regions Alt↑↓" };
   if (modal) {
     // A drawer holds focus, so `Esc closes` is required and movement is not: Tab
     // is discoverable by pressing it, and being shut inside a modal whose way out
@@ -5753,8 +5772,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // drag focus back here after every Tab and traversal would never move at all.
   // A restoration claim is somebody else's: exactly one description may claim
   // focus, and a drawer that just went says which one it is.
-  const claiming =
-    state.route.drawers.length === 0 && view.focused === undefined && claim === undefined;
+  const claiming = !modalOpen(view) && view.focused === undefined && claim === undefined;
   if (workspace !== undefined) {
     // With the selected work, which is the surface it is part of. A narrow
     // frame showing the Transcript or the Sidekick has no region to draw it in.
@@ -7109,7 +7127,11 @@ function formContent(
   // The same rule inside the modal: the first control claims focus when the
   // drawer opens, and afterwards traversal inside the drawer owns it.
   const entering =
-    focused === undefined || (!focused.startsWith("drawer:") && !focused.startsWith("footer:"));
+    focused === undefined ||
+    (!focused.startsWith("drawer:") &&
+      focused !== "footer:history" &&
+      focused !== "footer:exit" &&
+      !focused.startsWith("footer:top:"));
   for (const one of form.fields) {
     const value = held.values[one.name] ?? "";
     const marked = requiredNow(form, held.values, one) ? "*" : " ";
@@ -7658,7 +7680,7 @@ function revealing(described: Described, reveal: Readonly<Record<string, string>
       component: read.component,
       input: { ...fields(read.input), reveal },
       layout: read.layout,
-      ...(read.focus ? { focus: true as const } : {}),
+      ...(read.focus ? { focus: true } : {}),
     }),
   };
 }
@@ -7700,8 +7722,12 @@ function transcriptReveals(rows: readonly Described[], from: number, count: numb
   const turns = rows
     .map((one, at) => ({ one, at }))
     .filter(({ one }) => {
-      const input = fields(readDescription(one.description).input);
-      return one.key.startsWith("sessions:turn:") || input?.["select"] === "sidekick-turn";
+      const read = readDescription(one.description);
+      const input = fields(read.input);
+      return (
+        isControl(read.component, read.input) &&
+        (one.key.startsWith("sessions:turn:") || input?.["select"] === "sidekick-turn")
+      );
     });
   for (const [index, row] of turns.entries()) {
     if (row.at < from || row.at >= from + count) {
@@ -7719,11 +7745,12 @@ function transcriptReveals(rows: readonly Described[], from: number, count: numb
         targets[key] = other.one.key;
       }
     }
-    const child = rows[row.at + 1];
-    if (
-      child?.key.startsWith("sessions:request:") &&
-      (row.at + 1 < from || row.at + 1 >= from + count)
-    ) {
+    const end = turns[index + 1]?.at ?? rows.length;
+    const childAt = rows.findIndex(
+      (one, at) => at > row.at && at < end && one.key.startsWith("sessions:request:"),
+    );
+    const child = rows[childAt];
+    if (child !== undefined && (childAt < from || childAt >= from + count)) {
       targets["ArrowRight"] = child.key;
     }
     found.set(row.one.key, targets);
@@ -9147,9 +9174,11 @@ function editorRuns(
   if (editor !== undefined && typeof prompt === "string" && input?.["block"] !== true) {
     const focused = input?.["focused"] === true;
     const own = editor.display[editor.active];
+    const role = input?.["purpose"] === "draft" ? "draft" : "field-value";
     return tokenRuns([
-      { text: fieldLabel(prompt, focused), token: "field-value" },
-      ...(focused ? own.runs : tokenRuns([{ text: own.text, token: "field-value" }])),
+      { text: fieldLabel(prompt, focused).slice(0, 1), token: focused ? "focus-marker" : role },
+      { text: fieldLabel(prompt, focused).slice(1), token: role },
+      ...own.runs,
     ]);
   }
   for (const [prefix, key, count] of [
@@ -10030,6 +10059,15 @@ function offsetFor(
     const at = rows.findIndex((one) => one.key === requested.key);
     if (at >= 0) {
       return Math.min(Math.max(held, at - capacity + 1), at);
+    }
+  }
+  if (window === DRAWER_WINDOW && capacity > 0) {
+    const content = drawerContent(view, widths.drawer, preview, notices);
+    if (content?.entering === true) {
+      const at = content.content.findIndex((one) => one.field !== undefined);
+      if (at >= 0) {
+        return Math.min(Math.max(held, at - capacity + 1), at);
+      }
     }
   }
   const catalog = window === ENTRIES_WINDOW || (window === DRAWER_WINDOW && presentedCatalog(view));

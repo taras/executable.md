@@ -18,7 +18,7 @@ import type { Operation } from "effection";
 import { ReplTerminal } from "../../src/repl/terminal.ts";
 import { MOUNTED_DEADLINE_MS } from "./mounted-repl.ts";
 import type { Terminal } from "./mounted-repl.ts";
-import type { ReplPage, ScreenReading, ScreenScope } from "./repl-page.ts";
+import type { PageKey, ReplPage, ScreenReading, ScreenScope } from "./repl-page.ts";
 
 /** The Draft's own heading, which its Send shares a row with. */
 export const DRAFT = " DRAFT";
@@ -96,33 +96,13 @@ export function* typed(page: ReplPage, text: string): Operation<void> {
   yield* page.until(`the screen showing ${JSON.stringify(text)}`, (one) => one.shows(text));
 }
 
-/**
- * Walk the focus ring to the Draft.
- *
- * The product advertises both the route and the arrival: its guidance row says
- * "Type here" while the Draft takes the keystrokes and offers the way to it
- * otherwise. The ring wraps, so the walk is bounded.
- * Receipt: work/terminal-field-routes-2/receipts/.
- */
-export function* intoDraft(page: ReplPage): Operation<void> {
-  for (let press = 0; press < 40 && !page.screen().shows(TYPING); press += 1) {
-    yield* tab(page);
-  }
-  if (!page.screen().shows(TYPING)) {
-    // The guidance row is where this product advertises the Draft, and a
-    // refusal takes that row for itself. History is the way to put a sentence
-    // like that away: it is modal, it changes no entry, and closing it leaves
-    // the guidance row saying what the focus ring is doing again.
-    yield* page.press("[history]");
-    yield* page.until("the History drawer", (one) => one.shows("[close]"));
-    yield* page.press("[close]");
-    yield* page.until("the drawer closing", (one) => !one.shows("[close]"));
-    for (let press = 0; press < 40 && !page.screen().shows(TYPING); press += 1) {
-      yield* tab(page);
-    }
-  }
-  if (!page.screen().shows(TYPING)) {
-    throw new Error(`the Draft never took the keystrokes. ${page.describe()}`);
+/** Follow the caller's known route back to the Draft. */
+export function* intoDraft(page: ReplPage, route: readonly PageKey[] = []): Operation<void> {
+  for (const name of route) {
+    const before = page.screen().index;
+    yield* page.key(name);
+    yield* page.until(`the screen after ${name}`, (one) => one.index > before);
+    yield* sleep(30);
   }
 }
 
@@ -167,8 +147,12 @@ function* pressTab(
  * from the last line's own words rather than from the whole text: a wrapped
  * value is not on the screen as one string.
  */
-export function* pasteDraft(page: ReplPage, text: string): Operation<void> {
-  yield* intoDraft(page);
+export function* pasteDraft(
+  page: ReplPage,
+  text: string,
+  route: readonly PageKey[] = [],
+): Operation<void> {
+  yield* intoDraft(page, route);
   // The last word rather than the last line: a field fits a value into the
   // rows it has, so a long line is not on the screen as one string.
   const last = (text.trimEnd().split(/\s+/).at(-1) ?? "").slice(0, 24);
@@ -179,9 +163,13 @@ export function* pasteDraft(page: ReplPage, text: string): Operation<void> {
   );
 }
 
-/** Put this text in the Draft, wherever the keystrokes were going before. */
-export function* draftText(page: ReplPage, text: string): Operation<void> {
-  yield* intoDraft(page);
+/** Put this text in the already active Draft. */
+export function* draftText(
+  page: ReplPage,
+  text: string,
+  route: readonly PageKey[] = [],
+): Operation<void> {
+  yield* intoDraft(page, route);
   yield* typed(page, text);
 }
 
@@ -214,7 +202,7 @@ export function stopSidekick(page: ReplPage): Operation<void> {
   if (reading.shows(COMPOSER)) {
     return page.press("[stop]", SIDEKICK_CONTROLS);
   }
-  return page.press("[stop]", { rightOf: "[close]" });
+  return page.press("[stop]", { onRow: "[close]" });
 }
 
 /** Its own Send offered and its own Stop gone. */
