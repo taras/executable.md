@@ -2229,16 +2229,26 @@ var AcpRuntimeManager = class {
 	close(handle, options = {}) {
 		this.assertOpen();
 		const recordId = handle.acpxRecordId ?? handle.sessionKey;
-		return this.trackTask(this.withManagerLock(this.runtimeOperationLocks, recordId, async () => {
-			return await this.closeRuntimeSession(handle, options.discardPersistentState === true ? "discard" : "release");
-		}));
+		const cancelled = this.cancelSessionTasks(recordId);
+		cancelled.catch(() => {});
+		return this.queueSessionTask(recordId, async () => {
+			// Materialization finalization needs this lock, so join before acquiring it.
+			const turnCleanup = await settleAttempt(async () => {
+				const tasks = await cancelled;
+				await Promise.all(tasks.map((task) => task.completion));
+			});
+			const closed = await settleAttempt(async () => this.withManagerLock(this.runtimeOperationLocks, recordId, async () => this.closeRuntimeSession(handle, options.discardPersistentState === true ? "discard" : "release")));
+			const failure = firstFailedAttempt([turnCleanup, closed]);
+			if (failure) {
+				throw failure.error;
+			}
+		});
 	}
 	async closeRuntimeSession(handle, intent) {
 		const recordId = handle.acpxRecordId ?? handle.sessionKey;
 		await this.retrySessionCleanup(recordId);
 		const record = await this.resolveRuntimeRecordForClose(recordId);
 		this.markActiveRuntimeRecordClosing(record);
-		if (intent !== "prepare-fresh") await this.cancelSessionTasks(recordId);
 		const closeFailure = await this.closeRuntimeRecordOwnership(record, intent);
 		if (intent === "discard") {
 			if (closeFailure) throw closeFailure.error;

@@ -58,6 +58,12 @@ consumers that only use `runTurn()`. An already asserting session satisfies the
 barrier immediately. The local seam applies to `createAcpRuntime()`, which is
 the runtime XMD uses; the released shared/queue runtime is not an XMD provider.
 
+Handle close requests cancellation and joins the existing per-record turn queue
+before releasing ownership. The join precedes the manager lock because turn
+finalization needs that same lock. Close still attempts resource cleanup when a
+turn task fails and reports the failure. Provider teardown therefore includes an
+accepted promotion's save and finalization; no identity publishes after it ends.
+
 | Module | Materialization change |
 | --- | --- |
 | `runtime.js` | Deferred ensure, owner-private provisional identity, consumed acceptance, joined promotion and waitable turn barrier. |

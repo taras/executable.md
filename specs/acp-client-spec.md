@@ -1394,7 +1394,9 @@ none.
   reconcile.
 - **Teardown.** Provider-scope teardown cancels active turns and closes each
   distinct runtime handle with an all-settled strategy, throwing a single error or
-  an `AggregateError` from the provider scope.
+  an `AggregateError` from the provider scope. Handle release joins accepted
+  promotion and turn cleanup before giving up ownership. The join precedes the
+  manager lock needed by finalization; accepted identity and history remain saved.
 
 
 ## The CLI Sidekick attachment as an ACP backend

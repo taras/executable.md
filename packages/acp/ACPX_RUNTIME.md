@@ -78,6 +78,9 @@ deno task test packages/acp/tests/acpx-session-save.test.ts
 Waiting on `turn.promptStarted` proves only transport delivery. First-turn
 creation ensures with `materialization: "first-turn-acceptance"` and waits on
 `turn.materialized` before recording the host mapping or exposing events.
+Cancellation acknowledgement also does not finish a turn. Releasing its handle
+with `runtime.close(...)` joins promotion and turn cleanup before returning;
+provider teardown uses that same boundary and retains accepted history.
 
 A returned `_meta` is opaque adapter data, not permission to retain a checkpoint.
 Only XMD's successful completed terminal can carry one. A real response recovered
