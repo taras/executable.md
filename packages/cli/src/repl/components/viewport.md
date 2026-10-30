@@ -54,6 +54,15 @@ PageDown left by descendants; those use the existing `reading-key` reduction,
 move capacity minus one row and allow Freedom's survivor recovery. Fields keep
 arrows and Home/End. Reading anchors keep their own six keys.
 
+A focused reading anchor keeps its keyed description under the viewport when
+wheel admission reaches a page containing only controls. With no admitted text
+line to carry it, its label is empty and candidate assembly gives it no box.
+It reserves no row or activation target and retains no off-screen source row.
+When text becomes visible again, the same node carries the first admitted line.
+Only the existing focused anchor is retained this way; opening a control-only
+form still enters its editable value. Keep this rowless-owner case when changing
+`anchored()` or candidate assembly.
+
 This removes window buttons, their activation data, focus placements, guidance
 and layout reservations for chat and shared drawers. It adds one component,
 one physical input member, one semantic action, an optional focused extent in
@@ -80,6 +89,8 @@ and 120x30, and an entry question at 120x30 and 72x20 whose first editable enum
 window contains only controls. They send real terminal sequences through
 `ReplPage.wheel(direction, cell)` and read the existing emulator. Input/frame
 checks live in `repl-wheel-input.test.ts` and `repl-wheel-frame.test.ts`.
+The latter also follows the actual focused drawer anchor node through a long
+preview into an all-control enum page using the production pipeline.
 
 Run the foundation evidence with:
 

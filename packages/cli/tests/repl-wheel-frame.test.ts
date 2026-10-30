@@ -1,3 +1,19 @@
+import type { Operation } from "effection";
+import { journalModel } from "./fixtures/repl/journals.ts";
+import { usePresenter } from "./fixtures/repl/presentation.ts";
+import { readQuestionForm } from "../src/repl/elicitation.ts";
+import {
+  initialState,
+  reduceRepl,
+  viewFor,
+  withWorkspace,
+  workspaceOf,
+  presentedDrawer,
+  NO_AGENT,
+} from "../src/repl/application.ts";
+import type { ReplLive } from "../src/repl/application.ts";
+import type { ReplInputEvent } from "../src/repl/description.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { open, close, fixed } from "@bomb.sh/tty";
@@ -124,5 +140,120 @@ describe("wheel committed frame", () => {
     }
     expect(changed.value.map.scrolls[0].bounds.height).toBe(2);
     expect(frame.map.scrolls[0].bounds.height).toBe(5);
+  });
+});
+
+describe("foundation wheel anchor lifetime", () => {
+  it("retains the focused reading anchor when wheel enters a control-only question page", function* () {
+    const model = yield* journalModel(["# Current entry"]);
+    const size = { columns: 120, rows: 30 };
+    const presenter = yield* usePresenter(size);
+    const live: ReplLive = {
+      output: "",
+      expansion: "playing",
+      pausable: false,
+      running: true,
+      agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
+      question: {
+        message: Array.from({ length: 40 }, (_, index) => `Preview row ${index}`).join("\n"),
+        form: readQuestionForm({
+          type: "object",
+          properties: {
+            decision: {
+              type: "string",
+              enum: Array.from({ length: 35 }, (_, index) => `pick-${index}`),
+            },
+          },
+          required: ["decision"],
+          additionalProperties: false,
+        }),
+        submit() {
+          throw new Error("the witness must not submit");
+        },
+      },
+    };
+    let state = reduceRepl(
+      initialState("anchor-witness"),
+      { kind: "open-drawer", drawer: { kind: "live-elicit" } },
+      model,
+      live,
+    ).state;
+    const focused = () => {
+      const id = presenter.tree.focused();
+      return id === undefined ? undefined : presenter.tree.keyOf(id);
+    };
+    function view() {
+      const resolved = viewFor(state, model, live, size, focused());
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      return withWorkspace(resolved.value, workspaceOf(model));
+    }
+    let current = view();
+    let shown = yield* presenter.commit(current);
+    function* send(event: ReplInputEvent): Operation<void> {
+      const dispatched = yield* presenter.tree.dispatch(event);
+      if (!dispatched.ok) {
+        throw dispatched.error;
+      }
+      if (dispatched.value.outcome === "action") {
+        state = reduceRepl(
+          state,
+          dispatched.value.action,
+          model,
+          live,
+          shown.committed.admission,
+          presentedDrawer(current),
+        ).state;
+      }
+      current = view();
+      shown = yield* presenter.commit(current);
+    }
+    for (
+      let page = 0;
+      page < 15 && !presenter.grid.rows().some((row) => row.includes("Preview row 0"));
+      page++
+    ) {
+      yield* send({ kind: "key", key: "PageUp" });
+    }
+    expect(presenter.grid.rows().some((row) => row.includes("Preview row 0"))).toBe(true);
+    expect(focused()).toBe("drawer:reading:anchor");
+    const anchor = presenter.tree.focused();
+    expect(anchor).toBeDefined();
+    let controlsOnly = false;
+    for (let tick = 0; tick < 25; tick++) {
+      const scroll = shown.committed.rendered.map.scrolls.find(
+        (one) => one.id === "box:drawer:viewport",
+      );
+      if (scroll === undefined) {
+        throw new Error("production drawer viewport is absent");
+      }
+      const event = resolveWheel(
+        shown.committed.rendered,
+        { column: scroll.bounds.x, row: scroll.bounds.y },
+        "down",
+      );
+      if (event === undefined) {
+        throw new Error("production wheel did not resolve");
+      }
+      yield* send(event);
+      expect(shown.nodeOf("drawer:reading:anchor")).toBe(anchor);
+      expect(shown.mounted).toContain(anchor);
+      expect(shown.targets.some((target) => target.node === anchor)).toBe(false);
+      const window = shown.committed.admission.windows.get("drawer");
+      if (window === undefined) {
+        throw new Error("production drawer admission is absent");
+      }
+      if (presenter.grid.textIn(scroll.bounds).every((row) => row.includes("( ) pick-"))) {
+        controlsOnly = true;
+        expect(shown.keys.some((key) => key.startsWith("drawer:message:"))).toBe(false);
+        expect(shown.boundsOf("drawer:reading:anchor")).toBeUndefined();
+        const choices = shown.keys.filter((key) => key.startsWith("drawer:choice:"));
+        expect(choices).toHaveLength(window.count);
+      }
+      expect(presenter.tree.focused()).toBe(anchor);
+    }
+    expect(controlsOnly).toBe(true);
   });
 });

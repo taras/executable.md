@@ -5869,7 +5869,22 @@ function anchored(
 ): readonly Described[] {
   const at = rows.findIndex((one) => readDescription(one.description).component === LINE);
   if (at < 0) {
-    return rows;
+    if (focused !== key || rows.length === 0) {
+      return rows;
+    }
+    // A control-only page retains the focused viewport owner without a painted row.
+    return [
+      {
+        key,
+        style: ORDINARY,
+        description: describeNode<ReplAction>({
+          key,
+          component: READING,
+          input: { label: "", reading },
+        }),
+      },
+      ...rows,
+    ];
   }
   return rows.map((one, index) => {
     if (index !== at) {
@@ -6772,6 +6787,7 @@ function drawerFor(
   const admitted = windowed(content, context, entering, view.focused, asking, reveals);
   const readings =
     configuring &&
+    view.focused !== "drawer:reading:anchor" &&
     admitted.some((one) => {
       const read = readDescription(one.description);
       return isControl(read.component, read.input);
@@ -9006,7 +9022,8 @@ function candidatesOf(
   const walk = (description: ReplDescription<ReplAction>): void => {
     const read = readDescription(description);
     const slot =
-      fields(read.input)?.["covered"] === true
+      fields(read.input)?.["covered"] === true ||
+      (read.component === READING && fields(read.input)?.["label"] === "")
         ? undefined
         : catalogRows?.has(read.key) === true
           ? "drawer"
