@@ -129,9 +129,25 @@ describe("wheel real consumers", () => {
       expect(page.screen().shows("Preview row 0")).toBe(false);
       yield* page.type("pick-34");
       yield* page.until("enum value typed", (one) => one.shows("= pick-34"));
+      const option = page.screen().locate("(x) pick-34");
+      const firstChoice = () => {
+        for (const row of page.screen().rows) {
+          const match = /\([ x]\) pick-(\d+)/.exec(row);
+          if (match !== null) {
+            return Number(match[1]);
+          }
+        }
+        throw new Error(`no enum choice: ${page.describe()}`);
+      };
+      const first = firstChoice();
+      yield* key(page, "Tab");
+      yield* wheel(page, "up", option);
+      expect(firstChoice()).toBe(first - 3);
+      yield* wheel(page, "down", option);
+      expect(firstChoice()).toBe(first);
+      yield* key(page, "Backtab");
       yield* key(page, "Home");
       yield* key(page, "ArrowRight");
-      const option = page.screen().locate("(x) pick-34");
       const visible = page.screen().rows.filter((row) => row.includes("( ) pick-"));
       for (let tick = 0; tick < 3; tick += 1) {
         yield* wheel(page, "up", option);
