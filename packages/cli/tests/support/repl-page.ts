@@ -346,9 +346,14 @@ export function* useReplPage(
     );
   }
 
-  // The way out is on every drawable screen of this product, so its label is
-  // what says a person has one to act on at all.
-  yield* until("a screen offering the way out", (one) => one.shows("[exit]"));
+  // A screen a person can act on. Usually that is the footer's way out; at a
+  // terminal below the minimum it is the refusal naming the size, which draws
+  // no control at all and is still a screen to act on — grow the window, or
+  // press Escape.
+  yield* until(
+    "a screen a person can act on",
+    (one) => one.shows("[exit]") || one.shows("needs at least"),
+  );
 
   return { repl, screen, until, press, key: sendKey, type, resize, describe };
 }

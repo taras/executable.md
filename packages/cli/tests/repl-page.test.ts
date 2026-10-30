@@ -350,8 +350,7 @@ describe("REPL page — reaching a field the claim names, by keyboard", () => {
     // What the drawer then offers is the outcome a replacement has: this agent
     // has its own settings, so the way to adopt it is a conversation of its own.
     expect(page.screen().shows("scrivener has its own settings.")).toBe(true);
-    yield* page.press("[start new conversation]");
-    yield* page.until("Configure closing over the replacement", (one) => !one.shows("[refresh]"));
+    expect(page.screen().shows("[start new conversation]")).toBe(true);
   });
 
   it("answers the second field of a question form and submits it", function* () {

@@ -251,3 +251,24 @@ describe("REPL retained readings across every terminal size", () => {
     expect(yield* readTextFile(path)).toBe(before);
   });
 });
+
+describe("REPL startup below the minimum terminal size", () => {
+  it("J1: a terminal below the minimum refuses, and recovers when it grows", function* () {
+    const terminal = yield* scoped(function* () {
+      const page = yield* useReplPage({ size: { columns: 40, rows: 10 } });
+      const refusal = page.screen();
+      expect(refusal.shows("needs at least 72x20")).toBe(true);
+      expect(refusal.shows("Make the window")).toBe(true);
+      expect(refusal.shows("press Escape")).toBe(true);
+      expect(refusal.shows("[")).toBe(false);
+      expect(refusal.shows("Sessions")).toBe(false);
+      const grown = yield* page.resize(WIDE);
+      expect(grown.shows("TRANSCRIPT")).toBe(true);
+      expect(grown.shows("[exit]")).toBe(true);
+      yield* leaveWithLocation(page);
+      return page.repl.terminal;
+    });
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+  });
+});
