@@ -6,13 +6,16 @@ import { scoped, spawn, suspend } from "effection";
 import type { Operation } from "effection";
 import { Elicitation } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
-import { readTextFile } from "@effectionx/fs";
+import { readTextFile, readdir } from "@effectionx/fs";
+import { parseDurableEvent } from "@executablemd/durable-streams";
+import { projectRepl } from "../src/repl/model.ts";
+import { PAIRED_DIRECTORY, ENTRIES_FILE } from "../src/repl/sidekick/history.ts";
 import { join } from "node:path";
 import { decodeLocation } from "../src/repl/route.ts";
-import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
+import { referenceSource, REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
-import { awaited } from "./support/mounted-repl.ts";
+import { mountedExecution, awaited } from "./support/mounted-repl.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 
 import { useReplPage } from "./support/repl-page.ts";
@@ -270,5 +273,227 @@ describe("REPL startup below the minimum terminal size", () => {
     });
     expect(terminal.resets).toBe(1);
     expect(terminal.readers).toBe(0);
+  });
+});
+
+function* executionJournal(page: ReplPage): Operation<string> {
+  const execution = yield* mountedExecution(page.repl);
+  return join(page.repl.root, PAIRED_DIRECTORY, execution, ENTRIES_FILE);
+}
+
+function* journalRecords(page: ReplPage): Operation<string[]> {
+  return (yield* readTextFile(yield* executionJournal(page)))
+    .split("\n")
+    .filter((line) => line.length > 0);
+}
+
+function* retainedModel(page: ReplPage) {
+  const records = yield* journalRecords(page);
+  const events = records.map((record) => {
+    const parsed = parseDurableEvent(record);
+    if (!parsed.ok) {
+      throw parsed.error;
+    }
+    return parsed.value;
+  });
+  const projected = projectRepl(events);
+  if (!projected.ok) {
+    throw projected.error;
+  }
+  return projected.value;
+}
+
+function* referencePage(): Operation<ReplPage> {
+  return yield* useReplPage({ size: WIDE, includes: [REFERENCE_DIRECTORY] });
+}
+
+function* referenceAsking(page: ReplPage): Operation<string> {
+  const source = yield* referenceSource();
+  yield* pasteDraft(page, source);
+  yield* page.key("Enter");
+  yield* page.until("the entry asking", (one) => one.shows("[answer]"));
+  return source;
+}
+
+function* answerReference(page: ReplPage): Operation<void> {
+  yield* page.press("[answer]");
+  yield* page.until("the entry form", (one) => one.shows("[submit]"));
+  yield* page.press("( ) approve");
+  yield* entrySettles(page, 1, "ok");
+}
+
+function* commandReturned(page: ReplPage) {
+  yield* awaited("the command returning", () => page.repl.outcome() !== undefined);
+  const outcome = page.repl.outcome();
+  if (outcome === undefined) {
+    throw new Error("the command returned without an outcome");
+  }
+  return outcome;
+}
+
+function released(terminal: MountedRepl["terminal"]): void {
+  expect(terminal.resets).toBe(1);
+  expect(terminal.readers).toBe(0);
+  expect(terminal.listeners).toBe(0);
+  expect(terminal.raw.at(-1)).toBe(false);
+}
+
+describe("REPL original admission and terminal exit claims", () => {
+  it("J1: pasting the reference entry puts all of it in the draft and the location", function* () {
+    const page = yield* referencePage();
+    const source = yield* referenceSource();
+    const before = page.repl.terminal.presented.length;
+    yield* pasteDraft(page, source);
+    expect(page.repl.terminal.presented.length - before).toBeLessThan(4);
+    const tail = source.trimEnd().split("\n").at(-1) ?? "";
+    expect(page.screen().found(tail, DRAFT_VALUE)).toBe(1);
+    expect(source).toContain("\n\n");
+    expect(yield* journalRecords(page)).toEqual([]);
+    const location = route(yield* leaveWithLocation(page));
+    expect(location.draft).toBe(source);
+    expect(location.surface).toBe("entries");
+    expect(location.at).toBeUndefined();
+  });
+
+  it("J1: submitting admits exactly that source, and the run settles", function* () {
+    const terminal = yield* scoped(function* () {
+      const page = yield* referencePage();
+      const source = yield* referenceAsking(page);
+      const records = yield* journalRecords(page);
+      expect(records.length).toBeGreaterThan(0);
+      for (const line of records) {
+        expect(parseDurableEvent(line).ok).toBe(true);
+      }
+      const model = yield* retainedModel(page);
+      expect(model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      expect(model.entries[0]?.source).toBe(source);
+      expect(model.entries[0]?.settled).toBe(false);
+      expect(page.screen().shows("[answer]")).toBe(true);
+      yield* leaveWithLocation(page);
+      return page.repl.terminal;
+    });
+    released(terminal);
+  });
+
+  it("J1: the question is answered through the terminal, and the answer settles", function* () {
+    const terminal = yield* scoped(function* () {
+      const page = yield* referencePage();
+      yield* referenceAsking(page);
+      expect(page.screen().shows("( ) approve")).toBe(false);
+      yield* answerReference(page);
+      const lines = yield* journalRecords(page);
+      expect(lines.some((line) => line.includes("elicit"))).toBe(true);
+      for (let press = 0; press < 60 && !page.screen().shows("Decision: approve"); press += 1) {
+        const before = page.screen().index;
+        yield* page.press("[↓ later]", { rightOf: "Entries" });
+        yield* page.until("the reading advancing", (one) => one.index > before);
+      }
+      expect(page.screen().shows("Decision: approve")).toBe(true);
+      expect(page.screen().shows("TRANSCRIPT")).toBe(true);
+      expect(page.screen().shows("(none retained)")).toBe(true);
+      expect((yield* retainedModel(page)).entries[0]?.settled).toBe(true);
+      expect(yield* leaveWithLocation(page)).toContain("xmd://repl/");
+      return page.repl.terminal;
+    });
+    released(terminal);
+  });
+
+  it("J1: starting with no location creates one execution and focuses an empty draft", function* () {
+    const terminal = yield* scoped(function* () {
+      const page = yield* referencePage();
+      const files = yield* readdir(join(page.repl.root, PAIRED_DIRECTORY));
+      expect(files).toHaveLength(1);
+      expect(files[0]).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
+      expect(yield* journalRecords(page)).toEqual([]);
+      for (const label of [
+        "TRANSCRIPT",
+        "(none retained)",
+        "Entries",
+        "No entry yet",
+        "Type here",
+      ]) {
+        expect(page.screen().shows(label)).toBe(true);
+      }
+      yield* page.type("startup draft");
+      yield* page.until(
+        "the initial Draft taking the text",
+        (one) => one.found("startup draft", DRAFT_VALUE) === 1,
+      );
+      expect(page.screen().found("startup draft", { after: "message the sidekick" })).toBe(0);
+      const location = route(yield* leaveWithLocation(page));
+      expect(location.execution).toBe(files[0]);
+      expect(location.draft).toBe("startup draft");
+      expect(location.scopes).toEqual([]);
+      return page.repl.terminal;
+    });
+    released(terminal);
+  });
+
+  it("J1: Control-C ends the command and prints the location", function* () {
+    const terminal = yield* scoped(function* () {
+      const page = yield* referencePage();
+      const execution = yield* mountedExecution(page.repl);
+      yield* page.type("\x03");
+      const result = yield* commandReturned(page);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.location).toBe(`xmd://repl/${execution}/entries`);
+        expect(result.value.refusal).toBeUndefined();
+      }
+      return page.repl.terminal;
+    });
+    released(terminal);
+  });
+
+  it("J1: input queued behind Control-C starts nothing and appends nothing", function* () {
+    const page = yield* referencePage();
+    yield* page.type("\x03# queued behind an interrupt\r");
+    const outcome = yield* commandReturned(page);
+    expect(outcome.ok).toBe(true);
+    expect(yield* journalRecords(page)).toEqual([]);
+    expect(page.repl.fake.prompts).toEqual([]);
+    if (outcome.ok) {
+      expect(route(outcome.value.location).draft).toBeUndefined();
+    }
+    released(page.repl.terminal);
+  });
+
+  it("J1: no other chord ends it, so what leaves is the key and not the modifier", function* () {
+    const page = yield* referencePage();
+    yield* page.type("\x1ba\x08\x1b[15~");
+    yield* page.type("z");
+    yield* page.until("the following key arriving", (one) => one.found("z", DRAFT_VALUE) === 1);
+    expect(page.repl.outcome()).toBeUndefined();
+    expect(route(yield* leaveWithLocation(page)).draft).toBe("z");
+  });
+
+  it("J1: a control chord inserts nothing into the draft", function* () {
+    const page = yield* referencePage();
+    yield* page.type("\x1ba\x08\x1b[15~");
+    expect(route(yield* leaveWithLocation(page)).draft).toBeUndefined();
+  });
+
+  it("J1: a document that cannot be admitted leaves the draft and an empty journal", function* () {
+    const page = yield* referencePage();
+    yield* pasteDraft(page, "<Nowhere />");
+    yield* page.key("Enter");
+    yield* page.until("the admission refusal", (one) => one.shows("Nowhere") && one.shows("!"));
+    expect(yield* journalRecords(page)).toEqual([]);
+    expect(page.screen().found("<Nowhere />", DRAFT_VALUE)).toBe(1);
+    expect(route(yield* leaveWithLocation(page)).draft).toBe("<Nowhere />");
+    released(page.repl.terminal);
+  });
+
+  it("J1: a second entry is refused, and history does not change", function* () {
+    const page = yield* referencePage();
+    yield* referenceAsking(page);
+    const admitted = yield* journalRecords(page);
+    expect(admitted.length).toBeGreaterThan(0);
+    yield* pasteDraft(page, "<Json value={1} />");
+    yield* page.key("Enter");
+    yield* page.until("the unfinished entry refusal", (one) => one.shows("has not finished"));
+    expect(yield* journalRecords(page)).toEqual(admitted);
+    expect(page.screen().found("<Json value={1} />", DRAFT_VALUE)).toBe(1);
+    expect(route(yield* leaveWithLocation(page)).draft).toBe("<Json value={1} />");
   });
 });
