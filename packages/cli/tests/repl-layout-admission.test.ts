@@ -18,12 +18,12 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { collect, inlineSource, useTempFileCompiler } from "@executablemd/core";
+import { Elicitation, collect, inlineSource, useTempFileCompiler } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { readQuestionForm } from "../src/repl/elicitation.ts";
-import { Ok, scoped } from "effection";
+import { readQuestionForm, useReplElicitation } from "../src/repl/elicitation.ts";
+import { Ok, scoped, spawn } from "effection";
 import type { Operation } from "effection";
 
 import { skeletonOps } from "../src/repl/layout.ts";
@@ -59,7 +59,8 @@ import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { usePresenter, viewportBounds, windowOf } from "./fixtures/repl/presentation.ts";
 import type { Observed, Presenter } from "./fixtures/repl/presentation.ts";
 import { journalModel, projected } from "./fixtures/repl/journals.ts";
-import { referenceEvents } from "./fixtures/repl/reference.ts";
+import { referenceEvents, agentReferenceEvents } from "./fixtures/repl/reference.ts";
+import { awaited } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
 import { entrySettles, pasteDraft } from "./support/screen-journeys.ts";
@@ -1385,7 +1386,10 @@ describe("Owned renderer outcomes retained from the original journeys", () => {
     const pending = reduceRepl(initialState("owned"), { kind: "continue" }, model, live);
     expect(pending.intent.kind).toBe("none");
     expect(pending.state.refusal).toContain("not paused");
-    const held = reduceRepl(initialState("owned"), { kind: "continue" }, model, { ...live, expansion: "paused" });
+    const held = reduceRepl(initialState("owned"), { kind: "continue" }, model, {
+      ...live,
+      expansion: "paused",
+    });
     expect(held.intent.kind).toBe("continue");
     expect(held.state.refusal).toBeUndefined();
   });
@@ -1397,18 +1401,30 @@ describe("Owned renderer outcomes retained from the original journeys", () => {
       const closed = viewOf(model, size);
       yield* presenter.commit(closed);
       const before = presenter.grid.rows();
-      const state = reduceRepl(closed.state, { kind: "open-drawer", drawer: { kind: "history" } }, model, IDLE).state;
+      const state = reduceRepl(
+        closed.state,
+        { kind: "open-drawer", drawer: { kind: "history" } },
+        model,
+        IDLE,
+      ).state;
       const open = yield* presenter.commit(viewOf(model, size, { state }));
       const layer = open.regionOf("box:drawer:layer");
       const exit = open.boundsOf("footer:exit");
       const draft = open.boundsOf("footer:input");
-      if (layer === undefined || exit === undefined || draft === undefined) { throw new Error("the drawer lost its layer or footer"); }
-      const covered = before.slice(layer.y, layer.y + layer.height).map((row) => row.slice(layer.x, layer.x + layer.width).trim());
+      if (layer === undefined || exit === undefined || draft === undefined) {
+        throw new Error("the drawer lost its layer or footer");
+      }
+      const covered = before
+        .slice(layer.y, layer.y + layer.height)
+        .map((row) => row.slice(layer.x, layer.x + layer.width).trim());
       const inside = presenter.grid.textIn(layer).join("\n");
       expect(covered.some((row) => row.length > 4)).toBe(true);
       expect(inside).toContain("History");
       for (const row of covered) {
-        if (row.length >= 4 && !["[↑ earlier]", "[↓ later]", "[close]"].some((label) => label.includes(row))) {
+        if (
+          row.length >= 4 &&
+          !["[↑ earlier]", "[↓ later]", "[close]"].some((label) => label.includes(row))
+        ) {
           expect([size.columns, row, inside.includes(row)]).toEqual([size.columns, row, false]);
         }
       }
@@ -1422,25 +1438,297 @@ describe("Owned renderer outcomes retained from the original journeys", () => {
     const live: ReplLive = { ...IDLE, sidekick: KERNEL_SIDEKICK };
     for (const size of [WIDE, MEDIUM, NARROW]) {
       const presenter = yield* usePresenter(size);
-      let state = reduceRepl(initialState("owned"), { kind: "select-pane", pane: "sidekick" }, model, live).state;
+      let state = reduceRepl(
+        initialState("owned"),
+        { kind: "select-pane", pane: "sidekick" },
+        model,
+        live,
+      ).state;
       const view = (one: ReplState) => {
         const resolved = viewFor(one, model, live, size, "sidekick:message");
-        if (!resolved.ok) { throw resolved.error; }
+        if (!resolved.ok) {
+          throw resolved.error;
+        }
         return withWorkspace(resolved.value, workspaceOf(model));
       };
       const empty = yield* presenter.commit(view(state));
-      const before = empty.regionOf("box:inspection:viewport") ?? empty.regionOf("box:content:viewport");
-      state = reduceRepl(state, { kind: "type", field: "message", text: Array.from({ length: 8 }, (_, i) => `ROW-${i + 1}`).join("\n") }, model, live).state;
+      const before =
+        empty.regionOf("box:inspection:viewport") ?? empty.regionOf("box:content:viewport");
+      state = reduceRepl(
+        state,
+        {
+          kind: "type",
+          field: "message",
+          text: Array.from({ length: 8 }, (_, i) => `ROW-${i + 1}`).join("\n"),
+        },
+        model,
+        live,
+      ).state;
       const full = yield* presenter.commit(view(state));
-      const after = full.regionOf("box:inspection:viewport") ?? full.regionOf("box:content:viewport");
+      const after =
+        full.regionOf("box:inspection:viewport") ?? full.regionOf("box:content:viewport");
       const field = full.boundsOf("sidekick:message");
-      if (before === undefined || after === undefined || field === undefined) { throw new Error(`no chat or field at ${size.columns}`); }
+      if (before === undefined || after === undefined || field === undefined) {
+        throw new Error(`no chat or field at ${size.columns}`);
+      }
       expect(after.height).toBeLessThan(before.height);
       expect(after.height).toBeGreaterThanOrEqual(1);
       if (size.columns === 72) {
         expect(field.x).toBe(1);
         expect(presenter.grid.at(0, field.y)).toBe(" ");
       }
+    }
+  });
+});
+
+describe("Owned narrow guidance and pane navigation routes", () => {
+  it("UI10: every narrow focus destination says its state, action and way back whole", function* () {
+    const model = yield* entriesModel(0);
+    const presenter = yield* usePresenter(NARROW);
+    const state = initialState("owned");
+    for (const [key, expected] of [
+      ["footer:input", "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move"],
+      [
+        "sessions:heading",
+        "Ready for Entry 1 · Enter activates · Tab/Shift+Tab move · Tab to draft",
+      ],
+      ["footer:exit", "Ready for Entry 1 · Enter exits · Tab/Shift+Tab move · Tab to draft"],
+      ["footer:history", "Ready for Entry 1 · Enter opens · Tab/Shift+Tab move · Tab to draft"],
+    ]) {
+      yield* presenter.commit(viewOf(model, NARROW, { state }));
+      yield* focusKey(presenter, key);
+      yield* presenter.commit(viewOf(model, NARROW, { state, focused: focusedKey(presenter) }));
+      const row = presenter.grid
+        .rows()
+        .find((one) => one.includes("Tab/Shift+Tab move"))
+        ?.trim();
+      expect([key, row]).toEqual([key, expected]);
+      expect(row?.length ?? 999).toBeLessThanOrEqual(72);
+    }
+  });
+
+  it("UI10: a narrow question field, Submit and scroll each keep all four guidance facts", function* () {
+    yield* useTempFileCompiler();
+    const events = yield* referenceEvents();
+    const at = events.findIndex(
+      (one) => one.type === "yield" && JSON.stringify(one).includes('"elicit"'),
+    );
+    expect(at).toBeGreaterThan(0);
+    const model = projected(events.slice(0, at));
+    const elicitation = yield* useReplElicitation();
+    yield* spawn(() =>
+      Elicitation.operations.elicit({
+        message: "Go?",
+        schema: {
+          type: "object",
+          properties: { decision: { type: "string", enum: ["go"] } },
+          required: ["decision"],
+          additionalProperties: false,
+        },
+      }),
+    );
+    yield* awaited("the real provider's pending question", () => elicitation.pending !== undefined);
+    const live: ReplLive = { ...IDLE, question: elicitation.pending, running: true };
+    const state = reduceRepl(
+      initialState("owned"),
+      { kind: "open-drawer", drawer: { kind: "live-elicit" } },
+      model,
+      live,
+    ).state;
+    const presenter = yield* usePresenter(NARROW);
+    const view = (focused?: string) => {
+      const resolved = viewFor(state, model, live, NARROW, focused);
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      return withWorkspace(resolved.value, workspaceOf(model));
+    };
+    yield* presenter.commit(view());
+    for (const [key, action] of [
+      ["drawer:value:decision", "answers"],
+      ["drawer:form:submit", "answers"],
+      ["drawer:scroll:down", "scrolls"],
+    ]) {
+      yield* focusKey(presenter, key);
+      yield* presenter.commit(view(focusedKey(presenter)));
+      const row = presenter.grid
+        .rows()
+        .find((one) => one.includes("Tab/Shift+Tab move"))
+        ?.trim();
+      expect([key, row]).toEqual([
+        key,
+        `Entry 1 question · Enter ${action} · Esc closes · Tab/Shift+Tab move`,
+      ]);
+      expect(row?.length ?? 999).toBeLessThanOrEqual(72);
+    }
+  });
+
+  it("UH2: the default composer reaches Sidekick and Bindings by six and seven Backtabs", function* () {
+    const model = yield* entriesModel(0);
+    const live: ReplLive = { ...IDLE, sidekick: KERNEL_SIDEKICK };
+    const resolved = viewFor(initialState("owned"), model, live, WIDE);
+    if (!resolved.ok) {
+      throw resolved.error;
+    }
+    const presenter = yield* usePresenter(WIDE);
+    yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
+    yield* focusKey(presenter, "sidekick:message");
+    const walked = yield* ring(presenter, "Backtab");
+    expect(walked.indexOf("tab:sidekick")).toBe(6);
+    expect(walked.indexOf("tab:bindings")).toBe(7);
+    expect(walked[walked.indexOf("sidekick:message") + 1]).toBe("sidekick:send");
+  });
+});
+
+describe("Owned footer, History and single-field inventory", () => {
+  it("UI1/UI5: the Draft precedes the shared action band and its guidance follows", function* () {
+    const model = yield* entriesModel(1);
+    const presenter = yield* usePresenter(NARROW);
+    const observed = yield* presenter.commit(viewOf(model, NARROW));
+    const exit = observed.boundsOf("footer:exit");
+    const input = observed.boundsOf("footer:input");
+    const history = observed.boundsOf("footer:history");
+    const guidance = observed.boundsOf("guidance");
+    if (
+      exit === undefined ||
+      input === undefined ||
+      history === undefined ||
+      guidance === undefined
+    ) {
+      throw new Error("the footer lost one of its surfaces");
+    }
+    expect(input.y).toBeLessThan(exit.y);
+    expect(history.y).toBe(exit.y);
+    expect(guidance.y).toBeGreaterThan(exit.y);
+    const rows = presenter.grid.rows();
+    for (const word of ["HISTORY", "─", "[history]", "[exit]"]) {
+      expect(rows[exit.y]).toContain(word);
+    }
+    expect(rows.at(-1)).toContain("Tab/Shift+Tab");
+    for (const checkpoint of model.checkpoints) {
+      expect(rows[0]).not.toContain(checkpoint.label);
+    }
+  });
+  it("UI15: frozen guidance remains outside the History layer and its category rows", function* () {
+    yield* useTempFileCompiler();
+    const events = yield* referenceEvents();
+    const model = projected(events);
+    const marker = model.checkpoints[0]?.marker ?? "";
+    const projection = projectRepl(events, marker);
+    if (!projection.ok) {
+      throw projection.error;
+    }
+    const frozen = reduceRepl(
+      initialState("owned"),
+      { kind: "select-marker", marker },
+      model,
+      IDLE,
+    ).state;
+    const state = reduceRepl(
+      frozen,
+      { kind: "open-drawer", drawer: { kind: "history" } },
+      projection.value,
+      IDLE,
+    ).state;
+    const presenter = yield* usePresenter(WIDE);
+    const resolved = viewFor(
+      state,
+      projection.value,
+      IDLE,
+      WIDE,
+      undefined,
+      navigationOf(model.checkpoints, "settled"),
+    );
+    if (!resolved.ok) {
+      throw resolved.error;
+    }
+    const observed = yield* presenter.commit(
+      withWorkspace(resolved.value, workspaceOf(projection.value)),
+    );
+    const layer = observed.regionOf("box:drawer:layer");
+    const guidance = observed.boundsOf("guidance");
+    if (layer === undefined || guidance === undefined) {
+      throw new Error("no History layer or guidance");
+    }
+    expect(presenter.grid.textIn(guidance).join(" ")).toContain("History ·");
+    expect(guidance.y >= layer.y + layer.height || guidance.y + guidance.height <= layer.y).toBe(
+      true,
+    );
+    const labels = observed.keys
+      .filter((key) => key.startsWith("drawer:marker:"))
+      .map((key) => observed.cells.get(key)?.trim() ?? "");
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels).toContain("1 · Entry 1 admitted");
+    for (const label of labels) {
+      expect(/^\d+ · \S/.test(label)).toBe(true);
+      expect(label.startsWith("History")).toBe(false);
+    }
+  });
+  it("R3: the narrow Sidekick form mounts exactly its one editable field", function* () {
+    const model = yield* entriesModel(0);
+    const question = {
+      key: "rule",
+      message: "Which rounding rule?",
+      form: readQuestionForm({
+        type: "object",
+        properties: { rule: { type: "string", title: "Rounding rule" } },
+        required: ["rule"],
+        additionalProperties: false,
+      }),
+    };
+    const live: ReplLive = { ...IDLE, sidekick: { ...KERNEL_SIDEKICK, question } };
+    const selected = reduceRepl(
+      initialState("owned"),
+      { kind: "select-pane", pane: "sidekick" },
+      model,
+      live,
+    ).state;
+    const state = reduceRepl(
+      selected,
+      { kind: "open-sidekick-question", question: question.key },
+      model,
+      live,
+    ).state;
+    const resolved = viewFor(state, model, live, NARROW, "sidekick:answer");
+    if (!resolved.ok) {
+      throw resolved.error;
+    }
+    const presenter = yield* usePresenter(NARROW);
+    const observed = yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
+    expect(observed.keys.filter((key) => key.startsWith("drawer:value:"))).toEqual([
+      "drawer:value:rule",
+    ]);
+    yield* focusKey(presenter, "drawer:value:rule");
+    expect(focusedKey(presenter)).toBe("drawer:value:rule");
+  });
+});
+
+describe("Owned Transcript control geometry", () => {
+  it("BP3: Transcript choices and scrolling stay inside their measured column", function* () {
+    yield* useTempFileCompiler();
+    const model = projected(yield* agentReferenceEvents());
+    const live: ReplLive = { ...IDLE, sidekick: KERNEL_SIDEKICK };
+    const state = reduceRepl(
+      initialState("owned"),
+      { kind: "toggle-session-filter" },
+      model,
+      live,
+    ).state;
+    for (const size of [MEDIUM, WIDE]) {
+      const resolved = viewFor(state, model, live, size);
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      const presenter = yield* usePresenter(size);
+      const observed = yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
+      const sidebar = observed.regionOf("box:sidebar");
+      expect(within(sidebar, observed.boundsOf("sessions:all"))).toBe(true);
+      expect(within(sidebar, observed.boundsOf("sessions:later"))).toBe(true);
+      const target = observed.boundsOf("sessions:all");
+      if (target === undefined) {
+        throw new Error("the Transcript placed no All choice");
+      }
+      expect(presenter.grid.textIn(target).join(" ")).toContain("All conversations");
     }
   });
 });

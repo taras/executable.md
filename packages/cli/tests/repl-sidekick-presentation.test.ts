@@ -24,7 +24,7 @@ import {
 import { renderReceipt } from "../src/repl/sidekick/controls.ts";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import { projectRepl } from "../src/repl/model.ts";
-import { sidekickChatRows } from "../src/repl/program.ts";
+import { sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
 import type { MountedHost } from "./support/mounted-repl.ts";
 import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
@@ -124,11 +124,7 @@ function chatLines(reading: ScreenReading, anchor: string): string[] {
     anchor,
     reading.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined,
   ).column;
-  const controls = reading.shows(COMPOSER)
-    ? SIDEKICK_CONTROLS
-    : reading.shows("DRAFT")
-      ? { rightOf: "DRAFT" }
-      : undefined;
+  const controls = chatControls(reading);
   const start = reading.locate("[↑ earlier]", controls).row;
   const end = reading.locate("[↓ later]", controls).row;
   return reading.rows.slice(start + 1, end).map((row) => row.slice(column).trim());
@@ -1693,15 +1689,20 @@ describe("Older chats retain their identity across failure and cold opening", ()
 function* conversationChoices(page: ReplPage): Operation<string[]> {
   yield* page.press(" ▾");
   yield* page.until("the offered conversations", (one) => one.shows("All conversations"));
-  return page.screen().rows.filter((row) => row.trimStart().startsWith("xmd:v1:")).flatMap((row) => {
-    const match = row.match(/xmd:v1:[a-z0-9:]+…?/);
-    return match === null ? [] : [match[0]];
-  });
+  return page
+    .screen()
+    .rows.filter((row) => row.trimStart().startsWith("xmd:v1:"))
+    .flatMap((row) => {
+      const match = row.match(/xmd:v1:[a-z0-9:]+…?/);
+      return match === null ? [] : [match[0]];
+    });
 }
 
 function* filterChoice(page: ReplPage, choice: string): Operation<void> {
   const row = page.screen().rows.find((one) => one.trimStart().startsWith(choice));
-  if (row === undefined) { throw new Error(`no choice for ${choice}: ${page.describe()}`); }
+  if (row === undefined) {
+    throw new Error(`no choice for ${choice}: ${page.describe()}`);
+  }
   yield* page.press(choice, { onRow: row });
   yield* page.until("the chosen filter", (one) => !one.shows("All conversations"));
 }
@@ -1724,7 +1725,9 @@ function* appendBoundary(stopped: boolean): Operation<void> {
     const page = yield* useReplPage({ host });
     page.repl.fake.script({ reply: "<Output>Never saved.</Output>\n", turnId: "sk-turn-stop" });
     const hold = operations.holdNext((path, record) => {
-      if (!path.endsWith(SIDEKICK_FILE) || !record.includes("agent_prompt")) { return false; }
+      if (!path.endsWith(SIDEKICK_FILE) || !record.includes("agent_prompt")) {
+        return false;
+      }
       observed = /xmd:v1:[0-9a-f:]+/.exec(record)?.[0] ?? "";
       return true;
     });
@@ -1745,15 +1748,25 @@ function* appendBoundary(stopped: boolean): Operation<void> {
       expect(hold.holding).toBe(false);
     } else {
       hold.release();
-      yield* page.until("the released turn completed", (one) => transcriptHas(one, "stop me · completed"));
+      yield* page.until("the released turn completed", (one) =>
+        transcriptHas(one, "stop me · completed"),
+      );
       yield* page.until("the released cycle idle", sidekickIdle);
     }
-    expect(operations.appended.some((one) => one.path.endsWith(SIDEKICK_FILE) && one.record.includes("agent_prompt"))).toBe(!stopped);
+    expect(
+      operations.appended.some(
+        (one) => one.path.endsWith(SIDEKICK_FILE) && one.record.includes("agent_prompt"),
+      ),
+    ).toBe(!stopped);
     const saved = yield* settledReading(page.repl);
     expect(personMessages(saved.chat)).toEqual(["stop me"]);
-    expect(saved.chat.filter((one) => one.kind === "event" && one.event.includes("agent_prompt"))).toHaveLength(stopped ? 0 : 1);
+    expect(
+      saved.chat.filter((one) => one.kind === "event" && one.event.includes("agent_prompt")),
+    ).toHaveLength(stopped ? 0 : 1);
     const projected = projectSidekick(saved.chat);
-    if (!projected.ok) { throw projected.error; }
+    if (!projected.ok) {
+      throw projected.error;
+    }
     expect(projected.value.turns).toHaveLength(stopped ? 0 : 1);
     expect(selectedFilter(page.screen())).toBe(standing);
     execution = yield* mountedExecution(page.repl);
@@ -1785,7 +1798,10 @@ describe("Sidekick original provider membership and cancelled append", () => {
     page.repl.fake.script({ reply: "<Output>Shared answer.</Output>\n", turnId: "sk-turn-1" });
     yield* pasteDraft(page, promptEntry("entry-ask"));
     yield* page.key("Enter");
-    yield* page.until("the entry turn recorded", (one) => transcriptHas(one, "entry") && transcriptHas(one, "completed, recorded"));
+    yield* page.until(
+      "the entry turn recorded",
+      (one) => transcriptHas(one, "entry") && transcriptHas(one, "completed, recorded"),
+    );
     yield* compose(page, "chat ask");
     yield* sendComposed(page);
     yield* page.until("the chat turn saved", (one) => transcriptHas(one, "chat ask · completed"));
@@ -1805,7 +1821,10 @@ describe("Sidekick original provider membership and cancelled append", () => {
     expect(transcriptHas(page.screen(), "entry")).toBe(false);
     yield* conversationChoices(page);
     yield* page.press("All conversations");
-    yield* page.until("both owners' rows", (one) => transcriptHas(one, "entry") && transcriptHas(one, "chat ask"));
+    yield* page.until(
+      "both owners' rows",
+      (one) => transcriptHas(one, "entry") && transcriptHas(one, "chat ask"),
+    );
   });
 
   it("SS3: a live key filters its own unsaved row, and survives the cycle ending", function* () {
@@ -1813,7 +1832,9 @@ describe("Sidekick original provider membership and cancelled append", () => {
     const host = yield* useMountedHost({ gate });
     const page = yield* useReplPage({ host });
     page.repl.fake.script({ reply: "<Output>Said it.</Output>\n", turnId: "sk-turn-1" });
-    const hold = gate.holdNext((path, record) => path.endsWith(SIDEKICK_FILE) && record.includes("agent_prompt"));
+    const hold = gate.holdNext(
+      (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes("agent_prompt"),
+    );
     yield* compose(page, "say it");
     yield* sendComposed(page);
     yield* hold.started();
@@ -1850,16 +1871,25 @@ describe("Sidekick original provider membership and cancelled append", () => {
       page.repl.fake.script({ reply: "<Output>Chat answer.</Output>\n" });
       yield* pasteDraft(page, promptEntry("later-entry"));
       yield* page.key("Enter");
-      yield* page.until("the second entry recorded", (one) => transcriptHas(one, "later") && transcriptHas(one, "completed, recorded"));
+      yield* page.until(
+        "the second entry recorded",
+        (one) => transcriptHas(one, "later") && transcriptHas(one, "completed, recorded"),
+      );
       yield* compose(page, "chat ask");
       yield* sendComposed(page);
-      yield* page.until("the chat idle", (one) => chatHas(one, "Chat answer.") && sidekickIdle(one));
+      yield* page.until(
+        "the chat idle",
+        (one) => chatHas(one, "Chat answer.") && sidekickIdle(one),
+      );
       execution = yield* mountedExecution(page.repl);
       const read = yield* settledReading(page.repl);
       entryKey = read.model.turns.map((one) => one.sessionKey).find((one) => one.length > 0) ?? "";
       const chat = projectSidekick(read.chat);
-      if (!chat.ok) { throw chat.error; }
-      chatKey = chat.value.turns.map((one) => one.sessionKey).find((one) => one !== undefined) ?? "";
+      if (!chat.ok) {
+        throw chat.error;
+      }
+      chatKey =
+        chat.value.turns.map((one) => one.sessionKey).find((one) => one !== undefined) ?? "";
       expect(entryKey).not.toBe("");
       expect(chatKey).not.toBe("");
       expect(entryKey).not.toBe(chatKey);
@@ -1868,7 +1898,10 @@ describe("Sidekick original provider membership and cancelled append", () => {
     const cold = yield* useMountedHost({ dataRoot });
     const prefix = `xmd://repl/${execution}/sessions?at=${encodeURIComponent(marker)}&inspect&session=`;
     yield* scoped(function* () {
-      const page = yield* useReplPage({ host: cold, location: prefix + encodeURIComponent(chatKey) });
+      const page = yield* useReplPage({
+        host: cold,
+        location: prefix + encodeURIComponent(chatKey),
+      });
       expect(selectedFilter(page.screen())).toBeDefined();
       expect(transcriptHas(page.screen(), "chat ask")).toBe(true);
       expect(transcriptHas(page.screen(), "later-")).toBe(false);
@@ -1887,10 +1920,17 @@ function composerRows(one: ScreenReading, anchor?: string): string[] {
   return one.rows.slice(prompt.row + 1, footer.row).map((row) => row.slice(edge).trimEnd());
 }
 
-function* composerPaste(page: ReplPage, text: string, visible = (text.split("\n").at(-1) ?? "").split(/\s+/).at(-1) ?? ""): Operation<void> {
+function* composerPaste(
+  page: ReplPage,
+  text: string,
+  visible = (text.split("\n").at(-1) ?? "").split(/\s+/).at(-1) ?? "",
+): Operation<void> {
   const index = page.screen().index;
   yield* page.type(text);
-  yield* page.until("the composer's newest line", (one) => one.index > index && one.found(visible, { after: COMPOSER }) > 0);
+  yield* page.until(
+    "the composer's newest line",
+    (one) => one.index > index && one.found(visible, { after: COMPOSER }) > 0,
+  );
 }
 
 function* populateChat(page: ReplPage, count: number, prefix = "SAID"): Operation<void> {
@@ -1918,9 +1958,13 @@ describe("Sidekick original multiline composer ownership", () => {
     expect(pasted.join(" ")).toContain("広");
     expect(pasted.join(" ")).toContain("い");
     expect(chatHas(page.screen(), "SAID-10")).toBe(true);
-    for (const label of [COMPOSER, "[history]", "[exit]"]) { expect(page.screen().shows(label)).toBe(true); }
+    for (const label of [COMPOSER, "[history]", "[exit]"]) {
+      expect(page.screen().shows(label)).toBe(true);
+    }
     expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
-    for (let i = 0; i < 12; i += 1) { yield* page.key("Backspace"); }
+    for (let i = 0; i < 12; i += 1) {
+      yield* page.key("Backspace");
+    }
     yield* page.until("the value shrinking", (one) => composerRows(one).length < pasted.length);
     expect(yield* finishDraft(page)).toBeUndefined();
   });
@@ -1936,11 +1980,16 @@ describe("Sidekick original multiline composer ownership", () => {
     expect(shown).toHaveLength(6);
     expect(shown.at(-1)).toBe("LINE-9");
     expect(shown).not.toContain("LINE-1");
-    const hold = gate.holdNext((path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"message"'));
+    const hold = gate.holdNext(
+      (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"message"'),
+    );
     yield* sendComposed(page);
     yield* hold.started();
     yield* composerPaste(page, "NEWER-1\nNEWER-2\nNEWER-3");
-    const newer = composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy");
+    const newer = composerRows(
+      page.screen(),
+      page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy",
+    );
     expect(newer.length).toBeGreaterThan(1);
     hold.release();
     yield* page.until("the acknowledged multiline message", (one) => chatHas(one, "Understood."));
@@ -1949,7 +1998,9 @@ describe("Sidekick original multiline composer ownership", () => {
     expect(page.repl.fake.prompts[0]).toContain("LINE-1");
     expect(page.repl.fake.prompts[0]).toContain("LINE-9");
     expect(page.repl.fake.prompts[0]).not.toContain("NEWER-1");
-    expect(composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy")).toEqual(newer);
+    expect(
+      composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy"),
+    ).toEqual(newer);
   });
 
   it("MC6: control — an acknowledged Send leaves one blank value row", function* () {
@@ -1993,10 +2044,15 @@ describe("Sidekick original multiline composer ownership", () => {
     yield* sendComposed(page);
     yield* page.repl.fake.holdingTurns(1);
     yield* composerPaste(page, "while busy\nline two");
-    const newer = composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy");
+    const newer = composerRows(
+      page.screen(),
+      page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy",
+    );
     page.repl.fake.releaseTurn();
     yield* page.until("the held reply arriving", (one) => chatHas(one, "Held answer."));
-    expect(composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy")).toEqual(newer);
+    expect(
+      composerRows(page.screen(), page.screen().shows("NEWER-3") ? "NEWER-3" : "while busy"),
+    ).toEqual(newer);
     expect(page.repl.fake.prompts).toHaveLength(9);
     expect(page.repl.fake.prompts[8]).not.toContain("while busy");
     expect(yield* finishDraft(page)).toBeUndefined();
@@ -2004,7 +2060,16 @@ describe("Sidekick original multiline composer ownership", () => {
 });
 
 function submitting(source: string): string {
-  return ['<Let as="code" select="code">', "````xmd", source, "````", "</Let>", "<REPL.EntryInput>{code}</REPL.EntryInput>", "<REPL.Submit />", ""].join("\n");
+  return [
+    '<Let as="code" select="code">',
+    "````xmd",
+    source,
+    "````",
+    "</Let>",
+    "<REPL.EntryInput>{code}</REPL.EntryInput>",
+    "<REPL.Submit />",
+    "",
+  ].join("\n");
 }
 
 const HI_FIRST = "<Output>the first entry</Output>";
@@ -2028,19 +2093,25 @@ function* leaveLocation(page: ReplPage): Operation<string> {
   page.repl.terminal.end();
   yield* awaited("the command returning its location", () => page.repl.outcome() !== undefined);
   const result = page.repl.outcome();
-  if (result === undefined || !result.ok) { throw new Error("the command returned no successful location"); }
+  if (result === undefined || !result.ok) {
+    throw new Error("the command returned no successful location");
+  }
   return result.value.location;
 }
 
 function* recordedReceipt(page: ReplPage, said: string): Operation<void> {
   yield* awaitedFact(`the saved receipt ${said}`, function* () {
-    return (yield* settledReading(page.repl)).chat.some((one) => one.kind === "feedback" && one.text.includes(said));
+    return (yield* settledReading(page.repl)).chat.some(
+      (one) => one.kind === "feedback" && one.text.includes(said),
+    );
   });
 }
 
 function submitIntent(chat: readonly SidekickRecord[]) {
   for (const one of [...chat].reverse()) {
-    if (one.kind === "control" && one.submit !== undefined) { return one.submit; }
+    if (one.kind === "control" && one.submit !== undefined) {
+      return one.submit;
+    }
   }
   throw new Error("no Submit intent was retained");
 }
@@ -2051,7 +2122,9 @@ function* historicalSubmit(historical: boolean, failed: boolean): Operation<void
     const page = yield* useReplPage({ dataRoot });
     yield* entryRun(page, HI_FIRST, 1);
     yield* entryRun(page, HI_SECOND, 2);
-    if (historical) { yield* freezeFirst(page); }
+    if (historical) {
+      yield* freezeFirst(page);
+    }
     return yield* leaveLocation(page);
   });
   const page = yield* useReplPage({ dataRoot, location });
@@ -2069,22 +2142,35 @@ function* historicalSubmit(historical: boolean, failed: boolean): Operation<void
   yield* recordedReceipt(page, receipt);
   const read = yield* settledReading(page.repl);
   expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
-  expect(read.model.entries.map((one) => one.terminal?.status)).toEqual(["ok", "ok", failed ? "err" : "ok"]);
+  expect(read.model.entries.map((one) => one.terminal?.status)).toEqual([
+    "ok",
+    "ok",
+    failed ? "err" : "ok",
+  ]);
   expect(read.model.entries[2]?.source).toBe(source);
   const intent = submitIntent(read.chat);
   expect([intent.entry, intent.ordinal, intent.source]).toEqual(["entry-3", 2, source]);
-  const feedback = read.chat.flatMap((one) => one.kind === "feedback" ? [one.text] : []).join("\n");
+  const feedback = read.chat
+    .flatMap((one) => (one.kind === "feedback" ? [one.text] : []))
+    .join("\n");
   expect(feedback).toContain(receipt);
-  expect(feedback).toContain(failed
-    ? "Inspect its saved evidence with <REPL.Entry.Journal entry={3} />."
-    : "Read what it printed with <REPL.Entry.Output entry={3} />.");
+  expect(feedback).toContain(
+    failed
+      ? "Inspect its saved evidence with <REPL.Entry.Journal entry={3} />."
+      : "Read what it printed with <REPL.Entry.Output entry={3} />.",
+  );
   expect(feedback).not.toContain("entry={1}");
   expect(feedback).not.toContain("entry={2}");
-  if (failed) { expect(feedback).toContain("It failed:"); }
+  if (failed) {
+    expect(feedback).toContain("It failed:");
+  }
 }
 
 describe("Sidekick original acknowledged history submission identity", () => {
-  for (const arm of [{ name: "opened at the first entry", historical: true }, { name: "control: opened at the head", historical: false }]) {
+  for (const arm of [
+    { name: "opened at the first entry", historical: true },
+    { name: "control: opened at the head", historical: false },
+  ]) {
     it(`HI1: ${arm.name}, a reply's Submit names the entry it actually ran`, function* () {
       yield* historicalSubmit(arm.historical, false);
     });
@@ -2097,7 +2183,9 @@ describe("Sidekick original acknowledged history submission identity", () => {
     const page = yield* useReplPage({ gate });
     yield* entryRun(page, HI_FIRST, 1);
     yield* entryRun(page, HI_SECOND, 2);
-    const hold = gate.holdNext((path, record) => path.endsWith(ENTRIES_FILE) && record.includes('"type":"close"'));
+    const hold = gate.holdNext(
+      (path, record) => path.endsWith(ENTRIES_FILE) && record.includes('"type":"close"'),
+    );
     page.repl.fake.script({ reply: submitting(HI_FAILING) });
     page.repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
     yield* compose(page, "run one that fails");
@@ -2112,12 +2200,21 @@ describe("Sidekick original acknowledged history submission identity", () => {
     expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
     expect(read.model.entries[2]?.terminal?.status).toBe("err");
     expect(submitIntent(read.chat).entry).toBe("entry-3");
-    const feedback = read.chat.flatMap((one) => one.kind === "feedback" ? [one.text] : []).join("\n");
+    const feedback = read.chat
+      .flatMap((one) => (one.kind === "feedback" ? [one.text] : []))
+      .join("\n");
     expect(feedback).toContain("Entry entry-3 failed.");
     expect(feedback).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
     expect(feedback).not.toContain("entry={1}");
     expect(feedback).not.toContain("entry={2}");
-    expect(renderReceipt({ entry: "entry-3", status: "failed", failure: "the third entry failed", read: { entry: "entry-3" } })).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
+    expect(
+      renderReceipt({
+        entry: "entry-3",
+        status: "failed",
+        failure: "the third entry failed",
+        read: { entry: "entry-3" },
+      }),
+    ).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
   });
   it("HI3: frozen, Run establishes nothing; live, it admits the next entry", function* () {
     const dataRoot = yield* useTemporary("xmd-hi-person-");
@@ -2130,9 +2227,14 @@ describe("Sidekick original acknowledged history submission identity", () => {
     });
     const page = yield* useReplPage({ dataRoot, location });
     yield* closeDrawer(page);
-    for (let press = 0; press < 40 && !page.screen().shows("Enter unavailable"); press += 1) { yield* tab(page); }
+    for (let press = 0; press < 40 && !page.screen().shows("Enter unavailable"); press += 1) {
+      yield* tab(page);
+    }
     yield* page.type(HI_THIRD);
-    yield* page.until("the frozen Draft holding its source", (one) => one.found(HI_THIRD, DRAFT_VALUE) === 1);
+    yield* page.until(
+      "the frozen Draft holding its source",
+      (one) => one.found(HI_THIRD, DRAFT_VALUE) === 1,
+    );
     yield* page.key("Enter");
     yield* page.until("the frozen Run refusal", (one) => one.shows("live head"));
     expect((yield* settledReading(page.repl)).model.entries).toHaveLength(2);
@@ -2156,29 +2258,53 @@ function shownChat(one: ScreenReading): string[] {
   const controls = chatControls(one);
   const upper = one.locate("[↑ earlier]", controls).row;
   const lower = one.locate("[↓ later]", controls).row;
-  const anchor = one.rows.slice(upper + 1, lower).flatMap((row) => [...row.matchAll(/\[[US]\] /g)].map((match) => row.slice(match.index).trimEnd())).find((label) => one.found(label, one.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined) === 1);
-  if (anchor === undefined) { throw new Error(`no visible chat item: ${one.rows.join("\n")}`); }
+  const anchor = one.rows
+    .slice(upper + 1, lower)
+    .flatMap((row) =>
+      [...row.matchAll(/\[[US]\] /g)].map((match) => row.slice(match.index).trimEnd()),
+    )
+    .find((label) => one.found(label, one.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined) === 1);
+  if (anchor === undefined) {
+    throw new Error(`no visible chat item: ${one.rows.join("\n")}`);
+  }
   return chatLines(one, anchor);
 }
-function* chatScroll(page: ReplPage, direction: "up" | "down", until: (one: ScreenReading) => boolean): Operation<void> {
+function* chatScroll(
+  page: ReplPage,
+  direction: "up" | "down",
+  until: (one: ScreenReading) => boolean,
+): Operation<void> {
   for (let press = 0; press < 150 && !until(page.screen()); press += 1) {
     const index = page.screen().index;
-    yield* page.press(direction === "up" ? "[↑ earlier]" : "[↓ later]", chatControls(page.screen()));
+    yield* page.press(
+      direction === "up" ? "[↑ earlier]" : "[↓ later]",
+      chatControls(page.screen()),
+    );
     yield* page.until("the chat's new reading", (one) => one.index > index);
   }
   expect(until(page.screen())).toBe(true);
 }
 function* savedResponses(page: ReplPage, count: number): Operation<void> {
   yield* awaitedFact(`${count} saved responses`, function* () {
-    return (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response").length >= count;
+    return (
+      (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response").length >=
+      count
+    );
   });
   yield* page.until("the saved cycle idle", sidekickIdle);
 }
-function* reachTurn(page: ReplPage, label: string, direction: "up" | "down" = "down"): Operation<void> {
+function* reachTurn(
+  page: ReplPage,
+  label: string,
+  direction: "up" | "down" = "down",
+): Operation<void> {
   if (!transcriptHas(page.screen(), label)) {
     yield* atSize(page, NARROW);
     yield* page.press("Sessions");
-    yield* page.until("the Sessions outlet", (one) => one.shows("All sessions") || one.shows("All sessions ▾"));
+    yield* page.until(
+      "the Sessions outlet",
+      (one) => one.shows("All sessions") || one.shows("All sessions ▾"),
+    );
     for (let press = 0; press < 150 && !transcriptHas(page.screen(), label); press += 1) {
       const index = page.screen().index;
       yield* page.press(direction === "up" ? "[↑ earlier]" : "[↓ later]");
@@ -2191,9 +2317,13 @@ function* reachTurn(page: ReplPage, label: string, direction: "up" | "down" = "d
 }
 function* twoOverflowingChats(page: ReplPage): Operation<void> {
   page.repl.fake.configuration(ADVERTISED);
-  for (let i = 1; i <= 10; i += 1) { yield* exchange(page, `old-${i}`, `OLD-${i}\nmore`); }
+  for (let i = 1; i <= 10; i += 1) {
+    yield* exchange(page, `old-${i}`, `OLD-${i}\nmore`);
+  }
   yield* newConversation(page);
-  for (let i = 1; i <= 10; i += 1) { yield* exchange(page, `new-${i}`, `NEW-${i}\nmore`); }
+  for (let i = 1; i <= 10; i += 1) {
+    yield* exchange(page, `new-${i}`, `NEW-${i}\nmore`);
+  }
 }
 
 describe("Sidekick original independent readings and streaming rows", () => {
@@ -2237,22 +2367,32 @@ describe("Sidekick original independent readings and streaming rows", () => {
     const page = yield* useReplPage();
     yield* draftText(page, "mine");
     const first = `<Output>BEGIN\n${Array.from({ length: 30 }, (_, i) => `ROW-${i + 1}`).join("\n")}`;
-    page.repl.fake.script({ deltas: [first, "\nTAIL-LAST</Output>\n"], holdsEachPiece: true, holdAfter: 2 });
+    page.repl.fake.script({
+      deltas: [first, "\nTAIL-LAST</Output>\n"],
+      holdsEachPiece: true,
+      holdAfter: 2,
+    });
     yield* compose(page, "grow");
     yield* sendComposed(page);
     yield* page.repl.fake.streamingTurns(1);
     yield* composerPaste(page, "later");
     yield* page.until("the preview's newest row", (one) => chatHas(one, "ROW-30"));
     const fed = page.repl.terminal.fed;
-    expect((yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response")).toHaveLength(0);
+    expect(
+      (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response"),
+    ).toHaveLength(0);
     expect(chatHas(page.screen(), "BEGIN")).toBe(false);
     page.repl.fake.releaseDeltas();
     yield* page.until("the preview growing", (one) => chatHas(one, "TAIL-LAST"));
     expect(page.repl.terminal.fed).toBe(fed);
-    expect((yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response")).toHaveLength(0);
+    expect(
+      (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response"),
+    ).toHaveLength(0);
     page.repl.fake.releaseDeltas();
     yield* savedResponses(page, 1);
-    const responses = (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "response");
+    const responses = (yield* settledReading(page.repl)).chat.filter(
+      (one) => one.kind === "response",
+    );
     expect(responses).toHaveLength(1);
     expect(responses[0]).toMatchObject({ response: "response:1", hasOutput: true });
     expect(chatHas(page.screen(), "TAIL-LAST")).toBe(true);
@@ -2270,7 +2410,10 @@ describe("Sidekick original independent readings and streaming rows", () => {
     const fed = page.repl.terminal.fed;
     yield* page.until("the generating status", (one) => transcriptHas(one, "hold it · generating"));
     expect(page.repl.terminal.fed).toBe(fed);
-    yield* page.until("the acknowledged composer clearing", (one) => !composerHolds(one, "hold it"));
+    yield* page.until(
+      "the acknowledged composer clearing",
+      (one) => !composerHolds(one, "hold it"),
+    );
     page.repl.fake.releaseDeltas();
     yield* page.until("the completed status", (one) => transcriptHas(one, "hold it · completed"));
     expect(chatHas(page.screen(), "Half said.")).toBe(true);
@@ -2286,11 +2429,444 @@ describe("Sidekick original independent readings and streaming rows", () => {
     const fed = page.repl.terminal.fed;
     yield* page.until("the evaluation status", (one) => transcriptHas(one, "evaluating the reply"));
     const read = yield* settledReading(page.repl);
-    expect(read.chat.filter((one) => one.kind === "event" && one.event.includes("agent_prompt"))).toHaveLength(1);
+    expect(
+      read.chat.filter((one) => one.kind === "event" && one.event.includes("agent_prompt")),
+    ).toHaveLength(1);
     expect(read.chat.some((one) => one.kind === "response")).toBe(false);
     page.repl.fake.releaseTurn();
-    yield* page.until("the completed evaluation", (one) => transcriptHas(one, "evaluate it · completed"));
+    yield* page.until("the completed evaluation", (one) =>
+      transcriptHas(one, "evaluate it · completed"),
+    );
     expect(page.screen().found("evaluate it", { rightOf: "TRANSCRIPT" })).toBeGreaterThan(0);
     expect(page.repl.terminal.fed).toBe(fed);
+  });
+});
+
+describe("Sidekick original interrupted identities and native input routes", () => {
+  it("SS6: an interrupted first message leaves every later row its own identity", function* () {
+    const host = yield* useMountedHost();
+    const first = yield* useReplPage({ host });
+    first.repl.fake.script({ held: true, reply: "<Output>Unrecorded.</Output>\n" });
+    yield* compose(first, "unrecorded");
+    yield* sendComposed(first);
+    yield* first.repl.fake.holdingTurns(1);
+    yield* stopSidekick(first);
+    yield* first.until("the cancelled first generation", sidekickIdle);
+    const execution = yield* mountedExecution(first.repl);
+    yield* leaveLocation(first);
+    const page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
+    yield* exchange(page, "saved ask", "Saved reply.");
+    page.repl.fake.script({ reply: "<Output>Half said.</Output>\n", stopReason: "max_tokens" });
+    yield* compose(page, "failed ask");
+    yield* sendComposed(page);
+    yield* page.until("the later failed turn", (one) => transcriptHas(one, "failed ask · failed"));
+    const read = yield* settledReading(page.repl);
+    expect(read.chat.flatMap((one) => (one.kind === "response" ? [one.response] : []))).toEqual([
+      "response:2",
+    ]);
+    const projected = projectSidekick(read.chat);
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    const turns = sidekickTurnRows(projected.value, undefined);
+    expect(new Set(turns.map((one) => one.key)).size).toBe(turns.length);
+    expect(turns.map((one) => [one.turn, one.state])).toEqual([
+      [1, "completed"],
+      [2, "failed"],
+    ]);
+    expect(turns[0]?.key).toContain("response:2");
+    expect(turns[1]?.key).toContain(":turn:");
+    const chat = sidekickChatRows(projected.value, undefined);
+    expect(new Set(chat.map((one) => one.key)).size).toBe(chat.length);
+    expect(
+      transcriptLines(page.screen()).filter((row) => row.includes("saved ask ·")),
+    ).toHaveLength(1);
+    expect(
+      transcriptLines(page.screen()).filter((row) => row.includes("failed ask ·")),
+    ).toHaveLength(1);
+  });
+
+  it("SS6: a real automatic turn nobody answered opens as its own inert anchor", function* () {
+    const dataRoot = yield* useTemporary("xmd-ss6-inert-");
+    const gate = appendGate();
+    const execution = yield* scoped(function* () {
+      const host = yield* useMountedHost({ dataRoot, gate });
+      const page = yield* useReplPage({ host });
+      page.repl.fake.script({ reply: "<Output>First answer.</Output>\n<REPL.Bindings />\n" });
+      page.repl.fake.script({ reply: "<REPL.Bindings />\n" });
+      let seen = 0;
+      const held = gate.holdNext(
+        (path, record) =>
+          path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"response"') && ++seen === 2,
+      );
+      yield* compose(page, "read it");
+      yield* sendComposed(page);
+      yield* held.started();
+      return yield* mountedExecution(page.repl);
+    });
+    const cold = yield* useMountedHost({ dataRoot });
+    const page = yield* useReplPage({ host: cold, location: `xmd://repl/${execution}/sessions` });
+    yield* page.until(
+      "the saved automatic status",
+      (one) => transcriptHas(one, "Automatic") && transcriptHas(one, "Turn"),
+    );
+    expect(page.screen().shows("REPL.Bindings")).toBe(false);
+    yield* reachTurn(page, "Automatic");
+    yield* page.until("the inert automatic anchor", (one) =>
+      sidekickShows(one, "Automatic feedback · Turn saved"),
+    );
+    const rows = shownChat(page.screen()).map((row) => row.replace(/^\s*\[[US]\]\s/, "").trim());
+    const at = rows.findIndex((row) => row.includes("Automatic feedback"));
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(
+      rows
+        .slice(at, at + 3)
+        .join(" ")
+        .trim(),
+    ).toBe("Automatic feedback · Turn saved; no evaluated reply recorded.");
+    expect(sidekickShows(page.screen(), "First answer.")).toBe(true);
+    expect(page.screen().shows("REPL.Bindings")).toBe(false);
+    expect(cold.fake.created).toEqual([]);
+    expect(cold.fake.prompts).toEqual([]);
+  });
+
+  it("UH2: pointer and keyboard each reach both tabs, and neither composer loses text", function* () {
+    const page = yield* useReplPage();
+    yield* draftText(page, "kept entry");
+    yield* compose(page, "kept question");
+    for (let press = 0; press < 6; press += 1) {
+      const index = page.screen().index;
+      yield* page.key("Backtab");
+      yield* page.until("the preceding control", (one) => one.index > index);
+    }
+    yield* page.key("Backtab");
+    yield* page.key("Enter");
+    yield* page.until("keyboard selecting Bindings", (one) => !one.shows(COMPOSER));
+    yield* tab(page);
+    yield* page.key("Enter");
+    yield* page.until("keyboard selecting Sidekick", (one) => one.shows(COMPOSER));
+    expect(composerHolds(page.screen(), "kept question")).toBe(true);
+    yield* selectPane(page, "bindings");
+    yield* selectPane(page, "sidekick");
+    expect(page.screen().shows("[selected]")).toBe(false);
+    expect(composerHolds(page.screen(), "kept question")).toBe(true);
+    expect(yield* finishDraft(page)).toBe("kept entry");
+  });
+
+  it("UH5: an open History drawer still says Esc closes, and closing keeps both texts", function* () {
+    const page = yield* useReplPage();
+    yield* draftText(page, "kept entry");
+    yield* compose(page, "kept question");
+    yield* tab(page);
+    yield* page.key("Enter");
+    yield* page.until("the keyboard-opened History drawer", (one) => one.shows("[close]"));
+    expect(page.screen().shows("Esc closes")).toBe(true);
+    expect(page.screen().shows("Tab/Shift+Tab move")).toBe(true);
+    yield* page.key("Escape");
+    yield* page.until("History closing once", (one) => !one.shows("[close]"));
+    expect(composerHolds(page.screen(), "kept question")).toBe(true);
+    expect(yield* finishDraft(page)).toBe("kept entry");
+  });
+
+  it("UH4: resizing through narrow and back keeps both texts, and narrow grows no tabs", function* () {
+    const page = yield* useReplPage();
+    yield* draftText(page, "kept entry");
+    for (let i = 0; i < 3; i += 1) {
+      const index = page.screen().index;
+      yield* page.key("Backtab");
+      yield* page.until("the default composer's route", (one) => one.index > index);
+    }
+    yield* typed(page, "kept question");
+    yield* page.resize({ columns: 120, rows: 30 });
+    expect(page.screen().shows("BINDINGS")).toBe(true);
+    expect(page.screen().shows("SIDEKICK")).toBe(true);
+    expect(page.screen().shows("[selected]")).toBe(false);
+    const narrow = yield* page.resize(NARROW);
+    expect(narrow.shows("BINDINGS")).toBe(false);
+    expect(narrow.shows("SIDEKICK")).toBe(false);
+    expect(narrow.shows(COMPOSER)).toBe(false);
+    expect(narrow.found("kept entry", DRAFT_VALUE)).toBe(1);
+    yield* page.resize(WIDE);
+    expect(composerHolds(page.screen(), "kept question")).toBe(true);
+    expect(yield* finishDraft(page)).toBe("kept entry");
+  });
+
+  it("R3: the drawer opens through its own action and its field takes text", function* () {
+    const page = yield* useReplPage();
+    yield* intoComposer(page);
+    yield* page.resize(NARROW);
+    page.repl.fake.script({
+      reply: askingReply("Which rounding rule?", {
+        type: "object",
+        properties: { rule: { type: "string", title: "Rounding rule" } },
+        required: ["rule"],
+        additionalProperties: false,
+      }),
+    });
+    yield* typed(page, "which rule");
+    yield* sendComposed(page);
+    yield* page.until(
+      "the question's own notice",
+      (one) => one.shows("[answer sidekick]") && !one.shows("[close]"),
+    );
+    yield* openedQuestion(page);
+    yield* page.type("half up, to the cent");
+    yield* page.until("the named field receiving text", (one) => one.shows("half up, to the cent"));
+    expect(page.screen().shows("Which rounding rule?")).toBe(true);
+    expect(page.screen().shows("Rounding rule")).toBe(true);
+    expect(page.screen().shows("[close]")).toBe(true);
+  });
+});
+
+function* silentTurns(page: ReplPage, withFailure: boolean): Operation<number> {
+  page.repl.fake.configuration(ADVERTISED);
+  page.repl.fake.script({ reply: "<REPL.Bindings />\n" });
+  page.repl.fake.script({ reply: "Nothing to add.\n" });
+  yield* compose(page, "run it");
+  yield* sendComposed(page);
+  yield* savedResponses(page, 2);
+  let count = 2;
+  if (withFailure) {
+    page.repl.fake.script({ reply: "<REPL.Delete />\n" });
+    page.repl.fake.script({ reply: "<Output>Fixed it.</Output>\n" });
+    yield* compose(page, "break it");
+    yield* sendComposed(page);
+    yield* savedResponses(page, 4);
+    count = 4;
+  }
+  yield* exchange(page, "say it", "SPOKE-ALOUD");
+  for (let number = 1; number <= 10; number += 1) {
+    yield* exchange(page, `ask-${number}`, `ANSWER-${number}`);
+  }
+  return count + 11;
+}
+function* readSilentAndSpoken(page: ReplPage): Operation<void> {
+  yield* reachTurn(page, "run it ", "up");
+  yield* page.until("the silent turn's request", (one) => sidekickShows(one, "[U] run it"));
+  expect(sidekickShows(page.screen(), "ANSWER-10")).toBe(false);
+  const said = shownChat(page.screen()).filter((row) => row !== "");
+  const first = said.findIndex((row) => row.includes("[U] run it"));
+  expect(first).toBeGreaterThanOrEqual(0);
+  expect(said[first + 1]).toContain("[U] say it");
+  expect(sidekickShows(page.screen(), "answered without saying")).toBe(false);
+  expect(sidekickShows(page.screen(), "Nothing to add.")).toBe(false);
+  yield* reachTurn(page, "Automatic", "up");
+  yield* page.until("the chain's original request", (one) => sidekickShows(one, "[U] run it"));
+  expect(sidekickShows(page.screen(), "ANSWER-10")).toBe(false);
+  yield* reachTurn(page, "say it ", "up");
+  yield* page.until("the spoken turn's own Output", (one) => sidekickShows(one, "SPOKE-ALOUD"));
+}
+
+describe("Sidekick original reveal and cold decision coverage", () => {
+  it("SS4: a turn past the chat's window is revealed, and this screen keeps its own", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    for (let i = 1; i <= 12; i += 1) {
+      yield* exchange(page, `ask-${i}`, `ANSWER-${i}`);
+    }
+    yield* newConversation(page);
+    yield* exchange(page, "newer ask", "Newer answer.");
+    page.repl.fake.script({ reply: "ENTRY-ANSWER" });
+    yield* entryRun(page, promptEntry("kept-entry"), 1);
+    yield* draftText(page, "my entry");
+    yield* compose(page, "half typed");
+    yield* selectPane(page, "bindings");
+    expect(page.screen().shows(COMPOSER)).toBe(false);
+    yield* reachTurn(page, "ask-12 ");
+    yield* page.until("the selected older turn", (one) => sidekickShows(one, "ANSWER-12"));
+    expect(shownChat(page.screen()).some((row) => /ANSWER-1\b/.test(row))).toBe(false);
+    assertReadOnly(page.screen());
+    yield* backToCurrent(page);
+    expect(composerHolds(page.screen(), "half typed")).toBe(true);
+    expect(page.screen().shows(`[configure ${OTHER_MOUNTED_AGENT}]`)).toBe(true);
+    expect(entryTrail(page.screen())).toContain("Entry 1");
+    expect(yield* finishDraft(page)).toBe("my entry");
+  });
+
+  it("ER4: a silent turn reveals the request it answered, and composes no anchor", function* () {
+    const page = yield* useReplPage();
+    yield* silentTurns(page, false);
+    yield* newConversation(page);
+    yield* exchange(page, "newer ask", "Newer answer.");
+    page.repl.fake.script({ reply: "ENTRY-ANSWER" });
+    yield* entryRun(page, promptEntry("kept-entry"), 1);
+    yield* draftText(page, "my entry");
+    yield* compose(page, "half typed");
+    yield* readSilentAndSpoken(page);
+    expect(sidekickShows(page.screen(), "Newer answer.")).toBe(false);
+    yield* backToCurrent(page);
+    expect(composerHolds(page.screen(), "half typed")).toBe(true);
+    expect(entryTrail(page.screen())).toContain("Entry 1");
+    expect(yield* finishDraft(page)).toBe("my entry");
+  });
+
+  it("ER5: the same chat reopened cold makes the same decisions, and costs nothing", function* () {
+    const host = yield* useMountedHost();
+    const first = yield* useReplPage({ host });
+    yield* silentTurns(first, true);
+    const execution = yield* mountedExecution(first.repl);
+    const asked = host.fake.prompts.length;
+    const opened = host.fake.ensured.length;
+    yield* leaveLocation(first);
+    const before = yield* pairBytes(host.root, execution);
+    const page = yield* useReplPage({ host, location: `xmd://repl/${execution}/entries` });
+    yield* page.until("the cold latest reply", (one) => sidekickShows(one, "ANSWER-10"));
+    yield* reachTurn(page, "break it ", "up");
+    yield* page.until("the recorded failure", (one) =>
+      sidekickShows(one, "(failed): a generated fragment"),
+    );
+    yield* reachTurn(page, "say it ", "up");
+    yield* page.until("the recorded spoken output", (one) => sidekickShows(one, "SPOKE-ALOUD"));
+    yield* reachTurn(page, "run it ", "up");
+    yield* page.until("the recorded silent request", (one) => sidekickShows(one, "[U] run it"));
+    yield* reachTurn(page, "say it ", "up");
+    yield* page.until("the spoken reply before choosing its earlier automatic neighbour", (one) =>
+      sidekickShows(one, "SPOKE-ALOUD"),
+    );
+    let automatic = "";
+    for (let press = 0; press < 12; press += 1) {
+      automatic = page.screen().rows.find((row) => row.includes("Automatic fee")) ?? "";
+      if (
+        automatic.length > 0 &&
+        page.screen().rows.filter((row) => row.includes(automatic)).length === 1
+      ) {
+        break;
+      }
+      const index = page.screen().index;
+      yield* page.press("[↓ later]", chatControls(page.screen()));
+      yield* page.until(
+        "a distinct visible row beside the repeated caption",
+        (one) => one.index > index,
+      );
+    }
+    expect(page.screen().rows.filter((row) => row.includes(automatic))).toHaveLength(1);
+    yield* page.press("Automatic fee", { onRow: automatic });
+    yield* page.until("the cold automatic turn's original request", (one) =>
+      sidekickShows(one, "[U] run it"),
+    );
+    expect(sidekickShows(page.screen(), "ANSWER-10")).toBe(false);
+    expect(sidekickShows(page.screen(), "Nothing to add.")).toBe(false);
+    expect(sidekickShows(page.screen(), "answered without saying")).toBe(false);
+    expect(sidekickShows(page.screen(), "REPL.Bindings")).toBe(false);
+    expect(host.fake.prompts).toHaveLength(asked);
+    expect(host.fake.ensured).toHaveLength(opened);
+    expect(yield* pairBytes(host.root, execution)).toEqual(before);
+  });
+
+  it("SS7: control — an ordinary entry turn reaches the Sessions reading the same way", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ reply: "ENTRY-REPLY" });
+    yield* pasteDraft(page, promptEntry("control-ask"));
+    yield* page.key("Enter");
+    const fed = page.repl.terminal.fed;
+    yield* page.until(
+      "the entry's recorded provider turn",
+      (one) => transcriptHas(one, "contr") && transcriptHas(one, "completed, recorded"),
+    );
+    expect(page.repl.terminal.fed).toBe(fed);
+    expect(page.screen().shows("Entry agents")).toBe(false);
+    expect(transcriptHas(page.screen(), MOUNTED_AGENT)).toBe(true);
+    expect(transcriptLines(page.screen()).filter((row) => row.includes("contr"))).toHaveLength(1);
+  });
+});
+
+describe("Sidekick original populated chat profiles", () => {
+  it("SS7: three profiles keep a populated older reading, its window and the way home", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.configuration(ADVERTISED);
+    for (let i = 1; i <= 6; i += 1) {
+      yield* exchange(page, `old-${i}`, `OLD-${i}`);
+    }
+    yield* newConversation(page);
+    yield* exchange(page, "current ask", "Current answer.");
+    yield* draftText(page, "my entry");
+    yield* compose(page, "my q");
+    yield* reachTurn(page, "old-6 ");
+    yield* page.until("the populated older reading", (one) => chatHas(one, "OLD-6"));
+    for (const size of PROFILES) {
+      const one = yield* atSize(page, size);
+      if (!chatHas(one, "OLD-6")) {
+        throw new Error(`the older last turn at ${size.columns}: ${page.describe()}`);
+      }
+      expect(one.shows("[Back to current chat]")).toBe(true);
+      expect(one.shows("[exit]")).toBe(true);
+      assertReadOnly(one);
+      if (size.columns >= 120) {
+        expect(one.shows("TRANSCRIPT")).toBe(true);
+        expect(one.shows("SIDEKICK")).toBe(true);
+        expect(one.found("my entry", DRAFT_VALUE)).toBe(1);
+      } else {
+        expect(one.shows("DRAFT")).toBe(false);
+      }
+    }
+    yield* page.resize(WIDE);
+    yield* backToCurrent(page, "Current answer.");
+    expect(composerHolds(page.screen(), "my q")).toBe(true);
+    expect(yield* finishDraft(page)).toBe("my entry");
+  });
+
+  it("SS7: three profiles keep both sections, the window, Back and both texts", function* () {
+    const page = yield* useReplPage();
+    yield* exchange(page, "older ask", "Older answer.");
+    yield* draftText(page, "my entry");
+    yield* compose(page, "my q");
+    yield* chooseTurn(page, "older ask ");
+    yield* page.until("the current chat explicitly selected", (one) =>
+      one.shows("[Back to current chat]"),
+    );
+    for (const size of PROFILES) {
+      const one = yield* atSize(page, size);
+      expect(one.shows("[exit]")).toBe(true);
+      expect(one.shows("[Back to current chat]")).toBe(true);
+      expect(composerHolds(one, "my q")).toBe(true);
+      expect(chatHas(one, "Older answer.")).toBe(true);
+      expect(one.found("[send]", SIDEKICK_CONTROLS)).toBe(1);
+      if (size.columns >= 120) {
+        expect(one.shows("TRANSCRIPT")).toBe(true);
+        expect(one.shows("SIDEKICK")).toBe(true);
+        expect(one.found("my entry", DRAFT_VALUE)).toBe(1);
+      } else {
+        expect(one.shows("DRAFT")).toBe(false);
+      }
+    }
+    yield* page.resize(WIDE);
+    expect(yield* finishDraft(page)).toBe("my entry");
+  });
+});
+
+describe("Sidekick original independent body controls", () => {
+  it("BP3: both bodies stay usable through their own controls, and narrow gains no inset", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ reply: "ENTRY-REPLY" });
+    yield* entryRun(page, promptEntry("entry-ask"), 1);
+    yield* draftText(page, "kept entry");
+    yield* compose(page, "kept question");
+    yield* conversationChoices(page);
+    yield* page.press("All conversations");
+    yield* page.until("the chooser closing after All", (one) => !one.shows("All conversations"));
+    const execution = yield* mountedExecution(page.repl);
+    const before = yield* pairBytes(page.repl.root, execution);
+    for (const size of [WIDE, { columns: 120, rows: 30 }]) {
+      yield* atSize(page, size);
+      for (const scope of [{ after: COMPOSER }, SIDEKICK_CONTROLS]) {
+        const index = page.screen().index;
+        yield* page.press("[↓ later]", scope);
+        yield* page.until("the body's own scroll response", (one) => one.index > index);
+        expect(page.screen().found("kept entry", DRAFT_VALUE)).toBe(1);
+        expect(composerHolds(page.screen(), "kept question")).toBe(true);
+        expect(entryTrail(page.screen())).toContain("Entry 1");
+      }
+    }
+    yield* page.resize(NARROW);
+    yield* page.press("Entries");
+    yield* page.until("the narrow Entries catalog", (one) => one.shows("[close]"));
+    yield* closeDrawer(page);
+    expect(page.screen().shows("DRAFT")).toBe(true);
+    expect(page.screen().found("kept entry", DRAFT_VALUE)).toBe(1);
+    yield* page.resize(WIDE);
+    expect(composerHolds(page.screen(), "kept question")).toBe(true);
+    expect(yield* finishDraft(page)).toBe("kept entry");
+    expect(yield* pairBytes(page.repl.root, execution)).toEqual(before);
+    expect(page.repl.fake.prompts).toHaveLength(1);
   });
 });

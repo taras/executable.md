@@ -2,6 +2,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { ReplClock } from "../src/repl/frame.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { sleep, scoped, spawn, suspend, ensure, withResolvers } from "effection";
 import type { ReplOutcome } from "../src/repl/program.ts";
@@ -35,6 +36,8 @@ import { useReplPage } from "./support/repl-page.ts";
 import {
   composerHolds,
   intoComposer,
+  selectPane,
+  drawerLines,
   typed,
   tab,
   closeDrawer,
@@ -406,7 +409,9 @@ describe("REPL original admission and terminal exit claims", () => {
       expect(page.screen().shows("TRANSCRIPT")).toBe(true);
       expect(page.screen().shows("(none retained)")).toBe(true);
       expect((yield* retainedModel(page)).entries[0]?.settled).toBe(true);
-      expect(yield* leaveWithLocation(page)).toContain("xmd://repl/");
+      const location = yield* leaveWithLocation(page);
+      expect(location).toContain("xmd://repl/");
+      expect(route(location).drawers).toEqual([]);
       return page.repl.terminal;
     });
     released(terminal);
@@ -981,20 +986,26 @@ function preparationGate(startup = false) {
   return {
     reached: entered.operation,
     release: () => gate.resolve(),
-    get holding() { return holding; },
+    get holding() {
+      return holding;
+    },
     *install(): Operation<void> {
       yield* ensure(() => gate.resolve());
       if (startup) {
         yield* Execution.around({
           *document([request], next) {
-            if (!used) { yield* wait(); }
+            if (!used) {
+              yield* wait();
+            }
             return yield* next(request);
           },
         });
       } else {
         yield* API.Fs.around({
           *readTextFile([path], next) {
-            if (!used && path.endsWith("Checklist.md")) { yield* wait(); }
+            if (!used && path.endsWith("Checklist.md")) {
+              yield* wait();
+            }
             return yield* next(path);
           },
         });
@@ -1009,7 +1020,9 @@ function* authoredWork(): Operation<{ invoked: number }> {
   yield* API.Env.around({
     *compile([source, options], next) {
       const block = yield* next(source, options);
-      if (wrapped) { return block; }
+      if (wrapped) {
+        return block;
+      }
       wrapped = true;
       return (env: Record<string, unknown>) => {
         counter.invoked += 1;
@@ -1030,7 +1043,11 @@ function* requestPause(page: ReplPage): Operation<void> {
   expect(page.screen().shows("[continue]")).toBe(false);
 }
 
-function* resumeOnce(page: ReplPage, authored: { invoked: number }, performed: { asked: number }): Operation<void> {
+function* resumeOnce(
+  page: ReplPage,
+  authored: { invoked: number },
+  performed: { asked: number },
+): Operation<void> {
   yield* pausedAt(page, "paused");
   expect(page.screen().shows("[continue]")).toBe(true);
   expect(authored.invoked).toBe(0);
@@ -1103,11 +1120,16 @@ describe("REPL original pause-before-admission boundaries", () => {
     yield* pausedAt(page, "preparing");
     yield* requestPause(page);
     gate.release();
-    yield* page.until("the preflight refusal clearing preparation", (one) => one.shows("Nowhere") && !one.shows("[pause]"));
+    yield* page.until(
+      "the preflight refusal clearing preparation",
+      (one) => one.shows("Nowhere") && !one.shows("[pause]"),
+    );
     expect(yield* journalRecords(page)).toEqual([]);
     expect(page.screen().shows("[continue]")).toBe(false);
     yield* intoDraft(page);
-    for (const _ of source) { yield* page.key("Backspace"); }
+    for (const _ of source) {
+      yield* page.key("Backspace");
+    }
     const valid = yield* referenceSource();
     yield* pasteDraft(page, valid);
     yield* page.key("Enter");
@@ -1130,7 +1152,9 @@ describe("REPL original pause-before-admission boundaries", () => {
       *document([request], next) {
         yield* RootMetadata.around({
           metadata(args, delegate) {
-            if (refused) { return delegate(...args); }
+            if (refused) {
+              return delegate(...args);
+            }
             refused = true;
             atSeam = authored.invoked;
             throw new Error("runtime metadata refusal after root import");
@@ -1157,7 +1181,10 @@ describe("REPL original pause-before-admission boundaries", () => {
     yield* page.until("the next entry playing", (one) => one.shows("[answer]"));
     expect(performed.asked).toBe(1);
     expect(authored.invoked).toBe(1);
-    expect((yield* retainedModel(page)).entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+    expect((yield* retainedModel(page)).entries.map((entry) => entry.key)).toEqual([
+      "entry-1",
+      "entry-2",
+    ]);
     yield* leaveWithLocation(page);
   });
 
@@ -1198,7 +1225,9 @@ describe("REPL original pause-before-admission boundaries", () => {
     yield* page.press("Entry 1 admitted");
     yield* page.until("the earlier position", (one) => one.shows("[live]"));
     gate.release();
-    yield* page.until("the changed-head refusal", (one) => one.shows("moved away from the live head"));
+    yield* page.until("the changed-head refusal", (one) =>
+      one.shows("moved away from the live head"),
+    );
     expect((yield* retainedModel(page)).entries.map((entry) => entry.source)).toEqual([first]);
     yield* closeDrawer(page);
     yield* page.press("[live]");
@@ -1233,7 +1262,12 @@ describe("REPL original pause-before-admission boundaries", () => {
     const host = yield* useMountedHost({ dataRoot, includes: [REFERENCE_DIRECTORY] });
     yield* noNewExecution();
     const performed = yield* performedWork();
-    const cold = yield* useReplPage({ host, location, includes: [REFERENCE_DIRECTORY], size: WIDE });
+    const cold = yield* useReplPage({
+      host,
+      location,
+      includes: [REFERENCE_DIRECTORY],
+      size: WIDE,
+    });
     for (const label of ["[pause]", "[continue]", "preparing", "pausing"]) {
       expect(cold.screen().shows(label)).toBe(false);
     }
@@ -1490,7 +1524,11 @@ describe("REPL original live output and entry lifecycle", () => {
     yield* entrySettles(page, 2, "ok");
     const model = yield* retainedModel(page);
     expect(model.entries.map((one) => one.terminal?.status)).toEqual(["cancelled", "ok"]);
-    expect(model.entries[0]?.transcript.some((one) => one.kind === "output" && one.text.includes("printed before the question"))).toBe(true);
+    expect(
+      model.entries[0]?.transcript.some(
+        (one) => one.kind === "output" && one.text.includes("printed before the question"),
+      ),
+    ).toBe(true);
     expect(model.entries[1]?.source).toBe(FIRST_COLD);
     yield* leaveWithLocation(page);
     released(page.repl.terminal);
@@ -1535,55 +1573,72 @@ function directions(one: ScreenReading): string {
 
 describe("REPL original first-use paths and question ownership", () => {
   for (const size of [WIDE, NARROW]) {
-    it(size.columns === 72
-      ? "C1: submit, answer, dismiss, reopen, settle, Sessions, History, live and exit at 72x20"
-      : "UI8: the whole first-use path, using only what the screen says", function* () {
-      const page = yield* useReplPage({ size });
-      expect(directions(page.screen())).toBe("Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move");
-      yield* runSource(page, SHORT_QUESTION);
-      yield* page.until("the waiting announcement", (one) => one.shows("[answer]"));
-      if (size.columns === 72) {
-        expect(directions(page.screen())).toBe("Entry 1 question · activate answer · Type here · Tab/Shift+Tab move");
-      }
-      yield* sessions(page);
-      expect(page.screen().shows("[submit]")).toBe(false);
-      yield* page.press("[answer]");
-      yield* page.until("the question drawer", (one) => one.shows("[submit]"));
-      yield* page.key("Escape");
-      yield* page.until("the question dismissed", (one) => !one.shows("[close]"));
-      expect(page.screen().shows("[answer]")).toBe(true);
-      yield* page.key("Enter");
-      yield* page.until("Enter reopening the unanswered question", (one) => one.shows("[submit]"));
-      yield* page.press("( ) go");
-      yield* page.press("[submit]");
-      yield* entrySettles(page, 1, "ok");
-      expect(page.screen().shows("[close]")).toBe(false);
-      yield* catalog(page);
-      expect(page.screen().shows("1. [ok] entry-1")).toBe(true);
-      yield* closeDrawer(page);
-      yield* sessions(page);
-      yield* catalog(page);
-      yield* closeDrawer(page);
-      yield* draftText(page, "entry two");
-      yield* openHistory(page);
-      yield* page.press("Entry 1 admitted");
-      yield* page.until("the frozen drawer", (one) => one.shows("[live]"));
-      expect(directions(page.screen())).toContain("Esc closes");
-      yield* closeDrawer(page);
-      for (let press = 0; press < 40 && !directions(page.screen()).startsWith("History · Enter unavailable"); press += 1) { yield* tab(page); }
-      yield* page.until("the frozen Draft guidance", (one) => directions(one).startsWith("History · Enter unavailable"));
-      expect(directions(page.screen())).toContain("activate live");
-      expect(page.screen().shows("entry two")).toBe(true);
-      expect(page.screen().shows("Enter submits")).toBe(false);
-      yield* page.press("[live]");
-      yield* page.until("the live head", (one) => !one.shows("[live]"));
-      yield* intoDraft(page);
-      yield* page.key("Enter");
-      yield* entrySettles(page, 2, "ok");
-      expect((yield* retainedModel(page)).entries[1]?.source).toBe("entry two");
-      expect(yield* leaveWithLocation(page)).toContain("xmd://repl/");
-      released(page.repl.terminal);
-    });
+    it(
+      size.columns === 72
+        ? "C1: submit, answer, dismiss, reopen, settle, Sessions, History, live and exit at 72x20"
+        : "UI8: the whole first-use path, using only what the screen says",
+      function* () {
+        const page = yield* useReplPage({ size });
+        expect(directions(page.screen())).toBe(
+          "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move",
+        );
+        yield* runSource(page, SHORT_QUESTION);
+        yield* page.until("the waiting announcement", (one) => one.shows("[answer]"));
+        if (size.columns === 72) {
+          expect(directions(page.screen())).toBe(
+            "Entry 1 question · activate answer · Type here · Tab/Shift+Tab move",
+          );
+        }
+        yield* sessions(page);
+        expect(page.screen().shows("[submit]")).toBe(false);
+        yield* page.press("[answer]");
+        yield* page.until("the question drawer", (one) => one.shows("[submit]"));
+        yield* page.key("Escape");
+        yield* page.until("the question dismissed", (one) => !one.shows("[close]"));
+        expect(page.screen().shows("[answer]")).toBe(true);
+        yield* page.key("Enter");
+        yield* page.until("Enter reopening the unanswered question", (one) =>
+          one.shows("[submit]"),
+        );
+        yield* page.press("( ) go");
+        yield* page.press("[submit]");
+        yield* entrySettles(page, 1, "ok");
+        expect(page.screen().shows("[close]")).toBe(false);
+        yield* catalog(page);
+        expect(page.screen().shows("1. [ok] entry-1")).toBe(true);
+        yield* closeDrawer(page);
+        yield* sessions(page);
+        yield* catalog(page);
+        yield* closeDrawer(page);
+        yield* draftText(page, "entry two");
+        yield* openHistory(page);
+        yield* page.press("Entry 1 admitted");
+        yield* page.until("the frozen drawer", (one) => one.shows("[live]"));
+        expect(directions(page.screen())).toContain("Esc closes");
+        yield* closeDrawer(page);
+        for (
+          let press = 0;
+          press < 40 && !directions(page.screen()).startsWith("History · Enter unavailable");
+          press += 1
+        ) {
+          yield* tab(page);
+        }
+        yield* page.until("the frozen Draft guidance", (one) =>
+          directions(one).startsWith("History · Enter unavailable"),
+        );
+        expect(directions(page.screen())).toContain("activate live");
+        expect(page.screen().shows("entry two")).toBe(true);
+        expect(page.screen().shows("Enter submits")).toBe(false);
+        yield* page.press("[live]");
+        yield* page.until("the live head", (one) => !one.shows("[live]"));
+        yield* intoDraft(page);
+        yield* page.key("Enter");
+        yield* entrySettles(page, 2, "ok");
+        expect((yield* retainedModel(page)).entries[1]?.source).toBe("entry two");
+        expect(yield* leaveWithLocation(page)).toContain("xmd://repl/");
+        released(page.repl.terminal);
+      },
+    );
   }
 
   it("UI1: the longest question still has a placed, targetable control at 72x20", function* () {
@@ -1593,17 +1648,25 @@ describe("REPL original first-use paths and question ownership", () => {
     yield* sessions(page);
     const answer = page.screen().locate("[answer]");
     const row = page.screen().rows[answer.row] ?? "";
-    for (const label of ["[history]", "[exit]", "[pause]", "[answer]"]) { expect(row).toContain(label); }
+    for (const label of ["[history]", "[exit]", "[pause]", "[answer]"]) {
+      expect(row).toContain(label);
+    }
     expect(answer.column + "[answer]".length).toBeLessThanOrEqual(NARROW.columns);
     yield* page.press("[answer]");
-    yield* page.until("the long question's form", (one) => one.shows("[close]") && one.shows("decision: go"));
+    yield* page.until(
+      "the long question's form",
+      (one) => one.shows("[close]") && one.shows("decision: go"),
+    );
     yield* closeDrawer(page);
     expect(trail(page.screen())).toContain("Entry 1");
     yield* catalog(page);
     expect(page.screen().shows("1. [unfinished] entry-1")).toBe(true);
     yield* closeDrawer(page);
     yield* page.press("[answer]");
-    yield* page.until("the long question still pending", (one) => one.shows("[close]") && one.shows("decision: go"));
+    yield* page.until(
+      "the long question still pending",
+      (one) => one.shows("[close]") && one.shows("decision: go"),
+    );
   });
 
   it("UI4: a live question's drawer is refused wherever it cannot belong", function* () {
@@ -1613,11 +1676,17 @@ describe("REPL original first-use paths and question ownership", () => {
     const before = yield* journalRecords(page);
     yield* openHistory(page);
     yield* page.press("Entry 1 admitted");
-    yield* page.until("the frozen question absent", (one) => one.shows("[live]") && !one.shows("[answer]"));
+    yield* page.until(
+      "the frozen question absent",
+      (one) => one.shows("[live]") && !one.shows("[answer]"),
+    );
     yield* closeDrawer(page);
     expect(page.screen().shows("[submit]")).toBe(false);
     yield* page.press("[live]");
-    yield* page.until("the live question returning", (one) => one.shows("[answer]") && !one.shows("[live]"));
+    yield* page.until(
+      "the live question returning",
+      (one) => one.shows("[answer]") && !one.shows("[live]"),
+    );
     expect(yield* journalRecords(page)).toEqual(before);
     expect(page.screen().shows("[submit]")).toBe(false);
   });
@@ -1633,7 +1702,9 @@ describe("REPL original first-use paths and question ownership", () => {
         yield* page.until("the question field", (one) => one.shows("[submit]"));
         expect(page.screen().found("next entry", DRAFT_VALUE)).toBe(1);
         yield* page.type("go");
-        yield* page.until("the modal field taking the keystrokes", (one) => one.shows("decision: go"));
+        yield* page.until("the modal field taking the keystrokes", (one) =>
+          one.shows("decision: go"),
+        );
         expect(page.screen().found("next entry", DRAFT_VALUE)).toBe(1);
         yield* closeDrawer(page);
         expect(route(yield* leaveWithLocation(page)).draft).toBe("next entry");
@@ -1653,7 +1724,9 @@ describe("REPL original first-use paths and question ownership", () => {
       const bytes = yield* readTextFile(path);
       yield* page.press("[exit]");
       const outcome = yield* commandReturned(page);
-      if (!outcome.ok) { throw outcome.error; }
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
       const location = outcome.value.location;
       expect(location).not.toContain("+elicit");
       expect(location).not.toContain("+permission");
@@ -1679,8 +1752,12 @@ describe("REPL original completed-screen lifecycle", () => {
     const before = terminal.drawn;
     yield* draftText(page, "abc");
     expect(terminal.drawn).toBeGreaterThan(before);
-    expect(terminal.presented.some((bytes) => new TextDecoder().decode(bytes).includes(session))).toBe(true);
-    expect(new TextDecoder().decode(terminal.presented.at(-1) ?? new Uint8Array())).not.toContain(session);
+    expect(
+      terminal.presented.some((bytes) => new TextDecoder().decode(bytes).includes(session)),
+    ).toBe(true);
+    expect(new TextDecoder().decode(terminal.presented.at(-1) ?? new Uint8Array())).not.toContain(
+      session,
+    );
     expect(page.screen().rows[0]).toBe(top);
     for (const size of [{ columns: 120, rows: 30 }, NARROW, WIDE]) {
       const one = yield* page.resize(size);
@@ -1735,18 +1812,25 @@ describe("REPL original completed-screen lifecycle", () => {
         fed = terminal.fed;
         yield* suspend();
       });
-    } catch (error) { caught = error; }
+    } catch (error) {
+      caught = error;
+    }
     expect(caught).toBe(failure);
     expect(terminal?.fed).toBe(fed);
-    if (terminal === undefined) { throw new Error("the command never mounted its terminal"); }
+    if (terminal === undefined) {
+      throw new Error("the command never mounted its terminal");
+    }
     released(terminal);
   });
 
   it("ends a wait the screen can no longer satisfy when the command exits", function* () {
     const page = yield* referencePage();
     const waiting = yield* spawn(function* () {
-      try { yield* page.until("something never drawn", () => false); }
-      catch (error) { return error; }
+      try {
+        yield* page.until("something never drawn", () => false);
+      } catch (error) {
+        return error;
+      }
       return undefined;
     });
     yield* awaited("the subscribed wait", () => page.repl.terminal.waiting === 1);
@@ -1763,14 +1847,20 @@ describe("REPL original completed-screen lifecycle", () => {
     const before = page.screen().index;
     page.repl.terminal.resizeAfterRead(3, NARROW);
     yield* page.type("!");
-    const first = yield* page.until("the first completed resized write", (one) => one.index > before);
+    const first = yield* page.until(
+      "the first completed resized write",
+      (one) => one.index > before,
+    );
     expect(first.size).toEqual(NARROW);
     expect(first.found("resize me!", DRAFT_VALUE)).toBe(1);
     const churned = page.screen().index;
     page.repl.terminal.churnSize(60, NARROW);
     yield* page.type("?");
     yield* awaited("the drag ending", () => page.repl.terminal.churning() === 0);
-    const last = yield* page.until("the settled resize", (one) => one.found("resize me!?", DRAFT_VALUE) === 1);
+    const last = yield* page.until(
+      "the settled resize",
+      (one) => one.found("resize me!?", DRAFT_VALUE) === 1,
+    );
     expect(last.size).toEqual(NARROW);
     expect(last.index - churned).toBeLessThanOrEqual(1);
     expect(last.shows("needs at least")).toBe(false);
@@ -1783,43 +1873,81 @@ describe("REPL original completed-screen lifecycle", () => {
 });
 
 const POSITION_WORDS: Readonly<Record<string, string>> = {
-  entry: "Entry %E admitted", scope: "Component admitted", binding: "Bindings recorded",
-  generated: "Generated XMD admitted", elicit: "Answer recorded", agent: "Agent turn recorded", terminal: "Entry outcome recorded",
+  entry: "Entry %E admitted",
+  scope: "Component admitted",
+  binding: "Bindings recorded",
+  generated: "Generated XMD admitted",
+  elicit: "Answer recorded",
+  agent: "Agent turn recorded",
+  terminal: "Entry outcome recorded",
 };
-function expectedPositions(model: ReturnType<typeof projectRepl> extends Result<infer T> ? T : never): string[] {
+function expectedPositions(
+  model: ReturnType<typeof projectRepl> extends Result<infer T> ? T : never,
+): string[] {
   let entries = 0;
   return model.checkpoints.map((one, index) => {
-    if (one.kind === "entry") { entries += 1; }
+    if (one.kind === "entry") {
+      entries += 1;
+    }
     const words = POSITION_WORDS[one.kind];
-    if (words === undefined) { throw new Error(`no category for ${one.kind}`); }
+    if (words === undefined) {
+      throw new Error(`no category for ${one.kind}`);
+    }
     return `${index + 1} · ${words.replace("%E", String(entries))}`;
   });
 }
 function positionLabels(one: ScreenReading): string[] {
-  return one.rows.flatMap((row) => row.match(/\d+ · (?:Entry \d+ admitted|Component admitted|Bindings recorded|Generated XMD admitted|Answer recorded|Agent turn recorded|Entry outcome recorded)/)?.[0] ?? []);
+  return one.rows.flatMap(
+    (row) =>
+      row.match(
+        /\d+ · (?:Entry \d+ admitted|Component admitted|Bindings recorded|Generated XMD admitted|Answer recorded|Agent turn recorded|Entry outcome recorded)/,
+      )?.[0] ?? [],
+  );
 }
-function* allPositions(page: ReplPage, expected: readonly string[]): Operation<{ first: string[]; reached: string[] }> {
+function* allPositions(
+  page: ReplPage,
+  expected: readonly string[],
+): Operation<{ first: string[]; reached: string[] }> {
   const first = positionLabels(page.screen());
   const seen = new Set(first);
   for (let press = 0; press < expected.length * 2 && seen.size < expected.length; press += 1) {
     const rows = page.screen().rows;
     const last = positionLabels(page.screen()).at(-1);
-    if (last === undefined) { throw new Error(`the drawer holds no positions: ${page.describe()}`); }
+    if (last === undefined) {
+      throw new Error(`the drawer holds no positions: ${page.describe()}`);
+    }
     const at = rows.findIndex((row) => row.includes(last));
     const controlRow = rows.slice(at + 1).find((row) => row.includes("[↓ later]"));
-    if (controlRow === undefined) { throw new Error(`no later action after ${last}`); }
+    if (controlRow === undefined) {
+      throw new Error(`no later action after ${last}`);
+    }
     const index = page.screen().index;
     yield* page.press("[↓ later]", { onRow: controlRow, rightOf: "[close]" });
     yield* page.until("the next positions", (one) => one.index > index);
-    for (const label of positionLabels(page.screen())) { seen.add(label); }
+    for (const label of positionLabels(page.screen())) {
+      seen.add(label);
+    }
   }
-  return { first, reached: [...seen].sort((a, b) => Number(a.split(" ")[0]) - Number(b.split(" ")[0])) };
+  return {
+    first,
+    reached: [...seen].sort((a, b) => Number(a.split(" ")[0]) - Number(b.split(" ")[0])),
+  };
 }
 function historyBand(one: ScreenReading): string {
-  return one.rows.find((row) => row.includes("HISTORY"))?.replace(/>/g, " ").trimEnd() ?? "";
+  return (
+    one.rows
+      .find((row) => row.includes("HISTORY"))
+      ?.replace(/>/g, " ")
+      .trimEnd() ?? ""
+  );
 }
 function* fourEntries(page: ReplPage): Operation<void> {
-  for (const [index, source] of [FIRST_COLD, SECOND_COLD, '```js eval\nconst third = "third";\n```\n\nThree: {third}\n', '```js eval\nconst fourth = "fourth";\n```\n\nFour: {fourth}\n'].entries()) {
+  for (const [index, source] of [
+    FIRST_COLD,
+    SECOND_COLD,
+    '```js eval\nconst third = "third";\n```\n\nThree: {third}\n',
+    '```js eval\nconst fourth = "fourth";\n```\n\nFour: {fourth}\n',
+  ].entries()) {
     yield* runSource(page, source);
     yield* entrySettles(page, index + 1, "ok");
   }
@@ -1842,7 +1970,10 @@ describe("REPL original complete History and cold catalog", () => {
     for (const size of [{ columns: 120, rows: 30 }, NARROW, { columns: 40, rows: 10 }, WIDE]) {
       const shown = yield* page.resize(size);
       expect(shown.rows.filter((row) => row.length > size.columns)).toEqual([]);
-      if (size.columns < 72) { expect(shown.shows("Make the window")).toBe(true); continue; }
+      if (size.columns < 72) {
+        expect(shown.shows("Make the window")).toBe(true);
+        continue;
+      }
       expect(trail(shown)).toContain("Entry 1");
       expect(shown.found("my next entry", DRAFT_VALUE)).toBe(1);
       expect(shown.shows("[live]")).toBe(true);
@@ -1871,7 +2002,8 @@ describe("REPL original complete History and cold catalog", () => {
       yield* closeDrawer(page);
       const bands: string[] = [];
       for (const size of sizes) {
-        const shown = page.screen().size.columns === size.columns ? page.screen() : yield* page.resize(size);
+        const shown =
+          page.screen().size.columns === size.columns ? page.screen() : yield* page.resize(size);
         bands.push(historyBand(shown));
       }
       yield* openHistory(page);
@@ -1887,14 +2019,17 @@ describe("REPL original complete History and cold catalog", () => {
     const work = yield* performedWork();
     const page = yield* useReplPage({ host, location: hot.location, size: WIDE });
     expect(page.screen().shows("HEAD · SETTLED")).toBe(true);
-    for (const label of ["[pause]", "[continue]", "HEAD · LIVE", "HEAD · SETTLING"]) { expect(page.screen().shows(label)).toBe(false); }
+    for (const label of ["[pause]", "[continue]", "HEAD · LIVE", "HEAD · SETTLING"]) {
+      expect(page.screen().shows(label)).toBe(false);
+    }
     yield* catalog(page);
     expect(page.screen().shows("entry-1")).toBe(true);
     expect(page.screen().shows("entry-2")).toBe(false);
     yield* closeDrawer(page);
     const cold: string[] = [];
     for (const size of sizes) {
-      const shown = page.screen().size.columns === size.columns ? page.screen() : yield* page.resize(size);
+      const shown =
+        page.screen().size.columns === size.columns ? page.screen() : yield* page.resize(size);
       cold.push(historyBand(shown));
     }
     expect(cold).toEqual(hot.bands);
@@ -1932,7 +2067,10 @@ describe("REPL original complete History and cold catalog", () => {
     expect(trail(page.screen())).toContain("Entry 2");
     expect(page.screen().shows("Two: alpha-again")).toBe(true);
     expect(page.screen().shows("One: alpha")).toBe(false);
-    expect((yield* retainedModel(page)).entries[1]?.bindings.find((one) => one.name === "carried")?.value).toBe("alpha-again");
+    expect(
+      (yield* retainedModel(page)).entries[1]?.bindings.find((one) => one.name === "carried")
+        ?.value,
+    ).toBe("alpha-again");
     expect(yield* leaveWithLocation(page)).toBe(hot.location);
     expect(work.compiles).toBe(0);
     expect(work.reads.filter((one) => one.endsWith(".md"))).toEqual([]);
@@ -1949,17 +2087,24 @@ describe("REPL original visible guidance and controlled typing", () => {
     for (const size of [WIDE, NARROW]) {
       yield* scoped(function* () {
         const page = yield* useReplPage({ size });
-        expect(directions(page.screen())).toBe("Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move");
+        expect(directions(page.screen())).toBe(
+          "Ready for Entry 1 · Enter submits · Type here · Tab/Shift+Tab move",
+        );
         expect(page.screen().shows("Esc closes")).toBe(false);
         yield* page.key("Backtab");
         yield* page.until("the way out's guidance", (one) => one.shows("Enter exits"));
         expect(page.screen().shows("Enter submits")).toBe(false);
         expect(page.screen().shows("Ready for Entry 1")).toBe(true);
-        expect(page.screen().shows(size.columns === 72 ? "Tab to draft" : "Tab to the draft to type")).toBe(true);
+        expect(
+          page.screen().shows(size.columns === 72 ? "Tab to draft" : "Tab to the draft to type"),
+        ).toBe(true);
         yield* page.key("Backtab");
         yield* page.until("History's guidance", (one) => one.shows("Enter opens"));
         yield* page.key("Enter");
-        yield* page.until("History's closing instruction", (one) => one.shows("[close]") && one.shows("Esc closes"));
+        yield* page.until(
+          "History's closing instruction",
+          (one) => one.shows("[close]") && one.shows("Esc closes"),
+        );
       });
     }
   });
@@ -1984,7 +2129,9 @@ describe("REPL original visible guidance and controlled typing", () => {
     const page = yield* useReplPage({ size });
     const source = yield* referenceSource();
     yield* pasteDraft(page, source);
-    expect(page.screen().found(source.trimEnd().split(/\s+/).at(-1) ?? "", DRAFT_VALUE)).toBeGreaterThan(0);
+    expect(
+      page.screen().found(source.trimEnd().split(/\s+/).at(-1) ?? "", DRAFT_VALUE),
+    ).toBeGreaterThan(0);
     expect(page.screen().rows.every((row) => row.length <= size.columns)).toBe(true);
     expect(route(yield* leaveWithLocation(page)).draft).toBe(source);
   });
@@ -1996,12 +2143,24 @@ describe("REPL original visible guidance and controlled typing", () => {
     yield* API.Fetch.around({
       *fetch() {
         yield* release.operation;
-        return { status: 200, headers: new Headers(), *text() { return "done"; } };
+        return {
+          status: 200,
+          headers: new Headers(),
+          *text() {
+            return "done";
+          },
+        };
       },
     });
     const page = yield* useReplPage({ host });
     yield* runSource(page, '```js eval\nyield* fetch("https://held.invalid/finish");\n```');
-    yield* page.until("the running first entry", (one) => one.shows("Entry 1 running") && one.found("fetch(\"https://held.invalid/finish\")", DRAFT_VALUE) === 0 && one.found("```", DRAFT_VALUE) === 0);
+    yield* page.until(
+      "the running first entry",
+      (one) =>
+        one.shows("Entry 1 running") &&
+        one.found('fetch("https://held.invalid/finish")', DRAFT_VALUE) === 0 &&
+        one.found("```", DRAFT_VALUE) === 0,
+    );
     const text = "second entry, typed while the first is running";
     yield* runSource(page, text);
     yield* page.until("the temporary lifecycle refusal", (one) => one.shows("has not finished"));
@@ -2009,7 +2168,9 @@ describe("REPL original visible guidance and controlled typing", () => {
     expect((yield* retainedModel(page)).entries).toHaveLength(1);
     const fed = page.repl.terminal.fed;
     release.resolve();
-    yield* page.until("the refusal expiring with its entry", (one) => one.shows("Ready for Entry 2"));
+    yield* page.until("the refusal expiring with its entry", (one) =>
+      one.shows("Ready for Entry 2"),
+    );
     expect(page.repl.terminal.fed).toBe(fed);
     expect(page.screen().shows("has not finished")).toBe(false);
     expect(route(yield* leaveWithLocation(page)).draft).toBe(text);
@@ -2043,7 +2204,10 @@ describe("REPL original held reading and canonical startup", () => {
     expect(page.screen().rows.some((row) => row.trim().startsWith("…"))).toBe(false);
     yield* closeDrawer(page);
     yield* page.press("[live]");
-    yield* page.until("the held live head", (one) => !one.shows("[live]") && one.shows("[continue]"));
+    yield* page.until(
+      "the held live head",
+      (one) => !one.shows("[live]") && one.shows("[continue]"),
+    );
     yield* page.press("[continue]");
     yield* page.until("the authored question", (one) => one.shows("[answer]"));
     yield* answerReference(page);
@@ -2058,10 +2222,324 @@ describe("REPL original held reading and canonical startup", () => {
     released(page.repl.terminal);
   });
   it("J1: an untouched fresh command returns its exact empty canonical location", function* () {
-    const page = yield* referencePage();
-    const execution = yield* mountedExecution(page.repl);
-    expect(yield* journalRecords(page)).toEqual([]);
-    expect(yield* leaveWithLocation(page)).toBe(`xmd://repl/${execution}/entries`);
+    for (const size of [WIDE, NARROW]) {
+      yield* scoped(function* () {
+        const page = yield* useReplPage({ size, includes: [REFERENCE_DIRECTORY] });
+        const execution = yield* mountedExecution(page.repl);
+        expect(yield* journalRecords(page)).toEqual([]);
+        expect(page.screen().shows("Entries")).toBe(true);
+        expect(page.screen().shows("xmd://")).toBe(false);
+        expect(yield* leaveWithLocation(page)).toBe(`xmd://repl/${execution}/entries`);
+        released(page.repl.terminal);
+      });
+    }
+  });
+});
+
+describe("REPL original presentation acknowledgement", () => {
+  it("J1: a frame is not acknowledged until it has been presented", function* () {
+    const host = yield* useMountedHost({ includes: [REFERENCE_DIRECTORY] });
+    const pending: Array<() => void> = [];
+    let holding = false;
+    let waits = 0;
+    const release = () => {
+      for (const resolve of pending.splice(0)) {
+        resolve();
+      }
+    };
+    yield* ensure(release);
+    yield* ReplClock.around(
+      {
+        *now() {
+          return 0;
+        },
+        *wait() {
+          waits += 1;
+          if (holding) {
+            const ready = withResolvers<void>();
+            pending.push(() => ready.resolve());
+            yield* ready.operation;
+          }
+        },
+      },
+      { at: "min" },
+    );
+    const page = yield* useReplPage({ host, size: WIDE });
+    holding = true;
+    yield* sleep(5);
+    while (pending.length > 0) {
+      release();
+      yield* sleep(5);
+    }
+    const before = waits;
+    const reading = page.screen().index;
+    page.repl.terminal.holdNextPresent();
+    page.repl.terminal.resized({ columns: 150, rows: 34 });
+    yield* awaited("the presentation held inside its real write", () => {
+      release();
+      return page.repl.terminal.holdPresent !== undefined;
+    });
+    release();
+    yield* sleep(5);
+    expect(waits).toBe(before);
+    expect(page.screen().index).toBe(reading);
+    page.repl.terminal.holdPresent?.release();
+    yield* awaited("the stream's next tick after presentation", () => {
+      release();
+      return waits > before;
+    });
+    holding = false;
+    release();
+    yield* leaveWithLocation(page);
     released(page.repl.terminal);
+  });
+});
+
+const RETAINED_SCHEMA = {
+  type: "object",
+  properties: { decision: { type: "string", enum: ["approve", "decline"] } },
+  required: ["decision"],
+  additionalProperties: false,
+};
+const RETAINED_ANSWER = { decision: "approve" };
+function* retainedAnswerLines(page: ReplPage): Operation<{ first: string[]; seen: string[] }> {
+  const first = drawerLines(page.screen());
+  const seen = [...first];
+  const expected = [
+    ...JSON.stringify(RETAINED_SCHEMA, undefined, 2).split("\n"),
+    ...JSON.stringify(RETAINED_ANSWER, undefined, 2).split("\n"),
+  ].map((line) => line.trim());
+  for (
+    let press = 0;
+    press < 60 && !expected.every((line) => seen.some((row) => row.includes(line)));
+    press += 1
+  ) {
+    const one = page.screen();
+    const close = one.locate("[close]");
+    const row = [...one.rows.slice(0, close.row)]
+      .reverse()
+      .find((line) => line.includes("[↓ later]"));
+    if (row === undefined) {
+      throw new Error("the recorded drawer offered no later reading");
+    }
+    yield* page.press("[↓ later]", { onRow: row, rightOf: "[close]" });
+    yield* page.until("the recorded drawer's next rows", (next) => next.index > one.index);
+    seen.push(...drawerLines(page.screen()));
+  }
+  for (const line of expected) {
+    expect(seen.some((row) => row.includes(line))).toBe(true);
+  }
+  return { first, seen };
+}
+
+describe("REPL original retained schema and generated evidence", () => {
+  it("J1: a recorded question reopens its whole schema and answer without work", function* () {
+    const dataRoot = yield* useTemporary("xmd-recorded-answer-cold-");
+    const kept = yield* scoped(function* () {
+      const page = yield* useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], size: WIDE });
+      yield* referenceAsking(page);
+      yield* answerReference(page);
+      const generated = (yield* retainedModel(page)).transcript.find(
+        (one) => one.kind === "generated",
+      );
+      if (generated?.kind !== "generated" || generated.source === undefined) {
+        throw new Error("the reference retained no generated source");
+      }
+      yield* selectCatalog(page, "entry-1");
+      yield* selectCatalog(page, "generated generated");
+      const opening = '<Json value={{"title":"Ship the';
+      const closing = 'REPL","steps":2}} />';
+      expect(`${opening} ${closing}`).toBe(generated.source);
+      yield* page.resize(NARROW);
+      for (
+        let press = 0;
+        press < 60 && !(page.screen().shows(opening) && page.screen().shows(closing));
+        press += 1
+      ) {
+        const index = page.screen().index;
+        yield* page.press("[↓ later]");
+        yield* page.until("the generated source entering the reading", (one) => one.index > index);
+      }
+      const begins = page.screen().locate(opening);
+      const ends = page.screen().locate(closing);
+      expect(ends.row).toBe(begins.row + 1);
+      expect(page.screen().locate("<Evaluate").row).toBeLessThan(begins.row);
+      if (page.screen().size.columns !== WIDE.columns) {
+        yield* page.resize(WIDE);
+      }
+      yield* selectCatalog(page, "entry-1");
+      yield* selectPane(page, "bindings");
+      yield* openHistory(page);
+      const labels = positionLabels(page.screen());
+      expect(labels.length).toBeGreaterThan(4);
+      yield* page.press(labels.at(-1) ?? "");
+      yield* page.until("the recorded terminal prefix", (one) => one.shows("[live]"));
+      yield* closeDrawer(page);
+      yield* page.press("answered ");
+      yield* page.until(
+        "the recorded answer drawer",
+        (one) => one.shows("Recorded answer") && one.shows("[close]"),
+      );
+      const read = yield* retainedAnswerLines(page);
+      expect(read.first).not.toEqual(drawerLines(page.screen()));
+      const path = yield* executionJournal(page);
+      const location = yield* leaveWithLocation(page);
+      const parsed = route(location);
+      expect(parsed.scopes).toEqual(["entry-1"]);
+      expect(parsed.at).toBeDefined();
+      expect(parsed.inspect).toBe(true);
+      expect(parsed.drawers.map((one) => one.kind)).toEqual(["recorded-elicit"]);
+      return { path, location, generated: generated.source, labels };
+    });
+    const bytes = yield* readTextFile(kept.path);
+    const host = yield* useMountedHost({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+    yield* noNewExecution();
+    const work = yield* performedWork();
+    const page = yield* useReplPage({ host, location: kept.location, size: WIDE });
+    expect(page.screen().shows("Recorded answer")).toBe(true);
+    yield* retainedAnswerLines(page);
+    yield* closeDrawer(page);
+    expect(trail(page.screen())).toContain("Entry 1");
+    expect(page.screen().shows("[live]")).toBe(true);
+    yield* catalog(page);
+    expect(page.screen().shows("component Checklist")).toBe(true);
+    expect(page.screen().shows("generated generated")).toBe(true);
+    yield* closeDrawer(page);
+    yield* page.press("answered ");
+    yield* page.until(
+      "the retained question reachable again",
+      (one) => one.shows("Recorded answer") && one.shows("[close]"),
+    );
+    yield* retainedAnswerLines(page);
+    yield* closeDrawer(page);
+    yield* openHistory(page);
+    expect(positionLabels(page.screen())).toEqual(kept.labels);
+    const returned = route(yield* leaveWithLocation(page));
+    const original = route(kept.location);
+    expect([returned.execution, returned.scopes, returned.at, returned.inspect]).toEqual([
+      original.execution,
+      original.scopes,
+      original.at,
+      original.inspect,
+    ]);
+    expect(work.compiles).toBe(0);
+    expect(work.asked).toBe(0);
+    expect(work.reads).toEqual([]);
+    expect(yield* readTextFile(kept.path)).toBe(bytes);
+    released(page.repl.terminal);
+  });
+});
+
+describe("REPL original question arrival on another reading", () => {
+  it("UI3: a question on Sessions moves nothing, and is reached by activating it", function* () {
+    for (const size of [WIDE, NARROW]) {
+      yield* scoped(function* () {
+        const host = yield* useMountedHost();
+        const entered = withResolvers<void>();
+        const release = withResolvers<void>();
+        yield* ensure(() => release.resolve());
+        yield* Elicitation.around({
+          *elicit([request], next) {
+            entered.resolve();
+            yield* release.operation;
+            return yield* next(request);
+          },
+        });
+        const page = yield* useReplPage({ host, size });
+        yield* runSource(page, JOURNEY_ONE);
+        yield* entered.operation;
+        yield* sessions(page);
+        for (let press = 0; press < 40 && !page.screen().shows("Enter exits"); press += 1) {
+          const index = page.screen().index;
+          yield* page.key("Backtab");
+          yield* page.until("the preceding control's guidance", (one) => one.index > index);
+        }
+        expect(page.screen().shows("Enter exits")).toBe(true);
+        release.resolve();
+        yield* page.until("the newly arrived question", (one) => one.shows("[answer]"));
+        expect(page.screen().shows("Enter exits")).toBe(true);
+        expect(page.screen().shows("[close]")).toBe(false);
+        expect(page.screen().shows("decision: go")).toBe(false);
+        if (size.columns === 72) {
+          expect(page.screen().shows("All sessions")).toBe(true);
+          expect(page.screen().shows("DRAFT")).toBe(false);
+        }
+        yield* page.press("[answer]");
+        yield* page.until("the question's own entry drawer", (one) => one.shows("[submit]"));
+        expect(trail(page.screen())).toContain("Entry 1");
+        yield* closeDrawer(page);
+        expect(page.screen().shows("[answer]")).toBe(true);
+        yield* page.key("Enter");
+        yield* page.until("the unanswered question reopening", (one) => one.shows("[submit]"));
+        expect((yield* journalRecords(page)).filter((line) => line.includes("elicit"))).toEqual([]);
+        yield* leaveWithLocation(page);
+      });
+    }
+  });
+});
+
+describe("REPL original surface and entry selection marks", () => {
+  it("UI1: the active surface and the selected entry are marked in the frame", function* () {
+    for (const size of [WIDE, NARROW]) {
+      yield* scoped(function* () {
+        const page = yield* useReplPage({ size });
+        yield* runSource(page, FIRST_COLD);
+        yield* entrySettles(page, 1, "ok");
+        yield* runSource(
+          page,
+          "```js eval\nconst carried = `${token}-again`;\n```\n\nTwo: {carried}\n",
+        );
+        yield* entrySettles(page, 2, "ok");
+        expect(trail(page.screen())).toContain("Entry 2");
+        const before = page.screen().rows;
+        if (size.columns === 72) {
+          yield* page.press("Sessions");
+          yield* page.until("the selected Sessions outlet", (one) => one.shows("* Sessions"));
+        } else {
+          yield* intoDraft(page);
+          for (let press = 0; press < 4; press += 1) {
+            yield* tab(page);
+          }
+          expect(page.screen().shows("TRANSCRIPT")).toBe(true);
+        }
+        expect(page.screen().rows).not.toEqual(before);
+        yield* catalog(page);
+        if (size.columns === 72) {
+          expect(page.screen().shows("* Entries")).toBe(true);
+        }
+        yield* closeDrawer(page);
+        let first: readonly string[] = [];
+        for (const entry of ["entry-1", "entry-2"]) {
+          yield* selectCatalog(page, entry);
+          yield* catalog(page);
+          for (const label of ["entry-1", "entry-2"]) {
+            const row = page.screen().rows.find((one) => one.includes(label)) ?? "";
+            expect([size.columns, entry, label, row.includes("*")]).toEqual([
+              size.columns,
+              entry,
+              label,
+              entry === label,
+            ]);
+          }
+          yield* closeDrawer(page);
+          if (entry === "entry-1") {
+            first = page.screen().rows;
+          } else {
+            expect(page.screen().rows).not.toEqual(first);
+          }
+        }
+        yield* intoDraft(page);
+        yield* page.key("Backtab");
+        yield* page.until("the way out keeping the entry selected", (one) =>
+          one.shows("Enter exits"),
+        );
+        yield* catalog(page);
+        const selected = page.screen().rows.find((one) => one.includes("entry-2")) ?? "";
+        expect(selected).toContain("*");
+        yield* closeDrawer(page);
+        yield* sessions(page);
+        expect(page.screen().shows("(none retained)")).toBe(true);
+      });
+    }
   });
 });
