@@ -32,7 +32,6 @@ import { EntrySegmentStream } from "../src/repl/entries.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type { ReplActionCandidate, ReplBounds } from "../src/repl/layout.ts";
-import type { ReplWindow } from "../src/repl/layout-admission.ts";
 import { admitActions } from "../src/repl/layout-admission.ts";
 import type { ReplLive, ReplState, ReplView } from "../src/repl/application.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
@@ -50,19 +49,12 @@ import {
   workspaceOf,
 } from "../src/repl/application.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
-import { usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
+import { usePresenter, viewportBounds, windowOf } from "./fixtures/repl/presentation.ts";
+import type { Observed, Presenter } from "./fixtures/repl/presentation.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
-import { useReplPage } from "./support/mounted-page.ts";
-import type { PageFrame, ReplPage } from "./support/mounted-page.ts";
-import {
-  draft,
-  entrySettles,
-  focusCycle,
-  frameAt,
-  openCatalog,
-  paste,
-  scrollUntil,
-} from "./support/repl-page-adapters.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import type { ReplPage } from "./support/repl-page.ts";
+import { entrySettles, pasteDraft } from "./support/screen-journeys.ts";
 
 /**
  * The two cells in front of a control's label that its focus marker draws in.
@@ -109,15 +101,22 @@ function* referenceModel(): Operation<ReplModel> {
  * not fit.
  */
 function* entriesModel(count: number): Operation<ReplModel> {
+  return yield* journalModel(
+    Array.from({ length: count }, (_unused, at) => {
+      const order = at + 1;
+      return `# Entry ${order}\n\nThe ${order} th reading of this history.\n`;
+    }),
+  );
+}
+
+/** A journal of these sources, each entry of which really ran, in this order. */
+function* journalModel(sources: readonly string[]): Operation<ReplModel> {
   yield* useTempFileCompiler();
   const physical = new InMemoryStream();
-  for (let at = 1; at <= count; at += 1) {
+  for (const source of sources) {
     const settled = yield* physical.readAll();
     const execution = yield* executeInstalled(
-      {
-        ...inlineSource(`# Entry ${at}\n\nThe ${at} th reading of this history.\n`),
-        stream: new EntrySegmentStream(physical),
-      },
+      { ...inlineSource(source), stream: new EntrySegmentStream(physical) },
       [],
       { initialBindings: settled.length === 0 ? {} : entryInitialBindings(projected(settled)) },
     );
@@ -146,20 +145,59 @@ function viewOf(
   return withWorkspace(view.value, workspaceOf(model));
 }
 
-/** The window the frame measured under this name, or a failure naming the ones it did. */
-function windowIn(frame: PageFrame, name: string): ReplWindow {
-  const held = frame.windows.get(name);
-  if (held === undefined) {
-    throw new Error(
-      `this frame measured no ${name} window; it measured ${[...frame.windows.keys()].join(", ")}`,
-    );
+/** Whether one rectangle is drawn wholly inside another. */
+function within(outer: ReplBounds | undefined, inner: ReplBounds | undefined): boolean {
+  if (outer === undefined || inner === undefined) {
+    return false;
   }
-  return held;
+  return (
+    inner.x >= outer.x &&
+    inner.y >= outer.y &&
+    inner.x + inner.width <= outer.x + outer.width &&
+    inner.y + inner.height <= outer.y + outer.height
+  );
+}
+
+/** The key of the control holding focus in this tree, or none. */
+function focusedKey(presenter: Presenter): string | undefined {
+  const node = presenter.tree.focused();
+  return node === undefined ? undefined : presenter.tree.keyOf(node);
+}
+
+/**
+ * One whole focus cycle from wherever focus is, in the direction this key walks.
+ *
+ * Traversal arrives as an event, the way it does from a terminal: the tree has
+ * no other way in, so what this walks is the ring the product offers.
+ */
+function* ring(presenter: Presenter, key: "Tab" | "Backtab"): Operation<readonly string[]> {
+  const first = focusedKey(presenter) ?? "";
+  const walked: string[] = [first];
+  for (let press = 0; press < 200; press += 1) {
+    yield* presenter.tree.dispatch({ kind: "key", key });
+    const at = focusedKey(presenter) ?? "";
+    if (at === first) {
+      return walked;
+    }
+    walked.push(at);
+  }
+  throw new Error(`focus never came back round with ${key}`);
+}
+
+/** Walk the ring until this key holds focus, the way a person reaches one. */
+function* focusKey(presenter: Presenter, key: string): Operation<void> {
+  for (let press = 0; press < 200; press += 1) {
+    if (focusedKey(presenter) === key) {
+      return;
+    }
+    yield* presenter.tree.dispatch({ kind: "key", key: "Tab" });
+  }
+  throw new Error(`focus never reached ${key}`);
 }
 
 /** Submit one entry through the Draft and wait for the History rail to mark it settled. */
 function* submit(page: ReplPage, order: number, source: string): Operation<void> {
-  yield* paste(page, draft(page), source);
+  yield* pasteDraft(page, source);
   yield* page.key("Enter");
   yield* entrySettles(page, order, "ok");
 }
@@ -168,21 +206,74 @@ const CATALOG_ENTRIES = 10;
 const entryKey = (order: number): string => `entry:entry-${order}`;
 const entryLabel = (order: number): string => `${order}. [ok] entry-${order}`;
 
+/** One presenter and journal, with the state that has the catalog open. */
+interface Catalog {
+  readonly presenter: Presenter;
+  readonly model: ReplModel;
+  /** The state the drawer's own action leaves behind. */
+  readonly state: ReplState;
+  /** The control the mounted tree answered focus for before it opened. */
+  readonly focused: string | undefined;
+}
+
 /**
- * A page at the narrowest size with its Entries catalog open over ten entries.
+ * The Entries catalog open over ten entries at the narrowest size.
  *
- * The entries are submitted where the History rail marks each of them, and the
- * terminal is made narrow afterwards: the catalog's window holds six rows at
- * the narrowest size, so ten of them overflow it.
+ * The catalog's window holds six rows there, so ten of them overflow it: a
+ * window that fits has nothing to decide, and every row below is about the one
+ * that does not. It is opened from a frame whose focus the mounted tree
+ * answered for, because the drawer is a modal and only what it holds may take
+ * focus while it is open.
  */
-function* catalogOverEntries(): Operation<ReplPage> {
-  const page = yield* useReplPage({ size: WIDE });
-  for (let order = 1; order <= CATALOG_ENTRIES; order += 1) {
-    yield* submit(page, order, `Entry ${order} text.`);
+function* catalogOverEntries(): Operation<Catalog> {
+  const model = yield* entriesModel(CATALOG_ENTRIES);
+  const presenter = yield* usePresenter(NARROW);
+  yield* presenter.commit(viewOf(model, NARROW));
+  const focused = focusedKey(presenter);
+  const closed = viewOf(model, NARROW, { focused });
+  yield* presenter.commit(closed);
+  const state = reduceRepl(closed.state, { kind: "open-catalog" }, model, IDLE).state;
+  return { presenter, model, state, focused };
+}
+
+/** Draw this catalog at this state, and answer what the frame placed. */
+function* shownAt(catalog: Catalog, state: ReplState): Operation<Observed> {
+  const view = viewOf(catalog.model, catalog.presenter.grid.size, {
+    state,
+    focused: catalog.focused,
+  });
+  return yield* catalog.presenter.commit(view);
+}
+
+/**
+ * Move the catalog's window one row at a time until the frame holds of it.
+ *
+ * Each step reduces against the admission the frame it is looking at actually
+ * drew, which is what the running command's own scroll control gives it: a step
+ * taken against anything else would be moving from a window nobody saw.
+ */
+function* scrolledUntil(
+  catalog: Catalog,
+  from: ReplState,
+  delta: 1 | -1,
+  holds: (observed: Observed) => boolean,
+): Operation<{ readonly state: ReplState; readonly observed: Observed }> {
+  let state = from;
+  let observed = yield* shownAt(catalog, state);
+  for (let press = 0; press < 40 && !holds(observed); press += 1) {
+    state = reduceRepl(
+      state,
+      { kind: "scroll-entries", delta },
+      catalog.model,
+      IDLE,
+      observed.committed.admission,
+    ).state;
+    observed = yield* shownAt(catalog, state);
   }
-  yield* page.resize(NARROW);
-  yield* openCatalog(page);
-  return page;
+  if (!holds(observed)) {
+    throw new Error(`the catalog's window never reached what was asked of it, moving ${delta}`);
+  }
+  return { state, observed };
 }
 
 /** A reading long enough that no region holds it: forty paragraphs, one row each. */
@@ -201,9 +292,13 @@ const boundsIn =
   (id: string): ReplBounds | undefined =>
     extents[id.replace(/^box:/, "")];
 
-/** The rows the reading's viewport holds on this frame, trimmed. */
-const reading = (frame: PageFrame): readonly string[] =>
-  frame.area("box:reading:viewport")?.rows() ?? [];
+/** The keys of the controls one frame published a pointer target for. */
+function targetKeys(presenter: Presenter, observed: Observed): readonly string[] {
+  return observed.targets.flatMap((one) => {
+    const key = presenter.tree.keyOf(one.node);
+    return key === undefined ? [] : [key];
+  });
+}
 
 describe("REPL layout: what an empty measurement describes", () => {
   it("TL2: a measured viewport holds no node, no cell and no target", function* () {
@@ -224,19 +319,14 @@ describe("REPL layout: what an empty measurement describes", () => {
   });
 
   it("TL2: capacity describes the region, not whatever is overflowing it", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    yield* submit(page, 1, "Entry one.");
-    const few = windowIn(page.frame(), READING_WINDOW);
+    const one = yield* journalModel(["# Entry one\n\nEntry one.\n"]);
+    const overflowing = yield* journalModel([`# Entry two\n\n${LONG_READING}\n`]);
+    const presenter = yield* usePresenter(WIDE);
+    const few = windowOf(yield* presenter.prepare(viewOf(one, WIDE)), READING_WINDOW);
     expect(few.total).toBeLessThanOrEqual(few.capacity);
 
-    yield* submit(page, 2, LONG_READING);
-    const many = windowIn(
-      yield* page.until(
-        "the long entry being read",
-        (frame) => windowIn(frame, READING_WINDOW).total > few.capacity,
-      ),
-      READING_WINDOW,
-    );
+    const many = windowOf(yield* presenter.prepare(viewOf(overflowing, WIDE)), READING_WINDOW);
+    expect(many.total).toBeGreaterThan(few.capacity);
     // The same region, so the same room. A capacity that moved with the length
     // of the reading would be measuring the reading.
     expect(many.capacity).toBe(few.capacity);
@@ -245,19 +335,19 @@ describe("REPL layout: what an empty measurement describes", () => {
   });
 
   it("TL2: an action label is measured with the focus marker it draws with", function* () {
-    const page = yield* useReplPage({ size: WIDE });
+    const model = yield* referenceModel();
     // Each control is as wide as its own label and the room its marker draws
     // in, so a pointer aimed at one reaches it and not its neighbour.
     for (const size of [WIDE, NARROW]) {
-      const frame = yield* frameAt(page, size);
+      const presenter = yield* usePresenter(size);
+      const observed = yield* presenter.commit(viewOf(model, size));
       for (const [key, label] of [
         ["footer:history", "[history]"],
         ["footer:exit", "[exit]"],
         ["draft:send", "[send]"],
       ]) {
-        const control = frame.control(key);
-        expect(control?.text).toBe(label);
-        expect(control?.bounds.width).toBe(label.length + CONTROL_ROOM.length);
+        expect(observed.cells.get(key)?.trim()).toBe(label);
+        expect(observed.boundsOf(key)?.width).toBe(label.length + CONTROL_ROOM.length);
       }
     }
   });
@@ -265,9 +355,9 @@ describe("REPL layout: what an empty measurement describes", () => {
 
 describe("REPL layout: what a window admits", () => {
   it("TL3: a row outside the window is in no node, cell, target or Tab stop", function* () {
-    const page = yield* catalogOverEntries();
-    const frame = page.frame();
-    const held = windowIn(frame, DRAWER_WINDOW);
+    const catalog = yield* catalogOverEntries();
+    const observed = yield* shownAt(catalog, catalog.state);
+    const held = windowOf(observed.committed.admission, DRAWER_WINDOW);
     expect(held.total).toBe(CATALOG_ENTRIES);
     expect(held.capacity).toBeLessThan(held.total);
     expect(held.more).toBe(true);
@@ -277,14 +367,18 @@ describe("REPL layout: what a window admits", () => {
     const hidden = orders.filter((order) => !shown.includes(order));
     expect(hidden.length).toBeGreaterThan(0);
 
+    const drawn = targetKeys(catalog.presenter, observed);
     for (const order of hidden) {
       // Not placed, so there is nothing to draw, nothing to aim at and nothing
       // for traversal to stop on.
-      expect(frame.has(entryKey(order))).toBe(false);
-      expect(frame.rows.some((line) => line.includes(entryLabel(order)))).toBe(false);
+      expect(observed.keys).not.toContain(entryKey(order));
+      expect(drawn).not.toContain(entryKey(order));
+      expect(catalog.presenter.grid.rows().some((line) => line.includes(entryLabel(order)))).toBe(
+        false,
+      );
     }
-    const forward = yield* focusCycle(page, "Tab");
-    const backward = yield* focusCycle(page, "Backtab");
+    const forward = yield* ring(catalog.presenter, "Tab");
+    const backward = yield* ring(catalog.presenter, "Backtab");
     for (const order of hidden) {
       expect(forward).not.toContain(entryKey(order));
       // And the same in reverse: a hidden row is not reachable from either side.
@@ -296,90 +390,92 @@ describe("REPL layout: what a window admits", () => {
   });
 
   it("TL3: no row is drawn outside the viewport it was admitted to", function* () {
-    const page = yield* catalogOverEntries();
-    const frame = page.frame();
-    const viewport = frame.area(`box:${DRAWER_WINDOW}:viewport`);
+    const catalog = yield* catalogOverEntries();
+    const observed = yield* shownAt(catalog, catalog.state);
+    const viewport = viewportBounds(observed, DRAWER_WINDOW);
     if (viewport === undefined) {
-      throw new Error(`this frame placed no drawer viewport. ${page.describe()}`);
+      throw new Error("this frame placed no drawer viewport");
     }
-    const held = windowIn(frame, DRAWER_WINDOW);
+    const held = windowOf(observed.committed.admission, DRAWER_WINDOW);
+    const rows = catalog.presenter.grid.textIn(viewport);
     expect(held.count).toBeGreaterThan(0);
     for (let order = held.from + 1; order <= held.from + held.count; order += 1) {
-      expect(viewport.contains(entryKey(order))).toBe(true);
-      expect(viewport.shows(entryLabel(order))).toBe(true);
+      expect(within(viewport, observed.boundsOf(entryKey(order)))).toBe(true);
+      expect(rows.some((line) => line.includes(entryLabel(order)))).toBe(true);
     }
   });
 
   it("TL3: earlier and later reach every row, including the last", function* () {
-    const page = yield* catalogOverEntries();
+    const catalog = yield* catalogOverEntries();
     const last = entryKey(CATALOG_ENTRIES);
-    expect(page.frame().has(last)).toBe(false);
+    const opened = yield* shownAt(catalog, catalog.state);
+    expect(opened.keys).not.toContain(last);
 
-    // Walk the window to the end the way a person does, one press at a time,
+    // Move the window to the end the way a person does, one press at a time,
     // and stop when the final row is genuinely placed.
-    const reached = yield* scrollUntil(
-      page,
-      { window: DRAWER_WINDOW, control: "drawer:scroll:down", toward: "more" },
-      (frame) => frame.has(last),
+    const reached = yield* scrolledUntil(catalog, catalog.state, 1, (one) =>
+      one.keys.includes(last),
     );
-    expect(windowIn(reached, DRAWER_WINDOW).from).toBeGreaterThan(0);
+    expect(windowOf(reached.observed.committed.admission, DRAWER_WINDOW).from).toBeGreaterThan(0);
     // Visible, so it is a real control with real geometry and a Tab stop.
-    expect(reached.control(last)?.text).toBe(entryLabel(CATALOG_ENTRIES));
-    yield* page.focus(last);
-    expect(page.frame().focused).toBe(last);
+    expect(reached.observed.cells.get(last)?.trim()).toBe(entryLabel(CATALOG_ENTRIES));
+    expect(targetKeys(catalog.presenter, reached.observed)).toContain(last);
+    yield* focusKey(catalog.presenter, last);
+    expect(focusedKey(catalog.presenter)).toBe(last);
 
     // And back: the first row is reachable again from the far end.
     const first = entryKey(1);
-    expect(page.frame().has(first)).toBe(false);
-    const back = yield* scrollUntil(
-      page,
-      { window: DRAWER_WINDOW, control: "drawer:scroll:up", toward: "less" },
-      (frame) => frame.has(first),
+    expect(reached.observed.keys).not.toContain(first);
+    const back = yield* scrolledUntil(catalog, reached.state, -1, (one) =>
+      one.keys.includes(first),
     );
-    expect(windowIn(back, DRAWER_WINDOW).from).toBe(0);
+    expect(windowOf(back.observed.committed.admission, DRAWER_WINDOW).from).toBe(0);
   });
 
   it("TL3: the first scroll after a resize moves from the clamp that is drawn", function* () {
-    const page = yield* catalogOverEntries();
+    const catalog = yield* catalogOverEntries();
 
     // Scrolled to the very end of the smaller region, which is as far as this
     // reading goes while the terminal is this size.
-    yield* scrollUntil(
-      page,
-      { window: DRAWER_WINDOW, control: "drawer:scroll:down", toward: "more" },
-      (frame) => !windowIn(frame, DRAWER_WINDOW).more,
+    const end = yield* scrolledUntil(
+      catalog,
+      catalog.state,
+      1,
+      (one) => !windowOf(one.committed.admission, DRAWER_WINDOW).more,
     );
-    const atEnd = windowIn(page.frame(), DRAWER_WINDOW);
+    const atEnd = windowOf(end.observed.committed.admission, DRAWER_WINDOW);
     expect(atEnd.from).toBe(atEnd.total - atEnd.capacity);
     expect(atEnd.from).toBeGreaterThan(1);
 
     // The terminal grows. A taller region holds more rows, so the last window
     // starts further back — the position scrolled to is now past it, and what
     // the frame draws is the clamp.
-    const clamped = windowIn(
-      yield* page.resize({ columns: NARROW.columns, rows: NARROW.rows + 2 }),
-      DRAWER_WINDOW,
-    );
+    catalog.presenter.resize({ columns: NARROW.columns, rows: NARROW.rows + 2 });
+    const grown = yield* shownAt(catalog, end.state);
+    const clamped = windowOf(grown.committed.admission, DRAWER_WINDOW);
     expect(clamped.capacity).toBeGreaterThan(atEnd.capacity);
     expect(clamped.from).toBeLessThan(atEnd.from);
     expect(clamped.from).toBe(clamped.total - clamped.capacity);
     // And the clamp is what is on screen: the last row really is the last one.
     expect(clamped.more).toBe(false);
-    expect(page.frame().has(entryKey(CATALOG_ENTRIES))).toBe(true);
+    expect(grown.keys).toContain(entryKey(CATALOG_ENTRIES));
 
     // So the next press moves from there. Going one row earlier than the drawn
-    // clamp lands one row earlier; a frame that had moved from the position
+    // clamp lands one row earlier; a window that had moved from the position
     // scrolled to instead would land two rows further on.
-    yield* page.press("drawer:scroll:up");
-    const moved = windowIn(
-      yield* page.until(
-        "the window moving earlier",
-        (frame) => windowIn(frame, DRAWER_WINDOW).from !== clamped.from,
-      ),
-      DRAWER_WINDOW,
+    const moved = yield* shownAt(
+      catalog,
+      reduceRepl(
+        end.state,
+        { kind: "scroll-entries", delta: -1 },
+        catalog.model,
+        IDLE,
+        grown.committed.admission,
+      ).state,
     );
-    expect(moved.from).toBe(clamped.from - 1);
-    expect(moved.more).toBe(true);
+    const after = windowOf(moved.committed.admission, DRAWER_WINDOW);
+    expect(after.from).toBe(clamped.from - 1);
+    expect(after.more).toBe(true);
   });
 });
 
@@ -447,12 +543,19 @@ describe("REPL layout: what an action row admits", () => {
     }
 
     // The running command places its controls the same way at every size.
-    const page = yield* useReplPage({ size: WIDE });
+    const model = yield* referenceModel();
     for (const size of [WIDE, MEDIUM, NARROW]) {
-      const frame = yield* frameAt(page, size);
-      const actions = frame.area(ACTION_ROW);
-      expect(actions?.contains("footer:history")).toBe(true);
-      expect(actions?.contains("footer:exit")).toBe(true);
+      const where = `${size.columns}x${size.rows}`;
+      const presenter = yield* usePresenter(size);
+      const observed = yield* presenter.commit(viewOf(model, size));
+      const actions = observed.regionOf(ACTION_ROW);
+      for (const key of ["footer:history", "footer:exit"]) {
+        expect({ where, key, inside: within(actions, observed.boundsOf(key)) }).toEqual({
+          where,
+          key,
+          inside: true,
+        });
+      }
     }
   });
 
@@ -480,27 +583,34 @@ describe("REPL layout: what an action row admits", () => {
 });
 
 describe("REPL layout: what a shrinking reading leaves behind", () => {
-  /** Submit the long entry, then a short one that is read in its place. */
-  function* shrunk(page: ReplPage): Operation<readonly string[]> {
-    yield* submit(page, 1, LONG_READING);
-    yield* page.until("the long entry being read", (frame) =>
-      reading(frame).some((line) => line.includes("VACATED-3")),
-    );
-    const before = reading(page.frame());
-    yield* submit(page, 2, "Short.");
-    yield* page.until("the short entry being read", (frame) =>
-      reading(frame).some((line) => line.includes("Short.")),
-    );
-    return before;
+  /** One journal whose whole reading is the long one, and one that is short. */
+  function* readings(): Operation<{ long: ReplModel; short: ReplModel }> {
+    return {
+      long: yield* journalModel([`# Long\n\n${LONG_READING}\n`]),
+      short: yield* journalModel(["# Short\n\nShort.\n"]),
+    };
+  }
+
+  /** The rows the reading's viewport holds on the screen this frame left. */
+  function readingRows(presenter: Presenter, observed: Observed): readonly string[] {
+    const viewport = viewportBounds(observed, READING_WINDOW);
+    if (viewport === undefined) {
+      throw new Error("this frame placed no reading viewport");
+    }
+    return presenter.grid.textIn(viewport);
   }
 
   it("TL5: cells a filtered reading vacates are blank, not merely undescribed", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    const before = yield* shrunk(page);
-    const after = reading(page.frame());
+    const { long, short } = yield* readings();
+    const presenter = yield* usePresenter(WIDE);
+    const first = yield* presenter.commit(viewOf(long, WIDE));
+    const before = readingRows(presenter, first);
 
     // Pre-assert: the area about to be vacated really had text in it. Without
     // this the assertion below would pass on an empty screen.
+    expect(before.some((line) => line.includes("VACATED-3"))).toBe(true);
+    const second = yield* presenter.commit(viewOf(short, WIDE));
+    const after = readingRows(presenter, second);
     // Counted rather than read with `findLastIndex`: the Node typecheck's
     // `lib` is ES2022, and that reader is ES2023. Zero where every row is blank.
     const kept = after.reduce((last, line, at) => (line.trim().length > 0 ? at + 1 : last), 0);
@@ -510,38 +620,54 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
     // The reading becomes a short one. This is the one shape where a shared
     // measure-and-draw engine leaves the old text: the measurement skeleton
     // leaves these cells blank too, so a shared instance's diff has nothing to
-    // say about them. Asserted against the screen Termless holds, so this is
-    // what the terminal shows rather than what the last frame described.
+    // say about them. Asserted against the cells the frame's own bytes left on
+    // an emulated screen, so this is what a person would be looking at rather
+    // than what the frame described.
     expect(after.join("\n")).not.toContain("VACATED-");
-    expect(after.slice(kept).every((line) => line.length === 0)).toBe(true);
-    expect(page.frame().rows.join("\n")).not.toContain("VACATED-");
+    expect(after.slice(kept).every((line) => line.trim().length === 0)).toBe(true);
+    expect(presenter.grid.rows().join("\n")).not.toContain("VACATED-");
   });
 
   it("TL5: the rows that remain are still drawn where the frame says", function* () {
-    const page = yield* useReplPage({ size: WIDE });
-    yield* shrunk(page);
-    const frame = page.frame();
-    expect(frame.controls.length).toBeGreaterThan(0);
-    for (const placed of frame.controls) {
-      expect(frame.control(placed.key)?.text).not.toBe("");
+    const { long, short } = yield* readings();
+    const presenter = yield* usePresenter(WIDE);
+    yield* presenter.commit(viewOf(long, WIDE));
+    const observed = yield* presenter.commit(viewOf(short, WIDE));
+    const drawn = targetKeys(presenter, observed);
+    expect(drawn.length).toBeGreaterThan(0);
+    for (const key of drawn) {
+      expect((observed.cells.get(key) ?? "").trim()).not.toBe("");
     }
-    expect(frame.control("entries:heading")?.text).toBe("Entries");
-    expect(frame.control("footer:history")?.text).toBe("[history]");
-    expect(frame.area("box:reading:viewport")?.shows("Short.")).toBe(true);
+    expect(observed.cells.get("entries:heading")?.trim()).toBe("Entries");
+    expect(observed.cells.get("footer:history")?.trim()).toBe("[history]");
+    expect(readingRows(presenter, observed).some((line) => line.includes("Short."))).toBe(true);
+  });
+
+  it("TL5: the running command shows none of the longer reading afterwards", function* () {
+    // The same shape end to end, where the readings are two entries a person
+    // really submitted: whatever the frames in between did, the terminal is
+    // left showing the short one and no part of the long one.
+    const page = yield* useReplPage({ size: WIDE });
+    yield* submit(page, 1, LONG_READING);
+    yield* page.until("the long entry being read", (one) => one.shows("VACATED-3"));
+    yield* submit(page, 2, "Short.");
+    const settled = yield* page.until("the short entry being read", (one) => one.shows("Short."));
+    expect(settled.occurrences("VACATED-")).toBe(0);
   });
 });
 
 describe("REPL layout: the profiles this product supports", () => {
   it("TL1: every supported size keeps its columns and its two footer rows", function* () {
-    const page = yield* useReplPage({ size: WIDE });
+    const model = yield* referenceModel();
     for (const { size, profile } of [
       { size: WIDE, profile: "wide" },
       { size: MEDIUM, profile: "medium" },
       { size: NARROW, profile: "narrow" },
     ]) {
-      const frame = yield* frameAt(page, size);
-      expect(frame.profile).toBe(profile);
-      const bounds = (id: string): ReplBounds | undefined => frame.area(id)?.bounds;
+      const presenter = yield* usePresenter(size);
+      const observed = yield* presenter.commit(viewOf(model, size));
+      expect(observed.committed.manifest.profile).toBe(profile);
+      const bounds = (id: string): ReplBounds | undefined => observed.regionOf(id);
       // One identity row, the body between, then one compact History row and
       // one row of guidance, at every size.
       expect(bounds("box:identity")).toEqual({ x: 0, y: 0, width: size.columns, height: 1 });
@@ -563,18 +689,19 @@ describe("REPL layout: the profiles this product supports", () => {
         width: size.columns,
         height: 1,
       });
-      expect(frame.rows[size.rows - 2]).toContain("HISTORY");
-      expect(frame.area("box:history")?.contains("footer:history")).toBe(true);
-      expect(frame.area("box:draft")?.contains("footer:input")).toBe(true);
+      expect(presenter.grid.rows()[size.rows - 2]).toContain("HISTORY");
+      expect(within(bounds("box:history"), observed.boundsOf("footer:history"))).toBe(true);
+      expect(within(bounds("box:draft"), observed.boundsOf("footer:input"))).toBe(true);
     }
 
-    const wide = yield* frameAt(page, WIDE);
+    const presenter = yield* usePresenter(WIDE);
+    const wide = yield* presenter.commit(viewOf(model, WIDE));
     // The first composition gives the columns 36, 66 and 58 cells, dividers
     // included, the body 33 rows and the Draft four of the centre's.
-    expect(wide.area("box:sidebar")?.bounds).toMatchObject({ x: 0, width: 36, height: 33 });
-    expect(wide.area("box:transcript")?.bounds).toMatchObject({ x: 36, width: 66, height: 33 });
-    expect(wide.area("box:inspection")?.bounds).toMatchObject({ x: 102, width: 58, height: 33 });
-    expect(wide.area("box:draft")?.bounds.height).toBe(4);
+    expect(wide.regionOf("box:sidebar")).toMatchObject({ x: 0, width: 36, height: 33 });
+    expect(wide.regionOf("box:transcript")).toMatchObject({ x: 36, width: 66, height: 33 });
+    expect(wide.regionOf("box:inspection")).toMatchObject({ x: 102, width: 58, height: 33 });
+    expect(wide.regionOf("box:draft")?.height).toBe(4);
   });
 });
 
