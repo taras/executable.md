@@ -300,6 +300,15 @@ function targetKeys(presenter: Presenter, observed: Observed): readonly string[]
   });
 }
 
+/** The rows the reading's viewport holds on the screen this frame left. */
+function readingRows(presenter: Presenter, observed: Observed): readonly string[] {
+  const viewport = viewportBounds(observed, READING_WINDOW);
+  if (viewport === undefined) {
+    throw new Error("this frame placed no reading viewport");
+  }
+  return presenter.grid.textIn(viewport);
+}
+
 describe("REPL layout: what an empty measurement describes", () => {
   it("TL2: a measured viewport holds no node, no cell and no target", function* () {
     const model = yield* referenceModel();
@@ -589,15 +598,6 @@ describe("REPL layout: what a shrinking reading leaves behind", () => {
       long: yield* journalModel([`# Long\n\n${LONG_READING}\n`]),
       short: yield* journalModel(["# Short\n\nShort.\n"]),
     };
-  }
-
-  /** The rows the reading's viewport holds on the screen this frame left. */
-  function readingRows(presenter: Presenter, observed: Observed): readonly string[] {
-    const viewport = viewportBounds(observed, READING_WINDOW);
-    if (viewport === undefined) {
-      throw new Error("this frame placed no reading viewport");
-    }
-    return presenter.grid.textIn(viewport);
   }
 
   it("TL5: cells a filtered reading vacates are blank, not merely undescribed", function* () {
