@@ -71,15 +71,7 @@ export type ReplPresentationRole =
   | "waiting"
   /** Something activating does. */
   | "action"
-  /**
-   * The way through a window: the two controls that move one of its readings.
-   *
-   * An action in every other respect — it is activated, it is a Tab stop, and it
-   * reads in the action's own ink — but it belongs to the pane it scrolls rather
-   * than standing apart from it. A dark strip across the top and bottom of a
-   * reading reads as a bar between two things, and there is only one thing: the
-   * reading and the way along it.
-   */
+  /** A navigation control that keeps the surface of its pane. */
   | "navigate"
   /** The name of the reading a drawer is showing. */
   | "drawer-title"
@@ -389,10 +381,6 @@ export function surfaceOf(style: ReplRowStyle): number | undefined {
   if (style.role === "action") {
     return REPL_PALETTE.draftSurface;
   }
-  // A window's own two controls take the pane they navigate, which is what
-  // `undefined` means here: no surface of their own, so the column's shows
-  // through. They keep the action's foreground and its focus cue, because what
-  // they are has not changed — only where they look like they belong.
   if (style.role === "navigate") {
     return undefined;
   }

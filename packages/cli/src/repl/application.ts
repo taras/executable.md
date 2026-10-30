@@ -5464,9 +5464,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // controls sit outside the thing they move, and the pane's own controls sit
     // below both.
     //
-    // Only where there is a chat to move. A frame built without a Sidekick says
-    // so in one row, and two controls over that row would be Tab stops that
-    // scroll nothing.
+    // A frame without a Sidekick still keeps the reading anchor's identity.
     if (live.sidekick === undefined) {
       items.push(...sidekickReadingRows(undefined, view.focused));
     } else {
@@ -5507,10 +5505,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // rather than among them.
   const prepared = inspectable && surface !== undefined ? context.reading : undefined;
   // Only where there is a reading to move. An execution that has admitted
-  // nothing has no output and no source, and two controls over an empty pane
-  // would be Tab stops that scroll nothing — read from the model rather than
-  // from the fitted rows, because the pass that reserves these controls is the
-  // pass that has not fitted any.
+  // nothing has no output or source to admit.
   if (inspectable && model.entries.length > 0) {
     if (prepared !== undefined) {
       items.push(

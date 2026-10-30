@@ -366,15 +366,11 @@ focus outside the list all stay where they were — and output from the entry
 that is still running appears under that entry, never under the settled one you
 are reading.
 
-The list is windowed rather than clipped: it moves through as many rows as the
-frame can place, with `[\u2191 earlier]` and `[\u2193 later]` staying put while the
-rows move beneath them. Those two controls are spelled the same way wherever a
-reading has a window — this list, the catalog, Sessions and every drawer — and
-they remain controls you activate. Up/Down also reaches the next logical list
-row, revealing it before focus moves; Right enters nested scopes and Left returns
-to their parent. Enter selects the focused row. No horizontal scrolling exists. What the window is not showing is not drawn, not focusable
-and reaches no pointer, and every row can be scrolled to, activated by Enter and
-activated by a pointer.
+The list is windowed rather than clipped. Wheel input moves its measured
+viewport without selecting an entry. Up/Down reaches the next logical list
+row, revealing it before focus moves; Right enters nested scopes and Left
+returns to their parent. Enter selects the focused row. No horizontal scrolling
+exists. Rows outside the window are not drawn, focusable or pointer targets.
 
 Entries run one at a time. There is no queue: a submission while one is running,
 while one has settled but its work is still coming down, or while you are
@@ -924,21 +920,15 @@ say something untrue. Thirty-six leaves thirty-two inside the body's gutter and
 thirty past the focus marker, which is the room the column had before it was
 inset — so the same rows fit, at the medium profile as well as the wide one.
 
-The two controls that move a window — `[↑ earlier]` and `[↓ later]`, in
-Sessions, Entries, the Transcript and the Sidekick — carry the surface of the
-pane they navigate rather than the one every other control has. They are
-activated, they are Tab stops and they read in the action's own ink; what changed
-is only that they belong to the reading they move instead of standing apart from
-it. Their background says which pane they are in and never where focus is: the
-focus cue is the marker and the foreground, and moving focus on or off one leaves
-its pane showing through. Everything else that is activated — `[send]`,
-`[stop]`, a form's `[apply]`, the footer's own actions and a drawer's choices —
-keeps the surface the draft has.
+The reading has no window buttons or extra Tab stops. Wheel input and the
+reading's keyboard navigation move its content. Meaningful navigation controls
+keep their pane's surface, while Send, Stop, Apply, footer actions and drawer
+choices keep the draft's action surface. Focus remains the marker and foreground.
 
 Every shared column's body sits two cells in from its pane on each side: the
 Sidekick's chat viewport, composer and announcements; the
-Transcript's directions, retained reading and the two controls around it; and the
-sidebar's Sessions and Entries lists with theirs. Each column's heading — the
+Transcript's directions and retained reading; and the sidebar's Sessions and
+Entries lists. Each column's heading — the
 Transcript's band, the right pane's tab row, `Sessions` and `Entries` — spans the
 whole column, because a column says what it is across its full width, and the
 edge under a band spans it too. The gutters hold no text, are part of no row and
@@ -948,7 +938,7 @@ the whole pane.
 
 Text is fitted to the body that holds it rather than to the pane above it, so a
 line too long for a narrowed body is paid out over more rows and the rows a
-window cannot hold are reached with the controls that are already there. The
+window cannot hold are reached with wheel input or the reading keys. The
 narrow profile routes one outlet, has no shared column and is given no inset of
 its own.
 

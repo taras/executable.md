@@ -257,3 +257,80 @@ describe("foundation wheel anchor lifetime", () => {
     expect(controlsOnly).toBe(true);
   });
 });
+
+describe("wheel ordinary Entries composition", () => {
+  it("pairs permanent catalog admission with its mounted viewport owner", function* () {
+    const model = yield* journalModel(
+      Array.from({ length: 18 }, (_, at) => `Ordinary entry ${at}`),
+    );
+    const size = { columns: 160, rows: 36 };
+    const live: ReplLive = {
+      output: "",
+      expansion: "playing",
+      pausable: false,
+      running: false,
+      question: undefined,
+      agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
+    };
+    const presenter = yield* usePresenter(size);
+    let state = initialState("ordinary-catalog");
+    const view = () => {
+      const id = presenter.tree.focused();
+      const resolved = viewFor(
+        state,
+        model,
+        live,
+        size,
+        id === undefined ? undefined : presenter.tree.keyOf(id),
+      );
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      return resolved.value;
+    };
+    let shown = yield* presenter.commit(view());
+    function* tick(direction: "up" | "down"): Operation<void> {
+      const scroll = shown.committed.rendered.map.scrolls.find(
+        (one) => one.id === "box:entries:viewport",
+      );
+      if (scroll === undefined) {
+        throw new Error("ordinary Entries has no live viewport");
+      }
+      expect(presenter.tree.mounted()).toContain(scroll.node);
+      const event = resolveWheel(
+        shown.committed.rendered,
+        { column: scroll.bounds.x, row: scroll.bounds.y },
+        direction,
+      );
+      if (event === undefined) {
+        throw new Error("body cell has no target");
+      }
+      const dispatched = yield* presenter.tree.dispatch(event);
+      if (!dispatched.ok) {
+        throw dispatched.error;
+      }
+      if (dispatched.value.outcome !== "action") {
+        throw new Error("viewport did not act");
+      }
+      state = reduceRepl(
+        state,
+        dispatched.value.action,
+        model,
+        live,
+        shown.committed.admission,
+      ).state;
+      shown = yield* presenter.commit(view());
+    }
+    expect(shown.keys).toContain("entry:entry-1");
+    yield* tick("down");
+    expect(shown.keys).not.toContain("entry:entry-1");
+    yield* tick("up");
+    expect(shown.keys).toContain("entry:entry-1");
+    for (let at = 0; at < 12; at += 1) {
+      yield* tick("down");
+    }
+    expect(shown.keys).toContain("entry:entry-18");
+    expect(shown.keys).not.toContain("entries:later");
+  });
+});

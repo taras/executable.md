@@ -402,7 +402,8 @@ describe("REPL original admission and terminal exit claims", () => {
       expect(lines.some((line) => line.includes("elicit"))).toBe(true);
       for (let press = 0; press < 60 && !page.screen().shows("Decision: approve"); press += 1) {
         const before = page.screen().index;
-        yield* page.press("[↓ later]", { rightOf: "Entries" });
+        const draft = page.screen().locate("DRAFT");
+        yield* page.wheel("down", { column: draft.column, row: draft.row - 2 });
         yield* page.until("the reading advancing", (one) => one.index > before);
       }
       expect(page.screen().shows("Decision: approve")).toBe(true);
@@ -708,7 +709,8 @@ function* readTo(page: ReplPage, text: string): Operation<void> {
   yield* page.resize(NARROW);
   for (let press = 0; press < 100 && !page.screen().shows(text); press += 1) {
     const before = page.screen().index;
-    yield* page.press("[↓ later]");
+    const draft = page.screen().locate("DRAFT");
+    yield* page.wheel("down", { column: draft.column, row: draft.row - 2 });
     yield* page.until("the retained reading moving", (one) => one.index > before);
   }
   expect(page.screen().shows(text)).toBe(true);
@@ -1930,18 +1932,8 @@ function* allPositions(
   const first = positionLabels(page.screen());
   const seen = new Set(first);
   for (let press = 0; press < expected.length * 2 && seen.size < expected.length; press += 1) {
-    const rows = page.screen().rows;
-    const last = positionLabels(page.screen()).at(-1);
-    if (last === undefined) {
-      throw new Error(`the drawer holds no positions: ${page.describe()}`);
-    }
-    const at = rows.findIndex((row) => row.includes(last));
-    const controlRow = rows.slice(at + 1).find((row) => row.includes("[↓ later]"));
-    if (controlRow === undefined) {
-      throw new Error(`no later action after ${last}`);
-    }
     const index = page.screen().index;
-    yield* page.press("[↓ later]", { onRow: controlRow, rightOf: "[close]" });
+    yield* page.key("PageDown");
     yield* page.until("the next positions", (one) => one.index > index);
     for (const label of positionLabels(page.screen())) {
       seen.add(label);
@@ -2339,14 +2331,7 @@ function* retainedAnswerLines(page: ReplPage): Operation<{ first: string[]; seen
     press += 1
   ) {
     const one = page.screen();
-    const close = one.locate("[close]");
-    const row = [...one.rows.slice(0, close.row)]
-      .reverse()
-      .find((line) => line.includes("[↓ later]"));
-    if (row === undefined) {
-      throw new Error("the recorded drawer offered no later reading");
-    }
-    yield* page.press("[↓ later]", { onRow: row, rightOf: "[close]" });
+    yield* page.key("PageDown");
     yield* page.until("the recorded drawer's next rows", (next) => next.index > one.index);
     seen.push(...drawerLines(page.screen()));
   }
@@ -2381,7 +2366,8 @@ describe("REPL original retained schema and generated evidence", () => {
         press += 1
       ) {
         const index = page.screen().index;
-        yield* page.press("[↓ later]");
+        const draft = page.screen().locate("DRAFT");
+        yield* page.wheel("down", { column: draft.column, row: draft.row - 2 });
         yield* page.until("the generated source entering the reading", (one) => one.index > index);
       }
       const begins = page.screen().locate(opening);
@@ -2405,7 +2391,7 @@ describe("REPL original retained schema and generated evidence", () => {
         (one) => one.shows("Recorded answer") && one.shows("[close]"),
       );
       const read = yield* retainedAnswerLines(page);
-      expect(read.first).not.toEqual(drawerLines(page.screen()));
+      expect(read.first).toEqual(drawerLines(page.screen()));
       const path = yield* executionJournal(page);
       const location = yield* leaveWithLocation(page);
       const parsed = route(location);

@@ -8610,8 +8610,8 @@ while the screen shows something else owns nothing. Agent is an exact-name field
 because which agents exist is the provider's to answer, and `select()` validates
 what was typed against the real one. Model and effort are the provider's own
 ids on their actions, with the provider's words as labels. Its content is
-windowed like every other drawer's and scrolled by the same two controls, which
-move Configure's own offset: an agent may advertise more choices than a pane
+windowed like every other drawer's. Wheel input and Content paging move
+Configure's own offset: an agent may advertise more choices than a pane
 can draw, and a choice nobody can scroll to is a choice the drawer removed.
 
 **On the screen that question is a form in the pane that owns it, and the two

@@ -131,6 +131,13 @@ describe("wheel real consumers", () => {
     expect(page.screen().shows("Agent: scribe")).toBe(false);
     yield* wheel(page, "up", cell);
     expect(page.screen().shows("Agent: scribe")).toBe(true);
+    for (let tick = 0; tick < 24; tick += 1) {
+      yield* wheel(page, "down", cell);
+    }
+    expect(page.screen().shows("Model choice 39")).toBe(true);
+    for (let tick = 0; tick < 24; tick += 1) {
+      yield* wheel(page, "up", cell);
+    }
     yield* key(page, "Backtab");
     yield* page.type("X");
     yield* page.until("Agent retained caret", (one) => one.shows("Agent: scribXe"));
@@ -169,6 +176,20 @@ describe("wheel real consumers", () => {
     expect(page.screen().shows("held-value")).toBe(false);
     yield* wheel(page, "down", cell);
     expect(page.screen().shows("held-value")).toBe(true);
+    yield* key(page, "Backtab");
+    for (let at = 0; at < 8; at += 1) {
+      yield* key(page, "PageUp");
+    }
+    expect(page.screen().shows("Side question 0")).toBe(true);
+    const previewCell = page.screen().locate("Side question 0");
+    const seen: string[] = [];
+    for (let tick = 0; tick < 24; tick += 1) {
+      yield* wheel(page, "down", previewCell);
+      seen.push(...page.screen().rows);
+    }
+    expect(seen.join("\n")).toContain("Side question 22");
+    expect(seen.join("\n")).toContain("Side question 44");
+    expect(page.screen().shows("held-value")).toBe(true);
     yield* page.key("Escape");
     yield* page.until("closed held question", (one) => one.shows("[answer sidekick]"));
     yield* page.press("[answer sidekick]");
@@ -206,6 +227,15 @@ describe("wheel real consumers", () => {
     }
     expect(page.screen().shows("turn-00")).toBe(true);
     expect(page.screen().shows("message-kept")).toBe(true);
+    // Message -> History -> Transcript; its fixed entry is the selector.
+    yield* key(page, "Tab");
+    yield* key(page, "Tab");
+    yield* key(page, "Alt+ArrowDown");
+    for (let row = 0; row < 17; row += 1) {
+      yield* key(page, "ArrowDown");
+    }
+    expect(page.screen().shows("> [U] turn-17")).toBe(true);
+    expect(page.screen().shows("[Back to current chat]")).toBe(false);
     expect(page.repl.fake.prompts).toHaveLength(18);
   });
 

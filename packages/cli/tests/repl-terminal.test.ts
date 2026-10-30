@@ -423,13 +423,9 @@ describe("REPL terminal: responsive semantic frames", () => {
     expect(layer.y).toBeGreaterThanOrEqual(body.y);
     expect(layer.x + layer.width).toBeLessThanOrEqual(body.x + body.width);
     expect(layer.y + layer.height).toBeLessThanOrEqual(body.y + body.height);
-    // Its title, both window controls, its one row and the way out.
+    // Its title, admitted content and the way out.
     expect(app.presenter.grid.textIn(layer).join("\n")).toContain("Entries");
-    expect(keysInside(app.presenter, opened, layer)).toEqual([
-      "drawer:scroll:up",
-      "drawer:scroll:down",
-      "drawer:close",
-    ]);
+    expect(keysInside(app.presenter, opened, layer)).toEqual(["drawer:close"]);
     expect(opened.regionOf("box:history")).toEqual({
       x: 0,
       y: 18,
