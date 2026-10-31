@@ -48,7 +48,7 @@ import {
   hostFilesHandler,
 } from "@executablemd/runtime";
 import type { FilePathInput, FilesHandler, FileWriteInput } from "@executablemd/runtime";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { Execution } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
@@ -59,7 +59,6 @@ import { denoReplEntry } from "../src/deno-repositories.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { useMountedHost } from "./support/mounted-repl.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
-import { GitOperationAdmissionError } from "../../git/src/composition/errors.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import { asked, sendMessage } from "./support/screen-journeys.ts";
@@ -1223,7 +1222,8 @@ describe("975 — native Git keeps project selection and requires an authored ch
     ]);
     expect(answer?.ok).toBe(false);
     if (answer !== undefined && !answer.ok) {
-      expect(answer.error).toBeInstanceOf(GitOperationAdmissionError);
+      expect(answer.error).toBeInstanceOf(StaleInputError);
+      expect(answer.error.name).toBe("GitOperationAdmissionError");
       expect(answer.error.message).toContain("inside none of the checkouts");
       expect(answer.error.message).not.toContain("no retained terminal");
     }
