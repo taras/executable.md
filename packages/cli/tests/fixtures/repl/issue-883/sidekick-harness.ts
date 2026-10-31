@@ -245,8 +245,9 @@ export function* useHarness(
     },
     root,
     test: (path) => testForSidekick(path, { held: admitting, session, testing: profile.testing }),
-    submit(at, journal: ControlJournal): Operation<Result<SubmitReceipt>> {
+    submit(at, journal: ControlJournal, observed): Operation<Result<SubmitReceipt>> {
       return submitForSidekick(at, {
+        observed,
         session: {
           // The acknowledged history, read the way the root reads it.
           entries: () => {
@@ -258,6 +259,7 @@ export function* useHarness(
               read.value.model.entries.map((entry) => ({
                 key: entry.key,
                 source: entry.source,
+                ...(entry.terminal === undefined ? {} : { terminal: entry.terminal }),
               })),
             );
           },

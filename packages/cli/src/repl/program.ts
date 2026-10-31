@@ -1057,8 +1057,9 @@ function* drive(
           testing: options.profile.testing,
           ...(reopening.blocked === undefined ? {} : { blocked: reopening.blocked }),
         }),
-      submit(at, journal): Operation<Result<SubmitReceipt>> {
+      submit(at, journal, observed): Operation<Result<SubmitReceipt>> {
         return submitForSidekick(at, {
+          observed,
           session: {
             // The whole acknowledged history, read at the moment the
             // reservation asks for it. `current.model` is the projection of
@@ -1075,6 +1076,7 @@ function* drive(
                 read.value.model.entries.map((entry) => ({
                   key: entry.key,
                   source: entry.source,
+                  ...(entry.terminal === undefined ? {} : { terminal: entry.terminal }),
                 })),
               );
             },

@@ -1,3 +1,5 @@
+import type { ReplPrinting } from "../session.ts";
+import { finishedRound } from "./requests.ts";
 import type { MessageOrigin } from "./history.ts";
 import type { ReplTesting } from "./testing.ts";
 /**
@@ -374,7 +376,11 @@ export interface SidekickOwnerInput {
    * Handed in rather than performed here: a submission binds a reservation the
    * root owns the slot for, and this owner owns a conversation.
    */
-  submit(at: ResponseAt, journal: ControlJournal): Operation<Result<SubmitReceipt>>;
+  submit(
+    at: ResponseAt,
+    journal: ControlJournal,
+    observed?: (output: ReplPrinting) => void,
+  ): Operation<Result<SubmitReceipt>>;
   /** The chat revision this message clears, read when the message is sent. */
   revision(): number;
   /**
@@ -546,6 +552,7 @@ export interface SidekickOwner {
 
 /** Which response this conversation's captured controls are answering for. */
 interface ServingResponse {
+  output(): ReplPrinting | undefined;
   readonly test?: ReplTesting;
   readonly journal: ControlJournal;
   /** Admit the draft for this response, recording a refusal that wrote nothing. */
@@ -616,6 +623,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             ? Err(new Error("this REPL host has no test runner"))
             : yield* test(path);
         },
+        () => servingNow().output(),
       ),
       {
         *began(occurrence, reserved): Operation<number> {
@@ -1466,9 +1474,19 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // nothing ends it, and a provider failure pauses — so what bounds this is
       // the conversation itself rather than a number chosen here.
       let sending: Sending = { kind: "message", text, revision, options };
+      let observation: ReplPrinting | undefined;
       let last: SidekickTurn | undefined;
       while (true) {
-        const responded: Result<Responded> = yield* respond(paired, conversation, handle, sending);
+        const responded: Result<Responded> = yield* respond(
+          paired,
+          conversation,
+          handle,
+          sending,
+          () => observation,
+          (output) => {
+            observation = output;
+          },
+        );
         if (!responded.ok) {
           return last === undefined
             ? responded
@@ -1511,6 +1529,8 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       conversation: string,
       handle: AgentConversation,
       sending: Sending,
+      observation: () => ReplPrinting | undefined,
+      observed: (output: ReplPrinting) => void,
     ): Operation<Result<Responded>> {
       // Re-read, because the turn before this one wrote to the history: the
       // ordinal and whether this conversation has been oriented are both facts
@@ -1551,12 +1571,17 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
        * this is the whole of what is still this response's: its journal, and a
        * submission that records a refusal which produced no record.
        */
+      let submitted: ReplPrinting | undefined;
       const responding: ServingResponse = {
+        output: observation,
         journal,
         ...(input.test === undefined ? {} : { test: input.test }),
         *submit(): Operation<Result<SubmitReceipt>> {
           const taken = pairs;
-          const answer = yield* input.submit(at, journal);
+          const answer = yield* input.submit(at, journal, (output) => {
+            submitted = output;
+            observed(output);
+          });
           if (!answer.ok && pairs === taken) {
             refused.push({
               order: taken,
@@ -1910,7 +1935,14 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // act on: an ordinary failure is a correction the agent can make, and
       // sending it is how the agent gets to make it.
       const results = designatedResults(yield* paired.writer.readAll(), at, refused);
-      const next = sealedFeedback(results, evaluated.ok ? undefined : evaluated.error.message);
+      let next = sealedFeedback(results, evaluated.ok ? undefined : evaluated.error.message);
+      if (submitted !== undefined) {
+        const round = finishedRound(root, submitted);
+        if (!round.ok) {
+          return round;
+        }
+        next = [next, round.value].filter((text) => text !== undefined).join("\n\n");
+      }
       return Ok({
         held: {
           conversation,

@@ -2624,13 +2624,21 @@ Evidence the history does not hold refuses, as does a zero, fractional or
 out-of-range selector, an unknown field and a limit that is not a positive
 whole number; a refusal is that operation's outcome and the response goes on.
 
-Terminal evidence decides an entry's status even while the task that produced
-it is still unwinding. Without one, the entry this process is executing is
-running and any other is unfinished, so a cold reader of an interrupted history
-is told it is unfinished rather than that it is still going. Output is the
-retained terminal output where there is one, the text this process has observed
-for exactly that entry where there is not, and an empty window otherwise —
-nothing invents output a cold reader cannot have. These reads take the
+Terminal evidence decides an entry's status even while the task that produced it
+is still unwinding. Without one, the entry this process is executing is running
+and any other is unfinished, so a cold reader of an interrupted history is told
+it is unfinished rather than that it is still going. Output uses the retained
+document result when one exists. Without one, a running entry uses text this
+process has observed for that exact entry. A cancelled Close carries no document
+result or retained output. For the entry admitted by a live Sidekick Send, that
+Send's output reads may instead use the exact execution stream's final text
+after the close value has been consumed and execution and entry cleanup have
+joined. This live observation keeps the same entry, extent and pinned window
+arguments and changes no retained terminal. Sidekick Stop ends that Send's live
+access; later entry completion cannot restore it. Other cold and historical
+readers gain no output from this exception and keep the existing empty-window
+behavior when no output is available. Fatal persistence, Files, disclosure and
+cleanup failures retain their existing outcome. These reads take the
 acknowledged head whatever position, scope or tab the screen is on, and they
 open no entry, resume none, wait for none, execute no source, reach no entry's
 provider and change nothing they read.
@@ -2656,6 +2664,8 @@ These reads are of the validated journal projection and of this process's own
 observed output, and of nothing else. They reach no provider session file, and
 the retained publication, secret and persistence protections stand in front of
 anything a page carries.
+
+A page produced from the owning Send's final live observation is retained only through the read's existing control-outcome and feedback records and their existing disclosure and persistence gates. It is a saved observation of that read, not retained output on the cancelled entry. No additional cancellation payload, output record or record version is written.
 
 These four are what a response reads an entry with. The single output read they
 replaced is no longer one a reply may write, and a response that names it is

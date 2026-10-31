@@ -57,7 +57,9 @@ import type { WorkspaceMountTable } from "../workspace-mounts.ts";
  * own: text the document has emitted but the Journal has not settled, the
  * question waiting right now, what expansion is doing, and an unadmitted draft.
  * When the root closes, the recorded output replaces the overlay's, because at
- * that point the Journal knows and this process is merely remembering.
+ * that point the Journal knows and this process is merely remembering. A
+ * submission handle separately exposes its final joined stream observation;
+ * cancellation retains no output to replace that live observation with.
  */
 
 import {
@@ -523,6 +525,8 @@ export interface ReplSubmission {
    * whenever it is asked for — including after the session has moved on.
    */
   join(): Operation<Result<unknown>>;
+  /** Read this execution's final stream value after its consumer and cleanup join. */
+  output(): Operation<Result<ReplPrinting>>;
 }
 
 /** What starting or reopening a session needs. */
@@ -618,6 +622,8 @@ interface ReplEntryTask {
   readonly admitted: Operation<Result<void>>;
   /** Resolves with how this entry's execution finished. */
   readonly finished: Operation<Result<unknown>>;
+  output(): Result<ReplPrinting>;
+  stopped?: Operation<Result<void>>;
   admit(outcome: Result<void>): void;
   settle(outcome: Result<unknown>): void;
   /**
@@ -1251,6 +1257,7 @@ function* start(
         );
       }
       const settlement = withResolvers<Result<void>>();
+      held.stopped = settlement.operation;
       stopped = { held, joined: settlement.operation };
       // Run in the session's own scope, so a caller that goes away mid-stop
       // leaves the stop running rather than abandoning a half-joined entry.
@@ -1329,6 +1336,17 @@ function* start(
           const outcome = yield* held.finished;
           yield* held.task.halt();
           return outcome;
+        },
+        *output(): Operation<Result<ReplPrinting>> {
+          yield* held.finished;
+          yield* held.task.halt();
+          if (held.stopped !== undefined) {
+            const stopped = yield* held.stopped;
+            if (!stopped.ok) {
+              return stopped;
+            }
+          }
+          return held.output();
         },
       };
     }
@@ -1427,6 +1445,9 @@ function* start(
     ): ReplEntryTask {
       const admission = withResolvers<Result<void>>();
       const completion = withResolvers<Result<unknown>>();
+      let finalOutput: Result<ReplPrinting> = Err(
+        new ReplLifecycleError(`this execution's ${key} supplied no joined output observation.`),
+      );
       // This entry's own readiness for being stopped. Created before the task,
       // because the task is what resolves it and a Stop may arrive first.
       const stopping = withResolvers<Result<ReplEntryStop>>();
@@ -1616,7 +1637,20 @@ function* start(
         // scheduled to notice the admission instead would be ordered by the
         // scheduler rather than by the record, and the continuation it was
         // racing has no reason to lose.
-        const outcome = yield* runEntry(key, source, view, initialBindings, supplyStop, workspace);
+        const outcome = yield* runEntry(
+          key,
+          source,
+          view,
+          initialBindings,
+          supplyStop,
+          (text) => {
+            finalOutput = Ok(Object.freeze({ entry: key, output: text }));
+          },
+          workspace,
+        );
+        if (!outcome.ok && !finalOutput.ok) {
+          finalOutput = outcome;
+        }
         settle(outcome);
         // A settled entry is past whatever its segment retained, whichever way
         // it settled — including a failure that appended nothing at all, which
@@ -1628,6 +1662,7 @@ function* start(
         task,
         admitted: admission.operation,
         finished: completion.operation,
+        output: () => finalOutput,
         stopping: stopping.operation,
         admit,
         settle,
@@ -1709,6 +1744,7 @@ function* start(
        * would be looking for something that may not be there yet.
        */
       supplyStop: (stop: ReplEntryStop) => void,
+      observedOutput: (text: string) => void,
       workspace?: true,
     ): Operation<Result<unknown>> {
       try {
@@ -1804,7 +1840,7 @@ function* start(
         // run and fill it in at the end, which is the opposite of what an
         // overlay is for: what it shows is what the document has rendered
         // *so far*.
-        yield* spawn(function* () {
+        const consumed = yield* spawn(function* () {
           const chunks = yield* started.output;
           let next = yield* chunks.next();
           while (!next.done) {
@@ -1815,8 +1851,14 @@ function* start(
             outputs.send(output);
             next = yield* chunks.next();
           }
+          return next.value;
         });
         const outcome = yield* started;
+        const joined = yield* started.stop();
+        if (!joined.ok) {
+          return joined;
+        }
+        observedOutput(yield* consumed);
         if (!outcome.ok && isReconstructionFailure(outcome.error)) {
           refuse(outcome.error);
           return outcome;

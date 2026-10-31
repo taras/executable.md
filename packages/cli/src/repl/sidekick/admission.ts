@@ -61,7 +61,7 @@ import type { SidekickRecord, SidekickWriter } from "./history.ts";
 import { projectSidekick } from "./model.ts";
 import type { SidekickSubmitIntent } from "./model.ts";
 import type { ControlJournal, SubmitReceipt } from "./controls.ts";
-import type { ReplSubmission, StartingCheck } from "../session.ts";
+import type { ReplPrinting, ReplSubmission, StartingCheck } from "../session.ts";
 
 /**
  * The next entry slot, and whatever submission is taking it.
@@ -133,6 +133,7 @@ export function take(
 export interface AdmittedEntry {
   readonly key: string;
   readonly source: string;
+  readonly terminal?: { readonly status: "ok" | "err" | "cancelled" };
 }
 
 /**
@@ -222,6 +223,7 @@ export function* submitForSidekick(
     readonly writer: EntryJournal;
     /** Tell the loop something happened, so it applies the report. */
     readonly woke: () => void;
+    readonly observed?: (output: ReplPrinting) => void;
   },
 ): Operation<Result<SubmitReceipt>> {
   const { session, facts, held, journal, writer, woke } = options;
@@ -341,9 +343,24 @@ export function* submitForSidekick(
   // admitted, so waiting here waits for its outcome and its teardown even
   // after something else has started.
   const outcome = yield* submission.join();
+  const finishedHead = session.entries();
+  if (!finishedHead.ok) {
+    return finishedHead;
+  }
+  const terminal = finishedHead.value.find((entry) => entry.key === submission.entry)?.terminal;
+  if (options.observed !== undefined) {
+    if (terminal === undefined) {
+      throw new Error("The joined submitted entry has no retained terminal.");
+    }
+    const observed = yield* submission.output();
+    if (!observed.ok) {
+      throw observed.error;
+    }
+    options.observed(observed.value);
+  }
   const receipt: SubmitReceipt = {
     entry: submission.entry,
-    status: outcome.ok ? "completed" : "failed",
+    status: terminal?.status === "cancelled" ? "cancelled" : outcome.ok ? "completed" : "failed",
     failure: outcome.ok ? undefined : outcome.error.message,
     read: { entry: submission.entry },
   };
