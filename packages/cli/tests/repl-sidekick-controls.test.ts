@@ -674,6 +674,8 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Prompt",
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
+        "Sidekick.Todo",
+        "Sidekick.Todo",
       ].sort(),
     );
     // The name they replaced is not among them. A response written now cannot
@@ -691,7 +693,14 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         .filter((entry) => entry.effect === "write")
         .map((entry) => entry.name)
         .sort(),
-    ).toEqual(["Elicit", "REPL.EntryInput", "REPL.ImportAsset", "REPL.Submit", "REPL.Test"]);
+    ).toEqual([
+      "Elicit",
+      "REPL.EntryInput",
+      "REPL.ImportAsset",
+      "REPL.Submit",
+      "REPL.Test",
+      "Sidekick.Todo",
+    ]);
     expect(surface.find((entry) => entry.name === "REPL.EntryInput")?.form).toBe("paired");
     expect(surface.find((entry) => entry.name === "REPL.Submit")?.form).toBe("self-closing");
     // Paired, because the question is the content.
@@ -764,6 +773,8 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Prompt",
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
+        "Sidekick.Todo",
+        "Sidekick.Todo",
       ].sort(),
     );
     // Core's own self-description is deliberately not designated: its ordinary

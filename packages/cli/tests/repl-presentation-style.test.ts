@@ -1,4 +1,5 @@
 import { createChatPreparationStore } from "../src/repl/application.ts";
+import { parseTodo } from "../src/repl/todo/document.ts";
 /**
  * Semantic presentation, in the cells a frame actually wrote.
  *
@@ -1085,7 +1086,10 @@ describe("REPL appearance - the archive's inks, from the mounted terminal", () =
     expect(inkOf(grid, placed(catalog, "entry:entry-3")).foreground).toBe(REPL_PALETTE.waiting);
     expect(inkOf(grid, placed(catalog, "entry:entry-3")).foreground).not.toBe(SEMANTIC.tick);
     const viewOf = (focused?: string): ReplView =>
-      withWorkspace(reading(state, model, live, WIDE, focused), workspaceOf(model));
+      withWorkspace(reading(state, model, live, WIDE, focused), {
+        ...workspaceOf(model),
+        todo: { document: parseTodo("") },
+      });
     yield* presenter.commit(viewOf());
     expect(focusKeyOf(presenter)).toBe("footer:input");
     const observed = yield* presenter.commit(viewOf(focusKeyOf(presenter)));
@@ -5216,7 +5220,10 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
       nested.key,
     );
     const viewOf = (focused?: string): ReplView =>
-      withWorkspace(reading(state, model, live, WIDE, focused), workspaceOf(model));
+      withWorkspace(reading(state, model, live, WIDE, focused), {
+        ...workspaceOf(model),
+        todo: { document: parseTodo("") },
+      });
     yield* presenter.commit(viewOf());
     expect(focusKeyOf(presenter)).toBe("footer:input");
     const observed = yield* presenter.commit(viewOf(focusKeyOf(presenter)));
@@ -5281,9 +5288,9 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     expect(draftStop.x + draftStop.width).toBeLessThanOrEqual(draftBox.x + draftBox.width);
 
     // Follow remains absent; the queue shares the fixed tray header.
-    const todo = placed(observed, "tray:todo");
+    const todo = placed(observed, "todo:header");
     const sidekickStop = placed(observed, "sidekick:stop");
-    expect(sidekickStop.y).toBe(todo.y);
+    expect(sidekickStop.y).toBeLessThan(todo.y);
     expect(todo.x).toBeLessThan(sidekickStop.x);
     expect(sidekickStop.x + sidekickStop.width).toBeLessThan(160);
     expect(observed.keys.includes("tray:queue")).toBe(true);
@@ -6075,7 +6082,7 @@ describe("REPL presentation: the screen says what is placed", () => {
     const reading = page.screen();
     expect(reading.found(source, DRAFT_VALUE)).toBe(1);
     expect(draftHolds(reading, source)).toBe(true);
-    expect(reading.found(source, { after: COMPOSER })).toBe(0);
+    expect(reading.found(source, COMPOSER_VALUE)).toBe(0);
   });
 
   it("keeps a modal readable and leaves the Draft unchanged behind it", function* () {

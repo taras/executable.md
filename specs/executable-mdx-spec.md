@@ -5977,6 +5977,14 @@ inside another execution without moving what an invocation may name.
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
 
+An installed ordinary identity component selected for generated use retains its
+exact execution-owned domain through canonical capture and the evaluator's
+private wrappers. Only acknowledged registrations enter capture. The narrowed
+route admits exact captured functions, transfers no identity between executions
+and grants no protected-body dispatch or additional form/effect. Authored imports
+continue to settle their own selection frame; generated wrappers preserve the
+existing authenticator's lifetime, frame, single-use and projection checks.
+
 ### 5.7 Expansion observation
 
 `Component.expand` surrounds one executable element's complete expansion. Core

@@ -1,5 +1,6 @@
 import type { Plugin } from "@executablemd/core/api";
 import { useNodeReplProjectAccess } from "../../src/node-repl-project-access.ts";
+import { installTodoSource } from "../../src/node-todo-source.ts";
 /**
  * The real REPL command, run on a terminal this test owns.
  *
@@ -742,7 +743,7 @@ export function* useMountedHost(
       { at: "min" },
     );
   }
-  if (options.hostFiles === true) {
+  if (options.hostFiles !== false) {
     yield* useHostFiles();
   }
   if (options.entryInstallation !== undefined) {
@@ -753,6 +754,7 @@ export function* useMountedHost(
   yield* useTempFileCompiler();
   const dataRoot = options.dataRoot ?? (yield* useTemporary("xmd-repl-mounted-"));
   yield* useNodeReplProjectAccess();
+  yield* installTodoSource();
   yield* installReplHost({
     dataRoot: () => dataRoot,
     environment: () => [

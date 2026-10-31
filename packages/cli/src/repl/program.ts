@@ -8,6 +8,13 @@ import type { ReplChatPreparationStore } from "./application.ts";
 import { recoveryReference } from "./sidekick/recovery-record.ts";
 import type { ReplRecovering } from "./application.ts";
 import type { RecoveryReview } from "./sidekick/owner.ts";
+import { TODO_WAKE, todoWakeEligible } from "./todo/wake.ts";
+import { todoLinesOf } from "./application.ts";
+import { TodoEditError } from "./todo/document.ts";
+import { TodoSourceError } from "./todo/source.ts";
+import { parseFilesFailure } from "@executablemd/runtime";
+import { Todo } from "./todo/service.ts";
+import { SidekickOrigin } from "./sidekick/dispatch.ts";
 import { useSidekickAttachment } from "../sidekick-acp/server.ts";
 import { SidekickTransport } from "../sidekick-acp/protocol.ts";
 import { testForSidekick } from "./sidekick/admission.ts";
@@ -1537,7 +1544,38 @@ function* drive(
       },
     });
 
+    const todo = yield* Todo.get();
+    if (todo !== undefined) {
+      const changes = yield* todo.changes;
+      yield* spawn(function* () {
+        while (!(yield* changes.next()).done) {
+          wakes.send({ kind: "session" });
+        }
+      });
+    }
+    function todoIdle(): boolean {
+      return todoWakeEligible({
+        live: !ending && state.route.at === undefined,
+        storage: upgrading === undefined && unresolved === undefined,
+        entry: current.admits().ok,
+        reservation:
+          admitting.held === undefined &&
+          admitting.testing !== true &&
+          admissions.message === undefined,
+        dispatch:
+          !sidekick.busy &&
+          dispatch.current === undefined &&
+          dispatch.queue.pending.length === 0 &&
+          dispatch.queue.held === undefined,
+        configuration: admissions.configuration === undefined,
+        questions:
+          current.elicitation.pending === undefined && sidekick.questions.pending === undefined,
+        permissions: current.agent.requests.length === 0,
+        conversation: sidekick.reading.ok,
+      });
+    }
     const dispatch = yield* useSidekickDispatch({
+      todoEligible: todoIdle,
       owner: sidekick,
       admission: admissions,
       execution: execution.id,
@@ -2132,6 +2170,28 @@ function* drive(
             follow = !follow;
           },
           dispatch,
+          *todoWake() {
+            const eligible = todoIdle;
+            if (!eligible()) {
+              return;
+            }
+            const sent = yield* scoped(function* () {
+              yield* SidekickOrigin.set({ kind: "todo" });
+              if (!eligible()) {
+                return undefined;
+              }
+              return yield* dispatch.send(TODO_WAKE);
+            });
+            if (sent?.ok) {
+              yield* spawn(function* () {
+                const result = yield* sent.value.completion;
+                if (!result.ok) {
+                  sidekickReports.push({ kind: "refused", refusal: result.error.message });
+                }
+                wakes.send({ kind: "session" });
+              });
+            }
+          },
           refuse(refusal: string): void {
             sidekickReports.push({ kind: "refused", refusal });
           },
@@ -2211,6 +2271,21 @@ function* drive(
           sidekickReports.push({ kind: "refused", refusal });
         },
       );
+      if (performed.todoSaved === true) {
+        state = Object.freeze({
+          ...state,
+          todoEditor: undefined,
+          todoSelected: performed.todoSelected ?? state.todoSelected,
+          restore: {
+            kind: "reveal",
+            key:
+              performed.todoSelected === undefined
+                ? "todo:header"
+                : `todo:task:${performed.todoSelected}`,
+          },
+          refusal: undefined,
+        } satisfies ReplState);
+      }
       if (performed.answered !== undefined) {
         // The question took it, so the drawer that was asking is over. The model
         // here is the history without this answer in it yet, which is what makes
@@ -2987,6 +3062,7 @@ export function sidekickTurnRows(
         agent: live.agent,
         turn: live.turn,
         title: titleOf(live.asked, live.title),
+        origin: live.origin,
         state:
           live.phase === "pending"
             ? "asking"
@@ -3319,10 +3395,18 @@ function* build(
   // What it shows is read from this execution rather than supplied — the
   // reading this frame was resolved at, and what this execution's Sidekick
   // acknowledged doing to it: see `workspaceOf`.
+  const todo = yield* Todo.get();
+  const workspaceTodo =
+    todo === undefined
+      ? {}
+      : {
+          todo: todo.current.ok
+            ? { document: todo.current.value }
+            : { error: todo.current.error.message },
+        };
   return view.ok
-    ? withWorkspace(
-        view.value,
-        workspaceOf(
+    ? withWorkspace(view.value, {
+        ...workspaceOf(
           reading.model,
           sidekick,
           {
@@ -3335,7 +3419,8 @@ function* build(
           },
           follow,
         ),
-      )
+        ...workspaceTodo,
+      })
     : refusedView(state, view.error.message, size);
 }
 
@@ -3433,6 +3518,8 @@ function isObject(value: Json): value is { [key: string]: Json } {
 
 /** What performing one intent produced. */
 interface Performed {
+  readonly todoSaved?: true;
+  readonly todoSelected?: number;
   /**
    * The exact object a question took, when one did and is now over.
    *
@@ -3541,6 +3628,7 @@ function* perform(
     reviewRecovery(): void;
     recover(held: ReplRecovering): void;
     reference(accept: boolean): void;
+    todoWake(): Operation<void>;
     toggleFollow(): void;
     readonly dispatch: SidekickDispatch;
     /** Say why the Sidekick refused, on the next pass of the loop. */
@@ -3611,6 +3699,29 @@ function* perform(
     case "recovery-reference":
       chat.reference(intent.accept);
       return {};
+    case "todo-save": {
+      const todo = yield* Todo.get();
+      if (todo === undefined) {
+        return { refusal: "The TODO session is not initialized." };
+      }
+      const before = todo.pending.length;
+      try {
+        yield* todo.save(intent.source, intent.replacement);
+      } catch (error) {
+        if (
+          !(error instanceof TodoEditError) &&
+          !(error instanceof TodoSourceError) &&
+          parseFilesFailure(error) === undefined
+        ) {
+          throw error;
+        }
+        return { refusal: error instanceof Error ? error.message : String(error) };
+      }
+      if (todo.pending.length !== before) {
+        yield* chat.todoWake();
+      }
+      return { todoSaved: true, todoSelected: intent.selected, remounted: true };
+    }
     case "none":
       return {};
     case "exit":
@@ -4510,6 +4621,15 @@ export function* prepareFrame(
   if (!queueStatus.ok) {
     return queueStatus;
   }
+  const todoRows = yield* fitPlain(
+    renderer,
+    view.size,
+    todoLinesOf(view),
+    Math.max(1, widths.inspection - 6),
+  );
+  if (!todoRows.ok) {
+    return todoRows;
+  }
   // The Transcript's selector, fitted once. Before the header rows below,
   // because what this answers is how wide that control is and the wrap decision
   // is made against it — and before every pass after that, because a label one
@@ -4589,6 +4709,7 @@ export function* prepareFrame(
   let historyWideMap: number | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
+    todo: todoRows.value,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
     queueStatus: queueStatus.value,
     ...(wrapped.size === 0 ? {} : { headers: wrapped }),
@@ -4831,6 +4952,20 @@ export function* prepareFrame(
   if (message.value !== undefined) {
     editors.set("sidekick:message", message.value);
   }
+  if (view.state.todoEditor !== undefined && chatRoom > 0) {
+    const editor = view.state.todoEditor;
+    const fitted = yield* fitEditor(
+      renderer,
+      view.size,
+      caretFor(editor.text, editor.caret),
+      Math.max(1, chatRoom - 8),
+      view.focused === "todo:editor",
+    );
+    if (!fitted.ok) {
+      return fitted;
+    }
+    editors.set("todo:editor", fitted.value);
+  }
   // How tall the composer may be on this screen, and how tall it is.
   //
   // `C` is the chat capacity of the frame just measured, which carries the
@@ -4842,7 +4977,7 @@ export function* prepareFrame(
   const height =
     message.value === undefined
       ? 1
-      : Math.max(1, Math.min(fittedRows, MESSAGE_VALUE_ROWS, Math.max(1, capacity)));
+      : Math.max(1, Math.min(Math.max(3, fittedRows), MESSAGE_VALUE_ROWS, Math.max(1, capacity)));
   // The newest rows, because the end is where somebody is typing.
   const shown =
     message.value === undefined
@@ -4853,7 +4988,8 @@ export function* prepareFrame(
               Math.max(0, Math.min(message.value.active, fittedRows - height)),
               Math.max(0, Math.min(message.value.active, fittedRows - height)) + height,
             )
-            .map((own) => own.text),
+            .map((own) => own.text)
+            .concat(Array.from({ length: Math.max(0, height - fittedRows) }, () => "")),
         );
   // One more structural measurement when the composer is taller than the
   // minimum, so the capacity the chat is admitted against is the capacity of
@@ -4977,6 +5113,7 @@ export function* prepareFrame(
     preview: preview.value,
     chatSequence: chat.value,
     queue: queued.value,
+    todo: todoRows.value,
     notices: notices.value,
     details: details.value,
     boundsOf: (id: string) => geometry.value.boundsOf(id),
@@ -5011,6 +5148,7 @@ export function* prepareFrame(
     editors,
     notices: notices.value,
     details: details.value,
+    todo: todoRows.value,
     queue: queued.value,
     queueStatus: queueStatus.value,
     headers: wrapped.size === 0 ? undefined : wrapped,

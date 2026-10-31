@@ -45,6 +45,7 @@ import {
   DurableContext,
   DurablePersistenceError,
   InMemoryStream,
+  createDurableOperation,
 } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
@@ -69,6 +70,135 @@ import type {
   HostExecution,
 } from "../host.ts";
 import type { Json } from "../src/types.ts";
+import type { FunctionComponent } from "../src/types.ts";
+import { formDispatcher } from "../src/invocation-identity.ts";
+
+describe("Generated ordinary component identity", () => {
+  it("captures installed forms and names their durable work without protected dispatch", function* () {
+    const claimed: string[] = [];
+    const held = yield* useHeldHost({
+      installations: [
+        {
+          components: [
+            {
+              name: "Owned",
+              origin: "test://owned",
+              props: NO_PROPS,
+              forms: ["self-closing", "paired"],
+              generated: {
+                "self-closing": {
+                  identity: "https://executable.md/components/owned/read",
+                  effect: "read",
+                },
+                paired: {
+                  identity: "https://executable.md/components/owned/write",
+                  effect: "write",
+                },
+              },
+              factory: (claim) => {
+                const body: FunctionComponent = function* (_props, invocation) {
+                  const name = yield* claim(invocation);
+                  const value = yield createDurableOperation({ type: "owned", name }, function* () {
+                    claimed.push(name);
+                    return "owned";
+                  });
+                  return String(value);
+                };
+                return formDispatcher({ forms: "both", "self-closing": body, paired: body });
+              },
+            },
+          ],
+          *install() {
+            yield* useSelection({ Owned: ["self-closing", "paired"] });
+          },
+        },
+      ],
+    });
+    const refused = yield* held.execution.evaluateGeneratedXmdRoot({
+      id: "refused",
+      source: "<Owned></Owned>",
+      allow: ["read"],
+    });
+    expect(refused.ok).toBe(false);
+    expect(claimed).toEqual([]);
+    for (const [id, source] of [
+      ["read", "<Owned />"],
+      ["write", "<Owned></Owned>"],
+    ]) {
+      const result = yield* held.execution.evaluateGeneratedXmdRoot({
+        id,
+        source,
+        allow: ["read", "write"],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.output).toBe("owned");
+      }
+    }
+    expect(claimed).toHaveLength(2);
+    expect(claimed[0]).not.toBe(claimed[1]);
+  });
+
+  it("grants no local domain to an implementation borrowed from another execution", function* () {
+    let retained: FunctionComponent | undefined;
+    const original = yield* useHeldHost({
+      installations: [
+        {
+          components: [
+            {
+              name: "Owned",
+              origin: "test://owned",
+              props: NO_PROPS,
+              factory: (claim) => {
+                retained = function* (_props, invocation) {
+                  return yield* claim(invocation);
+                };
+                return retained;
+              },
+            },
+          ],
+        },
+      ],
+    });
+    yield* original.started;
+    const borrowed = retained;
+    if (borrowed === undefined) {
+      throw new Error("The original component factory did not run.");
+    }
+    const other = yield* useHeldHost({
+      installations: [
+        {
+          components: [
+            {
+              name: "Owned",
+              origin: "test://owned",
+              props: NO_PROPS,
+              generated: {
+                "self-closing": {
+                  identity: "https://executable.md/components/owned/read",
+                  effect: "read",
+                },
+              },
+              factory: () => borrowed,
+            },
+          ],
+          *install() {
+            yield* useSelection({ Owned: ["self-closing"] });
+          },
+        },
+      ],
+    });
+    const result = yield* other.execution.evaluateGeneratedXmdRoot({
+      id: "foreign",
+      source: "<Owned />",
+      allow: ["read"],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("names no durable identity");
+    }
+  });
+});
 
 const NO_PROPS = { type: "object", properties: {}, additionalProperties: false } as const;
 

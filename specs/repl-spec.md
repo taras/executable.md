@@ -254,6 +254,103 @@ root/session prop, project once, return ordinary rendered text with optional
 win; invoking a definition needs no preliminary source read. Outside these
 scopes, File operands are ordinary project paths. Testing remains session-owned.
 
+## The shared checklist
+
+Edit the TODO checklist above Message, or read it from an entry or response:
+
+```xmd
+<Sidekick.Todo as="items" />
+```
+
+Each item has `text` and `completed`. One `todo.md` in the session workspace
+owns this list across entries, directories and chat selections. Missing means
+empty and creates nothing. Reopening restores this file, with no pending
+changes, recovery marker or automatic prompt.
+
+The paired form takes exactly one fenced unified diff and returns its own
+committed items. Both forms require `as` before body effects and render nothing.
+A completed retained result restores its historical value without rereading or
+rewriting the file. Both response forms receive ordinary designated result
+feedback; an entry capture starts no feedback exchange.
+
+````xmd
+<Sidekick.Todo as="items">
+```diff
+@@ -1 +1 @@
+-- [ ] Review the proposal
++- [x] Review the proposal
+```
+</Sidekick.Todo>
+````
+
+Source contains blank lines and flat, unindented `- [ ] text`, `- [x] text` or
+`- [X] text` tasks. Inline Markdown source, untouched lines, trailing spaces,
+LF/CRLF and final-newline disposition survive edits. Unsupported lines and
+images refuse with their line location. Malformed UTF-8 refuses without a
+fabricated line number or byte replacement. Literal U+FFFD remains valid;
+an initial BOM remains part of the source and the flat grammar refuses it.
+
+All hunks match their declared old positions exactly. Bare hunks or optional
+`todo.md`, `a/todo.md` and `b/todo.md` headers are accepted, including valid
+no-final-newline markers. Fuzzy, malformed, multi-file, rename and binary patches
+refuse. A stale editor compares its complete opening source. Validation precedes
+one existing Files replacement; a refusal or no-op changes nothing and creates
+no change observation. Issued native work joins before mutation ordering or
+session shutdown releases it. Unknown replacement acknowledgement stays unknown;
+a later read establishes current contents only.
+
+The header collapses the checklist and `+` creates a task. Task Space checks or
+reopens; Enter edits. Down from the last task creates another. Enter saves the
+editor, Escape cancels, arrows edit its caret and Tab leaves the region. Move up,
+Move down and Remove task act on the selected task. Alt+Up/Down navigates locally
+without reordering. The TODO header is its fixed Tab and Backtab entry between
+the conversation and Message. Background changes preserve collapse, focus,
+composer text and reading positions.
+
+The list uses its natural displayed height up to eight, six and three task rows
+at 160x36, 120x30 and 72x20. Wrapped labels consume rows. Empty and short lists
+reserve no unused task rows. The header and `+` stay fixed, and Message normally
+shows three value rows. Completed rows retain position and use subdued
+strikethrough with readable focus. Markdown labels are inert terminal text;
+links display labels, braces and component-like text execute nothing, and source
+terminal escapes never reach the terminal.
+
+The live TODO service owns external refresh independently of frame demand.
+Explicit reads reread current source. Outside edits refresh views without
+creating pending observations or wakes; invalid or unreadable source remains a
+visible failure rather than stale items or empty success.
+
+Committed human and component changes produce ordered, detached origin/diff/items
+observations in the live TODO plugin. Prompt middleware selects one finite batch
+at activation. Successful canonical completion retires only that batch; later
+edits stay pending. Normal requests carry deltas. A failed or stopped request
+marks recovery, so the next independently allowed prompt rereads and explicitly
+supplies the fresh full checklist. Success returns later prompts to deltas.
+Recovery starts no work and bypasses no hold or unknown-feedback refusal.
+
+An idle eligible human commit can send one message through the existing dispatch,
+with origin `todo`, label TODO change and a fresh ordinary message ID. Busy or
+held edits consume no FIFO slot, and becoming idle starts nothing. Eligibility
+includes joined entry readiness, storage/reopen state, admission and test
+reservations, dispatch state, configuration, questions, permissions and readable
+conversation state. The root rechecks after suspension. Refusal leaves no deferred
+wake. Component changes use normal result feedback; external changes do neither.
+The wake preserves Message and Draft takeover. Its text is:
+
+```text
+Review the committed TODO changes supplied with this request and continue
+appropriately. Read Sidekick.Todo if you need the current checklist.
+```
+
+Selected Plugins register middleware through ordinary `Plugin.install`.
+`Repl.initialize(workspace): Operation<void>` from the neutral
+`@executablemd/cli/api` export defaults to no-op and runs once in the logical
+runtime after cold validation and profile selection, before operational entry
+or Sidekick work. It owns feature resources and joins partial initialization
+on failure/cancellation. Terminal attachment does not initialize again; passive
+history inspection initializes nothing. Importing `/api` evaluates no runtime
+entrypoint or provider.
+
 ## Testing session components
 
 After ordinary File entries create a component and its companion test, a
@@ -892,7 +989,7 @@ and answers nothing.
 Transcript -> Selected work -> Draft -> Tabs/Configure
     ^                                      |
     |                                      v
- History <- Message <- Right reading <-----+
+ History <- Message <- TODO <- Right reading <-----+
 ```
 
 Arrows move between local controls along their group's axis. Right enters a
@@ -1340,8 +1437,7 @@ is held and stays outside the scrolling window.
 **QUEUE** shows the waiting count out of sixteen. Each pending message shows its
 origin, text and `X`, accessible as *Remove message*. Placement expresses FIFO
 order without row numbers or repeated acknowledgements. X withdraws only its
-exact still-pending message; a stale X changes no active work. TODO remains an
-inactive placeholder. Follow starts checked and keeps its live setting across
+exact still-pending message; a stale X changes no active work. TODO edits the shared checklist above Message. Follow starts checked and keeps its live setting across
 rounds, navigation and resizing.
 
 A fixed status states the hold reason. While messages wait, the tray says once:
@@ -2786,7 +2882,7 @@ announces. That notification carries nothing and authorizes nothing — the scre
 reads the conversation afresh when it is told to look.
 
 Sending accepts the exact text, UI revisions and origin into the live owner's
-FIFO across UI and delivered ACP messages. Sixteen messages may wait beside the
+FIFO across UI, delivered ACP and eligible TODO wake messages. Sixteen messages may wait beside the
 one active exchange. Each message is at most 65536 UTF-8 bytes; a full queue or
 oversize message refuses before clearing text, with no eviction or truncation.
 Successful composer Send clears only its accepted Message revision. Newer typing

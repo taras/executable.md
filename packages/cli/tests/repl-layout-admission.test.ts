@@ -1,3 +1,4 @@
+import { parseTodo } from "../src/repl/todo/document.ts";
 /**
  * Measured admission (#875 TL2–TL5).
  *
@@ -1864,6 +1865,57 @@ describe("accepted rendered scrolling guidance", () => {
       yield* page.type("X");
       yield* page.until("Agent caret", (one) => one.shows("Agent: scribXe"));
       expect(page.repl.fake.prompts).toHaveLength(0);
+    });
+  }
+});
+
+describe("shared TODO measured content", () => {
+  for (const [size, cap] of [
+    [WIDE, 8],
+    [MEDIUM, 6],
+    [NARROW, 3],
+  ] as const) {
+    it(`uses natural task height up to ${cap} displayed rows at ${size.columns}x${size.rows}`, function* () {
+      const model = yield* entriesModel(0);
+      const live: ReplLive = { ...IDLE, sidekick: KERNEL_SIDEKICK };
+      const presenter = yield* usePresenter(size);
+      const selected = reduceRepl(
+        initialState("owned"),
+        { kind: "select-pane", pane: "sidekick" },
+        model,
+        live,
+      ).state;
+      function frame(source: string, focused = "todo:header"): ReplView {
+        const view = viewFor(selected, model, live, size, focused);
+        if (!view.ok) {
+          throw view.error;
+        }
+        return withWorkspace(view.value, {
+          ...workspaceOf(model),
+          todo: { document: parseTodo(source) },
+        });
+      }
+      const empty = yield* presenter.commit(frame(""));
+      expect(empty.keys.some((key) => key.startsWith("todo:task:"))).toBe(false);
+      const short = yield* presenter.commit(frame("- [ ] short\n"));
+      const extent = short.boundsOf("todo:task:0");
+      expect(extent?.height).toBe(1);
+      const focused = yield* presenter.commit(frame("- [ ] short\n", "todo:task:0"));
+      expect(focused.boundsOf("todo:task:0")).toEqual(extent);
+      const checked = yield* presenter.commit(frame("- [x] short\n", "todo:task:0"));
+      expect(checked.boundsOf("todo:task:0")).toEqual(extent);
+      const wrapped = yield* presenter.commit(frame("- [ ] " + "word ".repeat(70) + "\n"));
+      const filled = wrapped.keys.filter(
+        (key) => key.startsWith("todo:task:") || key.startsWith("todo:continuation:"),
+      );
+      expect(filled).toHaveLength(cap);
+      expect(wrapped.boundsOf("todo:header")?.height).toBe(1);
+      expect(wrapped.boundsOf("todo:add")?.height).toBe(1);
+      const message = wrapped.boundsOf("sidekick:message");
+      const values = wrapped.keys.filter((key) => key.startsWith("sidekick:message:value:"));
+      expect(message?.height).toBe(1);
+      expect(values.length).toBeGreaterThanOrEqual(3);
+      expect(wrapped.boundsOf("todo:task:0")?.y).toBeLessThan(message?.y ?? 0);
     });
   }
 });

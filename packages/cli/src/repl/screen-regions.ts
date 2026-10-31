@@ -228,6 +228,12 @@ function screenPlacement(
   ) {
     return { region: reading };
   }
+  if (key.startsWith("todo:")) {
+    return {
+      region: { key: "todo", rank: 5.5, axis: "vertical" },
+      ...(key === "todo:header" ? { entry: 0 } : {}),
+    };
+  }
   if (key === "sidekick:message") {
     return { region: MESSAGE_REGION, entry: 0 };
   }

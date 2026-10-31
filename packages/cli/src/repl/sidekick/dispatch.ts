@@ -142,6 +142,7 @@ export interface SidekickDispatch {
 
 export function* useSidekickDispatch(options: {
   owner: SidekickOwner;
+  todoEligible?: () => boolean;
   admission: SidekickAdmission;
   execution: string;
   workspace: string;
@@ -248,6 +249,11 @@ export function* useSidekickDispatch(options: {
     },
     *send(text, instruction): Operation<Result<SidekickExchange>> {
       const origin = Object.freeze({ ...(yield* SidekickOrigin.expect()) });
+      if (origin.kind === "todo" && options.todoEligible?.() !== true) {
+        return Err(
+          new Error("TODO changes remain pending until another independently eligible prompt."),
+        );
+      }
       const ready = guard();
       if (!ready.ok) {
         return ready;

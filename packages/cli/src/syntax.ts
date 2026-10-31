@@ -1,3 +1,4 @@
+import type { IdentityComponent } from "@executablemd/core/host";
 /**
  * `xmd syntax` — everything a document may write here, described without
  * running any of it.

@@ -48,7 +48,8 @@ describe("REPL focus regions: the normal screen", () => {
     it(`R1/R2: fixed region entries deliver Draft and Message input at ${size.columns}x${size.rows}`, function* () {
       const page = yield* useReplPage({ size });
       yield* typed(page, "draft-kept");
-      // Draft -> Tabs -> Right reading -> Message, independent of child counts.
+      // Draft -> Tabs -> Right reading -> TODO -> Message, independent of child counts.
+      yield* key(page, "Tab");
       yield* key(page, "Tab");
       yield* key(page, "Tab");
       yield* key(page, "Tab");
@@ -144,6 +145,7 @@ describe("REPL focus regions: Unicode caret editing", () => {
     yield* key(page, "Tab");
     yield* key(page, "Tab");
     yield* key(page, "Tab");
+    yield* key(page, "Tab");
     yield* page.type(" m界\nXYZ");
     yield* page.until("both Message rows", (one) => one.shows(" m界") && one.shows("XYZ"));
     yield* key(page, "Home");
@@ -201,6 +203,7 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     yield* key(page, "Tab");
     yield* key(page, "Tab");
     yield* key(page, "Tab");
+    yield* key(page, "Tab");
     yield* typed(page, "next-message");
     yield* page.resize(MEDIUM);
     yield* page.resize(NARROW);
@@ -218,6 +221,7 @@ describe("REPL focus regions: reading and narrow recovery", () => {
     yield* page.until("the minimum-size refusal", (one) => one.shows("needs at least 72x20"));
     yield* page.resize(NARROW);
     yield* page.until("the routed reading recovered", (one) => one.shows("message the sidekick"));
+    yield* key(page, "Tab");
     yield* key(page, "Tab");
     yield* page.type("-recovered");
     yield* page.until("the recovered Message", (one) => one.shows("next-message-narrow-recovered"));
@@ -273,6 +277,7 @@ describe("REPL focus regions: the catalog drawer at the narrow size", () => {
     // Closing selection restores Entries. Reopen, then use all three regions.
     yield* page.key("Enter");
     yield* page.until("catalog reopened", (one) => one.shows("[close]"));
+    yield* key(page, "Tab");
     yield* key(page, "Tab");
     yield* key(page, "Tab");
     yield* key(page, "Tab");
@@ -600,7 +605,7 @@ describe("REPL focus regions: background input ownership", () => {
   it("PV7: a reply and question leave a middle Message caret and Draft untouched", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* typed(page, "kept draft");
-    for (let at = 0; at < 3; at += 1) {
+    for (let at = 0; at < 4; at += 1) {
       yield* key(page, "Tab");
     }
     page.repl.fake.script({
@@ -635,7 +640,7 @@ describe("REPL focus regions: Sidekick reading keys", () => {
   it("PV5: Home/End and pages preserve an unsent Message while output arrives", function* () {
     const page = yield* useReplPage({ size: MEDIUM });
     yield* typed(page, "draft kept");
-    for (let at = 0; at < 3; at += 1) {
+    for (let at = 0; at < 4; at += 1) {
       yield* key(page, "Tab");
     }
     const first = Array.from({ length: 30 }, (_, at) => `Chat row ${at}`).join("\n");
@@ -646,6 +651,7 @@ describe("REPL focus regions: Sidekick reading keys", () => {
     yield* page.repl.fake.streamingTurns(1);
     yield* page.until("the live preview", (one) => one.shows("Chat row 29"));
     yield* typed(page, "message kept");
+    yield* key(page, "Backtab");
     yield* key(page, "Backtab");
     yield* key(page, "Home");
     yield* page.until("the start of the chat", (one) => one.shows("Chat row 0"));

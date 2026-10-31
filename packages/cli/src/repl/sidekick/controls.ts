@@ -273,6 +273,7 @@ export const ENTRY_INSPECTIONS = [
  * separate question, and `sidekickObservations()` answers it with nothing.
  */
 export const DESIGNATED: ReadonlySet<string> = new Set([
+  "Sidekick.Todo",
   "REPL.Bindings",
   "REPL.Syntax",
   "REPL.Environment",

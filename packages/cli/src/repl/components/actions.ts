@@ -20,6 +20,7 @@ import type { ReplDrawerRef, ReplPane, ReplSurface } from "../route.ts";
 export type ReplCaretKey = "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "Home" | "End";
 
 export type ReplFieldPurpose =
+  | "todo"
   | "draft"
   | "message"
   | "answer"
@@ -35,6 +36,21 @@ export type ReplAction =
   | { readonly kind: "recovery-reference-ack" }
   | { readonly kind: "recovery-reference-cancel" }
   | { readonly kind: "scroll-recovery"; readonly delta: number }
+  | { readonly kind: "todo-collapse" }
+  | {
+      readonly kind: "todo-edit";
+      readonly source: string;
+      readonly index: number;
+      readonly text: string;
+    }
+  | {
+      readonly kind: "todo-mutate";
+      readonly source: string;
+      readonly index: number;
+      readonly action: "toggle" | "remove" | "up" | "down";
+    }
+  | { readonly kind: "todo-save" }
+  | { readonly kind: "todo-cancel" }
   | { readonly kind: "viewport-wheel"; readonly window: string; readonly direction: "up" | "down" }
   | {
       readonly kind: "reading-key";
