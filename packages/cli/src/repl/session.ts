@@ -1856,6 +1856,11 @@ function* start(
         const outcome = yield* started;
         const joined = yield* started.stop();
         if (!joined.ok) {
+          if (isReconstructionFailure(joined.error)) {
+            refuse(joined.error);
+          } else {
+            open();
+          }
           return joined;
         }
         observedOutput(yield* consumed);

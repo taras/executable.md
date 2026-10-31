@@ -349,12 +349,12 @@ export function* submitForSidekick(
   }
   const terminal = finishedHead.value.find((entry) => entry.key === submission.entry)?.terminal;
   if (options.observed !== undefined) {
-    if (terminal === undefined) {
-      throw new Error("The joined submitted entry has no retained terminal.");
-    }
     const observed = yield* submission.output();
     if (!observed.ok) {
       throw observed.error;
+    }
+    if (terminal === undefined) {
+      throw new Error("The joined submitted entry has no retained terminal.");
     }
     options.observed(observed.value);
   }

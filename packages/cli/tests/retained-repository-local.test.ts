@@ -20,6 +20,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
+  allSettled,
   Err,
   Ok,
   ensure,
@@ -56,10 +57,12 @@ import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { denoReplEntry } from "../src/deno-repositories.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import {} from "./support/mounted-repl.ts";
+import { useMountedHost } from "./support/mounted-repl.ts";
+import type { MountedRepl } from "./support/mounted-repl.ts";
+import { GitOperationAdmissionError } from "../../git/src/composition/errors.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/repl-page.ts";
-import { asked } from "./support/screen-journeys.ts";
+import { asked, sendMessage } from "./support/screen-journeys.ts";
 import { createRepositoryRoot, runPhase } from "./fixtures/repl/issue-883/host.ts";
 import {
   replRepositoryInstallation,
@@ -1184,7 +1187,7 @@ describe("975 — native Git keeps project selection and requires an authored ch
     yield* until(writeFile(join(project, "request.md"), "project file"));
     yield* runGit(project, ["add", "request.md"]);
     yield* runGit(project, ["commit", "-m", "seed"]);
-    const page = yield* useReplPage({
+    const host = yield* useMountedHost({
       projectCwd: project,
       hostFiles: true,
       entryInstallation: denoReplEntry(
@@ -1192,26 +1195,51 @@ describe("975 — native Git keeps project selection and requires an authored ch
         join(project, "managed"),
       ),
     });
-    const repl = page.repl;
-    repl.fake.script({
-      reply:
-        '<Let as="code" select="code">\n```xmd\n<Dir path=' +
-        JSON.stringify(project) +
-        '><Git.Files as="files" /><Json value={files} /></Dir>\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
-    });
-    repl.fake.script({ reply: "<Output>Read the project checkout.</Output>" });
-    yield* asked(page, "read the known project checkout", "Read the project checkout.");
-    expect((yield* settledReading(repl)).model.entries[0]?.terminal?.output).toContain(
-      "request.md",
-    );
-    repl.fake.script({
-      reply:
-        '<Let as="code" select="code">\n```xmd\n<Git.Files as="files" />\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
-    });
-    repl.fake.script({ reply: "<Output>Read the checkout refusal.</Output>" });
-    yield* asked(page, "read Git without entering the project", "Read the checkout refusal.");
-    expect(repl.fake.prompts[3]).toContain("inside none of the checkouts");
-    expect(repl.fake.prompts[3]).not.toContain("project file");
+    let stopped: MountedRepl | undefined;
+    const [answer] = yield* allSettled([
+      scoped(function* () {
+        const page = yield* useReplPage({ host });
+        const repl = page.repl;
+        stopped = repl;
+        repl.fake.script({
+          reply:
+            '<Let as="code" select="code">\n```xmd\n<Dir path=' +
+            JSON.stringify(project) +
+            '><Git.Files as="files" /><Json value={files} /></Dir>\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
+        });
+        repl.fake.script({ reply: "<Output>Read the project checkout.</Output>" });
+        yield* asked(page, "read the known project checkout", "Read the project checkout.");
+        expect((yield* settledReading(repl)).model.entries[0]?.terminal?.output).toContain(
+          "request.md",
+        );
+        repl.fake.script({
+          reply:
+            '<Let as="code" select="code">\n```xmd\n<Git.Files as="files" />\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
+        });
+        repl.fake.script({ reply: "<Output>Read the checkout refusal.</Output>" });
+        yield* sendMessage(page, "read Git without entering the project");
+        yield* suspend();
+      }),
+    ]);
+    expect(answer?.ok).toBe(false);
+    if (answer !== undefined && !answer.ok) {
+      expect(answer.error).toBeInstanceOf(GitOperationAdmissionError);
+      expect(answer.error.message).toContain("inside none of the checkouts");
+      expect(answer.error.message).not.toContain("no retained terminal");
+    }
+    if (stopped === undefined) {
+      throw new Error("the mounted refusal ran no command");
+    }
+    expect(stopped.fake.prompts).toHaveLength(3);
+    const retained = yield* settledReading(stopped);
+    expect(retained.model.entries).toHaveLength(2);
+    expect(retained.model.entries[1]?.terminal).toBeUndefined();
+    expect(retained.chat.filter((record) => record.kind === "response")).toHaveLength(2);
+    expect(
+      retained.chat.filter(
+        (record) => record.kind === "feedback" && record.response === "response:3",
+      ),
+    ).toEqual([]);
   });
 });
 
