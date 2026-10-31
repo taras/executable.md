@@ -3494,7 +3494,12 @@ constructed.
 #### Materialization
 
 Session materialization is the transition that makes a placement's chosen route and its
-backend history resumable. ACP-first materialization happens only when the backend
+backend history resumable. The runtime is the integrity-pinned ACPX 0.21.1 source
+closure. Its released child environment and response metadata coexist with the
+local explicit-acceptance barrier: `promptStarted` acknowledges transport only.
+Promotion and ordinary checkpoints share the released session owner's writer;
+the asserting copy is saved before memory adopts it, and finalization joins
+promotion before saving. ACP-first materialization happens only when the backend
 reports that it accepted the session's first turn; client-native materialization is the
 native launch's existing retained construction. Nothing else promotes a placement — not
 a returning ensure, a first output, a terminal result, a checkpoint token, an error code

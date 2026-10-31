@@ -413,7 +413,9 @@ live:    the canonical executable path
 The live path exists only in the operation that observed it. Native creation and
 resume replace the adapter command's first argv member with it, and the matching
 Claude ACP child receives it through `CLAUDE_CODE_EXECUTABLE` in a transient
-child-process environment. It enters no route, journal, ACPX session option or
+child-process environment. The integrity-pinned ACPX 0.21.1 source closure
+supplies the child-only environment seam. Its local first-turn materialization
+barrier remains required independently of that released capability. It enters no route, journal, ACPX session option or
 record, public result, diagnostic, `process.env`, or provider partition that
 outlives its last handle.
 

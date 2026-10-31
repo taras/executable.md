@@ -41,6 +41,7 @@ import { agentIdentityComponents } from "@executablemd/core";
 import { useWorkflowAgentProfile, WORKFLOW_SESSION_INSTRUCTIONS } from "../src/workflow-agent.ts";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
+import { resolveAgentCommand } from "../../acp/src/acpx-runtime.ts";
 import type { WorkflowAgentProfileOptions as AgentProfileOptions } from "../src/workflow-agent.ts";
 import { createFakeAcp, makeStore, tripwireAcp } from "./support/fake-acp.ts";
 import type { FakeAcp, ScriptedTurn } from "./support/fake-acp.ts";
@@ -886,7 +887,11 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
 
       // Resolved through ACPX's own registry, to ACPX's own command. The
       // provider is handed one registry; this is the command it answered with.
-      expect(fake.created[0]?.agentRegistry.resolve("gemini")).toBe(GEMINI_COMMAND);
+      const created = fake.created[0];
+      if (!created) {
+        throw new Error("the workflow did not create an ACP runtime");
+      }
+      expect(resolveAgentCommand(created.agentRegistry, "gemini")).toBe(GEMINI_COMMAND);
       expect(fake.ensured[0]?.agent).toBe("gemini");
 
       // The embedded machinery was never asked about it — not to capture it,
@@ -1016,7 +1021,11 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       // what the registry resolved, and that what the registry resolved is
       // ACPX's own built-in — the literal the base branch retained for this
       // agent, written out rather than recomputed through the code under test.
-      expect(rows[0]?.["agent_command"]).toBe(fake.created[0]?.agentRegistry.resolve("gemini"));
+      const created = fake.created[0];
+      if (!created) {
+        throw new Error("the workflow did not create an ACP runtime");
+      }
+      expect(rows[0]?.["agent_command"]).toBe(resolveAgentCommand(created.agentRegistry, "gemini"));
       expect(rows[0]?.["agent_command"]).toBe(GEMINI_COMMAND);
       // Specifically not restated as an embedded identity, which is what a
       // registry closed to the two patched providers would have forced.

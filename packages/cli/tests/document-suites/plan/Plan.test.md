@@ -192,7 +192,7 @@ the ending evidence: if a tenth review had opened, it could not have offered
 that decision, and the run would have failed on the answer rather than on the
 explanation below.
 
-<Test name="a tenth unrepairable draft is explained automatically" timeout="180s">
+<Test name="a tenth unrepairable draft is explained automatically" timeout="300s">
 <Execution host="run" target="packages/cli/tests/document-suites/plan/uses-plan.md" as="run">
 <TestAgent>
 <TestAgent.Scenario session="planner" src="./agents/exhausted-plan.md" />

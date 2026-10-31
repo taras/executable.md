@@ -1,21 +1,26 @@
 {
   "format": 1,
   "package": "acpx",
-  "version": "0.12.0",
+  "version": "0.21.1",
   "repository": "https://github.com/openclaw/acpx",
-  "commit": "6a24a546d2349cbe71ed032d52d07cab611e320c",
+  "commit": "e6c782459a18a5b22d06210fde61d75003883ab0",
   "behaviorallyPatched": [
-    "generated/live-checkpoint-ClPCSdrW.js",
-    "generated/runtime.d.ts",
     "generated/runtime.js",
-    "generated/session-options-jkYbBxGE.d.ts"
+    "generated/runtime.d.ts",
+    "generated/ipc-BbYFsKOj.js",
+    "generated/queue-owner-runtime-B0mPqOu4.js",
+    "generated/session-options-BlnP3WAc.d.ts"
   ],
   "packagingAdapted": [
-    "generated/runtime.js",
-    "generated/live-checkpoint-ClPCSdrW.js",
+    "generated/agent-registry-Cz9fD9H1.js",
+    "generated/agent-registry.d.ts",
+    "generated/client-D12zqSyN.d.ts",
+    "generated/ipc-BbYFsKOj.js",
+    "generated/queue-owner-runtime-B0mPqOu4.js",
     "generated/runtime.d.ts",
-    "generated/client-DwNyFauq.d.ts",
-    "generated/session-options-jkYbBxGE.d.ts"
+    "generated/runtime.js",
+    "generated/session-options-BlnP3WAc.d.ts",
+    "generated/watch-bQXyUy3z.js"
   ],
   "files": [
     {
@@ -26,57 +31,98 @@
     {
       "path": "PROVENANCE.md",
       "kind": "provenance",
-      "sha256": "07444ab687840e22e16bbba09c80ed916f8aa9a8e222d30fa415c42d865695df"
+      "sha256": "75ce626b25cef551b82335dae20fb4a555a64d0fe011155f1804e53097c5f196"
     },
     {
-      "path": "generated/client-DwNyFauq.d.ts",
+      "path": "generated/agent-registry-Cz9fD9H1.js",
       "kind": "generated",
-      "sha256": "840a65aab63c8c3f51cb47fc0edffb211c828ff772424dbb48c5fb9eb49fdd5b"
+      "sha256": "2940701266e1bf07cd58d21299d81faaea266d64376b7565033d05f8128958be"
     },
     {
-      "path": "generated/live-checkpoint-ClPCSdrW.js",
+      "path": "generated/agent-registry.d.ts",
       "kind": "generated",
-      "sha256": "862276038e699594a37a2d0d6c7b4ac7382bd11e2b021b4633bf714d09eb7825"
+      "sha256": "bc4b2ab438e0704fe1e3b7847d92c1acdaa44e1f83d13eeabdf77528d58bfd38"
+    },
+    {
+      "path": "generated/client-D12zqSyN.d.ts",
+      "kind": "generated",
+      "sha256": "15a999729c41040bb97a07d6e722e7303ca196bb4ee2c7c7c7be44da244e8a3d"
+    },
+    {
+      "path": "generated/ipc-BbYFsKOj.js",
+      "kind": "generated",
+      "sha256": "423450379d7f13a5efb4d5e62e2f224e5420a96ea2b1e94efca5aef563a12c31"
+    },
+    {
+      "path": "generated/queue-owner-runtime-B0mPqOu4.js",
+      "kind": "generated",
+      "sha256": "39404d45c3a90861cbb29c0d3958c750475a9a5b263b5823470f688e9b62e47d"
     },
     {
       "path": "generated/runtime.d.ts",
       "kind": "generated",
-      "sha256": "04b634608eff30d6162b6c5f63a3e733bbdd50505beaafc145d4911933e02bcb"
+      "sha256": "7ca427da1b33029e357c0d718969352dce16521d64df542a656533cc004b8df7"
     },
     {
       "path": "generated/runtime.js",
       "kind": "generated",
-      "sha256": "fd7bf185df900f627a3a2786f133719311bee492d3dd0616a7d739da3c5a913d"
+      "sha256": "1c848668ca66f23414237e8695c0acc268af4df848dc352f15ce85a80f05b933"
     },
     {
-      "path": "generated/session-options-jkYbBxGE.d.ts",
+      "path": "generated/session-options-BlnP3WAc.d.ts",
       "kind": "generated",
-      "sha256": "2d52250cf4d6f1ac410c53aca9bc1a96e29393d4c95ae31e96c9627d13972d33"
+      "sha256": "e4484e22e1549b1297d276370c5542f8ef5cf569cdadff347f0c39111817b7aa"
     },
     {
-      "path": "upstream/client-DwNyFauq.d.ts",
-      "kind": "pristine",
-      "sha256": "076d9c7cf80d07fe13cd9219a5b6dc6a299c475df1a8d5466567cc417632baad"
+      "path": "generated/watch-bQXyUy3z.js",
+      "kind": "generated",
+      "sha256": "8a19193642ba24a5668c4e5d7d0f6bd68db691dcf0b651d07f457499aca074ae"
     },
     {
-      "path": "upstream/live-checkpoint-ClPCSdrW.js",
+      "path": "upstream/agent-registry-Cz9fD9H1.js",
       "kind": "pristine",
-      "sha256": "d92153086f058880623af7297a6867166068e27f9b2cc97a7b94c6a80e2b20da"
+      "sha256": "601755068224fb32e65bc04bf01705e238d4a973b862d287eb2eb1d87d272b86"
+    },
+    {
+      "path": "upstream/agent-registry.d.ts",
+      "kind": "pristine",
+      "sha256": "5208183065e16232790d8920456c5ad9cc2bbecb9442b3f3406695ae1bd776c9"
+    },
+    {
+      "path": "upstream/client-D12zqSyN.d.ts",
+      "kind": "pristine",
+      "sha256": "5c08bf401cbd7ef3f3df442126eef32e37f3ed08787b82be10f668362151b929"
+    },
+    {
+      "path": "upstream/ipc-BbYFsKOj.js",
+      "kind": "pristine",
+      "sha256": "30f82226c21c2471cf6698b76f35a5e8ac79cb4c541f4b041a382ca2c5b7b105"
+    },
+    {
+      "path": "upstream/queue-owner-runtime-B0mPqOu4.js",
+      "kind": "pristine",
+      "sha256": "ff7d866765a0295818e5043b553cb929b1406e1a9c0dbb464552303cb0f1cbad"
     },
     {
       "path": "upstream/runtime.d.ts",
       "kind": "pristine",
-      "sha256": "f91a14d8340da317e4809fb796ffce471cd621d4de86b0932ef4dc05dc91dfe4"
+      "sha256": "fd281abe7eb6664848adf4798046bd5eaf68d37211144de6f186c3049f1eb230"
     },
     {
       "path": "upstream/runtime.js",
       "kind": "pristine",
-      "sha256": "9d0dd46d20e49b32fa805462b64778bbfbd58463ef9124938b831071fe24e0b2"
+      "sha256": "0ac93733019c003fb0422fbee26063dc0ad73c20c6e4ebff947dc578ac64940a"
     },
     {
-      "path": "upstream/session-options-jkYbBxGE.d.ts",
+      "path": "upstream/session-options-BlnP3WAc.d.ts",
       "kind": "pristine",
-      "sha256": "1bb7459cf7f05038d43d7b4d810adc5d15462e926c2dcad038d966199b23b890"
+      "sha256": "fdd94fa52e6c992d6c86fb63571db6087199209048c3db6a84c1bff1d5b3b52f"
+    },
+    {
+      "path": "upstream/watch-bQXyUy3z.js",
+      "kind": "pristine",
+      "sha256": "272754964edcde352fcd6d4f102a1dcea5f32a9f772761b9ddbbdd982574741d"
     }
-  ]
+  ],
+  "tarballSha256": "d166c323dc77f02c610a79e34c1989e4f6880c0d61e9eda8cdcf5c5d26fccdda"
 }

@@ -6,8 +6,8 @@ license.
 
 ## acpx
 
-The ACP runtime under `vendor/acpx/generated` is npm `acpx@0.12.0`, carried in
-source with one local patch. `vendor/acpx/PROVENANCE.md` states the patch, the
+The ACP runtime under `vendor/acpx/generated` is npm `acpx@0.21.1`, carried in
+source with local compatibility patches. `vendor/acpx/PROVENANCE.md` states the patch, the
 upstream release commit it is taken from, and why it exists. dnt inlines this
 closure into the npm artifact, so the notice belongs with it.
 

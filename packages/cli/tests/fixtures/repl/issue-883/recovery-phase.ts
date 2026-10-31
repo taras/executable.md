@@ -23,7 +23,7 @@ import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promis
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import process from "node:process";
-import { main, Ok, spawn, suspend, until, withResolvers } from "effection";
+import { ensure, main, Ok, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -312,15 +312,25 @@ function* useConversing(
   // conversation it created would die with the process that created it — and a
   // case about reconciling an assertion across a restart would be reconciling
   // nothing but the fixture's own determinism.
-  // Created before the store is built: the runtime's save is fire-and-forget
-  // at the acpx boundary, so a write into a directory that is not there is a
-  // record that silently never lands.
   const state = join(dataRoot, "acpx");
   if (script.forget === true) {
     yield* until(rm(state, { recursive: true, force: true }));
   }
   yield* until(mkdir(state, { recursive: true }));
-  const store = createAcpxSessionStore(state);
+  const disk = createAcpxSessionStore(state);
+  let writes = Promise.resolve();
+  yield* ensure(() => until(writes));
+  // The scripted fake does not await saves; snapshots keep its pending write
+  // from adopting an identity before the queued asserting write publishes it.
+  const store: typeof disk = {
+    load: (key) => disk.load(key),
+    save: (record) => {
+      const snapshot = structuredClone(record);
+      const saving = writes.then(() => disk.save(snapshot));
+      writes = saving;
+      return saving;
+    },
+  };
   const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
     acp: {
       createRuntime: fake.create,
@@ -965,17 +975,13 @@ function* phases(): Operation<unknown> {
       const conversationKeys = held.fake.ensured
         .map((one) => one.sessionKey)
         .filter((key) => !key.startsWith("xmd:inspect:"));
-      // The provider saves its account at the acpx boundary without waiting for
-      // it, so the write is observed landing before it is read. Without this the
-      // read races the save and reports an assertion that is about to exist.
+      // The scripted fake issues saves without waiting; observe its asserting
+      // save before reading the disk store.
       yield* held.fake.assertedSessions(1);
       const asserted: (string | undefined)[] = [];
       for (const key of conversationKeys) {
         asserted.push((yield* held.retained(key))?.agentSessionId);
       }
-      // The provider saves its account at the acpx boundary without waiting for
-      // it, so the write is observed landing before it is read. Without this the
-      // read races the save and reports an assertion that is about to exist.
       return {
         stopped: script.stop,
         held: describeHeld(),

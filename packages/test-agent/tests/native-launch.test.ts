@@ -311,22 +311,41 @@ describe(
       expect(run.result.ok ? "" : run.result.error.message).toBe("");
       expect(run.results.map((result) => result.status)).toEqual(["pass", "pass"]);
 
-      // Each test's launch installed its own layer. A shared partition would
-      // have refused the second: the session would already carry a different
-      // one, and this provider replaces none.
-      const layers = run.sessions
-        .map((report) => report.systemPrompt)
-        .filter((prompt): prompt is string => prompt !== undefined);
-      expect(layers.length).toBe(2);
-      expect(layers.some((layer) => layer.includes("implementor"))).toBe(true);
-      expect(layers.some((layer) => layer.includes("reviewer"))).toBe(true);
-
       // Two native identities, so neither test saw the other's session — and
       // neither waited on the other, which a shared coordinator would have
       // made them do.
       const identities = new Set(run.launches.map((request) => request.command.at(-1)));
       expect(run.launches.length).toBe(2);
       expect(identities.size).toBe(2);
+
+      // Both session/new and session/load report the layer for the same identity.
+      const reportsByIdentity = new Map<string, NativeSessionReport[]>();
+      for (const report of run.sessions) {
+        const reports = reportsByIdentity.get(report.nativeSessionId) ?? [];
+        reports.push(report);
+        reportsByIdentity.set(report.nativeSessionId, reports);
+      }
+      expect(new Set(reportsByIdentity.keys())).toEqual(identities);
+      const layers: string[] = [];
+      const scenarioIds = new Set<string>();
+      for (const reports of reportsByIdentity.values()) {
+        expect(reports.length).toBeGreaterThan(0);
+        const first = reports[0];
+        if (first === undefined || first.systemPrompt === undefined) {
+          throw new Error("A launched identity has no instruction layer.");
+        }
+        for (const report of reports) {
+          expect(report.systemPrompt).toBe(first.systemPrompt);
+        }
+        layers.push(first.systemPrompt.trim());
+        expect(new Set(reports.map((report) => report.scenarioId)).size).toBe(1);
+        scenarioIds.add(first.scenarioId);
+      }
+      expect(layers.sort()).toEqual([
+        "You are the repository implementor.",
+        "You are the repository reviewer.",
+      ]);
+      expect(scenarioIds.size).toBe(2);
 
       // Each test's prompt was answered by a scenario of its own: one stage
       // exists per instance, and a shared one would have been exhausted.

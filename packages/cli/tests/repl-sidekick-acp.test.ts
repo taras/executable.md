@@ -380,7 +380,7 @@ function* clientIdentity() {
   const fromDeclarer = createRequire(join(ROOT, "packages/acp/package.json"));
   const packagePath = yield* until(realpath(fromDeclarer.resolve("acpx/package.json")));
   const info = z
-    .object({ version: z.literal("0.12.0") })
+    .object({ version: z.literal("0.21.1") })
     .passthrough()
     .parse(JSON.parse(yield* readTextFile(packagePath)));
   const cli = join(dirname(packagePath), "dist/cli.js");
@@ -392,7 +392,7 @@ function* clientIdentity() {
     JSON.stringify({
       kind: "actual-client-provenance",
       releasedVersion: info.version,
-      releaseCommit: "6a24a546d2349cbe71ed032d52d07cab611e320c",
+      releaseCommit: "e6c782459a18a5b22d06210fde61d75003883ab0",
       packagePath,
       cli,
       cliSha256: digest(yield* readTextFile(cli)),
@@ -407,7 +407,7 @@ function* clientIdentity() {
 }
 
 describe("minimal live Sidekick ACP attachment", () => {
-  it("A1/A2: released acpx0.12 delegates serially through the real bridge and bounded reads stay passive", function* () {
+  it("A1/A2: released acpx0.21.1 delegates serially through the real bridge and bounded reads stay passive", function* () {
     const one = yield* world();
     const cli = yield* clientIdentity();
     const target = "98a72388dc63f4b72a0a5e84960a2667d1a1acdb";
@@ -1223,20 +1223,29 @@ if(process.env.CONTROL==='bare')reply({stopReason:'end_turn'});
           () => true,
           () => false,
         );
-        // The result settles before final store writes; the event stream joins them.
         const events = turn.events[Symbol.asyncIterator]();
         let event = yield* until(events.next());
         while (!event.done) {
           event = yield* until(events.next());
         }
         const result = yield* until(turn.result);
-        expect(result.status).toBe("completed");
-        if (result.status !== "completed") {
-          throw new Error("No controlled ending.");
+        if (control === "bare") {
+          expect(result.status).toBe("completed");
+          if (result.status !== "completed") {
+            throw new Error("No controlled response.");
+          }
+          expect(result.stopReason).toBe("end_turn");
+        } else {
+          expect(result.status).toBe("failed");
+          if (result.status !== "failed") {
+            throw new Error("No controlled timeout.");
+          }
+          expect(result.error.code).toBe("TIMEOUT");
+          expect(result).not.toHaveProperty("stopReason");
         }
-        expect(result.stopReason).toBe("end_turn");
-        expect(result._meta?.["executablemd.sidekick-exchange/v1"]).toBe(undefined);
+        expect(result).not.toHaveProperty("_meta");
         expect(yield* until(accepted)).toBe(control === "timeout");
+        yield* until(runtime.close({ handle, reason: "controlled fixture completion" }));
       });
     }
   });

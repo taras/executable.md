@@ -42,6 +42,7 @@ import type {
   AcpSessionStore,
 } from "../src/acpx-runtime.ts";
 import type { ProbeCapableRuntime } from "../src/provider.ts";
+import { resolveAgentCommand } from "../src/acpx-runtime.ts";
 
 export function makeRecord(agentCommand: string, cwd: string): AcpSessionRecord {
   return {
@@ -416,7 +417,10 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           // instruction layer the caller asked for; a fake that skipped that
           // would hide every decision a later launch makes by reading it back.
           const record: AcpSessionRecord = {
-            ...makeRecord(options.agentRegistry.resolve(input.agent), input.cwd ?? options.cwd),
+            ...makeRecord(
+              resolveAgentCommand(options.agentRegistry, input.agent),
+              input.cwd ?? options.cwd,
+            ),
             acpxRecordId: input.sessionKey,
             messages: [],
           };
@@ -515,6 +519,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
               refuse();
             },
             turn: {
+              promptStarted: Promise.resolve(),
               requestId: input.requestId,
               events: {
                 [Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {

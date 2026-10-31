@@ -74,9 +74,9 @@ export function checkpointFromMeta(meta: unknown): AgentPromptCheckpoint | undef
  * The checkpoint a turn result carries.
  *
  * Only a completed turn has one. A cancelled turn was interrupted rather than
- * finished, a failed turn produced no response to read metadata from, and the
- * runtime's timeout fallback reconstructs a completion from session updates —
- * none of them describes a point a later run could continue from.
+ * finished, even when ACPX carries its raw response metadata. A failed turn
+ * names no checkpoint. A real response recovered during timeout drain still
+ * names its own turn; session updates without a response supply none.
  */
 export function checkpointFromResult(
   result: AcpRuntimeTurnResult,

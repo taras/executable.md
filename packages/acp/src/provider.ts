@@ -97,7 +97,12 @@ import type {
   AgentSessionRouteStore,
   AgentSessionRouteV3,
 } from "./session-route.ts";
-import { createAcpRuntime, createAgentRegistry, createRuntimeStore } from "./acpx-runtime.ts";
+import {
+  createAcpRuntime,
+  createAgentRegistry,
+  createRuntimeStore,
+  resolveAgentCommand,
+} from "./acpx-runtime.ts";
 import type {
   AcpAgentRegistry,
   AcpRuntime,
@@ -151,7 +156,7 @@ import {
  * Derived from ACPX's own options rather than imported from the ACP SDK, which
  * this package reaches only through ACPX.
  */
-export type AcpMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
+export type AcpMcpServer = Extract<NonNullable<AcpRuntimeOptions["mcpServers"]>, unknown[]>[number];
 
 /** The runtime surface the provider needs — ACPX's runtime plus its probe. */
 export interface ProbeCapableRuntime extends AcpRuntime {
@@ -1567,7 +1572,7 @@ function* useAcpxProviderState(
             `come from this provider's session()`,
         );
       }
-      const agentCommand = registry.resolve(agentName);
+      const agentCommand = resolveAgentCommand(registry, agentName);
       if (agentCommand !== entry.agentCommand) {
         throw new Error(
           `agent "${agentName}" (${agentCommand}) does not match session ` +
@@ -1596,7 +1601,7 @@ function* useAcpxProviderState(
       return { kind: "existing", sessionKey: named.sessionKey, entry };
     }
     const option = routed.name;
-    const agentCommand = registry.resolve(agentName);
+    const agentCommand = resolveAgentCommand(registry, agentName);
     if (sessions) {
       const details = yield* sessions.requestSession({
         agentName,
@@ -2571,11 +2576,13 @@ function* useAcpxProviderState(
               ),
             );
           });
-          pending = writeOption.call(runtime, {
-            handle: entry.handle,
-            key: optionId,
-            value,
-          });
+          pending = writeOption
+            .call(runtime, {
+              handle: entry.handle,
+              key: optionId,
+              value,
+            })
+            .then(() => undefined);
           yield* until(pending);
           // Only where the write answered. A `finally` here would run while
           // this very operation was being cancelled, which is the one moment
@@ -2654,7 +2661,7 @@ function* useAcpxProviderState(
     request?: AgentOptionsRequest,
   ): Operation<AgentOptions> {
     const agentName = yield* resolveAgent(name);
-    const agentCommand = registry.resolve(agentName);
+    const agentCommand = resolveAgentCommand(registry, agentName);
     const inspectionCwd = resolve(yield* agentCwd());
     // Random, and deliberately not derived from the directory: a key a
     // session request could also produce would make this inspection the session a

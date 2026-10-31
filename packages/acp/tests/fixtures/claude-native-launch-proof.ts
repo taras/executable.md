@@ -45,7 +45,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
-import { createAgentRegistry } from "../../src/acpx-runtime.ts";
+import { createAgentRegistry, resolveAgentCommand } from "../../src/acpx-runtime.ts";
 import { agentSessionKeyDigest } from "@executablemd/runtime";
 import { ADVERTISED_NATIVE_LAUNCH } from "../../src/native-launch.ts";
 
@@ -1440,7 +1440,7 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
 
   const sessionKey = head?.sessionKey;
   if (typeof sessionKey === "string" && sessionKey.length > 0) {
-    const paths = keyPaths(createAgentRegistry().resolve("claude"), sessionKey);
+    const paths = keyPaths(resolveAgentCommand(createAgentRegistry(), "claude"), sessionKey);
     const [route] = paths;
     if (route !== undefined && (yield* exists(route))) {
       const parsed: unknown = JSON.parse(yield* until(readFile(route, "utf8")));

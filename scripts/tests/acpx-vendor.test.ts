@@ -33,7 +33,12 @@ const ACP_SRC = "packages/acp/src";
  * named after something upstream already says — `_meta`, for one — would open a
  * permissive window at every unrelated mention of it.
  */
-const SEAMS: readonly string[] = ["agentProcessEnv", "checkpointMeta", "materialization"];
+const SEAMS: readonly string[] = [
+  "materialization",
+  "exactSessionRecordIds",
+  "strictResume",
+  "Strict explicit resume:",
+];
 
 /** How far an introduced line may sit from one that names the seam. */
 const SEAM_PROXIMITY_LINES = 8;
@@ -41,7 +46,7 @@ const SEAM_PROXIMITY_LINES = 8;
 /**
  * Undo the two packaging adaptations, so what remains is behavior.
  *
- * The snapshot is five files rather than a published package: it carries no
+ * The snapshot is nine files rather than a published package: it carries no
  * `.js` for declaration-only modules, no sourcemaps for anything, and ends
  * every file with a newline. All three adaptations are declared in
  * PROVENANCE.md and none can change what runs.
@@ -195,6 +200,9 @@ describe("Tier AV — vendored ACPX snapshot", () => {
         readFile(join(VENDOR, "upstream", path.replace(/^generated\//, "")), "utf8"),
       );
       const after = yield* until(readFile(join(VENDOR, path), "utf8"));
+      for (const seam of SEAMS) {
+        expect(before.toLowerCase()).not.toContain(seam.toLowerCase());
+      }
       const known = new Set(
         unpackage(before)
           .split("\n")
@@ -257,7 +265,7 @@ describe("Tier AV — vendored ACPX snapshot", () => {
     // this file, and a check that depends on the spelling stops checking.
     const pkg = JSON.parse(yield* until(readFile("packages/acp/package.json", "utf8")));
     const dependencies = (pkg as Record<string, Record<string, string>>).dependencies ?? {};
-    expect(dependencies.acpx).toBe("0.12.0");
+    expect(dependencies.acpx).toBe("0.21.1");
     // Sibling packages resolve through the workspace, as they always have.
     // What must not appear is a local protocol standing in for ACPX, or any
     // dependency reaching into the snapshot: either makes the runtime

@@ -14,14 +14,26 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, until } from "effection";
+import {
+  allSettled,
+  ensure,
+  race,
+  sleep,
+  spawn,
+  suspend,
+  until,
+  useScope,
+  withResolvers,
+} from "effection";
 import type { Operation } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { chmod } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Agent } from "@executablemd/core";
 import { createAcpRuntime } from "../src/acpx-runtime.ts";
+import { useAcpxProvider } from "../src/provider.ts";
 import type {
   AcpAgentRegistry,
   AcpRuntime,
@@ -401,6 +413,194 @@ describe(
       expect(outcome.materialized?.agentSessionId).toBe(asserted);
       yield* until(runtime.close({ handle, reason: "test" }));
       yield* until(quiet.close({ handle: again, reason: "test" }));
+    });
+
+    it("TM8: a held promotion gates the barrier and finalization's asserting save", function* () {
+      const world = yield* useWorld();
+      const runtime = runtimeFor(world, ["accept", "text"]);
+      const handle = yield* openSession(world, runtime, "tm-held");
+      const entered = withResolvers<void>();
+      const release = withResolvers<void>();
+      const scope = yield* useScope();
+      const save = world.store.save;
+      world.store.save = (record) =>
+        scope.run(function* () {
+          if (record.agentSessionId !== undefined) {
+            entered.resolve();
+            yield* release.operation;
+          }
+          yield* until(save(record));
+        });
+      yield* ensure(function* () {
+        release.resolve();
+        yield* until(runtime.close({ handle, reason: "test" }));
+      });
+      const turn = runtime.startTurn({ handle, text: "hello", mode: "prompt", requestId: "held" });
+      let materialized = false;
+      turn.materialized.then(
+        () => {
+          materialized = true;
+        },
+        () => {},
+      );
+      yield* entered.operation;
+      yield* until(turn.promptStarted);
+      expect(materialized).toBe(false);
+      expect(yield* pending(world, "tm-held")).toBe(true);
+      expect(yield* assertedIdentity(world, "tm-held")).toBe(undefined);
+      release.resolve();
+      const accepted = yield* until(turn.materialized);
+      yield* until(turn.result);
+      expect(yield* assertedIdentity(world, "tm-held")).toBe(accepted.agentSessionId);
+      expect(world.saves.at(-1)?.sessionMaterialization).toBe(undefined);
+    });
+
+    it("TM9: a rejected promotion cannot be overwritten by finalization", function* () {
+      const world = yield* useWorld();
+      const runtime = runtimeFor(world, ["accept", "text"]);
+      const handle = yield* openSession(world, runtime, "tm-refused-save");
+      const save = world.store.save;
+      world.store.save = (record) =>
+        record.agentSessionId === undefined
+          ? save(record)
+          : Promise.reject(new Error("promotion write refused"));
+      const turn = runtime.startTurn({
+        handle,
+        text: "hello",
+        mode: "prompt",
+        requestId: "refused-save",
+      });
+      const [promotion] = yield* allSettled([until(turn.materialized)]);
+      expect(promotion.ok).toBe(false);
+      if (!promotion.ok) {
+        expect(promotion.error.message).toBe("promotion write refused");
+      }
+      yield* until(turn.result);
+      expect(yield* pending(world, "tm-refused-save")).toBe(true);
+      expect(yield* assertedIdentity(world, "tm-refused-save")).toBe(undefined);
+      yield* until(runtime.close({ handle, reason: "test" }));
+    });
+
+    it("TM10: cancellation before dispatch leaves non-asserting occupancy", function* () {
+      const world = yield* useWorld();
+      const runtime = runtimeFor(world, ["accept", "text"]);
+      const handle = yield* openSession(world, runtime, "tm-cancel");
+      const cancellation = new AbortController();
+      cancellation.abort();
+      const turn = runtime.startTurn({
+        handle,
+        text: "hello",
+        mode: "prompt",
+        requestId: "cancel",
+        signal: cancellation.signal,
+      });
+      const [promotion] = yield* allSettled([until(turn.materialized)]);
+      expect(promotion.ok).toBe(false);
+      expect((yield* until(turn.result)).status).toBe("cancelled");
+      expect(yield* pending(world, "tm-cancel")).toBe(true);
+      expect(yield* assertedIdentity(world, "tm-cancel")).toBe(undefined);
+      yield* until(runtime.close({ handle, reason: "test" }));
+    });
+
+    it("TM11: provider cancellation joins accepted promotion before releasing ownership", function* () {
+      const world = yield* useWorld();
+      const entered = withResolvers<void>();
+      const release = withResolvers<void>();
+      const halting = withResolvers<void>();
+      const halted = withResolvers<void>();
+      const scope = yield* useScope();
+      const save = world.store.save;
+      world.store.save = (record) =>
+        scope.run(function* () {
+          if (record.agentSessionId !== undefined) {
+            entered.resolve();
+            yield* release.operation;
+          }
+          yield* until(save(record));
+        });
+      const runtimes: AcpRuntime[] = [];
+      let mappings = 0;
+      yield* ensure(function* () {
+        release.resolve();
+        for (const runtime of runtimes) {
+          if (runtime.shutdown) {
+            yield* until(runtime.shutdown());
+          }
+        }
+      });
+      const task = yield* spawn(function* () {
+        const provider = yield* useAcpxProvider(
+          { defaultAgent: "fake", permissionMode: "deny-all" },
+          {
+            sessionStore: world.store,
+            agentRegistry: world.registry,
+            advertiseNativeLaunch: [],
+            advertiseClientNativeAttachment: [],
+            *agentCwd() {
+              return world.dir;
+            },
+            createRuntime(options) {
+              const runtime = createAcpRuntime({
+                ...options,
+                agentProcessEnv: { XMD_TM_SCRIPT: JSON.stringify(["accept", "text"]) },
+              });
+              runtimes.push(runtime);
+              return runtime;
+            },
+            sessions: {
+              *requestSession() {
+                return { sessionKey: "tm-provider-release", cwd: world.dir, state: "new" };
+              },
+              *recordSessionIdentity() {
+                mappings++;
+              },
+            },
+          },
+        );
+        yield* Agent.around({
+          *agent([name]) {
+            return yield* provider.agent(name);
+          },
+        });
+        const session = yield* provider.session("review");
+        const subscription = yield* provider.promptStream("hello", { agent: "fake", session });
+        while (!(yield* subscription.next()).done) {}
+        yield* suspend();
+      });
+      yield* entered.operation;
+      const stopping = yield* spawn(function* () {
+        halting.resolve();
+        yield* task.halt();
+        halted.resolve();
+      });
+      yield* halting.operation;
+      const endedBeforeRelease = yield* race([
+        (function* () {
+          yield* halted.operation;
+          return true;
+        })(),
+        (function* () {
+          yield* sleep(250);
+          return false;
+        })(),
+      ]);
+      const pendingBeforeRelease = yield* pending(world, "tm-provider-release");
+      const identityBeforeRelease = yield* assertedIdentity(world, "tm-provider-release");
+      release.resolve();
+      yield* stopping;
+      const record = yield* until(world.store.load("tm-provider-release"));
+      const savedAtTeardown = structuredClone(world.saves);
+      yield* sleep(250);
+
+      expect(endedBeforeRelease).toBe(false);
+      expect(pendingBeforeRelease).toBe(true);
+      expect(identityBeforeRelease).toBe(undefined);
+      expect(mappings).toBe(0);
+      expect(record?.agentSessionId).toBe(`agent-${record?.acpSessionId}`);
+      expect(record?.sessionMaterialization).toBe(undefined);
+      expect(record?.closed).toBe(true);
+      expect(JSON.stringify(record?.messages)).toContain("the answer");
+      expect(world.saves).toEqual(savedAtTeardown);
     });
   },
 );
