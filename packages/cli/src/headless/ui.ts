@@ -22,6 +22,7 @@ export function serveChildUi(
     const source = yield* events;
     let size = initial;
     let sequence = 0;
+    let appliedFrame = false;
     let waiting: { sequence: number; settle(value: z.infer<typeof applied>): void } | undefined;
     let leased = false;
     const reader = yield* spawn(function* () {
@@ -40,6 +41,10 @@ export function serveChildUi(
         } else {
           if (event.kind === "resize") {
             size = event.size;
+            appliedFrame = false;
+          }
+          if ((event.kind === "pointer" || event.kind === "wheel") && !appliedFrame) {
+            continue;
           }
           events.send(event);
           if (event.kind === "eof") {
@@ -57,6 +62,7 @@ export function serveChildUi(
         return size;
       },
       *present(bytes, dimensions) {
+        appliedFrame = false;
         const expected = dimensions ?? size;
         const answer = withResolvers<z.infer<typeof applied>>();
         sequence += 1;
@@ -80,6 +86,7 @@ export function serveChildUi(
           refusal.name = "ReplStaleFrameError";
           throw refusal;
         }
+        appliedFrame = true;
       },
       events() {
         return {

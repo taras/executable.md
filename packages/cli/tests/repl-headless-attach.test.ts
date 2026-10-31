@@ -1,6 +1,6 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { race, scoped, sleep, spawn } from "effection";
+import { createSignal, race, scoped, sleep, spawn } from "effection";
 import type { Operation } from "effection";
 import { attachChildUi } from "../src/headless/ui.ts";
 import { ReplTerminal } from "../src/repl/terminal.ts";
@@ -16,10 +16,58 @@ import { useTerminalScreen } from "./support/terminal-screen.ts";
 import { withResolvers } from "effection";
 import { XmdResponse } from "@executablemd/acp";
 
+const appliedFrames = new WeakMap<Terminal, () => Operation<void>>();
+
+function* observeAppliedFrames(terminal: Terminal): Operation<void> {
+  const transport = yield* SidekickTransport.expect();
+  const applied = createSignal<void, void>();
+  const changes = yield* applied;
+  let acknowledged = 0;
+  appliedFrames.set(terminal, function* () {
+    while (acknowledged < terminal.drawn) {
+      yield* changes.next();
+    }
+  });
+  yield* SidekickTransport.set({
+    ...transport,
+    *connect(path) {
+      const connected = yield* transport.connect(path);
+      const wire = connected.wire;
+      return {
+        ...connected,
+        wire: {
+          ...wire,
+          *send(value) {
+            const frame = appliedAcknowledgement(value);
+            const drawn = terminal.drawn;
+            yield* wire.send(value);
+            if (frame) {
+              acknowledged = drawn;
+              applied.send();
+            }
+          },
+        },
+      };
+    },
+  });
+}
+
+function appliedAcknowledgement(value: unknown): boolean {
+  const parsed = applied.safeParse(value);
+  return parsed.success && parsed.data.applied;
+}
+
 function visible(terminal: Terminal, text: string): Operation<void> {
   return race([
     (function* () {
-      while (!terminal.screen?.rows().join("\n").includes(text)) {
+      while (true) {
+        const applied = appliedFrames.get(terminal);
+        if (applied !== undefined) {
+          yield* applied();
+        }
+        if (terminal.screen?.rows().join("\n").includes(text)) {
+          return;
+        }
         yield* terminal.after(terminal.drawn);
       }
     })(),
@@ -33,7 +81,11 @@ function visible(terminal: Terminal, text: string): Operation<void> {
   ]);
 }
 
-function press(terminal: Terminal, label: string): void {
+function* press(terminal: Terminal, label: string): Operation<void> {
+  const applied = appliedFrames.get(terminal);
+  if (applied !== undefined) {
+    yield* applied();
+  }
   const rows = terminal.screen?.rows() ?? [];
   const matches = rows.flatMap((text, row) => {
     const column = text.indexOf(label);
@@ -128,6 +180,7 @@ describe("headless live UI", () => {
     const terminal = recordingTerminal();
     const ui = yield* spawn(function* () {
       yield* terminal.install();
+      yield* observeAppliedFrames(terminal.terminal);
       yield* attachChildUi(held.reference.sessionId);
     });
     yield* visible(terminal.terminal, "[answer sidekick]");
@@ -159,29 +212,31 @@ describe("headless live UI", () => {
       entry: 1,
       status: "completed",
     });
-    press(terminal.terminal, "Entries");
-    yield* visible(terminal.terminal, "1. [ok]");
+    yield* press(terminal.terminal, "Entries");
+    yield* visible(terminal.terminal, ">   1. [ok]");
     const selecting = terminal.terminal.drawn;
-    press(terminal.terminal, "1. [ok]");
+    yield* press(terminal.terminal, "1. [ok]");
     yield* terminal.terminal.after(selecting);
+    yield* visible(terminal.terminal, "Enter submits · Type here");
     const switching = terminal.terminal.drawn;
-    press(terminal.terminal, "BINDINGS");
+    yield* press(terminal.terminal, "BINDINGS");
     yield* terminal.terminal.after(switching);
     yield* visible(terminal.terminal, "sharedToken =");
     yield* visible(terminal.terminal, "same-live-child-binding");
-    press(terminal.terminal, "SIDEKICK");
+    yield* press(terminal.terminal, "SIDEKICK");
     yield* visible(terminal.terminal, "[answer sidekick]");
 
     expect((yield* attachmentDescriptor(held.path)).conversation).toBe(
       held.descriptor.conversation,
     );
-    press(terminal.terminal, "[answer sidekick]");
+    yield* press(terminal.terminal, "[answer sidekick]");
     yield* visible(terminal.terminal, "[submit]");
     yield* visible(terminal.terminal, "Shared conditional question.");
-    press(terminal.terminal, "( ) approve");
+    yield* visible(terminal.terminal, "Enter answers");
+    yield* press(terminal.terminal, "( ) approve");
     yield* visible(terminal.terminal, "(x) approve");
     const before = terminal.terminal.drawn;
-    press(terminal.terminal, "[submit]");
+    yield* press(terminal.terminal, "[submit]");
     yield* terminal.terminal.after(before);
     expect(held.root.session.elicitation.pending).toBe(pending);
     expect(pending.submit({ decision: "approve", reason: "reviewed" }).kind).toBe("answered");
@@ -212,9 +267,10 @@ describe("headless live UI", () => {
     }
     const permission = yield* permissionAddress.operation;
     yield* visible(terminal.terminal, "asks: Write");
-    press(terminal.terminal, "asks: Write");
+    yield* press(terminal.terminal, "asks: Write");
     yield* visible(terminal.terminal, "[Allow]");
-    press(terminal.terminal, "[Allow]");
+    yield* visible(terminal.terminal, "Enter decides");
+    terminal.terminal.feed("\r");
     const completed = yield* working.value.join();
     if (!completed.ok) {
       throw completed.error;
@@ -402,6 +458,50 @@ describe("headless live UI", () => {
 
   it("H4: applies numbered frames only at matching dimensions and releases an outstanding frame on loss", function* () {
     const held = yield* useHeadlessFixture();
+    yield* scoped(function* () {
+      const { wire, descriptor } = yield* (yield* SidekickTransport.expect()).connect(held.path);
+      yield* wire.send({ id: 0, request: { method: "hello", descriptor } });
+      expect(Reply.parse(yield* wire.receive()).kind).toBe("value");
+      yield* wire.send({ id: 1, request: { method: "ui", size: { columns: 120, rows: 30 } } });
+      expect(Reply.parse(yield* wire.receive()).kind).toBe("value");
+      let frame = presentation.parse(yield* wire.receive());
+      const projected = yield* useTerminalScreen(frame.size);
+      projected.feed(Uint8Array.from(frame.bytes));
+      const row = projected.rows().findIndex((one) => one.includes("[detach]"));
+      const column = projected.rows()[row]?.indexOf("[detach]") ?? -1;
+      expect(row).toBeGreaterThanOrEqual(0);
+      expect(column).toBeGreaterThanOrEqual(0);
+      yield* wire.send({ kind: "pointer", at: { column, row } });
+      yield* wire.send({ kind: "wheel", at: { column: 90, row: 12 }, direction: "down" });
+      yield* wire.send({
+        kind: "input",
+        event: { kind: "text", text: "same-size input survived" },
+      });
+      yield* wire.send({
+        kind: "applied",
+        sequence: frame.sequence,
+        size: frame.size,
+        applied: true,
+      });
+      do {
+        frame = presentation.parse(yield* wire.receive());
+        projected.feed(Uint8Array.from(frame.bytes));
+        yield* wire.send({
+          kind: "applied",
+          sequence: frame.sequence,
+          size: frame.size,
+          applied: true,
+        });
+      } while (!projected.rows().join("\n").includes("same-size input survived"));
+      expect(projected.rows().join("\n")).toContain("[detach]");
+      expect((yield* attachmentDescriptor(held.path)).execution).toBe(held.descriptor.execution);
+      yield* wire.send({ kind: "eof" });
+      let end = Reply.safeParse(yield* wire.receive());
+      while (!end.success) {
+        end = Reply.safeParse(yield* wire.receive());
+      }
+      expect(end.data).toMatchObject({ kind: "value", value: { detached: true } });
+    });
     yield* scoped(function* () {
       const { wire, descriptor } = yield* (yield* SidekickTransport.expect()).connect(held.path);
       yield* wire.send({ id: 0, request: { method: "hello", descriptor } });

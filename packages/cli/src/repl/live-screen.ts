@@ -7,6 +7,7 @@ interface Connection {
   readonly scope: Scope;
   readonly screen: ReplScreen;
   readonly work: Set<Task<unknown>>;
+  frame: object | undefined;
   active: boolean;
   end(): void;
 }
@@ -27,9 +28,12 @@ export function* useReplLiveScreen(): Operation<ReplLiveScreen> {
   let current: Connection | undefined;
   let generation = 0;
   let lastSize: ReplTerminalSize = { columns: 120, rows: 30 };
-  const sources = new WeakMap<ReplScreenEvent, Connection>();
+  const sources = new WeakMap<
+    ReplScreenEvent,
+    { connection: Connection; frame: object | undefined }
+  >();
   function report(held: Connection, event: ReplScreenEvent): void {
-    sources.set(event, held);
+    sources.set(event, { connection: held, frame: held.frame });
     events.send(event);
   }
 
@@ -42,8 +46,12 @@ export function* useReplLiveScreen(): Operation<ReplLiveScreen> {
       if (held === undefined || !held.active) {
         throw new Error("The interactive child view detached before presentation.");
       }
+      held.frame = undefined;
       try {
         yield* held.screen.present(bytes, size);
+        if (held.active && current === held) {
+          held.frame = {};
+        }
       } catch (error) {
         if (!(error instanceof Error && error.name === "ReplStaleFrameError")) {
           held.end();
@@ -72,7 +80,14 @@ export function* useReplLiveScreen(): Operation<ReplLiveScreen> {
       current?.end();
     },
     accepts(event) {
-      return current !== undefined && current.active && sources.get(event) === current;
+      const source = sources.get(event);
+      return (
+        current !== undefined &&
+        current.active &&
+        source?.connection === current &&
+        ((event.kind !== "pointer" && event.kind !== "wheel") ||
+          (source.frame !== undefined && source.frame === current.frame))
+      );
     },
     connect(terminal): Operation<void> {
       return scoped(function* () {
@@ -84,6 +99,7 @@ export function* useReplLiveScreen(): Operation<ReplLiveScreen> {
           scope: yield* useScope(),
           screen: terminal,
           work: new Set(),
+          frame: undefined,
           active: true,
           end() {
             held.active = false;
