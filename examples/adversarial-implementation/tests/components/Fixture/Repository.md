@@ -1,5 +1,5 @@
 ---
-props: {type: object, properties: {}, additionalProperties: false}
+props: {type: object, properties: {guides: {type: boolean, default: false}}, additionalProperties: false}
 returns: {type: object}
 ---
 
@@ -25,4 +25,15 @@ pwd -P
 <If condition={prepared.exitCode !== 0}><Fail message={prepared.stderr} /></If>
 <Let as="temporary" value={prepared.stdout.trim()} />
 <Let as="fixture" value={{root:temporary,repository:temporary + "/repository",directory:temporary + "/work"}} />
+<If condition={props.guides}>
+<Dir path={fixture.repository}>
+<File path=".agents/planner.md">Planner test instructions: preserve approvals and produce only the assigned plan or review.</File>
+<File path=".agents/implementor.md">Implementor test instructions: use the accepted plan and existing APIs.</File>
+```bash exec as="guides"
+git add .agents
+git commit -qm 'selected source role guides'
+```
+<If condition={guides.exitCode !== 0}><Fail message={guides.stderr} /></If>
+</Dir>
+</If>
 <Return value={fixture} />
