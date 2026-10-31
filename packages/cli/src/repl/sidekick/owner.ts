@@ -1572,16 +1572,24 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
        * submission that records a refusal which produced no record.
        */
       let submitted: ReplPrinting | undefined;
+      let submissionFailure: Error | undefined;
       const responding: ServingResponse = {
         output: observation,
         journal,
         ...(input.test === undefined ? {} : { test: input.test }),
         *submit(): Operation<Result<SubmitReceipt>> {
           const taken = pairs;
-          const answer = yield* input.submit(at, journal, (output) => {
-            submitted = output;
-            observed(output);
-          });
+          let answer: Result<SubmitReceipt>;
+          try {
+            answer = yield* input.submit(at, journal, (output) => {
+              submitted = output;
+              observed(output);
+            });
+          } catch (error) {
+            // Generated evaluation may classify this as a response error; the joined submission still owns it.
+            submissionFailure = error instanceof Error ? error : new Error(String(error));
+            throw error;
+          }
           if (!answer.ok && pairs === taken) {
             refused.push({
               order: taken,
@@ -1898,6 +1906,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           }),
         ),
       );
+      if (submissionFailure !== undefined) {
+        throw submissionFailure;
+      }
       // A failed evaluation still rendered whatever it had, and the controls it
       // ran before failing happened. Both are retained: the reply a person
       // reads is what the root actually produced, and the operations are already

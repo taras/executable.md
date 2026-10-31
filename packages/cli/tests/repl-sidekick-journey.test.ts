@@ -30,7 +30,17 @@ import { initialState } from "../src/repl/application.ts";
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, Ok, sleep, spawn, suspend, until, useScope, withResolvers } from "effection";
+import {
+  allSettled,
+  ensure,
+  Ok,
+  sleep,
+  spawn,
+  suspend,
+  until,
+  useScope,
+  withResolvers,
+} from "effection";
 import type { Operation, Result } from "effection";
 
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -3764,6 +3774,42 @@ describe("Joined output API", () => {
     }
     const output = yield* admitted.value.output();
     expect(output).toEqual(Ok({ entry: admitted.value.entry, output: "" }));
+  });
+
+  it("keeps an entry cleanup failure authoritative through real generated Submit", function* () {
+    const failure = new Error("REVIEW-OWNING-CLEANUP-FAILED");
+    const held = yield* useHarness(undefined, {
+      entryInstallation: {
+        *install() {
+          yield* ensure(function* () {
+            throw failure;
+          });
+        },
+      },
+    });
+    held.fake.script({
+      reply: "<REPL.EntryInput>Entry emitted before cleanup.</REPL.EntryInput>\n<REPL.Submit />",
+    });
+    held.fake.script({ reply: "<Output>REVIEW-SECOND-TURN-AFTER-CLEANUP</Output>" });
+    const [answer] = yield* allSettled([
+      scoped(function* () {
+        const sent = yield* held.owner.message(
+          "Submit one entry; cleanup must retain its failure.",
+        );
+        if (!sent.ok) {
+          throw sent.error;
+        }
+        return sent.value;
+      }),
+    ]);
+    expect(held.fake.prompts).toHaveLength(1);
+    expect(answer?.ok).toBe(false);
+    if (answer !== undefined && !answer.ok) {
+      expect(answer.error).toBe(failure);
+    }
+    const saved = yield* records(held.execution);
+    expect(saved.filter((record) => record.kind === "feedback")).toEqual([]);
+    expect(saved.filter((record) => record.kind === "response")).toEqual([]);
   });
 
   it("does not publish stream text around a canonical cleanup failure", function* () {
