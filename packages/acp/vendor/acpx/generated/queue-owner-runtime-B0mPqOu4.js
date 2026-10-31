@@ -4951,8 +4951,8 @@ function isUnsupportedSessionLoadAcpError(acp) {
 function isFallbackSafeEmptySessionError(error, acp) {
 	return isAcpQueryClosedBeforeResponseError(error) || acp?.code === -32603;
 }
-function requiresSameSession(resumePolicy) {
-	return resumePolicy === "same-session-only";
+function requiresSameSession(options) {
+	return options.resumePolicy === "same-session-only" || Boolean(options.record.importedFrom) || options.strictResume === true;
 }
 function makeSessionResumeRequiredError(params) {
 	return new SessionResumeRequiredError(`Persistent ACP session ${params.record.acpSessionId} could not be resumed: ${params.reason}`, { cause: params.cause instanceof Error ? params.cause : void 0 });
@@ -5055,7 +5055,8 @@ async function connectAndLoadSession(options) {
 	const record = options.record;
 	const client = options.client;
 	assertControlAuthority(options.authority);
-	const sameSessionOnly = requiresSameSession(options.resumePolicy) || Boolean(record.importedFrom);
+	// strictResume excludes even an unprompted record's -32603 fallback.
+	const sameSessionOnly = requiresSameSession(options);
 	const originalSessionId = record.acpSessionId;
 	const originalAgentSessionId = record.agentSessionId;
 	const originalAcpx = cloneSessionAcpxState(record.acpx);
@@ -5080,7 +5081,8 @@ async function connectAndLoadSession(options) {
 		sameSessionOnly,
 		timeoutMs: options.timeoutMs,
 		authority: options.authority,
-		promptRecorded: options.promptRecorded
+		promptRecorded: options.promptRecorded,
+		strictResume: options.strictResume
 	});
 	const { resumed, loadError, sessionId, createdFreshSession, pendingAgentSessionId, sessionModels } = loadState;
 	applyReconnectedModelState(record, sessionModels, loadState.configOptionsPresent, loadState.legacyModelMetadataPresent, createdFreshSession);
@@ -5293,6 +5295,9 @@ async function recoverRuntimeSessionLoadFailure(params, error) {
 	};
 }
 function canRecoverLoadWithFreshSession(params, error) {
+	if (params.strictResume) {
+		return false;
+	}
 	if (!params.sameSessionOnly) return shouldFallbackToNewSession(error, params.record);
 	return isUnpromptedNewSession(params.record, params.promptRecorded) && extractAcpError(error)?.code === -32603;
 }
@@ -5370,6 +5375,7 @@ async function withConnectedSession(options) {
 				client,
 				record,
 				resumePolicy: options.resumePolicy,
+				strictResume: options.strictResume,
 				replacingMode: options.replacingMode,
 				replacingConfigOption: options.replacingConfigOption,
 				authority: options.authority,

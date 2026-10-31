@@ -5,6 +5,7 @@ import {
   createChannel,
   each,
   ensure,
+  sleep,
   spawn,
   stream,
   until,
@@ -15,8 +16,16 @@ import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { createAcpRuntime, resolveAgentCommand } from "../src/acpx-runtime.ts";
-import type { AcpRuntime, AcpRuntimeEvent, AcpRuntimeOptions } from "../src/acpx-runtime.ts";
+import type {
+  AcpRuntime,
+  AcpRuntimeEnsureInput,
+  AcpRuntimeEvent,
+  AcpRuntimeOptions,
+  AcpRuntimeTurn,
+  AcpSessionRecord,
+} from "../src/acpx-runtime.ts";
 import { createAcpxSessionStore, retainedSession } from "../src/session-store.ts";
 import { createAcpxProvider } from "../src/provider.ts";
 import {
@@ -36,12 +45,15 @@ import {
 } from "../vendor/acpx/generated/queue-owner-runtime-B0mPqOu4.js";
 
 const AGENT_SOURCE = `
+const fs = require("node:fs");
+const path = require("node:path");
+const controlDirectory = process.argv[2];
 let sessionId;
 let model = "initial";
 let effort = "high";
 const options = () => [
   { id: "model", name: "Model", category: "model", type: "select", currentValue: model,
-    options: ["initial", "selected"].map(value => ({value, name: value})) },
+    options: ["initial", "selected", "gpt-5.6-luna"].map(value => ({value, name: value})) },
   { id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: effort,
     options: ["high", "xhigh"].map(value => ({value, name: value})) },
 ];
@@ -59,6 +71,22 @@ process.stdin.on("data", chunk => {
   }
 });
 function handle(request) {
+  if (!controlDirectory || !request.method.startsWith("session/")) return respond(request);
+  fs.appendFile(path.join(controlDirectory, "methods.jsonl"), JSON.stringify({method: request.method, value: request.params?.value}) + "\\n", error => {
+    if (error) throw error;
+    const name = request.method === "session/load" ? "load" : request.method === "session/prompt" ? "prompt" : undefined;
+    if (!name) return respond(request);
+    fs.access(path.join(controlDirectory, "hold-" + name), error => {
+      if (error) return respond(request);
+      const wait = () => fs.access(path.join(controlDirectory, "release-" + name), error => {
+        if (error) setTimeout(wait, 5);
+        else respond(request);
+      });
+      wait();
+    });
+  });
+}
+function respond(request) {
   if (request.id === undefined) return;
   if (request.method === "initialize") {
     const initialize = () => reply(request.id, {protocolVersion: 1, agentCapabilities: {loadSession: true, promptCapabilities: {}}, authMethods: []});
@@ -69,8 +97,14 @@ function handle(request) {
       }), error => { if (error) throw error; initialize(); });
     } else initialize();
   } else if (request.method === "session/new" || request.method === "session/load") {
-    sessionId = request.params.sessionId ?? "session-" + process.pid;
-    reply(request.id, {sessionId, configOptions: options(), _meta: {agentSessionId: "native-" + sessionId}});
+    sessionId = request.params.sessionId ?? (controlDirectory ? "fixed-session" : "session-" + process.pid);
+    const loaded = () => reply(request.id, {sessionId, configOptions: options(), _meta: {agentSessionId: "native-" + sessionId}});
+    if (controlDirectory && request.method === "session/load") {
+      fs.access(path.join(controlDirectory, "fail-load"), error => {
+        if (error) loaded();
+        else send({jsonrpc: "2.0", id: request.id, error: {code: -32603, message: "Controlled cold load failure"}});
+      });
+    } else loaded();
   } else if (request.method === "session/set_config_option") {
     if (request.params.configId === "model") model = request.params.value;
     if (request.params.configId === "effort") effort = request.params.value;
@@ -90,13 +124,16 @@ function handle(request) {
 }
 `;
 
-function* world() {
+function* world(trace = false) {
   const dir = join(tmpdir(), `xmd-released-${randomUUID()}`);
   yield* ensureDir(dir);
   yield* ensure(() => rm(dir, { recursive: true, force: true }));
   const agent = join(dir, "agent with spaces.cjs");
   yield* writeTextFile(agent, AGENT_SOURCE);
-  const registry = { resolve: () => ["node", agent], list: () => ["scribe"] };
+  const registry = {
+    resolve: () => ["node", agent, ...(trace ? [dir] : [])],
+    list: () => ["scribe"],
+  };
   const store = createAcpxSessionStore(dir);
   return { dir, agent, registry, store };
 }
@@ -399,6 +436,285 @@ describe(
       expect(text).toBe("answer:once");
       const [again] = yield* allSettled([until(turn.result)]);
       expect(again.ok && again.value).toEqual(result);
+    });
+  },
+);
+
+const methodReport = z.object({ method: z.string(), value: z.string().optional() });
+
+function* explicitResumeWorld() {
+  const current = yield* world(true);
+  yield* writeTextFile(join(current.dir, "methods.jsonl"), "");
+  const options: AcpRuntimeOptions = {
+    cwd: current.dir,
+    sessionStore: current.store,
+    agentRegistry: current.registry,
+    permissionMode: "deny-all",
+    nonInteractivePermissions: "deny",
+  };
+  let runtime = createAcpRuntime(options);
+  yield* ensure(function* () {
+    yield* writeTextFile(join(current.dir, "release-load"), "release");
+    yield* writeTextFile(join(current.dir, "release-prompt"), "release");
+    yield* until(runtime.shutdown());
+  });
+  const input: AcpRuntimeEnsureInput = {
+    sessionKey: "explicit",
+    agent: "scribe",
+    mode: "persistent",
+    sessionOptions: { systemPrompt: "immutable instructions" },
+  };
+  const original = yield* until(runtime.ensureSession(input));
+  yield* until(runtime.setConfigOption({ handle: original, key: "model", value: "gpt-5.6-luna" }));
+  yield* until(runtime.setConfigOption({ handle: original, key: "effort", value: "xhigh" }));
+  yield* until(runtime.close({ handle: original, reason: "cold reconnect" }));
+  const before = yield* until(current.store.load(input.sessionKey));
+  if (!before) {
+    throw new Error("missing original record");
+  }
+  expect(before.acpx?.session_origin).toBe("new");
+  expect(before.messages).toEqual([]);
+  expect(before.acpx?.session_options?.model).toBe("gpt-5.6-luna");
+  expect(before.acpx?.desired_config_options?.effort).toBe("xhigh");
+  function* reports() {
+    const text = yield* readTextFile(join(current.dir, "methods.jsonl"));
+    return text
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => methodReport.parse(JSON.parse(line)));
+  }
+  return {
+    ...current,
+    input,
+    original,
+    before,
+    get runtime() {
+      return runtime;
+    },
+    reports,
+    *lifecycle() {
+      return (yield* reports())
+        .map((report) => report.method)
+        .filter((method) => ["session/new", "session/load"].includes(method));
+    },
+    mark: (name: string) => writeTextFile(join(current.dir, name), "enabled"),
+    unmark: (name: string) => rm(join(current.dir, name), { force: true }),
+    attach: () =>
+      until(runtime.ensureSession({ ...input, resumeSessionId: original.backendSessionId })),
+    *restart() {
+      yield* until(runtime.shutdown());
+      runtime = createAcpRuntime(options);
+    },
+    *waitFor(method: string) {
+      for (let count = 0; count < 1000; count++) {
+        if ((yield* reports()).some((report) => report.method === method)) {
+          return;
+        }
+        yield* sleep(5);
+      }
+      throw new Error(`child did not receive ${method}`);
+    },
+  };
+}
+
+function assertProjection(before: AcpSessionRecord, after: AcpSessionRecord | undefined) {
+  if (!after) {
+    throw new Error("original projection disappeared");
+  }
+  expect(after.acpSessionId).toBe(before.acpSessionId);
+  expect(after.createdAt).toBe(before.createdAt);
+  expect(after.eventLog).toEqual(before.eventLog);
+  expect(after.acpx?.session_options).toEqual(before.acpx?.session_options);
+  expect(after.acpx?.session_options?.model).toBe("gpt-5.6-luna");
+  expect(after.acpx?.desired_config_options?.effort).toBe("xhigh");
+}
+
+function* drainedResult(turn: AcpRuntimeTurn) {
+  for (const _event of yield* each(stream(turn.events))) {
+    yield* each.next();
+  }
+  return yield* until(turn.result);
+}
+
+describe(
+  "vendored strict explicit resume",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const operation of ["control", "prompt"]) {
+      it(`same-record aliases refuse cold ${operation} replacement`, function* () {
+        const f = yield* explicitResumeWorld();
+        yield* f.restart();
+        const handle = yield* f.attach();
+        yield* until(f.runtime.close({ handle, reason: "strict alias remains strict" }));
+        yield* until(f.runtime.ensureSession(f.input));
+        yield* f.mark("fail-load");
+        const controls = (yield* f.reports()).filter(
+          (report) => report.method === "session/set_config_option",
+        );
+        if (operation === "control") {
+          const [outcome] = yield* allSettled([
+            until(
+              f.runtime.setConfigOption({ handle: f.original, key: "model", value: "initial" }),
+            ),
+          ]);
+          expect({ refused: !outcome.ok, lifecycle: yield* f.lifecycle() }).toEqual({
+            refused: true,
+            lifecycle: ["session/new", "session/load"],
+          });
+          if (!outcome.ok) {
+            expect(outcome.error.message).toContain("could not be resumed");
+          }
+        } else {
+          const result = yield* drainedResult(
+            f.runtime.startTurn({
+              handle,
+              text: "must not send",
+              requestId: "refused",
+              mode: "prompt",
+            }),
+          );
+          expect({ status: result.status, lifecycle: yield* f.lifecycle() }).toEqual({
+            status: "failed",
+            lifecycle: ["session/new", "session/load"],
+          });
+          if (result.status === "failed") {
+            expect(result.error.message).toContain("could not be resumed");
+          }
+        }
+        expect(yield* f.lifecycle()).toEqual(["session/new", "session/load"]);
+        expect(
+          (yield* f.reports()).filter((report) => report.method === "session/set_config_option"),
+        ).toEqual(controls);
+        expect((yield* f.reports()).some((report) => report.method === "session/prompt")).toBe(
+          false,
+        );
+        const after = yield* until(f.store.load(f.input.sessionKey));
+        assertProjection(f.before, after);
+        if (operation === "control") {
+          expect(after?.messages).toEqual([]);
+          yield* f.unmark("fail-load");
+          yield* f.restart();
+          const next = yield* f.attach();
+          expect(
+            (yield* drainedResult(
+              f.runtime.startTurn({
+                handle: next,
+                text: "after refusal",
+                requestId: "after-refusal",
+                mode: "prompt",
+              }),
+            )).status,
+          ).toBe("completed");
+          assertProjection(f.before, yield* until(f.store.load(f.input.sessionKey)));
+          expect(yield* f.lifecycle()).toEqual(["session/new", "session/load", "session/load"]);
+        } else {
+          expect(JSON.stringify(after?.messages)).toContain("must not send");
+        }
+      });
+    }
+
+    it("cold exact reconnect replays omitted settings on the original projection", function* () {
+      const f = yield* explicitResumeWorld();
+      yield* f.restart();
+      const handle = yield* f.attach();
+      expect(
+        (yield* drainedResult(
+          f.runtime.startTurn({ handle, text: "continue", requestId: "continued", mode: "prompt" }),
+        )).status,
+      ).toBe("completed");
+      expect((yield* until(f.runtime.getStatus({ handle }))).models?.currentModelId).toBe(
+        "gpt-5.6-luna",
+      );
+      const after = yield* until(f.store.load(f.input.sessionKey));
+      assertProjection(f.before, after);
+      expect(
+        after?.acpx?.config_options?.find((option) => option.id === "effort")?.currentValue,
+      ).toBe("xhigh");
+      expect(yield* f.lifecycle()).toEqual(["session/new", "session/load"]);
+      expect(
+        (yield* f.reports())
+          .filter((report) => report.method === "session/set_config_option")
+          .map((report) => report.value),
+      ).toEqual(["gpt-5.6-luna", "xhigh", "gpt-5.6-luna", "xhigh"]);
+    });
+
+    it("an independent untargeted record retains its empty-record fallback", function* () {
+      const f = yield* explicitResumeWorld();
+      yield* f.attach();
+      const other = yield* until(f.runtime.ensureSession({ ...f.input, sessionKey: "other" }));
+      yield* until(f.runtime.close({ handle: other, reason: "cold reconnect" }));
+      yield* f.mark("fail-load");
+      yield* until(
+        f.runtime.setConfigOption({ handle: other, key: "model", value: "gpt-5.6-luna" }),
+      );
+      expect(yield* f.lifecycle()).toEqual([
+        "session/new",
+        "session/new",
+        "session/load",
+        "session/new",
+      ]);
+    });
+
+    it("explicit preparation permits a fresh untargeted arrangement", function* () {
+      const f = yield* explicitResumeWorld();
+      const handle = yield* f.attach();
+      yield* until(f.runtime.prepareFreshSession({ handle }));
+      const fresh = yield* until(f.runtime.ensureSession(f.input));
+      yield* until(f.runtime.close({ handle: fresh, reason: "after explicit reset" }));
+      yield* f.mark("fail-load");
+      yield* until(
+        f.runtime.setConfigOption({ handle: fresh, key: "model", value: "gpt-5.6-luna" }),
+      );
+      expect(yield* f.lifecycle()).toEqual([
+        "session/new",
+        "session/new",
+        "session/load",
+        "session/new",
+      ]);
+    });
+
+    it("first strict attachment refuses unfinished untargeted work", function* () {
+      const f = yield* explicitResumeWorld();
+      yield* f.restart();
+      yield* until(f.runtime.ensureSession(f.input));
+      yield* f.mark("hold-load");
+      yield* f.mark("fail-load");
+      const control = yield* spawn(() =>
+        allSettled([
+          until(f.runtime.setConfigOption({ handle: f.original, key: "model", value: "initial" })),
+        ]),
+      );
+      yield* f.waitFor("session/load");
+      const [attachment] = yield* allSettled([f.attach()]);
+      expect(attachment.ok).toBe(false);
+      if (!attachment.ok) {
+        expect(attachment.error.message).toContain("unfinished");
+      }
+      yield* f.mark("release-load");
+      const [outcome] = yield* control;
+      expect(outcome.ok).toBe(true);
+      expect(yield* f.lifecycle()).toEqual(["session/new", "session/load", "session/new"]);
+      yield* f.attach();
+    });
+
+    it("already strict compatible ensure remains available during a prompt", function* () {
+      const f = yield* explicitResumeWorld();
+      const handle = yield* f.attach();
+      yield* f.mark("hold-prompt");
+      const turn = f.runtime.startTurn({
+        handle,
+        text: "hold",
+        requestId: "strict-active",
+        mode: "prompt",
+      });
+      yield* until(turn.promptStarted);
+      yield* f.waitFor("session/prompt");
+      const alias = yield* f.attach();
+      expect(alias.backendSessionId).toBe(handle.backendSessionId);
+      yield* f.mark("release-prompt");
+      expect((yield* drainedResult(turn)).status).toBe("completed");
+      expect(yield* f.lifecycle()).toEqual(["session/new", "session/load"]);
     });
   },
 );

@@ -2,7 +2,8 @@
 
 `generated/` is the ACP runtime XMD executes: the runtime closure from npm
 `acpx@0.21.1`, with the existing first-turn materialization contract ported to
-the released session owner. The environment and metadata behavior are supplied by the released base.
+the released session owner and a local strict explicit-resume backport from
+upstream PR #925. The environment and metadata behavior are supplied by the released base.
 
 - Repository: https://github.com/openclaw/acpx
 - Release commit: `e6c782459a18a5b22d06210fde61d75003883ab0`
@@ -70,6 +71,46 @@ accepted promotion's save and finalization; no identity publishes after it ends.
 | `queue-owner-runtime-B0mPqOu4.js` | `LiveSessionCheckpoint.runMaterializationExclusive()` excludes checkpoint saves during promotion. |
 | `ipc-BbYFsKOj.js` | Read and write the existing `session_materialization` disk marker. |
 | `runtime.d.ts`, `session-options-BlnP3WAc.d.ts` | Declare the ensure input, barrier and pending record. |
+
+## Strict explicit-resume backport (#925)
+
+This interim local patch ports the reviewed behavior of
+[upstream PR #925](https://github.com/openclaw/acpx/pull/925), commit
+`12fcca9ffc1417838b20b26e35518f38c8292a0c`, on upstream source base
+`6ce38c34f4e5aef16bf28ca8b1fb1e6650695c60`. It is not part of the integrity-verified
+0.21.1 release recorded above. The pristine `upstream/` closure stays unchanged;
+no unreleased build replaces the published closure.
+
+An explicit `resumeSessionId` constrains the existing record before a handle is
+returned. Later cold prompt and control reconnects refuse a failed load before
+creating a replacement or dispatching the requested operation, including the
+otherwise permitted unprompted-record `-32603` fallback. Compatible attachment
+retains history, creation and event-log association, immutable session options
+and saved model/effort when the caller omits settings.
+
+The constraint belongs to the in-process manager, keyed by its existing record
+ID. Older handles, untargeted aliases and ordinary close cannot relax it. A new
+runtime must receive the explicit target again. First adding the constraint
+during unfinished untargeted work returns the existing busy refusal; an already
+strict compatible ensure remains available during active work. Independent
+untargeted records retain fallback. Explicit preparation permits a genuinely
+fresh arrangement, which clears the old constraint only after successful fresh
+creation. No public parameter, persisted field or identity protocol is added.
+
+`runtime.js` holds the record constraint and passes it to both reconnect paths.
+The existing reconnect and connected-session owners are bundled in
+`queue-owner-runtime-B0mPqOu4.js`; that module propagates the private
+`strictResume` flag and excludes fresh recovery. `runtime.d.ts` declares the
+private set and documents the existing ensure field. The generated patch follows
+the reviewed source algorithm; a local comment explains the exceptional fallback
+and a declaration comment names the seam for Tier AV's locality check. The
+materialization, promotion, checkpoint exclusion and joined-close code remains
+unchanged.
+
+Remove this backport only when an integrity-verified published artifact supplies
+the reviewed strictness and passes the same prompt/control, alias, configuration
+and admission regressions. That release qualification is separate from retiring
+the materialization patch or the vendor closure.
 
 ## Released environment seam (#566)
 

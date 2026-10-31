@@ -1000,6 +1000,7 @@ function sessionMaterializationRefused() {
 var AcpRuntimeManager = class {
 	options;
 	deps;
+	exactSessionRecordIds = /* @__PURE__ */ new Set();
 	activeControllers = /* @__PURE__ */ new Map();
 	controlSessionRecords = /* @__PURE__ */ new Map();
 	retainedSessionOwners = /* @__PURE__ */ new Map();
@@ -1402,6 +1403,7 @@ var AcpRuntimeManager = class {
 				verbose: this.options.verbose,
 				timeoutMs: this.options.timeoutMs,
 				resumePolicy: resumePolicyForSessionMode(sessionMode),
+				strictResume: this.exactSessionRecordIds.has(record.acpxRecordId),
 				replacingMode: replayOptions?.replacingMode,
 				replacingConfigOption: replayOptions?.replacingConfigOption,
 				authority,
@@ -1426,7 +1428,16 @@ var AcpRuntimeManager = class {
 		applyLifecycleSnapshotToRecord(record, owner.client.getAgentLifecycleSnapshot());
 	}
 	async ensureSession(input) {
-		return await this.withEnsureSessionLock(input, async () => this.ensureSessionWithOwnership(input));
+		return await this.withEnsureSessionLock(input, async () => {
+			const record = await this.ensureSessionWithOwnership(input);
+			if (input.resumeSessionId && !this.exactSessionRecordIds.has(record.acpxRecordId)) {
+				// Compatible ensures bypass operation locks; an earlier alias may
+				// already have committed to fresh fallback while awaiting its reply.
+				this.assertRuntimeSessionIdle(record.acpxRecordId);
+				this.exactSessionRecordIds.add(record.acpxRecordId);
+			}
+			return record;
+		});
 	}
 	async withEnsureSessionLock(input, run) {
 		const key = `${input.mode}\0${input.sessionKey}`;
@@ -1581,6 +1592,9 @@ var AcpRuntimeManager = class {
 				session
 			});
 			await this.retainInitializedSessionOwner(owner, record);
+			if (!input.resumeSessionId) {
+				this.exactSessionRecordIds.delete(record.acpxRecordId);
+			}
 			return record;
 		} catch (error) {
 			await settleAttempt(async () => this.abandonInitializingSessionOwner(owner));
@@ -2008,6 +2022,7 @@ var AcpRuntimeManager = class {
 			client: turn.client,
 			record: turn.record,
 			resumePolicy: resumePolicyForSessionMode(task.input.sessionMode),
+			strictResume: this.exactSessionRecordIds.has(turn.record.acpxRecordId),
 			timeoutMs: this.options.timeoutMs,
 			promptRecorded: true,
 			activeController: task.state.activeController,

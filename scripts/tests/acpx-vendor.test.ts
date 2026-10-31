@@ -33,7 +33,12 @@ const ACP_SRC = "packages/acp/src";
  * named after something upstream already says — `_meta`, for one — would open a
  * permissive window at every unrelated mention of it.
  */
-const SEAMS: readonly string[] = ["materialization"];
+const SEAMS: readonly string[] = [
+  "materialization",
+  "exactSessionRecordIds",
+  "strictResume",
+  "Strict explicit resume:",
+];
 
 /** How far an introduced line may sit from one that names the seam. */
 const SEAM_PROXIMITY_LINES = 8;
@@ -195,6 +200,9 @@ describe("Tier AV — vendored ACPX snapshot", () => {
         readFile(join(VENDOR, "upstream", path.replace(/^generated\//, "")), "utf8"),
       );
       const after = yield* until(readFile(join(VENDOR, path), "utf8"));
+      for (const seam of SEAMS) {
+        expect(before.toLowerCase()).not.toContain(seam.toLowerCase());
+      }
       const known = new Set(
         unpackage(before)
           .split("\n")
