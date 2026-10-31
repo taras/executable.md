@@ -73,6 +73,7 @@ export type PromptField = "reply" | "request" | "error";
 
 /** What one inspection reads: the acknowledged entries, and what is printing. */
 export interface InspectedHistory {
+  readonly joined?: { readonly entry: string; readonly output: string };
   readonly entries: readonly ReplEntry[];
   /**
    * The entry this process is printing, and its text so far.
@@ -219,6 +220,8 @@ export function readEntrySource(
  * retained, whatever this process remembers. Without one, the text is this
  * process's own only where it owns that exact entry — a cold reader of an
  * unfinished entry has an empty window rather than somebody else's output.
+ * A cancelled entry may use its owning Send's final joined observation without
+ * changing the retained terminal.
  */
 export function readEntryOutputWindow(
   request: EntryReadRequest,
@@ -234,7 +237,10 @@ export function readEntryOutputWindow(
   }
   const entry = found.value;
   const printing = history.printing;
-  const observed = entry.terminal?.output ?? (entry.key === printing?.entry ? printing.output : "");
+  const observed =
+    entry.terminal?.status === "cancelled" && history.joined?.entry === entry.key
+      ? history.joined.output
+      : (entry.terminal?.output ?? (entry.key === printing?.entry ? printing.output : ""));
   return Ok(
     textPage(entry, statusOf(entry, printing), observed, request.offset, limit.value, {
       // The tail, which is what a reader of output wants almost every time.

@@ -30,11 +30,21 @@ import { initialState } from "../src/repl/application.ts";
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, Ok, sleep, spawn, suspend, until, useScope, withResolvers } from "effection";
+import {
+  allSettled,
+  ensure,
+  Ok,
+  sleep,
+  spawn,
+  suspend,
+  until,
+  useScope,
+  withResolvers,
+} from "effection";
 import type { Operation, Result } from "effection";
 
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { Elicitation } from "@executablemd/core";
+import { Component, DocumentOutput, Elicitation, Execution } from "@executablemd/core";
 import { openReplSession } from "../src/repl/session.ts";
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
@@ -561,9 +571,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     expect(
       held_records.filter((record) => (record as { kind: string }).kind === "control-outcome"),
     ).toHaveLength(2);
-    // Both writes are designated, so both answers go back — and in admission
-    // order, with the acknowledgement for the fill and the receipt for the
-    // submission. Neither repeats the entry's own source or its output.
+    // Submit stays a receipt; the joined execution output travels separately.
     expect(held.fake.prompts).toHaveLength(2);
     const delivered = held.fake.prompts[1] ?? "";
     expect(delivered).toContain("## REPL.EntryInput");
@@ -576,7 +584,9 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     );
     // The receipt names the entry and the read to follow, and carries no body:
     // a reply that wants the output asks for it, with its own bounds.
-    expect(delivered).not.toContain("Hello from the reply.");
+    expect(delivered.split("## Execution outcome")[0]).not.toContain("Hello from the reply.");
+    expect(delivered).toContain("## Execution output");
+    expect(delivered).toContain("Hello from the reply.");
     expect(delivered).not.toContain("```js eval");
     // And one entry ran, not two: being told about a submission is not
     // submitting again.
@@ -827,6 +837,8 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
       reply: [
         '<Let as="code" select="code">',
         "````xmd",
+        "FAILED-ENTRY-PREFIX",
+        "",
         "```js eval",
         'throw new Error("entry failed on purpose");',
         "```",
@@ -863,6 +875,8 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     // And emphatically not a refusal. The submission happened; the entry is
     // what failed, and a reply told otherwise would try to submit again.
     expect(delivered).not.toContain("REPL.Submit refused");
+    expect(delivered).toContain("## Execution outcome\n\nEntry entry-1 failed.");
+    expect(delivered).toContain("FAILED-ENTRY-PREFIX");
     expect(answered.value.output).toContain("I will correct it.");
   });
 
@@ -3580,5 +3594,401 @@ describe("975 — configured-first lookup and unchanged permissions", () => {
     expect(read.model.entries[0]?.terminal?.output).toContain("permission");
     expect(repl.fake.prompts[2]).toContain("permission");
     expect(repl.fake.ensured[0]?.cwd).toBe(native);
+  });
+});
+
+describe("Joined output API", () => {
+  it("drains cleanup output and joins before exposing an interrupted observation", function* () {
+    const entered = withResolvers<void>();
+    const cleaning = withResolvers<void>();
+    const release = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    const held = yield* useHarness(undefined, {
+      entryInstallation: {
+        *install() {
+          yield* Component.around({
+            *expand([request], next) {
+              if (request.expansion.name === "Elicit") {
+                yield* ensure(function* () {
+                  cleaning.resolve();
+                  yield* release.operation;
+                  yield* DocumentOutput.operations.output("CLEANUP-TAIL");
+                });
+                entered.resolve();
+              }
+              yield* next(request);
+            },
+          });
+        },
+      },
+    });
+    const changes = yield* held.session.outputs;
+    const submitted = yield* held.session.submit(
+      'INTERRUPTED-API-PREFIX\n\n<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="answer">Wait for Entry Stop.</Elicit>',
+    );
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    while (!(held.session.printing?.output.includes("INTERRUPTED-API-PREFIX") ?? false)) {
+      yield* changes.next();
+    }
+    yield* entered.operation;
+    const stopping = yield* spawn(() => held.session.stopEntry(submitted.value.entry));
+    yield* cleaning.operation;
+    let published = false;
+    const reading = yield* spawn(function* () {
+      const output = yield* submitted.value.output();
+      published = true;
+      return output;
+    });
+    expect(published).toBe(false);
+    release.resolve();
+    expect((yield* stopping).ok).toBe(true);
+    const output = yield* reading;
+    if (!output.ok) {
+      throw output.error;
+    }
+    expect(output.value).toEqual({
+      entry: submitted.value.entry,
+      output: "INTERRUPTED-API-PREFIX\n\nCLEANUP-TAIL",
+    });
+    const head = held.session.reading(undefined);
+    if (!head.ok) {
+      throw head.error;
+    }
+    expect(head.value.model.entries[0]?.terminal).toMatchObject({
+      status: "cancelled",
+      output: "",
+    });
+    expect(held.session.printing).toBe(undefined);
+  });
+
+  it("supplies real round context and pinned reads only to the owning Send", function* () {
+    const held = yield* useHarness();
+    const text = "🟢".repeat(4100) + "INTERRUPTED-API-PREFIX";
+    const source =
+      text +
+      '\n\n<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="answer">Wait.</Elicit>';
+    held.fake.script({
+      reply: [
+        '<Let as="code" select="code">',
+        "```xmd",
+        source,
+        "```",
+        "</Let>",
+        "<REPL.EntryInput>{code}</REPL.EntryInput>",
+        "<REPL.Submit />",
+      ].join("\n"),
+    });
+    held.fake.script({
+      reply:
+        "<REPL.Entry.Output entry={1} offset={0} limit={5} />\n<REPL.Entry.Output entry={1} offset={5} limit={5} />",
+      held: true,
+    });
+    held.fake.script({ reply: "<Output>Observed interrupted work.</Output>" });
+    const sending = yield* spawn(() => held.owner.message("Run and inspect the interrupted entry"));
+    yield* awaitedFact("entry admission", function* () {
+      return held.session.model.entries.length === 1;
+    });
+    const changes = yield* held.session.outputs;
+    while (!(held.session.printing?.output.includes("INTERRUPTED-API-PREFIX") ?? false)) {
+      yield* changes.next();
+    }
+    expect((yield* held.session.stopEntry("entry-1")).ok).toBe(true);
+    yield* held.fake.startedTurns(2);
+    expect(held.fake.prompts[1]).toContain("Entry entry-1 interrupted.");
+    expect(held.fake.prompts[1]).toContain("INTERRUPTED-API-PREFIX");
+    const successor = yield* held.session.submit("A newer entry.");
+    if (!successor.ok) {
+      throw successor.error;
+    }
+    expect((yield* successor.value.join()).ok).toBe(true);
+    held.fake.releaseTurn();
+    expect((yield* sending).ok).toBe(true);
+    const saved = yield* records(held.execution);
+    const pages = saved.flatMap((record) =>
+      record.kind === "control-outcome" &&
+      typeof record.observed === "object" &&
+      record.observed !== null
+        ? [record.observed]
+        : [],
+    );
+    expect(pages).toHaveLength(2);
+    expect(pages[0]).toMatchObject({
+      entry: 1,
+      offset: 0,
+      length: Array.from(text + "\n\n").length,
+      text: "🟢".repeat(5),
+      status: "cancelled",
+    });
+    expect(pages[1]).toMatchObject({
+      entry: 1,
+      offset: 5,
+      length: Array.from(text + "\n\n").length,
+      text: "🟢".repeat(5),
+    });
+    expect(held.fake.prompts[2]).toContain("🟢");
+    held.fake.script({ reply: "<REPL.Entry.Output entry={1} />" });
+    held.fake.script({ reply: "<Output>No live access remains.</Output>" });
+    expect((yield* held.owner.message("Inspect after the first Send ended")).ok).toBe(true);
+    expect(held.fake.prompts[4]).not.toContain("INTERRUPTED-API-PREFIX");
+    expect(held.fake.prompts[4]).toContain('"length": 0');
+  });
+
+  it("withdraws a stopped Send's output access before late entry settlement", function* () {
+    const held = yield* useHarness();
+    const source =
+      'LATE-INTERRUPTED-PREFIX\n\n<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="answer">Wait.</Elicit>';
+    held.fake.script({
+      reply: [
+        '<Let as="code" select="code">',
+        "```xmd",
+        source,
+        "```",
+        "</Let>",
+        "<REPL.EntryInput>{code}</REPL.EntryInput>",
+        "<REPL.Submit />",
+      ].join("\n"),
+    });
+    const sending = yield* spawn(() => held.owner.message("Admit an independent entry"));
+    yield* awaitedFact("live output before Stop", function* () {
+      return held.session.printing?.output.includes("LATE-INTERRUPTED-PREFIX") ?? false;
+    });
+    yield* held.owner.stop();
+    expect((yield* sending).ok).toBe(false);
+    expect(held.session.live).toBe(true);
+    expect((yield* held.session.stopEntry("entry-1")).ok).toBe(true);
+    expect(held.fake.prompts).toHaveLength(1);
+    held.fake.script({ reply: "<REPL.Entry.Output entry={1} />" });
+    held.fake.script({ reply: "<Output>Stopped access is gone.</Output>" });
+    expect((yield* held.owner.message("Read the cancelled entry")).ok).toBe(true);
+    expect(held.fake.prompts[2]).not.toContain("LATE-INTERRUPTED-PREFIX");
+    expect(held.fake.prompts[2]).toContain('"length": 0');
+  });
+
+  it("keeps a final empty stream value distinct from an unavailable observation", function* () {
+    const held = yield* useHarness();
+    const admitted = yield* held.session.submit("<Output />");
+    if (!admitted.ok) {
+      throw admitted.error;
+    }
+    const output = yield* admitted.value.output();
+    expect(output).toEqual(Ok({ entry: admitted.value.entry, output: "" }));
+  });
+
+  it("keeps an entry cleanup failure authoritative through real generated Submit", function* () {
+    const failure = new Error("REVIEW-OWNING-CLEANUP-FAILED");
+    const held = yield* useHarness(undefined, {
+      entryInstallation: {
+        *install() {
+          yield* ensure(function* () {
+            throw failure;
+          });
+        },
+      },
+    });
+    held.fake.script({
+      reply: "<REPL.EntryInput>Entry emitted before cleanup.</REPL.EntryInput>\n<REPL.Submit />",
+    });
+    held.fake.script({ reply: "<Output>REVIEW-SECOND-TURN-AFTER-CLEANUP</Output>" });
+    const [answer] = yield* allSettled([
+      scoped(function* () {
+        const sent = yield* held.owner.message(
+          "Submit one entry; cleanup must retain its failure.",
+        );
+        if (!sent.ok) {
+          throw sent.error;
+        }
+        return sent.value;
+      }),
+    ]);
+    expect(held.fake.prompts).toHaveLength(1);
+    expect(answer?.ok).toBe(false);
+    if (answer !== undefined && !answer.ok) {
+      expect(answer.error).toBe(failure);
+    }
+    const saved = yield* records(held.execution);
+    expect(saved.filter((record) => record.kind === "feedback")).toEqual([]);
+    expect(saved.filter((record) => record.kind === "response")).toEqual([]);
+  });
+
+  it("does not publish stream text around a canonical cleanup failure", function* () {
+    const failure = new Error("controlled entry cleanup failure");
+    const held = yield* useHarness(undefined, {
+      entryInstallation: {
+        *install() {
+          yield* ensure(function* () {
+            throw failure;
+          });
+        },
+      },
+    });
+    const admitted = yield* held.session.submit("Emitted before cleanup.");
+    if (!admitted.ok) {
+      throw admitted.error;
+    }
+    const output = yield* admitted.value.output();
+    expect(output.ok).toBe(false);
+    if (!output.ok) {
+      expect(output.error).toBe(failure);
+    }
+  });
+});
+
+function followSubmission(source: string): string {
+  return [
+    '<Let as="code" select="code">',
+    "````xmd",
+    source,
+    "````",
+    "</Let>",
+    "<REPL.EntryInput>{code}</REPL.EntryInput>",
+    "<REPL.Submit />",
+  ].join("\n");
+}
+
+describe("Follow: submitted rounds in the running command", () => {
+  it("Follow: one mounted Send carries completed, failed and Entry Stop output from exact joined entries", function* () {
+    const asking = withResolvers<void>();
+    yield* Elicitation.around({
+      *elicit([request], next) {
+        asking.resolve();
+        return yield* next(request);
+      },
+    });
+    const page = yield* useReplPage();
+    const partial = "FAILED-PREFIX-" + "🙂".repeat(4200) + "-FAILED-TAIL";
+    page.repl.fake.script({
+      reply: followSubmission("Private documentation.\n<Output>SELECTED-COMPLETE</Output>"),
+    });
+    page.repl.fake.script({
+      reply: followSubmission(partial + '\n\n<Fail message="distinct failure" />'),
+    });
+    page.repl.fake.script({
+      reply: followSubmission(
+        'INTERRUPTED-PREFIX\n\n<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="said">Hold this entry.</Elicit>',
+      ),
+    });
+    page.repl.fake.script({ reply: "<REPL.Entry.Output entry={2} offset={0} limit={4096} />" });
+    page.repl.fake.script({
+      reply: "<Output>Finished after reading the original failed entry.</Output>",
+    });
+    yield* sendMessage(page, "run the sequence");
+    yield* awaitedFact("the third exact entry admitted", function* () {
+      const read = yield* settledReading(page.repl);
+      return read.model.entries.length === 3 && read.model.entries[2]?.terminal === undefined;
+    });
+    yield* asking.operation;
+    yield* page.until(
+      "the actual interrupted prefix beside its source",
+      (one) => one.occurrences("INTERRUPTED-PREFIX") >= 2,
+    );
+    yield* page.until("Entry Stop", (one) => one.found("[stop]", { onRow: DRAFT }) === 1);
+    yield* page.press("[stop]", { onRow: DRAFT });
+    yield* savedReplies(page.repl, 5);
+    yield* page.until("the joined Send", sidekickIdle);
+    const prompts = page.repl.fake.prompts;
+    expect(prompts).toHaveLength(5);
+    for (const [index, key, outcome, output] of [
+      [1, "entry-1", "completed", "SELECTED-COMPLETE"],
+      [2, "entry-2", "failed", "FAILED-TAIL"],
+      [3, "entry-3", "interrupted", "INTERRUPTED-PREFIX"],
+    ]) {
+      const prompt = prompts[Number(index)] ?? "";
+      expect(prompt).toContain(`Entry ${key} ${outcome}.`);
+      expect(prompt).toContain("## Execution outcome");
+      expect(prompt).toContain("## Execution output");
+      expect(prompt).toContain(String(output));
+    }
+    expect(prompts[1]).not.toContain("Private documentation.");
+    const failed = prompts[2] ?? "";
+    const pageText =
+      failed.split("## Execution output\n\n")[1]?.split("\n\nRead another window")[0] ?? "";
+    const failedPage = JSON.parse(pageText);
+    expect(failedPage.status).toBe("failed");
+    expect(failedPage.entry).toBe(2);
+    expect(failedPage.offset).toBeGreaterThan(0);
+    expect(failedPage.length).toBeGreaterThan(4096);
+    expect([...failedPage.text]).toHaveLength(4096);
+    expect(failed).toContain("<REPL.Entry.Output entry={2} offset={0} limit={4096} />");
+    const laterRead = JSON.parse(prompts[4] ?? "");
+    expect(laterRead.entry).toBe(2);
+    expect(laterRead.status).toBe("failed");
+    expect(laterRead.text).toContain("FAILED-PREFIX-");
+    expect(laterRead.next).toMatchObject({ entry: 2, offset: 4096, limit: 4096 });
+    const read = yield* settledReading(page.repl);
+    expect(read.model.entries.map((entry) => entry.terminal?.status)).toEqual([
+      "ok",
+      "err",
+      "cancelled",
+    ]);
+    expect(read.model.entries[2]?.terminal?.output).toBe("");
+    expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(1);
+    const replies = read.chat.filter((record) => record.kind === "response");
+    expect(replies.filter((record) => record.hasOutput)).toHaveLength(1);
+    const known = yield* projected(read.chat);
+    expect(known.submits.map((one) => [one.entry, one.ordinal, one.admitted])).toEqual([
+      ["entry-1", 0, true],
+      ["entry-2", 1, true],
+      ["entry-3", 2, true],
+    ]);
+    expect(known.submits.map((one) => one.source)).toEqual(
+      read.model.entries.map((entry) => entry.source),
+    );
+    const associated = sidekickChatRows(known, undefined);
+    expect(associated.filter((row) => row.kind === "person")).toHaveLength(1);
+  });
+
+  it("Follow: mounted off waits for the admitted round, preserves unsent results, and keeps ordinary reads and manual Draft Send", function* () {
+    const cleaning = withResolvers<void>();
+    const release = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    let first = true;
+    const page = yield* useReplPage({
+      *entryInstallation() {
+        return {
+          *install() {
+            yield* Execution.around({
+              *document([request], next) {
+                if (first) {
+                  first = false;
+                  yield* ensure(function* () {
+                    cleaning.resolve();
+                    yield* release.operation;
+                  });
+                }
+                yield* next(request);
+              },
+            });
+          },
+        };
+      },
+    });
+    page.repl.fake.script({ reply: followSubmission("<Output>OFF-ROUND</Output>") });
+    yield* sendMessage(page, "one round only");
+    yield* cleaning.operation;
+    yield* page.press("[x] Follow");
+    yield* page.until("unchecked live Follow", (one) => one.shows("[ ] Follow"));
+    expect(page.repl.fake.prompts).toHaveLength(1);
+    release.resolve();
+    yield* savedReplies(page.repl, 1);
+    yield* page.until("the round and Send joined", sidekickIdle);
+    const stopped = yield* settledReading(page.repl);
+    expect(stopped.model.entries[0]?.terminal?.status).toBe("ok");
+    expect(stopped.chat.filter((record) => record.kind === "feedback")).toHaveLength(0);
+    expect(stopped.chat.filter((record) => record.kind === "control-outcome")).toHaveLength(2);
+    page.repl.fake.script({ reply: "<REPL.Bindings />" });
+    page.repl.fake.script({ reply: "<Output>Ordinary read answered with Follow off.</Output>" });
+    yield* sendMessage(page, "read bindings");
+    yield* savedReplies(page.repl, 3);
+    yield* page.until("ordinary read joined", sidekickIdle);
+    expect(page.repl.fake.prompts).toHaveLength(3);
+    yield* draftText(page, "<Output>MANUAL-ONLY</Output>", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* page.press("[send]", { onRow: DRAFT });
+    yield* awaitedFact("manual entry settles", function* () {
+      return (yield* settledReading(page.repl)).model.entries[1]?.terminal?.status === "ok";
+    });
+    expect(page.repl.fake.prompts).toHaveLength(3);
+    expect(page.screen().shows("[ ] Follow")).toBe(true);
   });
 });

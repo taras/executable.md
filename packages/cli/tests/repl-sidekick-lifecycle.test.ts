@@ -26,7 +26,7 @@ import type { SidekickOperation } from "../src/repl/sidekick/model.ts";
 import { ensure, Ok, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
 
-import { Execution } from "@executablemd/core";
+import { Execution, registerComponents } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 
 import { submitForSidekick } from "../src/repl/sidekick/admission.ts";
@@ -43,6 +43,7 @@ import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import {
   appendGate,
+  awaitedFact,
   awaited,
   MOUNTED_AGENT,
   mountedExecution,
@@ -470,7 +471,22 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
     ).toEqual([]);
   });
 
-  it("R6: Stop leaves an entry it admitted running, and starts no further turn", function* () {
+  it("Follow: Sidekick Stop leaves its admitted entry alive and late joined completion starts no turn", function* () {
+    const release = withResolvers<void>();
+    const entered = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    yield* registerComponents([
+      {
+        name: "FollowEntryGate",
+        origin: "test://follow-entry-gate",
+        props: { type: "object" },
+        *fn() {
+          entered.resolve();
+          yield* release.operation;
+          return "The independent entry completed.";
+        },
+      },
+    ]);
     const held = yield* useHarness();
     // A reply that prepares an entry which stays open, and submits it. The
     // cycle then waits for that entry — which is where this row stops it.
@@ -478,7 +494,7 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
       reply: [
         '<Let as="code" select="code">',
         "````xmd",
-        RUNS_ON,
+        "<FollowEntryGate />",
         "````",
         "</Let>",
         "<REPL.EntryInput>{code}</REPL.EntryInput>",
@@ -492,6 +508,7 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
     // the cycle is waiting for its outcome.
     yield* reprojected(held.session, (model) => model.entries.length === 1);
 
+    yield* entered.operation;
     yield* held.owner.stop();
     const answered = yield* sent;
     expect(answered.ok).toBe(false);
@@ -502,7 +519,7 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
     const [entry] = held.session.model.entries;
     expect(entry?.key).toBe("entry-1");
     expect(entry?.terminal).toBe(undefined);
-    expect(entry?.source).toContain("yield* suspend()");
+    expect(entry?.source).toContain("<FollowEntryGate />");
 
     // The submission's intent is retained with no outcome, which is exactly
     // what it is: an operation that began and whose result nobody knows.
@@ -516,6 +533,13 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
     // later, nothing automatic is waiting to tell the agent about it.
     expect(held.fake.prompts).toHaveLength(1);
     expect(held.owner.busy).toBe(false);
+    release.resolve();
+    yield* held.session.join();
+    expect(held.session.model.entries[0]?.terminal?.status).toBe("ok");
+    expect(held.fake.prompts).toHaveLength(1);
+    held.fake.script({ reply: "<Output>Explicit Send after Stop.</Output>" });
+    expect((yield* held.owner.message("continue explicitly")).ok).toBe(true);
+    expect(held.fake.prompts).toHaveLength(2);
   });
 
   it("R6: Stop with nothing running changes nothing", function* () {
@@ -956,7 +980,7 @@ describe("Tier PV — generation that ended without a reply", () => {
     "",
   ].join("\n");
 
-  it("PV3: Stop keeps what was said as an attempt, and claims nothing that was not saved", function* () {
+  it("Follow: PV3 Stop keeps what was said as an attempt, and claims nothing that was not saved", function* () {
     const gate = appendGate();
     const host = yield* useMountedHost({ gate });
     const page = yield* useReplPage({ host });
@@ -978,6 +1002,7 @@ describe("Tier PV — generation that ended without a reply", () => {
 
     // Stopped, with the provider's own cancellation held: this is what says
     // Stop joined what it asked for rather than returning over the top of it.
+    expect(page.screen().shows("[x] Follow")).toBe(true);
     const cancelling = repl.fake.holdCancellation();
     // The Sidekick's own Stop. This person's entry is running, so the draft is
     // wearing a Stop too — and it is the leftmost, so a press that went looking
@@ -993,6 +1018,7 @@ describe("Tier PV — generation that ended without a reply", () => {
     yield* page.until("the attempt Stop left", (one) =>
       one.shows(`${MOUNTED_AGENT} (unfinished): As far as I`),
     );
+    expect(page.screen().shows("[x] Follow")).toBe(true);
     const read = yield* settledReading(repl);
     expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(read.chat.filter((record) => record.kind === "control")).toEqual([]);
@@ -1458,7 +1484,7 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     expect(repl.fake.prompts).toHaveLength(2);
   });
 
-  it("MQ3: Stop withdraws the Sidekick's question and invents no answer", function* () {
+  it("Follow: MQ3 Stop withdraws the Sidekick's question and invents no answer", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;
     repl.fake.script({ reply: asks(SIDEKICK_ASKS, "Shall I go on?") });
@@ -1487,6 +1513,7 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     yield* page.until("Stop joining and the Sidekick coming to rest", (one) => sidekickIdle(one));
     expect(page.screen().shows("Shall I go on?")).toBe(false);
     expect(page.screen().shows("[answer sidekick]")).toBe(false);
+    expect(page.screen().shows("[x] Follow")).toBe(true);
 
     // Nothing was answered and nothing followed: the intent stands with no
     // outcome beside it, which is what an interrupted question is.
@@ -1852,5 +1879,75 @@ describe("Tier CFG — a preference being written when the command leaves", () =
       join(repl.root, PAIRED_DIRECTORY, execution, SIDEKICK_FILE),
     );
     expect(written.filter((record) => record.kind === "preferences")).toEqual([]);
+  });
+});
+
+describe("Follow: mounted Stop owns continuation", () => {
+  it("Follow: Sidekick Stop preserves the setting and a late entry result cannot restart the Send", function* () {
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    yield* registerComponents([
+      {
+        name: "MountedFollowEntryGate",
+        origin: "test://mounted-follow-entry-gate",
+        props: { type: "object" },
+        *fn() {
+          entered.resolve();
+          yield* release.operation;
+          return "First independent entry.";
+        },
+      },
+    ]);
+    const page = yield* useReplPage();
+    page.repl.fake.script({
+      reply: [
+        '<Let as="code" select="code">',
+        "````xmd",
+        "<MountedFollowEntryGate />",
+        "````",
+        "</Let>",
+        "<REPL.EntryInput>{code}</REPL.EntryInput>",
+        "<REPL.Submit />",
+      ].join("\n"),
+    });
+    yield* sendMessage(page, "submit a held entry");
+    yield* entered.operation;
+    yield* page.until(
+      "both Stops with Follow enabled",
+      (one) => one.occurrences("[stop]") === 2 && one.shows("[x] Follow"),
+    );
+    yield* stopSidekick(page);
+    yield* page.until(
+      "Sidekick Stop joined with the entry still running",
+      (one) => sidekickIdle(one) && one.found("[stop]", { onRow: DRAFT }) === 1,
+    );
+    expect(page.screen().shows("[x] Follow")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(1);
+    expect((yield* settledReading(page.repl)).model.entries[0]?.terminal).toBeUndefined();
+    release.resolve();
+    yield* awaitedFact("the independent entry joined after Sidekick Stop", function* () {
+      return (yield* settledReading(page.repl)).model.entries[0]?.terminal?.status === "ok";
+    });
+    yield* page.until(
+      "Entry Stop retired after settlement",
+      (one) => one.occurrences("[stop]") === 0,
+    );
+    expect(page.repl.fake.prompts).toHaveLength(1);
+    yield* page.press("[Resume queue]");
+    yield* page.until("queue hold released without work", (one) => !one.shows("[Resume queue]"));
+    expect(page.repl.fake.prompts).toHaveLength(1);
+    page.repl.fake.script({
+      reply: "<REPL.EntryInput>Second independent entry.</REPL.EntryInput>\n<REPL.Submit />",
+    });
+    page.repl.fake.script({ reply: "<Output>Explicit Send kept Follow enabled.</Output>" });
+    yield* sendMessage(page, "submit explicitly again");
+    yield* page.until(
+      "the fresh Send followed its own result",
+      (one) => one.shows("Explicit Send kept Follow enabled.") && sidekickIdle(one),
+    );
+    expect(page.repl.fake.prompts).toHaveLength(3);
+    expect(page.repl.fake.prompts[2]).toContain("Entry entry-2 completed.");
+    expect(page.screen().shows("[x] Follow")).toBe(true);
   });
 });

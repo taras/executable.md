@@ -14,7 +14,7 @@ import { API } from "@executablemd/runtime";
 import type { Instruction } from "./gate.ts";
 import type { MessageOrigin } from "./history.ts";
 import { SidekickOwnerError } from "./owner.ts";
-import type { SidekickOwner, SidekickTurn } from "./owner.ts";
+import type { SidekickMessageOptions, SidekickOwner, SidekickTurn } from "./owner.ts";
 
 export const SidekickOrigin = createContext<MessageOrigin>("executablemd.repl.sidekick-origin", {
   kind: "ui",
@@ -149,7 +149,19 @@ export function* useSidekickDispatch(options: {
   const { owner, admission } = options;
   let current: SidekickExchange | undefined;
   const messages = new Map<string, SidekickExchange>();
-  const pending: { row: SidekickPendingMessage; start(): void; dispose(): void }[] = [];
+  type Activated = { readonly text: string; readonly options: SidekickMessageOptions };
+  interface Running {
+    task: Task<void> | undefined;
+    stopped: boolean;
+    finish(result: Result<SidekickTurn>): void;
+    publish(): void;
+  }
+  const pending: {
+    row: SidekickPendingMessage;
+    start(): void;
+    activate(running: Running): Result<Activated>;
+    dispose(): void;
+  }[] = [];
   let held: SidekickQueueSnapshot["held"];
   let live = true;
   let sequence = 0;
@@ -259,7 +271,7 @@ export function* useSidekickDispatch(options: {
       let completed: SidekickDispatchSnapshot | undefined;
       let state: SidekickDispatchSnapshot["state"] = "queued";
       let stopped = false;
-      let producer: Task<void> | undefined;
+      let running: Running | undefined;
       function snapshot(): SidekickDispatchSnapshot {
         return (
           completed ??
@@ -279,6 +291,9 @@ export function* useSidekickDispatch(options: {
         updated();
       }
       function settle(result: Result<SidekickTurn>): void {
+        if (terminal !== undefined) {
+          return;
+        }
         const final = snapshot();
         state = "settled";
         terminal = result;
@@ -314,17 +329,20 @@ export function* useSidekickDispatch(options: {
           }
           if (!stopped && current === exchange) {
             stopped = true;
+            if (running !== undefined) {
+              running.stopped = true;
+            }
             yield* owner.stop();
           }
-          if (producer !== undefined) {
-            yield* producer;
+          if (running?.task !== undefined) {
+            yield* running.task;
           }
         },
       };
       const entry = {
         row: Object.freeze({ key: `pending-${++sequence}`, text, exchange }),
         dispose,
-        start(): void {
+        activate(family: Running): Result<Activated> {
           const now = owner.reading;
           if (
             !now.ok ||
@@ -336,19 +354,47 @@ export function* useSidekickDispatch(options: {
               reason: "The selected Sidekick conversation changed before dispatch.",
             });
             updated();
-            return;
+            return Err(new Error(held.reason));
           }
           const reserved = admission.messageReservation(captured);
           if (!reserved.ok) {
             held = Object.freeze({ kind: "failure", reason: reserved.error.message });
             updated();
-            return;
+            return reserved;
           }
           pending.splice(pending.indexOf(entry), 1);
           state = "active";
           current = exchange;
+          running = family;
+          family.publish = publish;
+          family.finish = (result) => {
+            admission.releaseMessage(reserved.value);
+            if (current === exchange) {
+              current = undefined;
+            }
+            settle(result);
+          };
           publish();
-          producer = root.run(function* (): Operation<void> {
+          return Ok({
+            text,
+            options: {
+              origin,
+              saved(conversation, id) {
+                association = conversation;
+                message = Object.freeze({ execution: options.execution, conversation, id });
+                messages.set(id, exchange);
+                publish();
+              },
+            },
+          });
+        },
+        start(): void {
+          const family: Running = { task: undefined, stopped: false, finish() {}, publish() {} };
+          const first = entry.activate(family);
+          if (!first.ok) {
+            return;
+          }
+          family.task = root.run(function* (): Operation<void> {
             let result: Result<SidekickTurn> = Err(
               new SidekickOwnerError("The Sidekick exchange was cancelled."),
             );
@@ -364,10 +410,10 @@ export function* useSidekickDispatch(options: {
                 yield* spawn(function* () {
                   while (true) {
                     yield* changes.next();
-                    publish();
+                    family.publish();
                   }
                 });
-                if (stopped) {
+                if (family.stopped) {
                   return result;
                 }
                 const checked = guard();
@@ -386,13 +432,18 @@ export function* useSidekickDispatch(options: {
                     new Error("The selected Sidekick conversation changed before dispatch."),
                   );
                 }
-                const sent = yield* owner.message(text, {
-                  origin,
-                  saved(conversation, id) {
-                    association = conversation;
-                    message = Object.freeze({ execution: options.execution, conversation, id });
-                    messages.set(id, exchange);
-                    publish();
+                const sent = yield* owner.message(first.value.text, {
+                  ...first.value.options,
+                  *advance(settled) {
+                    if (family.stopped || !live || held !== undefined || pending.length === 0) {
+                      return Ok(undefined);
+                    }
+                    const ready = guard();
+                    if (!ready.ok) {
+                      return ready;
+                    }
+                    family.finish(Ok(settled));
+                    return pending[0].activate(family);
                   },
                 });
                 if (sent.ok && sent.value.failure !== undefined) {
@@ -408,14 +459,10 @@ export function* useSidekickDispatch(options: {
             } finally {
               if (!returned) {
                 live = false;
-              } else if (!result.ok && !stopped && held === undefined) {
+              } else if (!result.ok && !family.stopped && held === undefined) {
                 held = Object.freeze({ kind: "failure", reason: result.error.message });
               }
-              admission.releaseMessage(reserved.value);
-              if (current === exchange) {
-                current = undefined;
-              }
-              settle(result);
+              family.finish(result);
               advance();
             }
           });

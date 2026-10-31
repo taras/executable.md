@@ -210,6 +210,7 @@ export function sidekickRequests(
   root: RootReading,
   submit: SubmitForReply,
   test?: ReplTesting,
+  joined?: () => ReplPrinting | undefined,
 ): SidekickRequests {
   return {
     ...(test === undefined ? {} : { test }),
@@ -273,7 +274,7 @@ export function sidekickRequests(
     // deno-lint-ignore require-yield
     *inspectOutput(request: EntryReadRequest): Operation<Result<EntryTextPage>> {
       const read = inspected(root);
-      return read.ok ? readEntryOutputWindow(request, read.value) : read;
+      return read.ok ? readEntryOutputWindow(request, { ...read.value, joined: joined?.() }) : read;
     },
     // deno-lint-ignore require-yield
     *inspectJournal(request: EntryReadRequest): Operation<Result<EntryJournalPage>> {
@@ -343,4 +344,36 @@ function statusOf(terminal: "ok" | "err" | "cancelled" | undefined): ObservedEnt
       // whatever it has printed so far.
       return "running";
   }
+}
+
+export function finishedRound(root: RootReading, observation: ReplPrinting): Result<string> {
+  const head = root.acknowledged();
+  if (!head.ok) {
+    return head;
+  }
+  const entry = head.value.entries.find((entry) => entry.key === observation.entry);
+  const terminal = entry?.terminal;
+  if (entry === undefined || terminal === undefined) {
+    return Err(new Error("The joined Sidekick entry has no retained terminal."));
+  }
+  const page = readEntryOutputWindow(
+    { entry: entry.order },
+    {
+      entries: head.value.entries,
+      printing: undefined,
+      joined: observation,
+    },
+  );
+  if (!page.ok) {
+    return page;
+  }
+  const outcome =
+    terminal.status === "ok" ? "completed" : terminal.status === "err" ? "failed" : "interrupted";
+  return Ok(
+    [
+      `## Execution outcome\n\nEntry ${entry.key} ${outcome}.`,
+      `## Execution output\n\n${page.value.length === 0 ? "The entry output is empty.\n\n" : ""}${JSON.stringify(page.value, null, 2)}`,
+      `Read another window with <REPL.Entry.Output entry={${entry.order}} offset={0} limit={${page.value.limit}} />. Keep this entry number for later reads.`,
+    ].join("\n\n"),
+  );
 }

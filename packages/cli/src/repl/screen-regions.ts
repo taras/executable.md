@@ -235,6 +235,7 @@ function screenPlacement(
     return { region: MESSAGE_REGION, groups: [vertical("queue")] };
   }
   if (
+    key === "follow" ||
     key === "sidekick:answer" ||
     key === "sidekick:send" ||
     key === "sidekick:stop" ||

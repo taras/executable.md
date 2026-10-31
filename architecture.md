@@ -7106,8 +7106,7 @@ columns divide what is left — halved in the ordinary composition, and 66 and 5
 of 160 in the staged one below. A geometry change that narrows the left column
 is a change to what the product can say.
 
-**One staged composition is under image review.** The screen the root draws is
-the v2 composition, which is the wide screen #971 accepted: a Transcript of agent
+**The root draws the accepted v2 composition:** a Transcript of agent
 work on the left, the selected work with its breadcrumbs, exact source, state,
 results and its own multi-row Draft in the centre, and Bindings/Sidekick on the
 right with the trays this build offers above the composer and the Sidekick's
@@ -7116,15 +7115,13 @@ and a guidance block whose fitted rows determine its height. It is selected by
 a view carrying the inert workspace presentation, and the root supplies that
 presentation from what this execution
 actually holds: the live waiting queue and the entries its Sidekick's
-acknowledged Submits admitted. Follow remains absent; queue acceptance creates
-no autonomous continuation. It is not a second
-pipeline: it is the same reading, prepared, measured, admitted, reconciled into
-the one mounted tree and drawn by the same renderer pair, and every rule in this
-section holds for it unchanged. Its first geometry at 160x36 — columns of 36, 66
-and 58 cells with their dividers, 33 body rows, a four-row Draft — and its cell
-adaptations of the reference await the Product Owner's image acceptance; no
-capture of it is a regression target until then, and the 120x30 and 72x20
-compositions follow that review.
+acknowledged Submits admitted, together with the running command's Follow
+setting. Follow is an active control in the measured tray header and its input
+region. The composition uses the same reading, prepared, measured, admitted,
+reconciled into the one mounted tree and drawn by the same renderer pair, and every rule in this
+section holds for it unchanged. The accepted 160x36, 120x30 and 72x20
+compositions retain their geometry, focus, caret and wheel contracts. An inactive
+narrow outlet contributes no Follow control or input target.
 
 **A row's surface comes from its semantic role, never from its key or its
 label.** `surfaceOf()` maps roles to backgrounds, and a window's two navigation
@@ -8145,6 +8142,19 @@ credited by the key of the task producing it: the overlay a screen shows answers
 at the position its session was opened at, so it would report an earlier entry's
 retained output as the output of the entry running now.
 
+A cancelled Close establishes interruption and carries no document result, root
+bindings or retained entry output. For an entry admitted by a live Sidekick
+Send, that Send may use the exact execution output stream's final text after its
+existing consumer has drained the close value and the execution and entry
+cleanup have joined. The observation is tied to that submission and that Send.
+It supplies the Send's interrupted-round context and its exact-entry bounded
+output reads without replacing the projected terminal. Ordinary completed and
+failed document results keep their retained output; cold history and other
+historical readings acquire none of this live text. Sidekick Stop ends the
+Send's live access, and later entry settlement cannot recreate it. Fatal
+persistence, Files, disclosure and cleanup outcomes keep their existing
+precedence.
+
 **One entry's saved evidence is read through the projection, and metadata is
 part of it.** A reader of a failed entry needs what it ran, what its turns
 said, what it printed and where each of those sits in the file, and the last of
@@ -8162,15 +8172,15 @@ and no new record, index or stored position is written anywhere.
 
 The reads over it are a feature-local module of the Sidekick's own
 (`sidekick/entry-inspection.ts`): pure selectors, Unicode and record windows,
-and four page builders over frozen entry facts and the one exact printing fact
-the session already publishes. It owns no task, listener, stream or cache, so
-cancelling a read is cancelling its caller and nothing else, and it performs
-nothing — no entry is opened, resumed, waited for or executed, and no entry's
-provider is reached. `requests.ts` takes one acknowledged head and one printing
-fact per read before handing them to it, which is the same per-read moment
-every other read takes, and `controls.ts` records the ordinary intent and
-outcome pair around it. Execution ownership, the journal partition and the
-publication and secret boundaries are untouched by any of it.
+and four page builders over frozen entry facts and the exact live output
+observation their caller supplies. A running entry uses the existing printing
+fact; a cancelled entry may use the owning Send's final joined observation under
+the rule above. The reader owns no task, listener, stream or cache and performs
+no wait or execution. `requests.ts` supplies the acknowledged head and exact
+applicable observation for that read; `controls.ts` retains its ordinary intent
+and outcome pair. This does not add output to the entry's terminal or change the
+entry journal partition. No entry’s provider is reached. Execution ownership and
+the publication and secret boundaries remain unchanged.
 
 The single output read these four replaced is retired from admission rather
 than from history. A response written now cannot name it — the capture seals
@@ -8709,14 +8719,6 @@ state Stop leaves.
 
 #### Follow and the two Stops
 
-**Follow is not in the shipped build.** The layout and the two Stops ship
-first. The shared queue orders explicit messages and creates no Follow
-continuation. No screen offers Follow and nothing watches an entry to start a
-turn after it.
-What this section states about Follow is the contract that delivery is held to
-rather than behaviour a reader can exercise now. **The two Stops below are
-implemented**: an entry's and the Sidekick's, each owning exactly what it says.
-
 Follow continues a Sidekick Send through the evaluation that Send invokes. It is
 a setting of the running REPL: on when the REPL starts, kept across rounds and
 navigation, and saved nowhere, so no preference, history or configuration record
@@ -8729,23 +8731,32 @@ watches entry outcomes and starts turns on its own.
 When the exact submitted entry settles, and the current exchange and its cleanup
 have joined, the continuation supplies two separate facts: the entry's actual
 outcome — completed, failed or interrupted, each distinct — and its actual
-output. The Submit answer itself stays the receipt above, the outcome and the
-read instruction, so output never reaches the reply through status prose. With
-Follow on, the next eligible queued message is served before another autonomous
-round, under the queue's own ordering, holds and refusals (#964); nothing here
-grants one origin priority over another or restarts a held queue. Turning Follow
-off ends automatic continuation after the current round and does not interrupt
-it. The authority of the surrounding contract is unchanged: fatal storage,
-disclosure and cleanup failures keep their outcome, feedback whose acceptance is
-unknown is never resent, and only explicit evaluated Output becomes the
-assistant's chat — the facts of associated work are shown beside the
-conversation as work, not as something the Sidekick said.
+output. The exact acknowledged terminal decides the outcome. Completed and
+failed document results supply their retained output. A cancelled terminal
+contains no retained output; the owning Send uses that exact submission's final
+joined execution-output observation for its interrupted output, under the
+live-read rule above. This text is not a cancelled document result and is not
+reconstructed from receipt prose or a pre-stop overlay. Closing the stream does
+not permit continuation before cleanup joins, and a later fatal failure keeps
+its existing precedence. The Submit answer itself stays the receipt above, the
+outcome and the read instruction, so output never reaches the reply through
+status prose. With Follow on, the next eligible queued message is served before
+another autonomous round, under the queue's own ordering, holds and refusals
+(#964); nothing here grants one origin priority over another or restarts a held
+queue. Turning Follow off ends automatic continuation after the current round
+and does not interrupt it. Its receipt and control results remain retained but
+are not marked delivered. A response that only reads ordinary designated
+feedback still receives its next turn, and a refused submission creates no
+round. The authority of the surrounding contract is unchanged: fatal storage, disclosure and cleanup failures keep their outcome,
+feedback whose acceptance is unknown is never resent, and only explicit
+evaluated Output becomes the assistant's chat — the facts of associated work are
+shown beside the conversation as work, not as something the Sidekick said.
 
 There are two Stops, with two owners. Sidekick Stop is the response owner's: it
-ends the current Send and its continuation, joins both, and leaves Follow on for
-the next explicit Send. It is available while the reply is generating and while
-the Sidekick's question is waiting, with or without an entry. An admitted entry
-keeps running on its own terms, and its later settlement cannot restart the
+ends the current Send and its continuation, joins both, and preserves the Follow
+setting for the next explicit Send. It is available while the reply is generating
+and while the Sidekick's question is waiting, with or without an entry. An admitted
+entry keeps running on its own terms, and its later settlement cannot restart the
 continuation that was stopped. Entry Stop is the session's: it finishes the
 running entry as interrupted, as [sequential entries](#sequential-entries-over-one-physical-journal)
 states, and that interrupted outcome reaches the Sidekick as the round's result
