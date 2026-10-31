@@ -19,21 +19,31 @@ import {
   FilesProviderUnavailableError,
 } from "@executablemd/runtime";
 import { readGuideChapter } from "../src/repl/sidekick/guide.ts";
-import { pairedLocation } from "../src/repl/sidekick/history.ts";
+import { SIDEKICK_FILE, pairedLocation } from "../src/repl/sidekick/history.ts";
 import { testForSidekick, take } from "../src/repl/sidekick/admission.ts";
 import { encodeLocation } from "../src/repl/route.ts";
+import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import { initialState } from "../src/repl/application.ts";
 import { useHarness, useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { awaited, awaitedFact, mountedExecution, useMountedHost } from "./support/mounted-repl.ts";
+import {
+  appendGate,
+  awaited,
+  awaitedFact,
+  mountedExecution,
+  useMountedHost,
+} from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage } from "./support/repl-page.ts";
 import {
+  backspace,
+  composerHolds,
   draftText,
+  intoComposer,
+  sidekickIdle,
   entrySettles,
   sendMessage,
-  SIDEKICK_PANE,
   stopSidekick,
 } from "./support/screen-journeys.ts";
 
@@ -645,7 +655,9 @@ describe("REPL.Test admission and joined lifetime", () => {
 describe("REPL.Test retained and fatal outcomes", () => {
   it("R6: reopen inspection keeps completed reports inert and unmatched work unknown until a new explicit request", function* () {
     yield* useComponentModuleLoader();
+    const gate = appendGate();
     const host = yield* useMountedHost({
+      gate,
       projectCwd: yield* useTemporary("repl-testing-history-"),
       hostFiles: true,
     });
@@ -685,7 +697,7 @@ describe("REPL.Test retained and fatal outcomes", () => {
       yield* sendMessage(page, "start interrupted tests");
       yield* entered.operation;
       yield* stopSidekick(page);
-      yield* page.until("Stop joins", (one) => one.found("[send]", SIDEKICK_PANE) === 1);
+      yield* page.until("Stop joins", sidekickIdle);
       expect(yield* reports(repl)).toHaveLength(1);
       repl.terminal.end();
       yield* awaited("first close", () => repl.outcome() !== undefined);
@@ -708,11 +720,63 @@ describe("REPL.Test retained and fatal outcomes", () => {
     expect(bodies).toBe(1);
     expect(yield* readTextFile(location.entries)).toBe(entriesBefore);
     expect(yield* readTextFile(location.sidekick)).toBe(chatBefore);
+    const cold = projectSidekick(reading.chat);
+    if (!cold.ok) {
+      throw cold.error;
+    }
+    expect(cold.value.unfinished.filter((one) => one.component === "REPL.Test")).toHaveLength(1);
+    expect(cold.value.unestablished).toEqual([]);
+    const saving = gate.holdNext(
+      (path, record) => path.endsWith(SIDEKICK_FILE) && record.includes("agent_prompt"),
+    );
     reopened.fake.script({ reply: "<Output>inspection only</Output>" });
-    yield* sendMessage(reopenedPage, "continue explicitly after interruption");
-    yield* reopenedPage.until("explicit recovery response", (one) => one.shows("inspection only"));
+    try {
+      yield* sendMessage(reopenedPage, "continue explicitly after interruption");
+      yield* saving.started();
+      // A preview can precede the turn that establishes recovery feedback acceptance.
+      yield* reopenedPage.until("recovery preview", (one) =>
+        one.shows("(preview): inspection only"),
+      );
+      const pending = projectSidekick((yield* settledReading(reopened)).chat);
+      if (!pending.ok) {
+        throw pending.error;
+      }
+      expect(pending.value.unestablished).toHaveLength(1);
+      yield* sendMessage(reopenedPage, "B");
+      yield* reopenedPage.until(
+        "unknown-feedback refusal preserves text",
+        (one) =>
+          one.shows("feedback whose acceptance cannot be established") && composerHolds(one, "B"),
+      );
+      expect(host.fake.prompts).toHaveLength(prompts + 1);
+      expect(yield* reports(reopened)).toHaveLength(1);
+      expect(bodies).toBe(1);
+    } finally {
+      saving.release();
+    }
+    yield* awaitedFact("explicit recovery response is saved", function* () {
+      return (yield* settledReading(reopened)).chat.some(
+        (record) => record.kind === "response" && record.output === "inspection only",
+      );
+    });
+    yield* reopenedPage.until("explicit recovery joins", sidekickIdle);
+    const recovered = projectSidekick((yield* settledReading(reopened)).chat);
+    if (!recovered.ok) {
+      throw recovered.error;
+    }
+    expect(recovered.value.unestablished).toEqual([]);
+    expect(recovered.value.unfinished.filter((one) => one.component === "REPL.Test")).toHaveLength(
+      1,
+    );
     expect(host.fake.prompts[prompts]).toContain("what it did is not known");
     expect(bodies).toBe(1);
+    expect(yield* reports(reopened)).toHaveLength(1);
+    yield* intoComposer(reopenedPage);
+    yield* backspace(reopenedPage);
+    yield* reopenedPage.until(
+      "refused text deliberately cleared",
+      (one) => !composerHolds(one, "B"),
+    );
     yield* writeTextFile(join(workspace, "components/pass.test.md"), passing());
     yield* exchange(reopenedPage, ['<REPL.Test path="components/pass.test.md" />']);
     expect(yield* reports(reopened)).toHaveLength(2);
