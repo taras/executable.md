@@ -1,9 +1,18 @@
 import { z } from "zod";
 import type { AgentPromptEvent } from "@executablemd/core";
 
-const identity = z.string().min(1).max(512);
-const json = z.json();
-const issue = z
+const identity: z.ZodString = z.string().min(1).max(512);
+const json: z.ZodJSONSchema = z.json();
+const issue: z.ZodObject<
+  {
+    instancePath: z.ZodString;
+    schemaPath: z.ZodString;
+    keyword: z.ZodString;
+    params: typeof json;
+    message: z.ZodString;
+  },
+  z.core.$strict
+> = z
   .object({
     instancePath: z.string(),
     schemaPath: z.string(),
@@ -12,12 +21,64 @@ const issue = z
     message: z.string(),
   })
   .strict();
-const address = z.object({
+const address: z.ZodObject<{
+  kind: z.ZodEnum<{ question: "question"; permission: "permission" }>;
+  requestId: typeof identity;
+  presentationId: typeof identity;
+}> = z.object({
   kind: z.enum(["question", "permission"]),
   requestId: identity,
   presentationId: identity,
 });
-export const XmdResponse = z.union([
+export const XmdResponse: z.ZodUnion<
+  readonly [
+    z.ZodObject<
+      typeof address.shape & {
+        event: z.ZodLiteral<"response">;
+        outcome: z.ZodEnum<{
+          accepted: "accepted";
+          stale: "stale";
+          "not-submitted": "not-submitted";
+        }>;
+      },
+      z.core.$strict
+    >,
+    z.ZodObject<
+      Omit<typeof address.shape, "kind"> & {
+        kind: z.ZodLiteral<"question">;
+        event: z.ZodLiteral<"response">;
+        outcome: z.ZodLiteral<"invalid">;
+        reason: z.ZodLiteral<"schema">;
+        issues: z.ZodArray<typeof issue>;
+      },
+      z.core.$strict
+    >,
+    z.ZodObject<
+      Omit<typeof address.shape, "kind"> & {
+        kind: z.ZodLiteral<"permission">;
+        event: z.ZodLiteral<"response">;
+        outcome: z.ZodLiteral<"invalid">;
+        reason: z.ZodLiteral<"option-not-offered">;
+      },
+      z.core.$strict
+    >,
+    z.ZodObject<
+      typeof address.shape & {
+        event: z.ZodLiteral<"response">;
+        outcome: z.ZodLiteral<"invalid">;
+        reason: z.ZodLiteral<"response-format">;
+      },
+      z.core.$strict
+    >,
+    z.ZodObject<
+      typeof address.shape & {
+        event: z.ZodLiteral<"retired">;
+        reason: z.ZodLiteral<"request-ended">;
+      },
+      z.core.$strict
+    >,
+  ]
+> = z.union([
   address
     .extend({
       event: z.literal("response"),
