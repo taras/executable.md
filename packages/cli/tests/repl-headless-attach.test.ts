@@ -16,9 +16,9 @@ import { useTerminalScreen } from "./support/terminal-screen.ts";
 import { withResolvers } from "effection";
 import { XmdResponse } from "@executablemd/acp";
 
-const appliedFrames = new WeakMap<Terminal, () => Operation<void>>();
+type AppliedFrames = WeakMap<Terminal, () => Operation<void>>;
 
-function* observeAppliedFrames(terminal: Terminal): Operation<void> {
+function* observeAppliedFrames(terminal: Terminal, appliedFrames: AppliedFrames): Operation<void> {
   const transport = yield* SidekickTransport.expect();
   const applied = createSignal<void, void>();
   const changes = yield* applied;
@@ -57,11 +57,11 @@ function appliedAcknowledgement(value: unknown): boolean {
   return parsed.success && parsed.data.applied;
 }
 
-function visible(terminal: Terminal, text: string): Operation<void> {
+function visible(terminal: Terminal, text: string, appliedFrames?: AppliedFrames): Operation<void> {
   return race([
     (function* () {
       while (true) {
-        const applied = appliedFrames.get(terminal);
+        const applied = appliedFrames?.get(terminal);
         if (applied !== undefined) {
           yield* applied();
         }
@@ -81,7 +81,7 @@ function visible(terminal: Terminal, text: string): Operation<void> {
   ]);
 }
 
-function* press(terminal: Terminal, label: string): Operation<void> {
+function* press(terminal: Terminal, label: string, appliedFrames: AppliedFrames): Operation<void> {
   const applied = appliedFrames.get(terminal);
   if (applied !== undefined) {
     yield* applied();
@@ -99,6 +99,7 @@ function* press(terminal: Terminal, label: string): Operation<void> {
 
 describe("headless live UI", () => {
   it("H4/H5/J3: attached UI and capable ACP share the actual conditional question and permission owners", function* () {
+    const appliedFrames = new WeakMap<Terminal, () => Operation<void>>();
     const conditional = {
       type: "object",
       additionalProperties: false,
@@ -180,10 +181,10 @@ describe("headless live UI", () => {
     const terminal = recordingTerminal();
     const ui = yield* spawn(function* () {
       yield* terminal.install();
-      yield* observeAppliedFrames(terminal.terminal);
+      yield* observeAppliedFrames(terminal.terminal, appliedFrames);
       yield* attachChildUi(held.reference.sessionId);
     });
-    yield* visible(terminal.terminal, "[answer sidekick]");
+    yield* visible(terminal.terminal, "[answer sidekick]", appliedFrames);
     const retainedOutput = yield* requestAttachment(held.path, {
       method: "entry",
       entry: 1,
@@ -212,31 +213,31 @@ describe("headless live UI", () => {
       entry: 1,
       status: "completed",
     });
-    yield* press(terminal.terminal, "Entries");
-    yield* visible(terminal.terminal, ">   1. [ok]");
+    yield* press(terminal.terminal, "Entries", appliedFrames);
+    yield* visible(terminal.terminal, ">   1. [ok]", appliedFrames);
     const selecting = terminal.terminal.drawn;
-    yield* press(terminal.terminal, "1. [ok]");
+    yield* press(terminal.terminal, "1. [ok]", appliedFrames);
     yield* terminal.terminal.after(selecting);
-    yield* visible(terminal.terminal, "Enter submits · Type here");
+    yield* visible(terminal.terminal, "Enter submits · Type here", appliedFrames);
     const switching = terminal.terminal.drawn;
-    yield* press(terminal.terminal, "BINDINGS");
+    yield* press(terminal.terminal, "BINDINGS", appliedFrames);
     yield* terminal.terminal.after(switching);
-    yield* visible(terminal.terminal, "sharedToken =");
-    yield* visible(terminal.terminal, "same-live-child-binding");
-    yield* press(terminal.terminal, "SIDEKICK");
-    yield* visible(terminal.terminal, "[answer sidekick]");
+    yield* visible(terminal.terminal, "sharedToken =", appliedFrames);
+    yield* visible(terminal.terminal, "same-live-child-binding", appliedFrames);
+    yield* press(terminal.terminal, "SIDEKICK", appliedFrames);
+    yield* visible(terminal.terminal, "[answer sidekick]", appliedFrames);
 
     expect((yield* attachmentDescriptor(held.path)).conversation).toBe(
       held.descriptor.conversation,
     );
-    yield* press(terminal.terminal, "[answer sidekick]");
-    yield* visible(terminal.terminal, "[submit]");
-    yield* visible(terminal.terminal, "Shared conditional question.");
-    yield* visible(terminal.terminal, "Enter answers");
-    yield* press(terminal.terminal, "( ) approve");
-    yield* visible(terminal.terminal, "(x) approve");
+    yield* press(terminal.terminal, "[answer sidekick]", appliedFrames);
+    yield* visible(terminal.terminal, "[submit]", appliedFrames);
+    yield* visible(terminal.terminal, "Shared conditional question.", appliedFrames);
+    yield* visible(terminal.terminal, "Enter answers", appliedFrames);
+    yield* press(terminal.terminal, "( ) approve", appliedFrames);
+    yield* visible(terminal.terminal, "(x) approve", appliedFrames);
     const before = terminal.terminal.drawn;
-    yield* press(terminal.terminal, "[submit]");
+    yield* press(terminal.terminal, "[submit]", appliedFrames);
     yield* terminal.terminal.after(before);
     expect(held.root.session.elicitation.pending).toBe(pending);
     expect(pending.submit({ decision: "approve", reason: "reviewed" }).kind).toBe("answered");
@@ -266,10 +267,10 @@ describe("headless live UI", () => {
       throw working.error;
     }
     const permission = yield* permissionAddress.operation;
-    yield* visible(terminal.terminal, "asks: Write");
-    yield* press(terminal.terminal, "asks: Write");
-    yield* visible(terminal.terminal, "[Allow]");
-    yield* visible(terminal.terminal, "Enter decides");
+    yield* visible(terminal.terminal, "asks: Write", appliedFrames);
+    yield* press(terminal.terminal, "asks: Write", appliedFrames);
+    yield* visible(terminal.terminal, "[Allow]", appliedFrames);
+    yield* visible(terminal.terminal, "Enter decides", appliedFrames);
     terminal.terminal.feed("\r");
     const completed = yield* working.value.join();
     if (!completed.ok) {
