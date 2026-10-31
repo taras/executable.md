@@ -1,5 +1,5 @@
 ---
-description: 'Read the validated API handoff contract. Use <Adversarial.Schema as="schemas" />.'
+description: 'Read the launch and validated API handoff contracts. Use <Adversarial.Schema as="schemas" />.'
 returns: {type: object}
 ---
 
@@ -17,6 +17,216 @@ returns: {type: object}
   migration:{type:"object",properties:{request:text,retirePaths:{...texts,uniqueItems:true},acceptance:{...texts,minItems:1}},required:["request","retirePaths","acceptance"],additionalProperties:false}
 },required:["purpose","optimizedFor","frictionRemoved","frictionRetained","maintenance","ownedPaths","guide","examples","migration"],additionalProperties:false}} />
 <Return value={{
+  launch:{
+  "type": "object",
+  "properties": {
+    "work": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "directory": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "request": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^/"
+      }
+    },
+    "sessions": {
+      "type": "object",
+      "properties": {
+        "planner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "implementor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architect": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "planner",
+        "implementor",
+        "architect"
+      ],
+      "additionalProperties": false
+    },
+    "maxCorrections": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "maxApiRepairs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    assessment,
+    "scope": {
+      "type": "object",
+      "properties": {
+        "decisions": {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "openQuestions": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "required": [
+            "evidence",
+            "openQuestions"
+          ],
+          "additionalProperties": false
+        },
+        "implementation": {
+          "type": "object",
+          "properties": {
+            "ready": {
+              "type": "boolean"
+            },
+            "evidence": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "ready",
+            "evidence"
+          ],
+          "additionalProperties": false
+        },
+        "sharedApi": {
+          "type": "object",
+          "properties": {
+            "needed": {
+              "type": "boolean"
+            },
+            "evidence": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "needed",
+            "evidence"
+          ],
+          "additionalProperties": false
+        },
+        "migration": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "evidence": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "representativeConsumers": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!/)(?!.*(?:^|/)[.]{1,2}(?:/|$))(?!.*//)(?!.*\\\\)(?!.*[/]$).+$"
+                  },
+                  "minItems": 1
+                },
+                "remainingConsumers": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!/)(?!.*(?:^|/)[.]{1,2}(?:/|$))(?!.*//)(?!.*\\\\)(?!.*[/]$).+$"
+                  },
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "evidence",
+                "representativeConsumers",
+                "remainingConsumers"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "decisions",
+        "implementation",
+        "sharedApi",
+        "migration"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "work",
+    "repository",
+    "directory",
+    "revision",
+    "request",
+    "inputs",
+    "sessions",
+    "assessment",
+    "scope"
+  ],
+  "additionalProperties": false
+},
   api,
   task:{type:"object",properties:{
     work:{type:"string",pattern:"^[A-Za-z0-9_-]+$"},

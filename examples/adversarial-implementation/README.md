@@ -1,68 +1,134 @@
 # Adversarial implementation
 
-Use this workflow when an API can make a large consumer migration predictable.
-The Planner implements and tests the API before handing it over. The Implementor
-then challenges that API with real consumers, finishes the migration and removes
-the obsolete machinery.
-
-```text
-accepted outcome
-      |
-Planner / Opus: API code + representative consumers + focused tests
-      |
-verify committed examples
-      |
-Implementor / Sonnet: migrate remaining consumers and retire old code
-      |                         |
-      |                   concrete API conflict
-      |                         |
-      |                 same Planner repairs API
-      |                         |
-      +<---------------- same Implementor resumes
-      |
-selected independent reviews -> retirement check -> Sidekick running Codex
-```
+Deliver accepted work through one launch. Prepared scope facts select direct
+implementation, ordinary planning followed by implementation, or a validated API
+foundation followed by remaining consumer migration. Existing impact policy
+selects independent review separately from that route.
 
 ## Applies to
 
-Ordinary XMD runs and REPL entry programs. Each work item has an isolated source
-checkout, a fresh artifact directory outside that checkout, and distinct named
-Planner, Implementor and Architect conversations. One role runs at a time.
-
-These components are a repository example. Adding the example does not change a
-running REPL, an existing role's model or the live workflow's include directory.
+Ordinary XMD runs and REPL entry programs. Each new work item has an isolated,
+prepared source checkout, an exact clean source revision, a fresh artifact
+directory outside that checkout, and three distinct original role sessions. One
+role runs at a time. These components are a repository example; they do not
+change a running role's model or a live workflow's include directory.
 
 ## Run a work item
 
-Prepare this repository with `deno task setup`. Run from its root so the entry
-can read the two role guides. Copy `task.example.json` to a local file, replace
-its paths and request, and choose unused conversation names. The source checkout
-is prepared separately using its own repository instructions. Its feedback
-commits use its configured Git signing and verification.
+Prepare this repository with `deno task setup`. Copy `task.example.json` to a
+local file and replace its source, exact revision, output directory, accepted
+request, selected evidence paths and unused session names. Prepare the selected
+source through its own repository instructions. Its feedback commits use its
+configured Git signing and verification. Run from that source checkout:
 
 ```bash
-deno task xmd run examples/adversarial-implementation/run.md \
+cd /absolute/path/to/prepared-source-worktree
+xmd run /absolute/path/to/workflow/examples/adversarial-implementation/run.md \
   --props-task /absolute/path/to/task.json \
-  --include examples/adversarial-implementation/components
+  --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
 ```
 
-The entry's `task` prop becomes `--props-task`. Inspect its complete CLI with:
+`run.md --props-task` is the normal launch for all three routes. Inspect its
+complete CLI with `xmd run /absolute/path/to/workflow/examples/adversarial-implementation/run.md --help`.
+The task has no mode, phase, full flag or initialization override. `phase.md`
+and `continue.md` below serve separate assignments and existing records.
 
-```bash
-deno task xmd run examples/adversarial-implementation/run.md --help
+## Prepare scope and impact
+
+All four closed scope groups are required. Their evidence arrays name nonempty,
+distinct references selected in `task.inputs`; existing accepted scope and
+focused checks can support several groups. The launch captures those texts once,
+including role guides from the selected source. Later owners receive the
+captured accepted text and selected fresh plan references. Keep the combined
+initial packet within 64000 characters; retain full logs as references.
+
+| Scope group | Prepared fact |
+| --- | --- |
+| `decisions.evidence`, `decisions.openQuestions` | Accepted decisions and distinct unresolved material questions. Any question holds before roles. Empty questions declares settled decisions under existing approval rules. |
+| `implementation.ready`, `implementation.evidence` | Whether accepted scope and focused checks suffice for direct implementation through existing interfaces. A separate plan document is optional. |
+| `sharedApi.needed`, `sharedApi.evidence` | Whether accepted behavior requires shared API work. Necessary API work excludes simple; it alone does not justify a migration split. |
+| `migration` | `null` declares no worthwhile separate migration split. A record requires `evidence`, `representativeConsumers` and `remainingConsumers`: repeated production friction, representative validation and substantial identified conversion remaining. Both consumer lists are nonempty, distinct, disjoint repository-relative committed production paths. No file-count threshold applies. |
+
+`assessment` is the existing ReviewPolicy impact assessment, independent of
+scope. Its evidence and optional risk evidence also select `inputs`. Routing
+never selects reviewers, models or effort. Validation establishes shape and
+supported consistency; the preparing agent and reviewers establish approval,
+API necessity, production representativeness and migration effort.
+
+The table is ordered. Missing or unknown facts never become false or null.
+
+| Prepared input | Observable action |
+| --- | --- |
+| Missing/invalid/unknown member, unavailable evidence/source, occupied fresh-work directory, conflicting identities or contradictory migration record | Actionable hold before paid roles; identify what to correct or which existing record to continue |
+| Any `decisions.openQuestions` item | Hold before paid roles; show the unanswered question and evidence |
+| Valid non-null migration record and `sharedApi.needed=true` | Existing Planner foundation and representative validation, then remaining consumer implementation, selected review and retirement |
+| `migration=null`, `sharedApi.needed=false`, `implementation.ready=true` | Direct Implementor, then existing impact-selected independent review |
+| `migration=null`, `sharedApi.needed=false`, `implementation.ready=false` | Ordinary Planner plan/evidence, then Implementor and selected review |
+| `migration=null`, `sharedApi.needed=true`, either readiness value | Ordinary Planner plan/evidence, then one Implementor for necessary API work and consumers, followed by selected review |
+
+```text
+Normal run.md launch
+        |
+        v
+Valid facts, evidence, source and fresh-work prerequisites?
+        | no ------------------------> HOLD: explain correction/continuation
+        | yes
+        v
+Any unresolved material question?
+        | yes -----------------------> HOLD: show question and evidence
+        | no
+        v
+Justified migration record?  (requires sharedApi.needed=true)
+        | yes -----------------------> MIGRATION
+        |                              Planner foundation + representatives
+        |                              -> foundation review
+        |                              -> Implementor remaining consumers
+        |                              -> impact-selected review -> retirement
+        | no (migration=null)
+        v
+Shared API needed?
+        | yes -----------------------> STANDARD
+        |                              Planner plan/evidence -> Implementor
+        |                              -> impact-selected review
+        | no
+        v
+Implementation ready?
+        | no ------------------------> STANDARD (same sequence above)
+        | yes
+        v
+SIMPLE: Implementor -> impact-selected review
 ```
 
-In a REPL, put the same component include directory on the session's include
-path, read the role guides from this repository, and invoke `<Adversarial.Run>`
-with the task and guide contents. Keep that execution's journal and original
-session identities. Reopening a completed run is an observation; starting a
-fresh ordinary run at the same artifact directory refuses before another role.
-An interrupted ordinary command's diagnostic journal is not a continuation
-checkpoint. Reconcile its saved calls and partial effects before another run.
+Whenever launch assessment semantics, routing conditions, branch precedence or
+initial role sequence change, update the executable gate, decision table and
+flow diagram in the same PR; update affected focused routing tests. Reviewers
+verify their correspondence. A diagram-only edit does not alter accepted policy.
+Use existing routing tests and review; no separate diagram tooling or model call
+is needed.
+
+A ready existing-interface fix runs simple. A complex bug with settled behavior
+but an unready implementation runs standard. Necessary API work with
+`migration=null` also stays standard: Planner supplies plan/evidence, and one
+Implementor owns the API and consumers. Migration validates its foundation
+before handing over the remainder. A bug label, API edit, caller count or diff
+size does not select a route. A later material question holds under the existing
+phase contract; ordinary planning does not decide it.
+
+An initial refusal returns `status=hold`, an actionable reason and empty history,
+with no fabricated phase call or checkpoint. Simple and standard return the
+existing Ticket record; migration returns the existing Adversarial result.
+Provider and persistence failures retain their existing handling. Preserve first
+failure output and partial effects before another attempt.
+
+An occupied fresh-work directory holds; it is never an implicit retry or
+continuation. An ordinary command's diagnostic journal is not a continuation
+checkpoint. Reconcile its saved calls and partial effects before new work. In a
+retained REPL, reopen the original unfinished entry under its selected source
+and include version. Keep the original session identities and recorded inputs.
 
 The roles use the normal agent permission policy. Running this example invokes
-paid native coding agents and permits the assigned implementation work. It does
-not authorize a push, merge, issue edit or PR edit.
+paid coding agents and permits the assigned implementation work. Publication,
+issue/PR metadata and delivery remain with the Sidekick running Codex.
 
 ## Run a separate phase or continue a saved ticket
 
@@ -145,8 +211,8 @@ phase entry retains the implementation workflow's role and model policy.
 
 | Owner | Work | Model and effort |
 | --- | --- | --- |
-| Planner | Plan, implement the API, validate representative consumers, repair API conflicts | Claude `opus`, high |
-| Implementor | Challenge the API, migrate consumers, delete obsolete machinery | Claude `sonnet`, high |
+| Planner | Ordinary plan/evidence; on migration, implement the API, validate representative consumers and repair API conflicts | Claude `opus`; ordinary planning uses ReviewPolicy effort: medium, high for a concrete recorded risk; migration foundation design uses high |
+| Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Claude `sonnet`, high |
 | Planner reviewer | Inspect the migration against the accepted outcome and evidence | Same Opus session, medium; high for a concrete recorded risk |
 | Architect | Answer a concrete structural question or review structural impact | Codex `gpt-6.1-sol`, medium; high for a concrete recorded risk |
 | Sidekick running Codex | Author and apply issue/PR titles and descriptions; own publication and delivery | Existing coordinating Sidekick |
@@ -164,7 +230,7 @@ When the API foundation has structural impact, Architect reviews that committed
 foundation before migration starts. A non-passing verdict holds with its saved
 request for the Sidekick to resolve; migration cannot hide the foundation's diff.
 
-## The API handoff
+## The migration API handoff
 
 The Planner returns a signed commit, an API guide, API-owned file paths and at
 least two named behavioral examples. The guide describes purpose, the task the
@@ -172,7 +238,7 @@ API is optimized for, friction removed, necessary friction retained and expected
 maintenance. Representative consumers exercise the real supported path; a
 typecheck or a mock-only sketch is insufficient.
 
-The workflow verifies actual clean HEAD, ancestry and signature, confirms the
+The migration owner verifies actual clean HEAD, ancestry and signature, confirms the
 initial foundation changes an API-owned path, reads the committed consumer
 files, and runs each example command. It saves the command's full result before
 deciding whether migration can start. A failed example holds with its first
@@ -188,7 +254,7 @@ It is not a sandbox for untrusted commands. Shape validation and green tests do
 not prove that examples cover the right behavior; the roles and independent
 review remain responsible for that judgment.
 
-## Challenge, repair and review
+## Migration challenges, repair and review
 
 Captured replies pass through the workflow's existing `<Phase.Extract>` and
 `<SafeParse>` for schema validation.
@@ -253,8 +319,9 @@ installed.
 
 `components/Phase`, `Ticket`, `Discovery.Schema`, `ReviewPolicy`,
 `ExactCorrection` and `Guide.ExactCorrection` package the existing local feedback
-workflow. This version adds the validated foundation, Opus/Sonnet role profiles,
-API-conflict route, retirement check and Codex editorial ownership. Delivery
+workflow. The normal launch composes those owners from prepared scope while retaining
+validated foundations, role profiles, API-conflict repair, retirement and Codex
+editorial ownership. Delivery
 automation, task-specific attachment/routing programs and historical trial
 artifacts are outside this example.
 
@@ -263,6 +330,16 @@ and evidence, use the new example's include directory for the new work item,
 and refresh its accepted inputs against the actual source revision. Do not
 replace a running role's conversation or reinterpret an old result as this
 version's API handoff.
+
+## Compare delivery outcomes
+
+For the next six comparable bounded changes after adoption, use existing receipts
+to record the route, accepted starting scope, start/delivery times, role calls,
+human decisions, correction cycles and defects found after acceptance. Separate
+implementation, review, CI, dependency and human-wait time. Keep unavailable
+timings, token counts and costs null; record scope changes. Observed differences
+establish no causal speed claim. This uses ordinary work and creates no paid
+benchmark or recurring automation.
 
 ## Common mistake
 

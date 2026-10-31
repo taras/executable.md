@@ -31,6 +31,15 @@ Return verified implementation and technical evidence to the Sidekick.
 - Migrate remaining consumers and remove the named obsolete machinery.
 - Return API conflicts with a failing witness to the original Planner session.
 
+## Implement accepted work using existing APIs
+
+When no Planner foundation is supplied, implement the accepted plan through the
+existing supported interfaces. Keep ordinary local choices with this role; a
+local helper does not require a separate API design assignment. Preserve the
+frozen evidence and return demonstrated product or architecture conflicts through
+the existing discovery path. The validated-foundation rules below apply when
+that foundation is part of the assignment.
+
 ## Migrate a validated API
 
 Start with the supplied commit, API intent, working examples, remaining consumer

@@ -6,6 +6,8 @@ props:
     task: {type: object}
     plannerGuide: {type: object}
     implementorGuide: {type: object}
+    documents: {type: object}
+    assessment: {type: object}
   required: [task, plannerGuide, implementorGuide]
   additionalProperties: false
 returns: {type: object}
@@ -21,7 +23,10 @@ returns: {type: object}
 mkdir -- {quoted}
 ```
 <If condition={reserved.exitCode !== 0}><Fail message="The work directory must be fresh. Resume its original XMD execution instead of starting another writer." /></If>
+<If condition={props.documents === undefined}>
 <Ticket.Documents repository={task.repository} paths={task.inputs} documents={{}} as="documents" />
+<Else><Let as="documents" value={props.documents} /></Else>
+</If>
 <Let as="inputs" value={Object.values(documents)} />
 <If condition={inputs.reduce((total,input) => total + input.content.length,0) > 64000}><Fail message="Prepare a bounded initial packet; keep large logs as references." /></If>
 <Let as="deliveredInputs" value={{}} />
@@ -29,7 +34,7 @@ mkdir -- {quoted}
 <Let as="conflict" value={null} />
 <Let as="contract" value={null} />
 <Let as="initialized" value={{architect:false,planner:false,implementor:false}} />
-<Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"The accepted task introduces a validated API and migrates its consumers.",evidence:[props.plannerGuide.path]}} />
+<Let as="assessment" value={props.assessment ?? {mechanical:false,architecture:false,acceptance:true,risk:null,reason:"The accepted task introduces a validated API and migrates its consumers.",evidence:[props.plannerGuide.path]}} />
 <Let as="round" value={0} />
 <Let as="history" value={[]} />
 <Let as="finished" value={false} />

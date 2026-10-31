@@ -67,6 +67,14 @@ time:
 4. **Proposed:** Show the exact interface, wording or architecture decision.
 5. **Feedback:** Ask one focused question about the proposal.
 
+Before developing a new boundary or proposing its members, establish its
+necessity against the accepted behavior and a supported production consumer.
+Trace why existing owners cannot provide that behavior. A failure in a modeled
+provider or proposed recovery path does not alone prove that the current product
+needs a new protocol. Compare the actual baseline and the smaller alternatives
+before preparing a member-by-member proposal. Keep the approval rules below for
+a necessary unresolved boundary.
+
 ### Route system boundaries to a dedicated interview
 
 During **Assessment**, before proposing a decision, explicitly trigger the
