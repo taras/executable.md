@@ -36,10 +36,10 @@ export const TEST_AGENT_PROVIDER = "test-agent";
 export function createMemorySessionStore(): AcpxSessionStore {
   const records = new Map<string, AcpSessionRecord>();
   return {
-    load(sessionId) {
+    load(sessionId: string) {
       return Promise.resolve(records.get(sessionId));
     },
-    save(record) {
+    save(record: AcpSessionRecord) {
       records.set(record.acpxRecordId, record);
       return Promise.resolve();
     },
