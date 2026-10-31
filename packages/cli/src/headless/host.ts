@@ -320,7 +320,8 @@ export function* useHeadlessChildren(
         {
           name: "XMD.Session",
           description:
-            'Read or select a parent-owned XMD child. `<XMD.Session as="child" />` reads its exact reference in an XMD Session; `<XMD.Session sessionId={child.sessionId}><Prompt>Continue.</Prompt></XMD.Session>` selects the same live child in a later entry. Attach with `xmd repl --attach <sessionId>`. An ended reference refuses.',
+            'Read or select a parent-owned XMD child. `<XMD.Session as="child" />` reads exactly `{sessionId}` in an XMD Session; `<XMD.Session sessionId={child.sessionId}><Prompt>Continue.</Prompt></XMD.Session>` selects the same live child in a later entry. Attach with `xmd repl --attach <sessionId>`. An ended reference refuses.',
+          as: "The read form captures the exact {sessionId} object. The paired selection captures its rendered content.",
           origin: "@executablemd/cli",
           props: {
             type: "object",
@@ -368,6 +369,7 @@ export function* useHeadlessChildren(
           name: "XMD.Session.Shutdown",
           description:
             "Stop a child owned by this parent REPL. `<XMD.Session.Shutdown sessionId={child.sessionId} />` returns after its cleanup joins. Detaching its UI leaves it alive.",
+          as: "Optional. null after the child's cleanup joins.",
           forms: ["self-closing"],
           origin: "@executablemd/cli",
           props: {
