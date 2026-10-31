@@ -32,7 +32,11 @@ outlives it.
   what makes each entry's start a start rather than an overlap. What does cross
   is published JSON state — see `<Guide.Bindings />`.
 - Stopping the Sidekick does not stop an entry that has been admitted. The entry
-  keeps running and comes down on its own terms.
+  keeps running and comes down on its own terms. Before acknowledged entry
+  admission, stopping joins startup and admits nothing. Human Sidekick Stop also
+  holds waiting messages until explicit Resume queue; attachment cancellation
+  stops only its own exchange. Waiting messages belong to this running REPL,
+  have no saved record until they start, and do not survive its end.
 
 ## Example
 

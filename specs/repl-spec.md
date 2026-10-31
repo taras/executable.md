@@ -1129,37 +1129,29 @@ the next entry's text, and a blank row in it is a row.
 
 **Bindings** and **Sidekick** share the right column as two tabs. Above the
 Sidekick's composer, the trays this build offers sit on the left and the
-Sidekick's own Send — or Stop, while a Send is active — on the right.
+Sidekick's own Stop, Send and held Resume controls on the right. Send remains
+available during an active exchange. Resume queue appears only while advancement
+is held and stays outside the scrolling window.
 
-What a build offers there is what it has. **This build ships the layout and the
-two Stops, and offers neither the shared queue nor Follow**, so it draws no
-QUEUE tab and no Follow control: a tab a reader can select and find nothing
-behind, or a checkbox that changes nothing however it is drawn, is worse than no
-control at all. **TODO** is drawn, inactive, as the placeholder for the shared
-TODO (#901). The settings those deferred controls will carry are recorded in the
-delivery record rather than advertised on a screen that cannot honour them.
+**QUEUE** shows the waiting count out of sixteen. Each pending message shows its
+origin, text and `X`, accessible as *Remove message*. Placement expresses FIFO
+order without row numbers or repeated acknowledgements. X withdraws only its
+exact still-pending message; a stale X changes no active work. TODO remains an
+inactive placeholder and Follow is absent.
 
-No frame at any size places a `tray:queue` or `follow` control, and the running
-command's tests assert that absence at every profile. The cases that exercised
-them are not run: the populated queued rows and tray choices (DQ0), the queue
-portions of the surface, wrapping and chat-window cases (DQ1), an over-budget
-tray measured before its first fit (DQ2) and Follow's checkbox, label and
-narrow targets (DF1). Their source is recoverable from commit
-`a410786aa93e5e746d57b98ed7240c5adbbd75c2`: the staged-workspace fixture under
-`packages/cli/tests/fixtures/repl` as blob `6e73495287fd7dd8dfb7fe9797a4479a21041577`,
-`repl-presentation-style.test.ts` as `47f70755a8308e41788f674dc0022916b6444dd0`
-and `repl-layout-admission.test.ts` as
-`8fe50613bfdb299eefb68ca9863a4498001dc0ae`. They return against actual shared
-queue ownership (#964, after #895 and then #1003) and, for Follow, against
-evaluation-owned Sidekick Send continuation, compared with the profile evidence
-current then rather than with the pixels of that source.
+A fixed status states the hold reason. While messages wait, the tray says once:
+`Waiting messages are kept only in this REPL.` Both are fitted to the measured
+width before the queue window receives its height. The header uses two rows
+when its action groups cannot share one. During held active cleanup, a third row
+keeps Resume whole when all three actions exceed the medium column.
 
-When the queue ships, QUEUE lists the messages waiting behind the active
-exchange: each row shows where it came from, its text and an `X` whose
-accessible name is *Remove message*. Its place in the list is its order, so the
-rows carry no numbers and no routine acknowledgement. What you are typing in the
-composer is not one of them until you send it. How the queue admits, orders and
-holds those messages is the queue contract (#964).
+Message is the fixed entry of its keyboard region. Send, Stop, Resume and the
+vertical group of pending X controls belong to that same region, adding no Tab
+stop. Local navigation reveals a hidden neighbour before focusing it. Wheel
+scrolls only the queue viewport, preserves focus and stops before hiding its
+focused X. Fixed controls stay reachable during overflow. Background queue
+changes request no focus and change no drafts, selection, History, filter or
+route. Existing modal ownership contains the queue controls.
 
 At `160x36` the first composition gives the columns 36, 66 and 58 cells, dividers
 included, the body 33 rows and the Draft four of the centre's. That geometry and
@@ -2331,14 +2323,21 @@ follow-up starting, a cycle failing and a joined Stop are all things no keystrok
 announces. That notification carries nothing and authorizes nothing — the screen
 reads the conversation afresh when it is told to look.
 
-Sending a message captures the exact text and the revisions it was asked at, and
-reserves the one cycle this screen may have in flight before any work starts, so
-a second Send in the same burst asks for nothing rather than queueing a second
-turn. The message box is cleared only once the message is physically in the chat
-history, and only the revision that was sent: a person who typed again while the
-append was in flight keeps what they typed, and one who went back to the shared
-draft keeps the draft, because an instruction sent before their edit is not what
-hands it back. The provider is asked nothing until that has been applied.
+Sending accepts the exact text, UI revisions and origin into the live owner's
+FIFO across UI and delivered ACP messages. Sixteen messages may wait beside the
+one active exchange. Each message is at most 65536 UTF-8 bytes; a full queue or
+oversize message refuses before clearing text, with no eviction or truncation.
+Successful composer Send clears only its accepted Message revision. Newer typing
+survives; Retry consumes no composer text and ACP changes neither field.
+
+Waiting work has no ordinary saved message record. When it starts, ordinary saved
+acknowledgement releases only matching Draft takeover before response controls
+run. The entire exchange and its cleanup finish before the next starts. Human
+Sidekick Stop holds remaining work until explicit guarded Resume; attachment
+cancellation affects only its exact exchange and adds no hold. Ordinary failure
+holds without automatic retry; fatal failures and unknown-feedback guards retain
+their authority. Pending work must be removed before agent replacement. Waiting
+work ends with this live owner and has no cold recovery or automatic replay.
 
 A reply may ask a question, and it is answered in the Sidekick's own pane. When
 one is waiting, the pane says so and offers one control that opens its form; the
@@ -2430,8 +2429,7 @@ conversation active and its reason in the drawer.
 
 A request whose turn failed can be asked again. Retry sends that request's own
 saved text as a new message in the same conversation — not whatever is in the
-message box, which is neither sent nor cleared by it — and it takes the same one
-cycle a Send does. The failed attempt stays exactly where it is. A request whose
+message box, which is neither sent nor cleared by it — and it joins the same live FIFO a Send uses. The failed attempt stays exactly where it is. A request whose
 acceptance this history cannot establish is not offered again, because the agent
 may already have it; neither is one this conversation has moved past, because
 something asked after it has since been answered. Both stay in the chat and
@@ -2692,8 +2690,8 @@ One shared dispatch service owns a Sidekick message exchange through generation,
 control evaluation, automatic feedback and joined cleanup. UI Send and Retry
 preserve their existing input reduction and acknowledgement revisions. A dispatch
 captures its caller's UI or attachment origin before spawning, reserves under the
-same message/configuration admission policy and refuses busy work before a
-message append, provider turn or entry. The returned handle observes this exact
+same message/configuration admission policy at activation. Waiting work reserves
+no active cycle and appends no message until it starts. The returned handle observes this exact
 exchange. Dropping observation leaves the root-owned producer and reservation
 intact; cancellation through an old completed handle reaches no later exchange.
 

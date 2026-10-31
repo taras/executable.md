@@ -3757,6 +3757,60 @@ describe("REPL responsiveness: a chat the keystroke did not change", () => {
     return rows.map((one) => ({ key: one.key, line: one.line, text: one.text }));
   }
 
+  it("RS6: queue fitting reuses unchanged text and preserves fresh cuts after changes", function* () {
+    const renderer = yield* useCountingRenderer(WIDE);
+    const queueFits = createPlainFitStore();
+    const model = yield* emptyModel();
+    const chat = chatOf([]);
+    const text = `waiting e\u0301 \u5e83\u3044 ${WRAPS} QUEUE-TAIL`;
+    const queued = (text: string, size: ReplTerminalSize = WIDE): ReplView =>
+      withWorkspace(
+        frameOf(chat, {}, model, size),
+        workspaceOf(model, chat, {
+          pending: [{ key: "waiting", origin: { kind: "ui" }, text }],
+          held: undefined,
+        }),
+      );
+    const prepare = function* (view: ReplView, warm: boolean) {
+      renderer.reset();
+      const done = yield* prepareFrame(
+        renderer,
+        view,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        warm ? queueFits : undefined,
+      );
+      if (!done.ok) {
+        throw done.error;
+      }
+      return { rows: done.value.context.queue ?? [], measures: renderer.measures() };
+    };
+    const first = yield* prepare(queued(text), true);
+    const cached = yield* prepare(queued(text), true);
+    const fresh = yield* prepare(queued(text), false);
+    expect(first.rows.length).toBeGreaterThan(1);
+    expect(shapeOf(cached.rows)).toEqual(shapeOf(fresh.rows));
+    expect(cached.measures).toBeLessThan(first.measures);
+    expect(cached.measures).toBeLessThan(fresh.measures);
+    expect(
+      cached.rows
+        .map((row) => row.text)
+        .join("")
+        .trimStart(),
+    ).toBe(text);
+
+    for (const view of [queued(`${text} CHANGED`), queued(text, MEDIUM), queued("replacement")]) {
+      const warm = yield* prepare(view, true);
+      const cold = yield* prepare(view, false);
+      expect(shapeOf(warm.rows)).toEqual(shapeOf(cold.rows));
+    }
+    const empty = withWorkspace(frameOf(chat, {}, model), workspaceOf(model, chat));
+    expect((yield* prepare(empty, true)).rows).toEqual([]);
+  });
+
   it("RS4: growing one line measures only the line that grew", function* () {
     const held = yield* commanding();
     // Blank lines and a combining grapheme travel with this fixture, because
@@ -5225,15 +5279,14 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     expect(draftStop.x).toBeGreaterThan(input.x);
     expect(draftStop.x + draftStop.width).toBeLessThanOrEqual(draftBox.x + draftBox.width);
 
-    // The inactive TODO tray on the left and the Sidekick's own Stop on the
-    // right, on one row above the composer. This build offers no shared queue
-    // and no Follow control, so neither is placed.
+    // Follow remains absent; the queue shares the fixed tray header.
     const todo = placed(observed, "tray:todo");
     const sidekickStop = placed(observed, "sidekick:stop");
     expect(sidekickStop.y).toBe(todo.y);
     expect(todo.x).toBeLessThan(sidekickStop.x);
-    expect(sidekickStop.x + sidekickStop.width).toBeGreaterThan(155);
-    for (const key of ["tray:queue", "follow"]) {
+    expect(sidekickStop.x + sidekickStop.width).toBeLessThan(160);
+    expect(observed.keys.includes("tray:queue")).toBe(true);
+    for (const key of ["follow"]) {
       expect({ key, placed: observed.keys.includes(key) }).toEqual({ key, placed: false });
     }
     expect(placed(observed, "sidekick:message").y).toBeGreaterThan(todo.y);
@@ -5948,8 +6001,6 @@ describe("Checkpoint #971 A4 — current outcomes, work and the waiting question
  * outcomes its first window cuts off — and reads the answers off the screen
  * rather than off the description that produced it.
  *
- * The shared message queue is not offered by this build, so no window, control
- * or tray of it is placed.
  */
 describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
   it("R2: current chat traversal reads every outcome and keeps its composer", function* () {
@@ -5957,10 +6008,7 @@ describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
     // The size whose conversation still holds more than it shows.
     const resized = yield* page.resize(MEDIUM);
 
-    // No shared queue is offered here, so nothing of it is drawn: a window over
-    // rows this build has none of would be chrome over a reading that does not
-    // exist.
-    expect(resized.shows("QUEUE")).toBe(false);
+    expect(resized.shows("QUEUE 0/16")).toBe(true);
 
     // What the column does offer is all there: the conversation's own composer,
     // and the controls that move the chat.

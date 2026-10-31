@@ -371,7 +371,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(running.released).toBe(false);
     expect(yield* publishedPairs(host.root)).toEqual([]);
     yield* compose(page, "!");
-    expect(composerHolds(page.screen(), "explain!")).toBe(true);
+    expect(composerHolds(page.screen(), "!")).toBe(true);
     yield* draftText(page, "next", ["Tab", "Tab", "Tab", "Tab"]);
     running.release();
     yield* page.until("the reply arriving", (one) => one.shows("Noted."));
@@ -414,7 +414,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(yield* finishDraft(page)).toBe("next");
   });
 
-  it("M4: a delayed acknowledgement clears what was sent and keeps what came after", function* () {
+  it("M4: acceptance clears Message while delayed saved acknowledgement preserves newer edits", function* () {
     const gate = appendGate();
     const page = yield* useReplPage({ gate });
     page.repl.fake.script({ reply: FILLING_REPLY });
@@ -433,7 +433,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
     expect(page.repl.fake.prompts[0]).toContain("ask");
     expect(page.repl.fake.prompts[0]).not.toContain("ask!");
-    expect(composerHolds(page.screen(), "ask!")).toBe(true);
+    expect(composerHolds(page.screen(), "!")).toBe(true);
     expect(draftHolds(page.screen(), "mineX")).toBe(true);
     expect(page.repl.fake.prompts[1] ?? "").toContain("taken the shared draft over");
     expect(yield* finishDraft(page)).toBe("mineX");
@@ -459,7 +459,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(page.screen().found("Replaced by the reply.", DRAFT_VALUE)).toBe(1);
   });
 
-  it("M5: while generation is held, Stop is the control and Send cannot start a second cycle", function* () {
+  it("M5: while generation is held, Send remains beside Stop without starting unrequested work", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ held: true, reply: "<Output>Done.</Output>\n" });
     yield* compose(page, "ask");
@@ -469,7 +469,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
     yield* page.until("the Sidekick working", (one) => one.shows("[S] working"));
     expect(page.screen().found("[stop]", SIDEKICK_CONTROLS)).toBe(1);
-    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(0);
+    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
     expect(page.screen().found("[send]", { onRow: DRAFT })).toBe(1);
     yield* compose(page, "then this");
     page.repl.fake.releaseTurn();
@@ -1094,6 +1094,11 @@ function* twoChats(page: ReplPage, withOlderFailure = false): Operation<void> {
     yield* page.until("the first chat idle", sidekickIdle);
   }
   yield* newConversation(page);
+  if (withOlderFailure) {
+    yield* page.until("failure hold after agent replacement", (one) => one.shows("[Resume queue]"));
+    yield* page.press("[Resume queue]");
+    yield* page.until("explicit failure hold release", (one) => !one.shows("[Resume queue]"));
+  }
   yield* sendMessage(page, "newer ask");
   yield* page.until("the newer answer", (one) => sidekickShows(one, "Newer answer."));
   yield* page.until("the new chat idle", sidekickIdle);

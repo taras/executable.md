@@ -97,12 +97,13 @@ import {
   sidekickAssetUrl,
   sidekickGuideIndex,
 } from "../src/repl/sidekick/guide.ts";
-import type { EntryHistory, Reserved } from "../src/repl/sidekick/gate.ts";
+import type { EntryHistory, Reserved, Instruction } from "../src/repl/sidekick/gate.ts";
 import {
   admitted,
   filled,
   initialState,
   instructed,
+  acceptedInstruction,
   NO_AGENT,
   reduceRepl,
 } from "../src/repl/application.ts";
@@ -1027,15 +1028,15 @@ describe("Tier R3 — one gate decides who may take the next entry", () => {
       EMPTY,
       QUIET,
     ).state;
-    // At the revisions the instruction was asked at, which is what an
-    // acknowledgement names: the message that was sent and the draft as it
-    // stood when it was.
-    const asked = instructed(held, {
+    const instruction: Instruction = {
       message: held.revisions.message,
       draft: held.revisions.draft,
-      // This box's own text, which is what a Send acknowledges.
       from: "composer",
-    });
+    };
+    const accepted = acceptedInstruction(held, instruction);
+    expect(accepted.takenOver).toBe(true);
+    expect(accepted.revisions.message).toBe(1);
+    const asked = instructed(accepted, instruction);
 
     expect(asked.takenOver).toBe(false);
     expect(asked.revisions.message).toBe(1);
