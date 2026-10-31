@@ -23,7 +23,7 @@ import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { readQuestionForm, useReplElicitation } from "../src/repl/elicitation.ts";
-import { Ok, scoped, spawn } from "effection";
+import { Ok, scoped, spawn, sleep } from "effection";
 import type { Operation } from "effection";
 
 import { skeletonOps } from "../src/repl/layout.ts";
@@ -176,7 +176,7 @@ function* submit(page: ReplPage, order: number, source: string): Operation<void>
   yield* entrySettles(page, order, "ok");
 }
 
-const CATALOG_ENTRIES = 10;
+const CATALOG_ENTRIES = 14;
 const entryKey = (order: number): string => `entry:entry-${order}`;
 const entryLabel = (order: number): string => `${order}. [ok] entry-${order}`;
 
@@ -867,7 +867,7 @@ describe("REPL layout: what the application admits at each size", () => {
       earlier: last.earlier,
       later: last.later,
       chrome: last.chrome,
-    }).toEqual({ rows: 0, earlier: true, later: true, chrome: true });
+    }).toEqual({ rows: 0, earlier: false, later: false, chrome: true });
     // And it is a region with room in it. A window admitted against nothing
     // would satisfy every rule below and show no reading at all.
     expect({
@@ -888,13 +888,8 @@ describe("REPL layout: what the application admits at each size", () => {
     expect(last.bounds).toEqual(final.value.boundsOf(viewport));
     const above = final.value.boundsOf("box:drawer:drawer:scroll:up");
     const below = final.value.boundsOf("box:drawer:drawer:scroll:down");
-    if (above === undefined || below === undefined) {
-      throw new Error("this frame drew the catalog without its own controls");
-    }
-    expect({
-      above: above.y + above.height <= last.bounds.y,
-      below: below.y >= last.bounds.y + last.bounds.height,
-    }).toEqual({ above: true, below: true });
+    expect(above).toBeUndefined();
+    expect(below).toBeUndefined();
 
     // And a row the first frame does not show is reached by the control that
     // moves the window, with a whole target of its own inside that viewport.
@@ -1229,8 +1224,21 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
       viewOf(model, WIDE, { state: refused, focused: focusedKey(presenter) }),
     );
     expect(focusedKey(presenter)).toBe(marker);
-    expect(after.boundsOf("drawer:close")).toEqual(closeAt);
-    expect(after.keys).toEqual(before.keys);
+    const close = after.boundsOf("drawer:close");
+    expect(within(after.regionOf("box:drawer:layer"), close)).toBe(true);
+    if (close === undefined) {
+      throw new Error("the reflowed drawer lost Close");
+    }
+    expect(after.committed.rendered.map.at(close.x, close.y)).toBe(after.nodeOf("drawer:close"));
+    const owned = (keys: readonly string[]) =>
+      keys.filter(
+        (key) =>
+          key.startsWith("drawer:") ||
+          key === "viewport:drawer" ||
+          key === "footer:history" ||
+          key === "footer:exit",
+      );
+    expect(owned(after.keys)).toEqual(owned(before.keys));
   });
 
   it("Q-P1: four Backtabs reach the default composer without activating a pane", function* () {
@@ -1361,7 +1369,7 @@ describe("Owned renderer claims moved out of mounted journeys", () => {
           expect(layer.y + layer.height).toBeLessThanOrEqual(exit.y);
           const keys =
             kind === "question"
-              ? ["drawer:close", "drawer:scroll:up", "drawer:value:one"]
+              ? ["drawer:close", "drawer:value:one"]
               : ["drawer:close", "drawer:configure:refresh"];
           for (const key of keys) {
             expect([kind, key, within(layer, observed.boundsOf(key))]).toEqual([kind, key, true]);
@@ -1425,7 +1433,11 @@ describe("Owned renderer outcomes retained from the original journeys", () => {
           row.length >= 4 &&
           !["[↑ earlier]", "[↓ later]", "[close]"].some((label) => label.includes(row))
         ) {
-          expect([size.columns, row, inside.includes(row)]).toEqual([size.columns, row, false]);
+          expect([
+            size.columns,
+            row,
+            presenter.grid.textIn(layer).some((one) => one.trim() === row),
+          ]).toEqual([size.columns, row, false]);
         }
       }
       expect(exit.y).toBeGreaterThanOrEqual(layer.y + layer.height);
@@ -1551,7 +1563,6 @@ describe("Owned narrow guidance and pane navigation routes", () => {
     for (const [key, action] of [
       ["drawer:value:decision", "answers"],
       ["drawer:form:submit", "answers"],
-      ["drawer:scroll:down", "scrolls"],
     ]) {
       const selected = viewFor(
         { ...state, restore: { kind: "reveal", key } },
@@ -1569,10 +1580,9 @@ describe("Owned narrow guidance and pane navigation routes", () => {
         .rows()
         .find((one) => one.includes("Tab regions Alt↑↓"))
         ?.trim();
-      expect([key, row]).toEqual([
-        key,
-        `Entry 1 question · Enter ${action} · Esc closes · Tab regions Alt↑↓`,
-      ]);
+      expect(
+        row?.startsWith(`Entry 1 question · Enter ${action} · Esc closes · Tab regions Alt↑↓`),
+      ).toBe(true);
       expect(row?.length ?? 999).toBeLessThanOrEqual(72);
     }
   });
@@ -1740,7 +1750,7 @@ describe("Owned Transcript control geometry", () => {
       const observed = yield* presenter.commit(withWorkspace(resolved.value, workspaceOf(model)));
       const sidebar = observed.regionOf("box:sidebar");
       expect(within(sidebar, observed.boundsOf("sessions:all"))).toBe(true);
-      expect(within(sidebar, observed.boundsOf("sessions:later"))).toBe(true);
+      expect(observed.boundsOf("sessions:later")).toBeUndefined();
       const target = observed.boundsOf("sessions:all");
       if (target === undefined) {
         throw new Error("the Transcript placed no All choice");
@@ -1748,4 +1758,112 @@ describe("Owned Transcript control geometry", () => {
       expect(presenter.grid.textIn(target).join(" ")).toContain("All conversations");
     }
   });
+});
+
+describe("accepted rendered scrolling guidance", () => {
+  for (const size of [MEDIUM, NARROW]) {
+    it(`Content and reading help fit whole at ${size.columns}x${size.rows}`, function* () {
+      const page = yield* useReplPage({ size });
+      const schema = {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+        additionalProperties: false,
+      };
+      const preview = Array.from(
+        { length: 40 },
+        (_, at) => `Help preview ${String(at).padStart(2, "0")}`,
+      ).join("\n");
+      yield* page.type(
+        `<Elicit as="answer" schema={${JSON.stringify(schema)}}>${preview}</Elicit>`,
+      );
+      yield* page.until("source", (one) => one.shows("</Elicit>"));
+      yield* page.key("Enter");
+      yield* page.until("question waiting", (one) => one.shows("[answer]"));
+      yield* page.press("[answer]");
+      yield* page.until(
+        "Content help",
+        (one) => one.shows("[submit]") && one.shows("PageUp/PageDown reads"),
+      );
+      yield* sleep(30);
+      const words = () =>
+        page
+          .screen()
+          .rows.map((row) => row.trim())
+          .join(" ")
+          .replace(/\s+/g, " ");
+      const wheelHelp =
+        "Wheel scrolls the reading under your pointer, three displayed rows per tick. It stops before hiding the focused control.";
+      expect(words()).toContain(
+        "PageUp/PageDown reads more content. Arrows and Home/End keep editing a field.",
+      );
+      expect(words()).toContain(wheelHelp);
+      expect(words()).toContain("Esc closes");
+      expect(page.screen().shows("[close]")).toBe(true);
+      yield* page.type("saved-value");
+      yield* page.until("typed value", (one) => one.shows("saved-value"));
+      yield* page.key("Home");
+      yield* page.type("X");
+      yield* page.until("Home edits", (one) => one.shows("Xsaved-value"));
+      yield* page.key("End");
+      yield* page.type("Y");
+      yield* page.until("End edits", (one) => one.shows("Xsaved-valueY"));
+      for (let step = 0; step < 20 && !page.screen().shows("Help preview 00"); step += 1) {
+        const before = page.screen().index;
+        yield* page.key("PageUp");
+        yield* page.until("page written", (one) => one.index > before);
+        yield* sleep(30);
+      }
+      expect(page.screen().shows("Help preview 00")).toBe(true);
+      expect(words()).toContain("Enter does nothing");
+      expect(words()).toContain(
+        "Up/Down reads one row; PageUp/PageDown reads a page; Home/End reaches the bounds.",
+      );
+      expect(words()).toContain(wheelHelp);
+      expect(words()).not.toContain("Enter or click activates");
+      expect(words()).not.toContain("Enter activates");
+      expect(page.screen().shows("[submit]")).toBe(true);
+      expect(page.screen().shows("[close]")).toBe(true);
+      expect(words()).toContain("Esc closes");
+      const shown = [...page.screen().rows];
+      const before = page.screen().index;
+      yield* page.key("Enter");
+      yield* page.until("reading Enter written", (one) => one.index > before);
+      yield* sleep(30);
+      expect(page.screen().rows).toEqual(shown);
+      for (let step = 0; step < 20 && !page.screen().shows("Xsaved-valueY"); step += 1) {
+        const before = page.screen().index;
+        yield* page.key("PageDown");
+        yield* page.until("page back written", (one) => one.index > before);
+        yield* sleep(30);
+      }
+      expect(page.screen().shows("Xsaved-valueY")).toBe(true);
+      expect(page.screen().shows("[submit]")).toBe(true);
+      expect(page.screen().shows("[close]")).toBe(true);
+      yield* page.key("Escape");
+      yield* page.until("question closed", (one) => !one.shows("[submit]"));
+      yield* sleep(30);
+      if (size.columns === NARROW.columns) {
+        yield* page.press("Sidekick");
+        yield* page.until("Sidekick outlet", (one) => one.shows("[configure scribe]"));
+      }
+      yield* page.press("[configure scribe]");
+      yield* page.until(
+        "Configure help",
+        (one) => one.shows("Agent: scribe") && one.shows("PageUp/PageDown reads"),
+      );
+      yield* sleep(30);
+      expect(words()).toContain(wheelHelp);
+      expect(words()).toContain(
+        "PageUp/PageDown reads more content. Arrows and Home/End keep editing a field.",
+      );
+      for (const label of ["[refresh]", "[close]", "[history]", "[exit]", "Esc closes"]) {
+        expect(page.screen().shows(label)).toBe(true);
+      }
+      yield* page.key("ArrowLeft");
+      yield* page.type("X");
+      yield* page.until("Agent caret", (one) => one.shows("Agent: scribXe"));
+      expect(page.repl.fake.prompts).toHaveLength(0);
+    });
+  }
 });

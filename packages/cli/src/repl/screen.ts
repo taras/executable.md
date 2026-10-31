@@ -45,13 +45,11 @@ import {
 } from "@bomb.sh/tty";
 import { ReplTerminal, type ReplTerminalSize } from "./terminal.ts";
 import { ReplClock } from "./frame.ts";
-import { type ReplPointerAt, useReplDecoder } from "./input.ts";
-import type { ReplInputEvent } from "./description.ts";
+import { type ReplPhysicalInput, useReplDecoder } from "./input.ts";
 
 /** What the screen reports. */
 export type ReplScreenEvent =
-  | { readonly kind: "input"; readonly event: ReplInputEvent }
-  | { readonly kind: "pointer"; readonly at: ReplPointerAt }
+  | ReplPhysicalInput
   | { readonly kind: "resize"; readonly size: ReplTerminalSize }
   /** Input ended. A lifecycle outcome, not a key. */
   | { readonly kind: "eof" };
@@ -143,11 +141,8 @@ export function useReplScreen(options?: { readonly escLatency?: number }): Opera
     /** Publish what one scan produced. */
     function* publish(bytes?: Uint8Array): Operation<number | undefined> {
       const scan = yield* decoder.scan(bytes);
-      for (const event of scan.events) {
-        events.send({ kind: "input", event });
-      }
-      for (const at of scan.pointers) {
-        events.send({ kind: "pointer", at });
+      for (const event of scan.ordered) {
+        events.send(event);
       }
       if (scan.resized) {
         deliverResize(yield* ReplTerminal.operations.size());

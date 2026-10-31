@@ -109,7 +109,7 @@ import {
   viewportBounds,
   windowOf,
 } from "./fixtures/repl/presentation.ts";
-import { emptyModel } from "./fixtures/repl/journals.ts";
+import { journalModel, emptyModel } from "./fixtures/repl/journals.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
 import { QUEUE_WINDOW } from "../src/repl/application.ts";
 import { readDescription } from "../src/repl/description.ts";
@@ -795,7 +795,7 @@ function* selectChecklist(page: ReplPage): Operation<void> {
   yield* page.until("the catalog offering its scope", (reading) =>
     drawerLines(reading).some((row) => row.includes("Checklist")),
   );
-  yield* page.press("Checklist");
+  yield* page.press("component Checklist");
   yield* page.until("the catalog closing", (reading) => !drawerOpen(reading));
 }
 
@@ -1950,7 +1950,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
 
     // Every control of this drawer carries the surface a control carries, so a
     // reader can tell what acts from what explains before reading either.
-    for (const key of ["drawer:scroll:up", "drawer:scroll:down", "drawer:close"]) {
+    for (const key of ["drawer:close"]) {
       const bounds = placed(observed, key);
       expect(grid.styleAt(bounds.x, bounds.y).background).toBe(REPL_PALETTE.draftSurface);
     }
@@ -2987,7 +2987,9 @@ describe("REPL presentation: decoration the frame measured", () => {
   });
 
   it("P1-T4: a reading longer than the decorated window is in no cell and no target", function* () {
-    const model = yield* boundExample();
+    const model = yield* journalModel([
+      `<Let as="tokens" value={${JSON.stringify(Array.from({ length: 20 }, (_, at) => `Token ${at}`))}} />`,
+    ]);
     const presenter = yield* usePresenter(NARROW);
     const state = openingDrawer(selecting(stateWith({}), "entry-1"), {
       kind: "binding",
@@ -4540,7 +4542,7 @@ describe("Tier UH5 — the guidance above a route drawer", () => {
         throw new Error(`${where} published no drawer window`);
       }
       expect([where, window.height > 0]).toEqual([where, true]);
-      for (const key of ["drawer:scroll:up", "drawer:scroll:down", "drawer:close"]) {
+      for (const key of ["drawer:close"]) {
         const node = observed.nodeOf(key);
         expect([where, key, node !== undefined]).toEqual([where, key, true]);
         expect([where, key, observed.targets.some((one) => one.node === node)]).toEqual([
@@ -4766,16 +4768,8 @@ describe("Tier BP — matching body padding in the three shared columns", () => 
           true,
         ]);
       }
-      // The controls that reach what the window does not hold are mounted and
-      // are real targets, outside the thing they move.
       for (const key of ["reading:earlier", "reading:later"]) {
-        const node = observed.nodeOf(key);
-        expect([where, key, node !== undefined]).toEqual([where, key, true]);
-        expect([where, key, observed.targets.some((one) => one.node === node)]).toEqual([
-          where,
-          key,
-          true,
-        ]);
+        expect(observed.nodeOf(key)).toBeUndefined();
       }
     }
   });
@@ -4787,10 +4781,8 @@ describe("Tier BP — matching body padding in the three shared columns", () => 
  * Three Product Owner corrections to the padding increment. The Transcript's
  * name lines up with what is under it. The blank row above a column's heading
  * belongs to that column's header band and is painted with it, rather than
- * reading as a strip of the reading pushed down. And the two controls that move
- * a window take the pane they navigate: `Earlier`/`Later` inherited the generic
- * action surface, which drew a dark bar across the top and bottom of every
- * reading.
+ * reading as a strip of the reading pushed down. Retired window buttons are
+ * absent from all three panes.
  *
  * Read from the committed cells, because all three are about what the screen
  * looks like.
@@ -4913,55 +4905,18 @@ describe("Tier BP5 — header space, the inset title and pane navigation", () =>
         ]).toEqual([where, which, ACCEPTED_SURFACE.side]);
       }
 
-      // 3. Every window's own two controls take the pane they navigate, rather
-      // than the dark surface a generic action carries.
-      const panes: readonly { readonly keys: readonly string[]; readonly surface: number }[] = [
-        {
-          keys: ["sessions:earlier", "sessions:later", "entries:earlier", "entries:later"],
-          surface: ACCEPTED_SURFACE.side,
-        },
-        { keys: ["reading:earlier", "reading:later"], surface: ACCEPTED_SURFACE.centre },
-        { keys: ["sidekick:earlier", "sidekick:later"], surface: ACCEPTED_SURFACE.right },
-      ];
-      let navigation = 0;
-      for (const { keys, surface } of panes) {
-        let covered = 0;
-        for (const key of keys) {
-          const bounds = observed.boundsOf(key);
-          if (bounds === undefined) {
-            continue;
-          }
-          navigation += 1;
-          expect([where, key, grid.styleAt(bounds.x, bounds.y).background]).toEqual([
-            where,
-            key,
-            surface,
-          ]);
-          // And the same with focus on it: these backgrounds say which pane a
-          // control belongs to, never where the next keystroke lands — so the
-          // pane shows through either way and the cue is the foreground.
-          const focused = yield* presenter.commit(reading(state, model, live, size, key));
-          const row = placed(focused, key);
-          expect([where, key, grid.styleAt(row.x, row.y).background]).toEqual([
-            where,
-            key,
-            surface,
-          ]);
-          expect([where, key, inkOf(grid, row).foreground]).toEqual([
-            where,
-            key,
-            REPL_PALETTE.focus,
-          ]);
-          covered += 1;
-        }
-        // Each of the three panes really contributed a measured control, or
-        // this row would be proving the colour of whichever one it found.
-        expect([where, keys[0], covered > 0]).toEqual([where, keys[0], true]);
+      for (const key of [
+        "sessions:earlier",
+        "sessions:later",
+        "entries:earlier",
+        "entries:later",
+        "reading:earlier",
+        "reading:later",
+        "sidekick:earlier",
+        "sidekick:later",
+      ]) {
+        expect(observed.nodeOf(key)).toBeUndefined();
       }
-      // The Entries catalog states its own height while it fits, so it offers
-      // its two controls only once it is windowed — the other three readings
-      // offer theirs always, which is six of these in an ordinary frame.
-      expect([where, navigation >= 6]).toEqual([where, true]);
 
       // The positive control: an ordinary action still carries the surface the
       // draft does, so restyling every action could not have satisfied any of
@@ -5090,15 +5045,22 @@ function* walkChat(page: ReplPage, inks: Map<string, CellStyle>): Operation<Chat
     }
   };
   read();
-  for (const control of ["[↑ earlier]", "[↓ later]"]) {
+  const directions: readonly ("up" | "down")[] = ["up", "down"];
+  for (const direction of directions) {
     for (let press = 0; press < 24; press += 1) {
       const before = page.screen();
-      if (before.found(control, SIDEKICK_CONTROLS) !== 1) {
-        break;
+      const scope = before.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined;
+      const caption = before.rows
+        .flatMap((row) =>
+          [...row.matchAll(/\[[USR]\] /g)].map((match) => row.slice(match.index).trimEnd()),
+        )
+        .find((label) => before.found(label, scope) === 1);
+      if (caption === undefined) {
+        throw new Error(page.describe());
       }
-      yield* page.press(control, SIDEKICK_CONTROLS);
+      yield* page.wheel(direction, before.locate(caption, scope));
       const after = yield* page.until(
-        `the chat after ${control}`,
+        `the chat after ${direction}`,
         (one) => one.index > before.index,
       );
       read();
@@ -5406,7 +5368,7 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
         expect([where, row, rows.some((one) => one.includes(row))]).toEqual([where, row, true]);
       }
       // Its own window controls and its way out, in the drawer with them.
-      for (const control of ["[↑", "[↓", "[close]"]) {
+      for (const control of ["[close]"]) {
         expect([where, control, rows.some((one) => one.includes(control))]).toEqual([
           where,
           control,
@@ -5416,7 +5378,7 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
 
       // A nested scope, by its exact name. The reading moves to that exact entry
       // and child, and the catalog closes behind the choice it was opened to make.
-      yield* page.press("Checklist");
+      yield* page.press("component Checklist");
       yield* page.until("the catalog closing", (reading) => !drawerOpen(reading));
       expect([where, trailOf(page.screen()).includes("Entry 2")]).toEqual([where, true]);
       expect([where, trailOf(page.screen()).includes("Checklist")]).toEqual([where, true]);
@@ -6003,8 +5965,8 @@ describe("Checkpoint #971 R2 — current chat windows and outcomes", () => {
     // What the column does offer is all there: the conversation's own composer,
     // and the controls that move the chat.
     expect(resized.shows(COMPOSER)).toBe(true);
-    expect(resized.found("[↑ earlier]", { rightOf: COMPOSER })).toBe(1);
-    expect(resized.found("[↓ later]", { rightOf: COMPOSER })).toBe(1);
+    expect(resized.shows("[↑ earlier]")).toBe(false);
+    expect(resized.shows("[↓ later]")).toBe(false);
 
     // One traversal of the chat's own window, which holds more rows than it
     // shows: each outcome's ink is read the first time that outcome is on the

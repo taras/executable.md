@@ -283,13 +283,19 @@ export function drawerOpen(reading: ScreenReading): boolean {
 /** Open the History drawer and wait for the positions it offers. */
 export function* openHistory(page: ReplPage): Operation<void> {
   yield* page.press("[history]");
-  yield* page.until("the History drawer", (one) => drawerOpen(one) && one.shows("History"));
+  yield* page.until(
+    "the History drawer owning its keys",
+    (one) => drawerOpen(one) && one.shows("History") && !one.shows("Enter opens"),
+  );
 }
 
 /** Put the open drawer away with its own Close. */
 export function* closeDrawer(page: ReplPage): Operation<void> {
   yield* page.press("[close]");
-  yield* page.until("the drawer closing", (one) => !drawerOpen(one));
+  yield* page.until(
+    "the drawer closing and restoring its input destination",
+    (one) => !drawerOpen(one) && !one.shows("Enter closes"),
+  );
 }
 
 /** Whether the person said this, as the chat attributes it. */
@@ -369,7 +375,10 @@ export function formOpen(reading: ScreenReading): boolean {
 /** Open the Sidekick's own question and wait for the form it draws. */
 export function* openQuestion(page: ReplPage): Operation<void> {
   yield* page.press("[answer sidekick]");
-  yield* page.until("the question's form", (one) => formOpen(one));
+  yield* page.until(
+    "the question's editable field owning input",
+    (one) => formOpen(one) && one.shows("Enter answers"),
+  );
 }
 
 /**
@@ -544,11 +553,11 @@ export function* clearAgentField(page: ReplPage): Operation<void> {
   }
 }
 
-/** Press the drawer's own scroll-down control until it shows this text. */
+/** Page through drawer Content until it shows this text. */
 export function* scrollDrawerTo(page: ReplPage, text: string): Operation<void> {
   for (let press = 0; press < 60 && !drawerShows(page.screen(), text); press += 1) {
     const before = page.screen().index;
-    yield* page.press("[\u2193 scroll down]");
+    yield* page.key("PageDown");
     yield* page.until("the drawer scrolling", (one) => one.index > before);
   }
   if (!drawerShows(page.screen(), text)) {

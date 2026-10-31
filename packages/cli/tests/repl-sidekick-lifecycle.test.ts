@@ -1294,7 +1294,10 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
     if (interrupted) {
       yield* intoSecondField(page);
     }
-    yield* typed(page, "ay");
+    yield* page.type("ay");
+    yield* page.until("the message field holding the complete answer", (one) =>
+      one.shows("message: okay"),
+    );
     expect(page.screen().shows("message: okay")).toBe(true);
     yield* submitForm(page);
 

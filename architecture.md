@@ -6844,6 +6844,15 @@ action; the tree walks that target's own ancestry, and the first node to handle
 the event produces the typed action the root acts on. An event nothing handles
 is an explicit failure.
 
+Wheel is coordinate-targeted physical input, separate from control activation.
+A nonfocusable viewport component owns its admitted content descendants. It
+returns a semantic scroll action through the same ancestry walk and ends with
+its mounted branch. Drawer Content handles PageUp/PageDown left by descendants;
+fields retain their arrows and Home/End. Deliberate paging can remove a focused
+row and use the existing survivor recovery. Wheel instead stops before hiding
+its focused content control, using that control's fitted extent. A reading
+anchor keeps viewport identity as the displayed rows change.
+
 **Keyboard focus moves by regions, and the structure is derived, not stored.**
 A focusable description may carry a placement: its region — a key, a rank in
 the Tab cycle, an axis and an optional recovery preference — the nested groups
@@ -7054,7 +7063,7 @@ resize changes what a window holds and a delta added to a stale number would
 spend a press on state nobody can see. The canonical location is bounded the
 same way and for the same reason: in a narrow frame it shares one region with
 every control on the screen, so it takes at most three rows and says what it is
-not showing. Their window controls and
+not showing. Their fixed headings, composers, actions and
 the two surface controls stay outside the moving window. A narrow frame mounts
 one routed outlet and both surface controls, so the outlet the route did not
 select is absent everywhere — `mounted()`, the frame, the target map — while the
@@ -7103,8 +7112,9 @@ work on the left, the selected work with its breadcrumbs, exact source, state,
 results and its own multi-row Draft in the centre, and Bindings/Sidekick on the
 right with the trays this build offers above the composer and the Sidekick's
 Send/Stop beside them, under one identity row and above one compact History row
-and one guidance row. It is selected by a view carrying the inert workspace
-presentation, and the root supplies that presentation from what this execution
+and a guidance block whose fitted rows determine its height. It is selected by
+a view carrying the inert workspace presentation, and the root supplies that
+presentation from what this execution
 actually holds: the selected tray, no queued rows because this build has no
 shared queue, and the entries its Sidekick's acknowledged Submits admitted. A
 build without the continuation Follow governs offers neither Follow nor a QUEUE
@@ -7152,7 +7162,7 @@ move what it was moved clear of.
 **Measurement comes first, and it is not a frame.** The application builds inert
 ordered candidates and a paired manifest from one semantic reading, and the
 measuring pass draws that manifest with every scrolling viewport genuinely
-empty — surrounding headings, both window controls and complete action labels
+empty — surrounding headings, composers and complete action labels
 included, so the room it reports is the region's rather than whatever is
 currently overflowing it. That pass mounts nothing, publishes no target,
 advances no revision and acknowledges nothing. Capacity is the measured viewport
@@ -7173,7 +7183,7 @@ survives whole and the name keeps what is left in front of it, because a state
 cut in half says something untrue and two rows that are only their state are two
 rows a reader cannot tell apart.
 
-Whatever a column states *around* its window — a heading, both window controls,
+Whatever a column states *around* its window — a heading, fixed actions,
 the placeholder for a reading that holds nothing — it states in the measuring
 pass too, and a row stated around a window is not one of that window's own rows.
 A placeholder described only once the window had been admitted would take a row
@@ -7215,6 +7225,18 @@ something is centred or sized by a share, and a rounded hit box disagrees with
 the text underneath it. A pointer that does resolve becomes the same normalized
 event a key produces and walks the same ancestry, so clicking a control and
 pressing Enter on it are one action.
+
+Viewport wheel regions are copied separately from activation targets. Each
+manifest slot may name its owner's description key; the committed pass pairs
+that key with a live mounted node and the renderer snapshots the viewport's
+bounds in draw order. Missing owners and zero-size viewports produce no wheel
+region. Text, trailing spaces and blank cells inside it name that owner; headings,
+gutters, composers and fixed actions do not. Wheel resolution carries the
+presented tree revision, after current terminal dimensions agree with that
+frame. Stale revisions, removed owners and owners outside the top modal reach
+nothing; a forbidden target is never skipped to reach background. An edge or
+fitting viewport consumes without moving a neighbour. No registry or extra
+Context owns these associations.
 
 An open drawer is one floating, opaque rectangle over the body and above the
 footer. The background is coverage rather than style: an element without one
@@ -8589,8 +8611,8 @@ while the screen shows something else owns nothing. Agent is an exact-name field
 because which agents exist is the provider's to answer, and `select()` validates
 what was typed against the real one. Model and effort are the provider's own
 ids on their actions, with the provider's words as labels. Its content is
-windowed like every other drawer's and scrolled by the same two controls, which
-move Configure's own offset: an agent may advertise more choices than a pane
+windowed like every other drawer's. Wheel input and Content paging move
+Configure's own offset: an agent may advertise more choices than a pane
 can draw, and a choice nobody can scroll to is a choice the drawer removed.
 
 **On the screen that question is a form in the pane that owns it, and the two

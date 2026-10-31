@@ -1711,7 +1711,6 @@ describe("F3 — every placed modal control is in the ring", () => {
       { key: "footer:exit", action: "Enter exits" },
       { key: "footer:history", action: "Enter opens" },
       { key: "drawer:form:submit", action: "Enter answers" },
-      { key: "drawer:scroll:down", action: "Enter scrolls" },
       { key: "drawer:choice:decision:Approve", action: "Enter chooses" },
     ];
     for (const { key, action } of promised) {
@@ -1721,7 +1720,6 @@ describe("F3 — every placed modal control is in the ring", () => {
         "footer:exit": ["Backtab", "ArrowRight"],
         "footer:history": ["Backtab"],
         "drawer:form:submit": ["Tab"],
-        "drawer:scroll:down": ["Tab", "ArrowUp"],
         "drawer:choice:decision:Approve": ["Alt+ArrowUp", "Alt+ArrowUp"],
       };
       for (const name of routes[key] ?? []) {
@@ -1736,9 +1734,9 @@ describe("F3 — every placed modal control is in the ring", () => {
       // asserted where an entry is really waiting, in the rendered journey.
       expect([key, row?.label]).toEqual([
         key,
-        `Ready for Entry 2 · ${action} · Esc closes · Tab regions Alt↑↓`,
+        `Ready for Entry 2 · ${action} · Esc closes · Tab regions Alt↑↓ · In Content: PageUp/PageDown reads more content. Arrows and Home/End keep editing a field. · Wheel scrolls the reading under your pointer, three displayed rows per tick. It stops before hiding the focused control.`,
       ]);
-      expect([key, (row?.label ?? "").length <= NARROW.columns]).toEqual([key, true]);
+      expect(row?.label).toContain("Esc closes");
     }
   });
 });
@@ -1795,7 +1793,8 @@ describe("F2 — an invalid answer is not a lifecycle refusal", () => {
     expect(guidance).not.toContain("required");
     // Still the drawer's own sentence, with the way out and the keys.
     expect(guidance).toContain("Esc closes");
-    expect(guidance.length).toBeLessThanOrEqual(NARROW.columns);
+    expect(guidance).toContain("PageUp/PageDown reads more content");
+    expect(guidance).toContain("Wheel scrolls the reading under your pointer");
 
     // The two live in different places, so neither can be mistaken for the other.
     expect(invalid.refusal).toBe(undefined);

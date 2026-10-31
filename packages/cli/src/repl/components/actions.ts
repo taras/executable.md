@@ -27,6 +27,7 @@ export type ReplFieldPurpose =
   | "configure-agent";
 
 export type ReplAction =
+  | { readonly kind: "viewport-wheel"; readonly window: string; readonly direction: "up" | "down" }
   | {
       readonly kind: "reading-key";
       readonly reading: "selected" | "chat" | "drawer" | "empty";

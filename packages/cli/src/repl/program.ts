@@ -66,6 +66,7 @@ import {
   presentationFor,
   presentedDrawer,
   previewedMessage,
+  retainedDetailsOf,
   MESSAGE_VALUE_ROWS,
   footerSentence,
   guidanceSentence,
@@ -185,7 +186,7 @@ import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
-import { resolvePointer, useReplRenderer } from "./renderer.ts";
+import { resolveWheel, resolvePointer, useReplRenderer } from "./renderer.ts";
 import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./renderer.ts";
 import { useReplScreen } from "./screen.ts";
 import type { ReplScreen, ReplScreenEvent } from "./screen.ts";
@@ -1650,12 +1651,21 @@ function* drive(
           ended = true;
         } else if (wake.event.kind === "resize") {
           renderer.resize(wake.event.size);
-        } else if (wake.event.kind === "pointer") {
+        } else if (wake.event.kind === "pointer" || wake.event.kind === "wheel") {
           // Resolved only against the frame that produced these coordinates. A
           // stale frame, a node the tree has removed and a target behind a drawer
           // all reach nothing, and the drop happens without an action.
+          const size = yield* screen.size();
+          const valid =
+            rendered !== undefined &&
+            size.columns === rendered.size.columns &&
+            size.rows === rendered.size.rows;
           const aimed =
-            rendered === undefined ? undefined : resolvePointer(rendered, wake.event.at);
+            !valid || rendered === undefined
+              ? undefined
+              : wake.event.kind === "wheel"
+                ? resolveWheel(rendered, wake.event.at, wake.event.direction)
+                : resolvePointer(rendered, wake.event.at);
           if (aimed !== undefined) {
             if (yield* act(aimed)) {
               departing = true;
@@ -3394,6 +3404,10 @@ export function* commitReplFrame(
   const drawn = yield* renderer.draw({
     ops: committedOps(root, nodeByKey, mounted, cells, tree.focused()),
     boxes: drawnBoxesOf(root, nodeByKey, mounted),
+    scrolls: presentation.manifest.viewports.flatMap((slot) => {
+      const node = slot.owner === undefined ? undefined : nodeByKey.get(slot.owner);
+      return node === undefined || !mounted.has(node) ? [] : [{ id: slot.id, node }];
+    }),
     // Every region and every viewport, so where one landed is a fact the frame
     // carries rather than something a later caller works out again.
     // Every structural box the manifest placed: the regions, the viewports, the
@@ -3869,12 +3883,8 @@ export function* prepareFrame(
   if (!reading.ok) {
     return reading;
   }
-  // The open question's message, fitted to the drawer's own width. Prepared
-  // here for the same reason the reading is: a drawer row is one row, so a
-  // long preview line is only reachable if it was cut into rows before the
-  // window counted them.
-  // Whichever question the presented drawer is showing: the entry's where a
-  // route drawer is open, and the Sidekick's own where its pane-local form is.
+  // A drawer row is one displayed row: fitting the presented question or
+  // permission text before admission keeps wrapped content reachable.
   const asked = previewedMessage(view);
   const preview =
     asked === undefined || widths.drawer < 1
@@ -4068,6 +4078,14 @@ export function* prepareFrame(
   if (!notices.ok) {
     return notices;
   }
+  const detailLines = widths.drawer < 1 ? [] : retainedDetailsOf(view);
+  const details =
+    detailLines.length === 0
+      ? Ok(undefined)
+      : yield* fitPlain(renderer, view.size, detailLines, widths.drawer);
+  if (!details.ok) {
+    return details;
+  }
   const admission = admissionFor({
     view,
     manifest: placed.manifest,
@@ -4077,6 +4095,7 @@ export function* prepareFrame(
     chat: chat.value,
     queue: queued.value,
     notices: notices.value,
+    details: details.value,
     boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -4103,6 +4122,7 @@ export function* prepareFrame(
     draft: draftRows,
     editors,
     notices: notices.value,
+    details: details.value,
     queue: queued.value,
     headers: wrapped.size === 0 ? undefined : wrapped,
   };

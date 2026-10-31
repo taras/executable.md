@@ -2327,9 +2327,9 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     expect(yield* keysOf(view)).not.toContain(beyond);
     expect(nodeOf(tree, beyond)).toBe(undefined);
     expect(frame.node(beyond)).toBe(undefined);
-    // The controls that move the window never scroll away from whoever uses them.
-    expect(frame.node("entries:earlier")).toBeDefined();
-    expect(frame.node("entries:later")).toBeDefined();
+    // Window movement adds no activation controls.
+    expect(frame.node("entries:earlier")).toBeUndefined();
+    expect(frame.node("entries:later")).toBeUndefined();
 
     // Reached by scrolling, it is mounted, placed and offered.
     let at = state;

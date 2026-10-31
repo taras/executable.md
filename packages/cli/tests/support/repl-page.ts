@@ -126,6 +126,7 @@ export interface ReplPage {
   press(label: string, scope?: ScreenScope): Operation<void>;
   /** Send one named key. Waits for nothing. */
   key(name: PageKey): Operation<void>;
+  wheel(direction: "up" | "down", at: ScreenCell): Operation<void>;
   /** Send text to whatever holds focus. Waits for nothing. */
   type(text: string): Operation<void>;
   /** Resize the terminal and wait for a reading the new size produced. */
@@ -358,6 +359,10 @@ export function* useReplPage(
     repl.terminal.feed(KEYS[name]);
   }
 
+  function* wheel(direction: "up" | "down", at: ScreenCell): Operation<void> {
+    repl.terminal.feed(`\x1b[<${direction === "up" ? 64 : 65};${at.column + 1};${at.row + 1}M`);
+  }
+
   function* type(text: string): Operation<void> {
     repl.terminal.feed(text);
   }
@@ -380,5 +385,5 @@ export function* useReplPage(
     (one) => one.shows("[exit]") || one.shows("needs at least"),
   );
 
-  return { repl, screen, until, press, key: sendKey, type, resize, describe };
+  return { repl, screen, until, press, key: sendKey, wheel, type, resize, describe };
 }

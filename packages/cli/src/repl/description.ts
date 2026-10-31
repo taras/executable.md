@@ -147,7 +147,13 @@ export type ReplKey =
 export type ReplInputEvent =
   | { readonly kind: "key"; readonly key: ReplKey }
   | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "pointer"; readonly target: string; readonly frame: number };
+  | { readonly kind: "pointer"; readonly target: string; readonly frame: number }
+  | {
+      readonly kind: "wheel";
+      readonly direction: "up" | "down";
+      readonly target: string;
+      readonly frame: number;
+    };
 
 /** What a mounted child may do, for as long as it is mounted. */
 export interface ReplNode<Action> {

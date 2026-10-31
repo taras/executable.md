@@ -925,8 +925,9 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
 
     // Their own text in both composers first, which none of this may touch.
     yield* draftText(page, "mine");
-    // The send left the keystrokes in the composer, so this needs no route.
-    yield* typed(page, "later");
+    yield* intoComposer(page);
+    yield* page.type("later");
+    yield* page.until("the composer holding its unsent text", (one) => composerHolds(one, "later"));
 
     // Before opening it: nothing inspected, nothing established, nothing
     // written. Looking at the pane, changing tabs and resizing all cost
