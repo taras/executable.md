@@ -1,14 +1,48 @@
 {
-  "work": "consumer-migration",
-  "repository": "/absolute/path/to/prepared-source-worktree",
-  "directory": "/absolute/path/to/fresh-artifact-directory",
-  "request": "Implement and validate the API that removes the accepted consumer friction, migrate the remaining consumers, and retire the named obsolete machinery. Preserve the accepted behavior and meaningful evidence.",
-  "inputs": ["/absolute/path/to/accepted-story.md"],
+  "work": "bounded-parser-fix",
+  "repository": "/Users/tarasmankovski/.codex/worktrees/proportional-implementation/executable.md",
+  "directory": "/absolute/work/fresh-bounded-parser-fix",
+  "revision": "ec84362fd15df31fe2074f1ef8ee9b8474bc3a1e",
+  "request": "Implement the accepted parser correction and its focused regression using existing supported interfaces.",
+  "inputs": [
+    "/absolute/work/accepted-scope-and-checks.md"
+  ],
   "sessions": {
-    "planner": "consumer-migration-planner",
-    "implementor": "consumer-migration-implementor",
-    "architect": "consumer-migration-architect"
+    "planner": "bounded-parser-fix-planner",
+    "implementor": "bounded-parser-fix-implementor",
+    "architect": "bounded-parser-fix-architect"
   },
   "maxCorrections": 3,
-  "maxApiRepairs": 3
+  "maxApiRepairs": 3,
+  "assessment": {
+    "mechanical": false,
+    "architecture": false,
+    "acceptance": true,
+    "risk": null,
+    "reason": "Corrects the accepted observable parser behavior.",
+    "evidence": [
+      "/absolute/work/accepted-scope-and-checks.md"
+    ]
+  },
+  "scope": {
+    "decisions": {
+      "evidence": [
+        "/absolute/work/accepted-scope-and-checks.md"
+      ],
+      "openQuestions": []
+    },
+    "implementation": {
+      "ready": true,
+      "evidence": [
+        "/absolute/work/accepted-scope-and-checks.md"
+      ]
+    },
+    "sharedApi": {
+      "needed": false,
+      "evidence": [
+        "/absolute/work/accepted-scope-and-checks.md"
+      ]
+    },
+    "migration": null
+  }
 }

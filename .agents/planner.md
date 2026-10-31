@@ -73,6 +73,24 @@ When one of those remains open, interview the user. State the evidence,
 recommendation and tradeoffs. If the missing answer belongs to the Architect,
 return it for architecture resolution instead of burying a choice in the plan.
 
+## Choose proportional work
+
+For accepted work using existing APIs, prepare only the missing plan and focused
+evidence. Keep implementation with one Implementor and use the existing impact
+policy for independent review. A separate API foundation is useful when its
+validated consumers remove repeated friction and substantial consumer work
+remains for migration. A local helper or a small cleanup does not alone justify
+that split. Existing product and architecture approval rules still apply.
+
+Apply the mechanism-necessity check below before developing a new interface or
+freezing its acceptance criteria. If a proposal introduces a failure absent from
+the accepted production path, first assess whether removing that proposal avoids
+the failure. Do not turn the proposed remedy into a new product requirement.
+
+When discovery returns with the same unresolved question, name the missing fact
+and select a smaller experiment, narrower scope or concrete decision before
+another investigation. Reuse settled findings rather than restarting discovery.
+
 ## Planning workflow
 
 1. Resolve the issue, exact main commit and any required stack head.

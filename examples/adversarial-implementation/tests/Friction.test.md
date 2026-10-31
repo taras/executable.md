@@ -115,3 +115,56 @@ git rev-parse HEAD
 <AssertEquals actual={continued.calls} expected={held.calls} />
 </TempDir>
 </Test>
+
+<Test name="G10 continuation advances only the recorded next role and preserves correction standing" timeout="60s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Dir path={fixture.repository}>
+<File path="api.sh">format() { printf '%s' "$1"; }
+</File>
+```bash exec as="base"
+git add api.sh
+git commit -qm 'existing API'
+git rev-parse HEAD
+```
+<If condition={base.exitCode !== 0}><Fail message={base.stderr} /></If>
+</Dir>
+<Let as="reference" value={fixture.root + "/accepted.md"} />
+<Dir path={fixture.root}><File path="accepted.md">Captured original accepted behavior.</File></Dir>
+<Let as="impact" value={{...assessment,evidence:[reference]}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:"test",directory:fixture.directory,maxCorrections:3,roles:{architect:{session:"conditional-architect",provider:"codex",initialized:true},planner:{session:"original-planner",provider:"claude",initialized:true},implementor:{session:"original-implementor",provider:"claude",initialized:true}},acceptedInputs:[{path:reference,content:"Captured original accepted behavior."}],deliveredInputs:{"original-planner":[reference],"original-implementor":[reference]},assignment:{phase:"implementation",work:"test",repository:fixture.repository,revision:base.stdout.trim(),priorRevision:null,request:"migrate-consumer",assessment:impact,changedPaths:[],artifacts:[],evidence:[],findings:[]}}} />
+<Ticket.Start manifest={manifest} as="checkpoint" />
+<Let as="record" value={{manifest,checkpoint:{...checkpoint,round:2},calls:[],documents:{[reference]:manifest.acceptedInputs[0]}}} />
+<Dir path={fixture.directory + "/attempts"}><Let as="attemptsPrepared" value={true} /></Dir>
+<Dir path={fixture.directory + "/calls"}><Let as="callsPrepared" value={true} /></Dir>
+<Let as="pending" value={{...record,deliveredInputs:manifest.deliveredInputs,calls:[{id:"0000",role:"implementor",session:"original-implementor",provider:"claude",initialize:false,status:"accepted",result:"retained-result.json"}],checkpoint:{...record.checkpoint,gate:"planner-review",assignment:{...manifest.assignment,phase:"review"}}}} />
+<AssertEquals actual={pending.checkpoint.dispatchable} expected={true} />
+<AssertEquals actual={pending.checkpoint.gate} expected="planner-review" />
+<AssertEquals actual={pending.checkpoint.round} expected={2} />
+<Dir path={fixture.root}><File path="accepted.md">Changed mutable original after the recorded delivery.</File></Dir>
+<Fixture.Entry entry="continue" value={pending} repository={fixture.repository} steps={1} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="continued">{child.stdout}</Parse>
+<If condition={continued.status !== "feedback_ready"}><Fail message={JSON.stringify(continued)} /></If>
+<AssertEquals actual={continued.status} expected="feedback_ready" />
+<AssertEquals actual={continued.calls.slice(0,pending.calls.length)} expected={pending.calls} />
+<AssertEquals actual={continued.calls.length} expected={pending.calls.length + 1} />
+<AssertEquals actual={continued.calls.at(-1).role} expected="planner" />
+<AssertEquals actual={continued.calls.at(-1).session} expected="original-planner" />
+<AssertEquals actual={continued.calls.at(-1).provider} expected="claude" />
+<AssertEquals actual={continued.calls.at(-1).initialize} expected={false} />
+<AssertEquals actual={continued.calls.at(-1).inputs} expected={[]} />
+<AssertEquals actual={continued.deliveredInputs} expected={pending.deliveredInputs} />
+<AssertEquals actual={continued.manifest} expected={pending.manifest} />
+<AssertEquals actual={continued.checkpoint.initialized} expected={pending.checkpoint.initialized} />
+<AssertEquals actual={continued.checkpoint.round} expected={2} />
+<Each in={Object.keys(pending.documents)} let="path"><AssertEquals actual={continued.documents[path]} expected={pending.documents[path]} /></Each>
+<Dir path={fixture.root}><Glob include={["**/called.json"]} as="callsBefore" /></Dir>
+<Fixture.Entry entry="continue" value={continued} repository={fixture.repository} steps={1} command={runner} root={root} as="again" />
+<If condition={again.exitCode !== 0}><Fail message={again.stderr || again.stdout} /></If>
+<Parse schema={{type:"object"}} as="completed">{again.stdout}</Parse>
+<AssertEquals actual={completed} expected={continued} />
+<Dir path={fixture.root}><Glob include={["**/called.json"]} as="callsAfter" /></Dir>
+<AssertEquals actual={callsAfter} expected={callsBefore} />
+</TempDir>
+</Test>
