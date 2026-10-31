@@ -3757,6 +3757,60 @@ describe("REPL responsiveness: a chat the keystroke did not change", () => {
     return rows.map((one) => ({ key: one.key, line: one.line, text: one.text }));
   }
 
+  it("RS6: queue fitting reuses unchanged text and preserves fresh cuts after changes", function* () {
+    const renderer = yield* useCountingRenderer(WIDE);
+    const queueFits = createPlainFitStore();
+    const model = yield* emptyModel();
+    const chat = chatOf([]);
+    const text = `waiting e\u0301 \u5e83\u3044 ${WRAPS} QUEUE-TAIL`;
+    const queued = (text: string, size: ReplTerminalSize = WIDE): ReplView =>
+      withWorkspace(
+        frameOf(chat, {}, model, size),
+        workspaceOf(model, chat, {
+          pending: [{ key: "waiting", origin: { kind: "ui" }, text }],
+          held: undefined,
+        }),
+      );
+    const prepare = function* (view: ReplView, warm: boolean) {
+      renderer.reset();
+      const done = yield* prepareFrame(
+        renderer,
+        view,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        warm ? queueFits : undefined,
+      );
+      if (!done.ok) {
+        throw done.error;
+      }
+      return { rows: done.value.context.queue ?? [], measures: renderer.measures() };
+    };
+    const first = yield* prepare(queued(text), true);
+    const cached = yield* prepare(queued(text), true);
+    const fresh = yield* prepare(queued(text), false);
+    expect(first.rows.length).toBeGreaterThan(1);
+    expect(shapeOf(cached.rows)).toEqual(shapeOf(fresh.rows));
+    expect(cached.measures).toBeLessThan(first.measures);
+    expect(cached.measures).toBeLessThan(fresh.measures);
+    expect(
+      cached.rows
+        .map((row) => row.text)
+        .join("")
+        .trimStart(),
+    ).toBe(text);
+
+    for (const view of [queued(`${text} CHANGED`), queued(text, MEDIUM), queued("replacement")]) {
+      const warm = yield* prepare(view, true);
+      const cold = yield* prepare(view, false);
+      expect(shapeOf(warm.rows)).toEqual(shapeOf(cold.rows));
+    }
+    const empty = withWorkspace(frameOf(chat, {}, model), workspaceOf(model, chat));
+    expect((yield* prepare(empty, true)).rows).toEqual([]);
+  });
+
   it("RS4: growing one line measures only the line that grew", function* () {
     const held = yield* commanding();
     // Blank lines and a combining grapheme travel with this fixture, because

@@ -8932,9 +8932,9 @@ operation; they emit typed actions and the root alone changes route or state and
 performs work. Message is a distinct single-line destination with a revision of
 its own: typing and Backspace reach only it while it holds focus, Enter there or
 Send asks for that text, Draft's Enter still means Run, and an empty Message
-sends nothing. While the Sidekick is working, Message stays editable, Send has
-no admitted activation target and Stop is offered in its place, and finishing
-sends nothing that was prepared meanwhile. Both texts survive tab switches,
+sends nothing. While the Sidekick is working, Message stays editable and Send
+stays available beside Stop. Prepared text starts only after explicit Send;
+finishing sends nothing that was prepared meanwhile. Both texts survive tab switches,
 History navigation and resizing; the message is process-local and absent from the
 printed location. Send and Stop are spawned on the screen's own task, so a slow
 provider, an admission waiting on an entry, a joined entry outcome or Stop's

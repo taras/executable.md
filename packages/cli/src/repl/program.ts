@@ -697,6 +697,7 @@ function* drive(
   // chat's, and settling them into the chat's store would evict the chat on
   // every keystroke.
   const messageFits = createPlainFitStore();
+  const queueFits = createPlainFitStore();
   // And the directions', which change when focus or readiness does.
   const guidanceFits = createPlainFitStore();
   // And the staged Draft's, for the third time: a key typed into the Draft is
@@ -1330,6 +1331,7 @@ function* drive(
         messageFits,
         guidanceFits,
         draftFits,
+        queueFits,
       );
       if (!ready.ok) {
         throw ready.error;
@@ -1396,6 +1398,7 @@ function* drive(
           messageFits,
           guidanceFits,
           draftFits,
+          queueFits,
         );
         if (!ready.ok) {
           throw ready.error;
@@ -1599,6 +1602,7 @@ function* drive(
       messageFits,
       guidanceFits,
       draftFits,
+      queueFits,
     );
     rendered = first.rendered;
     presenting = presentedDrawer(first.view);
@@ -1618,6 +1622,7 @@ function* drive(
         messageFits,
         guidanceFits,
         draftFits,
+        queueFits,
       );
       rendered = marked.rendered;
       presenting = presentedDrawer(marked.view);
@@ -1855,6 +1860,7 @@ function* drive(
         messageFits,
         guidanceFits,
         draftFits,
+        queueFits,
       );
       rendered = painted.rendered;
       presenting = presentedDrawer(painted.view);
@@ -1884,6 +1890,7 @@ function* drive(
           messageFits,
           guidanceFits,
           draftFits,
+          queueFits,
         );
         rendered = again.rendered;
         presenting = presentedDrawer(again.view);
@@ -3178,6 +3185,7 @@ function* paint(
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
+  queue?: ReplPlainFitStore,
 ): Operation<ReplPainted> {
   while (true) {
     const painted = yield* prepared(
@@ -3191,6 +3199,7 @@ function* paint(
       message,
       guidance,
       draft,
+      queue,
     );
     if (painted !== undefined) {
       return painted;
@@ -3219,6 +3228,7 @@ function* prepared(
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
+  queue?: ReplPlainFitStore,
 ): Operation<ReplPainted | undefined> {
   return yield* scoped(function* (): Operation<ReplPainted | undefined> {
     const held = yield* frames.subscribe({ owner: "repl", participants: [["repl"]] });
@@ -3252,6 +3262,7 @@ function* prepared(
         message,
         guidance,
         draft,
+        queue,
       );
       if (committed.ok) {
         // 5. Present the copied bytes. 6. The caller retains the returned map.
@@ -3378,11 +3389,21 @@ export function* commitReplFrame(
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
+  queue?: ReplPlainFitStore,
 ): Operation<Result<ReplCommitted>> {
   // Measure before anything is mounted: this asks the engine how much room each
   // region has, so what a window shows is the frame's answer rather than this
   // boundary's guess. It mounts nothing and publishes nothing.
-  const prepared = yield* prepareFrame(renderer, view, store, chat, message, guidance, draft);
+  const prepared = yield* prepareFrame(
+    renderer,
+    view,
+    store,
+    chat,
+    message,
+    guidance,
+    draft,
+    queue,
+  );
   if (!prepared.ok) {
     return prepared;
   }
@@ -3638,6 +3659,7 @@ export function* prepareFrame(
    * other, and a shared store would evict whichever was not being typed into.
    */
   draftStore?: ReplPlainFitStore,
+  queueStore?: ReplPlainFitStore,
 ): Operation<Result<ReplPrepared>> {
   view = { ...view, initialPresentation: renderer.last() === undefined };
   // No widths at all for the pass that answers what the widths are. Every row
@@ -3669,7 +3691,7 @@ export function* prepareFrame(
   const queued =
     queueLines === undefined || (widths.queue ?? 0) < 1
       ? Ok(undefined)
-      : yield* fitPlain(renderer, view.size, queueLines, widths.queue ?? 0);
+      : yield* fitPlain(renderer, view.size, queueLines, widths.queue ?? 0, queueStore);
   if (!queued.ok) {
     return queued;
   }
