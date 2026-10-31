@@ -2,7 +2,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, scoped, sleep, spawn, suspend, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { XmdResponse, xmdPromptEvent } from "@executablemd/acp";
+import { XmdResponse, XMD_RESPONSE, xmdPromptEvent } from "@executablemd/acp";
 import { useHeadlessFixture, promptChild } from "./support/headless-repl.ts";
 import { requestAttachment } from "../src/sidekick-acp/client.ts";
 import { z } from "zod";
@@ -279,6 +279,134 @@ describe("headless child ACP clients", () => {
     });
     expect((yield* child.join()).code).toBe(0);
     expect(stdout).toContain("Answered by another supported input.");
+    yield* held.task.halt();
+  });
+  it("J4: stock ACPX 0.21.1 receives an offered permission and records its own default policy", function* () {
+    const held = yield* useHeadlessFixture();
+    const home = yield* useTemporary("xmd-headless-stock-permission-home-");
+    const stock = fileURLToPath(
+      new URL(
+        "../../../node_modules/.deno/acpx@0.21.1/node_modules/acpx/dist/cli.js",
+        import.meta.url,
+      ),
+    );
+    held.host.fake.script({
+      reply: entryResponse(
+        '<Agent name="scribe"><Session name="native"><Prompt>Use the requested tool.</Prompt></Session></Agent>',
+      ),
+    });
+    held.host.fake.script({
+      requestsTool: "write the synthetic file",
+      permissionChoices: [
+        { optionId: "allow-this-one", name: "Allow once", kind: "allow_once" },
+        { optionId: "reject-this-one", name: "Reject once", kind: "reject_once" },
+      ],
+      reply: "Tool completed.",
+    });
+    held.host.fake.script({ reply: "<Output>Stock permission exchange finished.</Output>" });
+    const finished = yield* exec("node", {
+      arguments: [
+        stock,
+        "--cwd",
+        held.descriptor.cwd,
+        "--format",
+        "json",
+        "--agent",
+        cliShellCommand(["sidekick", "child-acp", "--session-id", held.reference.sessionId]),
+        "exec",
+        "Ask through the stock permission.",
+      ],
+      cwd: held.descriptor.cwd,
+      env: {
+        HOME: home,
+        PATH: process.env.PATH ?? "",
+        DENO_DIR: process.env.DENO_DIR ?? "",
+        XMD_HEADLESS_ENDPOINT: held.path,
+      },
+    }).join();
+    const stdout = finished.stdout;
+    const line = z
+      .object({
+        method: z.string(),
+        params: z
+          .object({
+            options: z.array(z.object({ optionId: z.string() }).passthrough()),
+            _meta: z.object({
+              "executablemd.xmd-permission/v1": z.object({ requestId: z.string() }).passthrough(),
+            }),
+          })
+          .passthrough(),
+      })
+      .passthrough();
+    const notice = z
+      .object({
+        params: z
+          .object({
+            update: z
+              .object({
+                rawOutput: z.object({ "executablemd.xmd-response/v1": XmdResponse }).strict(),
+              })
+              .passthrough(),
+          })
+          .passthrough(),
+      })
+      .passthrough();
+    const traffic = stdout
+      .trim()
+      .split("\n")
+      .map((raw) => JSON.parse(raw));
+    const offers = traffic
+      .map((one) => line.safeParse(one))
+      .filter((one) => one.success && one.data.method === "session/request_permission")
+      .map((one) => (one.success ? one.data : undefined))
+      .filter((one): one is z.infer<typeof line> => one !== undefined);
+    expect(offers.length).toBeGreaterThan(0);
+    expect(offers[0]?.params.options.map((one) => one.optionId)).toEqual([
+      "allow-this-one",
+      "reject-this-one",
+    ]);
+    const requestId = offers[0]?.params._meta["executablemd.xmd-permission/v1"].requestId;
+    const response = traffic
+      .map((one) => notice.safeParse(one))
+      .filter((one) => one.success)
+      .map((one) => (one.success ? one.data : undefined))
+      .filter((one): one is z.infer<typeof notice> => one !== undefined)
+      .map((one) => one.params.update.rawOutput["executablemd.xmd-response/v1"])
+      .find((one) => one.requestId === requestId);
+    if (response === undefined) {
+      throw new Error(
+        "Stock permission traffic omitted its readable response/refusal: " + stdout,
+      );
+    }
+    // Stock ACPX's own non-interactive policy, observed rather than assumed,
+    // with no approve-all or other automatic-grant flag passed to it: it
+    // denies by default, answering the exact offered rejecting option
+    // itself — never the allowing one, and never a grant this repository
+    // invented. The alternative branch covers the case where it instead
+    // never submits one and the child's own request stays where it was.
+    if (response.event === "response" && response.outcome === "accepted") {
+      expect(held.host.fake.decisions).toEqual(["reject_once"]);
+      expect(stdout).toContain("Stock permission exchange finished.");
+    } else {
+      expect(response).toMatchObject({ event: "response", outcome: "not-submitted" });
+      expect(held.host.fake.decisions).toEqual([]);
+      const status = z
+        .object({ busy: z.boolean() })
+        .passthrough()
+        .parse(yield* requestAttachment(held.path, { method: "status" }));
+      expect(status.busy).toBe(true);
+      const offer = z
+        .object({ presentationId: z.string() })
+        .passthrough()
+        .parse(yield* requestAttachment(held.path, { method: "child-offer", requestId }));
+      yield* requestAttachment(held.path, {
+        method: "child-response",
+        kind: "permission",
+        requestId,
+        presentationId: offer.presentationId,
+        value: { outcome: { outcome: "selected", optionId: "allow-this-one" } },
+      });
+    }
     yield* held.task.halt();
   });
   it("H5: actual permission choices use the original owner, invalid options remain pending and stale ACP cannot settle again", function* () {
@@ -663,6 +791,165 @@ describe("headless child ACP clients", () => {
       .parse(yield* requestAttachment(held.path, { method: "status" }));
     expect(status.busy).toBe(false);
     expect(held.host.fake.prompts).toHaveLength(1);
+    yield* held.task.halt();
+  });
+  it("H6: a malformed B result fails and joins the actual local runtime while the parent-owned child survives", function* () {
+    const closing = withResolvers<void>();
+    const release = withResolvers<void>();
+    const held = yield* useHeadlessFixture(
+      // Accept the question outright, exactly as the embedded client would,
+      // without ever routing it through this process's own elicitation
+      // drawer: this witness is about the B result `consumeTurn` reads back,
+      // not about the A-side question-answering path the other H5/H6 cases
+      // already cover.
+      (input) => ({
+        ...input,
+        onElicitation: () =>
+          Promise.resolve({ action: "accept", content: { decision: "approve", reason: "reviewed" } }),
+      }),
+      undefined,
+      undefined,
+      {
+        // Corrupt exactly the accepted B result as `consumeTurn` reads it off
+        // the real ACP tool_call stream, rather than the A-side request
+        // `_meta` the callback-metadata case above corrupts.
+        transform(event) {
+          if (
+            event.type !== "tool_call" ||
+            event.rawOutput === null ||
+            typeof event.rawOutput !== "object" ||
+            !(XMD_RESPONSE in event.rawOutput)
+          ) {
+            return event;
+          }
+          const response = Reflect.get(event.rawOutput, XMD_RESPONSE);
+          if (
+            typeof response !== "object" ||
+            response === null ||
+            Reflect.get(response, "event") !== "response" ||
+            Reflect.get(response, "outcome") !== "accepted"
+          ) {
+            return event;
+          }
+          return { ...event, rawOutput: { [XMD_RESPONSE]: { not: "a valid response" } } };
+        },
+        *beforeClose() {
+          closing.resolve();
+          yield* release.operation;
+        },
+      },
+    );
+    held.host.fake.script({
+      reply: `<Elicit as="answer" schema={${JSON.stringify(conditional)}}>Actual failing B result.</Elicit>`,
+    });
+    const sent = yield* held.root.session.submit(
+      promptChild("Ask through the malformed B result."),
+    );
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    let finished = false;
+    const joining = yield* spawn(function* () {
+      const result = yield* sent.value.join();
+      finished = true;
+      return result;
+    });
+    // The malformed B result fails `XmdResponse.parse` inside `consumeTurn`'s
+    // own reading loop. Holding `beforeClose` open proves the parent Prompt
+    // cannot finish before that local cleanup joins.
+    yield* closing.operation;
+    expect(finished).toBe(false);
+    expect(held.root.session.elicitation.pending).toBeUndefined();
+    release.resolve();
+    const result = yield* joining;
+    expect(result.ok).toBe(false);
+    const status = z
+      .object({ busy: z.boolean() })
+      .passthrough()
+      .parse(yield* requestAttachment(held.path, { method: "status" }));
+    expect(status.busy).toBe(false);
+    // Exactly the one asking prompt, and at most the child's own ordinary
+    // automatic-feedback round over the answer it actually received — which
+    // may or may not have been reached yet when the outer turn's own
+    // cancellation won the race against it — but never a resend of either.
+    expect(held.host.fake.prompts.length).toBeGreaterThanOrEqual(1);
+    expect(held.host.fake.prompts.length).toBeLessThanOrEqual(2);
+    expect(held.host.fake.prompts[0]).toContain("Ask through the malformed B result.");
+    yield* held.task.halt();
+  });
+  it("H6/J5: a lost B notification remains unknown through the ordinary terminal path, with no resend", function* () {
+    const notices: AgentPromptEvent[] = [];
+    const held = yield* useHeadlessFixture(
+      (input) => ({
+        ...input,
+        onElicitation: () =>
+          Promise.resolve({ action: "accept", content: { decision: "approve", reason: "reviewed" } }),
+      }),
+      undefined,
+      undefined,
+      {
+        // The underlying request is genuinely answered — `requests.ts` settles
+        // it for real — but its matching B outcome notification never reaches
+        // the consumer: strip it from the wire event `consumeTurn` reads,
+        // leaving an ordinary tool_call_update carrying no XMD marker at all.
+        transform(event) {
+          if (
+            event.type !== "tool_call" ||
+            event.rawOutput === null ||
+            typeof event.rawOutput !== "object" ||
+            !(XMD_RESPONSE in event.rawOutput)
+          ) {
+            return event;
+          }
+          const response = Reflect.get(event.rawOutput, XMD_RESPONSE);
+          if (
+            typeof response !== "object" ||
+            response === null ||
+            Reflect.get(response, "event") !== "response" ||
+            Reflect.get(response, "outcome") !== "accepted"
+          ) {
+            return event;
+          }
+          return { ...event, rawOutput: {} };
+        },
+      },
+    );
+    held.host.fake.script({
+      reply: `<Elicit as="answer" schema={${JSON.stringify(conditional)}}>Lost B notification question.</Elicit>`,
+    });
+    held.host.fake.script({ reply: "<Output>Completed after a lost notification.</Output>" });
+    const observing = yield* spawn(function* () {
+      const updates = yield* held.root.session.agentChanges;
+      while (true) {
+        yield* updates.next();
+        for (const turn of held.root.session.agent.turns) {
+          notices.push(...(turn.inputResults ?? []));
+        }
+      }
+    });
+    const entry = yield* held.root.session.submit(
+      promptChild("Ask through a lost B notification."),
+    );
+    if (!entry.ok) {
+      throw entry.error;
+    }
+    const completed = yield* entry.value.join();
+    if (!completed.ok) {
+      throw completed.error;
+    }
+    const output = yield* entry.value.output();
+    if (!output.ok) {
+      throw output.error;
+    }
+    expect(output.value.output).toContain("Completed after a lost notification.");
+    yield* observing.halt();
+    // Unknown is the absence of a matching outcome, not a synthesized one:
+    // no question_answer_result ever appears for this exchange, and the
+    // ordinary terminal path completes exactly once with no resend — the
+    // second recorded prompt is the child's own ordinary automatic-feedback
+    // round over the answer it actually received, not a retry of anything.
+    expect(notices.some((one) => one.type === "question_answer_result")).toBe(false);
+    expect(held.host.fake.prompts).toHaveLength(2);
     yield* held.task.halt();
   });
   it("H5/J4: stock ACPX 0.21.1 sends two actual prompts to the exact live child", function* () {

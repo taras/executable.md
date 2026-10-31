@@ -33,6 +33,8 @@ export function* useHeadlessFixture(
   dataRoot?: string,
   native?: {
     event?(event: AcpRuntimeEvent): void;
+    /** Replace one raw ACP runtime event before `consumeTurn` reads it. */
+    transform?(event: AcpRuntimeEvent): AcpRuntimeEvent;
     permission?(request: AcpPermissionRequest): void;
     beforeClose?(): Operation<void>;
   },
@@ -101,10 +103,14 @@ export function* useHeadlessFixture(
                   return {
                     next: () =>
                       source.next().then((next) => {
-                        if (!next.done) {
-                          native?.event?.(next.value);
+                        if (next.done) {
+                          return next;
                         }
-                        return next;
+                        native?.event?.(next.value);
+                        const transform = native?.transform;
+                        return transform === undefined
+                          ? next
+                          : { ...next, value: transform(next.value) };
                       }),
                   };
                 },

@@ -81,7 +81,11 @@ function visible(terminal: Terminal, text: string, appliedFrames?: AppliedFrames
   ]);
 }
 
-function* press(terminal: Terminal, label: string, appliedFrames: AppliedFrames): Operation<void> {
+function* locate(
+  terminal: Terminal,
+  label: string,
+  appliedFrames: AppliedFrames,
+): Operation<{ row: number; column: number }> {
   const applied = appliedFrames.get(terminal);
   if (applied !== undefined) {
     yield* applied();
@@ -94,7 +98,15 @@ function* press(terminal: Terminal, label: string, appliedFrames: AppliedFrames)
   if (matches.length !== 1 || matches[0] === undefined) {
     throw new Error(`Expected one ${label}: ${rows.join("\n")}`);
   }
-  terminal.feed(`\x1b[<0;${matches[0].column + 1};${matches[0].row + 1}M`);
+  return matches[0];
+}
+
+function pressAt(terminal: Terminal, at: { row: number; column: number }): void {
+  terminal.feed(`\x1b[<0;${at.column + 1};${at.row + 1}M`);
+}
+
+function* press(terminal: Terminal, label: string, appliedFrames: AppliedFrames): Operation<void> {
+  pressAt(terminal, yield* locate(terminal, label, appliedFrames));
 }
 
 describe("headless live UI", () => {
@@ -236,15 +248,28 @@ describe("headless live UI", () => {
     yield* visible(terminal.terminal, "Enter answers", appliedFrames);
     yield* press(terminal.terminal, "( ) approve", appliedFrames);
     yield* visible(terminal.terminal, "(x) approve", appliedFrames);
-    const before = terminal.terminal.drawn;
-    yield* press(terminal.terminal, "[submit]", appliedFrames);
-    yield* terminal.terminal.after(before);
+    // The UI's own old submission of this exact question, retained unsent:
+    // its physical submit control is located now, while the drawer still
+    // answers it, so the same coordinates can be pressed again once the
+    // embedded channel has already settled the request.
+    const retainedSubmit = yield* locate(terminal.terminal, "[submit]", appliedFrames);
     expect(held.root.session.elicitation.pending).toBe(pending);
     expect(pending.submit({ decision: "approve", reason: "reviewed" }).kind).toBe("answered");
     const answered = yield* asking.value.join();
     if (!answered.ok) {
       throw answered.error;
     }
+    expect(held.root.session.elicitation.pending).toBeUndefined();
+    // The late UI submission: the same physical input the person would have
+    // sent, at the same coordinates, pressed only after the capable embedded
+    // answer already won. The original question is gone, so this has no
+    // successor to settle and no effect on the answer already returned.
+    const afterLate = terminal.terminal.drawn;
+    pressAt(terminal.terminal, retainedSubmit);
+    yield* terminal.terminal.after(afterLate);
+    yield* visible(terminal.terminal, "Shared question completed.", appliedFrames);
+    expect(terminal.terminal.screen?.rows().join("\n")).not.toContain("[submit]");
+    expect(held.root.session.elicitation.pending).toBeUndefined();
     const stale = XmdResponse.parse(
       yield* requestAttachment(held.path, {
         method: "child-response",
