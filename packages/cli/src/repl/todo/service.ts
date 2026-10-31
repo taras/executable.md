@@ -233,7 +233,8 @@ export function* useTodo(workspace: string): Operation<TodoService> {
                   JSON.stringify((yield* service.read()).items)
                 : selected.length === 0
                   ? ""
-                  : "Committed TODO changes (in commit order):\n" + JSON.stringify(selected);
+                  : "Committed TODO changes (in commit order):\n" +
+                    JSON.stringify(selected.map(({ origin, diff }) => ({ origin, diff })));
               const stream = yield* next(context === "" ? text : text + "\n\n" + context, options);
               const subscription = yield* stream;
               yield* provide({

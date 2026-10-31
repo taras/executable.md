@@ -280,6 +280,14 @@ describe("TODO strict source and serialized edits", () => {
 });
 
 describe("TODO exact source grammar and patches", () => {
+  it("describes separated changes without deleting and adding unchanged task lines", function* () {
+    const before = "- [ ] first\n- [ ] unchanged\n- [ ] last\n";
+    const after = "- [x] first\n- [ ] unchanged\n- [x] last\n";
+    const diff = todoDiff(before, after);
+    expect(diff).not.toContain("unchanged");
+    expect(applyTodoDiff(parseTodo(before), diff).source).toBe(after);
+  });
+
   it("preserves CRLF, blanks, trailing spaces, headers and final-newline markers", function* () {
     const source = "\r\n- [X] first  \r\n\r\n- [ ] last";
     const patch = "--- a/todo.md\n+++ b/todo.md\n@@ -2 +2 @@\n-- [X] first  \n+- [ ] first  \n";

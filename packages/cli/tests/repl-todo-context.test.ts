@@ -37,6 +37,29 @@ function* send(dispatch: SidekickDispatch, text: string): Operation<SidekickExch
 }
 
 describe("TODO context on independently admitted prompts", () => {
+  it("sends only the selected middle-task edit in ordinary provider input", function* () {
+    const { host, todo, dispatch } = yield* setup();
+    const source = "- [ ] before-neighbour-Q901\n- [ ] middle-Q901\n- [ ] after-neighbour-Q901\n";
+    yield* writeTextFile(host.workspace + "/todo.md", source);
+    yield* todo.apply("@@ -2 +2 @@\n-- [ ] middle-Q901\n+- [x] middle-Q901\n");
+    expect(todo.pending[0].items).toHaveLength(3);
+    expect(todo.pending[0].items[1]).toEqual({ text: "middle-Q901", completed: true });
+    host.fake.script({ reply: "<Output>reviewed delta</Output>" });
+    const sent = yield* send(dispatch, "review the selected edit");
+    expect((yield* sent.completion).ok).toBe(true);
+    const input = host.fake.prompts[0];
+    expect(input).toContain("+- [x] middle-Q901");
+    expect(input).not.toContain('"items":[');
+    for (const neighbour of ["before-neighbour-Q901", "after-neighbour-Q901"]) {
+      expect(input).not.toContain("-- [ ] " + neighbour);
+      expect(input).not.toContain("+- [ ] " + neighbour);
+      expect(input.split(neighbour).length - 1).toBeLessThanOrEqual(1);
+    }
+    expect((yield* todo.read()).items[1].completed).toBe(true);
+    expect(todo.pending).toEqual([]);
+    expect(todo.recovery).toBe(false);
+  });
+
   it("selects ordered finite deltas at activation and leaves late edits pending without idle drain", function* () {
     const { host, todo, dispatch } = yield* setup();
     host.fake.script({ reply: "<Output>first</Output>", held: true });
@@ -54,7 +77,7 @@ describe("TODO context on independently admitted prompts", () => {
     yield* host.fake.startedTurns(2);
     const selected = host.fake.prompts[1];
     expect(selected).toContain('"origin":"human"');
-    expect(selected.indexOf('"text":"one"')).toBeLessThan(selected.indexOf('"text":"two"'));
+    expect(selected.indexOf("+- [ ] one")).toBeLessThan(selected.indexOf("+- [x] two"));
     yield* todo.save("- [x] two\n", "- [ ] late\n");
     host.fake.releaseTurn();
     expect((yield* second.completion).ok).toBe(true);
@@ -62,8 +85,8 @@ describe("TODO context on independently admitted prompts", () => {
     expect(host.fake.prompts).toHaveLength(2);
     const third = yield* send(dispatch, "explicit next");
     expect((yield* third.completion).ok).toBe(true);
-    expect(host.fake.prompts[2]).toContain('"text":"late"');
-    expect(host.fake.prompts[2]).not.toContain('"text":"one"');
+    expect(host.fake.prompts[2]).toContain("+- [ ] late");
+    expect(host.fake.prompts[2]).not.toContain("one");
     expect(host.fake.prompts[2]).not.toContain("fresh recovery state");
     expect(todo.pending).toEqual([]);
     const saved = yield* records(host.execution);

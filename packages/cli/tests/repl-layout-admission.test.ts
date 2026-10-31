@@ -1,3 +1,4 @@
+import { todoTaskKeys } from "../src/repl/application.ts";
 import { parseTodo } from "../src/repl/todo/document.ts";
 /**
  * Measured admission (#875 TL2–TL5).
@@ -1898,12 +1899,16 @@ describe("shared TODO measured content", () => {
       const empty = yield* presenter.commit(frame(""));
       expect(empty.keys.some((key) => key.startsWith("todo:task:"))).toBe(false);
       const short = yield* presenter.commit(frame("- [ ] short\n"));
-      const extent = short.boundsOf("todo:task:0");
+      const extent = short.boundsOf(todoTaskKeys(parseTodo("- [ ] short\n"))[0]);
       expect(extent?.height).toBe(1);
-      const focused = yield* presenter.commit(frame("- [ ] short\n", "todo:task:0"));
-      expect(focused.boundsOf("todo:task:0")).toEqual(extent);
-      const checked = yield* presenter.commit(frame("- [x] short\n", "todo:task:0"));
-      expect(checked.boundsOf("todo:task:0")).toEqual(extent);
+      const focused = yield* presenter.commit(
+        frame("- [ ] short\n", todoTaskKeys(parseTodo("- [ ] short\n"))[0]),
+      );
+      expect(focused.boundsOf(todoTaskKeys(parseTodo("- [ ] short\n"))[0])).toEqual(extent);
+      const checked = yield* presenter.commit(
+        frame("- [x] short\n", todoTaskKeys(parseTodo("- [ ] short\n"))[0]),
+      );
+      expect(checked.boundsOf(todoTaskKeys(parseTodo("- [ ] short\n"))[0])).toEqual(extent);
       const wrapped = yield* presenter.commit(frame("- [ ] " + "word ".repeat(70) + "\n"));
       const filled = wrapped.keys.filter(
         (key) => key.startsWith("todo:task:") || key.startsWith("todo:continuation:"),
@@ -1915,7 +1920,9 @@ describe("shared TODO measured content", () => {
       const values = wrapped.keys.filter((key) => key.startsWith("sidekick:message:value:"));
       expect(message?.height).toBe(1);
       expect(values.length).toBeGreaterThanOrEqual(3);
-      expect(wrapped.boundsOf("todo:task:0")?.y).toBeLessThan(message?.y ?? 0);
+      expect(
+        wrapped.boundsOf(todoTaskKeys(parseTodo("- [ ] " + "word ".repeat(70) + "\n"))[0])?.y,
+      ).toBeLessThan(message?.y ?? 0);
     });
   }
 });

@@ -351,7 +351,10 @@ describe("TODO human semantic actions", () => {
     yield* page.press("Move down");
     yield* page.until(
       "move committed",
-      (one) => one.shows("[ ] duplicate") && !one.shows("> [ ] renamed"),
+      (one) =>
+        one.shows("> [ ] renamed rich code label") &&
+        one.rows.findIndex((row) => row.includes("[ ] duplicate")) <
+          one.rows.findIndex((row) => row.includes("> [ ] renamed rich code label")),
     );
     yield* awaitedFact("physical move", function* () {
       return (yield* readTextFile(file)).startsWith("- [ ] duplicate\n");
@@ -404,5 +407,48 @@ describe("TODO human semantic actions", () => {
     yield* awaitedFact("editing cleanup joined", function* () {
       return page.repl.outcome() !== undefined;
     });
+  });
+});
+
+describe("TODO background task focus", () => {
+  it("keeps the surviving target and its local actions after an external prepend", function* () {
+    const page = yield* useReplPage();
+    yield* intoComposer(page);
+    const read = yield* settledReading(page.repl);
+    const file = pairedLocation(page.repl.root, read.execution).directory + "/todo.md";
+    const source = "- [ ] first\n- [ ] target\n- [ ] last\n";
+    yield* writeTextFile(file, source);
+    yield* page.until("initial tasks", (one) => one.shows("[ ] target"));
+    yield* page.key("Backtab");
+    yield* page.until("TODO header focus", (one) => one.shows("> ▾ TODO"));
+    for (let attempt = 0; attempt < 10 && !page.screen().shows("> [ ] target"); attempt++) {
+      const before = page
+        .screen()
+        .rows.filter((row) => row.includes("> "))
+        .join("\n");
+      yield* page.key("ArrowDown");
+      yield* page.until(
+        "task focus advances",
+        (one) => one.rows.filter((row) => row.includes("> ")).join("\n") !== before,
+      );
+    }
+    yield* page.until("target focused", (one) => one.shows("> [ ] target"));
+    console.log(JSON.stringify({ correctionCapture: "before-prepend", rows: page.screen().rows }));
+    yield* writeTextFile(file, "- [ ] inserted-before\n" + source);
+    yield* page.until("real outside refresh", (one) => one.shows("[ ] inserted-before"));
+    expect(page.screen().shows("> [ ] target")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(0);
+    console.log(JSON.stringify({ correctionCapture: "after-prepend", rows: page.screen().rows }));
+    page.repl.fake.script({ reply: "<Output>reviewed removal</Output>" });
+    yield* page.press("Remove task");
+    yield* awaitedFact("local action removes target", function* () {
+      return (yield* readTextFile(file)) === "- [ ] inserted-before\n- [ ] first\n- [ ] last\n";
+    });
+    yield* page.until("human removal wake joined", (one) => one.shows("reviewed removal"));
+    page.repl.terminal.end();
+    yield* awaitedFact("background focus command joined", function* () {
+      return page.repl.outcome() !== undefined;
+    });
+    expect(page.repl.outcome()?.ok).toBe(true);
   });
 });

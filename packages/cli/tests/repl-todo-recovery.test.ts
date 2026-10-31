@@ -151,7 +151,7 @@ describe("TODO logical runtime recovery", () => {
     page.repl.fake.script({ reply: "<Output>independently requested</Output>" });
     yield* sendMessage(page, "explicit after cleanup");
     yield* page.until("explicit response", (one) => one.shows("[S] independently requested"));
-    expect(page.repl.fake.prompts[0]).toContain('"text":"pending during cleanup"');
+    expect(page.repl.fake.prompts[0]).toContain("+- [ ] pending during cleanup");
     page.repl.terminal.end();
     yield* awaitedFact("cleanup witness command joined", function* () {
       return page.repl.outcome() !== undefined;

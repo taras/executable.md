@@ -1061,7 +1061,7 @@ export const AT_TOP: ReplViewports = Object.freeze({
 export interface ReplState {
   readonly todoCollapsed?: boolean;
   readonly todoOffset?: number;
-  readonly todoSelected?: number;
+  readonly todoSelected?: string;
   readonly todoEditor?: {
     readonly source: string;
     readonly index: number;
@@ -4829,9 +4829,9 @@ export function focusSettled(
   admission?: ReplAdmission,
 ): ReplState {
   let state = view.state;
-  const selectedTodo = /^todo:task:(\d+)$/.exec(focused ?? "");
-  if (selectedTodo !== null) {
-    state = Object.freeze({ ...state, todoSelected: Number(selectedTodo[1]) });
+  const todoDocument = staged(view)?.todo?.document;
+  if (todoDocument !== undefined && todoTaskKeys(todoDocument).includes(focused ?? "")) {
+    state = Object.freeze({ ...state, todoSelected: focused });
   }
   const todoFrom = admission?.windows.get("todo")?.from;
   if (todoFrom !== undefined && todoFrom !== state.todoOffset) {
@@ -11867,11 +11867,10 @@ function workspaceControls(
       );
     }
     if (!state.todoCollapsed && document !== undefined && document.items.length > 0) {
-      const focused = /todo:(?:task:|action:)(\d+)/.exec(view.focused ?? "");
-      const index = Math.min(
-        document.items.length - 1,
-        focused === null ? (state.todoSelected ?? 0) : Number(focused[1]),
-      );
+      const keys = todoTaskKeys(document);
+      const focused = keys.indexOf(view.focused ?? "");
+      const selected = keys.indexOf(state.todoSelected ?? "");
+      const index = focused >= 0 ? focused : selected >= 0 ? selected : 0;
       for (const [name, label] of [
         ["up", "Move up"],
         ["down", "Move down"],
@@ -11905,8 +11904,9 @@ function workspaceControls(
       if (target >= 0) {
         from = Math.min(Math.max(from, target - cap + 1), target);
       }
+      const keys = todoTaskKeys(document);
       for (const piece of context.measuring ? [] : fitted.slice(from, from + cap)) {
-        const index = Number(piece.line.slice("todo:task:".length));
+        const index = keys.indexOf(piece.line);
         const task = document.items[index];
         if (task === undefined) {
           continue;
@@ -11932,11 +11932,11 @@ function workspaceControls(
                 text: task.text,
                 last: index === document.items.length - 1 && state.todoEditor === undefined,
                 reveal: {
-                  ArrowUp: `todo:task:${Math.max(0, index - 1)}`,
+                  ArrowUp: keys[Math.max(0, index - 1)],
                   ArrowDown:
                     index === document.items.length - 1 && state.todoEditor !== undefined
                       ? "todo:editor"
-                      : `todo:task:${index + 1}`,
+                      : keys[index + 1],
                 },
               },
               styleOf(task.completed ? "todo-completed" : "source"),
@@ -13541,11 +13541,21 @@ export function todoLinesOf(
   if (document === undefined || !showingSidekick(view) || view.state.todoCollapsed) {
     return [];
   }
+  const keys = todoTaskKeys(document);
   return document.items.map((item, index) => {
     const runs = [
       { text: `[${item.completed ? "x" : " "}] `, token: "source" as const },
       ...todoInline(item.text),
     ];
-    return { key: `todo:task:${index}`, text: runs.map((one) => one.text).join(""), runs };
+    return { key: keys[index], text: runs.map((one) => one.text).join(""), runs };
+  });
+}
+
+export function todoTaskKeys(document: TodoDocument): readonly string[] {
+  const occurrences = new Map<string, number>();
+  return document.items.map((item) => {
+    const occurrence = occurrences.get(item.text) ?? 0;
+    occurrences.set(item.text, occurrence + 1);
+    return `todo:task:${JSON.stringify([item.text, occurrence])}`;
   });
 }

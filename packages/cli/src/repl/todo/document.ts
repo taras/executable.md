@@ -73,26 +73,94 @@ function todoSource(lines: readonly TodoLine[]): string {
 }
 
 export function todoDiff(before: string, after: string): string {
-  if (before === after) {
-    return "";
-  }
   const old = sourceLines(before);
   const next = sourceLines(after);
-  const rows = [
-    `@@ -${old.length === 0 ? 0 : 1},${old.length} +${next.length === 0 ? 0 : 1},${next.length} @@`,
-  ];
-  for (const [prefix, lines] of [
-    ["-", old],
-    ["+", next],
-  ] as const) {
-    for (const line of lines) {
-      rows.push(prefix + line.text);
-      if (line.end === "") {
-        rows.push("\\ No newline at end of file");
+  const signature = (line: TodoLine): string => JSON.stringify([line.text, line.end]);
+  function positions(lines: readonly TodoLine[]): Map<string, number[]> {
+    const found = new Map<string, number[]>();
+    for (const [index, line] of lines.entries()) {
+      const key = signature(line);
+      const offsets = found.get(key) ?? [];
+      offsets.push(index);
+      found.set(key, offsets);
+    }
+    return found;
+  }
+  const oldPositions = positions(old);
+  const newPositions = positions(next);
+  const rows: string[] = [];
+  let left = 0;
+  let right = 0;
+  let startLeft = 0;
+  let startRight = 0;
+  const removed: TodoLine[] = [];
+  const added: TodoLine[] = [];
+  function flush(): void {
+    if (removed.length === 0 && added.length === 0) {
+      return;
+    }
+    rows.push(
+      `@@ -${startLeft + (removed.length === 0 ? 0 : 1)},${removed.length} +${startRight + (added.length === 0 ? 0 : 1)},${added.length} @@`,
+    );
+    for (const [prefix, lines] of [
+      ["-", removed],
+      ["+", added],
+    ] as const) {
+      for (const line of lines) {
+        rows.push(prefix + line.text);
+        if (line.end === "") {
+          rows.push("\\ No newline at end of file");
+        }
       }
     }
+    removed.length = 0;
+    added.length = 0;
   }
-  return rows.join("\n") + "\n";
+  while (left < old.length || right < next.length) {
+    const previous = old[left];
+    const following = next[right];
+    if (
+      previous !== undefined &&
+      following !== undefined &&
+      signature(previous) === signature(following)
+    ) {
+      flush();
+      left++;
+      right++;
+      continue;
+    }
+    if (removed.length === 0 && added.length === 0) {
+      startLeft = left;
+      startRight = right;
+    }
+    const oldMatch =
+      following === undefined
+        ? undefined
+        : oldPositions.get(signature(following))?.find((at) => at >= left);
+    const newMatch =
+      previous === undefined
+        ? undefined
+        : newPositions.get(signature(previous))?.find((at) => at >= right);
+    if (
+      previous === undefined ||
+      (newMatch !== undefined && (oldMatch === undefined || newMatch - right < oldMatch - left))
+    ) {
+      if (following !== undefined) {
+        added.push(following);
+        right++;
+      }
+    } else if (following === undefined || oldMatch !== undefined) {
+      removed.push(previous);
+      left++;
+    } else {
+      removed.push(previous);
+      added.push(following);
+      left++;
+      right++;
+    }
+  }
+  flush();
+  return rows.length === 0 ? "" : rows.join("\n") + "\n";
 }
 
 interface PatchLine {

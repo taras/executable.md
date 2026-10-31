@@ -9,8 +9,8 @@ import { recoveryReference } from "./sidekick/recovery-record.ts";
 import type { ReplRecovering } from "./application.ts";
 import type { RecoveryReview } from "./sidekick/owner.ts";
 import { TODO_WAKE, todoWakeEligible } from "./todo/wake.ts";
-import { todoLinesOf } from "./application.ts";
-import { TodoEditError } from "./todo/document.ts";
+import { todoLinesOf, todoTaskKeys } from "./application.ts";
+import { TodoEditError, parseTodo } from "./todo/document.ts";
 import { TodoSourceError } from "./todo/source.ts";
 import { parseFilesFailure } from "@executablemd/runtime";
 import { Todo } from "./todo/service.ts";
@@ -2278,10 +2278,7 @@ function* drive(
           todoSelected: performed.todoSelected ?? state.todoSelected,
           restore: {
             kind: "reveal",
-            key:
-              performed.todoSelected === undefined
-                ? "todo:header"
-                : `todo:task:${performed.todoSelected}`,
+            key: performed.todoSelected === undefined ? "todo:header" : performed.todoSelected,
           },
           refusal: undefined,
         } satisfies ReplState);
@@ -3519,7 +3516,7 @@ function isObject(value: Json): value is { [key: string]: Json } {
 /** What performing one intent produced. */
 interface Performed {
   readonly todoSaved?: true;
-  readonly todoSelected?: number;
+  readonly todoSelected?: string;
   /**
    * The exact object a question took, when one did and is now over.
    *
@@ -3720,7 +3717,11 @@ function* perform(
       if (todo.pending.length !== before) {
         yield* chat.todoWake();
       }
-      return { todoSaved: true, todoSelected: intent.selected, remounted: true };
+      return {
+        todoSaved: true,
+        todoSelected: todoTaskKeys(parseTodo(intent.replacement))[intent.selected ?? 0],
+        remounted: true,
+      };
     }
     case "none":
       return {};
