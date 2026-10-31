@@ -10726,7 +10726,8 @@ export function admissionFor(input: {
         view.state.restore?.kind === "reveal" ? view.state.restore.key : view.focused;
       const target = rows.findIndex((one) => one.line === requested);
       if (target >= 0 && capacity > 0) {
-        const end = rows.findLastIndex((one) => one.line === requested) + 1;
+        const end =
+          rows.reduce((last, one, index) => (one.line === requested ? index : last), -1) + 1;
         from = Math.min(Math.max(from, end - capacity), target);
       }
       const focused = rows.findIndex((one) => one.line === view.focused);
@@ -10739,7 +10740,10 @@ export function admissionFor(input: {
                 from: focused,
                 to: Math.min(
                   focused + capacity,
-                  rows.findLastIndex((one) => one.line === view.focused) + 1,
+                  rows.reduce(
+                    (last, one, index) => (one.line === view.focused ? index : last),
+                    -1,
+                  ) + 1,
                 ),
               },
             }),

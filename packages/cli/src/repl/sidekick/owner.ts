@@ -2373,6 +2373,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             if (sending.kind === "feedback") {
               began = (yield* paired.writer.readAll()).length - 1;
             }
+            yield* refresh();
           }
         },
       };

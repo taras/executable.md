@@ -2232,7 +2232,7 @@ describe("Older chats retain their identity across failure and cold opening", ()
 });
 
 function* conversationChoices(page: ReplPage): Operation<string[]> {
-  yield* page.press(" ▾");
+  yield* page.press(" ▾", page.screen().size.columns <= 72 ? undefined : { onRow: "TRANSCRIPT" });
   yield* page.until("the offered conversations", (one) => one.shows("All conversations"));
   return page
     .screen()
@@ -2489,7 +2489,7 @@ describe("Sidekick original multiline composer ownership", () => {
     const page = yield* useReplPage();
     yield* populateChat(page, 10);
     yield* intoComposer(page);
-    expect(composerRows(page.screen())).toHaveLength(1);
+    expect(composerRows(page.screen())).toHaveLength(3);
     yield* composerPaste(page, "a question whose words have to wrap onto another row of the pane");
     const wrapped = composerRows(page.screen(), "a question");
     expect(wrapped.length).toBeGreaterThan(1);
@@ -2548,7 +2548,7 @@ describe("Sidekick original multiline composer ownership", () => {
     ).toEqual(newer);
   });
 
-  it("MC6: control — an acknowledged Send leaves one blank value row", function* () {
+  it("MC6: control — an acknowledged Send leaves three blank value rows", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "<Output>Done.</Output>\n" });
     yield* intoComposer(page);
@@ -2556,7 +2556,7 @@ describe("Sidekick original multiline composer ownership", () => {
     expect(composerRows(page.screen()).length).toBeGreaterThan(1);
     yield* sendComposed(page);
     yield* page.until("the value acknowledged", (one) => chatHas(one, "Done."));
-    expect(composerRows(page.screen())).toHaveLength(1);
+    expect(composerRows(page.screen())).toHaveLength(3);
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["one\ntwo\nthree"]);
   });
 
@@ -3080,7 +3080,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
     const page = yield* useReplPage();
     yield* draftText(page, "kept entry");
     yield* compose(page, "kept question");
-    for (let press = 0; press < 1; press += 1) {
+    for (let press = 0; press < 2; press += 1) {
       const index = page.screen().index;
       yield* page.key("Backtab");
       yield* page.until("the preceding control", (one) => one.index > index);

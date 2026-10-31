@@ -291,7 +291,7 @@ describe("wheel remaining migration journeys", () => {
     page.repl.fake.script({
       reply: `<Elicit as="answer" schema={{type:"object",properties:{value:{type:"string"}},required:["value"],additionalProperties:false}}>${preview}</Elicit>`,
     });
-    for (let at = 0; at < 3; at += 1) {
+    for (let at = 0; at < 4; at += 1) {
       yield* key(page, "Tab");
     }
     yield* page.type("question");
@@ -469,18 +469,13 @@ describe("wheel remaining migration journeys", () => {
       "current restored and joined",
       (one) => !one.shows("[Back to current chat]") && sidekickIdle(one),
     );
-    // Retiring Stop returns one header row to chat without moving its first visible row.
-    const last = inspected[inspected.length - 1];
-    if (last === undefined) {
-      throw new Error("the streaming chat had no rows to inspect");
-    }
-    const nextRow = `New row ${String(Number(last.slice("New row ".length)) + 1).padStart(2, "0")}`;
+    // Stop and Send share the same action band, so joining changes no chat capacity.
     expect(
       page
         .screen()
         .rows.filter((row) => row.includes("New row"))
         .map((row) => row.slice(row.lastIndexOf("New row"))),
-    ).toEqual([...inspected, nextRow]);
+    ).toEqual(inspected);
     expect(page.screen().shows("New live tail")).toBe(false);
     expect(page.repl.fake.prompts).toHaveLength(2);
     absentButtons(page);
