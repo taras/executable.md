@@ -304,9 +304,11 @@ another tab changes only the view; background task or message activity never
 selects a tab. Selecting TODO shows its retained state; activating its active
 header collapses or expands the checklist. `+` creates a task. Task Space checks or
 reopens; Enter edits. Down from the last task creates another. Enter saves the
-editor, Escape cancels, arrows edit its caret and Tab leaves the region. Each
-task has ↑, ↓ and x controls beside its first displayed row for move up, move
-down and remove. Left/Right reaches those controls within the task row. Alt+Up/Down navigates locally
+editor, Escape cancels, arrows edit its caret and Tab leaves the region. Tasks
+show ☐ when incomplete and ☑ when complete. Only the task with keyboard focus
+on its label or an action shows ↑, ↓ and x beside its first displayed row for
+move up, move down and remove. These controls share the list background.
+Left/Right reaches them within the focused task row. Alt+Up/Down navigates locally
 without reordering. The TODO header is its fixed Tab and Backtab entry between
 the conversation and Message. Background changes preserve collapse, focus,
 composer text and reading positions.

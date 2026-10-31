@@ -11879,20 +11879,22 @@ function workspaceControls(
               { here: view.focused, claim, runs: piece.runs },
             ),
           );
-          for (const [name, label] of [
-            ["up", "↑"],
-            ["down", "↓"],
-            ["remove", "x"],
-          ]) {
-            items.push(
-              row(
-                `${piece.line}:action:${name}`,
-                label,
-                { select: `todo-${name}`, source: document.source, index },
-                styleOf("action"),
-                { here: view.focused },
-              ),
-            );
+          if (todoOwns(piece.line, view.focused)) {
+            for (const [name, label] of [
+              ["up", "↑"],
+              ["down", "↓"],
+              ["remove", "x"],
+            ]) {
+              items.push(
+                row(
+                  `${piece.line}:action:${name}`,
+                  label,
+                  { select: `todo-${name}`, source: document.source, index },
+                  styleOf("navigate"),
+                  { here: view.focused },
+                ),
+              );
+            }
           }
         }
       }
@@ -13599,7 +13601,7 @@ export function todoLinesOf(
   const keys = todoTaskKeys(document);
   return document.items.map((item, index) => {
     const runs = [
-      { text: `[${item.completed ? "x" : " "}] `, token: "source" as const },
+      { text: `${item.completed ? "☑" : "☐"} `, token: "source" as const },
       ...todoInline(item.text),
     ];
     return { key: keys[index], text: runs.map((one) => one.text).join(""), runs };

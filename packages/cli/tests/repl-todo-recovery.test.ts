@@ -31,6 +31,7 @@ describe("TODO logical runtime recovery", () => {
     yield* first.type("saved before failure");
     yield* first.key("Enter");
     yield* first.repl.fake.startedTurns(1);
+    yield* first.press("QUEUE");
     yield* first.until("failed wake held", (one) => one.shows("Resume queue"));
     const read = yield* settledReading(first.repl);
     const file = pairedLocation(first.repl.root, read.execution).directory + "/todo.md";

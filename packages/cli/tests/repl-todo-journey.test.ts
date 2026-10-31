@@ -11,12 +11,12 @@ import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { TODO_WAKE } from "../src/repl/todo/wake.ts";
 
 function inertFocused(one: ScreenReading): boolean {
-  const focus = one.rows.findIndex((row) => row.includes("> [ ]"));
+  const focus = one.rows.findIndex((row) => row.includes("> ☐"));
   const text = one.rows.findIndex((row) => row.includes("<Sidekick.Tod"));
   return (
     focus >= 0 &&
     text >= focus &&
-    !one.rows.slice(focus + 1, text + 1).some((row) => row.includes("[ ]"))
+    !one.rows.slice(focus + 1, text + 1).some((row) => row.includes("☐"))
   );
 }
 
@@ -78,7 +78,7 @@ for (const size of [
         "- [ ] **one** `code` [label](https://example.com)\n",
       );
       yield* page.press("▾ TODO");
-      yield* page.until("collapsed", (one) => !one.shows("[ ] one"));
+      yield* page.until("collapsed", (one) => !one.shows("☐ one"));
       capture(page, "collapsed");
       expect(page.screen().shows("Remove task")).toBe(false);
       yield* page.press("+", { onRow: "▸ TODO" });
@@ -150,10 +150,10 @@ for (const size of [
       for (let taskIndex = 0; taskIndex < 13; taskIndex++) {
         const expected =
           taskIndex === 0
-            ? "> [x]"
+            ? "> ☑"
             : taskIndex === 12
-              ? "> [ ] <Sidekick.Todo>"
-              : `> [ ] task-${taskIndex}`;
+              ? "> ☐ <Sidekick.Todo>"
+              : `> ☐ task-${taskIndex}`;
         const matches =
           taskIndex === 12 ? inertFocused : (one: ScreenReading) => one.shows(expected);
         for (
@@ -241,7 +241,12 @@ for (const size of [
               (one.size.columns >= 160 ? 8 : one.size.columns >= 120 ? 6 : 3),
             one.locate("message the sidekick").row,
           )
-          .map((row) => row.replace(/> (?=\[)/, "  "));
+          .map((row) =>
+            row
+              .replace(/> (?=[☐☑])/, "  ")
+              .replace(/ {2,}[↑↓x >]+(?=\s*$)/, "")
+              .trimEnd(),
+          );
       const beforeSwitch = visibleRows(page.screen());
       yield* page.press("QUEUE");
       yield* page.until("queue hides checklist", (one) => !one.shows("<Sidekick.Tod"));
@@ -283,7 +288,7 @@ describe("TODO human semantic actions", () => {
     yield* page.key("Enter");
     yield* sleep(30);
     yield* page.repl.fake.startedTurns(1);
-    yield* page.until("rich task", (one) => one.shows("[ ] rich code label"));
+    yield* page.until("rich task", (one) => one.shows("☐ rich code label"));
     const read = yield* settledReading(page.repl);
     const file = pairedLocation(page.repl.root, read.execution).directory + "/todo.md";
     const timings: number[] = [];
@@ -351,16 +356,16 @@ describe("TODO human semantic actions", () => {
     inputCount++;
     yield* page.key("Enter");
     yield* sleep(30);
-    yield* page.until("renamed task", (one) => one.shows("[ ] renamed rich code label"));
+    yield* page.until("renamed task", (one) => one.shows("☐ renamed rich code label"));
     inputCount++;
     yield* page.press("▾ TODO");
     yield* page.until("collapsed before task navigation", (one) => one.shows("▸ TODO"));
     inputCount++;
     yield* page.press("▸ TODO");
-    yield* page.until("expanded for keyboard", (one) => one.shows("[ ] renamed rich code label"));
+    yield* page.until("expanded for keyboard", (one) => one.shows("☐ renamed rich code label"));
     for (
       let attempt = 0;
-      attempt < 10 && !page.screen().shows("> [ ] renamed rich code label");
+      attempt < 10 && !page.screen().shows("> ☐ renamed rich code label");
       attempt++
     ) {
       const before = page.screen().index;
@@ -369,23 +374,23 @@ describe("TODO human semantic actions", () => {
       yield* sleep(30);
       yield* page.until("task focus write", (one) => one.index > before);
     }
-    yield* page.until("task focused", (one) => one.shows("> [ ] renamed rich code label"));
+    yield* page.until("task focused", (one) => one.shows("> ☐ renamed rich code label"));
     const extent = page.screen().locate("renamed rich code label");
     inputCount++;
     yield* page.type(" ");
-    yield* page.until("completed task", (one) => one.shows("> [x] renamed rich code label"));
+    yield* page.until("completed task", (one) => one.shows("> ☑ renamed rich code label"));
     expect(page.screen().locate("renamed rich code label")).toEqual(extent);
     inputCount++;
     yield* page.type(" ");
-    yield* page.until("reopened task", (one) => one.shows("> [ ] renamed rich code label"));
+    yield* page.until("reopened task", (one) => one.shows("> ☐ renamed rich code label"));
     inputCount++;
     yield* page.press("↓", { onRow: "renamed rich code label" });
     yield* page.until(
       "move committed",
       (one) =>
-        one.shows("> [ ] renamed rich code label") &&
-        one.rows.findIndex((row) => row.includes("[ ] duplicate")) <
-          one.rows.findIndex((row) => row.includes("> [ ] renamed rich code label")),
+        one.shows("> ☐ renamed rich code label") &&
+        one.rows.findIndex((row) => row.includes("☐ duplicate")) <
+          one.rows.findIndex((row) => row.includes("> ☐ renamed rich code label")),
     );
     yield* awaitedFact("physical move", function* () {
       return (yield* readTextFile(file)).startsWith("- [ ] duplicate\n");
@@ -403,7 +408,7 @@ describe("TODO human semantic actions", () => {
     yield* page.until("collapse after remove", (one) => one.shows("▸ TODO"));
     inputCount++;
     yield* page.press("▸ TODO");
-    yield* page.until("expand after remove", (one) => one.shows("[ ] duplicate"));
+    yield* page.until("expand after remove", (one) => one.shows("☐ duplicate"));
     for (let at = 0; at < 10 && !page.screen().shows("Task:"); at++) {
       const before = page.screen().index;
       inputCount++;
@@ -449,10 +454,10 @@ describe("TODO background task focus", () => {
     const file = pairedLocation(page.repl.root, read.execution).directory + "/todo.md";
     const source = "- [ ] first\n- [ ] target\n- [ ] last\n";
     yield* writeTextFile(file, source);
-    yield* page.until("initial tasks", (one) => one.shows("[ ] target"));
+    yield* page.until("initial tasks", (one) => one.shows("☐ target"));
     yield* page.key("Backtab");
     yield* page.until("TODO header focus", (one) => one.shows("> ▾ TODO"));
-    for (let attempt = 0; attempt < 10 && !page.screen().shows("> [ ] target"); attempt++) {
+    for (let attempt = 0; attempt < 10 && !page.screen().shows("> ☐ target"); attempt++) {
       const before = page
         .screen()
         .rows.filter((row) => row.includes("> "))
@@ -463,21 +468,31 @@ describe("TODO background task focus", () => {
         (one) => one.rows.filter((row) => row.includes("> ")).join("\n") !== before,
       );
     }
-    yield* page.until("target focused", (one) => one.shows("> [ ] target"));
+    yield* page.until("target focused", (one) => one.shows("> ☐ target"));
     for (const icon of ["↑", "↓", "x"]) {
       yield* page.key("ArrowRight");
       yield* page.until("target local action focused", (one) =>
-        one.rows.some((row) => row.includes("[ ] target") && row.includes(`> ${icon}`)),
+        one.rows.some((row) => row.includes("☐ target") && row.includes(`> ${icon}`)),
       );
     }
     console.log(JSON.stringify({ correctionCapture: "before-prepend", rows: page.screen().rows }));
     yield* writeTextFile(file, "- [ ] inserted-before\n" + source);
-    yield* page.until("real outside refresh", (one) => one.shows("[ ] inserted-before"));
-    expect(
-      page.screen().rows.some((row) => row.includes("[ ] target") && row.includes("> x")),
-    ).toBe(true);
+    yield* page.until("real outside refresh", (one) => one.shows("☐ inserted-before"));
+    expect(page.screen().rows.some((row) => row.includes("☐ target") && row.includes("> x"))).toBe(
+      true,
+    );
     expect(page.repl.fake.prompts).toHaveLength(0);
     console.log(JSON.stringify({ correctionCapture: "after-prepend", rows: page.screen().rows }));
+    for (const size of [
+      { columns: 120, rows: 30 },
+      { columns: 72, rows: 20 },
+      { columns: 160, rows: 36 },
+    ]) {
+      yield* page.resize(size);
+      yield* page.until("task action survives resize", (one) =>
+        one.rows.some((row) => row.includes("☐ target") && row.includes("> x")),
+      );
+    }
     page.repl.fake.script({ reply: "<Output>reviewed removal</Output>" });
     yield* page.key("Enter");
     yield* awaitedFact("local action removes target", function* () {

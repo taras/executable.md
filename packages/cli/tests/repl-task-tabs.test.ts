@@ -45,15 +45,58 @@ for (const size of [
       const file = pairedLocation(page.repl.root, reading.execution).directory + "/todo.md";
       const source = "- [x] done `code`\n- [ ] wrapped " + "label ".repeat(30) + "\n- [ ] last\n";
       yield* writeTextFile(file, source);
-      yield* page.until("current tasks", (one) => one.shows("[x] done code"));
+      yield* page.until("current tasks", (one) => one.shows("☑ done code"));
       const first = page.screen().locate("done code");
-      for (const icon of ["↑", "↓"]) {
-        expect(page.screen().locate(icon, { onRow: "done code" }).row).toBe(first.row);
-      }
-      expect(page.screen().rows[first.row].trimEnd().endsWith(" x")).toBe(true);
+      expect(page.screen().rows[first.row]).not.toContain("↑");
+      expect(page.screen().rows[first.row]).not.toContain("↓");
       expect(page.screen().locate("▾ TODO").row).toBe(page.screen().locate("QUEUE 0/16").row);
       expect(page.repl.terminal.screen?.styleAt(first.column, first.row).attrs).toContain(9);
-      capture(page, "todo-icons-wrapped");
+      capture(page, "composer-no-task-icons");
+      yield* page.key("Backtab");
+      yield* page.until("task tabs focused", (one) => one.shows("> ▾ TODO"));
+      yield* page.key("ArrowDown");
+      yield* page.until("completed task focused", (one) => one.shows("> ☑ done code"));
+      const focused = page.screen().locate("done code");
+      for (const icon of ["↑", "↓", "x"]) {
+        const at = page.screen().locate(icon, { onRow: "done code" });
+        expect(at.row).toBe(focused.row);
+        expect(page.repl.terminal.screen?.styleAt(at.column, at.row).background).toBe(
+          page.repl.terminal.screen?.styleAt(focused.column, focused.row).background,
+        );
+      }
+      capture(page, "completed-task-focused");
+      yield* page.key("ArrowRight");
+      yield* page.until("task action focused", (one) =>
+        one.rows.some((row) => row.includes("☑ done code") && row.includes("> ↑")),
+      );
+      const action = page.screen().locate("↑", { onRow: "done code" });
+      const label = page.screen().locate("done code");
+      expect(page.repl.terminal.screen?.styleAt(action.column, action.row).background).toBe(
+        page.repl.terminal.screen?.styleAt(label.column, label.row).background,
+      );
+      capture(page, "task-action-focused");
+      yield* page.key("ArrowLeft");
+      yield* page.until("task body focused again", (one) => one.shows("> ☑ done code"));
+      yield* page.key("ArrowDown");
+      yield* page.until("incomplete wrapped task focused", (one) => one.shows("> ☐ wrapped"));
+      expect(
+        page
+          .screen()
+          .rows.filter((row) => row.includes("done code"))
+          .every((row) => !row.includes("↑")),
+      ).toBe(true);
+      capture(page, "incomplete-wrapped-focused");
+      yield* page.key("ArrowUp");
+      yield* page.until("completed task reading restored", (one) => one.shows("> ☑ done code"));
+      yield* page.key("Tab");
+      yield* page.until(
+        "Message focus hides task actions",
+        (one) =>
+          one.shows("> › message the sidekick") &&
+          !one.rows[one.locate("done code").row].includes("↑") &&
+          !one.rows[one.locate("wrapped").row].includes("↑"),
+      );
+      capture(page, "composer-after-task-focus");
 
       page.repl.fake.script({ reply: "<Output>held answer</Output>", held: true });
       yield* page.type("active request");
@@ -84,7 +127,7 @@ for (const size of [
       yield* page.until("middle caret established", (one) => composerHolds(one, "kXept message"));
       yield* page.key("Backspace");
       yield* page.until("message retained", (one) => composerHolds(one, "kept message"));
-      expect(page.screen().shows("[x] done code")).toBe(true);
+      expect(page.screen().shows("☑ done code")).toBe(true);
       capture(page, "todo-queue-arrival");
 
       yield* page.press("QUEUE 2/16");

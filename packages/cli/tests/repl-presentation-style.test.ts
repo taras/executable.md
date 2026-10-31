@@ -5290,7 +5290,8 @@ describe("Checkpoint #971 — the workspace screen at 160x36", () => {
     // Follow remains absent; the queue shares the fixed tray header.
     const todo = placed(observed, "todo:header");
     const sidekickStop = placed(observed, "sidekick:stop");
-    expect(sidekickStop.y).toBeLessThan(todo.y);
+    expect(sidekickStop.y).toBe(todo.y);
+    expect(placed(observed, "tray:queue").y).toBe(todo.y);
     expect(todo.x).toBeLessThan(sidekickStop.x);
     expect(sidekickStop.x + sidekickStop.width).toBeLessThan(160);
     expect(observed.keys.includes("tray:queue")).toBe(true);
