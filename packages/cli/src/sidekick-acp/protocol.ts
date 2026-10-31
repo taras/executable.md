@@ -1,3 +1,4 @@
+import { UiSize } from "../headless/ui-schema.ts";
 import { z } from "zod";
 import { createContext } from "effection";
 import type { Operation } from "effection";
@@ -46,6 +47,19 @@ export const Cursor = z
   })
   .strict();
 export const Request = z.discriminatedUnion("method", [
+  z.object({ method: z.literal("child-offer"), requestId: identity }).strict(),
+  z
+    .object({
+      method: z.literal("child-response"),
+      kind: z.enum(["question", "permission"]),
+      requestId: identity,
+      presentationId: identity,
+      value: z.unknown(),
+    })
+    .strict(),
+  z.object({ method: z.literal("child-release"), presentationId: identity }).strict(),
+  z.object({ method: z.literal("child-retire"), presentationId: identity }).strict(),
+  z.object({ method: z.literal("ui"), size: UiSize }).strict(),
   z.object({ method: z.literal("hello"), descriptor: Descriptor }).strict(),
   z.object({ method: z.literal("attach"), cwd: absolute }).strict(),
   z.object({ method: z.literal("load"), attachment: identity, cwd: absolute }).strict(),
@@ -101,6 +115,7 @@ export interface Wire {
   close(): void;
 }
 export interface SidekickTransport {
+  canonicalDirectory?(path: string): Operation<string>;
   supported(): boolean;
   identify(): string;
   publish(

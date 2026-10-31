@@ -1,4 +1,5 @@
 import { runSessionOwnership } from "./session-ownership.ts";
+import { attachChildUi } from "./headless/ui.ts";
 import { runSidekickCommand, SIDEKICK_HELP } from "./sidekick-acp/command.ts";
 import { SidekickTransport } from "./sidekick-acp/protocol.ts";
 import { isAbsolute, resolve } from "node:path";
@@ -325,6 +326,10 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  * their entries is not the same choice as who their entries talk to.
  */
 const replConfig = object({
+  attach: {
+    description: "attach one interactive UI to this exact live XMD child",
+    ...field(z.string().optional()),
+  },
   sidekickAcp: {
     description: "absolute private attachment file; initializes Sidekick when needed (POSIX only)",
     ...field(z.string().optional()),
@@ -604,6 +609,9 @@ const UPGRADE_OPTIONS: readonly string[] = [...UPGRADE_SWITCHES, UPGRADE_JOURNAL
 const REPL_HELP = [
   "ENTRIES",
   "",
+  "  xmd repl --attach <sessionId> attaches to an exact live parent-owned XMD child.",
+  "  Its [detach] control, EOF and terminal loss release only that UI. Use XMD.Session.Shutdown in the owning parent to stop and join the child.",
+  "  A live sessionId is separate from a retained xmd://repl location.",
   "  xmd repl opens an empty draft in a full-screen terminal. Type or paste an",
   "  XMD entry and submit it; the REPL runs it, and you can pause its expansion,",
   "  look at an earlier point in its history, answer a question it asks and read",
@@ -700,6 +708,7 @@ export const REPL_VALUES: readonly string[] = [
   "--default-agent",
   "--sidekick-agent",
   "--sidekick-acp",
+  "--attach",
 ];
 
 /** The three REPL switches, which carry none. */
@@ -714,6 +723,7 @@ export function replGrammarError(
   const rest = args.slice(1);
   const positional: string[] = [];
   let attachmentPath = false;
+  let childAttachment = false;
   for (let at = 0; at < rest.length; at += 1) {
     const token = rest[at] ?? "";
     if (!token.startsWith("-") || token === "-") {
@@ -725,6 +735,16 @@ export function replGrammarError(
     const split = token.indexOf("=");
     const name = split === -1 ? token : token.slice(0, split);
     const written = split === -1 ? undefined : token.slice(split + 1);
+    if (name === "--attach") {
+      if (childAttachment) {
+        return "xmd repl: --attach accepts exactly one sessionId";
+      }
+      childAttachment = true;
+      const id = written ?? rest[at + 1];
+      if (!z.string().uuid().safeParse(id).success) {
+        return "xmd repl: --attach requires the exact returned XMD sessionId";
+      }
+    }
     if (REPL_SWITCHES.includes(name)) {
       if (written !== undefined) {
         return `xmd repl: ${name} is a switch and takes no value`;
@@ -775,6 +795,9 @@ export function replGrammarError(
       "xmd repl takes at most one location. A location names the one retained " +
       "execution to reopen, so there is no second one to name."
     );
+  }
+  if (childAttachment && (positional.length > 0 || attachmentPath)) {
+    return "xmd repl: --attach selects a live child and accepts no cold location or --sidekick-acp.";
   }
   if (location !== undefined) {
     const decoded = decodeLocation(location);
@@ -2998,6 +3021,19 @@ function* dispatch(
         yield* exit(1);
         break;
       }
+      if (command.config.attach !== undefined) {
+        if (command.config.location !== undefined || command.config.sidekickAcp !== undefined) {
+          throw new Error(
+            "--attach selects a live child and accepts no cold location or --sidekick-acp.",
+          );
+        }
+        if (replHost === undefined) {
+          throw new Error("This host provides no interactive child UI.");
+        }
+        yield* replHost.install();
+        yield* attachChildUi(command.config.attach);
+        break;
+      }
       const mountCwd = yield* cwd();
       const mounts = parseWorkspaceMounts(command.config.mount, mountCwd, { resolve });
       if (!mounts.ok) {
@@ -3491,6 +3527,9 @@ export function* runXmd(
   }
   if (args[0] === "sidekick") {
     try {
+      if (args[1] === "child-acp" && replHost !== undefined) {
+        yield* replHost.install();
+      }
       yield* runSidekickCommand(args.slice(1));
     } catch (error) {
       console.error(

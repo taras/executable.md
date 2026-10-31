@@ -251,6 +251,8 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     // an execution does with the entries it is given — and it is now the
     // behavior the mounted journeys actually prove.
     expect(own.stdout).toContain("--include");
+    expect(own.stdout).toContain("--attach");
+    expect(own.stdout).toContain("sessionId");
     expect(own.stdout).toContain("explicit values replace the default list [components, .]");
     expect(own.stdout).toContain("ENTRIES");
     expect(own.stdout).toContain("An execution admits one entry at a time");
@@ -277,6 +279,26 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(malformed.code).toBe(1);
     expect(malformed.stderr).toContain("xmd repl:");
     expect(malformed.stderr).toContain("xmd://repl/");
+  });
+
+  it("CH13: live attachment grammar refuses missing, repeated and cold targets before resources", function* () {
+    const id = "00000000-0000-4000-8000-000000000001";
+    const cases = [
+      { args: ["--attach"], message: "requires the exact returned XMD sessionId" },
+      { args: ["--attach", "worker"], message: "requires the exact returned XMD sessionId" },
+      { args: ["--attach", id, "--attach", id], message: "accepts exactly one sessionId" },
+      { args: ["--attach", id, "xmd://repl/unused"], message: "accepts no cold location" },
+      {
+        args: ["--attach", id, "--sidekick-acp", "/tmp/unused"],
+        message: "accepts no cold location",
+      },
+    ];
+    for (const { args, message } of cases) {
+      const result = yield* runCli(["repl", ...args]).join();
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain(message);
+      expect(result.stderr).not.toContain("interactive terminal");
+    }
   });
 
   it("C1: repl states the same five Agent options as run, described the same way", function* () {

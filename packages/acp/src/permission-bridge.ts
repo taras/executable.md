@@ -35,11 +35,17 @@
  * evaluation).
  */
 
-import { on, race } from "effection";
-import type { Operation, Scope } from "effection";
-import { Agent } from "@executablemd/core";
+import { ensure, Err, Ok, on, race, withResolvers } from "effection";
+import type { Operation, Result, Scope, Task } from "effection";
+import { z } from "zod";
+import { Agent, prepareElicitation, runPreparedElicitation } from "@executablemd/core";
 import type { PermissionOption, PermissionRequest, Session } from "@executablemd/core";
-import type { AcpPermissionDecision, AcpPermissionRequest } from "./acpx-runtime.ts";
+import type {
+  AcpPermissionDecision,
+  AcpPermissionRequest,
+  AcpElicitationRequest,
+  AcpElicitationResponse,
+} from "./acpx-runtime.ts";
 
 const CANCEL: AcpPermissionDecision = { outcome: "cancel" };
 
@@ -87,9 +93,18 @@ interface RegisteredTurn {
   refresh: RefreshRecord;
   currentId: string;
   active: boolean;
+  inputs: Map<string, Task<unknown>>;
+  retired: Set<string>;
+  failure: ReturnType<typeof withResolvers<Error>>;
 }
 
 export interface Registration {
+  readonly failed: Operation<Error>;
+  elicitation(
+    request: AcpElicitationRequest,
+    signal: AbortSignal,
+  ): Operation<AcpElicitationResponse>;
+  retire(presentationId: string): Operation<void>;
   /** Remove this registration; an in-flight refresh cannot reinsert it. */
   unregister(): void;
 }
@@ -147,6 +162,78 @@ export function strictPermissions(denied: (session: Session) => void): Permissio
     return CANCEL;
   };
 }
+
+function* inputInSubscriber<T>(
+  registered: RegisteredTurn,
+  signal: AbortSignal,
+  presentationId: string | undefined,
+  work: () => Operation<T>,
+  fatal: boolean,
+): Operation<Result<T> | undefined> {
+  const aborts = yield* on(signal, "abort");
+  if (
+    signal.aborted ||
+    !registered.active ||
+    (presentationId !== undefined && registered.retired.has(presentationId))
+  ) {
+    return undefined;
+  }
+  let task: Task<Result<T>> | undefined;
+  yield* ensure(function* () {
+    if (task !== undefined) {
+      yield* task.halt();
+    }
+    if (presentationId !== undefined) {
+      registered.inputs.delete(presentationId);
+    }
+  });
+  if (
+    signal.aborted ||
+    !registered.active ||
+    (presentationId !== undefined && registered.retired.has(presentationId))
+  ) {
+    return undefined;
+  }
+  const running = registered.scope.run(function* (): Operation<Result<T>> {
+    try {
+      return Ok(yield* work());
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      if (fatal) {
+        registered.failure.resolve(error);
+      }
+      return Err(error);
+    }
+  });
+  task = running;
+  if (presentationId !== undefined) {
+    registered.inputs.set(presentationId, running);
+  }
+  try {
+    return yield* race([
+      running,
+      (function* (): Operation<undefined> {
+        yield* aborts.next();
+        yield* running.halt();
+        return undefined;
+      })(),
+    ]);
+  } catch (error) {
+    if (
+      signal.aborted ||
+      !registered.active ||
+      (presentationId !== undefined && registered.retired.has(presentationId))
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+const permissionMeta = z
+  .object({ requestId: z.string().min(1), presentationId: z.string().min(1) })
+  .strict();
+const questionMeta = permissionMeta.extend({ schema: z.record(z.string(), z.json()) }).strict();
 
 export function createPermissionBridge(
   policy: PermissionPolicy = composablePermissions,
@@ -213,9 +300,52 @@ export function createPermissionBridge(
         refresh,
         currentId: acpSessionId,
         active: true,
+        inputs: new Map(),
+        retired: new Set(),
+        failure: withResolvers<Error>(),
       };
       turns.set(acpSessionId, entry);
       return {
+        failed: entry.failure.operation,
+        *retire(presentationId) {
+          entry.retired.add(presentationId);
+          const task = entry.inputs.get(presentationId);
+          if (task !== undefined) {
+            yield* task.halt();
+          }
+        },
+        *elicitation(request, signal) {
+          const parsed = questionMeta.safeParse(request._meta?.["executablemd.xmd-question/v1"]);
+          if (!parsed.success) {
+            entry.failure.resolve(parsed.error);
+            throw parsed.error;
+          }
+          const metadata = parsed.data;
+          const result = yield* inputInSubscriber(
+            entry,
+            signal,
+            metadata.presentationId,
+            function* () {
+              const prepared = yield* prepareElicitation(metadata.schema, "XMD child question");
+              const answer = yield* runPreparedElicitation(prepared, request.message);
+              const content = z
+                .record(
+                  z.string(),
+                  z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]),
+                )
+                .parse(answer);
+              return { action: "accept", content } satisfies AcpElicitationResponse;
+            },
+            true,
+          );
+          if (result === undefined) {
+            return { action: "cancel" };
+          }
+          if (!result.ok) {
+            throw result.error;
+          }
+          return result.value;
+        },
         unregister() {
           entry.active = false;
           if (turns.get(entry.currentId) === entry) {
@@ -227,7 +357,7 @@ export function createPermissionBridge(
     *decision(request, signal) {
       // Subscribe to abort BEFORE any policy work and recheck, so a
       // synchronous abort during evaluation is never lost.
-      const aborts = yield* on(signal, "abort");
+      yield* on(signal, "abort");
       if (signal.aborted) {
         return CANCEL;
       }
@@ -243,24 +373,17 @@ export function createPermissionBridge(
       }
       const registered = target;
       try {
-        // Policy errors are contained INSIDE the task: an unhandled
-        // task failure would propagate into the prompt scope itself.
-        // Halts are unaffected — try/catch does not intercept them.
-        const task = registered.scope.run(function* (): Operation<AcpPermissionDecision> {
-          try {
-            return yield* policy(request, registered.session);
-          } catch {
-            return CANCEL;
-          }
-        });
-        return yield* race([
-          task,
-          (function* (): Operation<AcpPermissionDecision> {
-            yield* aborts.next();
-            yield* task.halt();
-            return CANCEL;
-          })(),
-        ]);
+        const parsed = permissionMeta.safeParse(
+          request.raw._meta?.["executablemd.xmd-permission/v1"],
+        );
+        const result = yield* inputInSubscriber(
+          registered,
+          signal,
+          parsed.success ? parsed.data.presentationId : undefined,
+          () => policy(request, registered.session),
+          false,
+        );
+        return result?.ok ? result.value : CANCEL;
       } catch {
         // Torn-down prompt scopes cancel — never fall through to
         // another policy or ACPX's mode resolver.

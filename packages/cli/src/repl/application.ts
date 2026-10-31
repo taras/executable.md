@@ -580,6 +580,7 @@ export interface ReplSessionTurn {
   /** The mounted identity: this process's slot, or a record's own marker. */
   readonly key: string;
   readonly prompt: string;
+  readonly inputResults?: ReplLiveTurn["inputResults"];
   /** `retained` once a record holds it, and the live states until then. */
   readonly state: ReplLiveTurnState | "retained";
   readonly text: string;
@@ -668,6 +669,7 @@ function liveTurn(key: string, turn: ReplLiveTurn, live: ReplLive): ReplSessionT
     prompt: turn.prompt,
     state: turn.state,
     text: turn.text,
+    inputResults: turn.inputResults,
     agent: turn.agent,
     sessionKey: turn.sessionKey,
     status: turn.status,
@@ -1290,6 +1292,7 @@ export interface ReplTransition {
 
 /** One complete reading of the product, ready to describe. */
 export interface ReplView {
+  readonly detachable?: boolean;
   readonly state: ReplState;
   readonly model: ReplModel;
   /**
@@ -5630,9 +5633,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // node: while a drawer is mounted it is reparented into the modal branch, so it
   // stays reachable without reaching past the focus trap, and layout still draws
   // it in the footer where it always is.
-  const exit = row("footer:exit", "[exit]", { select: "exit" }, styleOf("action"), {
-    here: view.focused,
-  });
+  const exit = row(
+    "footer:exit",
+    view.detachable === true ? "[detach]" : "[exit]",
+    { select: "exit" },
+    styleOf("action"),
+    {
+      here: view.focused,
+    },
+  );
   // Whether the action row holds one control at all. A control the measured row
   // cannot hold whole is not described, so it mounts nothing: describing it and
   // leaving it out of the frame would be a focus stop that draws nothing and a
@@ -6129,6 +6138,7 @@ function sessionRows(
         ),
       );
     }
+    entries.push(...inputResultRows(turn, width));
     if (turn.text.length > 0) {
       entries.push(
         line(
@@ -10703,6 +10713,31 @@ function workspaceHeadings(
  * The same keys and the same activation the ordinary rows have, so selecting a
  * turn goes where it always did.
  */
+function inputResultRows(turn: ReplSessionTurn, width: number | undefined): readonly Described[] {
+  return (turn.inputResults ?? []).flatMap((event, index) => {
+    const kind =
+      event.type === "question_answer_result" ? "Question answer" : "Permission decision";
+    const id = event.type === "question_answer_result" ? event.questionId : event.permissionId;
+    const result = event.result;
+    const summary = `${kind} ${id}, input ${event.inputId}: ${result.status}${result.status === "invalid" ? ` (${result.reason})` : ""}`;
+    const messages = [
+      summary,
+      ...(result.status === "invalid" && result.reason === "schema"
+        ? result.issues.map((issue) => `${issue.instancePath}: ${issue.message}`)
+        : []),
+    ];
+    return messages.map((text, offset) =>
+      line(
+        `sessions:turn:${turn.key}:input:${index}:${offset}`,
+        fitLine([{ text: "    " }, { text, elide: true }], width),
+        styleOf(
+          result.status === "invalid" || result.status === "stale" ? "failed-outcome" : "metadata",
+        ),
+      ),
+    );
+  });
+}
+
 function compactTurn(
   turn: ReplSessionTurn,
   width: number | undefined,
@@ -10731,6 +10766,7 @@ function compactTurn(
       { here: focused, claim, runs: markedRuns(AGENT_MARK, label, style.role) },
     ),
   );
+  rows.push(...inputResultRows(turn, width));
   if (turn.text.length > 0) {
     rows.push(
       line(

@@ -1,3 +1,6 @@
+import { env } from "@executablemd/runtime";
+import { childAddressPath } from "../headless/host.ts";
+import { runChildProbe } from "../headless/probe.ts";
 import { z } from "zod";
 import type { Operation } from "effection";
 import { isAbsolute } from "node:path";
@@ -22,6 +25,21 @@ const positive = z
   .transform(Number)
   .pipe(z.number().int().positive().safe());
 export function* runSidekickCommand(args: readonly string[]): Operation<void> {
+  if (args[0] === "child-acp") {
+    if (!(args.length === 1 || (args.length === 3 && args[1] === "--session-id"))) {
+      throw new Error("child-acp accepts only --session-id with an exact live child reference.");
+    }
+    const sessionId = args[2] ?? (yield* env("XMD_HEADLESS_SESSION"));
+    if (sessionId === undefined) {
+      yield* runChildProbe();
+    } else {
+      yield* runSidekickBridge(
+        (yield* env("XMD_HEADLESS_ENDPOINT")) ?? (yield* childAddressPath(sessionId)),
+        sessionId,
+      );
+    }
+    return;
+  }
   if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
     console.log(SIDEKICK_HELP);
     return;

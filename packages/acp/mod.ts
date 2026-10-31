@@ -31,6 +31,7 @@ export type {
 } from "./src/provider.ts";
 /** The agent ACPX selects when nothing else is configured. */
 export { DEFAULT_AGENT_NAME } from "./src/acpx-runtime.ts";
+export { createAcpRuntime, createAgentRegistry } from "./src/acpx-runtime.ts";
 
 /**
  * Native session launch: the adapters whose resume command shape this package
@@ -114,3 +115,7 @@ export type {
   AgentSessionRouteV2,
   AgentSessionRouteV3,
 } from "./src/session-route.ts";
+
+export { resolveSessionDetails } from "./src/session-key.ts";
+
+export { XmdResponse, XMD_RESPONSE, xmdPromptEvent } from "./src/xmd-response.ts";

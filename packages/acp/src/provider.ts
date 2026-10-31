@@ -2847,13 +2847,15 @@ function* useAcpxProviderState(
             entry.session.agentSessionId = initial.agentSessionId;
           }
           const activeSessionId = initial?.acpSessionId ?? entry.handle.backendSessionId;
+          let registration: import("./permission-bridge.ts").Registration | undefined;
           if (activeSessionId !== undefined) {
-            const registration = bridge.register(activeSessionId, scope, entry.session, refresh);
+            registration = bridge.register(activeSessionId, scope, entry.session, refresh);
             yield* ensure(() => {
-              registration.unregister();
+              registration?.unregister();
             });
           }
 
+          const callbacks = agentName === "xmd" ? registration : undefined;
           const timeoutMs = options?.timeout;
           // The runtime that made this handle, never "the" runtime: a turn
           // started through another partition would be a second child in a
@@ -2864,6 +2866,27 @@ function* useAcpxProviderState(
             mode: "prompt",
             requestId: randomUUID(),
             timeoutMs,
+            ...(callbacks === undefined
+              ? {}
+              : {
+                  onElicitation: (request, context) =>
+                    scope
+                      .run(function* (): Operation<
+                        Result<import("./acpx-runtime.ts").AcpElicitationResponse>
+                      > {
+                        try {
+                          return Ok(yield* callbacks.elicitation(request, context.signal));
+                        } catch (error) {
+                          return Err(toError(error));
+                        }
+                      })
+                      .then((result) => {
+                        if (!result.ok) {
+                          throw result.error;
+                        }
+                        return result.value;
+                      }),
+                }),
           });
           activeTurns.add(turn);
           let completed = false;
@@ -2919,6 +2942,19 @@ function* useAcpxProviderState(
               launchCoordinator === undefined
                 ? undefined
                 : (terminal, token) => launchCoordinator.checkpoint(terminal, token),
+              callbacks,
+              callbacks === undefined
+                ? undefined
+                : function* () {
+                    yield* until(
+                      entry.runtime.runtime.close({
+                        handle: entry.handle,
+                        reason: "XMD callback or response stream failed",
+                      }),
+                    );
+                    releasedHandle(entry);
+                    detachSessionHandle(entry.session.sessionKey, entry);
+                  },
             ),
           );
           return subscription;

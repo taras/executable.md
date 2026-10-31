@@ -16,6 +16,13 @@ xmd repl 'xmd://repl/<execution>/entries' --include ../shared
 
 ## The command line, and the order it is read in
 
+`xmd repl --attach <sessionId>` connects one interactive UI to an exact live
+parent-owned XMD child. It accepts one returned ID, with no cold location or
+`--sidekick-acp`. Grammar is checked before connection or terminal acquisition.
+An unknown/ended reference and a second UI refuse without replacement or takeover.
+The normal interactive command retains terminal-before-history preflight; child
+hosting is a separate terminal-free path.
+
 `xmd repl` takes one optional location and the five Agent options `xmd run`
 takes, with the same spellings, the same descriptions and the same defaults:
 `--agent-provider` (default `acpx`), `--default-agent` (falling back to
@@ -23,7 +30,7 @@ takes, with the same spellings, the same descriptions and the same defaults:
 `--approve-reads` and `--deny-all`. An unstated permission line means
 `--approve-reads`.
 
-It takes one option of its own, because it has a Sidekick and a run has none:
+Its Sidekick selection has a separate option:
 `--sidekick-agent` names the agent a fresh Sidekick conversation is opened
 under. It is a separate selection rather than a second spelling of
 `--default-agent` — that one is the agent a `<Session>` an entry writes means
@@ -378,6 +385,23 @@ reading an earlier position is refused, and refusing it starts nothing.
 
 ## What a later entry starts from
 
+An XMD child reference can be published as eligible root JSON and selected in a
+later entry. The nested XMD.Session capture does not export itself. Capture the
+returned JSON at the entry root, for example:
+
+```xmd
+<Parse as="child" schema={{type:"object",properties:{sessionId:{type:"string"}},required:["sessionId"],additionalProperties:false}}>
+<Agent name="xmd"><Session name="worker">
+<XMD.Session as="started" /><Json value={started} />
+</Session></Agent>
+</Parse>
+```
+
+A later entry uses `<Agent name="xmd"><XMD.Session sessionId={child.sessionId}><Prompt>Continue.</Prompt></XMD.Session></Agent>`.
+The object carries identity only. Completed-document output can restore that data;
+selection, attachment and Shutdown still require the original live child. Capturing
+it extends no lifetime and grants no foreign parent's shutdown authority.
+
 The root values an earlier entry durably published are what the next one begins
 with. For each name it is the last value any earlier entry retained, in Journal
 order, and the values are the entry's own to change — they behave like values
@@ -710,6 +734,14 @@ drawn, not focusable and reaches no pointer.
 
 ## Permission: a live request, and a retained audit
 
+A headless child's ACP permission callback offers the original owner's actual
+options. ACP and UI submit to that same owner. An unoffered option or malformed
+response leaves it pending; a stale presentation cannot settle a later request.
+Input withdrawal removes and joins the corresponding callback, without creating
+a denial. Correlated response outcomes are transient live-turn notices outside
+reply text and retained Prompt records; accepted means original-owner acceptance,
+not journal publication or completed work.
+
 A turn waiting for permission says so on its own row, and that is all arriving
 does: nothing moves, nothing takes focus, and nothing else stops. Activate it and
 a drawer shows what is being asked — its kind, the call, whose turn is waiting,
@@ -1014,6 +1046,15 @@ process opening the same URL opens each reading at its start.
 
 ## The form language a question is drawn in
 
+The child ACP path delivers the actual message and complete normalized schema.
+Standard requestedSchema preserves original field names and unconditional rules;
+visible text explains conditional requirements. Namespaced optional metadata
+retains the complete if/then schema for capable clients. Original Core validation
+still decides acceptance. An invalid answer reports normalized issues and leaves
+the same request pending; a fresh presentation can correct it. UI and ACP stale
+responses refuse after one owner resolves. A client without form capability sees
+the full question and a precise refusal, while the child keeps waiting.
+
 A question's schema is read whole before anybody is asked. What this REPL draws
 is a closed object of string fields, each with its title, description, whether it
 is required, its minimum length and the exact enum values it accepts, plus at
@@ -1047,6 +1088,15 @@ No provider is reached to do it, no adapter is materialized, and nothing is
 appended: the history file is byte-identical before and after a cold run.
 
 ## How this command ends
+
+A connected child UI ends with `[detach]`, terminal EOF or connection loss.
+Each joins its UI readers, terminal modes, rendering, frame demand and exclusive
+lease. The parent-owned root and independently admitted work continue; reattachment
+shows current state without replaying acknowledged effects. In the owning parent,
+`<XMD.Session.Shutdown sessionId={child.sessionId} />` stops the exact child and
+returns after actual root, socket and process cleanup joins. Ending the parent
+performs the same cleanup. Unknown/ended IDs refuse. Cold retained-history opening
+is a separate operation and does not reopen an ended resource.
 
 Activating `[exit]`, pressing Control-C, Escape on the too-small refusal, EOF, a
 renderer that cannot present, a terminal that fails mid-read and a cancelled
@@ -2047,6 +2097,20 @@ not recorded appears as an explicit overlay; once the durable close exists, the
 recorded output replaces it.
 
 ## Attaching to the live Sidekick
+
+The entry composition `Agent name="xmd"` with a canonical Session starts a
+parent-owned headless child before `XMD.Session` reads its exact `{sessionId}`.
+Reading sends no Prompt; Session names remain labels and distinct declarations
+have distinct identities. The shipped Guide.Children chapter and REPL.Syntax
+describe startup, later selection, `xmd repl --attach <sessionId>`, detach and
+Shutdown using ordinary host facts. No provider-private file is required.
+
+The child's private endpoint validates its exact live owner/execution/conversation/cwd
+association. A symlinked temporary path resolves to a validated canonical private
+location; an unsafe location refuses with an actionable directory requirement.
+Its ACP/UI question and permission response capability belongs to this child
+connection. The prepared Sidekick attachment described below retains its original
+rights and still cannot answer questions.
 
 A POSIX REPL can initialize its Sidekick and publish a private attachment without
 UI input:

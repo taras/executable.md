@@ -59,7 +59,7 @@ export interface ReplScreen {
   /** The size as it stands. */
   size(): Operation<ReplTerminalSize>;
   /** Put one rendered frame on the terminal. */
-  present(bytes: Uint8Array): Operation<void>;
+  present(bytes: Uint8Array, size?: ReplTerminalSize): Operation<void>;
   /**
    * Everything that happened, in order, from the moment the screen opened.
    *

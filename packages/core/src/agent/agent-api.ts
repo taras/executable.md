@@ -90,7 +90,31 @@ export interface AgentOptionsRequest {
   readonly model?: string;
 }
 
+export type ChildAnswerPromptEvent =
+  | {
+      readonly type: "question_answer_result";
+      readonly questionId: string;
+      readonly inputId: string;
+      readonly result:
+        | { readonly status: "accepted" | "stale" | "not-submitted" }
+        | {
+            readonly status: "invalid";
+            readonly reason: "schema";
+            readonly issues: readonly import("../validate.ts").NormalizedIssue[];
+          }
+        | { readonly status: "invalid"; readonly reason: "response-format" };
+    }
+  | {
+      readonly type: "permission_decision_result";
+      readonly permissionId: string;
+      readonly inputId: string;
+      readonly result:
+        | { readonly status: "accepted" | "stale" | "not-submitted" }
+        | { readonly status: "invalid"; readonly reason: "option-not-offered" | "response-format" };
+    };
+
 export type AgentPromptEvent =
+  | ChildAnswerPromptEvent
   | { type: "started"; agent: Agent; session: Session }
   | { type: "text_delta"; text: string }
   | {

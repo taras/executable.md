@@ -1,4 +1,4 @@
-import { createSignal, ensure, scoped, spawn, useScope } from "effection";
+import { createSignal, ensure, race, scoped, spawn, useScope } from "effection";
 import type { Operation } from "effection";
 import type { RootReads } from "../repl/sidekick/requests.ts";
 import {
@@ -17,14 +17,29 @@ import { SidekickOrigin } from "../repl/sidekick/dispatch.ts";
 import { Cursor, Envelope, MAILBOX, SidekickTransport } from "./protocol.ts";
 import type { Descriptor, Request, Wire } from "./protocol.ts";
 
+import { createChildRequests } from "../headless/requests.ts";
+import type { ChildInput } from "../headless/requests.ts";
+import { serveChildUi } from "../headless/ui.ts";
+import type { ReplSession } from "../repl/session.ts";
+import type { ReplLiveScreen } from "../repl/live-screen.ts";
+
 interface AttachmentRoot {
+  readonly child?: {
+    readonly sessionId: string;
+    readonly session: ReplSession;
+    readonly view: ReplLiveScreen;
+  };
   readonly owner: SidekickOwner;
   readonly dispatch: SidekickDispatch;
   readonly reads: RootReads;
   readonly execution: string;
   readonly cwd: string;
 }
-function publicExchange(snapshot: SidekickDispatchSnapshot, cancelled = false) {
+function publicExchange(
+  snapshot: SidekickDispatchSnapshot,
+  cancelled = false,
+  inputs?: ChildInput[],
+) {
   const end = snapshot.terminal;
   const partial =
     end !== undefined && !end.ok && "partial" in end.error ? end.error.partial : undefined;
@@ -53,6 +68,7 @@ function publicExchange(snapshot: SidekickDispatchSnapshot, cancelled = false) {
     one.kind === "reply" ? [{ response: one.response, text: one.text }] : [],
   );
   return {
+    ...(inputs === undefined ? {} : { inputs }),
     message: snapshot.message ?? null,
     origin: snapshot.origin,
     activity:
@@ -207,10 +223,12 @@ function* observe(
   wire: Wire,
   id: number,
   cancelled: WeakSet<SidekickExchange>,
+  root?: AttachmentRoot,
+  inputs?: ReturnType<typeof createChildRequests>,
 ): Operation<PublicExchange> {
   return yield* scoped(function* () {
     const observed = yield* exchange.observe();
-    const queue: PublicExchange[] = [publicExchange(observed.snapshot, cancelled.has(exchange))];
+    const queue: PublicExchange[] = [];
     const wake = createSignal<void, never>();
     const changed = yield* wake;
     const updates = yield* spawn(function* () {
@@ -220,10 +238,34 @@ function* observe(
           wire.close();
           throw new Error("The attachment observer exceeded 64 pending updates.");
         }
-        queue.push(publicExchange(snapshot, cancelled.has(exchange)));
+        queue.push(publicExchange(snapshot, cancelled.has(exchange), inputs?.list()));
         wake.send();
       }
     });
+    if (root?.child !== undefined && inputs !== undefined) {
+      for (const changes of [
+        root.owner.questions.changes,
+        root.child.session.changes,
+        root.child.session.agentChanges,
+      ]) {
+        const source = yield* changes;
+        yield* spawn(function* () {
+          while (true) {
+            const next = yield* source.next();
+            if (next.done) {
+              return;
+            }
+            if (queue.length >= MAILBOX) {
+              wire.close();
+              return;
+            }
+            queue.push(publicExchange(exchange.snapshot, cancelled.has(exchange), inputs.list()));
+            wake.send();
+          }
+        });
+      }
+    }
+    queue.push(publicExchange(exchange.snapshot, cancelled.has(exchange), inputs?.list()));
     while (true) {
       while (queue.length === 0) {
         yield* changed.next();
@@ -257,7 +299,7 @@ export function* useSidekickAttachment(path: string, root: AttachmentRoot): Oper
     throw new Error("Sidekick ACP initialization did not establish a selected conversation.");
   }
   const listener = yield* host.publish(path, {
-    owner: host.identify(),
+    owner: root.child?.sessionId ?? host.identify(),
     execution: root.execution,
     conversation,
     cwd: root.cwd,
@@ -265,6 +307,10 @@ export function* useSidekickAttachment(path: string, root: AttachmentRoot): Oper
   const descriptor = listener.descriptor;
   const scope = yield* useScope();
   const cancelled = new WeakSet<SidekickExchange>();
+  const inputs =
+    root.child === undefined
+      ? undefined
+      : createChildRequests(root.owner, root.child.session, host.identify);
   const attachments = new Map<string, { exchange?: SidekickExchange; closing?: boolean }>();
   yield* ensure(() => {
     attachments.clear();
@@ -289,6 +335,35 @@ export function* useSidekickAttachment(path: string, root: AttachmentRoot): Oper
             while (true) {
               const envelope = Envelope.parse(yield* wire.receive());
               pair(root, descriptor);
+              if (envelope.request.method === "ui") {
+                if (root.child === undefined) {
+                  yield* wire.send({
+                    id: envelope.id,
+                    kind: "error",
+                    error: "This prepared attachment grants no child UI.",
+                  });
+                  return;
+                }
+                try {
+                  yield* race([
+                    (function* (): Operation<never> {
+                      const changes = yield* root.owner.changes;
+                      while (true) {
+                        yield* changes.next();
+                        pair(root, descriptor);
+                      }
+                    })(),
+                    serveChildUi(wire, root.child.view, envelope.request.size, envelope.id),
+                  ]);
+                } catch (error) {
+                  yield* wire.send({
+                    id: envelope.id,
+                    kind: "error",
+                    error: error instanceof Error ? error.message : "Child UI refused.",
+                  });
+                }
+                return;
+              }
               if (pending.has(envelope.id) || pending.size >= MAILBOX) {
                 throw new Error("The attachment request bound was exceeded.");
               }
@@ -297,10 +372,27 @@ export function* useSidekickAttachment(path: string, root: AttachmentRoot): Oper
                 try {
                   const request = envelope.request;
                   let value: unknown;
-                  if (request.method === "hello") {
+                  if (request.method === "hello" || request.method === "ui") {
                     throw new Error("Attachment handshake already completed.");
                   }
-                  if (request.method === "attach") {
+                  if (
+                    request.method === "child-offer" ||
+                    request.method === "child-response" ||
+                    request.method === "child-retire" ||
+                    request.method === "child-release"
+                  ) {
+                    if (inputs === undefined) {
+                      throw new Error("This prepared attachment grants no child input capability.");
+                    }
+                    value =
+                      request.method === "child-offer"
+                        ? inputs.offer(request.requestId)
+                        : request.method === "child-response"
+                          ? inputs.respond(request)
+                          : request.method === "child-retire"
+                            ? (inputs.retire(request.presentationId) ?? null)
+                            : (inputs.release(request.presentationId) ?? null);
+                  } else if (request.method === "attach") {
                     if (request.cwd !== descriptor.cwd) {
                       throw new Error("Attachment cwd mismatch.");
                     }
@@ -317,7 +409,7 @@ export function* useSidekickAttachment(path: string, root: AttachmentRoot): Oper
                       throw followed.error;
                     }
                     value = request.follow
-                      ? yield* observe(followed.value, wire, envelope.id, cancelled)
+                      ? yield* observe(followed.value, wire, envelope.id, cancelled, root, inputs)
                       : publicExchange(followed.value.snapshot, cancelled.has(followed.value));
                   } else {
                     const held = attachments.get(request.attachment);
@@ -362,7 +454,14 @@ export function* useSidekickAttachment(path: string, root: AttachmentRoot): Oper
                         throw sent.error;
                       }
                       held.exchange = sent.value;
-                      value = yield* observe(sent.value, wire, envelope.id, cancelled);
+                      value = yield* observe(
+                        sent.value,
+                        wire,
+                        envelope.id,
+                        cancelled,
+                        root,
+                        inputs,
+                      );
                     }
                   }
                   yield* wire.send({ id: envelope.id, kind: "value", value });
