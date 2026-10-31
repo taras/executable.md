@@ -71,11 +71,15 @@ import type { ReplInputEvent } from "../src/repl/description.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import {
+  closeDrawer,
   DRAFT_VALUE,
   draftShows,
   draftText,
   entrySettles,
+  openHistory,
   pasteDraft,
+  RAIL,
+  railMark,
   TYPING,
 } from "./support/screen-journeys.ts";
 
@@ -2900,6 +2904,31 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
         }
       });
     }
+  });
+});
+
+describe("REPL terminal: twelve and further History entries at 160x36 (#1017)", () => {
+  it("keeps the command running with whole-cell History controls past the twelfth entry", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    for (let order = 1; order <= 14; order += 1) {
+      yield* submit(page, order, `Entry ${order} text.`);
+    }
+    // Still running: a committed frame never threw ReplRenderError out of the
+    // command loop.
+    expect(page.repl.terminal.ending).toBeUndefined();
+    // Every earlier entry's own result is still the rail's reading, not just
+    // the latest one.
+    expect(railMark(page.screen(), 1)).toBe(RAIL.ok);
+    expect(railMark(page.screen(), 12)).toBe(RAIL.ok);
+    expect(railMark(page.screen(), 14)).toBe(RAIL.ok);
+    // The draft survives the entries that came before it.
+    yield* draftText(page, "kept past twelve entries");
+    expect(draftShows(page.screen(), "kept past twelve entries")).toBe(true);
+    // History's own actions stay reachable: its drawer still opens and shows
+    // the entries just admitted.
+    yield* openHistory(page);
+    expect(page.screen().shows("Entry 14")).toBe(true);
+    yield* closeDrawer(page);
   });
 });
 

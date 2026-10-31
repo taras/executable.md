@@ -85,6 +85,7 @@ import {
   historyMapWidth,
   historyProbeOf,
   historySplitOf,
+  wideHistoryMapWidth,
   queueTextWidth,
   draftRowsOf,
   GUIDANCE_ROW,
@@ -3797,6 +3798,11 @@ export function* prepareFrame(
    * part of a cell; measuring them apart is what makes the split whole.
    */
   let historyParts: { readonly map: number; readonly actions: number } | undefined;
+  /**
+   * The accepted wide row's own map, stated rather than left to the drawing
+   * engine's own `fit()`. See {@link wideHistoryMapWidth}.
+   */
+  let historyWideMap: number | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
@@ -3807,6 +3813,7 @@ export function* prepareFrame(
     ...(messageText === undefined ? {} : { queueText: messageText }),
     ...(historyRoom === undefined ? {} : { historyMap: historyRoom }),
     ...(historyParts === undefined ? {} : { historySplit: historyParts }),
+    ...(historyWideMap === undefined ? {} : { wideHistoryMap: historyWideMap }),
     ...(selector === undefined ? {} : { selector }),
   });
 
@@ -3884,6 +3891,7 @@ export function* prepareFrame(
   // the whole footer, and before anything is admitted: the question is how to
   // divide the room the map leaves, which no admitted set changes.
   historySpace = historyGapWidth((id) => fitted.value.boundsOf(id)?.width);
+  historyWideMap = wideHistoryMapWidth((id) => fitted.value.boundsOf(id)?.width);
   historyRoom = historyMapWidth(
     probed.manifest,
     (id) => fitted.value.boundsOf(id)?.width,
@@ -4200,6 +4208,7 @@ export function* prepareFrame(
     historyMap: historyRoom,
     historyGap: historySpace,
     historySplit: historyParts,
+    wideHistoryMap: historyWideMap,
     selector,
     draft: draftRows,
     editors,

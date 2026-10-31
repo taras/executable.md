@@ -8725,6 +8725,21 @@ export interface ReplPresentationContext {
    * and absent at every other profile, whose rows are arranged differently.
    */
   readonly historyGap?: number | undefined;
+  /**
+   * The accepted wide row's own map width, read once from this exact measured
+   * frame rather than left to the drawing engine's own `fit()`.
+   *
+   * A plain text box asked to size itself is still a second, independent
+   * question to whichever engine instance draws the committed frame, and that
+   * instance's own answer need not match this frame's own measuring pass:
+   * measured, an eighty-four-cell map this frame's measuring pass confirmed
+   * whole came back `82.0078125` from the engine that actually committed the
+   * frame, and the control beside it inherited the fraction. Stating what was
+   * already measured removes the second ask. Absent until that measurement,
+   * and absent at every other profile, whose rows ask their map a different
+   * way.
+   */
+  readonly wideHistoryMap?: number | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -11365,6 +11380,24 @@ export function historyGapWidth(widthOf: (id: string) => number | undefined): nu
 }
 
 /**
+ * The accepted wide row's own map, read from this exact measured frame.
+ *
+ * Stated rather than left to the drawing engine's own `fit()`: that engine
+ * answers from its own prior renders, not this frame's measuring pass, and a
+ * plain text box the measuring pass confirmed whole can still come back
+ * fractional from the one that draws — measured, an eighty-four-cell map came
+ * back `82.0078125` on the twelfth entry, and the control beside it inherited
+ * the fraction and was refused. Reusing what this frame already measured
+ * removes that second, independent ask.
+ */
+export function wideHistoryMapWidth(
+  widthOf: (id: string) => number | undefined,
+): number | undefined {
+  const map = widthOf(HISTORY_MAP);
+  return map !== undefined && Number.isInteger(map) ? map : undefined;
+}
+
+/**
  * How wide the History row's map is left, for this exact measured frame.
  *
  * The row's own width, less the width the engine gave the controls beside it.
@@ -12398,17 +12431,27 @@ function workspacePresentation(input: {
                   box({
                     id: HISTORY_MAP,
                     region: "footer",
-                    // The accepted wide row fits this map to its own text and
-                    // has room for it. Every other profile states it, at the
-                    // width this frame measured the row's two parts to need —
-                    // the map's own natural width, or what the controls leave,
-                    // whichever is smaller. Fitting it there instead makes its
-                    // text a minimum that competes with complete control
-                    // labels: measured, a 72-cell row gave a 29-cell map its
-                    // whole text and left the controls 43 where they need 51,
-                    // and every one of them came back on part of a cell.
-                    props:
-                      accepted || context.historySplit === undefined
+                    // Stated at the width this frame's own measuring pass
+                    // already confirmed, on every profile. Fitting it lets the
+                    // drawing engine size the same text a second time, and
+                    // that engine's own answer need not be the measuring
+                    // pass's: measured, an eighty-four-cell map the measuring
+                    // pass confirmed whole came back 82.0078125 from the
+                    // engine that commits the frame, on the twelfth entry.
+                    // Every other profile states it at the width this frame
+                    // measured the row's two parts to need — the map's own
+                    // natural width, or what the controls leave, whichever is
+                    // smaller — for the same reason fitting it there once
+                    // made its text a minimum that competes with complete
+                    // control labels: measured, a 72-cell row gave a 29-cell
+                    // map its whole text and left the controls 43 where they
+                    // need 51, and every one of them came back on part of a
+                    // cell.
+                    props: accepted
+                      ? context.wideHistoryMap === undefined
+                        ? fittedPartProps()
+                        : statedPartProps(context.wideHistoryMap)
+                      : context.historySplit === undefined
                         ? fittedPartProps()
                         : statedPartProps(context.historySplit.map),
                     text: runText(map),
