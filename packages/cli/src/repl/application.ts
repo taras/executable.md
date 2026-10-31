@@ -1168,6 +1168,7 @@ export type ReplIntent =
       readonly text: string;
       readonly held: Instruction;
     }
+  | { readonly kind: "toggle-follow" }
   /** Stop the Sidekick's own work, and join it. */
   | { readonly kind: "stop-sidekick" }
   | { readonly kind: "remove-sidekick-message"; readonly message: string }
@@ -1411,8 +1412,10 @@ export function workspaceOf(
     readonly pending: readonly ReplQueuedMessage[];
     readonly held: ReplWorkspace["queueHeld"];
   },
+  follow?: boolean,
 ): ReplWorkspace {
   return Object.freeze({
+    ...(follow === undefined ? {} : { follow }),
     tray: "queue" as const,
     trays: Object.freeze(["todo", "queue"] as const),
     queued: Object.freeze((queue?.pending ?? []).map((one) => Object.freeze({ ...one }))),
@@ -2133,6 +2136,7 @@ export function reduceRepl(
     }
     case "remove-sidekick-message":
     case "resume-sidekick-queue":
+    case "toggle-follow":
       return { state, intent: action };
     case "stop-sidekick": {
       // Unguarded, like `exit`. Stopping something that is not running is
@@ -10959,9 +10963,15 @@ function workspaceControls(
   }
   if (workspace.follow !== undefined) {
     items.push(
-      row("follow", `[${workspace.follow ? "x" : " "}] Follow`, {}, styleOf("action"), {
-        here: view.focused,
-      }),
+      row(
+        "follow",
+        `[${workspace.follow ? "x" : " "}] Follow`,
+        { select: "toggle-follow" },
+        styleOf("action"),
+        {
+          here: view.focused,
+        },
+      ),
     );
   }
   if (reading.busy) {
@@ -11492,7 +11502,7 @@ function trayAllocation(
   }
   const wrapped = (id: string): number =>
     id === "tray" && context.headers?.has("header:tray-actions") === true
-      ? 3
+      ? 2 + (workspace.follow === undefined ? 0 : 1) + (workspace.queueHeld === undefined ? 0 : 1)
       : context.headers?.has(`header:${id}`) === true
         ? 2
         : 1;
@@ -11915,6 +11925,9 @@ function workspacePresentation(input: {
       ];
     }
     if (id === "tray" && context.headers?.has("header:tray-actions") === true) {
+      const groups = [["follow"], ["sidekick:stop", "sidekick:send"], ["sidekick:resume"]]
+        .map((keys) => parts(headerKeysOf(keys, candidates), region, surface))
+        .filter((group) => group.length > 0);
       return [
         box({
           id: first,
@@ -11922,31 +11935,14 @@ function workspacePresentation(input: {
           props: props(),
           children: [...left, spacer(`${first}:space`, region)],
         }),
-        box({
-          id: `${first}:second`,
-          region,
-          props: props(),
-          children: [
-            spacer(`${first}:second:space`, region),
-            ...parts(
-              headerKeysOf(
-                spec.right.filter((key) => key !== "sidekick:resume"),
-                candidates,
-              ),
-              region,
-              surface,
-            ),
-          ],
-        }),
-        box({
-          id: `${first}:resume`,
-          region,
-          props: props(),
-          children: [
-            spacer(`${first}:resume:space`, region),
-            ...parts(["sidekick:resume"], region, surface),
-          ],
-        }),
+        ...groups.map((group, index) =>
+          box({
+            id: `${first}:actions:${index}`,
+            region,
+            props: props(),
+            children: [spacer(`${first}:actions:${index}:space`, region), ...group],
+          }),
+        ),
       ];
     }
     return [

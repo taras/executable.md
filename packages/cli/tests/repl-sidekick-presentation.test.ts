@@ -2976,3 +2976,66 @@ describe("Sidekick original independent body controls", () => {
     expect(page.repl.fake.prompts).toHaveLength(1);
   });
 });
+
+describe("Follow: the running command owns the mounted control", () => {
+  for (const size of PROFILES) {
+    it(`Follow: keyboard and pointer at ${size.columns}x${size.rows} retain the live setting`, function* () {
+      const page = yield* useReplPage();
+      yield* intoComposer(page);
+      if (size.columns !== WIDE.columns) {
+        yield* page.resize(size);
+      }
+      yield* page.until("checked Follow", (one) => one.shows("[x] Follow"));
+      yield* page.key("Alt+ArrowUp");
+      yield* page.key("Alt+ArrowUp");
+      yield* page.key("Enter");
+      yield* page.until("keyboard unchecked Follow", (one) => one.shows("[ ] Follow"));
+      yield* page.press("[ ] Follow");
+      yield* page.until("pointer checked Follow", (one) => one.shows("[x] Follow"));
+      yield* page.press("[x] Follow");
+      yield* page.until("Follow off before navigation", (one) => one.shows("[ ] Follow"));
+      yield* page.resize(size.columns === WIDE.columns ? { columns: 120, rows: 30 } : WIDE);
+      expect(page.screen().shows("[ ] Follow")).toBe(true);
+      yield* atSize(page, WIDE);
+      yield* selectPane(page, "bindings");
+      expect(page.screen().shows("Follow")).toBe(false);
+      yield* selectPane(page, "sidekick");
+      if (size.columns !== WIDE.columns) {
+        yield* page.resize(size);
+      }
+      expect(page.screen().shows("[ ] Follow")).toBe(true);
+      yield* page.press("[ ] Follow");
+      yield* page.until("deliberately enabled Follow", (one) => one.shows("[x] Follow"));
+      expect(page.repl.fake.prompts).toHaveLength(0);
+      expect(page.screen().shows("TODO")).toBe(true);
+      if (size.columns === 72) {
+        yield* page.press("Entries");
+        yield* page.until("inactive Sidekick outlet", (one) => !one.shows(COMPOSER));
+        expect(page.screen().shows("Follow")).toBe(false);
+      }
+    });
+  }
+
+  it("Follow: cold reopen defaults checked and starts no work", function* () {
+    const host = yield* useMountedHost();
+    const page = yield* useReplPage({ host });
+    host.fake.script({ reply: "<Output>Retained explicit reply.</Output>" });
+    yield* sendMessage(page, "retain this execution");
+    yield* page.until(
+      "reply joined",
+      (one) => one.shows("Retained explicit reply.") && sidekickIdle(one),
+    );
+    yield* page.press("[x] Follow");
+    yield* page.until("Follow unchecked", (one) => one.shows("[ ] Follow"));
+    page.repl.terminal.end();
+    yield* awaited("first command joined", () => page.repl.outcome() !== undefined);
+    const result = page.repl.outcome();
+    if (result === undefined || !result.ok) {
+      throw new Error("first command failed");
+    }
+    const before = host.fake.prompts.length;
+    const cold = yield* useReplPage({ host, location: result.value.location });
+    expect(cold.screen().shows("[x] Follow")).toBe(true);
+    expect(host.fake.prompts).toHaveLength(before);
+  });
+});

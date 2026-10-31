@@ -266,6 +266,9 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "resume-sidekick-queue") {
     return { kind: "resume-sidekick-queue" };
   }
+  if (select === "toggle-follow") {
+    return { kind: "toggle-follow" };
+  }
   if (select === "stop-sidekick") {
     return { kind: "stop-sidekick" };
   }

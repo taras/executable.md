@@ -1129,41 +1129,34 @@ the next entry's text, and a blank row in it is a row.
 
 **Bindings** and **Sidekick** share the right column as two tabs. Above the
 Sidekick's composer, the trays this build offers sit on the left and the
-Sidekick's own Stop, Send and held Resume controls on the right. Send remains
-available during an active exchange. Resume queue appears only while advancement
+Follow checkbox and the Sidekick's own Stop, Send and held Resume controls on
+the right. Send remains available during an active exchange. Resume queue appears only while advancement
 is held and stays outside the scrolling window.
 
 **QUEUE** shows the waiting count out of sixteen. Each pending message shows its
 origin, text and `X`, accessible as *Remove message*. Placement expresses FIFO
 order without row numbers or repeated acknowledgements. X withdraws only its
 exact still-pending message; a stale X changes no active work. TODO remains an
-inactive placeholder and Follow is absent.
+inactive placeholder. Follow starts checked and keeps its live setting across
+rounds, navigation and resizing.
 
 A fixed status states the hold reason. While messages wait, the tray says once:
 `Waiting messages are kept only in this REPL.` Both are fitted to the measured
-width before the queue window receives its height. The header uses two rows
-when its action groups cannot share one. During held active cleanup, a third row
-keeps Resume whole when all three actions exceed the medium column.
+width before the queue window receives its height. When the action groups
+cannot share one row, the header gives Follow, Send/Stop and held Resume their
+own rows so each control stays whole.
 
-Message is the fixed entry of its keyboard region. Send, Stop, Resume and the
-vertical group of pending X controls belong to that same region, adding no Tab
+Message is the fixed entry of its keyboard region. Follow, Send, Stop, Resume
+and the vertical group of pending X controls belong to that same region, adding no Tab
 stop. Local navigation reveals a hidden neighbour before focusing it. Wheel
 scrolls only the queue viewport, preserves focus and stops before hiding its
 focused X. Fixed controls stay reachable during overflow. Background queue
 changes request no focus and change no drafts, selection, History, filter or
 route. Existing modal ownership contains the queue controls.
 
-At `160x36` the first composition gives the columns 36, 66 and 58 cells, dividers
-included, the body 33 rows and the Draft four of the centre's. That geometry and
-the terminal adaptations it makes of the reference — cell rules for pixel edges,
-fixed-cell glyphs, origin colours converted to truecolor, and source wrapped at
-measured word boundaries rather than clipped — are under the Product Owner's image
-review. Until that review accepts an image they are not a regression target, and
-the `120x30` and `72x20` compositions follow it. This is the composition the
-running command draws: the Transcript of agent work, the selected work with its
-Draft, and the Bindings/Sidekick pane, under one identity row and above one
-compact History row and one row of directions. The earlier Sessions/Entries
-sidebar and seven-row footer are gone.
+The accepted `160x36`, `120x30` and `72x20` compositions retain their geometry,
+colour, focus, caret and wheel contracts. Follow uses the existing measured
+header and input region; an inactive narrow outlet offers no Follow target.
 
 Resizing the window is ordinary. Dragging a corner produces a stream of sizes,
 and each one redraws the screen for the size that is actually there: the
@@ -2722,14 +2715,10 @@ are distinct from the final exchange result.
 
 Follow is about execution, not scrolling: it decides whether a Sidekick Send
 goes on after the entry it submitted settles, and has nothing to do with whether
-a reading keeps its newest rows in view. **It is not in this build.** The
-continuation it governs ships with the shared queue, and until then no screen
-offers the choice and nothing watches an entry to start a turn after it. What
-follows describes the behaviour that delivery brings, and is the contract it is
-held to — not a description of what this command does today. When it ships it is
-on when the REPL starts, stays as you set it across rounds and navigation, and
-is not saved — the next REPL starts with it on again. Only an entry the Sidekick submitted during Send is a round;
-a Draft Send is not, and a round is one admitted entry rather than one provider
+a reading keeps its newest rows in view. It is on when the REPL starts, stays as
+you set it across rounds, navigation and resizing, and is not saved — the next
+REPL starts with it on again. Only an entry the Sidekick submitted during Send
+is a round; a Draft Send is not, and a round is one admitted entry rather than one provider
 turn. The evaluation the Sidekick invokes during Send creates and owns the
 continuation, so nothing else watches entries and starts turns.
 
@@ -2742,6 +2731,9 @@ Follow on, the next eligible queued message goes first and another autonomous
 round only after it, under the queue's own rules (#964); no origin is preferred
 and no held queue is restarted by it. Turning Follow off ends automatic
 continuation once the current round is over and does not interrupt that round.
+The receipt and control results remain retained without a delivery marker for
+feedback that was not sent. Ordinary read-only designated feedback still
+receives its answer with Follow off; a refused Submit creates no round.
 Fatal storage, disclosure and cleanup failures keep their outcome, feedback
 whose acceptance is unknown is never resent, and only explicit evaluated Output
 becomes the Sidekick's chat: the work associated with a message — its entry, its
@@ -2759,8 +2751,8 @@ running stays unfinished, and reopening the history continues it.
 The Sidekick's Stop ends the asking and nothing else. It is there while a reply
 is generating and while the Sidekick's question is waiting, whether or not an
 entry is running. It ends the current Send and the continuation that Send would
-have made, leaves Follow on for the next Send you make, cancels the generation in
-flight, the controls of the response being evaluated and the wait for an entry's
+have made, preserves your Follow setting for the next Send you make, cancels the
+generation in flight, the controls of the response being evaluated and the wait for an entry's
 outcome, and it stops any turn that would have followed — and it returns only once all of
 that has come down, so nobody is told their Sidekick stopped while it is still
 writing to their history. Everything already done stands: the chat, the drafts,

@@ -97,6 +97,7 @@ export type ReplAction =
    * goes on running, and leaving the command is `exit` — a control that meant
    * all three would be three decisions behind one key.
    */
+  | { readonly kind: "toggle-follow" }
   | { readonly kind: "stop-sidekick" }
   | { readonly kind: "remove-sidekick-message"; readonly message: string }
   | { readonly kind: "resume-sidekick-queue" }

@@ -1,5 +1,4 @@
 import type { ReplPrinting } from "../session.ts";
-import { finishedRound } from "./requests.ts";
 import type { MessageOrigin } from "./history.ts";
 import type { ReplTesting } from "./testing.ts";
 /**
@@ -107,7 +106,7 @@ import {
   sidekickCeilingInstallation,
   sidekickResponseCeiling,
 } from "./profile.ts";
-import { sidekickRequests } from "./requests.ts";
+import { sidekickRequests, finishedRound } from "./requests.ts";
 import type { RootReading } from "./requests.ts";
 import type { ControlJournal, SubmitReceipt } from "./controls.ts";
 import { useSidekickQuestions } from "./questions.ts";
@@ -158,6 +157,11 @@ export interface SidekickAssembly {
  */
 export interface SidekickMessageOptions {
   readonly origin: MessageOrigin;
+  advance?(
+    settled: SidekickTurn,
+  ): Operation<
+    Result<{ readonly text: string; readonly options: SidekickMessageOptions } | undefined>
+  >;
   saved?(conversation: string, id: string): void;
 }
 
@@ -175,6 +179,7 @@ type Sending =
        * was true when they sent it.
        */
       readonly revision: number;
+      readonly finished?: { readonly response: string; readonly text: string };
     }
   | { readonly kind: "feedback"; readonly of: string; readonly text: string };
 
@@ -197,6 +202,7 @@ interface Responded {
    * nothing a correction could fix, so the next move is the person's.
    */
   readonly next: string | undefined;
+  readonly round?: string;
 }
 
 /**
@@ -355,6 +361,7 @@ export interface SidekickLiveTurn {
 /** What the owner needs, and nothing it could reach the rest of the root with. */
 export interface SidekickOwnerInput {
   readonly test?: ReplTesting;
+  follow?(): boolean;
   readonly workspace?: string;
   readonly assembly: SidekickAssembly;
   /** This execution's chat storage as it stands, which may hold nothing yet. */
@@ -1477,15 +1484,17 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       let observation: ReplPrinting | undefined;
       let last: SidekickTurn | undefined;
       while (true) {
-        const responded: Result<Responded> = yield* respond(
-          paired,
-          conversation,
-          handle,
-          sending,
-          () => observation,
-          (output) => {
-            observation = output;
-          },
+        const responded: Result<Responded> = yield* scoped(() =>
+          respond(
+            paired,
+            conversation,
+            handle,
+            sending,
+            () => observation,
+            (output) => {
+              observation = output;
+            },
+          ),
         );
         if (!responded.ok) {
           return last === undefined
@@ -1504,6 +1513,27 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
               );
         }
         last = settled;
+        if (responded.value.round !== undefined && input.follow?.() === false) {
+          return Ok(settled);
+        }
+        if (responded.value.round !== undefined && responded.value.next !== undefined) {
+          const offered =
+            options.advance === undefined ? Ok(undefined) : yield* options.advance(settled);
+          if (!offered.ok) {
+            return offered;
+          }
+          const queued = offered.value;
+          if (queued !== undefined) {
+            sending = {
+              kind: "message",
+              text: queued.text,
+              options: queued.options,
+              revision: input.revision(),
+              finished: { response: settled.response, text: responded.value.next },
+            };
+            continue;
+          }
+        }
         if (responded.value.next === undefined) {
           return Ok(settled);
         }
@@ -1673,12 +1703,16 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           held === undefined ? undefined : recoveredWork(yield* paired.writer.readAll(), held);
         request = turnRequest({
           context,
-          recovered,
+          recovered:
+            [recovered, sending.finished?.text].filter((part) => part !== undefined).join("\n\n") ||
+            undefined,
           draft: input.draft(),
           message: sending.text,
         });
-        if (held !== undefined && recovered !== undefined) {
-          carried = held.response;
+        const delivering =
+          sending.finished?.response ?? (recovered === undefined ? undefined : held?.response);
+        if (delivering !== undefined) {
+          carried = delivering;
           // Retained before it is sent, and asserting nothing — the same
           // feedback text a feedback turn writes, for the same reason: an
           // interrupted process
@@ -1689,7 +1723,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           yield* paired.writer.append({
             kind: "feedback",
             conversation,
-            response: held.response,
+            response: delivering,
             turn: null,
             text: request,
           });
@@ -1964,6 +1998,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           failure: evaluated.ok ? undefined : evaluated.error.message,
         },
         answered: true,
+        ...(submitted === undefined ? {} : { round: submitted.entry }),
         next,
       });
     }

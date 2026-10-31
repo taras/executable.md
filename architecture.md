@@ -7106,8 +7106,7 @@ columns divide what is left — halved in the ordinary composition, and 66 and 5
 of 160 in the staged one below. A geometry change that narrows the left column
 is a change to what the product can say.
 
-**One staged composition is under image review.** The screen the root draws is
-the v2 composition, which is the wide screen #971 accepted: a Transcript of agent
+**The root draws the accepted v2 composition:** a Transcript of agent
 work on the left, the selected work with its breadcrumbs, exact source, state,
 results and its own multi-row Draft in the centre, and Bindings/Sidekick on the
 right with the trays this build offers above the composer and the Sidekick's
@@ -7116,15 +7115,13 @@ and a guidance block whose fitted rows determine its height. It is selected by
 a view carrying the inert workspace presentation, and the root supplies that
 presentation from what this execution
 actually holds: the live waiting queue and the entries its Sidekick's
-acknowledged Submits admitted. Follow remains absent; queue acceptance creates
-no autonomous continuation. It is not a second
-pipeline: it is the same reading, prepared, measured, admitted, reconciled into
-the one mounted tree and drawn by the same renderer pair, and every rule in this
-section holds for it unchanged. Its first geometry at 160x36 — columns of 36, 66
-and 58 cells with their dividers, 33 body rows, a four-row Draft — and its cell
-adaptations of the reference await the Product Owner's image acceptance; no
-capture of it is a regression target until then, and the 120x30 and 72x20
-compositions follow that review.
+acknowledged Submits admitted, together with the running command's Follow
+setting. Follow is an active control in the measured tray header and its input
+region. The composition uses the same reading, prepared, measured, admitted,
+reconciled into the one mounted tree and drawn by the same renderer pair, and every rule in this
+section holds for it unchanged. The accepted 160x36, 120x30 and 72x20
+compositions retain their geometry, focus, caret and wheel contracts. An inactive
+narrow outlet contributes no Follow control or input target.
 
 **A row's surface comes from its semantic role, never from its key or its
 label.** `surfaceOf()` maps roles to backgrounds, and a window's two navigation
@@ -8722,14 +8719,6 @@ state Stop leaves.
 
 #### Follow and the two Stops
 
-**Follow is not in the shipped build.** The layout and the two Stops ship
-first. The shared queue orders explicit messages and creates no Follow
-continuation. No screen offers Follow and nothing watches an entry to start a
-turn after it.
-What this section states about Follow is the contract that delivery is held to
-rather than behaviour a reader can exercise now. **The two Stops below are
-implemented**: an entry's and the Sidekick's, each owning exactly what it says.
-
 Follow continues a Sidekick Send through the evaluation that Send invokes. It is
 a setting of the running REPL: on when the REPL starts, kept across rounds and
 navigation, and saved nowhere, so no preference, history or configuration record
@@ -8755,17 +8744,19 @@ status prose. With Follow on, the next eligible queued message is served before
 another autonomous round, under the queue's own ordering, holds and refusals
 (#964); nothing here grants one origin priority over another or restarts a held
 queue. Turning Follow off ends automatic continuation after the current round
-and does not interrupt it. The authority of the surrounding contract is
-unchanged: fatal storage, disclosure and cleanup failures keep their outcome,
+and does not interrupt it. Its receipt and control results remain retained but
+are not marked delivered. A response that only reads ordinary designated
+feedback still receives its next turn, and a refused submission creates no
+round. The authority of the surrounding contract is unchanged: fatal storage, disclosure and cleanup failures keep their outcome,
 feedback whose acceptance is unknown is never resent, and only explicit
 evaluated Output becomes the assistant's chat — the facts of associated work are
 shown beside the conversation as work, not as something the Sidekick said.
 
 There are two Stops, with two owners. Sidekick Stop is the response owner's: it
-ends the current Send and its continuation, joins both, and leaves Follow on for
-the next explicit Send. It is available while the reply is generating and while
-the Sidekick's question is waiting, with or without an entry. An admitted entry
-keeps running on its own terms, and its later settlement cannot restart the
+ends the current Send and its continuation, joins both, and preserves the Follow
+setting for the next explicit Send. It is available while the reply is generating
+and while the Sidekick's question is waiting, with or without an entry. An admitted
+entry keeps running on its own terms, and its later settlement cannot restart the
 continuation that was stopped. Entry Stop is the session's: it finishes the
 running entry as interrupted, as [sequential entries](#sequential-entries-over-one-physical-journal)
 states, and that interrupted outcome reaches the Sidekick as the round's result

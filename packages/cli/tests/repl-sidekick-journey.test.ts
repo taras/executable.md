@@ -44,7 +44,7 @@ import {
 import type { Operation, Result } from "effection";
 
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { Component, DocumentOutput, Elicitation } from "@executablemd/core";
+import { Component, DocumentOutput, Elicitation, Execution } from "@executablemd/core";
 import { openReplSession } from "../src/repl/session.ts";
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
@@ -3832,5 +3832,163 @@ describe("Joined output API", () => {
     if (!output.ok) {
       expect(output.error).toBe(failure);
     }
+  });
+});
+
+function followSubmission(source: string): string {
+  return [
+    '<Let as="code" select="code">',
+    "````xmd",
+    source,
+    "````",
+    "</Let>",
+    "<REPL.EntryInput>{code}</REPL.EntryInput>",
+    "<REPL.Submit />",
+  ].join("\n");
+}
+
+describe("Follow: submitted rounds in the running command", () => {
+  it("Follow: one mounted Send carries completed, failed and Entry Stop output from exact joined entries", function* () {
+    const asking = withResolvers<void>();
+    yield* Elicitation.around({
+      *elicit([request], next) {
+        asking.resolve();
+        return yield* next(request);
+      },
+    });
+    const page = yield* useReplPage();
+    const partial = "FAILED-PREFIX-" + "🙂".repeat(4200) + "-FAILED-TAIL";
+    page.repl.fake.script({
+      reply: followSubmission("Private documentation.\n<Output>SELECTED-COMPLETE</Output>"),
+    });
+    page.repl.fake.script({
+      reply: followSubmission(partial + '\n\n<Fail message="distinct failure" />'),
+    });
+    page.repl.fake.script({
+      reply: followSubmission(
+        'INTERRUPTED-PREFIX\n\n<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="said">Hold this entry.</Elicit>',
+      ),
+    });
+    page.repl.fake.script({ reply: "<REPL.Entry.Output entry={2} offset={0} limit={4096} />" });
+    page.repl.fake.script({
+      reply: "<Output>Finished after reading the original failed entry.</Output>",
+    });
+    yield* sendMessage(page, "run the sequence");
+    yield* awaitedFact("the third exact entry admitted", function* () {
+      const read = yield* settledReading(page.repl);
+      return read.model.entries.length === 3 && read.model.entries[2]?.terminal === undefined;
+    });
+    yield* asking.operation;
+    yield* page.until(
+      "the actual interrupted prefix beside its source",
+      (one) => one.occurrences("INTERRUPTED-PREFIX") >= 2,
+    );
+    yield* page.until("Entry Stop", (one) => one.found("[stop]", { onRow: DRAFT }) === 1);
+    yield* page.press("[stop]", { onRow: DRAFT });
+    yield* savedReplies(page.repl, 5);
+    yield* page.until("the joined Send", sidekickIdle);
+    const prompts = page.repl.fake.prompts;
+    expect(prompts).toHaveLength(5);
+    for (const [index, key, outcome, output] of [
+      [1, "entry-1", "completed", "SELECTED-COMPLETE"],
+      [2, "entry-2", "failed", "FAILED-TAIL"],
+      [3, "entry-3", "interrupted", "INTERRUPTED-PREFIX"],
+    ]) {
+      const prompt = prompts[Number(index)] ?? "";
+      expect(prompt).toContain(`Entry ${key} ${outcome}.`);
+      expect(prompt).toContain("## Execution outcome");
+      expect(prompt).toContain("## Execution output");
+      expect(prompt).toContain(String(output));
+    }
+    expect(prompts[1]).not.toContain("Private documentation.");
+    const failed = prompts[2] ?? "";
+    const pageText =
+      failed.split("## Execution output\n\n")[1]?.split("\n\nRead another window")[0] ?? "";
+    const failedPage = JSON.parse(pageText);
+    expect(failedPage.status).toBe("failed");
+    expect(failedPage.entry).toBe(2);
+    expect(failedPage.offset).toBeGreaterThan(0);
+    expect(failedPage.length).toBeGreaterThan(4096);
+    expect([...failedPage.text]).toHaveLength(4096);
+    expect(failed).toContain("<REPL.Entry.Output entry={2} offset={0} limit={4096} />");
+    const laterRead = JSON.parse(prompts[4] ?? "");
+    expect(laterRead.entry).toBe(2);
+    expect(laterRead.status).toBe("failed");
+    expect(laterRead.text).toContain("FAILED-PREFIX-");
+    expect(laterRead.next).toMatchObject({ entry: 2, offset: 4096, limit: 4096 });
+    const read = yield* settledReading(page.repl);
+    expect(read.model.entries.map((entry) => entry.terminal?.status)).toEqual([
+      "ok",
+      "err",
+      "cancelled",
+    ]);
+    expect(read.model.entries[2]?.terminal?.output).toBe("");
+    expect(read.chat.filter((record) => record.kind === "message")).toHaveLength(1);
+    const replies = read.chat.filter((record) => record.kind === "response");
+    expect(replies.filter((record) => record.hasOutput)).toHaveLength(1);
+    const known = yield* projected(read.chat);
+    expect(known.submits.map((one) => [one.entry, one.ordinal, one.admitted])).toEqual([
+      ["entry-1", 0, true],
+      ["entry-2", 1, true],
+      ["entry-3", 2, true],
+    ]);
+    expect(known.submits.map((one) => one.source)).toEqual(
+      read.model.entries.map((entry) => entry.source),
+    );
+    const associated = sidekickChatRows(known, undefined);
+    expect(associated.filter((row) => row.kind === "person")).toHaveLength(1);
+  });
+
+  it("Follow: mounted off waits for the admitted round, preserves unsent results, and keeps ordinary reads and manual Draft Send", function* () {
+    const cleaning = withResolvers<void>();
+    const release = withResolvers<void>();
+    yield* ensure(() => release.resolve());
+    let first = true;
+    const page = yield* useReplPage({
+      *entryInstallation() {
+        return {
+          *install() {
+            yield* Execution.around({
+              *document([request], next) {
+                if (first) {
+                  first = false;
+                  yield* ensure(function* () {
+                    cleaning.resolve();
+                    yield* release.operation;
+                  });
+                }
+                yield* next(request);
+              },
+            });
+          },
+        };
+      },
+    });
+    page.repl.fake.script({ reply: followSubmission("<Output>OFF-ROUND</Output>") });
+    yield* sendMessage(page, "one round only");
+    yield* cleaning.operation;
+    yield* page.press("[x] Follow");
+    yield* page.until("unchecked live Follow", (one) => one.shows("[ ] Follow"));
+    expect(page.repl.fake.prompts).toHaveLength(1);
+    release.resolve();
+    yield* savedReplies(page.repl, 1);
+    yield* page.until("the round and Send joined", sidekickIdle);
+    const stopped = yield* settledReading(page.repl);
+    expect(stopped.model.entries[0]?.terminal?.status).toBe("ok");
+    expect(stopped.chat.filter((record) => record.kind === "feedback")).toHaveLength(0);
+    expect(stopped.chat.filter((record) => record.kind === "control-outcome")).toHaveLength(2);
+    page.repl.fake.script({ reply: "<REPL.Bindings />" });
+    page.repl.fake.script({ reply: "<Output>Ordinary read answered with Follow off.</Output>" });
+    yield* sendMessage(page, "read bindings");
+    yield* savedReplies(page.repl, 3);
+    yield* page.until("ordinary read joined", sidekickIdle);
+    expect(page.repl.fake.prompts).toHaveLength(3);
+    yield* draftText(page, "<Output>MANUAL-ONLY</Output>", ["Tab", "Tab", "Tab", "Tab"]);
+    yield* page.press("[send]", { onRow: DRAFT });
+    yield* awaitedFact("manual entry settles", function* () {
+      return (yield* settledReading(page.repl)).model.entries[1]?.terminal?.status === "ok";
+    });
+    expect(page.repl.fake.prompts).toHaveLength(3);
+    expect(page.screen().shows("[ ] Follow")).toBe(true);
   });
 });
