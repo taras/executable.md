@@ -3,9 +3,10 @@ import { expect } from "@executablemd/test-support/expect";
 import { race, scoped, sleep, spawn } from "effection";
 import type { Operation } from "effection";
 import { attachChildUi } from "../src/headless/ui.ts";
+import { ReplTerminal } from "../src/repl/terminal.ts";
 import { useReplScreen } from "../src/repl/screen.ts";
 import { Reply, SidekickTransport } from "../src/sidekick-acp/protocol.ts";
-import { presentation } from "../src/headless/ui-schema.ts";
+import { applied, presentation } from "../src/headless/ui-schema.ts";
 import { attachmentDescriptor, requestAttachment } from "../src/sidekick-acp/client.ts";
 import { useHeadlessFixture, START_CHILD, promptChild } from "./support/headless-repl.ts";
 import { recordingTerminal } from "./support/mounted-repl.ts";
@@ -432,9 +433,66 @@ describe("headless live UI", () => {
       expect((yield* attachmentDescriptor(held.path)).execution).toBe(held.descriptor.execution);
     });
     const recovered = recordingTerminal();
+    const applying = withResolvers<void>();
+    const release = withResolvers<void>();
+    const refused = withResolvers<void>();
+    const acknowledged = withResolvers<void>();
+    const acknowledgements: z.infer<typeof applied>[] = [];
+    const transport = yield* SidekickTransport.expect();
     const next = yield* spawn(function* () {
       yield* recovered.install();
+      yield* SidekickTransport.set({
+        ...transport,
+        *connect(path) {
+          const connected = yield* transport.connect(path);
+          const wire = connected.wire;
+          return {
+            ...connected,
+            wire: {
+              ...wire,
+              *send(value) {
+                const parsed = applied.safeParse(value);
+                if (parsed.success) {
+                  acknowledgements.push(parsed.data);
+                  if (parsed.data.applied) {
+                    acknowledged.resolve();
+                  } else {
+                    refused.resolve();
+                  }
+                }
+                yield* wire.send(value);
+              },
+            },
+          };
+        },
+      });
+      let writes = 0;
+      yield* ReplTerminal.around({
+        *write([bytes], next) {
+          if (writes === 1) {
+            applying.resolve();
+            yield* release.operation;
+          }
+          writes += 1;
+          yield* next(bytes);
+        },
+      });
       yield* attachChildUi(held.reference.sessionId);
+    });
+    yield* applying.operation;
+    expect(acknowledgements).toEqual([]);
+    recovered.terminal.resized({ columns: 100, rows: 26 });
+    release.resolve();
+    yield* refused.operation;
+    expect(acknowledgements[0]).toMatchObject({
+      sequence: 1,
+      size: { columns: 100, rows: 26 },
+      applied: false,
+    });
+    yield* acknowledged.operation;
+    expect(acknowledgements.at(-1)).toMatchObject({
+      size: { columns: 100, rows: 26 },
+      applied: true,
     });
     yield* visible(recovered.terminal, "[detach]");
     recovered.terminal.end();
