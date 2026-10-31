@@ -469,13 +469,18 @@ describe("wheel remaining migration journeys", () => {
       "current restored and joined",
       (one) => !one.shows("[Back to current chat]") && sidekickIdle(one),
     );
-    // Stop and Send share the same action band, so joining changes no chat capacity.
+    // Retiring Stop releases the wrapped action row without moving the reading anchor.
+    const last = inspected.at(-1);
+    if (last === undefined) {
+      throw new Error("the streaming chat had no rows to inspect");
+    }
+    const nextRow = `New row ${String(Number(last.slice("New row ".length)) + 1).padStart(2, "0")}`;
     expect(
       page
         .screen()
         .rows.filter((row) => row.includes("New row"))
         .map((row) => row.slice(row.lastIndexOf("New row"))),
-    ).toEqual(inspected);
+    ).toEqual([...inspected, nextRow]);
     expect(page.screen().shows("New live tail")).toBe(false);
     expect(page.repl.fake.prompts).toHaveLength(2);
     absentButtons(page);

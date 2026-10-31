@@ -36,6 +36,7 @@ export type ReplAction =
   | { readonly kind: "recovery-reference-ack" }
   | { readonly kind: "recovery-reference-cancel" }
   | { readonly kind: "scroll-recovery"; readonly delta: number }
+  | { readonly kind: "select-task-tray"; readonly tray: "todo" | "queue" }
   | { readonly kind: "todo-collapse" }
   | {
       readonly kind: "todo-edit";

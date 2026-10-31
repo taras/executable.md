@@ -3,12 +3,22 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { useReplPage } from "./support/repl-page.ts";
-import { intoComposer } from "./support/screen-journeys.ts";
+import { intoComposer, sidekickIdle } from "./support/screen-journeys.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
-import type { ReplPage } from "./support/repl-page.ts";
+import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { TODO_WAKE } from "../src/repl/todo/wake.ts";
+
+function inertFocused(one: ScreenReading): boolean {
+  const focus = one.rows.findIndex((row) => row.includes("> [ ]"));
+  const text = one.rows.findIndex((row) => row.includes("<Sidekick.Tod"));
+  return (
+    focus >= 0 &&
+    text >= focus &&
+    !one.rows.slice(focus + 1, text + 1).some((row) => row.includes("[ ]"))
+  );
+}
 
 function capture(page: ReplPage, name: string, timings: readonly number[] = []) {
   const screen = page.repl.terminal.screen;
@@ -56,6 +66,7 @@ for (const size of [
         "committed task and answer",
         (one) => one.shows("one") && one.shows("Reviewed task."),
       );
+      yield* page.until("task review joins", sidekickIdle);
       capture(page, "short", [performance.now() - start]);
       expect(page.repl.fake.prompts).toHaveLength(1);
       expect(page.repl.fake.prompts[0]).toContain(TODO_WAKE);
@@ -110,10 +121,10 @@ for (const size of [
       capture(page, "overflow-wrapped");
       const header = page.screen().locate("▾ TODO");
       const composer = page.screen().locate("message the sidekick");
-      const actions = page.screen().locate("Remove task");
+      const actions = page.screen().locate("task-0");
       const bodyRows = page
         .screen()
-        .rows.slice(actions.row + 1, composer.row)
+        .rows.slice(actions.row, composer.row)
         .filter((row) => row.slice(header.column).trim().length > 0);
       expect(bodyRows.length).toBeLessThanOrEqual(
         size.columns >= 160 ? 8 : size.columns >= 120 ? 6 : 3,
@@ -133,16 +144,21 @@ for (const size of [
       capture(page, "collapsed-background-change");
       yield* page.press("▸ TODO");
       yield* page.until("expanded current tasks", (one) => one.shows("background-0"));
+      yield* page.until("expanded header owns focus", (one) => one.shows("> ▾ TODO"));
       const timings: number[] = [];
       let navigationInputs = 0;
       for (let taskIndex = 0; taskIndex < 13; taskIndex++) {
         const expected =
-          taskIndex === 12
-            ? "> [ ] <Sidekick.Todo>"
-            : `> [${taskIndex === 0 ? "x" : " "}] ${taskIndex === 0 ? "background-0" : `task-${taskIndex}`}`;
+          taskIndex === 0
+            ? "> [x]"
+            : taskIndex === 12
+              ? "> [ ] <Sidekick.Todo>"
+              : `> [ ] task-${taskIndex}`;
+        const matches =
+          taskIndex === 12 ? inertFocused : (one: ScreenReading) => one.shows(expected);
         for (
           let attempt = 0;
-          attempt < (taskIndex === 0 ? 10 : 1) && !page.screen().shows(expected);
+          attempt < (taskIndex === 0 ? 10 : 1) && !matches(page.screen());
           attempt++
         ) {
           const previousFocus = page
@@ -155,13 +171,13 @@ for (const size of [
           yield* page.until(
             "keyboard focus write",
             (one) =>
-              one.shows(expected) ||
+              matches(one) ||
               (taskIndex === 0 &&
                 one.rows.filter((row) => row.includes("> ")).join("\n") !== previousFocus),
           );
           timings.push(performance.now() - start);
         }
-        yield* page.until(`focus on task ${taskIndex}`, (one) => one.shows(expected));
+        yield* page.until(`focus on task ${taskIndex}`, (one) => matches(one));
         if (taskIndex === 0) {
           capture(page, "completed-focus");
         }
@@ -169,7 +185,7 @@ for (const size of [
       const taskText = page
         .screen()
         .rows.slice(
-          page.screen().locate("Remove task").row + 1,
+          page.screen().locate("▾ TODO").row + 1,
           page.screen().locate("message the sidekick").row,
         )
         .map((row) =>
@@ -178,9 +194,9 @@ for (const size of [
         .join("");
       expect(taskText).toContain("{inert}");
       expect(taskText).toContain("\\u{1b}");
-      const focusedLast = page.screen().locate("<Sidekick.Todo>");
+      const focusedLast = page.screen().locate("<Sidekick.Tod");
       yield* page.wheel("up", focusedLast);
-      yield* page.until("wheel retains focused task", (one) => one.shows("> [ ] <Sidekick.Todo>"));
+      yield* page.until("wheel retains focused task", (one) => inertFocused(one));
       const resizeTimings: number[] = [];
       for (const resized of [
         { columns: 160, rows: 36 },
@@ -196,9 +212,7 @@ for (const size of [
         }
         const started = performance.now();
         yield* page.resize(resized);
-        yield* page.until("focused task survives resize", (one) =>
-          one.shows("> [ ] <Sidekick.Todo>"),
-        );
+        yield* page.until("focused task survives resize", (one) => inertFocused(one));
         resizeTimings.push(performance.now() - started);
       }
       const changed = source.replace("task-0", "background-0").replace("task-1 ", "background-1 ");
@@ -206,7 +220,7 @@ for (const size of [
       yield* writeTextFile(file, changed);
       yield* page.until(
         "background refresh leaves focus",
-        (one) => one.index > beforeRefresh && one.shows("> [ ] <Sidekick.Todo>"),
+        (one) => one.index > beforeRefresh && inertFocused(one),
       );
       console.log(
         JSON.stringify({
@@ -220,6 +234,23 @@ for (const size of [
           timingBoundary: "input to completed terminal write; not physical paint",
         }),
       );
+      const visibleRows = (one: ScreenReading) =>
+        one.rows
+          .slice(
+            one.locate("message the sidekick").row -
+              (one.size.columns >= 160 ? 8 : one.size.columns >= 120 ? 6 : 3),
+            one.locate("message the sidekick").row,
+          )
+          .map((row) => row.replace(/> (?=\[)/, "  "));
+      const beforeSwitch = visibleRows(page.screen());
+      yield* page.press("QUEUE");
+      yield* page.until("queue hides checklist", (one) => !one.shows("<Sidekick.Tod"));
+      yield* page.press("▾ TODO");
+      yield* page.until(
+        "checklist reading restored",
+        (one) => one.shows("<Sidekick.Tod") && one.shows("> ▾ TODO"),
+      );
+      expect(visibleRows(page.screen())).toEqual(beforeSwitch);
       yield* page.key("Tab");
       yield* page.until("Message fixed entry", (one) => one.shows("> › message the sidekick"));
       yield* page.key("Backtab");
@@ -348,7 +379,7 @@ describe("TODO human semantic actions", () => {
     yield* page.type(" ");
     yield* page.until("reopened task", (one) => one.shows("> [ ] renamed rich code label"));
     inputCount++;
-    yield* page.press("Move down");
+    yield* page.press("↓", { onRow: "renamed rich code label" });
     yield* page.until(
       "move committed",
       (one) =>
@@ -360,7 +391,7 @@ describe("TODO human semantic actions", () => {
       return (yield* readTextFile(file)).startsWith("- [ ] duplicate\n");
     });
     inputCount++;
-    yield* page.press("Remove task");
+    yield* page.press("x", { onRow: "renamed rich code label" });
     yield* page.until(
       "removed selected moved task",
       (one) => !one.shows("renamed rich code label"),
@@ -433,14 +464,22 @@ describe("TODO background task focus", () => {
       );
     }
     yield* page.until("target focused", (one) => one.shows("> [ ] target"));
+    for (const icon of ["↑", "↓", "x"]) {
+      yield* page.key("ArrowRight");
+      yield* page.until("target local action focused", (one) =>
+        one.rows.some((row) => row.includes("[ ] target") && row.includes(`> ${icon}`)),
+      );
+    }
     console.log(JSON.stringify({ correctionCapture: "before-prepend", rows: page.screen().rows }));
     yield* writeTextFile(file, "- [ ] inserted-before\n" + source);
     yield* page.until("real outside refresh", (one) => one.shows("[ ] inserted-before"));
-    expect(page.screen().shows("> [ ] target")).toBe(true);
+    expect(
+      page.screen().rows.some((row) => row.includes("[ ] target") && row.includes("> x")),
+    ).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(0);
     console.log(JSON.stringify({ correctionCapture: "after-prepend", rows: page.screen().rows }));
     page.repl.fake.script({ reply: "<Output>reviewed removal</Output>" });
-    yield* page.press("Remove task");
+    yield* page.key("Enter");
     yield* awaitedFact("local action removes target", function* () {
       return (yield* readTextFile(file)) === "- [ ] inserted-before\n- [ ] first\n- [ ] last\n";
     });

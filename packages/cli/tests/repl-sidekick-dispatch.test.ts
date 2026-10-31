@@ -49,6 +49,7 @@ function* send(dispatch: SidekickDispatch, text: string): Operation<SidekickExch
 }
 
 function* queueComposer(page: Parameters<typeof sendMessage>[0]): Operation<void> {
+  yield* page.press("QUEUE");
   if (page.screen().size.columns < 120) {
     for (
       let step = 0;
@@ -222,6 +223,7 @@ describe("shared Sidekick dispatch", () => {
       "busy Send beside Stop",
       (one) => one.found("[send]", SIDEKICK_PANE) === 1 && one.found("[stop]", SIDEKICK_PANE) === 1,
     );
+    yield* page.press("QUEUE");
     yield* sendMessage(page, "waiting request");
     yield* page.key("Enter");
     yield* page.until(
@@ -320,7 +322,9 @@ describe("shared Sidekick dispatch", () => {
     yield* page.press("X", { onRow: "waiting-00" });
     yield* page.until("first exact withdrawal", (one) => one.shows("QUEUE 15/16"));
     yield* queueComposer(page);
-    yield* page.key("Alt+ArrowUp");
+    yield* page.key("Backtab");
+    yield* page.until("task tray fixed entry", (one) => one.shows("> ▾ TODO"));
+    yield* page.key("ArrowDown");
     yield* page.until("queue focus", (one) =>
       one.rows.some((row) => row.includes("waiting-") && row.includes("> X")),
     );
@@ -360,6 +364,14 @@ describe("shared Sidekick dispatch", () => {
       (one) => one.shows("QUEUE 15/16") && one.found("refused seventeenth", COMPOSER_VALUE) === 0,
     );
     expect(page.repl.fake.prompts).toHaveLength(1);
+    const visibleWaiting = () =>
+      page.screen().rows.flatMap((row) => row.match(/waiting-\d+/)?.[0] ?? []);
+    const beforeSwitch = visibleWaiting();
+    yield* page.press("▾ TODO");
+    yield* page.until("TODO hides queued rows", (one) => !one.shows("waiting-"));
+    yield* page.press("QUEUE");
+    yield* page.until("queue reading restored", (one) => one.shows("waiting-"));
+    expect(visibleWaiting()).toEqual(beforeSwitch);
   });
 
   it("shows failure hold, preserves blocked Send text and resumes only remaining work", function* () {

@@ -299,10 +299,14 @@ no change observation. Issued native work joins before mutation ordering or
 session shutdown releases it. Unknown replacement acknowledgement stays unknown;
 a later read establishes current contents only.
 
-The header collapses the checklist and `+` creates a task. Task Space checks or
+TODO and QUEUE share one tab row with the selected list beneath it. Selecting
+another tab changes only the view; background task or message activity never
+selects a tab. Selecting TODO shows its retained state; activating its active
+header collapses or expands the checklist. `+` creates a task. Task Space checks or
 reopens; Enter edits. Down from the last task creates another. Enter saves the
-editor, Escape cancels, arrows edit its caret and Tab leaves the region. Move up,
-Move down and Remove task act on the selected task. Alt+Up/Down navigates locally
+editor, Escape cancels, arrows edit its caret and Tab leaves the region. Each
+task has ↑, ↓ and x controls beside its first displayed row for move up, move
+down and remove. Left/Right reaches those controls within the task row. Alt+Up/Down navigates locally
 without reordering. The TODO header is its fixed Tab and Backtab entry between
 the conversation and Message. Background changes preserve collapse, focus,
 composer text and reading positions.

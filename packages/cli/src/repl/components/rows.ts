@@ -230,6 +230,10 @@ function activation(input: ReplViewData): ReplAction | undefined {
     return undefined;
   }
   const select = named["select"];
+  if (select === "select-task-tray") {
+    const tray = named["tray"];
+    return tray === "todo" || tray === "queue" ? { kind: "select-task-tray", tray } : undefined;
+  }
   if (select === "todo-collapse") {
     return { kind: "todo-collapse" };
   }

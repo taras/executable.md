@@ -1911,7 +1911,9 @@ describe("shared TODO measured content", () => {
       expect(checked.boundsOf(todoTaskKeys(parseTodo("- [ ] short\n"))[0])).toEqual(extent);
       const wrapped = yield* presenter.commit(frame("- [ ] " + "word ".repeat(70) + "\n"));
       const filled = wrapped.keys.filter(
-        (key) => key.startsWith("todo:task:") || key.startsWith("todo:continuation:"),
+        (key) =>
+          (key.startsWith("todo:task:") && !/:action:(up|down|remove)$/.test(key)) ||
+          key.startsWith("todo:continuation:"),
       );
       expect(filled).toHaveLength(cap);
       expect(wrapped.boundsOf("todo:header")?.height).toBe(1);

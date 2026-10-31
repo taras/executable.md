@@ -4626,7 +4626,7 @@ export function* prepareFrame(
     renderer,
     view.size,
     todoLinesOf(view),
-    Math.max(1, widths.inspection - 6),
+    Math.max(1, widths.inspection - 18),
   );
   if (!todoRows.ok) {
     return todoRows;

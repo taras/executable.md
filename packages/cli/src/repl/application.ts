@@ -1059,6 +1059,7 @@ export const AT_TOP: ReplViewports = Object.freeze({
 
 /** Everything typed and not yet committed anywhere. */
 export interface ReplState {
+  readonly taskTray?: "todo" | "queue";
   readonly todoCollapsed?: boolean;
   readonly todoOffset?: number;
   readonly todoSelected?: string;
@@ -1576,7 +1577,9 @@ function staged(view: ReplView): ReplWorkspace | undefined {
   if (view.refusal !== undefined || profileFor(view.size) === "too-small") {
     return undefined;
   }
-  return view.workspace;
+  return view.workspace?.todo === undefined
+    ? view.workspace
+    : Object.freeze({ ...view.workspace, tray: view.state.taskTray ?? "todo" });
 }
 
 /** The staged presentation one view carries, for a caller outside this module. */
@@ -2108,8 +2111,26 @@ export function reduceRepl(
         },
       });
     }
+    case "select-task-tray":
+      return settled({
+        ...state,
+        taskTray: action.tray,
+        restore: { kind: "reveal", key: action.tray === "todo" ? "todo:header" : "tray:queue" },
+      });
     case "todo-collapse":
-      return settled({ ...state, todoCollapsed: !state.todoCollapsed, todoEditor: undefined });
+      if (state.taskTray === "queue") {
+        return settled({
+          ...state,
+          taskTray: "todo",
+          restore: { kind: "reveal", key: "todo:header" },
+        });
+      }
+      return settled({
+        ...state,
+        todoCollapsed: !state.todoCollapsed,
+        todoEditor: undefined,
+        restore: { kind: "reveal", key: "todo:header" },
+      });
     case "todo-edit":
       return settled({
         ...state,
@@ -4830,8 +4851,14 @@ export function focusSettled(
 ): ReplState {
   let state = view.state;
   const todoDocument = staged(view)?.todo?.document;
-  if (todoDocument !== undefined && todoTaskKeys(todoDocument).includes(focused ?? "")) {
-    state = Object.freeze({ ...state, todoSelected: focused });
+  if (
+    todoDocument !== undefined &&
+    todoTaskKeys(todoDocument).some((key) => todoOwns(key, focused))
+  ) {
+    state = Object.freeze({
+      ...state,
+      todoSelected: todoTaskKeys(todoDocument).find((key) => todoOwns(key, focused)),
+    });
   }
   const todoFrom = admission?.windows.get("todo")?.from;
   if (todoFrom !== undefined && todoFrom !== state.todoOffset) {
@@ -10724,13 +10751,13 @@ export function admissionFor(input: {
       let from = Math.max(0, Math.min(view.state.todoOffset ?? 0, rows.length - capacity));
       const requested =
         view.state.restore?.kind === "reveal" ? view.state.restore.key : view.focused;
-      const target = rows.findIndex((one) => one.line === requested);
+      const target = rows.findIndex((one) => todoOwns(one.line, requested));
       if (target >= 0 && capacity > 0) {
         const end =
-          rows.reduce((last, one, index) => (one.line === requested ? index : last), -1) + 1;
+          rows.reduce((last, one, index) => (todoOwns(one.line, requested) ? index : last), -1) + 1;
         from = Math.min(Math.max(from, end - capacity), target);
       }
-      const focused = rows.findIndex((one) => one.line === view.focused);
+      const focused = rows.findIndex((one) => todoOwns(one.line, view.focused));
       windows.set("todo", {
         ...admitRows({ offset: from, total: rows.length, capacity }),
         ...(focused < 0
@@ -10741,7 +10768,7 @@ export function admissionFor(input: {
                 to: Math.min(
                   focused + capacity,
                   rows.reduce(
-                    (last, one, index) => (one.line === view.focused ? index : last),
+                    (last, one, index) => (todoOwns(one.line, view.focused) ? index : last),
                     -1,
                   ) + 1,
                 ),
@@ -11711,18 +11738,21 @@ function workspaceControls(
       ),
     );
   }
-  for (const tray of traysOf(workspace)) {
-    if (tray === "todo") {
-      continue;
-    }
-    const here = workspace.tray === tray;
-    items.push(
-      line(
-        `tray:${tray}`,
-        focusPrefixed(tray === "queue" ? `QUEUE ${workspace.queued.length}/16` : "", false),
-        styleOf(here ? "pane-heading" : "metadata", { selected: here }),
-      ),
-    );
+  const queueTab = offersQueue(workspace)
+    ? workspace.todo === undefined
+      ? line("tray:queue", `QUEUE ${workspace.queued.length}/16`, styleOf("pane-heading"))
+      : row(
+          "tray:queue",
+          `QUEUE ${workspace.queued.length}/16`,
+          { select: "select-task-tray", tray: "queue" },
+          styleOf(workspace.tray === "queue" ? "pane-heading" : "metadata", {
+            selected: workspace.tray === "queue",
+          }),
+          { here: view.focused, claim },
+        )
+    : undefined;
+  if (workspace.todo === undefined && queueTab !== undefined) {
+    items.push(queueTab);
   }
   if (workspace.follow !== undefined) {
     items.push(
@@ -11749,7 +11779,7 @@ function workspaceControls(
       here: view.focused,
     }),
   );
-  if (workspace.queueHeld !== undefined) {
+  if (workspace.queueHeld !== undefined && workspace.tray === "queue") {
     items.push(
       row(
         "sidekick:resume",
@@ -11760,8 +11790,123 @@ function workspaceControls(
       ),
     );
   }
-  for (const [at, one] of (context.queueStatus ?? []).entries()) {
+  for (const [at, one] of (workspace.tray === "queue"
+    ? (context.queueStatus ?? [])
+    : []
+  ).entries()) {
     items.push(line(`queue-status:${at}`, one.text, styleOf("metadata")));
+  }
+  if (workspace.todo !== undefined) {
+    const document = workspace.todo.document;
+    items.push(
+      row(
+        "todo:header",
+        `${state.todoCollapsed ? "▸" : "▾"} TODO`,
+        { select: "todo-collapse" },
+        styleOf(workspace.tray === "todo" ? "pane-heading" : "metadata", {
+          selected: workspace.tray === "todo",
+        }),
+        { here: view.focused, claim },
+      ),
+    );
+    if (queueTab !== undefined) {
+      items.push(queueTab);
+    }
+    if (document !== undefined && workspace.tray === "todo") {
+      items.push(
+        row(
+          "todo:add",
+          "+",
+          { select: "todo-edit", source: document.source, index: document.items.length, text: "" },
+          styleOf("action"),
+          { here: view.focused, claim },
+        ),
+      );
+    }
+    if (workspace.tray === "todo" && workspace.todo.error !== undefined) {
+      items.push(line("todo:error", workspace.todo.error, styleOf("failed-outcome")));
+    }
+    if (workspace.tray === "todo" && !state.todoCollapsed && document !== undefined) {
+      const fitted = context.todo ?? [];
+      const cap = Math.min(
+        view.size.columns >= 160 ? 8 : view.size.columns >= 120 ? 6 : 3,
+        Math.max(0, view.size.rows - 13),
+      );
+      let from =
+        context.admission.windows.get("todo")?.from ??
+        Math.max(0, Math.min(state.todoOffset ?? 0, fitted.length - cap));
+      const requested = state.restore?.kind === "reveal" ? state.restore.key : view.focused;
+      const target = fitted.findIndex((one) => todoOwns(one.line, requested));
+      if (target >= 0) {
+        from = Math.min(Math.max(from, target - cap + 1), target);
+      }
+      const keys = todoTaskKeys(document);
+      for (const piece of context.measuring ? [] : fitted.slice(from, from + cap)) {
+        const index = keys.indexOf(piece.line);
+        const task = document.items[index];
+        if (task === undefined) {
+          continue;
+        }
+        if (piece.continuation) {
+          items.push(
+            line(
+              `todo:continuation:${piece.key}`,
+              "  " + " ".repeat(piece.indent) + piece.text,
+              styleOf(task.completed ? "todo-completed" : "source"),
+              [{ text: "  " + " ".repeat(piece.indent), token: "source" }, ...piece.runs],
+            ),
+          );
+        } else {
+          items.push(
+            row(
+              piece.line,
+              piece.text,
+              {
+                select: "todo-edit",
+                source: document.source,
+                index,
+                text: task.text,
+                last: index === document.items.length - 1 && state.todoEditor === undefined,
+                reveal: {
+                  ArrowUp: keys[Math.max(0, index - 1)],
+                  ArrowDown:
+                    index === document.items.length - 1 && state.todoEditor !== undefined
+                      ? "todo:editor"
+                      : keys[index + 1],
+                },
+              },
+              styleOf(task.completed ? "todo-completed" : "source"),
+              { here: view.focused, claim, runs: piece.runs },
+            ),
+          );
+          for (const [name, label] of [
+            ["up", "↑"],
+            ["down", "↓"],
+            ["remove", "x"],
+          ]) {
+            items.push(
+              row(
+                `${piece.line}:action:${name}`,
+                label,
+                { select: `todo-${name}`, source: document.source, index },
+                styleOf("action"),
+                { here: view.focused },
+              ),
+            );
+          }
+        }
+      }
+    }
+    const editor = workspace.tray === "todo" ? state.todoEditor : undefined;
+    if (editor !== undefined) {
+      items.push(
+        field("todo:editor", " Task: ", editor.text, "todo", styleOf("field-value"), {
+          here: view.focused,
+          caret: editor.caret,
+          ...(claim === "todo:editor" ? { focus: true } : {}),
+        }),
+      );
+    }
   }
   if (workspace.tray === "queue" && offersQueue(workspace)) {
     const window = context.admission.windows.get(QUEUE_WINDOW);
@@ -11846,119 +11991,6 @@ function workspaceControls(
           ),
         );
       }
-    }
-  }
-  if (workspace.todo !== undefined) {
-    const document = workspace.todo.document;
-    items.push(
-      row(
-        "todo:header",
-        `${state.todoCollapsed ? "▸" : "▾"} TODO`,
-        { select: "todo-collapse" },
-        styleOf("pane-heading"),
-        { here: view.focused, claim },
-      ),
-    );
-    if (document !== undefined) {
-      items.push(
-        row(
-          "todo:add",
-          "+",
-          { select: "todo-edit", source: document.source, index: document.items.length, text: "" },
-          styleOf("action"),
-          { here: view.focused, claim },
-        ),
-      );
-    }
-    if (!state.todoCollapsed && document !== undefined && document.items.length > 0) {
-      const keys = todoTaskKeys(document);
-      const focused = keys.indexOf(view.focused ?? "");
-      const selected = keys.indexOf(state.todoSelected ?? "");
-      const index = focused >= 0 ? focused : selected >= 0 ? selected : 0;
-      for (const [name, label] of [
-        ["up", "Move up"],
-        ["down", "Move down"],
-        ["remove", "Remove task"],
-      ]) {
-        items.push(
-          row(
-            `todo:action:${name}`,
-            label,
-            { select: `todo-${name}`, source: document.source, index },
-            styleOf("action"),
-            { here: view.focused },
-          ),
-        );
-      }
-    }
-    if (workspace.todo.error !== undefined) {
-      items.push(line("todo:error", workspace.todo.error, styleOf("failed-outcome")));
-    }
-    if (!state.todoCollapsed && document !== undefined) {
-      const fitted = context.todo ?? [];
-      const cap = Math.min(
-        view.size.columns >= 160 ? 8 : view.size.columns >= 120 ? 6 : 3,
-        Math.max(0, view.size.rows - 13),
-      );
-      let from =
-        context.admission.windows.get("todo")?.from ??
-        Math.max(0, Math.min(state.todoOffset ?? 0, fitted.length - cap));
-      const requested = state.restore?.kind === "reveal" ? state.restore.key : view.focused;
-      const target = fitted.findIndex((one) => one.line === requested);
-      if (target >= 0) {
-        from = Math.min(Math.max(from, target - cap + 1), target);
-      }
-      const keys = todoTaskKeys(document);
-      for (const piece of context.measuring ? [] : fitted.slice(from, from + cap)) {
-        const index = keys.indexOf(piece.line);
-        const task = document.items[index];
-        if (task === undefined) {
-          continue;
-        }
-        if (piece.continuation) {
-          items.push(
-            line(
-              `todo:continuation:${piece.key}`,
-              "  " + " ".repeat(piece.indent) + piece.text,
-              styleOf(task.completed ? "todo-completed" : "source"),
-              [{ text: "  " + " ".repeat(piece.indent), token: "source" }, ...piece.runs],
-            ),
-          );
-        } else {
-          items.push(
-            row(
-              piece.line,
-              piece.text,
-              {
-                select: "todo-edit",
-                source: document.source,
-                index,
-                text: task.text,
-                last: index === document.items.length - 1 && state.todoEditor === undefined,
-                reveal: {
-                  ArrowUp: keys[Math.max(0, index - 1)],
-                  ArrowDown:
-                    index === document.items.length - 1 && state.todoEditor !== undefined
-                      ? "todo:editor"
-                      : keys[index + 1],
-                },
-              },
-              styleOf(task.completed ? "todo-completed" : "source"),
-              { here: view.focused, claim, runs: piece.runs },
-            ),
-          );
-        }
-      }
-    }
-    const editor = state.todoEditor;
-    if (editor !== undefined) {
-      items.push(
-        field("todo:editor", " Task: ", editor.text, "todo", styleOf("field-value"), {
-          here: view.focused,
-          caret: editor.caret,
-          ...(claim === "todo:editor" ? { focus: true } : {}),
-        }),
-      );
     }
   }
   const claiming = claim === "sidekick:message";
@@ -12057,7 +12089,9 @@ export function queueTextWidth(
   widthOf: (id: string) => number | undefined,
   room: number | undefined,
 ): number | undefined {
-  const control = flatten(manifest.root).find((one) => one.key?.endsWith(":remove") === true);
+  const control = flatten(manifest.root).find(
+    (one) => one.key?.startsWith("queue:") === true && one.key.endsWith(":remove"),
+  );
   if (control === undefined || room === undefined || room < 1) {
     return undefined;
   }
@@ -12401,23 +12435,7 @@ function trayAllocation(
       : context.headers?.has(`header:${id}`) === true
         ? 2
         : 1;
-  const composer =
-    1 +
-    messageValueRows(context).length +
-    (context.queueStatus?.length ?? 0) +
-    (workspace.todo === undefined
-      ? 0
-      : 1 +
-        (!view.state.todoCollapsed && workspace.todo.document?.items.length
-          ? wrapped("todo-actions")
-          : 0) +
-        (view.state.todoCollapsed
-          ? 0
-          : Math.min(
-              view.size.columns >= 160 ? 8 : view.size.columns >= 120 ? 6 : 3,
-              context.todo?.length ?? 0,
-            )) +
-        (view.state.todoEditor === undefined ? 0 : 1));
+  const composer = 1 + messageValueRows(context).length + (context.queueStatus?.length ?? 0);
   const held = queueSequence(workspace, context.queue).length;
   const column = workspaceBodyRows(view.size) - wrapped("conversation") - 1 - 1 - extras;
   const queue = Math.max(0, Math.min(WORKSPACE_QUEUE_ROWS, column - wrapped("tray") - composer));
@@ -12482,13 +12500,6 @@ const WORKSPACE_HEADERS: readonly {
   /** The left group where one outlet is routed, if it differs. */
   readonly outletLeft?: readonly string[];
 }[] = Object.freeze([
-  Object.freeze({ id: "todo", gap: 1, left: ["todo:header"], right: ["todo:add"] }),
-  Object.freeze({
-    id: "todo-actions",
-    gap: 1,
-    left: ["todo:action:up"],
-    right: ["todo:action:down", "todo:action:remove"],
-  }),
   Object.freeze({
     id: "transcript",
     gap: TAB_GAP,
@@ -12520,7 +12531,7 @@ const WORKSPACE_HEADERS: readonly {
     // describe — a tray this execution does not offer, a Follow it does not
     // have — contributes no part, so the row is built from what is actually
     // there rather than from what a wider build would have put there.
-    left: Object.freeze(["tray:todo", "tray:queue"]),
+    left: Object.freeze(["todo:header", "tray:queue", "todo:add"]),
     right: Object.freeze(["follow", "sidekick:stop", "sidekick:send", "sidekick:resume"]),
   }),
 ]);
@@ -12749,7 +12760,14 @@ function workspacePresentation(input: {
       id: `box:${region}:${candidate.key}`,
       key: candidate.key,
       region,
-      props: fittedPartProps(surface),
+      // Fixed panel labels contain only single-cell glyphs; fit can leave fractional widths.
+      props:
+        candidate.key === "todo:header" ||
+        candidate.key === "todo:add" ||
+        candidate.key === "tray:queue" ||
+        /^todo:task:.*:action:(up|down|remove)$/.test(candidate.key)
+          ? statedPartProps(candidate.text.length)
+          : fittedPartProps(surface),
       text: candidate.text,
       control: candidate.control,
       style: candidate.style,
@@ -13142,8 +13160,6 @@ function workspacePresentation(input: {
                       }),
                     ]
                   : queueRows),
-                ...headerRows("todo", region, REPL_PALETTE.composerSurface),
-                ...headerRows("todo-actions", region, REPL_PALETTE.composerSurface),
                 ...byKey("todo:error").map((one) => rowBox(one, region, room)),
                 box({
                   id: "box:todo:viewport",
@@ -13157,10 +13173,37 @@ function workspacePresentation(input: {
                   children: candidates
                     .filter(
                       (one) =>
-                        one.key.startsWith("todo:task:") ||
+                        (one.key.startsWith("todo:task:") &&
+                          !/:action:(up|down|remove)$/.test(one.key)) ||
                         one.key.startsWith("todo:continuation:"),
                     )
-                    .map((one) => rowBox(one, region, room)),
+                    .map((one) => {
+                      const controls = candidates.filter((other) =>
+                        other.key.startsWith(`${one.key}:action:`),
+                      );
+                      return box({
+                        id: `box:${region}:${one.key}:row`,
+                        region,
+                        props: partsRowProps(1, 1, room),
+                        children: [
+                          box({
+                            id: `box:${region}:${one.key}:text`,
+                            region,
+                            props: statedPartProps(
+                              Math.max(1, (context.widths?.inspection ?? 18) - 16),
+                            ),
+                            children: [
+                              rowBox(
+                                one,
+                                region,
+                                Math.max(1, (context.widths?.inspection ?? 18) - 16),
+                              ),
+                            ],
+                          }),
+                          ...controls.map((control) => part(control, region)),
+                        ],
+                      });
+                    }),
                 }),
                 ...byKey("todo:editor").map((one) => rowBox(one, region, room)),
                 ...composer.map((one) => rowBox(one, region, room)),
@@ -13528,6 +13571,9 @@ export function queueStatusLinesOf(
   if (workspace === undefined) {
     return [];
   }
+  if (workspace.tray !== "queue") {
+    return [];
+  }
   return [
     ...(workspace.queueHeld === undefined
       ? []
@@ -13542,7 +13588,12 @@ export function todoLinesOf(
   view: ReplView,
 ): readonly { key: string; text: string; runs: readonly ReplTokenRun[] }[] {
   const document = staged(view)?.todo?.document;
-  if (document === undefined || !showingSidekick(view) || view.state.todoCollapsed) {
+  if (
+    document === undefined ||
+    staged(view)?.tray !== "todo" ||
+    !showingSidekick(view) ||
+    view.state.todoCollapsed
+  ) {
     return [];
   }
   const keys = todoTaskKeys(document);
@@ -13553,6 +13604,10 @@ export function todoLinesOf(
     ];
     return { key: keys[index], text: runs.map((one) => one.text).join(""), runs };
   });
+}
+
+function todoOwns(line: string, key: string | undefined): boolean {
+  return key === line || key?.startsWith(`${line}:action:`) === true;
 }
 
 export function todoTaskKeys(document: TodoDocument): readonly string[] {
