@@ -473,7 +473,7 @@ describe("REPL focus regions: owned composition invariants", () => {
 
   it("R5: catalog Content re-entry uses the first admitted row rather than the last focus", function* () {
     const model = yield* journalModel(
-      Array.from({ length: 8 }, (_, index) => `# Reading ${index + 1}`),
+      Array.from({ length: 12 }, (_, index) => `# Reading ${index + 1}`),
     );
     let state: ReplState = initialState("owned");
     const presenter = yield* usePresenter(NARROW);
@@ -500,7 +500,7 @@ describe("REPL focus regions: owned composition invariants", () => {
     yield* send("ArrowRight");
     yield* send("Enter");
     expect(focused(presenter)).toBe("entry:entry-1");
-    for (let row = 2; row <= 8; row += 1) {
+    for (let row = 2; row <= 12; row += 1) {
       yield* send("ArrowDown");
       expect(focused(presenter)).toBe(`entry:entry-${row}`);
     }
@@ -508,7 +508,7 @@ describe("REPL focus regions: owned composition invariants", () => {
     const window = windowOf(shown.committed.admission, DRAWER_WINDOW);
     expect(window.from).toBeGreaterThan(0);
     const first = shown.keys.find((one) => one.startsWith("entry:"));
-    expect(first).not.toBe("entry:entry-8");
+    expect(first).not.toBe("entry:entry-12");
     yield* send("Tab");
     expect(focused(presenter)).toBe("drawer:close");
     yield* send("Tab");

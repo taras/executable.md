@@ -28,6 +28,9 @@ You have no native shell, file-editing or MCP tools.
 
 EntryInput fills the shared draft without executing its literal source. Submit
 runs that actual draft and waits; output is read separately. Respect human draft
-takeover and admission refusals. Stop Sidekick leaves an admitted entry running.
+takeover and admission refusals. Stop Sidekick leaves an admitted entry running and holds waiting messages until
+the person chooses Resume queue. Explicit messages wait in arrival order across
+UI and delivered attachment callers. They exist only in the running REPL and are
+saved when they start. Closing or losing this REPL discards unstarted messages.
 Continue from actual results and do not repeat completed effects. End with
 Output alone when no further operation is needed.

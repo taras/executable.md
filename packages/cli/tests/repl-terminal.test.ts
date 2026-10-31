@@ -423,19 +423,17 @@ describe("REPL terminal: responsive semantic frames", () => {
     expect(layer.y).toBeGreaterThanOrEqual(body.y);
     expect(layer.x + layer.width).toBeLessThanOrEqual(body.x + body.width);
     expect(layer.y + layer.height).toBeLessThanOrEqual(body.y + body.height);
-    // Its title, both window controls, its one row and the way out.
+    // Its title, admitted content and the way out.
     expect(app.presenter.grid.textIn(layer).join("\n")).toContain("Entries");
-    expect(keysInside(app.presenter, opened, layer)).toEqual([
-      "drawer:scroll:up",
-      "drawer:scroll:down",
-      "drawer:close",
-    ]);
-    expect(opened.regionOf("box:history")).toEqual({
-      x: 0,
-      y: 18,
-      width: 72,
-      height: 1,
-    });
+    expect(keysInside(app.presenter, opened, layer)).toEqual(["drawer:close"]);
+    const history = opened.regionOf("box:history");
+    const guidance = opened.regionOf("box:guidance");
+    if (history === undefined || guidance === undefined) {
+      throw new Error("the narrow drawer lost its History band or fitted help");
+    }
+    expect(history).toEqual({ x: 0, y: guidance.y - 1, width: 72, height: 1 });
+    expect(guidance.y + guidance.height).toBe(NARROW.rows);
+    expect(layer.y + layer.height).toBeLessThanOrEqual(history.y);
     expect(opened.keys).toContain("footer:history");
   });
 
@@ -1120,6 +1118,7 @@ describe("REPL terminal: frame and renderer ownership", () => {
     ops.push(close());
     const request = {
       ops,
+      scrolls: [],
       boxes: ids.map((id) => ({ id, node: id, control: true })),
       regions: [] as string[],
       tree: 1,
@@ -2886,6 +2885,7 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
         // reach whatever is behind — so this frame is not drawn at all.
         const drawn = yield* renderer.draw({
           ops: shape.ops,
+          scrolls: [],
           boxes: [{ id: "target", node: "target", control: true }],
           regions: ["parent"],
           tree: 1,

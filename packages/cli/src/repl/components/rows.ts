@@ -168,7 +168,7 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
           return { kind: "reveal", key: beyond };
         }
       }
-      if (event.kind !== "pointer" && event.key !== "Enter") {
+      if (event.kind !== "pointer" && (event.kind !== "key" || event.key !== "Enter")) {
         return undefined;
       }
       return activation(node.input);
@@ -259,6 +259,13 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "send-message") {
     return { kind: "send-message" };
   }
+  if (select === "remove-sidekick-message") {
+    const message = named["message"];
+    return typeof message === "string" ? { kind: "remove-sidekick-message", message } : undefined;
+  }
+  if (select === "resume-sidekick-queue") {
+    return { kind: "resume-sidekick-queue" };
+  }
   if (select === "stop-sidekick") {
     return { kind: "stop-sidekick" };
   }
@@ -339,32 +346,7 @@ function activation(input: ReplViewData): ReplAction | undefined {
       ? { kind: "retry-message", conversation, message }
       : undefined;
   }
-  if (select === "configure-scroll") {
-    const delta = named["delta"];
-    return typeof delta === "number" ? { kind: "scroll-configure", delta } : undefined;
-  }
-  if (select === "sidekick-scroll") {
-    const delta = named["delta"];
-    return typeof delta === "number" ? { kind: "scroll-sidekick-question", delta } : undefined;
-  }
-  if (select === "scroll") {
-    // A direction, not a position: the control knows which way it points, and
-    // how far the region may travel is the frame's to decide.
-    const delta = named["delta"];
-    return typeof delta === "number" ? { kind: "scroll", delta } : undefined;
-  }
-  if (select === "scroll-sessions") {
-    const delta = named["delta"];
-    return typeof delta === "number" ? { kind: "scroll-sessions", delta } : undefined;
-  }
-  if (select === "scroll-entries") {
-    const delta = named["delta"];
-    return typeof delta === "number" ? { kind: "scroll-entries", delta } : undefined;
-  }
-  if (select === "scroll-reading") {
-    const delta = named["delta"];
-    return typeof delta === "number" ? { kind: "scroll-reading", delta } : undefined;
-  }
+
   if (select === "session") {
     const session = named["session"];
     return typeof session === "string" && session.length > 0
@@ -414,10 +396,7 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "sidekick-back") {
     return { kind: "read-current-chat" };
   }
-  if (select === "scroll-sidekick") {
-    const delta = named["delta"];
-    return typeof delta === "number" ? { kind: "scroll-sidekick", delta } : undefined;
-  }
+
   if (select === "permission") {
     const request = named["request"];
     return typeof request === "string" ? { kind: "select-permission", request } : undefined;
@@ -485,7 +464,7 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       if (event.kind === "text") {
         return { kind: "type", text: event.text, ...owns };
       }
-      if (event.kind === "pointer") {
+      if (event.kind !== "key") {
         return undefined;
       }
       if (event.key === "Backspace") {
@@ -621,7 +600,7 @@ export const REFUSAL: ReplComponent<ReplAction> = component<ReplAction>({
       if (event.kind === "text") {
         return undefined;
       }
-      if (event.kind !== "pointer" && event.key !== "Enter") {
+      if (event.kind !== "pointer" && (event.kind !== "key" || event.key !== "Enter")) {
         return undefined;
       }
       return back === "live" ? { kind: "go-live" } : { kind: "select-surface", surface: "entries" };

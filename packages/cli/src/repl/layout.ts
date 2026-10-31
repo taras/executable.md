@@ -119,6 +119,8 @@ export interface ReplBox {
 
 /** One scrolling viewport, and the reading whose offset moves inside it. */
 export interface ReplViewportSlot {
+  /** The description key of the mounted viewport input owner. */
+  readonly owner?: string;
   /** The clipped box the engine measures. */
   readonly id: string;
   readonly region: ReplRegion;

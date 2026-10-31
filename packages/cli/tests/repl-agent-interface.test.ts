@@ -144,7 +144,7 @@ const SPAWNS_NAMED_LIKE_FACTS = [
 ].join("\n");
 
 /** More choices than the smallest accepted drawer can place at once. */
-const SEVEN_CHOICES: readonly PermissionOption[] = [
+const MANY_CHOICES: readonly PermissionOption[] = [
   { optionId: "once", name: "Allow once", kind: "allow_once" },
   { optionId: "always", name: "Allow for this session", kind: "allow_always" },
   { optionId: "conversation", name: "Allow for this conversation", kind: "allow_always" },
@@ -152,6 +152,14 @@ const SEVEN_CHOICES: readonly PermissionOption[] = [
   { optionId: "no", name: "Deny once", kind: "reject_once" },
   { optionId: "never", name: "Deny for this session", kind: "reject_always" },
   { optionId: "halt", name: "Deny and stop", kind: "reject_always" },
+  ...Array.from(
+    { length: 10 },
+    (_, at): PermissionOption => ({
+      optionId: `extra-${at}`,
+      name: `Additional choice ${at}`,
+      kind: "allow_once",
+    }),
+  ),
 ];
 
 /** Options named after a turn's own read-only facts. */
@@ -745,11 +753,7 @@ function* acted(
 /** The Sessions rows this view describes, in order. */
 function* sessionKeysOf(view: ReplView, engine?: ReplRenderer): Operation<string[]> {
   return (yield* keysOf(view, engine)).filter(
-    (key) =>
-      key.startsWith("sessions:") &&
-      key !== "sessions:heading" &&
-      key !== "sessions:earlier" &&
-      key !== "sessions:later",
+    (key) => key.startsWith("sessions:") && key !== "sessions:heading",
   );
 }
 
@@ -1837,10 +1841,14 @@ describe("U3 — what each accepted frame mounts, and nothing else", () => {
     }
     // Sessions is in the sidebar at this size, and it holds the turns.
     expect(placed[0]?.sessions.some((key) => key.startsWith("sessions:turn:"))).toBe(true);
-    // Filtering and opening the drawer change what Sessions shows and leave the
-    // document transcript and the inspection column exactly as they were.
+    // Modal help can change the transcript's admitted tail; its reading position
+    // and the ordered content that still fits stay the same.
     expect(placed[1]?.transcript).toEqual(placed[0]?.transcript);
-    expect(placed[2]?.transcript).toEqual(placed[0]?.transcript);
+    const content = (keys: readonly string[]) => keys.filter((key) => !key.startsWith("guidance"));
+    const admitted = content(placed[2]?.transcript ?? []);
+    expect(admitted.length).toBeGreaterThan(1);
+    expect(admitted).toEqual(content(placed[0]?.transcript ?? []).slice(0, admitted.length));
+    expect(drawered.viewports).toEqual(all.viewports);
     expect(placed[1]?.inspection).toEqual(placed[0]?.inspection);
     expect(placed[2]?.inspection).toEqual(placed[0]?.inspection);
     expect(placed[1]?.sessions).not.toEqual(placed[0]?.sessions);
@@ -2356,9 +2364,9 @@ describe("U6 — the Sessions reading is windowed", () => {
       kind: "select-permission",
       request: request.key,
     });
-    // The window controls never scroll away from whoever is using them.
-    expect(frame.node("sessions:earlier")).toBeDefined();
-    expect(frame.node("sessions:later")).toBeDefined();
+    // The window adds no activation controls.
+    expect(frame.node("sessions:earlier")).toBeUndefined();
+    expect(frame.node("sessions:later")).toBeUndefined();
     expect(frame.node("sessions:heading")).toBeDefined();
 
     // And scrolling back recovers what was there before, rather than leaving a
@@ -2494,8 +2502,8 @@ describe("U6 — the Sessions reading is windowed", () => {
     const pressed = yield* activate(tree);
     expect(yield* pointed(tree, yield* drawn(tree, view), control?.key ?? "")).toEqual(pressed);
 
-    expect(frame.node("sessions:earlier")).toBeDefined();
-    expect(frame.node("sessions:later")).toBeDefined();
+    expect(frame.node("sessions:earlier")).toBeUndefined();
+    expect(frame.node("sessions:later")).toBeUndefined();
     // The dedicated location shows none of itself and reserves nothing for it:
     // every row of this narrow outlet belongs to the reading.
     expect(frame.keys.filter((key) => key.startsWith("location:"))).toEqual([]);
@@ -2708,7 +2716,7 @@ describe("U7 — the permission drawer is windowed", () => {
           toolCallId: "call-1",
           title: "Write",
           kind: "edit",
-          options: SEVEN_CHOICES,
+          options: MANY_CHOICES,
         },
       },
       build: { streaming: true },
@@ -2719,7 +2727,7 @@ describe("U7 — the permission drawer is windowed", () => {
     if (request === undefined) {
       throw new Error("no request was published");
     }
-    expect(request.choices).toHaveLength(SEVEN_CHOICES.length);
+    expect(request.choices).toHaveLength(MANY_CHOICES.length);
 
     const opened = yield* acted(
       onSessions(session),
@@ -2730,14 +2738,14 @@ describe("U7 — the permission drawer is windowed", () => {
     // More content than the smallest accepted drawer can place, so the first
     // window is a prefix and the rest is reached by scrolling.
     const firstWindow = yield* drawerKeysOf(reading(opened, session, NARROW));
-    expect(firstWindow.length).toBeLessThan(SEVEN_CHOICES.length);
+    expect(firstWindow.length).toBeLessThan(MANY_CHOICES.length);
 
     const reached: string[] = [];
     let at = opened;
     for (let press = 0; press < 20; press += 1) {
       const view = reading(at, session, NARROW);
       const frame = yield* drawn(tree, view);
-      for (const choice of SEVEN_CHOICES) {
+      for (const choice of MANY_CHOICES) {
         const key = `drawer:permission:choice:${choice.optionId}`;
         const placed = frame.node(key);
         if (placed !== undefined && !reached.includes(choice.optionId)) {
@@ -2762,13 +2770,13 @@ describe("U7 — the permission drawer is windowed", () => {
           expect(nodeOf(tree, key)).toBe(undefined);
         }
       }
-      if (reached.length === SEVEN_CHOICES.length) {
+      if (reached.length === MANY_CHOICES.length) {
         break;
       }
       at = yield* acted(at, { kind: "scroll", delta: 1 }, session);
     }
     // Every one of them, in the order the provider offered them.
-    expect(reached).toEqual(SEVEN_CHOICES.map((choice) => choice.optionId));
+    expect(reached).toEqual(MANY_CHOICES.map((choice) => choice.optionId));
 
     // And taking one calls the authority exactly once.
     const chose = reduceRepl(
@@ -2795,7 +2803,7 @@ describe("U7 — the permission drawer is windowed", () => {
           toolCallId: "call-1",
           title: "Write",
           kind: "edit",
-          options: SEVEN_CHOICES,
+          options: MANY_CHOICES,
         },
       },
       build: { streaming: true },
@@ -2845,7 +2853,7 @@ describe("U7 — the permission drawer is windowed", () => {
           toolCallId: "call-1",
           title: "Write",
           kind: "edit",
-          options: SEVEN_CHOICES,
+          options: MANY_CHOICES,
         },
       },
       build: { streaming: true },
@@ -4044,7 +4052,6 @@ describe("PV2: Transcript groups and logical reveal", () => {
     yield* send("ArrowLeft");
     expect(currentKey()).toBe("transcript:selector");
     yield* send("Enter");
-    yield* send("ArrowDown");
     yield* send("ArrowDown");
     const turns = session.agent.slots.map((one) => `sessions:turn:${one.key}`);
     expect(currentKey()).toBe(turns[0]);

@@ -925,8 +925,9 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
 
     // Their own text in both composers first, which none of this may touch.
     yield* draftText(page, "mine");
-    // The send left the keystrokes in the composer, so this needs no route.
-    yield* typed(page, "later");
+    yield* intoComposer(page);
+    yield* page.type("later");
+    yield* page.until("the composer holding its unsent text", (one) => composerHolds(one, "later"));
 
     // Before opening it: nothing inspected, nothing established, nothing
     // written. Looking at the pane, changing tabs and resizing all cost
@@ -2030,13 +2031,17 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     // A turn the backend takes and then reports as failed: the request was
     // accepted, so the history knows which turn it became and that it failed.
     repl.fake.script({ reply: "", stopReason: "refusal" });
-    repl.fake.script({ reply: "<Output>Second time lucky.</Output>\n" });
+    repl.fake.script({ reply: "<Output>Second time lucky.</Output>\n", held: true });
+    repl.fake.script({ reply: "<Output>Queued Retry finished.</Output>" });
 
     yield* sendMessage(page, "inspect it");
     const failed = yield* page.until("the failed attempt and its retry", (one) =>
       retryOffered(one),
     );
     expect(retryOffered(failed)).toBe(true);
+    yield* page.until("failure queue hold", (one) => one.shows("[Resume queue]"));
+    yield* page.press("[Resume queue]");
+    yield* page.until("explicit failure release", (one) => !one.shows("[Resume queue]"));
 
     // Unrelated newer text in the box, and a newer draft edit: neither is what
     // Retry sends, and neither is consumed by it.
@@ -2044,19 +2049,24 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     yield* typed(page, "something else");
     yield* draftText(page, "mine", ["Tab", "Tab", "Tab", "Tab"]);
 
-    // Two activations in one burst: the same one cycle a Send reserves, so the
-    // second finds it held rather than starting a second turn.
+    // A second explicit Retry waits behind the first; it consumes no newer text.
     yield* page.press("[retry]");
+    yield* repl.fake.holdingTurns(1);
+    yield* page.until("active Retry", (one) => one.shows("[stop]"));
     yield* page.press("[retry]");
-    yield* page.until("the retried request being answered", (one) =>
-      one.shows("Second time lucky."),
+    yield* page.until("Retry accepted while busy", (one) => one.shows("QUEUE 1/16"));
+    expect(repl.fake.prompts).toHaveLength(2);
+    repl.fake.releaseTurn();
+    yield* page.until("the queued Retry being answered", (one) =>
+      one.shows("Queued Retry finished."),
     );
 
-    // One new message, carrying the old request's own literal text.
+    // Both explicit retries carry the saved literal text.
     const read = yield* settledReading(repl);
     const asked = read.chat.filter((record) => record.kind === "message");
-    expect(asked).toHaveLength(2);
+    expect(asked).toHaveLength(3);
     expect(asked.map((record) => (record.kind === "message" ? record.text : ""))).toEqual([
+      "inspect it",
       "inspect it",
       "inspect it",
     ]);
@@ -2065,8 +2075,8 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
       asked.map((record) => (record.kind === "message" ? record.conversation : "")),
     );
     expect(conversations.size).toBe(1);
-    // Two turns and no more: the second activation asked for nothing.
-    expect(repl.fake.prompts).toHaveLength(2);
+    // Each explicit accepted Retry starts exactly once.
+    expect(repl.fake.prompts).toHaveLength(3);
     expect(repl.fake.prompts[1]).toContain("inspect it");
     expect(repl.fake.prompts[1]).not.toContain("something else");
 
@@ -2086,6 +2096,10 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     // Offered first, which is what makes the rest of this row a transition
     // rather than a control that was never there.
     yield* page.until("the failed attempt and its retry", (one) => retryOffered(one));
+
+    yield* page.until("failure queue hold", (one) => one.shows("[Resume queue]"));
+    yield* page.press("[Resume queue]");
+    yield* page.until("explicit failure release", (one) => !one.shows("[Resume queue]"));
 
     // Something else asked, and answered. The failure is still in the history
     // and still readable, but it is behind a reply now: resending it would put

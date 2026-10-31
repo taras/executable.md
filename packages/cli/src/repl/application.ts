@@ -8,6 +8,8 @@
  * adoption; a refusal preserves the standing route, selection and draft.
  */
 
+import { VIEWPORT } from "./components/viewport.ts";
+
 import { boundaries, caretFor, eraseAt, insertAt } from "./caret.ts";
 import type { ReplCaret } from "./caret.ts";
 
@@ -69,7 +71,6 @@ import {
   statedPartProps,
   WORKSPACE_DRAFT_GAP,
   WORKSPACE_DRAFT_ROWS,
-  WORKSPACE_CHROME_ROWS,
   WORKSPACE_LIST_GUTTER,
   WORKSPACE_QUEUE_ROWS,
   workspaceBodyRows,
@@ -122,7 +123,14 @@ import type {
 // module: no session, no repository, no resolver and no authority crosses it,
 // so the reduction stays a reduction while still refusing on exactly the terms
 // the root admits on.
-import { cleared, clearedMessage, edited, initialRevisions, submittable } from "./sidekick/gate.ts";
+import {
+  cleared,
+  acceptedMessage,
+  acknowledgedInstruction,
+  edited,
+  initialRevisions,
+  submittable,
+} from "./sidekick/gate.ts";
 import type { Instruction, Reservation, Revisions, Submitter } from "./sidekick/gate.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import { decodeLocation, encodeLocation, resolveLocation, surfaceForDrawer } from "./route.ts";
@@ -449,7 +457,7 @@ export interface ReplSidekickReading {
    * Sidekick is no longer continuing.
    */
   readonly chat: readonly ReplSidekickChatRow[];
-  /** Whether a cycle is running, so a second Send refuses rather than queueing. */
+  /** Whether the current exchange is running. */
   readonly busy: boolean;
   /** The agent the chat being read was held with. */
   readonly agent: string;
@@ -962,6 +970,8 @@ export interface ReplSidekickReveal {
 export interface ReplViewports {
   /** Rows the Sessions reading is scrolled by. */
   readonly sessions: number;
+  /** Fitted rows the live queue is scrolled by. */
+  readonly queue?: number;
   /**
    * Rows the Sidekick pane is scrolled by, one entry per chat it has read.
    *
@@ -1012,6 +1022,7 @@ export interface ReplViewports {
 /** Every window at its first row, which is where a fresh reading starts. */
 export const AT_TOP: ReplViewports = Object.freeze({
   sessions: 0,
+  queue: 0,
   sidekick: Object.freeze({}),
   sidekickFollowing: Object.freeze({}),
   entries: 0,
@@ -1159,6 +1170,8 @@ export type ReplIntent =
     }
   /** Stop the Sidekick's own work, and join it. */
   | { readonly kind: "stop-sidekick" }
+  | { readonly kind: "remove-sidekick-message"; readonly message: string }
+  | { readonly kind: "resume-sidekick-queue" }
   /**
    * Stop this exact entry, and join everything it owned.
    *
@@ -1321,19 +1334,12 @@ export interface ReplView {
   /** Whether this renderer has yet to commit a frame. */
   readonly initialPresentation?: boolean;
   /**
-   * The staged workspace composition's own presentation, where a caller gave one.
-   *
-   * Inert: what Follow shows, which tray is selected, the messages waiting
-   * behind the active exchange and which entry a Sidekick message submitted. No
-   * owner, writer, reservation or provider is reachable through it. The root
-   * never supplies it, so the screen a command draws is the ordinary
-   * composition; a wide view carrying it is drawn as the #971 composition under
-   * image review.
+   * Detached workspace facts, with no owner, writer or provider handles.
    */
   readonly workspace?: ReplWorkspace;
 }
 
-/** One message waiting behind the active exchange, as the staged screen lists it. */
+/** One waiting message projected for the live Sidekick queue. */
 export interface ReplQueuedMessage {
   readonly key: string;
   readonly origin: MessageOrigin;
@@ -1348,7 +1354,7 @@ interface ReplAssociatedWork {
   readonly entry: string;
 }
 
-/** What the staged workspace composition shows that no reading holds yet. */
+/** Acknowledged work and live-only queue presentation. */
 export interface ReplWorkspace {
   /**
    * Whether this execution offers Follow at all, and how it stands.
@@ -1369,6 +1375,8 @@ export interface ReplWorkspace {
   readonly trays?: readonly ("todo" | "queue")[];
   readonly tray: "todo" | "queue";
   readonly queued: readonly ReplQueuedMessage[];
+  /** The live queue hold, without an execution handle. */
+  readonly queueHeld?: { readonly kind: "stopped" | "failure"; readonly reason: string };
   readonly work: readonly ReplAssociatedWork[];
   /**
    * How far the tray's own window is scrolled through those messages.
@@ -1386,33 +1394,7 @@ export function withWorkspace(view: ReplView, workspace: ReplWorkspace): ReplVie
   return Object.freeze({ ...view, workspace });
 }
 
-/**
- * What the ordinary root's own screen stages, from what it actually holds.
- *
- * Everything here is a fact this reading already carries or a part of the
- * screen that is honestly empty. Nothing is supplied so that a control has
- * something to point at:
- *
- * - **Associated work** is the association between a chat row and the entry
- *   that row's evaluation admitted. It is read out of the acknowledged
- *   Submits this history already holds — see {@link associatedWork} — so a
- *   reply that really admitted an entry shows that entry's own state and
- *   output after it, and a reply that admitted nothing shows nothing. No
- *   message is given an entry it did not submit.
- * - **Queued messages** are the shared queue's, and there is no shared queue
- *   here. An empty tray is what this execution holds; a populated one would be
- *   a fiction in a screen somebody is working from.
- * - **Follow** is not offered. What it governs — a reply that evaluates and
- *   admits a round, and the continuation after it — is a later delivery, and
- *   a checkbox for behaviour this build does not have would be a choice that
- *   does nothing however it was drawn. Its accepted setting is kept in the
- *   delivery record, not advertised here.
- * - **QUEUE** is not offered either, and for the same reason: there is no
- *   shared queue in this build, and a tab a reader can select and find nothing
- *   behind is worse than no tab.
- *
- * So the tray is TODO, which is the inactive placeholder it has always been.
- */
+/** Project acknowledged work and detached live queue facts for this frame. */
 export function workspaceOf(
   /**
    * The reading this frame is drawn from, which is the selected prefix.
@@ -1425,10 +1407,16 @@ export function workspaceOf(
   model?: ReplModel,
   /** What this execution's Sidekick acknowledged, where the frame has one. */
   sidekick?: ReplSidekickReading,
+  queue?: {
+    readonly pending: readonly ReplQueuedMessage[];
+    readonly held: ReplWorkspace["queueHeld"];
+  },
 ): ReplWorkspace {
   return Object.freeze({
-    tray: "todo" as const,
-    queued: Object.freeze([]),
+    tray: "queue" as const,
+    trays: Object.freeze(["todo", "queue"] as const),
+    queued: Object.freeze((queue?.pending ?? []).map((one) => Object.freeze({ ...one }))),
+    ...(queue?.held === undefined ? {} : { queueHeld: queue.held }),
     work: associatedWork(model, sidekick),
   });
 }
@@ -1941,6 +1929,7 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
  */
 export function readsGeometry(action: ReplAction): boolean {
   return (
+    action.kind === "viewport-wheel" ||
     action.kind === "reading-key" ||
     action.kind === "scroll" ||
     // The Sidekick form's own window, for the same reason: how far it may
@@ -2008,6 +1997,48 @@ export function reduceRepl(
   switch (action.kind) {
     case "noop":
       return settled(state);
+    case "viewport-wheel": {
+      const window = admission.windows.get(action.window);
+      if (window === undefined || window.capacity < 1) {
+        return settled(given);
+      }
+      const requested = scrolled(window, action.direction === "up" ? -3 : 3);
+      const focus = window.focus;
+      const next =
+        focus === undefined
+          ? requested
+          : Math.min(
+              Math.max(requested, Math.max(0, focus.to - window.capacity)),
+              Math.min(focus.from, Math.max(0, window.total - window.capacity)),
+            );
+      if (next === window.from) {
+        return settled(given);
+      }
+      if (action.window === QUEUE_WINDOW) {
+        return settled({ ...state, viewports: Object.freeze({ ...state.viewports, queue: next }) });
+      }
+      const kind =
+        action.window === SIDEKICK_WINDOW
+          ? "scroll-sidekick"
+          : action.window === SESSIONS_WINDOW
+            ? "scroll-sessions"
+            : action.window === ENTRIES_WINDOW
+              ? "scroll-entries"
+              : action.window === READING_WINDOW
+                ? "scroll-reading"
+                : action.window === DRAWER_WINDOW
+                  ? presented?.kind === "configure"
+                    ? "scroll-configure"
+                    : asking !== undefined
+                      ? "scroll-sidekick-question"
+                      : state.catalog
+                        ? "scroll-entries"
+                        : "scroll"
+                  : undefined;
+      return kind === undefined
+        ? settled(given)
+        : reduceRepl(state, { kind, delta: next - window.from }, model, live, admission, presented);
+    }
     case "reading-key": {
       const name =
         action.reading === "selected"
@@ -2100,6 +2131,9 @@ export function reduceRepl(
         },
       };
     }
+    case "remove-sidekick-message":
+    case "resume-sidekick-queue":
+      return { state, intent: action };
     case "stop-sidekick": {
       // Unguarded, like `exit`. Stopping something that is not running is
       // nothing, and a control that refused on a screen where the work had
@@ -2499,12 +2533,15 @@ export function reduceRepl(
       // The key is taken first, because a `+permission` candidate resolves only
       // while the request it names is pending — so the state that navigates has
       // to be the one already holding it. A refusal keeps neither.
+      const first = live.agent.requests.find((request) => request.key === action.request)
+        ?.choices[0];
       const holding = Object.freeze({
         ...state,
         permission: action.request,
-        // At its first row: this is a different request, and a window left where
-        // the last one was read to would open part way down a question nobody
-        // has read the start of.
+        restore:
+          first === undefined
+            ? undefined
+            : Object.freeze({ kind: "reveal", key: `drawer:permission:choice:${first.optionId}` }),
         viewports: Object.freeze({ ...state.viewports, permission: 0 }),
       });
       // Declared, so the drawer this adds is the one the grammar defines rather
@@ -4102,15 +4139,12 @@ function sidekickControls(
     items.push(line(`sidekick:message:value:${at}`, own, styleOf("draft")));
   }
   if (reading.busy) {
-    // Working, so there is nothing for Send to do — a second cycle cannot queue
-    // behind the first one — and Stop is the control that is offered instead.
     items.push(line("sidekick:working", `  ${reading.agent} is working...`, styleOf("waiting")));
     items.push(
       row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("action"), {
         here: view.focused,
       }),
     );
-    return items;
   }
   items.push(
     row("sidekick:send", "[send]", { select: "send-message" }, styleOf("action"), {
@@ -4142,20 +4176,14 @@ export function filled(state: ReplState, source: string): ReplState {
   return Object.freeze({ ...drafting(state, source, "sidekick").state, draftCaret: undefined });
 }
 
-/**
- * The state after an explicit instruction to the Sidekick was saved.
- *
- * Applied when the message is actually in the chat history, not at the
- * keystroke that asked for it — so it names the revisions it was asked for at
- * and clears only those. A person who typed another message while the append
- * was in flight keeps it, and one who went back to the shared draft keeps the
- * draft: clearing the takeover is what unpauses automatic submission, and an
- * instruction sent before their edit is not what hands it back.
- */
+export function acceptedInstruction(state: ReplState, held: Instruction): ReplState {
+  return Object.freeze({ ...state, ...acceptedMessage(held, state), refusal: undefined });
+}
+
 export function instructed(state: ReplState, held: Instruction): ReplState {
   return Object.freeze({
     ...state,
-    ...clearedMessage(held, state),
+    ...acknowledgedInstruction(held, state),
     refusal: undefined,
   });
 }
@@ -4498,6 +4526,16 @@ export function focusSettled(
       ? state.viewports
       : Object.freeze({ ...state.viewports, entries: revealed });
   if (state.restore.kind === "reveal" && admission !== undefined) {
+    if (claim.startsWith("queue:")) {
+      return Object.freeze({
+        ...state,
+        restore: undefined,
+        viewports: {
+          ...viewports,
+          queue: admission.windows.get(QUEUE_WINDOW)?.from ?? viewports.queue,
+        },
+      });
+    }
     if (claim.startsWith("sessions:")) {
       return Object.freeze({
         ...state,
@@ -4519,6 +4557,7 @@ export function focusSettled(
           viewports: {
             ...viewports,
             configure: presentedConfiguring(view) === undefined ? viewports.configure : from,
+            permission: open?.kind === "live-permission" ? from : viewports.permission,
             readings:
               key === undefined ? viewports.readings : { ...viewports.readings, [key]: from },
           },
@@ -4801,7 +4840,10 @@ function drawerState(view: ReplView, readiness: ReplReadiness): string {
  * it. A drawer's ring is not all one kind of control, so neither is this answer.
  */
 function primaryAction(view: ReplView, narrow: boolean): string {
-  const focused = view.focused;
+  const focused = focusClaim(view) ?? view.focused;
+  if (focused?.endsWith(":anchor")) {
+    return "Enter does nothing";
+  }
   if (focused === "footer:history" || focused === "footer:top:history") {
     // Shortened where the row is 72 columns and not otherwise. The control under
     // the cursor is labelled `[history]`, so the narrow form is not vague — it is
@@ -4818,11 +4860,6 @@ function primaryAction(view: ReplView, narrow: boolean): string {
     // An option the provider offered. Taking it settles the request, and only a
     // control that is one of those may say so.
     return "Enter decides";
-  }
-  if (focused !== undefined && focused.startsWith("drawer:scroll:")) {
-    // It moves the window over a message too long to draw at once. Saying this
-    // answers the question would promise an answer to somebody reading it.
-    return "Enter scrolls";
   }
   if (focused !== undefined && focused.startsWith("drawer:choice:")) {
     // One offered value. Taking it fills the field rather than answering the
@@ -4965,11 +5002,30 @@ function guidanceParts(
   readiness: ReplReadiness,
   compact: boolean,
 ): readonly GuidancePart[] {
-  const focused = view.focused;
+  // Reconciliation honors this claim before drawing. Fitting the old owner's
+  // help would move controls again when the focus refresh follows this frame.
+  const focused = focusClaim(view) ?? view.focused;
   const modal = modalOpen(view);
   const editing = focused === undefined || focused === "footer:input";
   const narrow = view.size.columns <= NARROW.columns;
   const move: GuidancePart = { text: "Tab regions Alt↑↓" };
+  const anchor = focused?.endsWith(":anchor") === true;
+  const scrolling: GuidancePart[] = [];
+  if (anchor) {
+    scrolling.push({
+      text: "Up/Down reads one row; PageUp/PageDown reads a page; Home/End reaches the bounds.",
+    });
+  }
+  if (modal && !anchor) {
+    scrolling.push({
+      text: "In Content: PageUp/PageDown reads more content. Arrows and Home/End keep editing a field.",
+    });
+  }
+  if (anchor || modal) {
+    scrolling.push({
+      text: "Wheel scrolls the reading under your pointer, three displayed rows per tick. It stops before hiding the focused control.",
+    });
+  }
   if (modal) {
     // A drawer holds focus, so `Esc closes` is required and movement is not: Tab
     // is discoverable by pressing it, and being shut inside a modal whose way out
@@ -4980,6 +5036,7 @@ function guidanceParts(
       { text: primaryAction(view, compact), required: true },
       { text: "Esc closes", required: true },
       move,
+      ...scrolling,
     ];
   }
   const state: GuidancePart = { text: statePhrase(readiness, compact), required: true };
@@ -4993,6 +5050,7 @@ function guidanceParts(
       { text: primaryAction(view, compact), required: true },
       move,
       { text: compact ? "Tab to draft" : "Tab to the draft to type", required: true },
+      ...scrolling,
     ];
   }
   const advice = stateAdvice(readiness, compact, staged(view) !== undefined && !narrow);
@@ -5323,19 +5381,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       live.sidekick,
       workspace !== undefined,
     );
-    // Outside the thing they move, like the drawer's: a control inside the
-    // window would scroll away from whoever was reaching for it.
-    items.push(
-      row(
-        "sessions:earlier",
-        `  ${EARLIER}`,
-        { select: "scroll-sessions", delta: -1 },
-        styleOf("navigate"),
-        {
-          here: view.focused,
-        },
-      ),
-    );
     const window = context.admission.windows.get(SESSIONS_WINDOW);
     const reveal =
       window === undefined ? undefined : transcriptReveals(content, window.from, window.count);
@@ -5344,17 +5389,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         const target = reveal?.get(one.key);
         return target === undefined ? one : revealing(one, target);
       }),
-    );
-    items.push(
-      row(
-        "sessions:later",
-        `  ${LATER}`,
-        { select: "scroll-sessions", delta: 1 },
-        styleOf("navigate"),
-        {
-          here: view.focused,
-        },
-      ),
     );
   }
   if (workspace === undefined && !narrow) {
@@ -5385,29 +5419,8 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       // admitted would take a row the measurement had already given away.
       items.push(line("entry:none", "  1. (not submitted)", styleOf("metadata")));
     }
-    if (context.entriesWindowed) {
-      items.push(
-        row(
-          "entries:earlier",
-          `  ${EARLIER}`,
-          { select: "scroll-entries", delta: -1 },
-          styleOf("navigate"),
-          { here: view.focused },
-        ),
-      );
-    }
+
     items.push(...shown(catalog, context, ENTRIES_WINDOW));
-    if (context.entriesWindowed) {
-      items.push(
-        row(
-          "entries:later",
-          `  ${LATER}`,
-          { select: "scroll-entries", delta: 1 },
-          styleOf("navigate"),
-          { here: view.focused },
-        ),
-      );
-    }
   }
 
   // What each shared column is, said once at the top of it. A pane that named
@@ -5468,21 +5481,10 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // controls sit outside the thing they move, and the pane's own controls sit
     // below both.
     //
-    // Only where there is a chat to move. A frame built without a Sidekick says
-    // so in one row, and two controls over that row would be Tab stops that
-    // scroll nothing.
+    // A frame without a Sidekick still keeps the reading anchor's identity.
     if (live.sidekick === undefined) {
       items.push(...sidekickReadingRows(undefined, view.focused));
     } else {
-      items.push(
-        row(
-          "sidekick:earlier",
-          `  ${EARLIER}`,
-          { select: "scroll-sidekick", delta: -1 },
-          styleOf("navigate"),
-          { here: view.focused },
-        ),
-      );
       items.push(
         ...anchored(
           shown(
@@ -5493,15 +5495,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           "sidekick:anchor",
           "chat",
           view.focused,
-        ),
-      );
-      items.push(
-        row(
-          "sidekick:later",
-          `  ${LATER}`,
-          { select: "scroll-sidekick", delta: 1 },
-          styleOf("navigate"),
-          { here: view.focused },
         ),
       );
       items.push(
@@ -5529,25 +5522,8 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // rather than among them.
   const prepared = inspectable && surface !== undefined ? context.reading : undefined;
   // Only where there is a reading to move. An execution that has admitted
-  // nothing has no output and no source, and two controls over an empty pane
-  // would be Tab stops that scroll nothing — read from the model rather than
-  // from the fitted rows, because the pass that reserves these controls is the
-  // pass that has not fitted any.
+  // nothing has no output or source to admit.
   if (inspectable && model.entries.length > 0) {
-    // Both controls, always, exactly as the Sessions reading does it. They
-    // consume their capacity *before* the rows do: the pass that measures how
-    // many rows the window holds has to be the pass that already has them in
-    // it, or the window is measured two rows too tall and the control it then
-    // grows is drawn over the last row of the reading. Measured: it was.
-    items.push(
-      row(
-        "reading:earlier",
-        `  ${EARLIER}`,
-        { select: "scroll-reading", delta: -1 },
-        styleOf("navigate"),
-        { here: view.focused },
-      ),
-    );
     if (prepared !== undefined) {
       items.push(
         ...anchored(
@@ -5558,15 +5534,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         ),
       );
     }
-    items.push(
-      row(
-        "reading:later",
-        `  ${LATER}`,
-        { select: "scroll-reading", delta: 1 },
-        styleOf("navigate"),
-        { here: view.focused },
-      ),
-    );
   }
 
   // The inspection controls, and only where there is an inspection region to put
@@ -5850,7 +5817,22 @@ function anchored(
 ): readonly Described[] {
   const at = rows.findIndex((one) => readDescription(one.description).component === LINE);
   if (at < 0) {
-    return rows;
+    if (focused !== key || rows.length === 0) {
+      return rows;
+    }
+    // A control-only page retains the focused viewport owner without a painted row.
+    return [
+      {
+        key,
+        style: ORDINARY,
+        description: describeNode<ReplAction>({
+          key,
+          component: READING,
+          input: { label: "", reading },
+        }),
+      },
+      ...rows,
+    ];
   }
   return rows.map((one, index) => {
     if (index !== at) {
@@ -6517,13 +6499,16 @@ function outcomeOf(audit: ReplAgentPermission): string {
 /**
  * The message the presented drawer is fitting, or none because none is.
  *
- * Asked rather than assumed, because two owners ask questions and only one
- * form is drawn: fitting the entry's message into the Sidekick's form would
- * show somebody one question's words above another question's fields.
+ * A held question or permission behind another drawer contributes no text
+ * to that drawer's fitted preview.
  */
 export function previewedMessage(view: ReplView): string | undefined {
-  if (view.selection.drawers.length > 0) {
-    return view.live.question?.message;
+  const open = view.selection.drawers.at(-1);
+  if (open?.kind === "live-permission") {
+    return view.live.agent.requests.find((request) => request.key === view.state.permission)?.title;
+  }
+  if (open !== undefined) {
+    return open.kind === "live-elicit" ? view.live.question?.message : undefined;
   }
   return presentedAsking(view)?.question.message;
 }
@@ -6677,8 +6662,8 @@ function modalOpen(view: ReplView): boolean {
  * that block has been fitted there is nothing to clear, and the rectangle the
  * size states is what those passes measure.
  *
- * The Sidekick's pane-local rectangles are untouched by any of it. They are its
- * pane's own, they begin at the top of it, and the gap is not in that pane.
+ * Staged drawers also clear the extra fitted footer rows. Pane-local drawers
+ * keep their own origin; route drawers keep their existing inset.
  */
 function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBounds | undefined {
   // Which body this layer covers: the staged composition keeps three rows
@@ -6688,12 +6673,19 @@ function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBo
   // The catalog floats over the body, exactly where a route drawer does: it is
   // a reading of the whole execution rather than of one pane, so a pane-local
   // rectangle would put the list of every entry inside the Sidekick's column.
-  if (view.selection.drawers.length > 0 || presentedCatalog(view)) {
-    return context.drawer ?? drawerRect(view.size, workspace);
+  const rect =
+    view.selection.drawers.length > 0 || presentedCatalog(view)
+      ? (context.drawer ?? drawerRect(view.size, workspace))
+      : presentedAsking(view) !== undefined || presentedConfiguring(view) !== undefined
+        ? sidekickDrawerRect(view.size, workspace)
+        : undefined;
+  if (rect === undefined || !workspace) {
+    return rect;
   }
-  return presentedAsking(view) === undefined && presentedConfiguring(view) === undefined
-    ? undefined
-    : sidekickDrawerRect(view.size, workspace);
+  return Object.freeze({
+    ...rect,
+    height: Math.max(0, rect.height - Math.max(0, (context.guidance?.length ?? 1) - 1)),
+  });
 }
 
 /**
@@ -6718,7 +6710,13 @@ function drawerFor(
   exit: Described,
   drawable: boolean,
 ): { readonly drawer: Described; readonly rows: readonly Described[] } | undefined {
-  const held = drawerContent(view, context.widths?.drawer ?? 0, context.preview, context.notices);
+  const held = drawerContent(
+    view,
+    context.widths?.drawer ?? 0,
+    context.preview,
+    context.notices,
+    context.details,
+  );
   if (held === undefined) {
     return undefined;
   }
@@ -6742,23 +6740,6 @@ function drawerFor(
   const overHeld =
     view.selection.drawers.at(-1)?.kind === "history" && view.state.heldHistory === true;
   const rows: Described[] = [];
-  rows.push(
-    row(
-      "drawer:scroll:up",
-      // Configure's window moves through a list of choices rather than through
-      // a recorded order, so it is the one drawer that does not say Earlier.
-      padControl(configuring ? SCROLL_UP : EARLIER, width),
-      catalog
-        ? { select: "scroll-entries", delta: -1 }
-        : configuring
-          ? { select: "configure-scroll", delta: -1 }
-          : asking !== undefined
-            ? { select: "sidekick-scroll", delta: -1 }
-            : { select: "scroll", delta: -1 },
-      styleOf("action"),
-      { here: view.focused },
-    ),
-  );
   const reveals = catalog
     ? (from: number, count: number) => catalogReveals(content, from, count)
     : (from: number, count: number) =>
@@ -6770,6 +6751,7 @@ function drawerFor(
   const admitted = windowed(content, context, entering, view.focused, asking, reveals);
   const readings =
     configuring &&
+    view.focused !== "drawer:reading:anchor" &&
     admitted.some((one) => {
       const read = readDescription(one.description);
       return isControl(read.component, read.input);
@@ -6779,21 +6761,6 @@ function drawerFor(
   for (const placed of readings) {
     rows.push(placed);
   }
-  rows.push(
-    row(
-      "drawer:scroll:down",
-      padControl(configuring ? SCROLL_DOWN : LATER, width),
-      catalog
-        ? { select: "scroll-entries", delta: 1 }
-        : configuring
-          ? { select: "configure-scroll", delta: 1 }
-          : asking !== undefined
-            ? { select: "sidekick-scroll", delta: 1 }
-            : { select: "scroll", delta: 1 },
-      styleOf("action"),
-      { here: view.focused },
-    ),
-  );
 
   // The two nodes the footer would have drawn, inside the modal focus root. A
   // modal contains focus, so a way out mounted beside it would be one Tab could
@@ -6885,6 +6852,16 @@ function drawerFor(
       input: { ...fields(read.input), covered: true },
     });
   };
+  const contentKeys = new Set(readings.map((one) => one.key));
+  const viewportRows = visibleRows.filter((one) => contentKeys.has(one.key));
+  const fixedRows = visibleRows.filter((one) => !contentKeys.has(one.key));
+  const viewport = describeNode<ReplAction>({
+    key: "viewport:drawer",
+    component: VIEWPORT,
+    input: { window: DRAWER_WINDOW },
+    children: viewportRows.map((one) => one.description),
+  });
+  const viewportChildren = [viewport, ...fixedRows.map((one) => one.description)];
   const children = overHeld
     ? [
         covered(history),
@@ -6894,10 +6871,10 @@ function drawerFor(
           component: DRAWER,
           input: { label: "" },
           modal: true,
-          children: visibleRows.map((one) => one.description),
+          children: viewportChildren,
         }),
       ]
-    : visibleRows.map((one) => one.description);
+    : viewportChildren;
   const drawer: Described = {
     key: "drawer:open",
     style: titleStyle,
@@ -6964,6 +6941,7 @@ function drawerContent(
   width: number,
   preview?: readonly ReplFittedLine[] | undefined,
   notices?: ReplPreparedNotices,
+  details?: readonly ReplFittedLine[],
 ): DrawerContent | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
   if (open === undefined && presentedCatalog(view)) {
@@ -7000,17 +6978,9 @@ function drawerContent(
 
   if (open.kind === "binding") {
     title = drawerTitle("Binding", open.name, width);
-    for (const [offset, text] of detail(open.binding.value).entries()) {
-      content.push({
-        described: drawerLine(
-          `drawer:value:${offset}`,
-          text,
-          width,
-          styleOf("field-value"),
-          jsonRuns(text),
-        ),
-      });
-    }
+    content.push(
+      ...detailRows("drawer:value", open.binding.value, width, styleOf("field-value"), details),
+    );
   } else if (open.kind === "recorded-elicit") {
     title = drawerTitle("Recorded answer", open.elicitation.location, width);
     // The whole of what was asked and the whole of what was answered. A drawer is
@@ -7019,29 +6989,27 @@ function drawerContent(
     content.push({
       described: drawerLine("drawer:schema", "schema", width, styleOf("field-label")),
     });
-    for (const [offset, text] of detail(open.elicitation.schema).entries()) {
-      content.push({
-        // The schema stays the subordinate reading it already is. What was
-        // asked for is the shape of the question, not the value this drawer
-        // exists to show, and colouring it as a value would put the two
-        // readings on the same footing.
-        described: drawerLine(`drawer:schema:${offset}`, text, width, styleOf("field-hint")),
-      });
-    }
+    content.push(
+      ...detailRows(
+        "drawer:schema",
+        open.elicitation.schema,
+        width,
+        styleOf("field-hint"),
+        details,
+      ),
+    );
     content.push({
       described: drawerLine("drawer:answered", "answer", width, styleOf("field-label")),
     });
-    for (const [offset, text] of detail(open.elicitation.answer).entries()) {
-      content.push({
-        described: drawerLine(
-          `drawer:answer:${offset}`,
-          text,
-          width,
-          styleOf("field-value"),
-          jsonRuns(text),
-        ),
-      });
-    }
+    content.push(
+      ...detailRows(
+        "drawer:answer",
+        open.elicitation.answer,
+        width,
+        styleOf("field-value"),
+        details,
+      ),
+    );
   } else if (open.kind === "live-permission") {
     // The request this screen selected, read again here: a drawer draws what is
     // pending now, and the one it was opened over may have been answered or torn
@@ -7059,7 +7027,14 @@ function drawerContent(
     // bounds how many it offers: a drawer that described every choice would have
     // layout clip the last ones, which are exactly the ones a person scrolled
     // down to find.
-    for (const placed of permissionContent(view.model, view.live, request, width, view.focused)) {
+    for (const placed of permissionContent(
+      view.model,
+      view.live,
+      request,
+      width,
+      view.focused,
+      preview,
+    )) {
       content.push({ described: placed });
     }
     dismissing = request.key;
@@ -7899,10 +7874,23 @@ function permissionContent(
   request: ReplLivePermission,
   width: number,
   focused: string | undefined,
+  preview?: readonly ReplFittedLine[],
 ): readonly Described[] {
   const content: Described[] = [];
-  // What is being asked, in the provider's own words. Never `rawInput` and
-  // never the request object: a screen shows what a person decides about.
+  // Only the provider's explanation, never rawInput or the request object.
+  if (request.title !== undefined) {
+    for (const [offset, part] of messageRows({ message: request.title }, preview).entries()) {
+      content.push(
+        drawerLine(
+          `drawer:permission:message:${offset}`,
+          part.text,
+          width,
+          styleOf("source"),
+          part.runs,
+        ),
+      );
+    }
+  }
   if (request.kind !== undefined) {
     content.push(
       drawerLine("drawer:permission:kind", `  ${request.kind}`, width, styleOf("field-label")),
@@ -8146,9 +8134,48 @@ function requiredNow(
   return condition.requires.some((one) => one.name === field.name);
 }
 
-/** One value, as the lines a drawer shows it on. */
-function detail(value: Json): readonly string[] {
-  return (JSON.stringify(value, undefined, 2) ?? "null").split("\n");
+function detailLines(key: string, value: Json, style: ReplRowStyle) {
+  return (JSON.stringify(value, undefined, 2) ?? "null").split("\n").map((text, offset) => ({
+    key: `${key}:${offset}`,
+    text,
+    runs: style.role === "field-value" ? jsonRuns(text) : tokenRuns([{ text, token: style.role }]),
+  }));
+}
+
+export function retainedDetailsOf(view: ReplView) {
+  const open = view.selection.drawers.at(-1);
+  if (open?.kind === "binding") {
+    return detailLines("drawer:value", open.binding.value, styleOf("field-value"));
+  }
+  if (open?.kind === "recorded-elicit") {
+    return [
+      ...detailLines("drawer:schema", open.elicitation.schema, styleOf("field-hint")),
+      ...detailLines("drawer:answer", open.elicitation.answer, styleOf("field-value")),
+    ];
+  }
+  return [];
+}
+
+function detailRows(
+  key: string,
+  value: Json,
+  width: number,
+  style: ReplRowStyle,
+  prepared: readonly ReplFittedLine[] | undefined,
+): readonly DrawerRow[] {
+  const rows =
+    prepared === undefined
+      ? detailLines(key, value, style).map((one) => ({ ...one, indent: 0 }))
+      : prepared.filter((one) => one.line.startsWith(`${key}:`));
+  return rows.map((one) => ({
+    described: drawerLine(
+      one.key,
+      " ".repeat(one.indent) + one.text,
+      width,
+      style,
+      tokenRuns([{ text: " ".repeat(one.indent), token: style.role }, ...one.runs]),
+    ),
+  }));
 }
 
 /**
@@ -8352,34 +8379,6 @@ function failedLine(message: string, width: number): string {
   // One column for the mark that says there is more.
   return `${line.slice(0, Math.max(FAILED_PREFIX.length, width - 1))}…`;
 }
-
-/**
- * What the two window controls are called, wherever a reading has a window.
- *
- * One spelling, so Sessions, the catalog, a drawer and the entry reading
- * cannot drift apart — and arrows rather than the ASCII they replaced, which
- * is what the accepted presentation states. The semantic actions behind them
- * are unchanged, and no keyboard shortcut is introduced: these are controls a
- * person activates the way they always did.
- */
-export const EARLIER = "[\u2191 earlier]";
-/** The other one. */
-export const LATER = "[\u2193 later]";
-
-/**
- * What Configure's own window controls are called instead.
- *
- * Earlier and Later are words about a *history*: they are right for a
- * recorded order — Sessions, the entry reading, the catalog, a chat — and
- * wrong for a list of settings, where moving the window reaches another
- * choice rather than another moment. Configure's window is the only one of
- * these that is not a reading of something that happened, so it is the only
- * one that says this. The actions behind the controls, their order, their
- * ownership and their scrolling are unchanged.
- */
-export const SCROLL_UP = "[\u2191 scroll up]";
-/** The other one. */
-export const SCROLL_DOWN = "[\u2193 scroll down]";
 
 /** The Sessions reading's window. */
 export const SESSIONS_WINDOW = "sessions";
@@ -8632,6 +8631,7 @@ export interface ReplPresentationContext {
    * count is the geometry question and the text would be fitted to nothing.
    */
   readonly queue?: readonly ReplFittedLine[] | undefined;
+  readonly queueStatus?: readonly ReplFittedLine[] | undefined;
   /**
    * How wide the Draft's field is, once its row and its control are measured.
    *
@@ -8702,6 +8702,7 @@ export interface ReplPresentationContext {
    * interior has room for. None before the frame has measured one.
    */
   readonly notices?: ReplPreparedNotices | undefined;
+  readonly details?: readonly ReplFittedLine[] | undefined;
   /**
    * How wide the History row's map is, once its controls have been measured.
    *
@@ -8844,6 +8845,7 @@ function messageValueRows(context: ReplPresentationContext): readonly string[] {
  * on, because the rows that stay put are exactly what the viewport does not get.
  */
 type ReplSlot =
+  | "queue"
   | "located"
   | "navigation"
   | "pane-heading"
@@ -8855,8 +8857,6 @@ type ReplSlot =
   | "reading"
   | "transcript"
   | "inspection"
-  | "drawer-above"
-  | "drawer-below"
   | "drawer-actions"
   | "drawer"
   | "drawer-title"
@@ -8868,27 +8868,19 @@ type ReplSlot =
   /** The Sidekick's own input row and its controls, below its chat. */
   | "inspection-below"
   /** The chat window's own two controls, which surround it. */
-  | "inspection-window"
   /** The staged composition's own rows, placed by key. */
-  | "workspace"
-  /** The tray window's two controls, which surround it rather than move in it. */
-  | "queue-fixed";
+  | "workspace";
+/** The tray window's two controls, which surround it rather than move in it. */
 
 function slotOf(key: string): ReplSlot | undefined {
+  if (key.startsWith("queue:")) {
+    return "queue";
+  }
   if (key === "drawer:open") {
     return "drawer-title";
   }
-  if (key === "drawer:scroll:up") {
-    return "drawer-above";
-  }
   if (key === "drawer:close" || key === "drawer:sidekick:stop" || key === "drawer:form:submit") {
     return "drawer-actions";
-  }
-  if (key === "drawer:scroll:down") {
-    // Below the window with the other fixed controls, never inside it: a
-    // control that scrolled away from whoever was reaching for it is the one
-    // thing this drawer's layout exists to prevent.
-    return "drawer-below";
   }
   if (key.startsWith("drawer:")) {
     return "drawer";
@@ -8914,22 +8906,17 @@ function slotOf(key: string): ReplSlot | undefined {
   }
   // The empty placeholder and both window controls stay put around the window
   // rather than inside it, so a measured viewport is the moving part alone.
-  if (key === "sessions:empty" || key === "sessions:earlier" || key === "sessions:later") {
+  if (key === "sessions:empty") {
     return "sessions-fixed";
   }
   if (key.startsWith("sessions:")) {
     return "sessions";
   }
-  if (key === "entries:earlier" || key === "entries:later" || key === "entry:none") {
+  if (key === "entry:none") {
     return "entries-fixed";
   }
   if (key.startsWith("entries:") || key.startsWith("entry:") || key.startsWith("scope:")) {
     return "entries";
-  }
-  // The reading's own window controls stay put around it, so a measured
-  // viewport is the moving part alone.
-  if (key === "reading:earlier" || key === "reading:later") {
-    return "reading-fixed";
   }
   if (key.startsWith("reading:")) {
     return "reading";
@@ -8940,16 +8927,12 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key.startsWith("tab:")) {
     return "inspection-above";
   }
-  // Both window controls stay put around the chat rather than inside it, so a
-  // measured viewport is the moving part alone.
-  if (key === "sidekick:earlier" || key === "sidekick:later") {
-    return "inspection-window";
-  }
   if (
     key === "sidekick:message" ||
     key.startsWith("sidekick:message:value:") ||
     key === "sidekick:send" ||
     key === "sidekick:stop" ||
+    key === "sidekick:resume" ||
     key === "sidekick:back" ||
     key === "sidekick:working" ||
     key === "sidekick:configure" ||
@@ -8964,9 +8947,7 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "guidance" || key.startsWith("guidance:row:")) {
     return "located";
   }
-  if (key === "queue:earlier" || key === "queue:later") {
-    return "queue-fixed";
-  }
+
   if (
     key === "transcript:title" ||
     key === "transcript:selector" ||
@@ -8978,7 +8959,8 @@ function slotOf(key: string): ReplSlot | undefined {
     key === "follow" ||
     key.startsWith("draft:value:") ||
     key.startsWith("tray:") ||
-    key.startsWith("queue:")
+    key.startsWith("queue:") ||
+    key.startsWith("queue-status:")
   ) {
     return "workspace";
   }
@@ -9041,7 +9023,8 @@ function candidatesOf(
   const walk = (description: ReplDescription<ReplAction>): void => {
     const read = readDescription(description);
     const slot =
-      fields(read.input)?.["covered"] === true
+      fields(read.input)?.["covered"] === true ||
+      (read.component === READING && fields(read.input)?.["label"] === "")
         ? undefined
         : catalogRows?.has(read.key) === true
           ? "drawer"
@@ -9254,7 +9237,60 @@ export function presentationFor(
   context: ReplPresentationContext,
 ): ReplPresentation {
   const screen = described(view, context);
-  const composed = screen.items.map((item) => editorDescription(item.description, context));
+  const chat =
+    profileFor(view.size) !== "too-small" &&
+    view.refusal === undefined &&
+    showingSidekick(view) &&
+    view.live.sidekick !== undefined &&
+    presentedAsking(view) === undefined;
+  const active = profileFor(view.size) !== "too-small" && view.refusal === undefined;
+  const narrow = profileFor(view.size) === "narrow";
+  const work =
+    active && (!narrow || (view.state.route.surface === "entries" && !showingSidekick(view)));
+  const composed: ReplDescription<ReplAction>[] = [];
+  const owners = [
+    ...(work ? [{ slot: "reading", window: READING_WINDOW }] : []),
+    ...(active && (!narrow || (view.state.route.surface === "sessions" && !showingSidekick(view)))
+      ? [{ slot: "sessions", window: SESSIONS_WINDOW }]
+      : []),
+    ...(work && staged(view) === undefined ? [{ slot: "entries", window: ENTRIES_WINDOW }] : []),
+    ...(chat ? [{ slot: "inspection", window: SIDEKICK_WINDOW }] : []),
+  ];
+  const grouped = new Set(owners.map((one) => one.slot));
+  let queueMounted = false;
+  for (const item of screen.items) {
+    if (chat && staged(view) !== undefined && slotOf(item.key) === "queue") {
+      if (!queueMounted) {
+        queueMounted = true;
+        composed.push(
+          describeNode<ReplAction>({
+            key: `viewport:${QUEUE_WINDOW}`,
+            component: VIEWPORT,
+            input: { window: QUEUE_WINDOW },
+            children: screen.items
+              .filter((one) => slotOf(one.key) === "queue")
+              .map((one) => editorDescription(one.description, context)),
+          }),
+        );
+      }
+      continue;
+    }
+    if (!grouped.has(slotOf(item.key) ?? "")) {
+      composed.push(editorDescription(item.description, context));
+    }
+  }
+  for (const owner of owners) {
+    composed.push(
+      describeNode<ReplAction>({
+        key: `viewport:${owner.window}`,
+        component: VIEWPORT,
+        input: { window: owner.window },
+        children: screen.items
+          .filter((one) => slotOf(one.key) === owner.slot)
+          .map((one) => editorDescription(one.description, context)),
+      }),
+    );
+  }
   // Placed only where the tree will hold them: a measuring pass mounts nothing.
   const placedDescriptions = context.measuring
     ? composed
@@ -9414,26 +9450,17 @@ export function presentationFor(
     room?: number,
   ): readonly ReplBox[] => {
     const fixed = of(fixedSlot);
-    // The window controls sit outside the thing they move, so they are siblings
-    // of the viewport rather than rows inside it.
-    const above = fixed.filter((candidate) => candidate.key.endsWith(":earlier"));
-    const below = fixed.filter((candidate) => candidate.key.endsWith(":later"));
-    const rest = fixed.filter(
-      (candidate) => !candidate.key.endsWith(":earlier") && !candidate.key.endsWith(":later"),
-    );
     const id = `box:${window}:viewport`;
     const inside = room ?? bodyWidthOfRegion(region);
-    viewports.push(Object.freeze({ id, region, window }));
+    viewports.push(Object.freeze({ id, region, window, owner: `viewport:${window}` }));
     return [
-      ...rest.map((candidate) => rowBox(candidate, region, inside)),
-      ...above.map((candidate) => rowBox(candidate, region, inside)),
+      ...fixed.map((candidate) => rowBox(candidate, region, inside)),
       box({
         id,
         region,
         props: viewportProps(rows),
         children: of(rowSlot).map((candidate) => rowBox(candidate, region, inside)),
       }),
-      ...below.map((candidate) => rowBox(candidate, region, inside)),
     ];
   };
 
@@ -9454,7 +9481,6 @@ export function presentationFor(
    */
   const bodyWidth = (): number | undefined => context.widths?.body;
   const chatColumn = (region: ReplRegion): readonly ReplBox[] => {
-    const controls = of("inspection-window");
     const rows = of("inspection").map((candidate) => rowBox(candidate, region, bodyWidth()));
     const id = "box:inspection:viewport";
     const windowed =
@@ -9465,16 +9491,10 @@ export function presentationFor(
     if (!windowed) {
       return [box({ id, region, props: viewportProps(), children: rows })];
     }
-    viewports.push(Object.freeze({ id, region, window: SIDEKICK_WINDOW }));
-    return [
-      ...controls
-        .filter((candidate) => candidate.key.endsWith(":earlier"))
-        .map((candidate) => rowBox(candidate, region, bodyWidth())),
-      box({ id, region, props: viewportProps(), children: rows }),
-      ...controls
-        .filter((candidate) => candidate.key.endsWith(":later"))
-        .map((candidate) => rowBox(candidate, region, bodyWidth())),
-    ];
+    viewports.push(
+      Object.freeze({ id, region, window: SIDEKICK_WINDOW, owner: "viewport:sidekick" }),
+    );
+    return [box({ id, region, props: viewportProps(), children: rows })];
   };
 
   const located = of("located").map((candidate) => {
@@ -9848,7 +9868,9 @@ export function presentationFor(
   const [title] = of("drawer-title");
   if (rect !== undefined && title !== undefined) {
     const id = `box:${DRAWER_WINDOW}:viewport`;
-    viewports.push(Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW }));
+    viewports.push(
+      Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW, owner: "viewport:drawer" }),
+    );
     regions.push({ region: "drawer", id: "box:drawer:layer" });
     columns.push(
       box({
@@ -9857,9 +9879,6 @@ export function presentationFor(
         props: drawerLayerProps(rect, context.capture),
         children: [
           rowBox(title, "drawer", context.widths?.drawer),
-          ...of("drawer-above").map((candidate) =>
-            rowBox(candidate, "drawer", context.widths?.drawer),
-          ),
           box({
             id,
             region: "drawer",
@@ -9868,9 +9887,6 @@ export function presentationFor(
               rowBox(candidate, "drawer", context.widths?.drawer),
             ),
           }),
-          ...of("drawer-below").map((candidate) =>
-            rowBox(candidate, "drawer", context.widths?.drawer),
-          ),
           drawerActions(of("drawer-actions")),
         ],
       }),
@@ -9979,7 +9995,7 @@ export function admissionFor(input: {
   readonly widths: ReplMeasuredWidths;
   /** The reading this frame fitted, which is what its window admits rows of. */
   readonly reading?: ReplPreparedReading | undefined;
-  /** The open question's message, fitted, which its own window admits rows of. */
+  /** The presented question or permission text, fitted before admission. */
   readonly preview?: readonly ReplFittedLine[] | undefined;
   /** The chat, fitted, which its own window admits rows of. */
   readonly chat?: readonly ReplFittedLine[] | undefined;
@@ -9987,23 +10003,73 @@ export function admissionFor(input: {
   readonly queue?: readonly ReplFittedLine[] | undefined;
   /** The drawer's notices, fitted, which its own window admits rows of. */
   readonly notices?: ReplPreparedNotices | undefined;
+  readonly details?: readonly ReplFittedLine[] | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
-  const { view, manifest, widths, reading, preview, chat, queue, notices, boundsOf } = input;
+  const { view, manifest, widths, reading, preview, chat, queue, notices, details, boundsOf } =
+    input;
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
     // The count first, because a window that follows its newest rows needs to
     // know where they end before it can say where it is.
-    const total = totalOf(view, widths, reading, preview, chat, queue, notices, slot.window);
-    windows.set(
+    const total = totalOf(
+      view,
+      widths,
+      reading,
+      preview,
+      chat,
+      queue,
+      notices,
+      details,
       slot.window,
-      admitRows({
-        offset: offsetFor(view, slot.window, capacity, total, chat, widths, preview, notices),
+    );
+    const rows =
+      slot.window === DRAWER_WINDOW
+        ? drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
+            (one) => one.described,
+          )
+        : slot.window === QUEUE_WINDOW
+          ? queueSequence(staged(view) ?? workspaceOf(), queue).map((one) => ({
+              key: one.first
+                ? `queue:${one.message.key}:remove`
+                : `queue:${one.message.key}:row:${one.offset}`,
+            }))
+          : slot.window === SIDEKICK_WINDOW
+            ? sidekickReadingRows(view.live.sidekick, view.focused, chat, chatStagingOf(view))
+            : slot.window === SESSIONS_WINDOW
+              ? sessionRows(
+                  view.state,
+                  chronology(view.model, view.live),
+                  view.focused,
+                  undefined,
+                  widths.listBody,
+                  view.live.sidekick,
+                  staged(view) !== undefined,
+                )
+              : slot.window === ENTRIES_WINDOW
+                ? entryContent(view.model, view.focused, view.selection.entry?.key, widths.listBody)
+                : undefined;
+    const focused = rows?.findIndex((one) => one.key === view.focused) ?? -1;
+    windows.set(slot.window, {
+      ...admitRows({
+        offset: offsetFor(
+          view,
+          slot.window,
+          capacity,
+          total,
+          chat,
+          queue,
+          widths,
+          preview,
+          notices,
+          details,
+        ),
         total,
         capacity,
       }),
-    );
+      ...(focused < 0 ? {} : { focus: { from: focused, to: focused + 1 } }),
+    });
   }
   const actions = manifest.actions;
   if (actions === undefined) {
@@ -10047,11 +10113,22 @@ function offsetFor(
   capacity: number,
   total: number,
   chat: readonly ReplFittedLine[] | undefined,
+  queue: readonly ReplFittedLine[] | undefined,
   widths: ReplMeasuredWidths,
   preview: readonly ReplFittedLine[] | undefined,
   notices: ReplPreparedNotices | undefined,
+  details: readonly ReplFittedLine[] | undefined,
 ): number {
   const held = offsetOf(view, window);
+  if (window === QUEUE_WINDOW && capacity > 0 && view.state.restore?.kind === "reveal") {
+    const requested = view.state.restore.key;
+    const at = queueSequence(staged(view) ?? workspaceOf(), queue).findIndex(
+      (one) => one.first && `queue:${one.message.key}:remove` === requested,
+    );
+    if (at >= 0) {
+      return Math.min(Math.max(held, at - capacity + 1), at);
+    }
+  }
   if (window === SIDEKICK_WINDOW) {
     // The turn a Sessions selection asked to be shown, placed against the chat
     // window *this* frame measured. The frame that answered the selection may
@@ -10094,16 +10171,23 @@ function offsetFor(
             view.live.sidekick,
             staged(view) !== undefined,
           )
-        : (drawerContent(view, widths.drawer, preview, notices)?.content.map(
+        : (drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
             (one) => one.described,
           ) ?? []);
     const at = rows.findIndex((one) => one.key === requested.key);
     if (at >= 0) {
+      if (
+        window === DRAWER_WINDOW &&
+        view.selection.drawers.at(-1)?.kind === "live-permission" &&
+        !view.focused?.startsWith("drawer:")
+      ) {
+        return at;
+      }
       return Math.min(Math.max(held, at - capacity + 1), at);
     }
   }
   if (window === DRAWER_WINDOW && capacity > 0) {
-    const content = drawerContent(view, widths.drawer, preview, notices);
+    const content = drawerContent(view, widths.drawer, preview, notices, details);
     if (content?.entering === true) {
       const at = content.content.findIndex((one) => one.field !== undefined);
       if (at >= 0) {
@@ -10145,7 +10229,7 @@ function chatRead(view: ReplView): string {
 /** How far one window is scrolled, as this process is holding it. */
 function offsetOf(view: ReplView, window: string): number {
   if (window === QUEUE_WINDOW) {
-    return staged(view)?.queueOffset ?? 0;
+    return view.state.viewports.queue ?? staged(view)?.queueOffset ?? 0;
   }
   if (window === SESSIONS_WINDOW) {
     return view.state.viewports.sessions;
@@ -10177,6 +10261,7 @@ function totalOf(
   chat: readonly ReplFittedLine[] | undefined,
   queue: readonly ReplFittedLine[] | undefined,
   notices: ReplPreparedNotices | undefined,
+  details: readonly ReplFittedLine[] | undefined,
   window: string,
 ): number {
   if (window === QUEUE_WINDOW) {
@@ -10203,7 +10288,7 @@ function totalOf(
   }
   // The same prepared rows the drawing pass consumes, so what this window
   // admits and what it draws cannot disagree about how tall a notice is.
-  return drawerContent(view, widths?.drawer ?? 0, preview, notices)?.content.length ?? 0;
+  return drawerContent(view, widths?.drawer ?? 0, preview, notices, details)?.content.length ?? 0;
 }
 
 /**
@@ -10808,10 +10893,7 @@ function compactSidekickTurn(
  * and the Sidekick's Send or Stop beside it, the waiting messages, and the
  * composer itself.
  *
- * TODO, QUEUE, Follow and each message's remove control are mounted controls
- * that ask the root for nothing: their behaviour is the queue contract's (#964)
- * and the shared TODO's (#901), and none of it is wired here. Send and Stop are
- * the Sidekick's own, with the actions they always had.
+ * Queue actions carry only exact pending keys to the root.
  */
 function workspaceControls(
   state: ReplState,
@@ -10865,20 +10947,12 @@ function workspaceControls(
       ),
     );
   }
-  // Only the trays this execution actually offers, and Follow only where it is
-  // offered at all. A build without the shared queue draws no QUEUE tab and no
-  // Follow checkbox: a control for behaviour that is not here is a choice
-  // somebody can make and nothing happens, however it is drawn.
-  // A tray's name is a heading while it is the only tray, not a stop: TODO is
-  // inactive until the shared TODO ships, and a control that does nothing is a
-  // Tab stop somebody has to step past. Indented as a row is, so it reads in
-  // the same cells it always has.
   for (const tray of traysOf(workspace)) {
     const here = workspace.tray === tray;
     items.push(
       line(
         `tray:${tray}`,
-        focusPrefixed(tray.toUpperCase(), false),
+        focusPrefixed(tray === "queue" ? `QUEUE ${workspace.queued.length}/16` : "TODO", false),
         styleOf(here ? "pane-heading" : "metadata", { selected: here }),
       ),
     );
@@ -10890,15 +10964,32 @@ function workspaceControls(
       }),
     );
   }
+  if (reading.busy) {
+    items.push(
+      row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
+        here: view.focused,
+      }),
+    );
+  }
   items.push(
-    reading.busy
-      ? row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
-          here: view.focused,
-        })
-      : row("sidekick:send", "[send]", { select: "send-message" }, styleOf("action"), {
-          here: view.focused,
-        }),
+    row("sidekick:send", "[send]", { select: "send-message" }, styleOf("action"), {
+      here: view.focused,
+    }),
   );
+  if (workspace.queueHeld !== undefined) {
+    items.push(
+      row(
+        "sidekick:resume",
+        "[Resume queue]",
+        { select: "resume-sidekick-queue" },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
+  }
+  for (const [at, one] of (context.queueStatus ?? []).entries()) {
+    items.push(line(`queue-status:${at}`, one.text, styleOf("metadata")));
+  }
   if (workspace.tray === "queue" && offersQueue(workspace)) {
     const window = context.admission.windows.get(QUEUE_WINDOW);
     // Rows rather than messages. The window counts fitted rows, so the
@@ -10915,14 +11006,6 @@ function workspaceControls(
       (one) => one.key === "sidekick:back" || one.key === "sidekick:answer",
     ).length;
     const overflowing = trayAllocation(view, context, beside) !== undefined;
-    // Both controls where the tray holds more than it can show, and neither
-    // where it does not: a control that scrolls nothing is a Tab stop and a
-    // pointer target over a reading that is already whole.
-    if (overflowing) {
-      items.push(
-        row("queue:earlier", `  ${EARLIER}`, {}, styleOf("navigate"), { here: view.focused }),
-      );
-    }
     // Which rows this pass puts in the tray.
     //
     // A tray whose rows fit has no window and no viewport: its rows are its
@@ -10943,6 +11026,7 @@ function workspaceControls(
         : context.queueProbe === true
           ? sequence.slice(0, 1)
           : [];
+    const controls = sequence.filter((one) => one.first);
     for (const one of shownRows) {
       const mark = originMark(one.message.origin);
       const marked = one.first && one.text.startsWith(MARKER_ROOM);
@@ -10959,19 +11043,36 @@ function workspaceControls(
       // it takes no row of the window, and a continuation shown without its
       // beginning offers no control that would act on the wrong message.
       if (one.first) {
+        const at = controls.indexOf(one);
+        const reveal: Record<string, string> = {};
+        for (const [step, keys] of [
+          [-1, ["ArrowUp", "Alt+ArrowUp"]],
+          [1, ["ArrowDown", "Alt+ArrowDown"]],
+        ] satisfies readonly (readonly [number, readonly string[]])[]) {
+          const neighbour = controls[at + step];
+          if (neighbour !== undefined && !shownRows.includes(neighbour)) {
+            for (const key of keys) {
+              reveal[key] = `queue:${neighbour.message.key}:remove`;
+            }
+          }
+        }
         items.push(
-          row(
-            `queue:${one.message.key}:remove`,
-            "X",
-            { name: "Remove message" },
-            styleOf("metadata"),
-            { here: view.focused },
+          revealing(
+            row(
+              `queue:${one.message.key}:remove`,
+              "X",
+              {
+                select: "remove-sidekick-message",
+                message: one.message.key,
+                name: "Remove message",
+              },
+              styleOf("metadata"),
+              { here: view.focused },
+            ),
+            reveal,
           ),
         );
       }
-    }
-    if (overflowing) {
-      items.push(row("queue:later", `  ${LATER}`, {}, styleOf("navigate"), { here: view.focused }));
     }
   }
   const claiming = claim === "sidekick:message";
@@ -11389,20 +11490,20 @@ function trayAllocation(
   if (workspace === undefined || workspace.tray !== "queue" || !offersQueue(workspace)) {
     return undefined;
   }
-  const wrapped = (id: string): number => (context.headers?.has(`header:${id}`) === true ? 2 : 1);
-  const composer = 1 + messageValueRows(context).length;
-  const navigation = 2;
+  const wrapped = (id: string): number =>
+    id === "tray" && context.headers?.has("header:tray-actions") === true
+      ? 3
+      : context.headers?.has(`header:${id}`) === true
+        ? 2
+        : 1;
+  const composer = 1 + messageValueRows(context).length + (context.queueStatus?.length ?? 0);
   const held = queueSequence(workspace, context.queue).length;
-  const column =
-    workspaceBodyRows(view.size) - wrapped("conversation") - 1 - navigation - 1 - extras;
-  const queue = Math.max(
-    0,
-    Math.min(WORKSPACE_QUEUE_ROWS, column - wrapped("tray") - navigation - composer),
-  );
+  const column = workspaceBodyRows(view.size) - wrapped("conversation") - 1 - 1 - extras;
+  const queue = Math.max(0, Math.min(WORKSPACE_QUEUE_ROWS, column - wrapped("tray") - composer));
   if (held <= queue) {
     return undefined;
   }
-  return { tray: wrapped("tray") + navigation + queue + composer, queue };
+  return { tray: wrapped("tray") + queue + composer, queue };
 }
 
 /** One drawn row of the tray, and the message whose text it carries. */
@@ -11492,7 +11593,7 @@ const WORKSPACE_HEADERS: readonly {
     // have — contributes no part, so the row is built from what is actually
     // there rather than from what a wider build would have put there.
     left: Object.freeze(["tray:todo", "tray:queue"]),
-    right: Object.freeze(["follow", "sidekick:stop", "sidekick:send"]),
+    right: Object.freeze(["follow", "sidekick:stop", "sidekick:send", "sidekick:resume"]),
   }),
 ]);
 
@@ -11649,6 +11750,9 @@ export function workspaceHeaderLines(
       continue;
     }
     const room = headerRoomOf(header.id, widths);
+    if (header.id === "tray" && room > 0) {
+      lines.push({ key: "header:tray-actions", text: right, room });
+    }
     if (room < 1) {
       continue;
     }
@@ -11670,7 +11774,7 @@ export function workspaceHeaderLines(
  * The staged workspace composition's boxes, from the same classified rows.
  *
  * One identity row, the body, and below it one compact History row carrying the
- * contextual actions and one guidance row. The wide and medium profiles give
+ * contextual actions and a measured guidance block. The wide and medium profiles give
  * the body three columns — the Transcript of agent work, the selected work with
  * its Draft, and Bindings/Sidekick with the tray above its composer. The narrow
  * profile routes one outlet instead, under the two surface controls, exactly as
@@ -11807,6 +11911,41 @@ function workspacePresentation(input: {
           region,
           props: props(),
           children: [...left, spacer(`${first}:space`, region), ...right],
+        }),
+      ];
+    }
+    if (id === "tray" && context.headers?.has("header:tray-actions") === true) {
+      return [
+        box({
+          id: first,
+          region,
+          props: props(),
+          children: [...left, spacer(`${first}:space`, region)],
+        }),
+        box({
+          id: `${first}:second`,
+          region,
+          props: props(),
+          children: [
+            spacer(`${first}:second:space`, region),
+            ...parts(
+              headerKeysOf(
+                spec.right.filter((key) => key !== "sidekick:resume"),
+                candidates,
+              ),
+              region,
+              surface,
+            ),
+          ],
+        }),
+        box({
+          id: `${first}:resume`,
+          region,
+          props: props(),
+          children: [
+            spacer(`${first}:resume:space`, region),
+            ...parts(["sidekick:resume"], region, surface),
+          ],
         }),
       ];
     }
@@ -11958,16 +12097,14 @@ function workspacePresentation(input: {
       ...byKey("follow"),
       ...byKey("sidekick:stop"),
       ...byKey("sidekick:send"),
+      ...byKey("sidekick:resume"),
     ];
     const held = staged(view);
     // One box per row this frame described, walked in description order so the
     // rows placed are exactly the rows the window admitted. A box per message
     // reports its whole rectangle even where the window clipped it, and the
     // row after it is then placed over the control below.
-    const described = candidates.filter(
-      (one) =>
-        one.key.startsWith("queue:") && one.key !== "queue:earlier" && one.key !== "queue:later",
-    );
+    const described = candidates.filter((one) => one.key.startsWith("queue:"));
     let named = false;
     const queueRows: ReplBox[] = [];
     for (const [at, one] of described.entries()) {
@@ -12017,9 +12154,16 @@ function workspacePresentation(input: {
       held !== undefined &&
       held.tray === "queue" &&
       offersQueue(held) &&
-      allocation !== undefined
+      (allocation !== undefined || queueRows.length > 0)
     ) {
-      viewports.push(Object.freeze({ id: queueViewport, region, window: QUEUE_WINDOW }));
+      viewports.push(
+        Object.freeze({
+          id: queueViewport,
+          region,
+          window: QUEUE_WINDOW,
+          owner: `viewport:${QUEUE_WINDOW}`,
+        }),
+      );
     }
     const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
     return [
@@ -12055,21 +12199,22 @@ function workspacePresentation(input: {
               ),
               children: [
                 ...headerRows("tray", region, REPL_PALETTE.composerSurface),
-                ...byKey("queue:earlier").map((one) => rowBox(one, region, room)),
+                ...startingWith("queue-status:").map((one) => rowBox(one, region, room)),
                 // A tray whose rows fit places them where the accepted screen
                 // has them. One that does not is a window of the rows it was
                 // allocated, whose room the engine measures like any other.
-                ...(held?.tray === "queue" && offersQueue(held) && allocation !== undefined
+                ...(held?.tray === "queue" &&
+                offersQueue(held) &&
+                (allocation !== undefined || queueRows.length > 0)
                   ? [
                       box({
                         id: queueViewport,
                         region,
-                        props: viewportProps(allocation.queue),
+                        props: viewportProps(allocation?.queue ?? queueRows.length),
                         children: queueRows,
                       }),
                     ]
                   : queueRows),
-                ...byKey("queue:later").map((one) => rowBox(one, region, room)),
                 ...composer.map((one) => rowBox(one, region, room)),
               ],
             }),
@@ -12189,7 +12334,9 @@ function workspacePresentation(input: {
   const [title] = of("drawer-title");
   if (rect !== undefined && title !== undefined) {
     const id = `box:${DRAWER_WINDOW}:viewport`;
-    viewports.push(Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW }));
+    viewports.push(
+      Object.freeze({ id, region: "drawer", window: DRAWER_WINDOW, owner: "viewport:drawer" }),
+    );
     regions.push({ region: "drawer", id: "box:drawer:layer" });
     columns.push(
       box({
@@ -12198,14 +12345,12 @@ function workspacePresentation(input: {
         props: drawerLayerProps(rect, context.capture),
         children: [
           rowBox(title, "drawer", context.widths?.drawer),
-          ...of("drawer-above").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
           box({
             id,
             region: "drawer",
             props: viewportProps(),
             children: of("drawer").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
           }),
-          ...of("drawer-below").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
           drawerActions(of("drawer-actions")),
         ],
       }),
@@ -12245,12 +12390,9 @@ function workspacePresentation(input: {
           box({
             id: "box:footer",
             region: "footer",
-            // Two rows, stated: the History row and the guidance row. A fitted
-            // stack takes its height from its content, and the engine's own
-            // arithmetic over that content is not always whole — measured, a
-            // fitted staged footer came back 1.9921875 tall and put every row
-            // of the body, the band and the guidance on a fraction of a cell.
-            props: stackProps(WORKSPACE_CHROME_ROWS - 1),
+            // State the fitted row count: intrinsic stack sizing can place this
+            // footer on fractional cells, invalidating every input rectangle.
+            props: stackProps(1 + (context.guidance?.length ?? 1)),
             children: [
               box({
                 id: "box:history",
@@ -12448,3 +12590,20 @@ export function draftRowsOf(fitted: readonly ReplFittedLine[]): readonly string[
   ]);
 }
 export type { ReplDrawerRef };
+
+export function queueStatusLinesOf(
+  view: ReplView,
+): readonly { readonly key: string; readonly text: string }[] {
+  const workspace = staged(view);
+  if (workspace === undefined) {
+    return [];
+  }
+  return [
+    ...(workspace.queueHeld === undefined
+      ? []
+      : [{ key: "queue-hold", text: workspace.queueHeld.reason }]),
+    ...(workspace.queued.length === 0
+      ? []
+      : [{ key: "queue-loss", text: "Waiting messages are kept only in this REPL." }]),
+  ];
+}

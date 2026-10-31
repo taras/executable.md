@@ -299,70 +299,31 @@ export function cleared(
   };
 }
 
-/**
- * The revisions one explicit instruction to the Sidekick was asked for at.
- *
- * Both, because the instruction decides two different things and they can move
- * independently while it is in flight: the message box is cleared because the
- * text it held is now in the chat history, and the shared draft is handed back
- * because asking for something is how a person unpauses automatic submission.
- * A newer edit to either one is somebody still working on it.
- */
 export interface Instruction {
-  /** The message revision whose text was sent. */
+  /** The Message revision captured when this instruction was accepted. */
   readonly message: number;
-  /** The draft revision standing when it was sent. */
+  /** The Draft revision whose takeover this saved instruction may release. */
   readonly draft: number;
-  /**
-   * Where the text this instruction carried came from.
-   *
-   * `composer` is somebody's own Send: the box held what was sent, so the box
-   * is cleared by the record that saved it. `saved` is a failed request being
-   * asked again — its text came out of the history, and the box held something
-   * else entirely, which was neither sent nor consumed. Both still release a
-   * draft takeover under the same rule, because both are explicit instructions.
-   *
-   * Said rather than inferred from a revision. Encoding "nothing to clear" as a
-   * number no revision can equal would be a sentinel: a reader would have to
-   * know which numbers are real before it could tell the two apart.
-   */
+  /** Composer acceptance clears its exact Message revision; saved Retry clears none. */
   readonly from: "composer" | "saved";
 }
 
-/**
- * What the chat box and the takeover hold once an instruction is acknowledged.
- *
- * The same rule `cleared` applies to the draft, applied to the two things an
- * instruction settles — and applied late, because this acknowledgement arrives
- * after the message has physically been saved rather than at the keystroke. A
- * person typing in that window keeps what they typed, and one who went back to
- * the draft keeps the draft.
- */
-export function clearedMessage(
+export function acceptedMessage(
   held: Instruction,
-  facts: {
-    readonly message: string;
-    readonly revisions: Revisions;
-    readonly takenOver: boolean;
-  },
-): {
-  readonly message: string;
-  readonly revisions: Revisions;
-  readonly takenOver: boolean;
-} {
-  // A retry never held the box's text, so there is nothing of the box for it to
-  // clear. Only an instruction that *came from* the composer settles it.
-  const stale = held.from === "saved" || facts.revisions.message !== held.message;
-  const reclaimed = facts.revisions.draft !== held.draft;
+  facts: { readonly message: string; readonly revisions: Revisions },
+) {
+  const matches = held.from === "composer" && facts.revisions.message === held.message;
   return {
-    message: stale ? facts.message : "",
-    // Raised only when something was actually cleared, so a revision still
-    // names one text.
-    revisions: stale ? facts.revisions : edited(facts.revisions, "message"),
-    // A person who edited the draft after sending this message owns it again,
-    // and this instruction is not the thing that hands it back.
-    takenOver: reclaimed ? facts.takenOver : false,
+    message: matches ? "" : facts.message,
+    revisions: matches ? edited(facts.revisions, "message") : facts.revisions,
   };
+}
+
+export function acknowledgedInstruction(
+  held: Instruction,
+  facts: { readonly revisions: Revisions; readonly takenOver: boolean },
+) {
+  return { takenOver: facts.revisions.draft === held.draft ? false : facts.takenOver };
 }
 
 /** Raise one revision. Monotonic, so a revision never names two texts. */

@@ -871,14 +871,17 @@ describe("minimal live Sidekick ACP attachment", () => {
     if (old === undefined) {
       throw new Error("No exact exchange.");
     }
-    yield* requestAttachment(one.path, { method: "cancel", attachment: a.attachment });
-    expect(exchangeSchema.parse(yield* first).ending?.outcome).toBe("cancelled");
-    expect(cleaned).toBe(true);
     one.held.fake.script({ reply: "<Output>Human successor.</Output>", held: true });
     const next = yield* one.dispatch.send("human successor");
     if (!next.ok) {
       throw next.error;
     }
+    expect(next.value.snapshot.state).toBe("queued");
+    expect(next.value.snapshot.message).toBe(undefined);
+    yield* requestAttachment(one.path, { method: "cancel", attachment: a.attachment });
+    expect(exchangeSchema.parse(yield* first).ending?.outcome).toBe("cancelled");
+    expect(cleaned).toBe(true);
+    expect(one.dispatch.queue.held).toBe(undefined);
     yield* one.held.fake.startedTurns(one.baselineTurns + 2);
     yield* old.cancel();
     yield* requestAttachment(one.path, { method: "cancel", attachment: a.attachment });
@@ -1068,14 +1071,13 @@ describe("minimal live Sidekick ACP attachment", () => {
     expect(status.feedbackUnestablished).toBeGreaterThan(0);
     const before = yield* records(one.held.execution);
     const count = one.held.fake.prompts.length;
-    const result = exchangeSchema.parse(
-      yield* requestAttachment(one.path, {
+    yield* refused(
+      requestAttachment(one.path, {
         method: "prompt",
         attachment: a.attachment,
         text: "do not resend",
       }),
     );
-    expect(result.ending?.outcome).toBe("failed");
     expect(one.held.fake.prompts).toHaveLength(count);
     expect(yield* records(one.held.execution)).toEqual(before);
   });

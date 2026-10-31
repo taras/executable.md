@@ -126,9 +126,11 @@ function chatLines(reading: ScreenReading, anchor: string): string[] {
     anchor,
     reading.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined,
   ).column;
-  const controls = chatControls(reading);
-  const start = reading.locate("[↑ earlier]", controls).row;
-  const end = reading.locate("[↓ later]", controls).row;
+  const start = reading.locate(reading.shows("SIDEKICK") ? "SIDEKICK" : "Sidekick").row;
+  const end = reading.shows(COMPOSER)
+    ? reading.locate(COMPOSER).row - 2
+    : reading.locate("HISTORY").row;
+
   return reading.rows.slice(start + 1, end).map((row) => row.slice(column).trim());
 }
 
@@ -200,7 +202,7 @@ describe("Tier CF — complete messages and following the newest reply", () => {
       press += 1
     ) {
       const before = page.screen().index;
-      yield* page.press("[↑ earlier]", SIDEKICK_CONTROLS);
+      yield* chatWheel(page, "up");
       yield* page.until("the earlier messages", (one) => one.index > before);
       if (
         page.screen().rows.some((row) => row.trimEnd().endsWith("[S] ANSWER-1")) &&
@@ -369,7 +371,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(running.released).toBe(false);
     expect(yield* publishedPairs(host.root)).toEqual([]);
     yield* compose(page, "!");
-    expect(composerHolds(page.screen(), "explain!")).toBe(true);
+    expect(composerHolds(page.screen(), "!")).toBe(true);
     yield* draftText(page, "next", ["Tab", "Tab", "Tab", "Tab"]);
     running.release();
     yield* page.until("the reply arriving", (one) => one.shows("Noted."));
@@ -412,7 +414,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(yield* finishDraft(page)).toBe("next");
   });
 
-  it("M4: a delayed acknowledgement clears what was sent and keeps what came after", function* () {
+  it("M4: acceptance clears Message while delayed saved acknowledgement preserves newer edits", function* () {
     const gate = appendGate();
     const page = yield* useReplPage({ gate });
     page.repl.fake.script({ reply: FILLING_REPLY });
@@ -431,7 +433,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
     expect(page.repl.fake.prompts[0]).toContain("ask");
     expect(page.repl.fake.prompts[0]).not.toContain("ask!");
-    expect(composerHolds(page.screen(), "ask!")).toBe(true);
+    expect(composerHolds(page.screen(), "!")).toBe(true);
     expect(draftHolds(page.screen(), "mineX")).toBe(true);
     expect(page.repl.fake.prompts[1] ?? "").toContain("taken the shared draft over");
     expect(yield* finishDraft(page)).toBe("mineX");
@@ -457,7 +459,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(page.screen().found("Replaced by the reply.", DRAFT_VALUE)).toBe(1);
   });
 
-  it("M5: while generation is held, Stop is the control and Send cannot start a second cycle", function* () {
+  it("M5: while generation is held, Send remains beside Stop without starting unrequested work", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ held: true, reply: "<Output>Done.</Output>\n" });
     yield* compose(page, "ask");
@@ -467,7 +469,7 @@ describe("Sidekick acquisition, durable handoff and acknowledgements", () => {
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["ask"]);
     yield* page.until("the Sidekick working", (one) => one.shows("[S] working"));
     expect(page.screen().found("[stop]", SIDEKICK_CONTROLS)).toBe(1);
-    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(0);
+    expect(page.screen().found("[send]", SIDEKICK_CONTROLS)).toBe(1);
     expect(page.screen().found("[send]", { onRow: DRAFT })).toBe(1);
     yield* compose(page, "then this");
     page.repl.fake.releaseTurn();
@@ -1092,6 +1094,11 @@ function* twoChats(page: ReplPage, withOlderFailure = false): Operation<void> {
     yield* page.until("the first chat idle", sidekickIdle);
   }
   yield* newConversation(page);
+  if (withOlderFailure) {
+    yield* page.until("failure hold after agent replacement", (one) => one.shows("[Resume queue]"));
+    yield* page.press("[Resume queue]");
+    yield* page.until("explicit failure hold release", (one) => !one.shows("[Resume queue]"));
+  }
   yield* sendMessage(page, "newer ask");
   yield* page.until("the newer answer", (one) => sidekickShows(one, "Newer answer."));
   yield* page.until("the new chat idle", sidekickIdle);
@@ -1392,7 +1399,7 @@ const LONG_SCHEMA = {
 function* scrollFormTo(page: ReplPage, label: string, direction: "up" | "down"): Operation<void> {
   for (let press = 0; press < 100 && !page.screen().shows(label); press += 1) {
     const before = page.screen().index;
-    yield* page.press(direction === "down" ? "[↓ later]" : "[↑ earlier]", { rightOf: "[submit]" });
+    yield* page.key(direction === "down" ? "PageDown" : "PageUp");
     yield* page.until("the form scrolling", (one) => one.index > before);
   }
   expect(page.screen().shows(label)).toBe(true);
@@ -1492,7 +1499,7 @@ describe("Sidekick drawers across every supported size", () => {
     expect(yield* finishDraft(page)).toBe("note");
   });
 
-  it("CX4: Configure says scroll, the readings around it still say earlier", function* () {
+  it("CX4: Configure choices page without window buttons", function* () {
     const many = Array.from({ length: 64 }, (_, at) => ({
       id: `model-${at + 1}`,
       name: `Model ${at + 1}`,
@@ -1506,18 +1513,18 @@ describe("Sidekick drawers across every supported size", () => {
       { size: { columns: 120, rows: 30 }, choice: 63 },
     ]) {
       yield* atSize(page, size);
-      expect(page.screen().found("[↑ scroll up]", { rightOf: "[close]" })).toBe(1);
-      expect(page.screen().found("[↓ scroll down]", { rightOf: "[close]" })).toBe(1);
+      expect(page.screen().found("[↑ scroll up]", { rightOf: "[close]" })).toBe(0);
+      expect(page.screen().found("[↓ scroll down]", { rightOf: "[close]" })).toBe(0);
       expect(page.screen().found("[↑ earlier]", { rightOf: "[close]" })).toBe(0);
       expect(page.screen().found("[↓ later]", { rightOf: "[close]" })).toBe(0);
-      expect(transcriptHas(page.screen(), "[↑ earlier]")).toBe(true);
+      expect(page.screen().shows("[↑ earlier]")).toBe(false);
       expect(page.screen().shows(`( ) Model ${choice}`)).toBe(false);
       yield* scrollDrawerTo(page, `( ) Model ${choice}`);
       yield* chooseOffered(page, `Model ${choice}`);
       expect(page.screen().shows(`(x) Model ${choice}`)).toBe(true);
       for (let press = 0; press < 100 && !page.screen().shows("Model 1"); press += 1) {
         const before = page.screen().index;
-        yield* page.press("[↑ scroll up]");
+        yield* page.key("PageUp");
         yield* page.until("the choices scrolling back", (one) => one.index > before);
       }
       expect(page.screen().shows("Model 1")).toBe(true);
@@ -2346,19 +2353,23 @@ describe("Sidekick original acknowledged history submission identity", () => {
   });
 });
 
-function chatControls(one: ScreenReading) {
-  return one.shows(COMPOSER) ? SIDEKICK_CONTROLS : { rightOf: "[Back to current chat]" };
+function* chatWheel(page: ReplPage, direction: "up" | "down"): Operation<void> {
+  const one = page.screen();
+  const composer = one.shows(COMPOSER)
+    ? one.locate(COMPOSER)
+    : one.locate("[Back to current chat]");
+  yield* page.wheel(direction, {
+    column: composer.column,
+    row: one.shows(COMPOSER) ? composer.row - 3 : composer.row + 2,
+  });
 }
 function shownChat(one: ScreenReading): string[] {
-  const controls = chatControls(one);
-  const upper = one.locate("[↑ earlier]", controls).row;
-  const lower = one.locate("[↓ later]", controls).row;
+  const scope = one.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined;
   const anchor = one.rows
-    .slice(upper + 1, lower)
     .flatMap((row) =>
       [...row.matchAll(/\[[US]\] /g)].map((match) => row.slice(match.index).trimEnd()),
     )
-    .find((label) => one.found(label, one.shows("DRAFT") ? { rightOf: "DRAFT" } : undefined) === 1);
+    .find((label) => one.found(label, scope) === 1);
   if (anchor === undefined) {
     throw new Error(`no visible chat item: ${one.rows.join("\n")}`);
   }
@@ -2371,10 +2382,7 @@ function* chatScroll(
 ): Operation<void> {
   for (let press = 0; press < 150 && !until(page.screen()); press += 1) {
     const index = page.screen().index;
-    yield* page.press(
-      direction === "up" ? "[↑ earlier]" : "[↓ later]",
-      chatControls(page.screen()),
-    );
+    yield* chatWheel(page, direction);
     yield* page.until("the chat's new reading", (one) => one.index > index);
   }
   expect(until(page.screen())).toBe(true);
@@ -2402,7 +2410,7 @@ function* reachTurn(
     );
     for (let press = 0; press < 150 && !transcriptHas(page.screen(), label); press += 1) {
       const index = page.screen().index;
-      yield* page.press(direction === "up" ? "[↑ earlier]" : "[↓ later]");
+      yield* page.wheel(direction, { column: 2, row: page.screen().locate("Sessions").row + 3 });
       yield* page.until("the Transcript's next rows", (one) => one.index > index);
     }
   }
@@ -2830,7 +2838,7 @@ describe("Sidekick original reveal and cold decision coverage", () => {
         break;
       }
       const index = page.screen().index;
-      yield* page.press("[↓ later]", chatControls(page.screen()));
+      yield* chatWheel(page, "down");
       yield* page.until(
         "a distinct visible row beside the repeated caption",
         (one) => one.index > index,
@@ -2947,7 +2955,8 @@ describe("Sidekick original independent body controls", () => {
       yield* atSize(page, size);
       for (const scope of [{ after: COMPOSER }, SIDEKICK_CONTROLS]) {
         const index = page.screen().index;
-        yield* page.press("[↓ later]", scope);
+        const heading = page.screen().locate(scope === SIDEKICK_CONTROLS ? COMPOSER : "DRAFT");
+        yield* page.wheel("down", { column: heading.column, row: heading.row - 3 });
         yield* page.until("the body's own scroll response", (one) => one.index > index);
         expect(page.screen().found("kept entry", DRAFT_VALUE)).toBe(1);
         expect(composerHolds(page.screen(), "kept question")).toBe(true);

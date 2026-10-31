@@ -636,7 +636,7 @@ export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
       }
 
       let target: Node | undefined;
-      if (event.kind === "pointer") {
+      if (event.kind === "pointer" || event.kind === "wheel") {
         if (event.frame !== frameId) {
           return Ok(dropped("this pointer was resolved against a frame that is no longer drawn."));
         }

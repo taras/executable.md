@@ -55,7 +55,13 @@ export interface ReplPointerAt {
 export interface ReplNormalized {
   readonly event: ReplInputEvent | undefined;
   readonly at: ReplPointerAt | undefined;
+  readonly wheel?: { readonly direction: "up" | "down"; readonly at: ReplPointerAt };
 }
+
+export type ReplPhysicalInput =
+  | { readonly kind: "input"; readonly event: ReplInputEvent }
+  | { readonly kind: "pointer"; readonly at: ReplPointerAt }
+  | { readonly kind: "wheel"; readonly direction: "up" | "down"; readonly at: ReplPointerAt };
 
 /**
  * The keys this composition layer has a meaning for.
@@ -183,6 +189,13 @@ export function normalize(event: InputEvent): ReplNormalized {
     }
     return { event: undefined, at: undefined };
   }
+  if (event.type === "wheel") {
+    return {
+      event: undefined,
+      at: undefined,
+      wheel: { direction: event.direction, at: { column: event.x, row: event.y } },
+    };
+  }
   if (event.type === "mousedown" && event.button === "left") {
     // The target is filled in by whoever holds the current frame; until then
     // this is a position and nothing more.
@@ -193,6 +206,7 @@ export function normalize(event: InputEvent): ReplNormalized {
 
 /** What one scan of the terminal's bytes produced. */
 export interface ReplInputScan {
+  readonly ordered: readonly ReplPhysicalInput[];
   /** Normalized keys and text, in the order the terminal sent them. */
   readonly events: readonly ReplInputEvent[];
   readonly pointers: readonly ReplPointerAt[];
@@ -214,6 +228,7 @@ export interface ReplInputScan {
 export function scanInput(input: Input, bytes?: Uint8Array): ReplInputScan {
   const result: ScanResult = bytes === undefined ? input.scan() : input.scan(bytes);
   const events: ReplInputEvent[] = [];
+  const ordered: ReplPhysicalInput[] = [];
   const pointers: ReplPointerAt[] = [];
   let resized = false;
 
@@ -225,13 +240,19 @@ export function scanInput(input: Input, bytes?: Uint8Array): ReplInputScan {
     const normalized = normalize(event);
     if (normalized.event !== undefined) {
       events.push(normalized.event);
+      ordered.push({ kind: "input", event: normalized.event });
     }
     if (normalized.at !== undefined) {
       pointers.push(normalized.at);
+      ordered.push({ kind: "pointer", at: normalized.at });
+    }
+    if (normalized.wheel !== undefined) {
+      ordered.push({ kind: "wheel", ...normalized.wheel });
     }
   }
 
   return Object.freeze({
+    ordered: Object.freeze(ordered),
     events: Object.freeze(events),
     pointers: Object.freeze(pointers),
     resized,
@@ -264,10 +285,7 @@ export function useReplDecoder(
       *scan(bytes?: Uint8Array): Operation<ReplInputScan> {
         const drained = drain(input, bytes);
         const settling =
-          bytes === undefined &&
-          drained.pendingFor !== undefined &&
-          drained.events.length === 0 &&
-          drained.pointers.length === 0;
+          bytes === undefined && drained.pendingFor !== undefined && drained.ordered.length === 0;
         if (!settling) {
           return drained;
         }
@@ -276,6 +294,7 @@ export function useReplDecoder(
         // otherwise become the first byte of whatever is typed next.
         input = yield* until(createInput(settings));
         return Object.freeze({
+          ordered: Object.freeze([{ kind: "input", event: ESCAPE } satisfies ReplPhysicalInput]),
           events: Object.freeze([ESCAPE]),
           pointers: Object.freeze([]),
           resized: drained.resized,
@@ -295,6 +314,7 @@ export function useReplDecoder(
  */
 function drain(input: Input, bytes?: Uint8Array): ReplInputScan {
   const events: ReplInputEvent[] = [];
+  const ordered: ReplPhysicalInput[] = [];
   const pointers: ReplPointerAt[] = [];
   let resized = false;
   let pendingFor: number | undefined;
@@ -303,12 +323,14 @@ function drain(input: Input, bytes?: Uint8Array): ReplInputScan {
   while (true) {
     const pass = first && bytes !== undefined ? scanInput(input, bytes) : scanInput(input);
     first = false;
+    ordered.push(...pass.ordered);
     events.push(...pass.events);
     pointers.push(...pass.pointers);
     resized = resized || pass.resized;
     pendingFor = pass.pendingFor;
-    if (pass.events.length === 0 && pass.pointers.length === 0 && !pass.resized) {
+    if (pass.ordered.length === 0 && !pass.resized) {
       return Object.freeze({
+        ordered: Object.freeze(ordered),
         events: Object.freeze(events),
         pointers: Object.freeze(pointers),
         resized,

@@ -60,12 +60,14 @@ import {
   focusSettled,
   initialState,
   instructed,
+  acceptedInstruction,
   permissionSettled,
   offering,
   permissionWithdrawn,
   presentationFor,
   presentedDrawer,
   previewedMessage,
+  retainedDetailsOf,
   MESSAGE_VALUE_ROWS,
   footerSentence,
   guidanceSentence,
@@ -88,6 +90,7 @@ import {
   GUIDANCE_ROW,
   QUEUE_TEXT,
   queueLinesOf,
+  queueStatusLinesOf,
   stagedWorkspace,
   workspaceHeaderLines,
   readsGeometry,
@@ -185,7 +188,7 @@ import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
-import { resolvePointer, useReplRenderer } from "./renderer.ts";
+import { resolveWheel, resolvePointer, useReplRenderer } from "./renderer.ts";
 import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./renderer.ts";
 import { useReplScreen } from "./screen.ts";
 import type { ReplScreen, ReplScreenEvent } from "./screen.ts";
@@ -694,6 +697,7 @@ function* drive(
   // chat's, and settling them into the chat's store would evict the chat on
   // every keystroke.
   const messageFits = createPlainFitStore();
+  const queueFits = createPlainFitStore();
   // And the directions', which change when focus or readiness does.
   const guidanceFits = createPlainFitStore();
   // And the staged Draft's, for the third time: a key typed into the Draft is
@@ -1320,12 +1324,14 @@ function* drive(
           focused,
           preparingOf(admitting),
           sidekickReading(state),
+          dispatch.queue,
         ),
         fits,
         chatFits,
         messageFits,
         guidanceFits,
         draftFits,
+        queueFits,
       );
       if (!ready.ok) {
         throw ready.error;
@@ -1385,12 +1391,14 @@ function* drive(
             focused,
             preparingOf(admitting),
             sidekickReading(state),
+            dispatch.queue,
           ),
           fits,
           chatFits,
           messageFits,
           guidanceFits,
           draftFits,
+          queueFits,
         );
         if (!ready.ok) {
           throw ready.error;
@@ -1424,6 +1432,9 @@ function* drive(
             sidekickReports.push({ kind: "refused", refusal });
           },
           asked: askedBy,
+          accepted(held): void {
+            state = acceptedInstruction(state, held);
+          },
           *admit(kind, conversation, work): Operation<string | undefined> {
             const busy = admissions.occupied(kind);
             if (busy !== undefined) {
@@ -1471,13 +1482,6 @@ function* drive(
             sidekickReports.push({ kind: "replaced", conversation, revision, answer });
           },
           retrying(conversation, message): Result<{ text: string; held: Instruction }> {
-            const blocked = admissions.occupied("message");
-            if (blocked !== undefined) {
-              // Refused before the saved text is even resolved: a retry that
-              // wrote its record and then failed would leave this history
-              // claiming a request nobody could have sent.
-              return Err(new Error(blocked));
-            }
             const known = sidekick.reading;
             if (!known.ok) {
               return known;
@@ -1583,6 +1587,7 @@ function* drive(
             focused,
             preparingOf(admitting),
             sidekickReading(state),
+            dispatch.queue,
           )
         : refusedView(state, broken, at, focused);
     };
@@ -1597,6 +1602,7 @@ function* drive(
       messageFits,
       guidanceFits,
       draftFits,
+      queueFits,
     );
     rendered = first.rendered;
     presenting = presentedDrawer(first.view);
@@ -1616,6 +1622,7 @@ function* drive(
         messageFits,
         guidanceFits,
         draftFits,
+        queueFits,
       );
       rendered = marked.rendered;
       presenting = presentedDrawer(marked.view);
@@ -1650,12 +1657,21 @@ function* drive(
           ended = true;
         } else if (wake.event.kind === "resize") {
           renderer.resize(wake.event.size);
-        } else if (wake.event.kind === "pointer") {
+        } else if (wake.event.kind === "pointer" || wake.event.kind === "wheel") {
           // Resolved only against the frame that produced these coordinates. A
           // stale frame, a node the tree has removed and a target behind a drawer
           // all reach nothing, and the drop happens without an action.
+          const size = yield* screen.size();
+          const valid =
+            rendered !== undefined &&
+            size.columns === rendered.size.columns &&
+            size.rows === rendered.size.rows;
           const aimed =
-            rendered === undefined ? undefined : resolvePointer(rendered, wake.event.at);
+            !valid || rendered === undefined
+              ? undefined
+              : wake.event.kind === "wheel"
+                ? resolveWheel(rendered, wake.event.at, wake.event.direction)
+                : resolvePointer(rendered, wake.event.at);
           if (aimed !== undefined) {
             if (yield* act(aimed)) {
               departing = true;
@@ -1844,6 +1860,7 @@ function* drive(
         messageFits,
         guidanceFits,
         draftFits,
+        queueFits,
       );
       rendered = painted.rendered;
       presenting = presentedDrawer(painted.view);
@@ -1873,6 +1890,7 @@ function* drive(
           messageFits,
           guidanceFits,
           draftFits,
+          queueFits,
         );
         rendered = again.rendered;
         presenting = presentedDrawer(again.view);
@@ -2508,6 +2526,7 @@ function* build(
    * action uses, and only the loop holds that mapping.
    */
   sidekick?: ReplSidekickReading,
+  queue?: SidekickDispatch["queue"],
 ): Operation<ReplView> {
   // Both halves from the reading that was resolved, never from the session
   // again. A resize recomposes at a new size, not at a new snapshot.
@@ -2524,7 +2543,17 @@ function* build(
   // reading this frame was resolved at, and what this execution's Sidekick
   // acknowledged doing to it: see `workspaceOf`.
   return view.ok
-    ? withWorkspace(view.value, workspaceOf(reading.model, sidekick))
+    ? withWorkspace(
+        view.value,
+        workspaceOf(reading.model, sidekick, {
+          held: queue?.held,
+          pending: Object.freeze(
+            (queue?.pending ?? []).map(({ key, text, exchange }) =>
+              Object.freeze({ key, text, origin: exchange.snapshot.origin }),
+            ),
+          ),
+        }),
+      )
     : refusedView(state, view.error.message, size);
 }
 
@@ -2768,13 +2797,12 @@ function* perform(
     saved(conversation: string | undefined, revision: number, answer: Result<void>): void;
     /** Apply what a replacement answered, for the selection that asked for it. */
     replaced(conversation: string | undefined, revision: number, answer: Result<void>): void;
+    accepted(held: Instruction): void;
     /**
      * The exact text of the saved failed request this names, or why not.
      *
-     * Resolved here, against the history as it stands, and reserving the one
-     * message cycle in the same breath: a retry that resolved its text and then
-     * waited would be sending whatever that message id meant by the time it
-     * started.
+     * Resolve against acknowledged history before dispatch captures the text.
+     * Pending work retains that exact text and its conversation association.
      */
     retrying(conversation: string, message: number): Result<{ text: string; held: Instruction }>;
   },
@@ -2830,6 +2858,7 @@ function* perform(
       if (!admitted.ok) {
         return { refusal: admitted.error.message };
       }
+      chat.accepted(intent.held);
       yield* spawn(function* (): Operation<void> {
         const sent = yield* admitted.value.completion;
         if (!sent.ok) {
@@ -2837,8 +2866,23 @@ function* perform(
         }
         wakes.send({ kind: "session" });
       });
-      // The row beside the box is `[stop]` now rather than `[send]`, and the
-      // next event in this burst is dispatched against what is mounted.
+      return { remounted: true };
+    }
+    case "remove-sidekick-message": {
+      const pending = chat.dispatch.queue.pending.find((one) => one.key === intent.message);
+      if (pending !== undefined) {
+        yield* pending.exchange.cancel();
+      }
+      return { remounted: true };
+    }
+    case "resume-sidekick-queue": {
+      yield* spawn(function* (): Operation<void> {
+        const resumed = yield* chat.dispatch.resume();
+        if (!resumed.ok) {
+          chat.refuse(resumed.error.message);
+        }
+        wakes.send({ kind: "session" });
+      });
       return { remounted: true };
     }
     case "stop-sidekick": {
@@ -2847,6 +2891,9 @@ function* perform(
       // wait for an entry's outcome — and returns only once all of it has come
       // down. A person who pressed it keeps a usable keyboard while it does.
       const exchange = chat.dispatch.current;
+      if (exchange !== undefined) {
+        chat.dispatch.hold();
+      }
       yield* spawn(function* (): Operation<void> {
         if (exchange !== undefined) {
           yield* exchange.cancel();
@@ -2962,8 +3009,9 @@ function* perform(
         // flight has to come down before another conversation starts — and
         // `select()` refuses outright while it is still up, which is why this
         // waits rather than trying and reporting the refusal.
-        if (chat.owner.busy) {
-          yield* chat.owner.stop();
+        const exchange = chat.dispatch.current;
+        if (exchange !== undefined) {
+          yield* exchange.cancel();
         }
         // Explicitly a new conversation. The old chat and its association stay
         // where they are; a failed setup leaves the old one active and says why.
@@ -2978,8 +3026,6 @@ function* perform(
       return { remounted: true };
     }
     case "retry-message": {
-      // The same one cycle a Send reserves, synchronously and before anything
-      // is spawned: a second Retry in the same burst finds it held.
       const asked = chat.retrying(intent.conversation, intent.message);
       if (!asked.ok) {
         return { refusal: asked.error.message };
@@ -3139,6 +3185,7 @@ function* paint(
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
+  queue?: ReplPlainFitStore,
 ): Operation<ReplPainted> {
   while (true) {
     const painted = yield* prepared(
@@ -3152,6 +3199,7 @@ function* paint(
       message,
       guidance,
       draft,
+      queue,
     );
     if (painted !== undefined) {
       return painted;
@@ -3180,6 +3228,7 @@ function* prepared(
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
+  queue?: ReplPlainFitStore,
 ): Operation<ReplPainted | undefined> {
   return yield* scoped(function* (): Operation<ReplPainted | undefined> {
     const held = yield* frames.subscribe({ owner: "repl", participants: [["repl"]] });
@@ -3213,6 +3262,7 @@ function* prepared(
         message,
         guidance,
         draft,
+        queue,
       );
       if (committed.ok) {
         // 5. Present the copied bytes. 6. The caller retains the returned map.
@@ -3339,11 +3389,21 @@ export function* commitReplFrame(
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
+  queue?: ReplPlainFitStore,
 ): Operation<Result<ReplCommitted>> {
   // Measure before anything is mounted: this asks the engine how much room each
   // region has, so what a window shows is the frame's answer rather than this
   // boundary's guess. It mounts nothing and publishes nothing.
-  const prepared = yield* prepareFrame(renderer, view, store, chat, message, guidance, draft);
+  const prepared = yield* prepareFrame(
+    renderer,
+    view,
+    store,
+    chat,
+    message,
+    guidance,
+    draft,
+    queue,
+  );
   if (!prepared.ok) {
     return prepared;
   }
@@ -3394,6 +3454,10 @@ export function* commitReplFrame(
   const drawn = yield* renderer.draw({
     ops: committedOps(root, nodeByKey, mounted, cells, tree.focused()),
     boxes: drawnBoxesOf(root, nodeByKey, mounted),
+    scrolls: presentation.manifest.viewports.flatMap((slot) => {
+      const node = slot.owner === undefined ? undefined : nodeByKey.get(slot.owner);
+      return node === undefined || !mounted.has(node) ? [] : [{ id: slot.id, node }];
+    }),
     // Every region and every viewport, so where one landed is a fact the frame
     // carries rather than something a later caller works out again.
     // Every structural box the manifest placed: the regions, the viewports, the
@@ -3595,6 +3659,7 @@ export function* prepareFrame(
    * other, and a shared store would evict whichever was not being typed into.
    */
   draftStore?: ReplPlainFitStore,
+  queueStore?: ReplPlainFitStore,
 ): Operation<Result<ReplPrepared>> {
   view = { ...view, initialPresentation: renderer.last() === undefined };
   // No widths at all for the pass that answers what the widths are. Every row
@@ -3626,9 +3691,18 @@ export function* prepareFrame(
   const queued =
     queueLines === undefined || (widths.queue ?? 0) < 1
       ? Ok(undefined)
-      : yield* fitPlain(renderer, view.size, queueLines, widths.queue ?? 0);
+      : yield* fitPlain(renderer, view.size, queueLines, widths.queue ?? 0, queueStore);
   if (!queued.ok) {
     return queued;
+  }
+  const queueStatus = yield* fitPlain(
+    renderer,
+    view.size,
+    queueStatusLinesOf(view),
+    widths.inspection - 2,
+  );
+  if (!queueStatus.ok) {
+    return queueStatus;
   }
   // The Transcript's selector, fitted once. Before the header rows below,
   // because what this answers is how wide that control is and the wrap decision
@@ -3705,6 +3779,7 @@ export function* prepareFrame(
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
+    queueStatus: queueStatus.value,
     ...(wrapped.size === 0 ? {} : { headers: wrapped }),
     ...(historySpace === undefined ? {} : { historyGap: historySpace }),
     ...(field === undefined ? {} : { draftField: field }),
@@ -3869,12 +3944,8 @@ export function* prepareFrame(
   if (!reading.ok) {
     return reading;
   }
-  // The open question's message, fitted to the drawer's own width. Prepared
-  // here for the same reason the reading is: a drawer row is one row, so a
-  // long preview line is only reachable if it was cut into rows before the
-  // window counted them.
-  // Whichever question the presented drawer is showing: the entry's where a
-  // route drawer is open, and the Sidekick's own where its pane-local form is.
+  // A drawer row is one displayed row: fitting the presented question or
+  // permission text before admission keeps wrapped content reachable.
   const asked = previewedMessage(view);
   const preview =
     asked === undefined || widths.drawer < 1
@@ -4068,6 +4139,14 @@ export function* prepareFrame(
   if (!notices.ok) {
     return notices;
   }
+  const detailLines = widths.drawer < 1 ? [] : retainedDetailsOf(view);
+  const details =
+    detailLines.length === 0
+      ? Ok(undefined)
+      : yield* fitPlain(renderer, view.size, detailLines, widths.drawer);
+  if (!details.ok) {
+    return details;
+  }
   const admission = admissionFor({
     view,
     manifest: placed.manifest,
@@ -4077,6 +4156,7 @@ export function* prepareFrame(
     chat: chat.value,
     queue: queued.value,
     notices: notices.value,
+    details: details.value,
     boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -4103,7 +4183,9 @@ export function* prepareFrame(
     draft: draftRows,
     editors,
     notices: notices.value,
+    details: details.value,
     queue: queued.value,
+    queueStatus: queueStatus.value,
     headers: wrapped.size === 0 ? undefined : wrapped,
   };
   const collect = function* (

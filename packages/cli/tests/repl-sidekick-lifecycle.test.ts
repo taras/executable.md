@@ -934,8 +934,10 @@ describe("Tier PV — generation that ended without a reply", () => {
     expect(read.chat.filter((record) => record.kind === "response")).toEqual([]);
     expect(repl.fake.prompts).toHaveLength(1);
 
-    // A following explicit message is its own item, and the stopped candidate
-    // does not update it.
+    // Explicit Resume releases the failure hold without retrying the failed candidate.
+    yield* page.until("failure hold", (one) => one.shows("[Resume queue]"));
+    yield* page.press("[Resume queue]");
+    yield* page.until("failure hold released", (one) => !one.shows("[Resume queue]"));
     yield* sendMessage(page, "again");
     yield* page.until(
       "the next reply, with no preview left",
@@ -1294,7 +1296,10 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
     if (interrupted) {
       yield* intoSecondField(page);
     }
-    yield* typed(page, "ay");
+    yield* page.type("ay");
+    yield* page.until("the message field holding the complete answer", (one) =>
+      one.shows("message: okay"),
+    );
     expect(page.screen().shows("message: okay")).toBe(true);
     yield* submitForm(page);
 
@@ -1514,6 +1519,9 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     // And a later message asks a new question, with the same field names and an
     // empty form: the values typed into the stopped one are not an answer to it.
     repl.fake.script({ reply: asks(SIDEKICK_ASKS, "Asking again.") });
+    yield* page.until("human Stop hold", (one) => one.shows("[Resume queue]"));
+    yield* page.press("[Resume queue]");
+    yield* page.until("human Stop hold released", (one) => !one.shows("[Resume queue]"));
     yield* sendMessage(page, "ask again");
     yield* page.until("the next question announcing itself", (one) =>
       // The notice this screen gives: the control that opens the question, in

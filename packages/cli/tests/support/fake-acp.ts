@@ -88,6 +88,11 @@ export interface ScriptedTurn {
    * there, which is what lets a test assert it reaches no diagnostic.
    */
   readonly requestsTool?: string;
+  readonly permissionChoices?: readonly {
+    readonly optionId: string;
+    readonly name: string;
+    readonly kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
+  }[];
   /**
    * Whether the backend accepts this turn, when the session is awaiting its
    * first accepted one.
@@ -386,10 +391,13 @@ function permissionAsked(
     raw: {
       sessionId,
       toolCall: { toolCallId: "call-1", title: tool, rawInput: { command: tool } },
-      options: [
-        { optionId: "allow", name: "Allow", kind: "allow_once" },
-        { optionId: "reject", name: "Reject", kind: "reject_once" },
-      ],
+      options:
+        turn.permissionChoices === undefined
+          ? [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ]
+          : [...turn.permissionChoices],
     },
   };
   return Promise.resolve(

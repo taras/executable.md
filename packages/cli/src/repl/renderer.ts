@@ -79,6 +79,8 @@ export interface ReplTarget {
 export interface ReplFrameMap {
   /** In draw order, so a later entry is drawn over an earlier one. */
   readonly targets: readonly ReplTarget[];
+  readonly scrolls: readonly ReplTarget[];
+  scrollAt(x: number, y: number): string | undefined;
   /** The live node at one position, topmost first, or none. */
   at(x: number, y: number): string | undefined;
   /** The geometry one element id was given, or none if it was not drawn. */
@@ -115,6 +117,7 @@ export interface ReplDrawnBox {
 export interface ReplDrawRequest {
   readonly ops: readonly Op[];
   readonly boxes: readonly ReplDrawnBox[];
+  readonly scrolls: readonly Pick<ReplTarget, "id" | "node">[];
   /**
    * Structural ids whose geometry this frame publishes beside its targets.
    *
@@ -249,7 +252,12 @@ export function useReplRenderer(size: ReplTerminalSize): Operation<ReplRenderer>
           recovered = true;
         }
 
-        const map = mapOf(input.boxes, input.regions, attempt.result.info);
+        const scrollById = new Map(input.scrolls.map((scroll) => [scroll.id, scroll]));
+        const scrolls = idsOf(input.ops).flatMap((id) => {
+          const scroll = scrollById.get(id);
+          return scroll === undefined ? [] : [scroll];
+        });
+        const map = mapOf(input.boxes, scrolls, input.regions, attempt.result.info);
         if (!map.ok) {
           return map;
         }
@@ -360,6 +368,7 @@ function idsOf(ops: readonly Op[]): readonly string[] {
  */
 function mapOf(
   boxes: readonly ReplDrawnBox[],
+  scrolls: readonly Pick<ReplTarget, "id" | "node">[],
   regions: readonly string[],
   info: { get(id: string): { bounds: ReplBounds } | undefined },
 ): Result<ReplFrameMap> {
@@ -397,11 +406,41 @@ function mapOf(
     placed.set(id, checked.value);
   }
 
+  const scrolling: ReplTarget[] = [];
+  for (const scroll of scrolls) {
+    const measured = info.get(scroll.id);
+    if (measured === undefined) {
+      continue;
+    }
+    const checked = integral(scroll.id, measured.bounds);
+    if (!checked.ok) {
+      return checked;
+    }
+    if (checked.value.width > 0 && checked.value.height > 0) {
+      scrolling.push(Object.freeze({ ...scroll, bounds: checked.value }));
+    }
+  }
+  const frozenScrolls = Object.freeze(scrolling);
   const frozen = Object.freeze(targets);
   const byId = new Map(frozen.map((target) => [target.id, target]));
   return Ok(
     Object.freeze({
       targets: frozen,
+      scrolls: frozenScrolls,
+      scrollAt(x: number, y: number) {
+        for (let index = frozenScrolls.length - 1; index >= 0; index -= 1) {
+          const { bounds, node } = frozenScrolls[index];
+          if (
+            x >= bounds.x &&
+            x < bounds.x + bounds.width &&
+            y >= bounds.y &&
+            y < bounds.y + bounds.height
+          ) {
+            return node;
+          }
+        }
+        return undefined;
+      },
       at(x: number, y: number) {
         // Back to front: the last thing drawn is the thing on top, which is how
         // a drawer keeps a pointer off the controls it covers. Half-open on both
@@ -484,4 +523,15 @@ export function resolvePointer(
     return undefined;
   }
   return { kind: "pointer", target, frame: rendered.tree };
+}
+
+export function resolveWheel(
+  rendered: ReplRendered,
+  at: { readonly column: number; readonly row: number },
+  direction: "up" | "down",
+): Extract<ReplInputEvent, { readonly kind: "wheel" }> | undefined {
+  const target = rendered.map.scrollAt(at.column, at.row);
+  return target === undefined
+    ? undefined
+    : { kind: "wheel", direction, target, frame: rendered.tree };
 }

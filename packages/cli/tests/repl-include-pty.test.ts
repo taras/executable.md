@@ -138,6 +138,31 @@ function* refused(pty: Pty, history: string, name: string): Operation<void> {
   for (let at = 0; at < `<${name} />`.length; at += 1) {
     yield* pty.type("\x7f");
   }
+  // The script allocator queues writes without waiting for a frame. Clearing
+  // the refusal changes the footer height and moves Exit before its next click.
+  const deadline = Date.now() + ACT_MS;
+  while (true) {
+    const screen = yield* pty.shows();
+    const draft = screen.findIndex((row) => row.includes("> DRAFT"));
+    const rail = screen.findIndex((row) => row.includes(" HISTORY"));
+    const column = screen[draft]?.split("│").findIndex((part) => part.includes("> DRAFT"));
+    if (
+      draft >= 0 &&
+      rail > draft &&
+      column !== undefined &&
+      column > 0 &&
+      screen.slice(draft + 1, rail).every((row) => row.split("│")[column]?.trim() === "") &&
+      screen
+        .slice(rail + 1)
+        .some((row) => row.includes("Ready for Entry") && row.includes("Type here"))
+    ) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`Draft never cleared after refusal. screen=${JSON.stringify(screen)}`);
+    }
+    yield* sleep(150);
+  }
 }
 
 describe("REPL includes through the production source terminal", () => {

@@ -27,6 +27,7 @@ export type ReplFieldPurpose =
   | "configure-agent";
 
 export type ReplAction =
+  | { readonly kind: "viewport-wheel"; readonly window: string; readonly direction: "up" | "down" }
   | {
       readonly kind: "reading-key";
       readonly reading: "selected" | "chat" | "drawer" | "empty";
@@ -97,6 +98,8 @@ export type ReplAction =
    * all three would be three decisions behind one key.
    */
   | { readonly kind: "stop-sidekick" }
+  | { readonly kind: "remove-sidekick-message"; readonly message: string }
+  | { readonly kind: "resume-sidekick-queue" }
   /**
    * Stop this exact entry's execution, and join everything it owned.
    *

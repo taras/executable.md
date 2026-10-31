@@ -6849,6 +6849,15 @@ action; the tree walks that target's own ancestry, and the first node to handle
 the event produces the typed action the root acts on. An event nothing handles
 is an explicit failure.
 
+Wheel is coordinate-targeted physical input, separate from control activation.
+A nonfocusable viewport component owns its admitted content descendants. It
+returns a semantic scroll action through the same ancestry walk and ends with
+its mounted branch. Drawer Content handles PageUp/PageDown left by descendants;
+fields retain their arrows and Home/End. Deliberate paging can remove a focused
+row and use the existing survivor recovery. Wheel instead stops before hiding
+its focused content control, using that control's fitted extent. A reading
+anchor keeps viewport identity as the displayed rows change.
+
 **Keyboard focus moves by regions, and the structure is derived, not stored.**
 A focusable description may carry a placement: its region — a key, a rank in
 the Tab cycle, an axis and an optional recovery preference — the nested groups
@@ -7059,7 +7068,7 @@ resize changes what a window holds and a delta added to a stale number would
 spend a press on state nobody can see. The canonical location is bounded the
 same way and for the same reason: in a narrow frame it shares one region with
 every control on the screen, so it takes at most three rows and says what it is
-not showing. Their window controls and
+not showing. Their fixed headings, composers, actions and
 the two surface controls stay outside the moving window. A narrow frame mounts
 one routed outlet and both surface controls, so the outlet the route did not
 select is absent everywhere — `mounted()`, the frame, the target map — while the
@@ -7108,12 +7117,12 @@ work on the left, the selected work with its breadcrumbs, exact source, state,
 results and its own multi-row Draft in the centre, and Bindings/Sidekick on the
 right with the trays this build offers above the composer and the Sidekick's
 Send/Stop beside them, under one identity row and above one compact History row
-and one guidance row. It is selected by a view carrying the inert workspace
-presentation, and the root supplies that presentation from what this execution
-actually holds: the selected tray, no queued rows because this build has no
-shared queue, and the entries its Sidekick's acknowledged Submits admitted. A
-build without the continuation Follow governs offers neither Follow nor a QUEUE
-tab, so neither is drawn and nothing dispatches them. It is not a second
+and a guidance block whose fitted rows determine its height. It is selected by
+a view carrying the inert workspace presentation, and the root supplies that
+presentation from what this execution
+actually holds: the live waiting queue and the entries its Sidekick's
+acknowledged Submits admitted. Follow remains absent; queue acceptance creates
+no autonomous continuation. It is not a second
 pipeline: it is the same reading, prepared, measured, admitted, reconciled into
 the one mounted tree and drawn by the same renderer pair, and every rule in this
 section holds for it unchanged. Its first geometry at 160x36 — columns of 36, 66
@@ -7157,7 +7166,7 @@ move what it was moved clear of.
 **Measurement comes first, and it is not a frame.** The application builds inert
 ordered candidates and a paired manifest from one semantic reading, and the
 measuring pass draws that manifest with every scrolling viewport genuinely
-empty — surrounding headings, both window controls and complete action labels
+empty — surrounding headings, composers and complete action labels
 included, so the room it reports is the region's rather than whatever is
 currently overflowing it. That pass mounts nothing, publishes no target,
 advances no revision and acknowledges nothing. Capacity is the measured viewport
@@ -7178,7 +7187,7 @@ survives whole and the name keeps what is left in front of it, because a state
 cut in half says something untrue and two rows that are only their state are two
 rows a reader cannot tell apart.
 
-Whatever a column states *around* its window — a heading, both window controls,
+Whatever a column states *around* its window — a heading, fixed actions,
 the placeholder for a reading that holds nothing — it states in the measuring
 pass too, and a row stated around a window is not one of that window's own rows.
 A placeholder described only once the window had been admitted would take a row
@@ -7220,6 +7229,18 @@ something is centred or sized by a share, and a rounded hit box disagrees with
 the text underneath it. A pointer that does resolve becomes the same normalized
 event a key produces and walks the same ancestry, so clicking a control and
 pressing Enter on it are one action.
+
+Viewport wheel regions are copied separately from activation targets. Each
+manifest slot may name its owner's description key; the committed pass pairs
+that key with a live mounted node and the renderer snapshots the viewport's
+bounds in draw order. Missing owners and zero-size viewports produce no wheel
+region. Text, trailing spaces and blank cells inside it name that owner; headings,
+gutters, composers and fixed actions do not. Wheel resolution carries the
+presented tree revision, after current terminal dimensions agree with that
+frame. Stale revisions, removed owners and owners outside the top modal reach
+nothing; a forbidden target is never skipped to reach background. An edge or
+fitting viewport consumes without moving a neighbour. No registry or extra
+Context owns these associations.
 
 An open drawer is one floating, opaque rectangle over the body and above the
 footer. The background is coverage rather than style: an element without one
@@ -8594,8 +8615,8 @@ while the screen shows something else owns nothing. Agent is an exact-name field
 because which agents exist is the provider's to answer, and `select()` validates
 what was typed against the real one. Model and effort are the provider's own
 ids on their actions, with the provider's words as labels. Its content is
-windowed like every other drawer's and scrolled by the same two controls, which
-move Configure's own offset: an agent may advertise more choices than a pane
+windowed like every other drawer's. Wheel input and Content paging move
+Configure's own offset: an agent may advertise more choices than a pane
 can draw, and a choice nobody can scroll to is a choice the drawer removed.
 
 **On the screen that question is a form in the pane that owns it, and the two
@@ -8694,8 +8715,9 @@ state Stop leaves.
 #### Follow and the two Stops
 
 **Follow is not in the shipped build.** The layout and the two Stops ship
-first; the continuation Follow governs ships with the shared queue, so no screen
-offers the choice today and nothing watches an entry to start a turn after it.
+first. The shared queue orders explicit messages and creates no Follow
+continuation. No screen offers Follow and nothing watches an entry to start a
+turn after it.
 What this section states about Follow is the contract that delivery is held to
 rather than behaviour a reader can exercise now. **The two Stops below are
 implemented**: an entry's and the Sidekick's, each owning exactly what it says.
@@ -8844,13 +8866,24 @@ before the command reports its outcome and the terminal is released.
 **One root-owned dispatch spans the whole Sidekick exchange.** UI Send and
 Retry use the same private service and admission policy as an attributed external
 caller. Constructing an operation does nothing; executing it captures lexical
-origin and conversation selection, then reserves before producer work. Message,
-inspection, save and replacement share the existing policy: save and replacement
-may accompany a message, while explicit configuration jobs exclude one another.
-The producer belongs to the live command. Detaching an observer does not cancel
-it or release its reservation. Exact-handle Stop joins producer cleanup before
-release, and an old handle cannot stop a successor. Entry work remains owned by
-ReplSession.
+origin, text, Instruction and conversation association. Waiting work is live-only,
+FIFO across UI and delivered ACP, bounded to sixteen pending messages plus the
+active exchange and 65536 UTF-8 bytes per message. Refusal clears nothing and
+neither evicts nor truncates accepted work. Waiting takes no message reservation
+or history writer. Activation takes the existing exact reservation and rechecks
+readable history, unknown feedback, configuration and conversation association.
+Replacement and inspection refuse while pending work remains.
+
+The producer belongs to the live command. One exchange includes generation,
+evaluation, designated feedback and joined scoped cleanup before advancement.
+Detaching an observer cancels no work. Exact cancellation withdraws only its
+pending item or stops and joins its active exchange; old handles are inert.
+Human Sidekick Stop separately holds advancement synchronously before spawning
+that captured cancellation. Attachment cancellation adds no hold. Ordinary
+failure holds remaining work without retrying the failed item; explicit Resume
+rechecks guards. Fatal owner failures retain their command authority. Teardown
+prevents advancement and disposes unsaved waiting work. Cold inspection starts
+none. Entry work remains owned by ReplSession.
 
 Every message record carries an opaque ID and a UI/attachment origin beside the
 conversation-scoped numeric `turn`, and a record missing either is unreadable
@@ -8869,21 +8902,14 @@ reads a fresh immutable snapshot of the reading rather than being handed one. No
 polling and no filesystem watcher is involved, and the notification grants
 nothing: what it says is "look again".
 
-**An explicit message is cleared by the record that saved it, not by the
-keystroke that asked for it.** Send synchronously captures the exact text, the
-message revision and the draft revision and reserves the screen's one message
-cycle, so a second Send in the same input burst finds the cycle held and starts
-nothing. The owner writes that captured text at that captured revision, and once
-the record is physically in the file — and before it sends a turn or evaluates
-anything a reply asks for — it asks the root to acknowledge that revision and
-waits. The root queues the acknowledgement with its other reports and applies it
-before any fill waiting behind it, which is what lets a reply that came straight
-back fill a draft the instruction had just released. Clearing is then exact:
-only the submitted message revision is cleared, so text typed while the save was
-in flight survives, and an existing draft takeover is released only if no newer
-draft edit happened since Send — a later edit by hand still owns the draft. A
-message that was refused or never acknowledged clears no text and releases no
-takeover.
+**Queue acceptance and saved acknowledgement settle different revisions.**
+Successful UI Send clears only its exact accepted Message revision and advances
+that revision once. Retry clears no composer text; ACP changes neither composer
+nor Draft takeover. The ordinary message is written only when execution starts.
+Its saved acknowledgement releases only the captured Draft revision's takeover,
+before response controls may run. A newer edit to either field survives.
+Withdrawal and later failure restore no earlier composer text. Waiting acceptance
+has no saved message reference and does not change canonical prompt attribution.
 
 **The storage handoff holds the entry writer for the whole publication, not
 just at the start of it.** An execution's first explicit message asks the root
@@ -8911,9 +8937,9 @@ operation; they emit typed actions and the root alone changes route or state and
 performs work. Message is a distinct single-line destination with a revision of
 its own: typing and Backspace reach only it while it holds focus, Enter there or
 Send asks for that text, Draft's Enter still means Run, and an empty Message
-sends nothing. While the Sidekick is working, Message stays editable, Send has
-no admitted activation target and Stop is offered in its place, and finishing
-sends nothing that was prepared meanwhile. Both texts survive tab switches,
+sends nothing. While the Sidekick is working, Message stays editable and Send
+stays available beside Stop. Prepared text starts only after explicit Send;
+finishing sends nothing that was prepared meanwhile. Both texts survive tab switches,
 History navigation and resizing; the message is process-local and absent from the
 printed location. Send and Stop are spawned on the screen's own task, so a slow
 provider, an admission waiting on an entry, a joined entry outcome or Stop's
