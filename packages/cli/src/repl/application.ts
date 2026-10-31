@@ -123,7 +123,14 @@ import type {
 // module: no session, no repository, no resolver and no authority crosses it,
 // so the reduction stays a reduction while still refusing on exactly the terms
 // the root admits on.
-import { cleared, clearedMessage, edited, initialRevisions, submittable } from "./sidekick/gate.ts";
+import {
+  cleared,
+  acceptedMessage,
+  acknowledgedInstruction,
+  edited,
+  initialRevisions,
+  submittable,
+} from "./sidekick/gate.ts";
 import type { Instruction, Reservation, Revisions, Submitter } from "./sidekick/gate.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import { decodeLocation, encodeLocation, resolveLocation, surfaceForDrawer } from "./route.ts";
@@ -4146,15 +4153,12 @@ function sidekickControls(
     items.push(line(`sidekick:message:value:${at}`, own, styleOf("draft")));
   }
   if (reading.busy) {
-    // Working, so there is nothing for Send to do — a second cycle cannot queue
-    // behind the first one — and Stop is the control that is offered instead.
     items.push(line("sidekick:working", `  ${reading.agent} is working...`, styleOf("waiting")));
     items.push(
       row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("action"), {
         here: view.focused,
       }),
     );
-    return items;
   }
   items.push(
     row("sidekick:send", "[send]", { select: "send-message" }, styleOf("action"), {
@@ -4186,20 +4190,14 @@ export function filled(state: ReplState, source: string): ReplState {
   return Object.freeze({ ...drafting(state, source, "sidekick").state, draftCaret: undefined });
 }
 
-/**
- * The state after an explicit instruction to the Sidekick was saved.
- *
- * Applied when the message is actually in the chat history, not at the
- * keystroke that asked for it — so it names the revisions it was asked for at
- * and clears only those. A person who typed another message while the append
- * was in flight keeps it, and one who went back to the shared draft keeps the
- * draft: clearing the takeover is what unpauses automatic submission, and an
- * instruction sent before their edit is not what hands it back.
- */
+export function acceptedInstruction(state: ReplState, held: Instruction): ReplState {
+  return Object.freeze({ ...state, ...acceptedMessage(held, state), refusal: undefined });
+}
+
 export function instructed(state: ReplState, held: Instruction): ReplState {
   return Object.freeze({
     ...state,
-    ...clearedMessage(held, state),
+    ...acknowledgedInstruction(held, state),
     refusal: undefined,
   });
 }
@@ -10940,14 +10938,17 @@ function workspaceControls(
       }),
     );
   }
+  if (reading.busy) {
+    items.push(
+      row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
+        here: view.focused,
+      }),
+    );
+  }
   items.push(
-    reading.busy
-      ? row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("failed-outcome"), {
-          here: view.focused,
-        })
-      : row("sidekick:send", "[send]", { select: "send-message" }, styleOf("action"), {
-          here: view.focused,
-        }),
+    row("sidekick:send", "[send]", { select: "send-message" }, styleOf("action"), {
+      here: view.focused,
+    }),
   );
   if (workspace.tray === "queue" && offersQueue(workspace)) {
     const window = context.admission.windows.get(QUEUE_WINDOW);

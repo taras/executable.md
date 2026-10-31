@@ -60,6 +60,7 @@ import {
   focusSettled,
   initialState,
   instructed,
+  acceptedInstruction,
   permissionSettled,
   offering,
   permissionWithdrawn,
@@ -930,6 +931,7 @@ function* drive(
      * that produced it was saved.
      */
     const sidekickReports: (
+      | { readonly kind: "accepted"; readonly held: Instruction }
       | { readonly kind: "acknowledged"; readonly held: Instruction; settle(): void }
       | { readonly kind: "refused"; readonly refusal: string }
       | {
@@ -970,6 +972,10 @@ function* drive(
 
     function applySidekickReports(): void {
       for (const report of sidekickReports.splice(0)) {
+        if (report.kind === "accepted") {
+          state = acceptedInstruction(state, report.held);
+          continue;
+        }
         if (report.kind === "acknowledged") {
           state = instructed(state, report.held);
           report.settle();
@@ -1321,6 +1327,7 @@ function* drive(
           focused,
           preparingOf(admitting),
           sidekickReading(state),
+          dispatch.queue,
         ),
         fits,
         chatFits,
@@ -1386,6 +1393,7 @@ function* drive(
             focused,
             preparingOf(admitting),
             sidekickReading(state),
+            dispatch.queue,
           ),
           fits,
           chatFits,
@@ -1425,6 +1433,9 @@ function* drive(
             sidekickReports.push({ kind: "refused", refusal });
           },
           asked: askedBy,
+          accepted(held): void {
+            sidekickReports.push({ kind: "accepted", held });
+          },
           *admit(kind, conversation, work): Operation<string | undefined> {
             const busy = admissions.occupied(kind);
             if (busy !== undefined) {
@@ -1584,6 +1595,7 @@ function* drive(
             focused,
             preparingOf(admitting),
             sidekickReading(state),
+            dispatch.queue,
           )
         : refusedView(state, broken, at, focused);
     };
@@ -2518,6 +2530,7 @@ function* build(
    * action uses, and only the loop holds that mapping.
    */
   sidekick?: ReplSidekickReading,
+  queue?: SidekickDispatch["queue"],
 ): Operation<ReplView> {
   // Both halves from the reading that was resolved, never from the session
   // again. A resize recomposes at a new size, not at a new snapshot.
@@ -2534,7 +2547,16 @@ function* build(
   // reading this frame was resolved at, and what this execution's Sidekick
   // acknowledged doing to it: see `workspaceOf`.
   return view.ok
-    ? withWorkspace(view.value, workspaceOf(reading.model, sidekick))
+    ? withWorkspace(view.value, {
+        ...workspaceOf(reading.model, sidekick),
+        tray: "queue",
+        trays: ["todo", "queue"],
+        queued: Object.freeze(
+          (queue?.pending ?? []).map(({ key, text, exchange }) =>
+            Object.freeze({ key, text, origin: exchange.snapshot.origin }),
+          ),
+        ),
+      })
     : refusedView(state, view.error.message, size);
 }
 
@@ -2778,6 +2800,7 @@ function* perform(
     saved(conversation: string | undefined, revision: number, answer: Result<void>): void;
     /** Apply what a replacement answered, for the selection that asked for it. */
     replaced(conversation: string | undefined, revision: number, answer: Result<void>): void;
+    accepted(held: Instruction): void;
     /**
      * The exact text of the saved failed request this names, or why not.
      *
@@ -2840,6 +2863,7 @@ function* perform(
       if (!admitted.ok) {
         return { refusal: admitted.error.message };
       }
+      chat.accepted(intent.held);
       yield* spawn(function* (): Operation<void> {
         const sent = yield* admitted.value.completion;
         if (!sent.ok) {
@@ -2847,8 +2871,6 @@ function* perform(
         }
         wakes.send({ kind: "session" });
       });
-      // The row beside the box is `[stop]` now rather than `[send]`, and the
-      // next event in this burst is dispatched against what is mounted.
       return { remounted: true };
     }
     case "stop-sidekick": {
@@ -2857,6 +2879,9 @@ function* perform(
       // wait for an entry's outcome — and returns only once all of it has come
       // down. A person who pressed it keeps a usable keyboard while it does.
       const exchange = chat.dispatch.current;
+      if (exchange !== undefined) {
+        chat.dispatch.hold();
+      }
       yield* spawn(function* (): Operation<void> {
         if (exchange !== undefined) {
           yield* exchange.cancel();

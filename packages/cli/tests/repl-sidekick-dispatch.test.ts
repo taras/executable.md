@@ -15,7 +15,14 @@ import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/repl-page.ts";
-import { asked } from "./support/screen-journeys.ts";
+import {
+  asked,
+  sendMessage,
+  intoComposer,
+  typed,
+  SIDEKICK_PANE,
+  COMPOSER_VALUE,
+} from "./support/screen-journeys.ts";
 
 function service(
   held: Harness,
@@ -77,6 +84,164 @@ describe("shared Sidekick dispatch", () => {
     expect(read.chat.filter((one) => one.kind === "response")).toHaveLength(2);
   });
 
+  it("accepts busy UI Send and preserves a newer composer while the queued message starts", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ reply: "<Output>first answer</Output>", held: true });
+    page.repl.fake.script({ reply: "<Output>queued answer</Output>" });
+    yield* sendMessage(page, "first request");
+    yield* page.repl.fake.startedTurns(1);
+    yield* page.until(
+      "busy Send beside Stop",
+      (one) => one.found("[send]", SIDEKICK_PANE) === 1 && one.found("[stop]", SIDEKICK_PANE) === 1,
+    );
+    yield* sendMessage(page, "waiting request");
+    yield* page.until(
+      "accepted queue row and cleared composer",
+      (one) => one.shows("waiting request") && one.found("waiting request", COMPOSER_VALUE) === 0,
+    );
+    yield* intoComposer(page);
+    yield* typed(page, "newer unsent text");
+    expect(page.repl.fake.prompts).toHaveLength(1);
+    const before = yield* settledReading(page.repl);
+    expect(before.chat.filter((one) => one.kind === "message")).toHaveLength(1);
+    page.repl.fake.releaseTurn();
+    yield* page.until("the queued answer", (one) => one.shows("queued answer"));
+    expect(page.screen().found("newer unsent text", COMPOSER_VALUE)).toBe(1);
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    expect(
+      (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "message"),
+    ).toHaveLength(2);
+  });
+
+  it("holds FIFO after human Stop, bounds waiting text, and resumes without retry", function* () {
+    const held = yield* useHarness();
+    held.fake.script({ reply: "", manual: true });
+    held.fake.script({ reply: "<Output>next</Output>" });
+    const admission = createSidekickAdmission();
+    const dispatch = yield* service(held, admission);
+    const first = yield* send(dispatch, "active");
+    yield* held.fake.startedTurns(1);
+    const next = yield* send(dispatch, "next");
+    expect(next.snapshot.state).toBe("queued");
+    expect(next.snapshot.message).toBe(undefined);
+    expect(admission.configure("replace", undefined).ok).toBe(false);
+    dispatch.hold();
+    yield* first.cancel();
+    const removed = yield* send(dispatch, "remove");
+    yield* removed.cancel();
+    expect((yield* removed.completion).ok).toBe(false);
+    expect(dispatch.queue.held?.kind).toBe("stopped");
+    expect(held.fake.prompts).toHaveLength(1);
+    expect((yield* dispatch.send("é".repeat(32769))).ok).toBe(false);
+    const boundary = yield* send(dispatch, "é".repeat(32768));
+    const waiting: SidekickExchange[] = [next, boundary];
+    for (let index = 2; index < 16; index += 1) {
+      waiting.push(yield* send(dispatch, `waiting ${index}`));
+    }
+    expect(dispatch.queue.pending).toHaveLength(16);
+    expect((yield* dispatch.send("seventeenth")).ok).toBe(false);
+    for (const exchange of waiting.slice(1)) {
+      yield* exchange.cancel();
+    }
+    expect((yield* dispatch.resume()).ok).toBe(true);
+    expect((yield* next.completion).ok).toBe(true);
+    expect(held.fake.prompts).toHaveLength(2);
+    yield* first.cancel();
+    expect(dispatch.queue.pending).toHaveLength(0);
+  });
+
+  it("joins held control cleanup before advancing mixed-origin FIFO", function* () {
+    const entered = withResolvers<void>();
+    const cleaning = withResolvers<void>();
+    const release = withResolvers<void>();
+    const held = yield* useHarness(undefined, {
+      *fill() {
+        yield* ensure(function* () {
+          cleaning.resolve();
+          yield* release.operation;
+        });
+        entered.resolve();
+        yield* suspend();
+        return Ok(undefined);
+      },
+    });
+    held.fake.script({ reply: fills("blocked") });
+    held.fake.script({ reply: "<Output>UI successor</Output>", held: true });
+    held.fake.script({ reply: "<Output>ACP successor</Output>" });
+    const dispatch = yield* service(held);
+    const first = yield* send(dispatch, "control owner");
+    yield* entered.operation;
+    const ui = yield* send(dispatch, "UI successor");
+    const acp = yield* scoped(function* () {
+      yield* SidekickOrigin.set({ kind: "acp", attachment: "queued attachment" });
+      return yield* send(dispatch, "ACP successor");
+    });
+    const cancelling = yield* spawn(() => first.cancel());
+    yield* cleaning.operation;
+    expect(dispatch.current).toBe(first);
+    expect(dispatch.queue.pending.map((one) => one.text)).toEqual([
+      "UI successor",
+      "ACP successor",
+    ]);
+    expect(held.fake.prompts).toHaveLength(1);
+    expect(ui.snapshot.message).toBe(undefined);
+    expect(acp.snapshot.live).toBe(undefined);
+    release.resolve();
+    yield* cancelling;
+    yield* held.fake.startedTurns(2);
+    expect(dispatch.current).toBe(ui);
+    expect(acp.snapshot.message).toBe(undefined);
+    yield* first.cancel();
+    held.fake.releaseTurn();
+    expect((yield* ui.completion).ok).toBe(true);
+    expect((yield* acp.completion).ok).toBe(true);
+    const saved = (yield* records(held.execution)).filter((one) => one.kind === "message");
+    expect(saved.map((one) => one.text)).toEqual([
+      "control owner",
+      "UI successor",
+      "ACP successor",
+    ]);
+    expect(saved[2].origin).toEqual({ kind: "acp", attachment: "queued attachment" });
+  });
+
+  it("holds ordinary failure until Resume and never retries the failed item", function* () {
+    const held = yield* useHarness();
+    held.fake.script({ reply: "incomplete", stopReason: "max_tokens", held: true });
+    held.fake.script({ reply: "<Output>resumed successor</Output>" });
+    const dispatch = yield* service(held);
+    const first = yield* send(dispatch, "failed item");
+    yield* held.fake.startedTurns(1);
+    const next = yield* send(dispatch, "remaining item");
+    held.fake.releaseTurn();
+    expect((yield* first.completion).ok).toBe(false);
+    expect(dispatch.queue.held?.kind).toBe("failure");
+    expect((yield* dispatch.send("blocked new work")).ok).toBe(false);
+    expect(held.fake.prompts).toHaveLength(1);
+    expect((yield* dispatch.resume()).ok).toBe(true);
+    expect((yield* next.completion).ok).toBe(true);
+    expect(held.fake.prompts).toHaveLength(2);
+  });
+
+  it("disposes unsaved pending handles when the live owner ends", function* () {
+    const handles: SidekickExchange[] = [];
+    yield* scoped(function* () {
+      const held = yield* useHarness();
+      held.fake.script({ reply: "", manual: true });
+      const dispatch = yield* service(held);
+      handles.push(yield* send(dispatch, "active at exit"));
+      yield* held.fake.startedTurns(1);
+      handles.push(yield* send(dispatch, "unsaved at exit"));
+      expect(handles[1].snapshot.message).toBe(undefined);
+      expect((yield* records(held.execution)).filter((one) => one.kind === "message")).toHaveLength(
+        1,
+      );
+    });
+    expect((yield* handles[0].completion).ok).toBe(false);
+    expect((yield* handles[1].completion).ok).toBe(false);
+    expect(handles[1].snapshot.state).toBe("settled");
+    expect(handles[1].snapshot.message).toBe(undefined);
+  });
+
   it("captures lexical origins while detached observers leave the producer reserved", function* () {
     const held = yield* useHarness();
     held.fake.script({ reply: "<Output>one</Output>", held: true });
@@ -95,8 +260,12 @@ describe("shared Sidekick dispatch", () => {
     yield* scoped(function* () {
       yield* first.observe();
     });
-    const refused = yield* dispatch.send("burst duplicate");
-    expect(refused.ok).toBe(false);
+    const queued = yield* send(dispatch, "withdraw this waiting message");
+    expect(queued.snapshot.state).toBe("queued");
+    expect(queued.snapshot.live).toBe(undefined);
+    expect(queued.snapshot.preview).toBe(undefined);
+    yield* queued.cancel();
+    expect((yield* queued.completion).ok).toBe(false);
     expect(held.fake.prompts).toHaveLength(1);
     expect((yield* records(held.execution)).filter((one) => one.kind === "message")).toHaveLength(
       1,

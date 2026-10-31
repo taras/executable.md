@@ -2331,14 +2331,21 @@ follow-up starting, a cycle failing and a joined Stop are all things no keystrok
 announces. That notification carries nothing and authorizes nothing — the screen
 reads the conversation afresh when it is told to look.
 
-Sending a message captures the exact text and the revisions it was asked at, and
-reserves the one cycle this screen may have in flight before any work starts, so
-a second Send in the same burst asks for nothing rather than queueing a second
-turn. The message box is cleared only once the message is physically in the chat
-history, and only the revision that was sent: a person who typed again while the
-append was in flight keeps what they typed, and one who went back to the shared
-draft keeps the draft, because an instruction sent before their edit is not what
-hands it back. The provider is asked nothing until that has been applied.
+Sending accepts the exact text, UI revisions and origin into the live owner's
+FIFO across UI and delivered ACP messages. Sixteen messages may wait beside the
+one active exchange. Each message is at most 65536 UTF-8 bytes; a full queue or
+oversize message refuses before clearing text, with no eviction or truncation.
+Successful composer Send clears only its accepted Message revision. Newer typing
+survives; Retry consumes no composer text and ACP changes neither field.
+
+Waiting work has no ordinary saved message record. When it starts, ordinary saved
+acknowledgement releases only matching Draft takeover before response controls
+run. The entire exchange and its cleanup finish before the next starts. Human
+Sidekick Stop holds remaining work until explicit guarded Resume; attachment
+cancellation affects only its exact exchange and adds no hold. Ordinary failure
+holds without automatic retry; fatal failures and unknown-feedback guards retain
+their authority. Pending work must be removed before agent replacement. Waiting
+work ends with this live owner and has no cold recovery or automatic replay.
 
 A reply may ask a question, and it is answered in the Sidekick's own pane. When
 one is waiting, the pane says so and offers one control that opens its form; the
