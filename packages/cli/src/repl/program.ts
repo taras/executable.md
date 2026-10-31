@@ -931,7 +931,6 @@ function* drive(
      * that produced it was saved.
      */
     const sidekickReports: (
-      | { readonly kind: "accepted"; readonly held: Instruction }
       | { readonly kind: "acknowledged"; readonly held: Instruction; settle(): void }
       | { readonly kind: "refused"; readonly refusal: string }
       | {
@@ -972,10 +971,6 @@ function* drive(
 
     function applySidekickReports(): void {
       for (const report of sidekickReports.splice(0)) {
-        if (report.kind === "accepted") {
-          state = acceptedInstruction(state, report.held);
-          continue;
-        }
         if (report.kind === "acknowledged") {
           state = instructed(state, report.held);
           report.settle();
@@ -1434,7 +1429,7 @@ function* drive(
           },
           asked: askedBy,
           accepted(held): void {
-            sidekickReports.push({ kind: "accepted", held });
+            state = acceptedInstruction(state, held);
           },
           *admit(kind, conversation, work): Operation<string | undefined> {
             const busy = admissions.occupied(kind);

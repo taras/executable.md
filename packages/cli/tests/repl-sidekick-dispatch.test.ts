@@ -95,6 +95,7 @@ describe("shared Sidekick dispatch", () => {
       (one) => one.found("[send]", SIDEKICK_PANE) === 1 && one.found("[stop]", SIDEKICK_PANE) === 1,
     );
     yield* sendMessage(page, "waiting request");
+    yield* page.key("Enter");
     yield* page.until(
       "accepted queue row and cleared composer",
       (one) => one.shows("waiting request") && one.found("waiting request", COMPOSER_VALUE) === 0,
