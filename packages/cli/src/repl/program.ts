@@ -658,6 +658,7 @@ function* drive(
   workspace: string,
 ): Operation<Result<ReplOutcome>> {
   let state = start;
+  let follow = true;
   /**
    * The execution as it stands, which an upgrade replaces.
    *
@@ -1016,6 +1017,7 @@ function* drive(
      * chat history this version cannot read stays an explicit refusal.
      */
     const sidekick: SidekickOwner = yield* useSidekickOwner({
+      follow: () => follow,
       assembly: options.profile.sidekickAssembly,
       workspace,
       chat: execution.chat,
@@ -1057,8 +1059,9 @@ function* drive(
           testing: options.profile.testing,
           ...(reopening.blocked === undefined ? {} : { blocked: reopening.blocked }),
         }),
-      submit(at, journal): Operation<Result<SubmitReceipt>> {
+      submit(at, journal, observed): Operation<Result<SubmitReceipt>> {
         return submitForSidekick(at, {
+          observed,
           session: {
             // The whole acknowledged history, read at the moment the
             // reservation asks for it. `current.model` is the projection of
@@ -1075,6 +1078,7 @@ function* drive(
                 read.value.model.entries.map((entry) => ({
                   key: entry.key,
                   source: entry.source,
+                  ...(entry.terminal === undefined ? {} : { terminal: entry.terminal }),
                 })),
               );
             },
@@ -1325,6 +1329,7 @@ function* drive(
           preparingOf(admitting),
           sidekickReading(state),
           dispatch.queue,
+          follow,
         ),
         fits,
         chatFits,
@@ -1392,6 +1397,7 @@ function* drive(
             preparingOf(admitting),
             sidekickReading(state),
             dispatch.queue,
+            follow,
           ),
           fits,
           chatFits,
@@ -1427,6 +1433,9 @@ function* drive(
         reopening,
         {
           owner: sidekick,
+          toggleFollow() {
+            follow = !follow;
+          },
           dispatch,
           refuse(refusal: string): void {
             sidekickReports.push({ kind: "refused", refusal });
@@ -1588,6 +1597,7 @@ function* drive(
             preparingOf(admitting),
             sidekickReading(state),
             dispatch.queue,
+            follow,
           )
         : refusedView(state, broken, at, focused);
     };
@@ -2527,6 +2537,7 @@ function* build(
    */
   sidekick?: ReplSidekickReading,
   queue?: SidekickDispatch["queue"],
+  follow?: boolean,
 ): Operation<ReplView> {
   // Both halves from the reading that was resolved, never from the session
   // again. A resize recomposes at a new size, not at a new snapshot.
@@ -2545,14 +2556,19 @@ function* build(
   return view.ok
     ? withWorkspace(
         view.value,
-        workspaceOf(reading.model, sidekick, {
-          held: queue?.held,
-          pending: Object.freeze(
-            (queue?.pending ?? []).map(({ key, text, exchange }) =>
-              Object.freeze({ key, text, origin: exchange.snapshot.origin }),
+        workspaceOf(
+          reading.model,
+          sidekick,
+          {
+            held: queue?.held,
+            pending: Object.freeze(
+              (queue?.pending ?? []).map(({ key, text, exchange }) =>
+                Object.freeze({ key, text, origin: exchange.snapshot.origin }),
+              ),
             ),
-          ),
-        }),
+          },
+          follow,
+        ),
       )
     : refusedView(state, view.error.message, size);
 }
@@ -2756,6 +2772,7 @@ function* perform(
    */
   chat: {
     readonly owner: SidekickOwner;
+    toggleFollow(): void;
     readonly dispatch: SidekickDispatch;
     /** Say why the Sidekick refused, on the next pass of the loop. */
     refuse(refusal: string): void;
@@ -2873,6 +2890,10 @@ function* perform(
       if (pending !== undefined) {
         yield* pending.exchange.cancel();
       }
+      return { remounted: true };
+    }
+    case "toggle-follow": {
+      chat.toggleFollow();
       return { remounted: true };
     }
     case "resume-sidekick-queue": {

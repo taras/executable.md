@@ -827,6 +827,7 @@ export function* useMountedHost(
  */
 export function* useMountedRepl(
   options: {
+    readonly sidekickAcp?: string;
     readonly size?: ReplTerminalSize;
     readonly location?: string;
     /** A host already installed, for a case that reopens the same root. */
@@ -870,6 +871,7 @@ export function* useMountedRepl(
   yield* spawn(function* (): Operation<void> {
     const outcome = yield* runReplProgram({
       profile: host.profile,
+      ...(options.sidekickAcp === undefined ? {} : { sidekickAcp: options.sidekickAcp }),
       ...(options.location === undefined ? {} : { location: options.location }),
     });
     settledOutcome.value = outcome;

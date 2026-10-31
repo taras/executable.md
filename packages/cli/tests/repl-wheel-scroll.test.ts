@@ -122,8 +122,19 @@ describe("wheel real consumers", () => {
       },
       effort: { "model-0": { selected: "medium", choices: [{ id: "medium", name: "Medium" }] } },
     });
+    const inspecting = page.repl.fake.holdStatus();
     yield* page.press("[configure scribe]");
-    yield* page.until("Configure open", (one) => one.shows("Agent: scribe"));
+    yield* inspecting.reached;
+    yield* page.until(
+      "Configure waiting for its choices",
+      (one) => one.shows("Agent: scribe") && one.shows("Reading what this agent"),
+    );
+    expect(page.screen().shows("Model choice 0")).toBe(false);
+    inspecting.release();
+    yield* page.until(
+      "Configure choices mounted",
+      (one) => one.shows("Agent: scribe") && one.shows("Model choice 0"),
+    );
     yield* key(page, "ArrowLeft");
     yield* key(page, "Tab");
     const cell = page.screen().locate("Agent: scribe");

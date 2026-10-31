@@ -9,6 +9,7 @@ import {
   openConfigure,
   replaceAgent,
   applyConfigure,
+  sidekickIdle,
 } from "./support/screen-journeys.ts";
 import { OTHER_MOUNTED_AGENT } from "./support/mounted-repl.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
@@ -464,13 +465,22 @@ describe("wheel remaining migration journeys", () => {
       (one) => one.found("Old row 00", { rightOf: "BINDINGS" }) > 0,
     );
     yield* page.press("[Back to current chat]");
-    yield* page.until("current restored", (one) => !one.shows("[Back to current chat]"));
+    yield* page.until(
+      "current restored and joined",
+      (one) => !one.shows("[Back to current chat]") && sidekickIdle(one),
+    );
+    // Retiring Stop returns one header row to chat without moving its first visible row.
+    const last = inspected[inspected.length - 1];
+    if (last === undefined) {
+      throw new Error("the streaming chat had no rows to inspect");
+    }
+    const nextRow = `New row ${String(Number(last.slice("New row ".length)) + 1).padStart(2, "0")}`;
     expect(
       page
         .screen()
         .rows.filter((row) => row.includes("New row"))
         .map((row) => row.slice(row.lastIndexOf("New row"))),
-    ).toEqual(inspected);
+    ).toEqual([...inspected, nextRow]);
     expect(page.screen().shows("New live tail")).toBe(false);
     expect(page.repl.fake.prompts).toHaveLength(2);
     absentButtons(page);

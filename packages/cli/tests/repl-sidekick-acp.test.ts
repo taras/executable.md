@@ -3,7 +3,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { cliCommand, cliShellCommand, shellQuote } from "@executablemd/test-support/launch";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import { Agent, Execution } from "@executablemd/core";
+import { Agent, Component, Execution } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -59,7 +59,17 @@ import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { requestAttachment } from "../src/sidekick-acp/client.ts";
 import { usePosixSidekickTransport } from "../src/sidekick-acp/posix.ts";
 import { recordingTerminal, useMountedHost, MOUNTED_AGENT } from "./support/mounted-repl.ts";
-import { drawnScreen } from "./support/screen-journeys.ts";
+import {
+  drawnScreen,
+  sendMessage,
+  intoComposer,
+  typed,
+  composerHolds,
+  sidekickIdle,
+} from "./support/screen-journeys.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import { settledReading } from "./support/mounted-history.ts";
+import { awaitedFact } from "./support/mounted-repl.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { PAIRED_DIRECTORY, parseEntryRecords } from "../src/repl/sidekick/history.ts";
@@ -2648,5 +2658,107 @@ describe("ACP82: the file this publication keeps open", () => {
     yield* until(unlink(file));
     yield* until(unlink(stagePath));
     yield* until(rmdir(directory!));
+  });
+});
+
+describe("Follow: joined mixed-origin queue handoff", () => {
+  it("Follow: mounted UI and delivered ACP stay FIFO behind entry and generated-control cleanup", function* () {
+    yield* usePosixSidekickTransport(process.platform);
+    const home = yield* publishingHome("xmd-follow-queue-");
+    const path = join(home, "attachment.json");
+    const entryCleaning = withResolvers<void>();
+    const entryRelease = withResolvers<void>();
+    const exchangeCleaning = withResolvers<void>();
+    const exchangeRelease = withResolvers<void>();
+    yield* ensure(() => {
+      entryRelease.resolve();
+      exchangeRelease.resolve();
+    });
+    yield* Component.around({
+      *expand([request], next) {
+        if (request.expansion.name === "REPL.Submit") {
+          yield* ensure(function* () {
+            exchangeCleaning.resolve();
+            yield* exchangeRelease.operation;
+          });
+        }
+        yield* next(request);
+      },
+    });
+    const host = yield* useMountedHost({
+      *entryInstallation() {
+        return {
+          *install() {
+            yield* Execution.around({
+              *document([request], next) {
+                yield* ensure(function* () {
+                  entryCleaning.resolve();
+                  yield* entryRelease.operation;
+                });
+                yield* next(request);
+              },
+            });
+          },
+        };
+      },
+    });
+    host.fake.script({ reply: "<Output>Ready for attachment.</Output>" });
+    const page = yield* useReplPage({ host, sidekickAcp: path });
+    const descriptor = Descriptor.parse(JSON.parse(yield* readTextFile(path)));
+    const attached = attachResult.parse(
+      yield* requestAttachment(path, { method: "attach", cwd: descriptor.cwd }),
+    );
+    host.fake.script({
+      reply: fills("<Output>FINISHED-ROUND-CONTEXT</Output>") + "\n<REPL.Submit />",
+    });
+    host.fake.script({ reply: "<Output>UI queued answer.</Output>" });
+    host.fake.script({ reply: "<Output>ACP queued answer.</Output>" });
+    yield* sendMessage(page, "start real round");
+    yield* entryCleaning.operation;
+    yield* sendMessage(page, "UI queued text");
+    const acp = yield* spawn(() =>
+      requestAttachment(path, {
+        method: "prompt",
+        attachment: attached.attachment,
+        text: "ACP queued text",
+      }),
+    );
+    yield* page.until("two delivered waiting messages", (one) => one.shows("QUEUE 2/16"));
+    yield* intoComposer(page);
+    yield* typed(page, "newer composer text");
+    const before = yield* settledReading(page.repl);
+    expect(before.model.entries[0]?.terminal?.status).toBe("ok");
+    expect(host.fake.prompts).toHaveLength(2);
+    expect(before.chat.filter((record) => record.kind === "message")).toHaveLength(2);
+    entryRelease.resolve();
+    yield* exchangeCleaning.operation;
+    expect(host.fake.prompts).toHaveLength(2);
+    expect(
+      (yield* settledReading(page.repl)).chat.filter((record) => record.kind === "message"),
+    ).toHaveLength(2);
+    exchangeRelease.resolve();
+    const completed = exchangeSchema.parse(yield* acp);
+    expect(completed.ending).toMatchObject({ joined: true, outcome: "completed" });
+    yield* page.until("all Send work joined", sidekickIdle);
+    expect(host.fake.prompts).toHaveLength(4);
+    expect(host.fake.prompts[2]).toContain("The person says:\n\nUI queued text");
+    expect(host.fake.prompts[2]).toContain("## Execution outcome");
+    expect(host.fake.prompts[2]).toContain("Entry entry-1 completed.");
+    expect(host.fake.prompts[2]).toContain("## Execution output");
+    expect(host.fake.prompts[2]).toContain("FINISHED-ROUND-CONTEXT");
+    expect(host.fake.prompts[3]).toContain("The person says:\n\nACP queued text");
+    expect(composerHolds(page.screen(), "newer composer text")).toBe(true);
+    const saved = (yield* settledReading(page.repl)).chat.filter(
+      (record) => record.kind === "message",
+    );
+    expect(saved.map((record) => record.text)).toEqual([
+      "Initialize this Sidekick for an ACP attachment. Reply briefly in an Output region that you are ready, without submitting an entry or changing the draft.",
+      "start real round",
+      "UI queued text",
+      "ACP queued text",
+    ]);
+    expect(saved[2]?.origin).toEqual({ kind: "ui" });
+    expect(saved[3]?.origin).toMatchObject({ kind: "acp", attachment: attached.attachment });
+    expect(new Set(saved.map((record) => record.id)).size).toBe(4);
   });
 });
