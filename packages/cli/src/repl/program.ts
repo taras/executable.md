@@ -90,6 +90,7 @@ import {
   GUIDANCE_ROW,
   QUEUE_TEXT,
   queueLinesOf,
+  queueStatusLinesOf,
   stagedWorkspace,
   workspaceHeaderLines,
   readsGeometry,
@@ -1478,13 +1479,6 @@ function* drive(
             sidekickReports.push({ kind: "replaced", conversation, revision, answer });
           },
           retrying(conversation, message): Result<{ text: string; held: Instruction }> {
-            const blocked = admissions.occupied("message");
-            if (blocked !== undefined) {
-              // Refused before the saved text is even resolved: a retry that
-              // wrote its record and then failed would leave this history
-              // claiming a request nobody could have sent.
-              return Err(new Error(blocked));
-            }
             const known = sidekick.reading;
             if (!known.ok) {
               return known;
@@ -2542,16 +2536,17 @@ function* build(
   // reading this frame was resolved at, and what this execution's Sidekick
   // acknowledged doing to it: see `workspaceOf`.
   return view.ok
-    ? withWorkspace(view.value, {
-        ...workspaceOf(reading.model, sidekick),
-        tray: "queue",
-        trays: ["todo", "queue"],
-        queued: Object.freeze(
-          (queue?.pending ?? []).map(({ key, text, exchange }) =>
-            Object.freeze({ key, text, origin: exchange.snapshot.origin }),
+    ? withWorkspace(
+        view.value,
+        workspaceOf(reading.model, sidekick, {
+          held: queue?.held,
+          pending: Object.freeze(
+            (queue?.pending ?? []).map(({ key, text, exchange }) =>
+              Object.freeze({ key, text, origin: exchange.snapshot.origin }),
+            ),
           ),
-        ),
-      })
+        }),
+      )
     : refusedView(state, view.error.message, size);
 }
 
@@ -2799,10 +2794,8 @@ function* perform(
     /**
      * The exact text of the saved failed request this names, or why not.
      *
-     * Resolved here, against the history as it stands, and reserving the one
-     * message cycle in the same breath: a retry that resolved its text and then
-     * waited would be sending whatever that message id meant by the time it
-     * started.
+     * Resolve against acknowledged history before dispatch captures the text.
+     * Pending work retains that exact text and its conversation association.
      */
     retrying(conversation: string, message: number): Result<{ text: string; held: Instruction }>;
   },
@@ -2863,6 +2856,23 @@ function* perform(
         const sent = yield* admitted.value.completion;
         if (!sent.ok) {
           chat.refuse(sent.error.message);
+        }
+        wakes.send({ kind: "session" });
+      });
+      return { remounted: true };
+    }
+    case "remove-sidekick-message": {
+      const pending = chat.dispatch.queue.pending.find((one) => one.key === intent.message);
+      if (pending !== undefined) {
+        yield* pending.exchange.cancel();
+      }
+      return { remounted: true };
+    }
+    case "resume-sidekick-queue": {
+      yield* spawn(function* (): Operation<void> {
+        const resumed = yield* chat.dispatch.resume();
+        if (!resumed.ok) {
+          chat.refuse(resumed.error.message);
         }
         wakes.send({ kind: "session" });
       });
@@ -2992,8 +3002,9 @@ function* perform(
         // flight has to come down before another conversation starts — and
         // `select()` refuses outright while it is still up, which is why this
         // waits rather than trying and reporting the refusal.
-        if (chat.owner.busy) {
-          yield* chat.owner.stop();
+        const exchange = chat.dispatch.current;
+        if (exchange !== undefined) {
+          yield* exchange.cancel();
         }
         // Explicitly a new conversation. The old chat and its association stay
         // where they are; a failed setup leaves the old one active and says why.
@@ -3008,8 +3019,6 @@ function* perform(
       return { remounted: true };
     }
     case "retry-message": {
-      // The same one cycle a Send reserves, synchronously and before anything
-      // is spawned: a second Retry in the same burst finds it held.
       const asked = chat.retrying(intent.conversation, intent.message);
       if (!asked.ok) {
         return { refusal: asked.error.message };
@@ -3664,6 +3673,15 @@ export function* prepareFrame(
   if (!queued.ok) {
     return queued;
   }
+  const queueStatus = yield* fitPlain(
+    renderer,
+    view.size,
+    queueStatusLinesOf(view),
+    widths.inspection - 2,
+  );
+  if (!queueStatus.ok) {
+    return queueStatus;
+  }
   // The Transcript's selector, fitted once. Before the header rows below,
   // because what this answers is how wide that control is and the wrap decision
   // is made against it — and before every pass after that, because a label one
@@ -3739,6 +3757,7 @@ export function* prepareFrame(
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
     ...context,
     ...(queued.value === undefined ? {} : { queue: queued.value }),
+    queueStatus: queueStatus.value,
     ...(wrapped.size === 0 ? {} : { headers: wrapped }),
     ...(historySpace === undefined ? {} : { historyGap: historySpace }),
     ...(field === undefined ? {} : { draftField: field }),
@@ -4144,6 +4163,7 @@ export function* prepareFrame(
     notices: notices.value,
     details: details.value,
     queue: queued.value,
+    queueStatus: queueStatus.value,
     headers: wrapped.size === 0 ? undefined : wrapped,
   };
   const collect = function* (

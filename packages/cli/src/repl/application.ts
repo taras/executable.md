@@ -457,7 +457,7 @@ export interface ReplSidekickReading {
    * Sidekick is no longer continuing.
    */
   readonly chat: readonly ReplSidekickChatRow[];
-  /** Whether a cycle is running, so a second Send refuses rather than queueing. */
+  /** Whether the current exchange is running. */
   readonly busy: boolean;
   /** The agent the chat being read was held with. */
   readonly agent: string;
@@ -970,6 +970,8 @@ export interface ReplSidekickReveal {
 export interface ReplViewports {
   /** Rows the Sessions reading is scrolled by. */
   readonly sessions: number;
+  /** Fitted rows the live queue is scrolled by. */
+  readonly queue?: number;
   /**
    * Rows the Sidekick pane is scrolled by, one entry per chat it has read.
    *
@@ -1020,6 +1022,7 @@ export interface ReplViewports {
 /** Every window at its first row, which is where a fresh reading starts. */
 export const AT_TOP: ReplViewports = Object.freeze({
   sessions: 0,
+  queue: 0,
   sidekick: Object.freeze({}),
   sidekickFollowing: Object.freeze({}),
   entries: 0,
@@ -1167,6 +1170,8 @@ export type ReplIntent =
     }
   /** Stop the Sidekick's own work, and join it. */
   | { readonly kind: "stop-sidekick" }
+  | { readonly kind: "remove-sidekick-message"; readonly message: string }
+  | { readonly kind: "resume-sidekick-queue" }
   /**
    * Stop this exact entry, and join everything it owned.
    *
@@ -1329,19 +1334,12 @@ export interface ReplView {
   /** Whether this renderer has yet to commit a frame. */
   readonly initialPresentation?: boolean;
   /**
-   * The staged workspace composition's own presentation, where a caller gave one.
-   *
-   * Inert: what Follow shows, which tray is selected, the messages waiting
-   * behind the active exchange and which entry a Sidekick message submitted. No
-   * owner, writer, reservation or provider is reachable through it. The root
-   * never supplies it, so the screen a command draws is the ordinary
-   * composition; a wide view carrying it is drawn as the #971 composition under
-   * image review.
+   * Detached workspace facts, with no owner, writer or provider handles.
    */
   readonly workspace?: ReplWorkspace;
 }
 
-/** One message waiting behind the active exchange, as the staged screen lists it. */
+/** One waiting message projected for the live Sidekick queue. */
 export interface ReplQueuedMessage {
   readonly key: string;
   readonly origin: MessageOrigin;
@@ -1356,7 +1354,7 @@ interface ReplAssociatedWork {
   readonly entry: string;
 }
 
-/** What the staged workspace composition shows that no reading holds yet. */
+/** Acknowledged work and live-only queue presentation. */
 export interface ReplWorkspace {
   /**
    * Whether this execution offers Follow at all, and how it stands.
@@ -1377,6 +1375,8 @@ export interface ReplWorkspace {
   readonly trays?: readonly ("todo" | "queue")[];
   readonly tray: "todo" | "queue";
   readonly queued: readonly ReplQueuedMessage[];
+  /** The live queue hold, without an execution handle. */
+  readonly queueHeld?: { readonly kind: "stopped" | "failure"; readonly reason: string };
   readonly work: readonly ReplAssociatedWork[];
   /**
    * How far the tray's own window is scrolled through those messages.
@@ -1394,33 +1394,7 @@ export function withWorkspace(view: ReplView, workspace: ReplWorkspace): ReplVie
   return Object.freeze({ ...view, workspace });
 }
 
-/**
- * What the ordinary root's own screen stages, from what it actually holds.
- *
- * Everything here is a fact this reading already carries or a part of the
- * screen that is honestly empty. Nothing is supplied so that a control has
- * something to point at:
- *
- * - **Associated work** is the association between a chat row and the entry
- *   that row's evaluation admitted. It is read out of the acknowledged
- *   Submits this history already holds — see {@link associatedWork} — so a
- *   reply that really admitted an entry shows that entry's own state and
- *   output after it, and a reply that admitted nothing shows nothing. No
- *   message is given an entry it did not submit.
- * - **Queued messages** are the shared queue's, and there is no shared queue
- *   here. An empty tray is what this execution holds; a populated one would be
- *   a fiction in a screen somebody is working from.
- * - **Follow** is not offered. What it governs — a reply that evaluates and
- *   admits a round, and the continuation after it — is a later delivery, and
- *   a checkbox for behaviour this build does not have would be a choice that
- *   does nothing however it was drawn. Its accepted setting is kept in the
- *   delivery record, not advertised here.
- * - **QUEUE** is not offered either, and for the same reason: there is no
- *   shared queue in this build, and a tab a reader can select and find nothing
- *   behind is worse than no tab.
- *
- * So the tray is TODO, which is the inactive placeholder it has always been.
- */
+/** Project acknowledged work and detached live queue facts for this frame. */
 export function workspaceOf(
   /**
    * The reading this frame is drawn from, which is the selected prefix.
@@ -1433,10 +1407,16 @@ export function workspaceOf(
   model?: ReplModel,
   /** What this execution's Sidekick acknowledged, where the frame has one. */
   sidekick?: ReplSidekickReading,
+  queue?: {
+    readonly pending: readonly ReplQueuedMessage[];
+    readonly held: ReplWorkspace["queueHeld"];
+  },
 ): ReplWorkspace {
   return Object.freeze({
-    tray: "todo" as const,
-    queued: Object.freeze([]),
+    tray: "queue" as const,
+    trays: Object.freeze(["todo", "queue"] as const),
+    queued: Object.freeze((queue?.pending ?? []).map((one) => Object.freeze({ ...one }))),
+    ...(queue?.held === undefined ? {} : { queueHeld: queue.held }),
     work: associatedWork(model, sidekick),
   });
 }
@@ -2034,6 +2014,9 @@ export function reduceRepl(
       if (next === window.from) {
         return settled(given);
       }
+      if (action.window === QUEUE_WINDOW) {
+        return settled({ ...state, viewports: Object.freeze({ ...state.viewports, queue: next }) });
+      }
       const kind =
         action.window === SIDEKICK_WINDOW
           ? "scroll-sidekick"
@@ -2148,6 +2131,9 @@ export function reduceRepl(
         },
       };
     }
+    case "remove-sidekick-message":
+    case "resume-sidekick-queue":
+      return { state, intent: action };
     case "stop-sidekick": {
       // Unguarded, like `exit`. Stopping something that is not running is
       // nothing, and a control that refused on a screen where the work had
@@ -4540,6 +4526,16 @@ export function focusSettled(
       ? state.viewports
       : Object.freeze({ ...state.viewports, entries: revealed });
   if (state.restore.kind === "reveal" && admission !== undefined) {
+    if (claim.startsWith("queue:")) {
+      return Object.freeze({
+        ...state,
+        restore: undefined,
+        viewports: {
+          ...viewports,
+          queue: admission.windows.get(QUEUE_WINDOW)?.from ?? viewports.queue,
+        },
+      });
+    }
     if (claim.startsWith("sessions:")) {
       return Object.freeze({
         ...state,
@@ -8635,6 +8631,7 @@ export interface ReplPresentationContext {
    * count is the geometry question and the text would be fitted to nothing.
    */
   readonly queue?: readonly ReplFittedLine[] | undefined;
+  readonly queueStatus?: readonly ReplFittedLine[] | undefined;
   /**
    * How wide the Draft's field is, once its row and its control are measured.
    *
@@ -8848,6 +8845,7 @@ function messageValueRows(context: ReplPresentationContext): readonly string[] {
  * on, because the rows that stay put are exactly what the viewport does not get.
  */
 type ReplSlot =
+  | "queue"
   | "located"
   | "navigation"
   | "pane-heading"
@@ -8875,6 +8873,9 @@ type ReplSlot =
 /** The tray window's two controls, which surround it rather than move in it. */
 
 function slotOf(key: string): ReplSlot | undefined {
+  if (key.startsWith("queue:")) {
+    return "queue";
+  }
   if (key === "drawer:open") {
     return "drawer-title";
   }
@@ -8931,6 +8932,7 @@ function slotOf(key: string): ReplSlot | undefined {
     key.startsWith("sidekick:message:value:") ||
     key === "sidekick:send" ||
     key === "sidekick:stop" ||
+    key === "sidekick:resume" ||
     key === "sidekick:back" ||
     key === "sidekick:working" ||
     key === "sidekick:configure" ||
@@ -8957,7 +8959,8 @@ function slotOf(key: string): ReplSlot | undefined {
     key === "follow" ||
     key.startsWith("draft:value:") ||
     key.startsWith("tray:") ||
-    key.startsWith("queue:")
+    key.startsWith("queue:") ||
+    key.startsWith("queue-status:")
   ) {
     return "workspace";
   }
@@ -9254,7 +9257,24 @@ export function presentationFor(
     ...(chat ? [{ slot: "inspection", window: SIDEKICK_WINDOW }] : []),
   ];
   const grouped = new Set(owners.map((one) => one.slot));
+  let queueMounted = false;
   for (const item of screen.items) {
+    if (chat && staged(view) !== undefined && slotOf(item.key) === "queue") {
+      if (!queueMounted) {
+        queueMounted = true;
+        composed.push(
+          describeNode<ReplAction>({
+            key: `viewport:${QUEUE_WINDOW}`,
+            component: VIEWPORT,
+            input: { window: QUEUE_WINDOW },
+            children: screen.items
+              .filter((one) => slotOf(one.key) === "queue")
+              .map((one) => editorDescription(one.description, context)),
+          }),
+        );
+      }
+      continue;
+    }
     if (!grouped.has(slotOf(item.key) ?? "")) {
       composed.push(editorDescription(item.description, context));
     }
@@ -10009,21 +10029,27 @@ export function admissionFor(input: {
         ? drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
             (one) => one.described,
           )
-        : slot.window === SIDEKICK_WINDOW
-          ? sidekickReadingRows(view.live.sidekick, view.focused, chat, chatStagingOf(view))
-          : slot.window === SESSIONS_WINDOW
-            ? sessionRows(
-                view.state,
-                chronology(view.model, view.live),
-                view.focused,
-                undefined,
-                widths.listBody,
-                view.live.sidekick,
-                staged(view) !== undefined,
-              )
-            : slot.window === ENTRIES_WINDOW
-              ? entryContent(view.model, view.focused, view.selection.entry?.key, widths.listBody)
-              : undefined;
+        : slot.window === QUEUE_WINDOW
+          ? queueSequence(staged(view) ?? workspaceOf(), queue).map((one) => ({
+              key: one.first
+                ? `queue:${one.message.key}:remove`
+                : `queue:${one.message.key}:row:${one.offset}`,
+            }))
+          : slot.window === SIDEKICK_WINDOW
+            ? sidekickReadingRows(view.live.sidekick, view.focused, chat, chatStagingOf(view))
+            : slot.window === SESSIONS_WINDOW
+              ? sessionRows(
+                  view.state,
+                  chronology(view.model, view.live),
+                  view.focused,
+                  undefined,
+                  widths.listBody,
+                  view.live.sidekick,
+                  staged(view) !== undefined,
+                )
+              : slot.window === ENTRIES_WINDOW
+                ? entryContent(view.model, view.focused, view.selection.entry?.key, widths.listBody)
+                : undefined;
     const focused = rows?.findIndex((one) => one.key === view.focused) ?? -1;
     windows.set(slot.window, {
       ...admitRows({
@@ -10033,6 +10059,7 @@ export function admissionFor(input: {
           capacity,
           total,
           chat,
+          queue,
           widths,
           preview,
           notices,
@@ -10086,12 +10113,22 @@ function offsetFor(
   capacity: number,
   total: number,
   chat: readonly ReplFittedLine[] | undefined,
+  queue: readonly ReplFittedLine[] | undefined,
   widths: ReplMeasuredWidths,
   preview: readonly ReplFittedLine[] | undefined,
   notices: ReplPreparedNotices | undefined,
   details: readonly ReplFittedLine[] | undefined,
 ): number {
   const held = offsetOf(view, window);
+  if (window === QUEUE_WINDOW && capacity > 0 && view.state.restore?.kind === "reveal") {
+    const requested = view.state.restore.key;
+    const at = queueSequence(staged(view) ?? workspaceOf(), queue).findIndex(
+      (one) => one.first && `queue:${one.message.key}:remove` === requested,
+    );
+    if (at >= 0) {
+      return Math.min(Math.max(held, at - capacity + 1), at);
+    }
+  }
   if (window === SIDEKICK_WINDOW) {
     // The turn a Sessions selection asked to be shown, placed against the chat
     // window *this* frame measured. The frame that answered the selection may
@@ -10192,7 +10229,7 @@ function chatRead(view: ReplView): string {
 /** How far one window is scrolled, as this process is holding it. */
 function offsetOf(view: ReplView, window: string): number {
   if (window === QUEUE_WINDOW) {
-    return staged(view)?.queueOffset ?? 0;
+    return view.state.viewports.queue ?? staged(view)?.queueOffset ?? 0;
   }
   if (window === SESSIONS_WINDOW) {
     return view.state.viewports.sessions;
@@ -10856,10 +10893,7 @@ function compactSidekickTurn(
  * and the Sidekick's Send or Stop beside it, the waiting messages, and the
  * composer itself.
  *
- * TODO, QUEUE, Follow and each message's remove control are mounted controls
- * that ask the root for nothing: their behaviour is the queue contract's (#964)
- * and the shared TODO's (#901), and none of it is wired here. Send and Stop are
- * the Sidekick's own, with the actions they always had.
+ * Queue actions carry only exact pending keys to the root.
  */
 function workspaceControls(
   state: ReplState,
@@ -10913,20 +10947,12 @@ function workspaceControls(
       ),
     );
   }
-  // Only the trays this execution actually offers, and Follow only where it is
-  // offered at all. A build without the shared queue draws no QUEUE tab and no
-  // Follow checkbox: a control for behaviour that is not here is a choice
-  // somebody can make and nothing happens, however it is drawn.
-  // A tray's name is a heading while it is the only tray, not a stop: TODO is
-  // inactive until the shared TODO ships, and a control that does nothing is a
-  // Tab stop somebody has to step past. Indented as a row is, so it reads in
-  // the same cells it always has.
   for (const tray of traysOf(workspace)) {
     const here = workspace.tray === tray;
     items.push(
       line(
         `tray:${tray}`,
-        focusPrefixed(tray.toUpperCase(), false),
+        focusPrefixed(tray === "queue" ? `QUEUE ${workspace.queued.length}/16` : "TODO", false),
         styleOf(here ? "pane-heading" : "metadata", { selected: here }),
       ),
     );
@@ -10950,6 +10976,20 @@ function workspaceControls(
       here: view.focused,
     }),
   );
+  if (workspace.queueHeld !== undefined) {
+    items.push(
+      row(
+        "sidekick:resume",
+        "[Resume queue]",
+        { select: "resume-sidekick-queue" },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
+  }
+  for (const [at, one] of (context.queueStatus ?? []).entries()) {
+    items.push(line(`queue-status:${at}`, one.text, styleOf("metadata")));
+  }
   if (workspace.tray === "queue" && offersQueue(workspace)) {
     const window = context.admission.windows.get(QUEUE_WINDOW);
     // Rows rather than messages. The window counts fitted rows, so the
@@ -10986,6 +11026,7 @@ function workspaceControls(
         : context.queueProbe === true
           ? sequence.slice(0, 1)
           : [];
+    const controls = sequence.filter((one) => one.first);
     for (const one of shownRows) {
       const mark = originMark(one.message.origin);
       const marked = one.first && one.text.startsWith(MARKER_ROOM);
@@ -11002,13 +11043,33 @@ function workspaceControls(
       // it takes no row of the window, and a continuation shown without its
       // beginning offers no control that would act on the wrong message.
       if (one.first) {
+        const at = controls.indexOf(one);
+        const reveal: Record<string, string> = {};
+        for (const [step, keys] of [
+          [-1, ["ArrowUp", "Alt+ArrowUp"]],
+          [1, ["ArrowDown", "Alt+ArrowDown"]],
+        ] satisfies readonly (readonly [number, readonly string[]])[]) {
+          const neighbour = controls[at + step];
+          if (neighbour !== undefined && !shownRows.includes(neighbour)) {
+            for (const key of keys) {
+              reveal[key] = `queue:${neighbour.message.key}:remove`;
+            }
+          }
+        }
         items.push(
-          row(
-            `queue:${one.message.key}:remove`,
-            "X",
-            { name: "Remove message" },
-            styleOf("metadata"),
-            { here: view.focused },
+          revealing(
+            row(
+              `queue:${one.message.key}:remove`,
+              "X",
+              {
+                select: "remove-sidekick-message",
+                message: one.message.key,
+                name: "Remove message",
+              },
+              styleOf("metadata"),
+              { here: view.focused },
+            ),
+            reveal,
           ),
         );
       }
@@ -11429,8 +11490,13 @@ function trayAllocation(
   if (workspace === undefined || workspace.tray !== "queue" || !offersQueue(workspace)) {
     return undefined;
   }
-  const wrapped = (id: string): number => (context.headers?.has(`header:${id}`) === true ? 2 : 1);
-  const composer = 1 + messageValueRows(context).length;
+  const wrapped = (id: string): number =>
+    id === "tray" && context.headers?.has("header:tray-actions") === true
+      ? 3
+      : context.headers?.has(`header:${id}`) === true
+        ? 2
+        : 1;
+  const composer = 1 + messageValueRows(context).length + (context.queueStatus?.length ?? 0);
   const held = queueSequence(workspace, context.queue).length;
   const column = workspaceBodyRows(view.size) - wrapped("conversation") - 1 - 1 - extras;
   const queue = Math.max(0, Math.min(WORKSPACE_QUEUE_ROWS, column - wrapped("tray") - composer));
@@ -11527,7 +11593,7 @@ const WORKSPACE_HEADERS: readonly {
     // have — contributes no part, so the row is built from what is actually
     // there rather than from what a wider build would have put there.
     left: Object.freeze(["tray:todo", "tray:queue"]),
-    right: Object.freeze(["follow", "sidekick:stop", "sidekick:send"]),
+    right: Object.freeze(["follow", "sidekick:stop", "sidekick:send", "sidekick:resume"]),
   }),
 ]);
 
@@ -11684,6 +11750,9 @@ export function workspaceHeaderLines(
       continue;
     }
     const room = headerRoomOf(header.id, widths);
+    if (header.id === "tray" && room > 0) {
+      lines.push({ key: "header:tray-actions", text: right, room });
+    }
     if (room < 1) {
       continue;
     }
@@ -11845,6 +11914,41 @@ function workspacePresentation(input: {
         }),
       ];
     }
+    if (id === "tray" && context.headers?.has("header:tray-actions") === true) {
+      return [
+        box({
+          id: first,
+          region,
+          props: props(),
+          children: [...left, spacer(`${first}:space`, region)],
+        }),
+        box({
+          id: `${first}:second`,
+          region,
+          props: props(),
+          children: [
+            spacer(`${first}:second:space`, region),
+            ...parts(
+              headerKeysOf(
+                spec.right.filter((key) => key !== "sidekick:resume"),
+                candidates,
+              ),
+              region,
+              surface,
+            ),
+          ],
+        }),
+        box({
+          id: `${first}:resume`,
+          region,
+          props: props(),
+          children: [
+            spacer(`${first}:resume:space`, region),
+            ...parts(["sidekick:resume"], region, surface),
+          ],
+        }),
+      ];
+    }
     return [
       box({
         id: first,
@@ -11993,6 +12097,7 @@ function workspacePresentation(input: {
       ...byKey("follow"),
       ...byKey("sidekick:stop"),
       ...byKey("sidekick:send"),
+      ...byKey("sidekick:resume"),
     ];
     const held = staged(view);
     // One box per row this frame described, walked in description order so the
@@ -12049,9 +12154,16 @@ function workspacePresentation(input: {
       held !== undefined &&
       held.tray === "queue" &&
       offersQueue(held) &&
-      allocation !== undefined
+      (allocation !== undefined || queueRows.length > 0)
     ) {
-      viewports.push(Object.freeze({ id: queueViewport, region, window: QUEUE_WINDOW }));
+      viewports.push(
+        Object.freeze({
+          id: queueViewport,
+          region,
+          window: QUEUE_WINDOW,
+          owner: `viewport:${QUEUE_WINDOW}`,
+        }),
+      );
     }
     const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
     return [
@@ -12087,15 +12199,18 @@ function workspacePresentation(input: {
               ),
               children: [
                 ...headerRows("tray", region, REPL_PALETTE.composerSurface),
+                ...startingWith("queue-status:").map((one) => rowBox(one, region, room)),
                 // A tray whose rows fit places them where the accepted screen
                 // has them. One that does not is a window of the rows it was
                 // allocated, whose room the engine measures like any other.
-                ...(held?.tray === "queue" && offersQueue(held) && allocation !== undefined
+                ...(held?.tray === "queue" &&
+                offersQueue(held) &&
+                (allocation !== undefined || queueRows.length > 0)
                   ? [
                       box({
                         id: queueViewport,
                         region,
-                        props: viewportProps(allocation.queue),
+                        props: viewportProps(allocation?.queue ?? queueRows.length),
                         children: queueRows,
                       }),
                     ]
@@ -12475,3 +12590,20 @@ export function draftRowsOf(fitted: readonly ReplFittedLine[]): readonly string[
   ]);
 }
 export type { ReplDrawerRef };
+
+export function queueStatusLinesOf(
+  view: ReplView,
+): readonly { readonly key: string; readonly text: string }[] {
+  const workspace = staged(view);
+  if (workspace === undefined) {
+    return [];
+  }
+  return [
+    ...(workspace.queueHeld === undefined
+      ? []
+      : [{ key: "queue-hold", text: workspace.queueHeld.reason }]),
+    ...(workspace.queued.length === 0
+      ? []
+      : [{ key: "queue-loss", text: "Waiting messages are kept only in this REPL." }]),
+  ];
+}

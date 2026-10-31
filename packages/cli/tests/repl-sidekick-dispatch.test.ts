@@ -22,6 +22,8 @@ import {
   typed,
   SIDEKICK_PANE,
   COMPOSER_VALUE,
+  draftText,
+  DRAFT_VALUE,
 } from "./support/screen-journeys.ts";
 
 function service(
@@ -42,6 +44,32 @@ function* send(dispatch: SidekickDispatch, text: string): Operation<SidekickExch
     throw admitted.error;
   }
   return admitted.value;
+}
+
+function* queueComposer(page: Parameters<typeof sendMessage>[0]): Operation<void> {
+  if (page.screen().size.columns < 120) {
+    for (
+      let step = 0;
+      step < 8 && !page.screen().rows.some((row) => row.includes("> › message the sidekick"));
+      step += 1
+    ) {
+      const before = page.screen().index;
+      yield* page.key("Tab");
+      yield* page.until("Message region traversal", (one) => one.index > before);
+    }
+    expect(page.screen().rows.some((row) => row.includes("> › message the sidekick"))).toBe(true);
+  } else {
+    yield* intoComposer(page);
+    yield* page.until("Message focus after pane selection", (one) =>
+      one.rows.some((row) => row.includes("> › message the sidekick")),
+    );
+  }
+}
+
+function* queueSend(page: Parameters<typeof sendMessage>[0], text: string): Operation<void> {
+  yield* queueComposer(page);
+  yield* typed(page, text);
+  yield* page.press("[send]", { rightOf: "message the sidekick" });
 }
 
 function fills(source: string): string {
@@ -87,6 +115,7 @@ describe("shared Sidekick dispatch", () => {
   it("accepts busy UI Send and preserves a newer composer while the queued message starts", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "<Output>first answer</Output>", held: true });
+    page.repl.fake.script({ reply: fills("<Output>replacement</Output>") });
     page.repl.fake.script({ reply: "<Output>queued answer</Output>" });
     yield* sendMessage(page, "first request");
     yield* page.repl.fake.startedTurns(1);
@@ -102,16 +131,158 @@ describe("shared Sidekick dispatch", () => {
     );
     yield* intoComposer(page);
     yield* typed(page, "newer unsent text");
+    yield* draftText(page, "newer held draft", ["Tab", "Tab", "Tab", "Tab"]);
     expect(page.repl.fake.prompts).toHaveLength(1);
     const before = yield* settledReading(page.repl);
     expect(before.chat.filter((one) => one.kind === "message")).toHaveLength(1);
     page.repl.fake.releaseTurn();
     yield* page.until("the queued answer", (one) => one.shows("queued answer"));
     expect(page.screen().found("newer unsent text", COMPOSER_VALUE)).toBe(1);
-    expect(page.repl.fake.prompts).toHaveLength(2);
+    expect(page.repl.fake.prompts).toHaveLength(3);
+    expect(page.screen().found("newer held draft", DRAFT_VALUE)).toBe(1);
+    expect(page.repl.fake.prompts[2]).toContain("taken the shared draft over");
     expect(
       (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "message"),
     ).toHaveLength(2);
+  });
+
+  for (const size of [
+    { columns: 160, rows: 36 },
+    { columns: 120, rows: 30 },
+    { columns: 72, rows: 20 },
+  ]) {
+    it(`withdraws exact waiting UI work and resumes the held FIFO at ${size.columns}x${size.rows}`, function* () {
+      const page = yield* useReplPage();
+      yield* intoComposer(page);
+      if (page.screen().size.columns !== size.columns || page.screen().size.rows !== size.rows) {
+        yield* page.resize(size);
+      }
+      page.repl.fake.script({ reply: "", manual: true });
+      page.repl.fake.script({ reply: "<Output>remaining answer</Output>" });
+      page.repl.fake.script({ reply: "<Output>appended answer</Output>" });
+      yield* queueSend(page, "active request");
+      yield* page.repl.fake.startedTurns(1);
+      yield* queueSend(page, "withdraw me");
+      yield* page.until("first waiting row", (one) => one.shows("QUEUE 1/16"));
+      yield* queueSend(page, "remaining request");
+      yield* page.until("two waiting rows", (one) => one.shows("QUEUE 2/16"));
+      yield* page.press("[stop]");
+      yield* page.until(
+        "fixed Resume after Stop",
+        (one) => one.shows("[Resume queue]") && one.occurrences("[stop]") === 0,
+      );
+      expect(page.screen().shows("Stopped.")).toBe(true);
+      yield* page.press("X", { onRow: "withdraw me" });
+      yield* page.until(
+        "exact withdrawal",
+        (one) => one.shows("QUEUE 1/16") && !one.shows("withdraw me"),
+      );
+      yield* queueSend(page, "appended while held");
+      yield* page.until("held append", (one) => one.shows("QUEUE 2/16"));
+      expect(page.repl.fake.prompts).toHaveLength(1);
+      yield* queueComposer(page);
+      yield* typed(page, "unsent newer text");
+      yield* page.press("[Resume queue]");
+      yield* page.until("resumed FIFO completion", (one) => one.shows("appended answer"));
+      expect(page.repl.fake.prompts).toHaveLength(3);
+      expect(page.screen().found("unsent newer text", COMPOSER_VALUE)).toBe(1);
+      const messages = (yield* settledReading(page.repl)).chat.filter(
+        (one) => one.kind === "message",
+      );
+      expect(messages.map((one) => one.text)).toEqual([
+        "active request",
+        "remaining request",
+        "appended while held",
+      ]);
+    });
+  }
+
+  it("reaches queue overflow by keyboard and wheel while fixed controls and composer remain owned", function* () {
+    const page = yield* useReplPage({ size: { columns: 120, rows: 30 } });
+    page.repl.fake.script({ reply: "", manual: true });
+    yield* queueSend(page, "active request");
+    yield* page.repl.fake.startedTurns(1);
+    for (let at = 0; at < 16; at += 1) {
+      yield* queueSend(page, `waiting-${String(at).padStart(2, "0")}`);
+      yield* page.until("queue count after acceptance", (one) => one.shows(`QUEUE ${at + 1}/16`));
+    }
+    yield* queueSend(page, "refused seventeenth");
+    yield* page.until("full queue refusal", (one) => one.shows("queue is full"));
+    expect(page.screen().found("refused seventeenth", COMPOSER_VALUE)).toBe(1);
+    expect(page.screen().shows("waiting-15")).toBe(false);
+    const cell = page.screen().locate("waiting-00");
+    yield* page.wheel("down", cell);
+    yield* page.until(
+      "queue wheel scroll",
+      (one) => !one.shows("waiting-00") && one.shows("waiting-03"),
+    );
+    yield* page.wheel("up", cell);
+    yield* page.until("queue wheel return", (one) => one.shows("waiting-00"));
+    yield* page.press("X", { onRow: "waiting-00" });
+    yield* page.until("first exact withdrawal", (one) => one.shows("QUEUE 15/16"));
+    yield* queueComposer(page);
+    yield* page.key("Alt+ArrowUp");
+    yield* page.until("queue focus", (one) =>
+      one.rows.some((row) => row.includes("waiting-") && row.includes("> X")),
+    );
+    const focusedRow = page
+      .screen()
+      .rows.find((row) => row.includes("waiting-") && row.includes("> X"));
+    const match = /waiting-(\d+)/.exec(focusedRow ?? "");
+    if (match === null) {
+      throw new Error("focused queue control missing");
+    }
+    for (let at = Number(match[1]) + 1; at < 16; at += 1) {
+      yield* page.key("ArrowDown");
+      yield* page.until("next logical queue control", (one) =>
+        one.rows.some(
+          (row) => row.includes(`waiting-${String(at).padStart(2, "0")}`) && row.includes("> X"),
+        ),
+      );
+    }
+    yield* page.until("last pending control revealed", (one) =>
+      one.rows.some((row) => row.includes("waiting-15") && row.includes("> X")),
+    );
+    const focused = page.screen().locate("waiting-15");
+    yield* page.wheel("up", focused);
+    const before = page.screen().index;
+    yield* page.key("Enter");
+    yield* page.until(
+      "keyboard exact withdrawal",
+      (one) => one.index > before && one.shows("QUEUE 14/16"),
+    );
+    expect(page.repl.fake.prompts).toHaveLength(1);
+    expect(page.screen().found("refused seventeenth", COMPOSER_VALUE)).toBe(1);
+    expect(page.screen().found("[send]", { rightOf: "message the sidekick" })).toBe(1);
+    expect(page.screen().found("[stop]", { rightOf: "message the sidekick" })).toBe(1);
+    yield* page.press("[send]", { rightOf: "message the sidekick" });
+    yield* page.until(
+      "freed capacity accepts the previously refused text",
+      (one) => one.shows("QUEUE 15/16") && one.found("refused seventeenth", COMPOSER_VALUE) === 0,
+    );
+    expect(page.repl.fake.prompts).toHaveLength(1);
+  });
+
+  it("shows failure hold, preserves blocked Send text and resumes only remaining work", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({ reply: "incomplete", stopReason: "max_tokens", held: true });
+    page.repl.fake.script({ reply: "<Output>next after failure</Output>" });
+    yield* queueSend(page, "fails once");
+    yield* page.repl.fake.startedTurns(1);
+    yield* queueSend(page, "next request");
+    yield* page.until("pending before failure", (one) => one.shows("QUEUE 1/16"));
+    page.repl.fake.releaseTurn();
+    yield* page.until("failure Resume", (one) => one.shows("[Resume queue]"));
+    yield* queueSend(page, "blocked composer");
+    yield* page.until(
+      "blocked Send remains",
+      (one) => one.found("blocked composer", COMPOSER_VALUE) === 1 && one.shows("QUEUE 1/16"),
+    );
+    expect(page.repl.fake.prompts).toHaveLength(1);
+    yield* page.press("[Resume queue]");
+    yield* page.until("remaining item only", (one) => one.shows("next after failure"));
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    expect(page.screen().found("blocked composer", COMPOSER_VALUE)).toBe(1);
   });
 
   it("holds FIFO after human Stop, bounds waiting text, and resumes without retry", function* () {

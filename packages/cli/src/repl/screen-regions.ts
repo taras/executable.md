@@ -231,7 +231,15 @@ function screenPlacement(
   if (key === "sidekick:message") {
     return { region: MESSAGE_REGION, entry: 0 };
   }
-  if (key === "sidekick:answer" || key === "sidekick:send" || key === "sidekick:stop") {
+  if (key.startsWith("queue:") && key.endsWith(":remove")) {
+    return { region: MESSAGE_REGION, groups: [vertical("queue")] };
+  }
+  if (
+    key === "sidekick:answer" ||
+    key === "sidekick:send" ||
+    key === "sidekick:stop" ||
+    key === "sidekick:resume"
+  ) {
     return { region: MESSAGE_REGION };
   }
   if (key === "footer:history") {

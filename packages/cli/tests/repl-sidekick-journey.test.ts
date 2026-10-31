@@ -1260,17 +1260,14 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     // no entry, and the draft is still a draft somebody is holding rather than
     // work that has been admitted.
     expect(page.screen().shows("No entry yet")).toBe(true);
-    // Both composers still hold what was typed into them, and the Sidekick is
-    // working — so Stop is the control, not Send.
+    // Both composers keep newer text while the active exchange owns Stop.
     expect(draftHolds(page.screen(), "mine")).toBe(true);
     expect(composerHolds(page.screen(), "later")).toBe(true);
     expect(page.screen().shows("[stop]")).toBe(true);
-    // The Sidekick's own control is Stop while it works. The entry draft keeps
-    // its own Send beside it — they are two destinations with two controls —
-    // so this asks the pane rather than the whole screen.
+    // Busy Send and Stop belong to the Sidekick; Draft retains its own Send.
     expect(sidekickIdle(page.screen())).toBe(false);
     expect(page.screen().found("[stop]", SIDEKICK_PANE)).toBe(1);
-    expect(page.screen().found("[send]", SIDEKICK_PANE)).toBe(0);
+    expect(page.screen().found("[send]", SIDEKICK_PANE)).toBe(1);
     expect(page.screen().found("[send]", { onRow: DRAFT })).toBe(1);
 
     // The rest of the text arrives, and the entry the reply submits is held

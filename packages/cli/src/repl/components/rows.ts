@@ -259,6 +259,13 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "send-message") {
     return { kind: "send-message" };
   }
+  if (select === "remove-sidekick-message") {
+    const message = named["message"];
+    return typeof message === "string" ? { kind: "remove-sidekick-message", message } : undefined;
+  }
+  if (select === "resume-sidekick-queue") {
+    return { kind: "resume-sidekick-queue" };
+  }
   if (select === "stop-sidekick") {
     return { kind: "stop-sidekick" };
   }
