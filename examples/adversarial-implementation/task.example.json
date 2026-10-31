@@ -1,12 +1,10 @@
 {
   "work": "bounded-parser-fix",
-  "repository": "/Users/tarasmankovski/.codex/worktrees/proportional-implementation/executable.md",
+  "repository": "/absolute/path/to/prepared-source-worktree",
   "directory": "/absolute/work/fresh-bounded-parser-fix",
   "revision": "ec84362fd15df31fe2074f1ef8ee9b8474bc3a1e",
   "request": "Implement the accepted parser correction and its focused regression using existing supported interfaces.",
-  "inputs": [
-    "/absolute/work/accepted-scope-and-checks.md"
-  ],
+  "inputs": ["/absolute/work/accepted-scope-and-checks.md"],
   "sessions": {
     "planner": "bounded-parser-fix-planner",
     "implementor": "bounded-parser-fix-implementor",
@@ -20,28 +18,20 @@
     "acceptance": true,
     "risk": null,
     "reason": "Corrects the accepted observable parser behavior.",
-    "evidence": [
-      "/absolute/work/accepted-scope-and-checks.md"
-    ]
+    "evidence": ["/absolute/work/accepted-scope-and-checks.md"]
   },
   "scope": {
     "decisions": {
-      "evidence": [
-        "/absolute/work/accepted-scope-and-checks.md"
-      ],
+      "evidence": ["/absolute/work/accepted-scope-and-checks.md"],
       "openQuestions": []
     },
     "implementation": {
       "ready": true,
-      "evidence": [
-        "/absolute/work/accepted-scope-and-checks.md"
-      ]
+      "evidence": ["/absolute/work/accepted-scope-and-checks.md"]
     },
     "sharedApi": {
       "needed": false,
-      "evidence": [
-        "/absolute/work/accepted-scope-and-checks.md"
-      ]
+      "evidence": ["/absolute/work/accepted-scope-and-checks.md"]
     },
     "migration": null
   }

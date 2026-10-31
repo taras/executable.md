@@ -211,7 +211,7 @@ phase entry retains the implementation workflow's role and model policy.
 
 | Owner | Work | Model and effort |
 | --- | --- | --- |
-| Planner | Ordinary plan/evidence; on migration, implement the API, validate representative consumers and repair API conflicts | Claude `opus`, high |
+| Planner | Ordinary plan/evidence; on migration, implement the API, validate representative consumers and repair API conflicts | Claude `opus`; ordinary planning uses ReviewPolicy effort: medium, high for a concrete recorded risk; migration foundation design uses high |
 | Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Claude `sonnet`, high |
 | Planner reviewer | Inspect the migration against the accepted outcome and evidence | Same Opus session, medium; high for a concrete recorded risk |
 | Architect | Answer a concrete structural question or review structural impact | Codex `gpt-6.1-sol`, medium; high for a concrete recorded risk |
