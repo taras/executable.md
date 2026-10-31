@@ -94,6 +94,11 @@ describe("headless live UI", () => {
         },
       },
     );
+    const bindingEntry =
+      '<Let as="sharedToken" value="same-live-child-binding" /><Output>{sharedToken}</Output>';
+    held.host.fake.script({
+      reply: `<Let as="code" select="code">\n\x60\x60\x60xmd\n${bindingEntry}\n\x60\x60\x60\n</Let><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />`,
+    });
     held.host.fake.script({
       reply: `<Elicit as="answer" schema={${JSON.stringify(conditional)}}>Shared conditional question.</Elicit>`,
     });
@@ -125,6 +130,47 @@ describe("headless live UI", () => {
       yield* attachChildUi(held.reference.sessionId);
     });
     yield* visible(terminal.terminal, "[answer sidekick]");
+    const retainedOutput = yield* requestAttachment(held.path, {
+      method: "entry",
+      entry: 1,
+      view: "output",
+    });
+    const retainedSource = yield* requestAttachment(held.path, {
+      method: "entry",
+      entry: 1,
+      view: "source",
+    });
+    expect(JSON.stringify(retainedOutput)).toContain("same-live-child-binding");
+    const sourcePage = z
+      .object({
+        text: z.string(),
+        execution: z.string(),
+        conversation: z.string(),
+        entry: z.number(),
+        status: z.string(),
+      })
+      .passthrough()
+      .parse(retainedSource);
+    expect(sourcePage.text).toBe(bindingEntry);
+    expect(sourcePage).toMatchObject({
+      execution: held.descriptor.execution,
+      conversation: held.descriptor.conversation,
+      entry: 1,
+      status: "completed",
+    });
+    press(terminal.terminal, "Entries");
+    yield* visible(terminal.terminal, "1. [ok]");
+    const selecting = terminal.terminal.drawn;
+    press(terminal.terminal, "1. [ok]");
+    yield* terminal.terminal.after(selecting);
+    const switching = terminal.terminal.drawn;
+    press(terminal.terminal, "BINDINGS");
+    yield* terminal.terminal.after(switching);
+    yield* visible(terminal.terminal, "sharedToken =");
+    yield* visible(terminal.terminal, "same-live-child-binding");
+    press(terminal.terminal, "SIDEKICK");
+    yield* visible(terminal.terminal, "[answer sidekick]");
+
     expect((yield* attachmentDescriptor(held.path)).conversation).toBe(
       held.descriptor.conversation,
     );
@@ -189,6 +235,9 @@ describe("headless live UI", () => {
         sessionId: held.reference.sessionId,
         execution: held.descriptor.execution,
         conversation: held.descriptor.conversation,
+        selectedEntry: 1,
+        sharedBinding: "same-live-child-binding",
+        historyComparedThroughAcp: true,
         question: {
           requestId: address.requestId,
           invalidUiStayedPending: true,
