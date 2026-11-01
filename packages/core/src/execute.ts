@@ -2375,7 +2375,7 @@ function* documentWorkflow(
       );
     }
 
-    // A root declaring top-level <Output> selects what renders, and selecting
+    // A root declaring <Output> selects what renders, and selecting
     // needs the whole body (spec §5.4): execute it, then emit the selected
     // regions once. The owner is allocated outside this expansion so that a
     // failure partway still leaves this frame holding what the regions rendered

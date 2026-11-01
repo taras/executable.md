@@ -20,8 +20,8 @@
 import type { ComponentElement, ReturnsSchema, Segment, TextSegment } from "./types.ts";
 import type { ErrorSegment } from "./types.ts";
 
-/** One thing a `<Return>` element itself got wrong. */
-export interface ReturnElementViolation {
+/** One thing an output or return element itself got wrong. */
+interface ElementViolation {
   readonly element: ComponentElement;
   readonly message: string;
 }
@@ -35,8 +35,7 @@ export interface ReturnElementViolation {
  */
 export interface BodyStructureFacts {
   readonly mode: "text" | "value";
-  /** Text mode: every `<Output>` written below the top level. */
-  readonly misplacedOutputs: readonly ComponentElement[];
+  readonly outputViolations: readonly ElementViolation[];
   /** Text mode: every `<Return>` a body with no `returns` declaration wrote. */
   readonly undeclaredReturns: readonly ComponentElement[];
   /** Value mode: every `<Output>`, at any depth — `returns` excludes all of them. */
@@ -44,15 +43,15 @@ export interface BodyStructureFacts {
   /** Value mode: the body declares `returns` and writes no `<Return>` at all. */
   readonly missingReturn: boolean;
   /** Value mode: what each `<Return>` element itself got wrong. */
-  readonly returnViolations: readonly ReturnElementViolation[];
-}
-
-function isTopLevelOutput(segment: Segment): boolean {
-  return segment.type === "component" && segment.name === "Output";
+  readonly returnViolations: readonly ElementViolation[];
 }
 
 export function bodyHasOutput(bodySegments: Segment[]): boolean {
-  return bodySegments.some(isTopLevelOutput);
+  return bodySegments.some(
+    (segment) =>
+      segment.type === "component" &&
+      (segment.name === "Output" || bodyHasOutput(segment.children)),
+  );
 }
 
 /** Every `<Output>` at or below `minimumDepth`, in source order. */
@@ -160,7 +159,7 @@ export function bodyStructureFacts(
 ): BodyStructureFacts {
   if (returns !== undefined) {
     const declared = collectReturns(bodySegments);
-    const returnViolations: ReturnElementViolation[] = [];
+    const returnViolations: ElementViolation[] = [];
     for (const element of declared) {
       for (const message of returnElementViolations(element)) {
         returnViolations.push({ element, message });
@@ -168,7 +167,7 @@ export function bodyStructureFacts(
     }
     return {
       mode: "value",
-      misplacedOutputs: [],
+      outputViolations: [],
       undeclaredReturns: [],
       exclusiveOutputs: collectOutputs(bodySegments, 0),
       missingReturn: declared.length === 0,
@@ -177,7 +176,10 @@ export function bodyStructureFacts(
   }
   return {
     mode: "text",
-    misplacedOutputs: collectOutputs(bodySegments, 1),
+    outputViolations: collectOutputs(bodySegments, 0).flatMap((element) => {
+      const message = outputPropsViolation(element);
+      return message === undefined ? [] : [{ element, message }];
+    }),
     undeclaredReturns: collectReturns(bodySegments),
     exclusiveOutputs: [],
     missingReturn: false,
@@ -188,23 +190,6 @@ export function bodyStructureFacts(
 function structureError(source: string, headline: string, violations: string[]): ErrorSegment {
   const list = violations.map((entry) => `  - ${entry}`).join("\n");
   return { type: "error", message: `${headline}\n${list}`, source };
-}
-
-function misplacedOutputAggregate(
-  misplaced: readonly ComponentElement[],
-): ErrorSegment | undefined {
-  if (misplaced.length === 0) {
-    return undefined;
-  }
-  const list = misplaced.map((segment) => `  - ${previewOutput(segment)}`).join("\n");
-  return {
-    type: "error",
-    message:
-      "<Output> must be a direct top-level child of the component or document " +
-      "that declares it. For conditional rendering, use <If> inside " +
-      `<Output>. Misplaced <Output> found:\n${list}`,
-    source: "Output",
-  };
 }
 
 /**
@@ -237,7 +222,14 @@ export function renderBodyStructure(facts: BodyStructureFacts): ErrorSegment | u
     );
   }
 
-  const outputError = misplacedOutputAggregate(facts.misplacedOutputs);
+  const outputError =
+    facts.outputViolations.length === 0
+      ? undefined
+      : structureError(
+          "Output",
+          "Invalid <Output> declaration:",
+          facts.outputViolations.map((violation) => violation.message),
+        );
   const returnError =
     facts.undeclaredReturns.length === 0
       ? undefined
@@ -250,8 +242,8 @@ export function renderBodyStructure(facts: BodyStructureFacts): ErrorSegment | u
   if (outputError && returnError) {
     return {
       type: "error",
-      message: `${outputError.message}\n\n${returnError.message}`,
       source: "Return",
+      message: `${outputError.message}\n\n${returnError.message}`,
     };
   }
   return outputError ?? returnError;
@@ -274,10 +266,7 @@ export function validateBodyStructure(
 
 /** What a misplaced `<Output>` reaching expansion's dispatch says. */
 export function misplacedOutputMessage(): string {
-  return (
-    "<Output> must be a direct top-level child of the component or document " +
-    "that declares it. For conditional rendering, use <If> inside <Output>."
-  );
+  return "<Output> requires an authored document or component body.";
 }
 
 /** What a `<Return>` written outside a value body's flow says. */

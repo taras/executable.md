@@ -709,18 +709,6 @@ class ValidationState {
     owner: string | undefined,
   ): { token: number; element?: ComponentElement }[] {
     const drafted: { token: number; element?: ComponentElement }[] = [];
-    for (const element of facts.misplacedOutputs) {
-      drafted.push({
-        element,
-        token: this.#draft(ordinal, "body-shape-invalid", {
-          message:
-            "<Output> must be a direct top-level child of the component or document that " +
-            `declares it. Found ${previewOutput(element)}.`,
-          component: "Output",
-          ...positionOf(element),
-        }),
-      });
-    }
     for (const element of facts.exclusiveOutputs) {
       drafted.push({
         element,

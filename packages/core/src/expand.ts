@@ -106,8 +106,7 @@ import type {
   ExpansionRequest,
 } from "./execution-declarations.ts";
 import { regionStream } from "./expansion-region.ts";
-import { emissions } from "./render.ts";
-import type { Emission } from "./render.ts";
+import { emissions, exactly, renderSegment } from "./render.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger, refuseCheckedFailure } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
@@ -296,6 +295,7 @@ function expandChildrenScoped(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     const overrideEnv = override === undefined ? undefined : { values: override };
@@ -321,11 +321,69 @@ function expandChildrenScoped(
       imports,
       returnBody,
       filesystem,
+      outputFrame,
     );
   });
 }
 
+export interface OutputFrame {
+  readonly source: string;
+  readonly declared: boolean;
+  readonly active: boolean;
+  readonly private: boolean;
+  readonly marks: WeakMap<Segment, readonly string[]>;
+}
+
+function bodyOutput(segments: Segment[], path: string, inherited?: OutputFrame): OutputFrame {
+  return {
+    source: path,
+    declared: bodyHasOutput(segments),
+    active: false,
+    private: false,
+    marks: inherited?.marks ?? new WeakMap(),
+  };
+}
+
+function markSelection(
+  frame: OutputFrame | undefined,
+  segments: Segment[],
+  sources: Iterable<string>,
+): void {
+  if (frame === undefined) {
+    return;
+  }
+  const selected = [...sources];
+  if (selected.length === 0) {
+    return;
+  }
+  for (const segment of segments) {
+    frame.marks.set(segment, [...new Set([...(frame.marks.get(segment) ?? []), ...selected])]);
+  }
+}
+
+function selectionSources(frame: OutputFrame | undefined, segments: Segment[]): string[] {
+  return [...new Set(segments.flatMap((segment) => frame?.marks.get(segment) ?? []))];
+}
+
+function selectedOutput(frame: OutputFrame | undefined, segments: Segment[]): Segment[] {
+  return frame === undefined || !frame.declared || frame.active
+    ? segments
+    : segments.filter((segment) => frame.marks.get(segment)?.includes(frame.source));
+}
+
+function projectedOutput(
+  caller: OutputFrame | undefined,
+  current: OutputFrame | undefined,
+  segments: Segment[],
+): OutputFrame | undefined {
+  return caller === undefined
+    ? undefined
+    : { ...caller, declared: bodyHasOutput(segments), marks: current?.marks ?? caller.marks };
+}
+
 interface ProjectionState {
+  rendered?: (segments: Segment[], frame: OutputFrame | undefined) => void;
+  stringRendered?: (segments: Segment[], frame: OutputFrame | undefined) => void;
   invocation: Invocation;
   /**
    * Raised for the whole of one projection of this invocation's own content.
@@ -378,6 +436,7 @@ interface ProjectionState {
   checkedFailures: CheckedFailures | undefined;
   environment: ExecutionEnvironment | undefined;
   filesystem?: FilesystemExpansion;
+  outputFrame?: OutputFrame;
   /**
    * The admission a protected producer's content is narrowed to, when one
    * narrowed it.
@@ -487,6 +546,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
      */
     owner?: Segment[];
     path: string;
+    outputFrame?: OutputFrame;
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
       // Every projection this invocation performs funnels through here —
@@ -512,6 +572,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // rendered before stopping. When the caller owns a region, that array is
       // the region itself and the prefix is already where the document needs it.
       const rendered: Segment[] = options.owner ?? [];
+      const renderedFrom = rendered.length;
       const task = contentScope.scope.run(function* () {
         try {
           yield* ErrorMode.set(options.mode);
@@ -543,9 +604,20 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             state.imports,
             options.returnFrame,
             state.filesystem,
+            options.outputFrame,
+          );
+          rendered.splice(
+            renderedFrom,
+            rendered.length - renderedFrom,
+            ...selectedOutput(options.outputFrame, rendered.slice(renderedFrom)),
           );
           outcome.resolve({ segments: rendered });
         } catch (error) {
+          rendered.splice(
+            renderedFrom,
+            rendered.length - renderedFrom,
+            ...selectedOutput(options.outputFrame, rendered.slice(renderedFrom)),
+          );
           outcome.resolve({ segments: rendered, failure: error });
         }
       });
@@ -560,8 +632,8 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     }
   }
 
-  function* runProjection(request: ProjectionRequest): Operation<Segment[]> {
-    const outcome = yield* runProjectionOutcome(request);
+  function* runProjection(request: ProjectionRequest, current?: OutputFrame): Operation<Segment[]> {
+    const outcome = yield* runProjectionOutcome(request, current);
     if (outcome.failure !== undefined) {
       throw outcome.failure;
     }
@@ -577,6 +649,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
    */
   function* runProjectionOutcome(
     request: ProjectionRequest,
+    current?: OutputFrame,
   ): Operation<{ segments: Segment[]; failure?: unknown }> {
     // First statement of the body, so the ordinal is taken when this operation
     // is interpreted and before anything it does can suspend. An operation that
@@ -586,6 +659,10 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     const mode = request.mode ?? (yield* ErrorMode.get()) ?? "print";
     const contentScope = yield* state.invocation.useContentScope();
     const frame = frameFor(request);
+    const selection =
+      request.kind === "markdown"
+        ? undefined
+        : projectedOutput(state.outputFrame, current, segments);
     const project = makeProjectFn(frame.env);
     // The enclosing handle answers <Content /> written inside projected
     // content: it belongs to the caller's invocation, not to this one.
@@ -658,10 +735,16 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
               state.imports,
               request.kind === "markdown" ? undefined : state.callerReturn,
               state.filesystem,
+              selection,
             );
-            outcome.resolve({ segments: [...errors, ...rendered] });
+            const selected = selectedOutput(selection, rendered);
+            state.rendered?.(selected, selection);
+            outcome.resolve({ segments: [...errors, ...selected] });
           } catch (error) {
-            outcome.resolve({ segments: [...errors, ...rendered], failure: error });
+            outcome.resolve({
+              segments: [...errors, ...selectedOutput(selection, rendered)],
+              failure: error,
+            });
           }
         });
         yield* ensure(() => task.halt());
@@ -682,6 +765,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       element: ComponentElement,
       owner: Segment[],
       elementPath: string,
+      current?: OutputFrame,
     ): Operation<Segment[]> {
       // Slots were resolved during substitution. The projected content keeps
       // the caller frame; only the resource scope moves.
@@ -702,18 +786,20 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         errors: [],
         owner,
         path: extendPath(elementPath, { f: "proj" }),
+        outputFrame: projectedOutput(state.outputFrame, current, element.children),
       });
     },
     project: runProjection,
     tryProject: runProjectionOutcome,
-    *projectToString(request: ProjectionRequest): Operation<string> {
+    *projectToString(request: ProjectionRequest, current?: OutputFrame): Operation<string> {
       const printedErrors = state.printedErrors;
       if (printedErrors === undefined) {
         throw new Error(
           "projectToString() requires somewhere to record printed errors; this handle only supports project().",
         );
       }
-      const segments = yield* runProjection(request);
+      const segments = yield* runProjection(request, current);
+      state.stringRendered?.(segments, current);
       // A string result must not hide a failure: record the structured errors
       // where the invocation can refuse an `as=` capture.
       for (const segment of segments) {
@@ -869,6 +955,7 @@ export function expandSegments(
     undefined,
     undefined,
     filesystem,
+    undefined,
   );
 }
 
@@ -885,20 +972,19 @@ export function expandSegments(
 export function* expandSegmentsWithin(
   ...expansion: Parameters<typeof expandListSegments>
 ): Operation<Segment[]> {
-  // Structure, for a harness that reads a construct's children in two passes.
-  // A declaration written beside the others and one a construct expanded on its
-  // own are told apart by how many lists are open, and only expansion knows
-  // that. Bracketed once here rather than at each construct, so a construct
-  // that recurses cannot be the one this forgets.
+  const owner = expansion[5] ?? [];
+  expansion[5] = owner;
+  const start = owner.length;
+  const frame = expansion[13];
   const scanner = yield* DeclarationScan.get();
-  if (scanner === undefined) {
-    return yield* expandListSegments(...expansion);
-  }
-  scanner.enterList();
+  scanner?.enterList();
   try {
     return yield* expandListSegments(...expansion);
   } finally {
-    scanner.exitList();
+    if (frame?.active) {
+      markSelection(frame, owner.slice(start), [frame.source]);
+    }
+    scanner?.exitList();
   }
 }
 
@@ -950,6 +1036,7 @@ function* expandListSegments(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -975,6 +1062,7 @@ function* expandListSegments(
         imports,
         returnBody,
         filesystem,
+        outputFrame,
       );
     });
   }
@@ -1039,19 +1127,46 @@ function* expandListSegments(
           // the ambient error mode, so they are appended as they are.
           const projection = yield* ActiveProjection.get();
           if (projection && projection.claims(segment)) {
-            yield* projection.expandClaimed(segment, result, elementPath);
+            yield* projection.expandClaimed(segment, result, elementPath, outputFrame);
             break;
           }
         }
 
         if (segment.name === "Output") {
-          // Definition-owned <Output> is consumed by buildBody before it
-          // reaches here. Reaching this branch means a misplaced or
-          // dynamically scanned <Output> (e.g. render(markdown) content) —
-          // diagnose it defensively per the ambient error mode.
-          result.push(
-            yield* raise({ type: "error", message: misplacedOutputMessage(), source: "Output" }),
-          );
+          const violation = outputPropsViolation(segment);
+          if (outputFrame === undefined || violation !== undefined) {
+            result.push(
+              yield* raise({
+                type: "error",
+                message: violation ?? misplacedOutputMessage(),
+                source: "Output",
+              }),
+            );
+            break;
+          }
+          const selected: OutputFrame = { ...outputFrame, active: true };
+          const empty: Segment = { type: "text", content: "" };
+          result.push(empty);
+          markSelection(selected, [empty], [selected.source]);
+          yield* scoped(function* () {
+            yield* ErrorMode.set("output");
+            yield* expandSegmentsWithin(
+              segment.children,
+              parentMeta,
+              parentProps,
+              hideSet,
+              counter,
+              result,
+              elementPath,
+              0,
+              checkedFailures,
+              environment,
+              imports,
+              returnBody,
+              filesystem,
+              selected,
+            );
+          });
           break;
         }
 
@@ -1102,6 +1217,7 @@ function* expandListSegments(
               imports,
               returnBody,
               filesystem,
+              outputFrame,
             )),
           );
           break;
@@ -1124,6 +1240,7 @@ function* expandListSegments(
               imports,
               returnBody,
               filesystem,
+              outputFrame,
             )),
           );
           break;
@@ -1147,6 +1264,7 @@ function* expandListSegments(
             imports,
             returnBody,
             filesystem,
+            outputFrame,
           );
           break;
         }
@@ -1182,6 +1300,7 @@ function* expandListSegments(
             imports,
             returnBody,
             filesystem,
+            outputFrame,
           );
           break;
         }
@@ -1202,6 +1321,7 @@ function* expandListSegments(
             imports,
             returnBody,
             filesystem,
+            outputFrame,
           );
           break;
         }
@@ -1225,6 +1345,7 @@ function* expandListSegments(
               imports,
               returnBody,
               filesystem,
+              outputFrame,
             );
           // Which state this is, answered by identity rather than by name:
           // a trusted harness knows which expansions its own declaration scan
@@ -1273,6 +1394,7 @@ function* expandListSegments(
             imports,
             returnBody,
             filesystem,
+            outputFrame,
           );
           break;
         }
@@ -1311,6 +1433,7 @@ function* expandListSegments(
             environment,
             imports,
             filesystem,
+            outputFrame,
           );
           break;
         }
@@ -1366,6 +1489,7 @@ function* expandListSegments(
             imports,
             returnBody,
             filesystem,
+            outputFrame,
           );
           break;
         }
@@ -1390,6 +1514,7 @@ function* expandListSegments(
           imports,
           returnBody,
           filesystem,
+          outputFrame,
         );
         // A printed error the callee produced is data, and stays data here: it
         // was decided once, where it was raised, under the error mode governing
@@ -1418,6 +1543,24 @@ function* expandListSegments(
         // via the env preamble (const { name } = env;). Interpolating would
         // mangle JS template literals like `${name}` into `$<value>`.
         const evalEnv = yield* env;
+        const projection = yield* ActiveProjection.get();
+        if (evalEnv && projection) {
+          evalEnv.values.renderChildren = (override?: unknown, mode?: ErrorMode) =>
+            projection.projectToString(
+              { kind: "children", override: validateRenderOverride(override), mode },
+              outputFrame,
+            );
+          evalEnv.values.render = (markdown: unknown, mode?: ErrorMode) =>
+            projection.projectToString(
+              { kind: "markdown", segments: scanSegments(String(markdown)), mode },
+              outputFrame,
+            );
+          evalEnv.values.useContent = (slot?: unknown, mode?: ErrorMode) =>
+            projection.projectToString(
+              { kind: "slot", name: slot === undefined ? undefined : String(slot), mode },
+              outputFrame,
+            );
+        }
         const lastModifier = segment.modifiers[segment.modifiers.length - 1];
         const isEvalTerminal = lastModifier !== undefined && lastModifier.name === "eval";
         const interpolatedContent =
@@ -1536,6 +1679,7 @@ function* expandListSegments(
                 imports,
                 returnBody,
                 filesystem,
+                outputFrame,
               ),
             );
           }
@@ -1600,6 +1744,7 @@ function* checkedCommandFailure(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
   // consulted at all: the mode decides how this is reported, never whether the
@@ -1707,6 +1852,7 @@ function* expandLet(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<ErrorSegment[]> {
   // Every one of these is decided from what the author wrote, so the whole
   // catalog lives in `structural-rules.ts` where validation reads it too. The
@@ -1726,7 +1872,7 @@ function* expandLet(
 
   // The region's foreground commands write their stdout into this binding
   // rather than to the reader; stderr stays diagnostic and is displayed (#441).
-  const expandedChildren = yield* withRouting({ stdout: "capture", stderr: "forward" }, () =>
+  const capturedChildren = yield* withRouting({ stdout: "capture", stderr: "forward" }, () =>
     expandSegmentsWithin(
       segment.children,
       parentMeta,
@@ -1741,8 +1887,13 @@ function* expandLet(
       imports,
       returnBody,
       filesystem,
+      outputFrame === undefined ? undefined : { ...outputFrame, private: true },
     ),
   );
+
+  const expandedChildren = bodyHasOutput(segment.children)
+    ? selectedOutput(outputFrame, capturedChildren)
+    : capturedChildren;
 
   // The body reported these where they were created (§6.9). They are returned
   // before rendering or `select` folds them into text, so the binding stays
@@ -1854,6 +2005,7 @@ function* expandEach(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<Segment[]> {
   return yield* structural(segment, path, () => work());
 
@@ -1918,6 +2070,9 @@ function* expandEach(
         imports,
         returnBody,
         filesystem,
+        asBinding === undefined || outputFrame === undefined
+          ? outputFrame
+          : { ...outputFrame, private: true },
       );
       // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
       // items are part of the work that iteration no longer does.
@@ -1944,7 +2099,9 @@ function* expandEach(
         yield* raise(eachError('Prop "as" on <Each /> requires a parent evaluation environment.')),
       ];
     }
-    captureEnv.values[asBinding] = renderSegments(out);
+    captureEnv.values[asBinding] = renderSegments(
+      bodyHasOutput(segment.children) ? selectedOutput(outputFrame, out) : out,
+    );
     return [];
   }
 }
@@ -2047,6 +2204,7 @@ function* expandIf(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2124,6 +2282,7 @@ function* expandIf(
         imports,
         returnBody,
         filesystem,
+        outputFrame,
       );
     };
     // The `<Else>` is an element of its own, and only when it is the arm that
@@ -2205,6 +2364,7 @@ function* expandSwitch(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2280,6 +2440,7 @@ function* expandSwitch(
         imports,
         returnBody,
         filesystem,
+        outputFrame,
       ),
     );
   }
@@ -2359,6 +2520,7 @@ function* expandLoop(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2421,6 +2583,7 @@ function* expandLoop(
             imports,
             returnBody,
             filesystem,
+            outputFrame,
           );
           if (frame.broken) {
             break;
@@ -2545,8 +2708,13 @@ function spawnChild(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
-): Operation<Emission[]> {
+  outputFrame: OutputFrame | undefined = undefined,
+): Operation<SpawnRendering> {
   return scoped(function* () {
+    const childFrame =
+      outputFrame === undefined
+        ? undefined
+        : { ...outputFrame, marks: new WeakMap<Segment, readonly string[]>() };
     yield* provideEnv(spawnEnvironment(incoming));
     yield* provideEvalScope(yield* useEvalScope());
     yield* ActiveLoop.set(undefined);
@@ -2579,6 +2747,7 @@ function spawnChild(
         imports,
         undefined,
         filesystem,
+        childFrame,
       ),
     );
     yield* refuseCheckedFailure(ledger);
@@ -2588,7 +2757,27 @@ function spawnChild(
     // segments do not leave the child, so the child states what they were: a
     // string would arrive in the caller as prose, and a durable close holding
     // one could not say otherwise on a replay either.
-    return emissions(environment?.sourceSegments, segments);
+    const runs: SpawnRun[] = [];
+    for (const segment of selectedOutput(childFrame, segments)) {
+      const text = renderSegment(segment);
+      const selection = [...(childFrame?.marks.get(segment) ?? [])].sort();
+      if (text === "" && selection.length === 0) {
+        continue;
+      }
+      const exact = exactly(environment?.sourceSegments, segment);
+      const previous = runs[runs.length - 1];
+      if (
+        previous !== undefined &&
+        previous.exact === exact &&
+        previous.selection.length === selection.length &&
+        previous.selection.every((source, index) => source === selection[index])
+      ) {
+        previous.text += text;
+      } else {
+        runs.push({ text, exact, selection });
+      }
+    }
+    return { runs };
   });
 }
 
@@ -2625,6 +2814,7 @@ function* expandAll(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2656,6 +2846,7 @@ function* expandAll(
           environment,
           imports,
           filesystem,
+          outputFrame,
         ),
     );
 
@@ -2667,11 +2858,8 @@ function* expandAll(
             children.map((child) => (): Workflow<Json> => ephemeral(retained(child()))),
           )).map(readEmissions);
 
-    for (const runs of rendered) {
-      for (const run of runs) {
-        if (run.text === "") {
-          continue;
-        }
+    for (const child of rendered) {
+      for (const run of child.runs) {
         // One segment per run, and the exact ones are marked again here: the
         // record is keyed by segment identity, and these segments are this
         // region's, not the child's. A child that ran on a previous attempt says
@@ -2679,6 +2867,7 @@ function* expandAll(
         // exactly what the live run marked.
         const segment: Segment = { type: "text", content: run.text };
         owner.push(segment);
+        markSelection(outputFrame, [segment], run.selection);
         if (run.exact) {
           markExactSource(environment?.sourceSegments, [segment]);
         }
@@ -2687,10 +2876,26 @@ function* expandAll(
   }
 }
 
-/** One child's runs, as its durable close retains them. */
-function retained(child: Operation<Emission[]>): Operation<Json> {
+interface SpawnRun {
+  text: string;
+  readonly exact: boolean;
+  readonly selection: string[];
+}
+
+interface SpawnRendering {
+  readonly runs: SpawnRun[];
+}
+
+function retained(child: Operation<SpawnRendering>): Operation<Json> {
   return (function* (): Operation<Json> {
-    return (yield* child).map((run) => ({ text: run.text, exact: run.exact }));
+    const rendering = yield* child;
+    return {
+      runs: rendering.runs.map((run) => ({
+        text: run.text,
+        exact: run.exact,
+        selection: run.selection,
+      })),
+    };
   })();
 }
 
@@ -2706,26 +2911,37 @@ const UNREADABLE_RUNS =
  * skipping a member it cannot read, or reading a value that is not a list of
  * runs as an empty one, would publish a document missing exactly the part that
  * could not be read — and it would look like a document that rendered nothing
- * there. So every member is checked, the shape is closed at the two members a
+ * there. So every member is checked, the shape is closed at the three members a
  * run has, and anything else fails this run rather than shortening its output.
  */
-function readEmissions(value: Json): Emission[] {
-  if (!Array.isArray(value)) {
+function readEmissions(value: Json): SpawnRendering {
+  if (!isJsonObject(value) || Object.keys(value).length !== 1 || !Array.isArray(value.runs)) {
     throw new StaleInputError(UNREADABLE_RUNS);
   }
-  const runs: Emission[] = [];
-  for (const entry of value) {
+  const runs: SpawnRun[] = [];
+  for (const entry of value.runs) {
     if (!isJsonObject(entry)) {
       throw new StaleInputError(UNREADABLE_RUNS);
     }
-    const text = entry["text"];
-    const exact = entry["exact"];
-    if (Object.keys(entry).length !== 2 || typeof text !== "string" || typeof exact !== "boolean") {
+    const { text, exact, selection } = entry;
+    if (
+      Object.keys(entry).length !== 3 ||
+      typeof text !== "string" ||
+      typeof exact !== "boolean" ||
+      !Array.isArray(selection)
+    ) {
       throw new StaleInputError(UNREADABLE_RUNS);
     }
-    runs.push({ text, exact });
+    const sources: string[] = [];
+    for (const source of selection) {
+      if (typeof source !== "string" || sources.includes(source)) {
+        throw new StaleInputError(UNREADABLE_RUNS);
+      }
+      sources.push(source);
+    }
+    runs.push({ text, exact, selection: sources });
   }
-  return runs;
+  return { runs };
 }
 
 function printErrorsPropError(segment: ComponentElement, message: string): ErrorSegment {
@@ -2761,6 +2977,7 @@ function* expandPrintErrors(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<void> {
   const refusal = printErrorsViolations(segment)[0];
   if (refusal !== undefined) {
@@ -2789,6 +3006,7 @@ function* expandPrintErrors(
       imports,
       returnBody,
       filesystem,
+      outputFrame,
     );
   });
 }
@@ -2829,6 +3047,7 @@ function* expandComponent(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<Segment[]> {
   // Surrounded before resolution, props validation or any body: what an
   // observer is offered is the whole of this element's expansion, including
@@ -3015,6 +3234,7 @@ function* expandComponent(
         selected,
         dispatcher,
         filesystem,
+        outputFrame,
       );
     }
 
@@ -3128,6 +3348,7 @@ function* expandComponent(
     // (renderChildren, render, useContent); the buffer records them so an
     // `as=` capture can be refused (§6.5).
     const bodyContentErrors: Segment[] = [];
+    const stringSelection = new Set<string>();
 
     // Read before the invocation exists: the eval scope ambient here is the
     // caller's, and it is what `retain()` creates resources in. The loop is read
@@ -3149,6 +3370,13 @@ function* expandComponent(
       observed.active();
       const enclosing = yield* ActiveProjection.get();
       const handle = createProjectionHandle({
+        stringRendered: (segments, frame) => {
+          if (!frame?.private && (!bodyHasOutput(definition.bodySegments) || frame?.active)) {
+            for (const source of selectionSources(frame ?? outputFrame, segments)) {
+              stringSelection.add(source);
+            }
+          }
+        },
         invocation,
         enclosing,
         children,
@@ -3175,6 +3403,7 @@ function* expandComponent(
         checkedFailures,
         environment,
         filesystem,
+        outputFrame,
         imports,
       });
       // Published on the eval scope, which every task the invocation owns
@@ -3254,6 +3483,7 @@ function* expandComponent(
               imports,
               returnBody,
               filesystem,
+              outputFrame,
             );
           }, observed.settled),
         );
@@ -3306,8 +3536,15 @@ function* expandComponent(
           imports,
           returnBody,
           filesystem,
+          outputFrame,
         );
       }, observed.settled),
+    );
+
+    markSelection(
+      outputFrame,
+      bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom),
+      stringSelection,
     );
 
     // Exact source is a provenance, and both halves of it are read here from
@@ -3519,6 +3756,7 @@ function* expandFunctionComponent(
    */
   dispatcher: FunctionComponent | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<Segment[]> {
   // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
@@ -3648,6 +3886,7 @@ function* expandFunctionComponent(
   };
 
   /** The invocation itself, and what a failure of it means. */
+  const returnedSelection = new Set<string>();
   const invoke = function* (): Operation<Segment[]> {
     // Call the function component inside its invocation, with content middleware
     // in scope so it can render its invocation content through `yield* content()`.
@@ -3692,6 +3931,11 @@ function* expandFunctionComponent(
             ? body
             : environment.invokeGeneratedComponent(definition.fn, issued.invocation, body);
         const projectionState: ProjectionState = {
+          rendered: (segments, frame) => {
+            for (const source of selectionSources(frame, segments)) {
+              returnedSelection.add(source);
+            }
+          },
           invocation,
           projecting: issued.projecting,
           enclosing,
@@ -3718,6 +3962,7 @@ function* expandFunctionComponent(
           checkedFailures,
           environment,
           filesystem,
+          outputFrame,
           imports,
         };
         // Only the ordinary handle is published. The richer projection a
@@ -3907,7 +4152,10 @@ function* expandFunctionComponent(
       // Without `as` there is nowhere to bind, so only text can be observed:
       // a string renders, and anything else renders nothing rather than being
       // stringified into the document.
-      return typeof output === "string" ? [{ type: "text", content: output }] : [];
+      const rendered: Segment[] =
+        typeof output === "string" ? [{ type: "text", content: output }] : [];
+      markSelection(outputFrame, rendered, returnedSelection);
+      return rendered;
     } catch (error) {
       // Everything below runs after `withInvocation()` has dismantled the
       // invocation, so what is handled here accounts for the body and its
@@ -4442,96 +4690,9 @@ function substituteContent(
   return substituteSegmentList(bodySegments, slots, project, state, claim);
 }
 
-interface BodyChunk {
-  /** true = a rendered `<Output>` region; false = documentation (executed, not rendered). */
-  output: boolean;
-  segments: Segment[];
-  /**
-   * The path this chunk expands under. An `<Output>` region is consumed here and
-   * never reaches dispatch, so its frame is added when the chunk is built (§5.6).
-   */
-  path?: string;
-  /** Where this chunk's segments start in the body they were taken from. */
-  indexBase?: number;
-  /**
-   * An error about the region declaration itself rather than about work inside
-   * one. The region never opened, so the mode it would have installed has
-   * nothing to say about it: the enclosing mode decides, which is how a
-   * mistyped `<Output>` stays a printed error in a document that prints.
-   */
-  declaration?: boolean;
-}
-
-/**
- * The body output/return contract, read once in `body-structure.ts`.
- *
- * Re-exported here because expansion is where these have always been reached
- * from; the walk and the catalog now live beside the facts validation reads, so
- * the two callers cannot drift.
- */
 export { bodyHasOutput, validateBodyStructure };
 
-/**
- * Partition a definition body into ordered chunks (spec §6.9). Output error mode
- * is determined by definition provenance — top-level `<Output>` segments in
- * the source, before `<Content />` substitution — so caller-projected
- * `<Output>` can neither activate nor alter it. `<Content />` inside a
- * top-level `<Output>` is substituted one level in; slot errors are emitted
- * once across the whole body via the shared substitution state.
- */
-function buildBody(
-  bodySegments: Segment[],
-  children: Segment[],
-  callerEnv: EvalEnv | undefined,
-  claim: ClaimFn,
-  path: string,
-): BodyChunk[] {
-  const slots = partitionBySlot(children);
-  const state: SubstitutionState = { errorsEmitted: false };
-  const project = makeProjectFn(callerEnv);
-  const chunks: BodyChunk[] = [];
-
-  for (const [index, segment] of bodySegments.entries()) {
-    if (segment.type === "component" && segment.name === "Output") {
-      const propsViolation = outputPropsViolation(segment);
-      if (propsViolation !== undefined) {
-        chunks.push({
-          output: true,
-          segments: [{ type: "error", message: propsViolation, source: "Output" }],
-          declaration: true,
-        });
-        continue;
-      }
-      const outputSegments = substituteSegmentList(segment.children, slots, project, state, claim);
-      chunks.push({
-        output: true,
-        segments: outputSegments,
-        path: extendPath(path, elementFrame(segment.name, elementSite(segment.position, index))),
-      });
-      continue;
-    }
-
-    const docSegments = substituteSegmentList([segment], slots, project, state, claim);
-    chunks.push({ output: false, segments: docSegments, indexBase: index });
-  }
-
-  return chunks;
-}
-
-/**
- * Expand a definition body (spec §6.9). Without a top-level `<Output>`, the
- * whole body renders (backward compatible). With `<Output>`, only the declared
- * regions render; documentation executes for its side effects under `throw` and
- * its rendered result is discarded; output regions install `output`, so an
- * undecided error in a region fails the run and nothing after it — the rest of
- * the region, later regions, later documentation — begins.
- * Regions and documentation run in document order, so output can depend on
- * bindings computed by preceding documentation.
- *
- * A failing region keeps what it rendered: every region writes into the owner
- * as it goes, so the caller is already holding the prefix when the failure
- * reaches it (§6.9 Partial output).
- */
+/** Expand a source body in authored order, retaining only its selected rendering. */
 export function* expandBody(
   bodySegments: Segment[],
   children: Segment[],
@@ -4555,91 +4716,55 @@ export function* expandBody(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<Segment[]> {
-  if (!bodyHasOutput(bodySegments)) {
-    const substituted = substituteContent(bodySegments, children, callerEnv, claim);
-    return yield* expandSegmentsWithin(
-      substituted,
-      meta,
-      props,
-      hideSet,
-      counter,
-      owner,
-      path,
-      0,
-      checkedFailures,
-      environment,
-      imports,
-      returnBody,
-      filesystem,
-    );
-  }
-
-  const chunks = buildBody(bodySegments, children, callerEnv, claim, path);
-  const output: Segment[] = owner ?? [];
-
-  for (const chunk of chunks) {
-    const chunkPath = chunk.path ?? path;
-    const chunkBase = chunk.indexBase ?? 0;
-    if (chunk.declaration) {
-      yield* expandSegmentsWithin(
-        chunk.segments,
+  const frame = bodyOutput(bodySegments, path, outputFrame);
+  const output = owner ?? [];
+  const start = output.length;
+  const substituted = substituteContent(bodySegments, children, callerEnv, claim);
+  try {
+    if (!frame.declared) {
+      return yield* expandSegmentsWithin(
+        substituted,
         meta,
         props,
         hideSet,
         counter,
         output,
-        chunkPath,
+        path,
         0,
         checkedFailures,
         environment,
         imports,
         returnBody,
         filesystem,
+        frame,
       );
-    } else if (chunk.output) {
-      yield* scoped(function* () {
-        yield* ErrorMode.set("output");
-        return yield* expandSegmentsWithin(
-          chunk.segments,
-          meta,
-          props,
-          hideSet,
-          counter,
-          output,
-          chunkPath,
-          0,
-          checkedFailures,
-          environment,
-          imports,
-          returnBody,
-          filesystem,
-        );
-      });
-    } else {
-      // Documentation: execute for side effects, discard rendered output.
-      yield* scoped(function* () {
-        yield* ErrorMode.set("throw");
-        return yield* expandSegmentsWithin(
-          chunk.segments,
-          meta,
-          props,
-          hideSet,
-          counter,
-          undefined,
-          chunkPath,
-          chunkBase,
-          checkedFailures,
-          environment,
-          imports,
-          returnBody,
-          filesystem,
-        );
-      });
     }
+    return yield* scoped(function* () {
+      yield* ErrorMode.set("throw");
+      return yield* expandSegmentsWithin(
+        substituted,
+        meta,
+        props,
+        hideSet,
+        counter,
+        output,
+        path,
+        0,
+        checkedFailures,
+        environment,
+        imports,
+        returnBody,
+        filesystem,
+        frame,
+      );
+    });
+  } finally {
+    const selected = selectedOutput(frame, output.slice(start));
+    markSelection(frame, selected, selectionSources(frame, selected));
+    output.splice(start, output.length - start, ...selected);
   }
-
-  return output;
 }
 
 /**
@@ -4664,6 +4789,7 @@ function runDocumentation(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
@@ -4681,6 +4807,7 @@ function runDocumentation(
       imports,
       returnBody,
       filesystem,
+      outputFrame,
     );
   });
 }
@@ -4735,6 +4862,7 @@ function* expandValueBody(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
@@ -4763,6 +4891,7 @@ function* expandValueBody(
       imports,
       ownBody,
       filesystem,
+      outputFrame,
     );
   }
 
@@ -4806,6 +4935,7 @@ function* expandInstalledStructural(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
+  outputFrame: OutputFrame | undefined = undefined,
 ): Operation<void> {
   const name = segment.name;
 
@@ -4907,6 +5037,7 @@ function* expandInstalledStructural(
     checkedFailures,
     environment,
     filesystem,
+    outputFrame,
     imports,
     returnBody,
     children: segment.children,
@@ -4961,6 +5092,7 @@ interface RegionContext {
   readonly checkedFailures: CheckedFailures | undefined;
   readonly environment: ExecutionEnvironment;
   readonly filesystem?: FilesystemExpansion;
+  readonly outputFrame?: OutputFrame;
   readonly imports: ComponentImportTerminal | undefined;
   readonly returnBody: ReturnBody | undefined;
   readonly children: Segment[];
@@ -5129,6 +5261,7 @@ function* produceRegion(
         context.imports,
         context.returnBody,
         context.filesystem,
+        context.outputFrame,
       );
     } catch (error) {
       failure = { error };

@@ -480,3 +480,12 @@ describe("Tier SL1 — S7: cancellation owns the teardown", () => {
     expect(source).toContain("yield* content()");
   });
 });
+
+describe("993 selected Slice input", () => {
+  it("W6: returns the ordinary excerpt without publishing the original selected string", function* () {
+    const result = yield* run("<Slice length={2}>documentation<Output>ABCD</Output>tail</Slice>");
+    expect(result.failure).toBe("");
+    expect(result.output).toBe(excerpt(0, 2, 4, "AB"));
+    expect(result.output).not.toContain("ABCD");
+  });
+});

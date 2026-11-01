@@ -16,7 +16,7 @@ import type {
 import type { ExecutionEnvironment } from "../src/execution-environment.ts";
 import { createExactSource } from "../src/output/exact-source.ts";
 import { DocumentOutput } from "../src/api.ts";
-import { Component, content } from "../src/component-api.ts";
+import { Component, content, env } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { interpolate } from "../src/interpolate.ts";
@@ -916,47 +916,55 @@ describe("component-declared output", () => {
 
   // --- Structural preflight ---
 
-  it("aggregates a nested <Output> into one printed error and runs no side effects", function* () {
+  it("executes nested declarations in place without repeating documentation effects", function* () {
     const comp = makeComponent(
       "Struct",
       "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output>x</Output>\n</Wrapper>\n",
     );
     const { output, execCalls } = yield* recordingExpand(scanSegments("<Struct />"), {
       Struct: comp,
+      Wrapper: echoComponent,
     });
-    expect(output).toContain("must be a direct top-level");
-    expect(execCalls).toHaveLength(0);
+    expect(output).toBe("x");
+    expect(execCalls).toHaveLength(1);
   });
 
-  it("aggregates every misplaced <Output> into a single printed error", function* () {
+  it("composes declarations through separate requested renderings", function* () {
     const comp = makeComponent(
       "Many",
       "<A>\n<Output>one</Output>\n</A>\n\n<B>\n<Output>two</Output>\n</B>\n",
     );
-    const ctx = { Many: comp };
+    const ctx = { Many: comp, A: echoComponent, B: echoComponent };
     const output = yield* expand(scanSegments("<Many />"), ctx);
     const errorComments = output.match(/<!-- ERROR/g) ?? [];
-    expect(errorComments).toHaveLength(1);
+    expect(errorComments).toHaveLength(0);
     expect(output).toContain("one");
     expect(output).toContain("two");
   });
 
-  it("diagnoses a nested <Output> inside <If condition={false}>", function* () {
+  it("hides documentation when the only declaration is in a false branch", function* () {
     const comp = makeComponent("Hidden", "<If condition={false}>\n<Output>hidden</Output>\n</If>");
     const ctx = { Hidden: comp };
     const output = yield* expand(scanSegments("<Hidden />"), ctx);
-    expect(output).toContain("must be a direct top-level");
+    expect(output).toBe("");
   });
 
-  it("diagnoses a nested <Output> passed to a component that discards content", function* () {
-    const comp = makeComponent("Discard", "<NoContent>\n<Output>x</Output>\n</NoContent>");
-    const ctx = { Discard: comp };
-    const output = yield* expand(scanSegments("<Discard />"), ctx);
-    expect(output).toContain("must be a direct top-level");
+  it("does not request declarations beneath a component that discards content", function* () {
+    const comp = makeComponent(
+      "Discard",
+      "<NoContent>\n<Output>x\n\n```bash exec\nMARKER\n```\n</Output>\n</NoContent>",
+    );
+    const ctx = { Discard: comp, NoContent: makeComponent("NoContent", "discarded") };
+    const { output, execCalls } = yield* recordingExpand(scanSegments("<Discard />"), ctx);
+    expect(output).toBe("");
+    expect(execCalls).toEqual([]);
   });
 
   it("throws a structural printed error when an invalid child is used from documentation", function* () {
-    const child = makeComponent("BadChild", "<Wrapper>\n<Output>x</Output>\n</Wrapper>");
+    const child = makeComponent(
+      "BadChild",
+      "<If condition={false}><Output invalid>x</Output></If>",
+    );
     const parent = makeComponent("P", "<BadChild />\n\n<Output>tail</Output>");
     const ctx = { BadChild: child, P: parent };
     let threw = false;
@@ -1984,4 +1992,164 @@ describe("Tier SR — expanding installed structural syntax", () => {
     const ranked = extendPath(deckPath, elementFrame("Panel", elementSite(undefined, 0)));
     expect(seen).not.toBe(extendPath(ranked, elementFrame("Probe", elementSite(undefined, 0))));
   });
+});
+
+describe("993 nested selection and private renderings", () => {
+  it("W3/W4: unexecuted declarations hide prose, ordinary sources and callee ownership remain independent", function* () {
+    for (const body of [
+      "docs<If condition={false}><Output>hidden</Output></If>",
+      'docs<Each in={[]} let="n" as="held"><Output>hidden</Output></Each>',
+    ]) {
+      expect(yield* expand(scanSegments("<Root />"), { Root: makeComponent("Root", body) })).toBe(
+        "",
+      );
+    }
+    expect(
+      yield* expand(scanSegments("<Root />"), {
+        Root: makeComponent("Root", "before<Child />after"),
+        Child: makeComponent("Child", "docs<If condition={true}><Output>chosen</Output></If>"),
+      }),
+    ).toBe("beforechosenafter");
+    expect(
+      yield* expand(scanSegments("<Root />"), {
+        Root: makeComponent(
+          "Root",
+          '<Output>A<Output>B</Output>C</Output><Each in={[1,2]} let="n"><Output>{n}</Output></Each><Output>Z</Output>',
+        ),
+      }),
+    ).toBe("ABC12Z");
+  });
+
+  it("W3/W5: reached empty children select returned wrappers while captures and untaken children do not", function* () {
+    const wrapper: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Wrap",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        return `[${yield* content()}]`;
+      },
+    };
+    for (const [children, expected] of [
+      ["<Output />", "[]"],
+      ["<If condition={false}><Output /></If>", ""],
+      ['<Let as="held"><Output>private</Output></Let>', ""],
+      ['<Echo as="held"><Output>private</Output></Echo>', ""],
+      ['<Each in={[1]} let="n" as="held"><Output>private</Output></Each>', ""],
+    ]) {
+      expect(
+        yield* expand(scanSegments("<Root />"), {
+          Root: makeComponent("Root", `docs<Wrap>${children}</Wrap>`),
+          Wrap: wrapper,
+          Echo: echoComponent,
+        }),
+      ).toBe(expected);
+    }
+    for (const capture of [
+      '<Let as="held"><Output>private</Output></Let>',
+      '<Echo as="held"><Output>private</Output></Echo>',
+      '<Each in={[1]} let="n" as="held"><Output>private</Output></Each>',
+    ]) {
+      expect(
+        yield* expand(scanSegments("<Root />"), {
+          Root: makeComponent("Root", `${capture}<Output>{held}</Output>`),
+          Echo: echoComponent,
+        }),
+      ).toBe("private");
+    }
+  });
+
+  it("W4/W5: repeated caller projections preserve bindings and callee documentation discards selection", function* () {
+    expect(
+      yield* expand(scanSegments("<Root />"), {
+        Root: makeComponent(
+          "Root",
+          '<Let as="name" value="caller" /><Twice>docs<Output>{name}</Output></Twice>',
+        ),
+        Twice: makeComponent("Twice", '<Let as="name" value="callee" /><Content /><Content />'),
+      }),
+    ).toBe("callercaller");
+    expect(
+      yield* expand(scanSegments("<Root />"), {
+        Root: makeComponent("Root", "<Discard><Output>caller</Output></Discard>"),
+        Discard: makeComponent("Discard", "<Content /><Output>callee</Output>"),
+      }),
+    ).toBe("");
+  });
+
+  it("W6: transforms only selected input and retains replacement returns once", function* () {
+    const replace: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Replace",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        expect(yield* content()).toBe("chosen");
+        return "replacement";
+      },
+    };
+    expect(
+      yield* expand(scanSegments("<Root />"), {
+        Root: makeComponent("Root", "<Replace>docs<Output>chosen</Output>tail</Replace>"),
+        Replace: replace,
+      }),
+    ).toBe("replacement");
+    expect(
+      yield* expand(scanSegments("<Root />"), {
+        Root: makeComponent(
+          "Root",
+          '<Slots><Echo slot="used">docs<Output>chosen</Output></Echo><Echo slot="unused"><Output><Bogus /></Output></Echo></Slots>',
+        ),
+        Slots: makeComponent("Slots", 'before<Content slot="used" />after'),
+        Echo: echoComponent,
+      }),
+    ).toBe("beforechosenafter");
+  });
+
+  it("W6: dynamic render does not select its surrounding source", function* () {
+    yield* useTestComponents({
+      Root: makeComponent(
+        "Root",
+        "docs<If condition={false}><Output>unreached</Output></If><Render />",
+      ),
+      Render: makeComponent("Render", "```js eval\ndynamic\n```"),
+    });
+    yield* useTestEnv({ values: {} });
+    yield* Component.around({
+      *applyModifiers() {
+        const render = (yield* env)?.values.render;
+        if (typeof render !== "function") {
+          throw new Error("missing render closure");
+        }
+        const rendered = yield* render("dynamic text");
+        expect(rendered).toBe("dynamic text");
+        return { output: rendered, exitCode: 0, stderr: "" };
+      },
+    });
+    expect(renderSegments(yield* expandSegments(scanSegments("<Root />"), {}, {}, new Set()))).toBe(
+      "",
+    );
+  });
+
+  for (const alias of ["renderChildren", "useContent"]) {
+    it(`W6: ${alias} consumes the selected caller input through its existing string projection`, function* () {
+      yield* useTestComponents({
+        Root: makeComponent("Root", "<Render>docs<Output>chosen</Output>tail</Render>"),
+        Render: makeComponent("Render", `\`\`\`js eval\n${alias}\n\`\`\``),
+      });
+      yield* useTestEnv({ values: {} });
+      yield* Component.around({
+        *applyModifiers() {
+          const values = (yield* env)?.values;
+          const operation = values?.[alias];
+          if (typeof operation !== "function") {
+            throw new Error("missing render closure");
+          }
+          const rendered = yield* operation();
+          expect(rendered).toBe("chosen");
+          return { output: `[${rendered}]`, exitCode: 0, stderr: "" };
+        },
+      });
+      const rendered = yield* expandSegments(scanSegments("<Root />"), {}, {}, new Set());
+      expect(renderSegments(rendered)).toBe("[chosen]");
+    });
+  }
 });

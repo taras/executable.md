@@ -26,6 +26,7 @@
 
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
+import type { OutputFrame } from "./expand.ts";
 import type { ErrorMode } from "./errors.ts";
 import type { ComponentElement, Segment } from "./types.ts";
 
@@ -67,6 +68,7 @@ export interface ProjectionHandle {
      * project under different identities (§5.6).
      */
     elementPath: string,
+    current?: OutputFrame,
   ): Operation<Segment[]>;
   /** Structured result — ErrorSegments stay identifiable to the caller. */
   project(request: ProjectionRequest): Operation<Segment[]>;
@@ -79,7 +81,7 @@ export interface ProjectionHandle {
    * bindings. A handle without one fails the call rather than rendering errors
    * away silently; function components project structurally and install none.
    */
-  projectToString(request: ProjectionRequest): Operation<string>;
+  projectToString(request: ProjectionRequest, current?: OutputFrame): Operation<string>;
   /**
    * `project`, reporting a failure instead of throwing it.
    *

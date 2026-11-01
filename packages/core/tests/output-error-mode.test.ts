@@ -1139,14 +1139,22 @@ describe("Tier OM — every visible producer keeps its prefix", () => {
 });
 
 describe("Tier OM — work the document was not going to render never reaches the output", () => {
-  const STAGE = ["<Output>", "", "PREFIX", "", "```bash exec", "FAIL", "```", "", "</Output>"].join(
-    "\n",
-  );
+  const STAGE = [
+    "<If condition={true}><Output>",
+    "",
+    "PREFIX",
+    "",
+    "```bash exec",
+    "FAIL",
+    "```",
+    "",
+    "</Output></If>",
+  ].join("\n");
 
   it("OM11a: keeps a <Let as> prefix out of the document", function* () {
     const result = yield* run({
       "doc.md":
-        '<Output>\n\n<Let as="held">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Let>\n\n</Output>',
+        '<Output>\n\n<Let as="held">\n\n<If condition={true}><Output>PREFIX</Output></If>\n\n```bash exec\nFAIL\n```\n\n</Let>\n\n</Output>',
     });
 
     expect(result.ok).toBe(false);
@@ -1156,7 +1164,7 @@ describe("Tier OM — work the document was not going to render never reaches th
   it("OM11b: keeps an <Each as> prefix out of the document", function* () {
     const result = yield* run({
       "doc.md":
-        '<Output>\n\n<Each in={[1]} let="n" as="held">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Each>\n\n</Output>',
+        '<Output>\n\n<Each in={[1]} let="n" as="held">\n\n<If condition={true}><Output>PREFIX</Output></If>\n\n```bash exec\nFAIL\n```\n\n</Each>\n\n</Output>',
     });
 
     expect(result.ok).toBe(false);
@@ -1172,7 +1180,7 @@ describe("Tier OM — work the document was not going to render never reaches th
         "```",
       ].join("\n"),
       "doc.md":
-        "<Output>\n\n<Renderer>\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Renderer>\n\n</Output>",
+        "<Output>\n\n<Renderer>\n\n<If condition={true}><Output>PREFIX</Output></If>\n\n```bash exec\nFAIL\n```\n\n</Renderer>\n\n</Output>",
     });
 
     expect(result.ok).toBe(false);
@@ -1890,4 +1898,53 @@ describe("Tier RF — root failure settlement", () => {
     expect(stream.snapshot()).toHaveLength(eventsAfterFirst);
     expect(commands(stream.snapshot()).some((name) => name.includes("LATER"))).toBe(false);
   });
+});
+
+describe("993 nested failure settlement", () => {
+  beforeAll(() => useTempFileCompiler());
+  it("W8: retains the selected prefix and completed effect, stops later work and restores the completed failure", function* () {
+    const files = {
+      "doc.md":
+        "<If condition={true}><Output>PREFIX</Output></If>\n```bash exec silent\nfirst\n```\n```bash exec silent\nFAIL\n```\n```bash exec silent\nlater\n```\n<Output>LATER</Output>",
+    };
+    const first = yield* run(files);
+    expect(first.ok).toBe(false);
+    expect(first.output).toBe("PREFIX");
+    expect(commands(first.events).join(" ")).toContain("first");
+    expect(commands(first.events).join(" ")).not.toContain("later");
+    const replayed = yield* run(files, new InMemoryStream(first.events));
+    expect(replayed.output).toBe(first.output);
+    expect(String(replayed.error)).toContain(String(first.error));
+    expect(replayed.displayed).toBe("");
+    expect(replayed.events).toEqual(first.events);
+  });
+  for (const recover of [false, true]) {
+    it(`W8: content failure transfers only its selected prefix unless recovered (${recover})`, function* () {
+      const wrapper: FunctionComponentDefinition = {
+        kind: "function",
+        name: "Wrapper",
+        props: { type: "object", properties: {} },
+        *fn() {
+          if (recover) {
+            try {
+              yield* content();
+            } catch {
+              return "replacement";
+            }
+          }
+          return `WRAPPER:${yield* content()}`;
+        },
+      };
+      const result = yield* runRegistered(
+        {
+          "doc.md":
+            "<Wrapper>docs<If condition={true}><Output>PREFIX</Output></If><Missing /></Wrapper>",
+        },
+        { Wrapper: wrapper },
+      );
+      expect(result.ok).toBe(recover);
+      expect(result.output).toBe(recover ? "" : "PREFIX");
+      expect(result.output).not.toContain("WRAPPER");
+    });
+  }
 });

@@ -12133,9 +12133,9 @@ visible warning blocks, gather into a separate error report).
 
 ### Tier NO — Nested Output (§6.9)
 
-These are the approved product journeys for #993. They state required behavior,
-not a report that the runtime implements it. Lower-level evidence derives from
-these journeys without adding acceptance permutations.
+These approved product journeys for #993 are implemented and tested through the
+Core and mounted REPL witnesses. Lower-level evidence derives from these
+journeys without adding acceptance permutations.
 
 | ID | Journey | Required observation |
 | --- | --- | --- |
