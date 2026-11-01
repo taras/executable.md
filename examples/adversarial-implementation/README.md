@@ -146,6 +146,7 @@ For a separate phase, save one request file using the existing phase assignment:
   "session": "original-planner-session",
   "attempt": "/absolute/path/to/work/review-1",
   "initialize": false,
+  "maxResponseCorrections": 0,
   "inputPaths": ["/absolute/path/to/review-guide.md"],
   "assignment": {
     "phase": "review",
@@ -186,6 +187,28 @@ The command returns the canonical phase result. `Phase.Run` saves its assignment
 raw reply, result, status and acceptance receipt beneath the request's attempt.
 Source and role checks run before a prompt. Reusing an occupied attempt refuses;
 inspect its saved effects before selecting another attempt.
+
+Set `maxResponseCorrections` to zero to validate the reply without another model
+prompt. A valid reply still returns its canonical result. A rejected reply saves
+the raw text, rejection and `response-disposition.json`, then fails without a
+canonical result or successor. Inspect those records before continuing; zero
+does not skip validation or retry an uncertain prompt. This limit controls
+response-format corrections, independently of implementation corrections and
+transport retries. It accepts zero through three and defaults to three when
+omitted. A direct REPL invocation uses the same option:
+
+```xmd
+<Phase.Run phase={request.assignment.phase} role={request.role}
+  session={request.session} assignment={request.assignment} attempt={request.attempt}
+  initialize={request.initialize ?? false} inputs={Object.values(documents)}
+  implementationProvider={request.implementationProvider ?? "claude"}
+  maxResponseCorrections={0} successor={request.assignment.continuation.phase}
+  nextRole={request.assignment.continuation.role} as="phase" />
+```
+
+Here `request` is the prepared phase request above and `documents` is the
+selected input map returned by `<Ticket.Documents>`. Keep the original session
+and reserved attempts when changing this limit at a completed phase boundary.
 
 To advance a saved `Ticket.Run` or `Ticket.Continue` record, pass that complete
 record rather than reconstructing its assignment or artifact paths:
