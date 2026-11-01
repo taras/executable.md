@@ -1,3 +1,4 @@
+import { createChatPreparationStore } from "../src/repl/application.ts";
 /**
  * Semantic presentation, in the cells a frame actually wrote.
  *
@@ -3642,7 +3643,7 @@ describe("REPL responsiveness: a chat the keystroke did not change", () => {
     const renderer = yield* useCountingRenderer(size);
     const tree = yield* useReplTree<ReplAction>();
     const fits = createFitStore();
-    const chatFits = createPlainFitStore();
+    const chatFits = createChatPreparationStore(createPlainFitStore());
     const model = projectRepl([]);
     if (!model.ok) {
       throw model.error;
