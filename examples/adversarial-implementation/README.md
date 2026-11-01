@@ -299,6 +299,22 @@ only to affected responsibilities. `feedback_ready` is neither CI completion
 nor permission to merge. The Sidekick running Codex handles metadata and the
 repository's normal delivery gates afterwards.
 
+Give existing external independent-review assignments the
+[Reviewer guide](../../.agents/reviewer.md). It focuses on correctness,
+minimalism, and performance when UI or performance-sensitive paths are affected,
+including whether existing APIs suffice. Mechanical validation and review
+bookkeeping stay with their existing workflow or coordinator owners. This guide
+adds no workflow phase or review stage.
+
+Start required Fable reviews when the exact feedback commit and focused evidence
+are ready, without waiting for CI on `main` or the reviewed branch. When Fable
+is unavailable, including exhausted Claude quota, use an independent Codex Astra
+(`gpt-6-astra`) reviewer under the same scope, effort policy and correction
+limits. Reconcile any in-flight call and preserve its findings before fallback.
+Record the review provider/model. The repository's
+[review rules](../../AGENTS.md#feedback-commits) retain main health and required
+CI as merge gates; review acceptance waives neither.
+
 ## Test without paid agents
 
 ```bash

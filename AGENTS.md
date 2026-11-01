@@ -119,6 +119,24 @@ focused test fails, fix it and rerun it before creating the feedback commit.
 suite, and CI are not prerequisites for a feedback commit. Waiting for them
 withholds the commit the feedback exists to be given against.
 
+Assign independent reviewers the [Reviewer guide](.agents/reviewer.md):
+correctness, minimalism and performance when UI or performance-sensitive paths
+are affected. This includes checking existing APIs before accepting a new one.
+The workflow or coordinator owns mechanical validation and review bookkeeping.
+
+**Start Fable reviews without waiting for CI on `main` or the reviewed branch.**
+Review the exact feedback commit once its focused evidence is ready, including
+while CI is pending or red. Main health and the branch's required checks remain
+merge gates; a review pass does not waive them.
+
+**Use Codex Astra (`gpt-6-astra`) when a required Fable review is unavailable.**
+This includes exhausted Claude quota. Keep the reviewer independent from the
+Implementor and retain the same review scope, reasoning-effort policy and
+correction limits. Reconcile any in-flight review before starting the fallback,
+preserve its findings and session records, and record the provider and model
+that supplied the verdict. This fallback replaces the required review; it adds
+no extra review stage.
+
 The specialized procedures in this document are not ordinary confidence checks,
 and each still applies when a change touches what it covers: dependency layout
 and mutation, release targets and the release specification, generated
