@@ -112,7 +112,10 @@ import { blankBand, EMPTY_BAND } from "./history-rail.ts";
 import type { ReplPreparedRail } from "./history-rail.ts";
 import { entryReading, NO_READING } from "./source-reading.ts";
 import type { ReplReading } from "./source-reading.ts";
-import { readingRuns } from "./fitting.ts";
+import { readingRuns, fitPlain } from "./fitting.ts";
+import type { ReplPlainFitStore } from "./fitting.ts";
+import type { ReplRenderer } from "./renderer.ts";
+import type { Operation } from "effection";
 import type {
   ReplEditor,
   ReplFittedLabel,
@@ -3695,27 +3698,13 @@ export function elicitWithdrawn(state: ReplState): ReplState {
  * turn is about to be read in. None where this frame cannot place it: no
  * measured chat window, no reading, or a chat that holds no such turn.
  *
- * The rows are built for the chat the reveal names, through the one builder the
- * description and the measurement both use, so the row this lands on is the row
- * the screen draws.
+ * Positions come from the prepared sequence this frame admits and draws.
  */
 function revealedAt(
   reveal: ReplSidekickReveal,
   reading: ReplSidekickReading | undefined,
   capacity: number,
-  /** The rows this frame fitted, so a reveal lands on a row that is drawn. */
-  fitted: readonly ReplFittedLine[] | undefined,
-  /**
-   * What this process is holding for the chat being read.
-   *
-   * The same staging the description pass gives the builder. Without it the row
-   * list this searches is a *different* list from the one the window counts
-   * rows of — measured, a twelve-turn chat the frame drew as 47 rows came back
-   * from here as 24, and the index found in the short list named a row the long
-   * one has somewhere else. A reveal is an index into the drawn list or it is
-   * nothing.
-   */
-  staging: ReplChatStaging | undefined,
+  sequence: ReplChatSequence,
 ): number | undefined {
   if (capacity < 1 || reading === undefined) {
     return undefined;
@@ -3741,21 +3730,9 @@ function revealedAt(
   if (candidates.length === 0) {
     return undefined;
   }
-  // Focus is not a fact about where a row is, so none is stated: the marker
-  // would change what one row's text says and not which row it is.
-  const rows = sidekickReadingRows(
-    Object.freeze({ ...reading, reading: reveal.conversation }),
-    undefined,
-    fitted,
-    staging,
-  );
-  // The first candidate this frame actually draws, at its *first* row, which is
-  // the one its key is on: a message cut into three rows is revealed from its
-  // beginning, not from wherever it ends. Asked of the same rows the screen
-  // paints, so a reveal cannot land on a row that does not exist.
   const at = candidates
-    .map((key) => rows.findIndex((item) => item.key === `sidekick:${key}`))
-    .find((found) => found >= 0);
+    .map((key) => sequence.positions.get(`sidekick:${key}`))
+    .find((found) => found !== undefined);
   if (at === undefined) {
     return undefined;
   }
@@ -3847,12 +3824,16 @@ type ReplChatComposed =
       /** The origin drawn over the first four cells of its first row, where marked. */
       readonly mark?: ReplOriginMark;
     }
-  | { readonly kind: "control"; readonly described: Described };
+  | {
+      readonly kind: "control";
+      readonly key: string;
+      readonly label: string;
+      readonly action: { readonly [name: string]: Json };
+      readonly style: ReplRowStyle;
+    };
 
 function sidekickComposedRows(
   reading: ReplSidekickReading | undefined,
-  /** The key of whatever holds focus, for the one row that wears the marker. */
-  focused: string | undefined,
   /** The staged composition's associated work, where this reading is drawn there. */
   staging?: ReplChatStaging,
 ): readonly ReplChatComposed[] {
@@ -3862,15 +3843,19 @@ function sidekickComposedRows(
     reading.refusal === undefined &&
     (reading.setup === undefined || reading.setup.phase === "activated")
   ) {
-    return workspaceChatComposed(reading, staging, focused);
+    return workspaceChatComposed(reading, staging);
   }
   const items: ReplChatComposed[] = [];
   /** One row of readable text, which a width still has to cut into rows. */
   const text = (key: string, label: string, style: ReplRowStyle): ReplChatComposed =>
     Object.freeze({ kind: "text" as const, key, text: label, style });
   /** One row that is activated rather than read, which is never cut. */
-  const control = (described: Described): ReplChatComposed =>
-    Object.freeze({ kind: "control" as const, described });
+  const control = (
+    key: string,
+    label: string,
+    action: { readonly [name: string]: Json },
+  ): ReplChatComposed =>
+    Object.freeze({ kind: "control" as const, key, label, action, style: styleOf("action") });
   if (reading === undefined) {
     // No Sidekick on this screen at all. Said rather than drawn as an empty
     // conversation, because the two are different facts.
@@ -3973,15 +3958,11 @@ function sidekickComposedRows(
       }
       if (asked !== undefined && reading.current) {
         items.push(
-          control(
-            row(
-              `sidekick:retry:${asked.message}`,
-              "[retry]",
-              { select: "retry-message", conversation: asked.conversation, message: asked.message },
-              styleOf("action"),
-              { here: focused },
-            ),
-          ),
+          control(`sidekick:retry:${asked.message}`, "[retry]", {
+            select: "retry-message",
+            conversation: asked.conversation,
+            message: asked.message,
+          }),
         );
       }
       continue;
@@ -4052,40 +4033,32 @@ export function sidekickChatLines(
   reading: ReplSidekickReading | undefined,
   staging?: ReplChatStaging,
 ): readonly { readonly key: string; readonly text: string }[] {
-  return sidekickComposedRows(reading, undefined, staging).flatMap((one) =>
+  return sidekickComposedRows(reading, staging).flatMap((one) =>
     one.kind === "text" ? chatLinesOf(one.key, one.text) : [],
   );
 }
 
-/**
- * The Sidekick's reading, as the rows a frame of this width actually draws.
- *
- * One composition, cut by `fitted`. A message is text somebody wrote and a row
- * is one line of a terminal, and the two are the same thing only while every
- * message is short enough to fit — so a reading drawn without this cut paints
- * its second line over the next message's row, and the window counts one row
- * for something that occupies three.
- *
- * Without a fitted list this returns the composition as it stands, which is
- * what the pass still asking how wide the pane is must get: text fitted to a
- * width nobody has measured yet would be fitted to nothing. Everything that
- * reads these rows — the descriptions, the window's own count and a Sessions
- * reveal — comes through here with the same list, so a drawn row and the row a
- * scroll clamps against are the same row.
- *
- * A cut row is a display row *under* its item: it carries that item's style and
- * a continuation key the fitting derived, and it is not a new message, turn,
- * response or record.
- */
-function sidekickReadingRows(
-  reading: ReplSidekickReading | undefined,
-  /** The key of whatever holds focus, for the one row that wears the marker. */
-  focused: string | undefined,
-  /** The lines this frame fitted, or none before it has fitted any. */
-  fitted?: readonly ReplFittedLine[] | undefined,
-  staging?: ReplChatStaging,
-): readonly Described[] {
-  const composed = sidekickComposedRows(reading, focused, staging);
+/** Counting and revealing a turn share fitted rows without describing components. */
+interface ReplChatSequence {
+  readonly fitted: readonly ReplFittedLine[] | undefined;
+  readonly rows: readonly ReplChatPreparedRow[];
+  readonly positions: ReadonlyMap<string, number>;
+}
+
+type ReplChatPreparedRow =
+  | Extract<ReplChatComposed, { kind: "control" }>
+  | {
+      readonly kind: "text";
+      readonly key: string;
+      readonly label: string;
+      readonly item: Extract<ReplChatComposed, { kind: "text" }>;
+      readonly first: boolean;
+    };
+
+function chatSequence(
+  composed: readonly ReplChatComposed[],
+  fitted?: readonly ReplFittedLine[],
+): ReplChatSequence {
   const cuts = new Map<string, ReplFittedLine[]>();
   for (const cut of fitted ?? []) {
     const held = cuts.get(cut.line);
@@ -4095,36 +4068,177 @@ function sidekickReadingRows(
       held.push(cut);
     }
   }
-  const rows: Described[] = [];
+  const rows: ReplChatPreparedRow[] = [];
+  const positions = new Map<string, number>();
   for (const one of composed) {
+    positions.set(one.key, rows.length);
     if (one.kind === "control") {
-      rows.push(one.described);
+      rows.push(one);
       continue;
     }
     for (const own of chatLinesOf(one.key, one.text)) {
       const pieces = cuts.get(own.key);
       if (pieces === undefined) {
-        // No width was asked for, so this line stands as the one line it is.
-        rows.push(chatRow(own.key, own.text, one, own.key === one.key));
-        continue;
-      }
-      for (const piece of pieces) {
-        // Continuations are drawn at the column their line began at, which is
-        // the room the cut already reserved for them: a wrapped message reads
-        // as the one message it is, and a row drawn flush left would be as wide
-        // as the fitting assumed it was narrow.
-        rows.push(
-          chatRow(
-            piece.key,
-            `${" ".repeat(piece.indent)}${piece.text}`,
-            one,
-            own.key === one.key && !piece.continuation,
-          ),
-        );
+        rows.push({
+          kind: "text",
+          key: own.key,
+          label: own.text,
+          item: one,
+          first: own.key === one.key,
+        });
+      } else {
+        for (const piece of pieces) {
+          rows.push({
+            kind: "text",
+            key: piece.key,
+            label: `${" ".repeat(piece.indent)}${piece.text}`,
+            item: one,
+            first: own.key === one.key && !piece.continuation,
+          });
+        }
       }
     }
   }
-  return rows;
+  for (const [at, one] of rows.entries()) {
+    positions.set(one.key, at);
+  }
+  return { rows, positions, fitted };
+}
+
+function materializeChatRow(one: ReplChatPreparedRow, focused: string | undefined): Described {
+  return one.kind === "control"
+    ? row(one.key, one.label, one.action, one.style, { here: focused })
+    : chatRow(one.key, one.label, one.item, one.first);
+}
+
+function chatWindow(view: ReplView, context: ReplPresentationContext): readonly Described[] {
+  const held = context.admission.windows.get(SIDEKICK_WINDOW);
+  const sequence = context.chatSequence;
+  if (context.measuring || held === undefined || sequence === undefined) {
+    return [];
+  }
+  const materialize = context.chatMaterialize ?? materializeChatRow;
+  return sequence.rows
+    .slice(held.from, held.from + held.count)
+    .map((one) => materialize(one, view.focused));
+}
+
+// Scalar facts keep projected array identity and unrelated view state out of reuse.
+function chatFacts(view: ReplView): readonly (string | number | boolean | null | undefined)[] {
+  const reading = view.live.sidekick;
+  const staging = chatStagingOf(view);
+  const facts: (string | number | boolean | null | undefined)[] = [
+    reading !== undefined,
+    reading?.reading,
+    reading?.agent,
+    reading?.busy,
+    reading?.current,
+    reading?.refusal,
+    reading?.setup?.phase,
+    reading?.setup?.failure,
+    staging !== undefined,
+  ];
+  for (const one of reading?.chat ?? []) {
+    if (one.conversation !== reading?.reading) {
+      continue;
+    }
+    facts.push(
+      one.key,
+      one.conversation,
+      one.turn,
+      one.kind,
+      one.text,
+      one.hasOutput,
+      one.failure,
+      one.incomplete,
+      one.automatic,
+      one.request,
+      one.retry?.conversation,
+      one.retry?.message,
+      one.origin?.kind,
+      one.origin?.kind === "acp" ? one.origin.attachment : undefined,
+    );
+  }
+  facts.push(undefined);
+  for (const one of staging?.work ?? []) {
+    const entry = staging?.model.entries.find((candidate) => candidate.key === one.entry);
+    facts.push(
+      one.message,
+      one.entry,
+      entry?.key,
+      entry?.order,
+      entry?.terminal?.status,
+      entry?.terminal?.output,
+      entry === undefined || staging === undefined
+        ? undefined
+        : workState(entry, staging.model, staging.live).word,
+    );
+  }
+  return facts;
+}
+
+export interface ReplChatPreparationStore {
+  readonly sessions: ReplSessionPreparationStore;
+  prepare(
+    view: ReplView,
+    renderer: ReplRenderer,
+    room: number,
+  ): Operation<Result<ReplChatSequence>>;
+  materialize: typeof materializeChatRow;
+}
+
+export function createChatPreparationStore(cuts: ReplPlainFitStore): ReplChatPreparationStore {
+  let held:
+    | {
+        readonly facts: ReturnType<typeof chatFacts>;
+        readonly room: number;
+        readonly columns: number;
+        readonly rows: number;
+        readonly sequence: ReplChatSequence;
+      }
+    | undefined;
+  return {
+    sessions: createSessionPreparationStore(),
+    materialize: materializeChatRow,
+    *prepare(view, renderer, room) {
+      const facts = chatFacts(view);
+      if (
+        held !== undefined &&
+        held.room === room &&
+        held.columns === view.size.columns &&
+        held.rows === view.size.rows &&
+        facts.length === held.facts.length &&
+        facts.every((one, at) => one === held?.facts[at])
+      ) {
+        return Ok(held.sequence);
+      }
+      const composed = sidekickComposedRows(view.live.sidekick, chatStagingOf(view));
+      const lines = composed.flatMap((one) =>
+        one.kind === "text" ? chatLinesOf(one.key, one.text) : [],
+      );
+      // Prune before suspension too: a refused or cancelled fit owns no old candidates.
+      cuts.settle(
+        lines.map((one) => one.text),
+        room,
+        view.size,
+      );
+      let complete = false;
+      try {
+        const fitted = yield* fitPlain(renderer, view.size, lines, room, cuts);
+        if (!fitted.ok) {
+          return fitted;
+        }
+        const sequence = chatSequence(composed, fitted.value);
+        held = { facts, room, columns: view.size.columns, rows: view.size.rows, sequence };
+        complete = true;
+        return Ok(sequence);
+      } finally {
+        if (!complete) {
+          cuts.settle([], room, view.size);
+        }
+      }
+    },
+  };
 }
 
 /**
@@ -5425,7 +5539,6 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
 
   const showEntry = (!narrow || routed === "entries") && !(narrow && showSidekick);
 
-  const turns = chronology(model, live);
   // Which surface to be on belongs to neither surface. A narrow frame mounts one
   // outlet, so a control that lives inside the outlet can only take somebody
   // where they already are — and the way back would be mounted on the screen
@@ -5487,39 +5600,26 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   }
   if (!showSessions) {
     // Nothing: this frame is showing the other surface.
-  } else if (live.sidekick === undefined && turns.length === 0) {
+  } else if (live.sidekick === undefined && context.sessions?.rows.length === 0) {
     // Present and empty, with one owner. This REPL keeps one execution per
     // invocation, and a Sessions surface that vanished when it held nothing
     // would read as a feature that does not exist. With a Sidekick installed
     // there are two sections instead, and each of them says what it holds.
     items.push(line("sessions:empty", "  (none retained)", styleOf("metadata")));
   } else {
-    // One window over the whole reading. Every conversation, turn, fact, audit
-    // and request is built in order and then windowed: a list that described all
-    // of them would have its tail placed nowhere, and a row layout cannot place
-    // is not one a person can see, focus or point at.
-    //
-    // The window is what the frame measured, not what this boundary could work
-    // out from the region's height — the rows above and below it are described
-    // here, so only the engine knows what is left for the rows inside.
-    const content = sessionRows(
-      state,
-      turns,
-      view.focused,
-      claim,
-      context.widths?.listBody,
-      live.sidekick,
-      workspace !== undefined,
-    );
+    const content = context.sessions?.rows ?? [];
     const window = context.admission.windows.get(SESSIONS_WINDOW);
-    const reveal =
-      window === undefined ? undefined : transcriptReveals(content, window.from, window.count);
-    items.push(
-      ...shown(content, context, SESSIONS_WINDOW).map((one) => {
-        const target = reveal?.get(one.key);
-        return target === undefined ? one : revealing(one, target);
-      }),
-    );
+    if (!context.measuring && window !== undefined) {
+      const reveal = transcriptReveals(content, window.from, window.count);
+      const materialize = context.sessionMaterialize ?? materializeSessionRow;
+      items.push(
+        ...content.slice(window.from, window.from + window.count).map((one) => {
+          const described = materialize(one, view.focused, claim);
+          const target = reveal.get(one.key);
+          return target === undefined ? described : revealing(described, target);
+        }),
+      );
+    }
   }
   if (workspace === undefined && !narrow) {
     items.push(toEntries);
@@ -5613,20 +5713,9 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     //
     // A frame without a Sidekick still keeps the reading anchor's identity.
     if (live.sidekick === undefined) {
-      items.push(...sidekickReadingRows(undefined, view.focused));
+      items.push(line("sidekick:absent", "  This screen has no Sidekick.", styleOf("metadata")));
     } else {
-      items.push(
-        ...anchored(
-          shown(
-            sidekickReadingRows(live.sidekick, view.focused, context.chat, chatStagingOf(view)),
-            context,
-            SIDEKICK_WINDOW,
-          ),
-          "sidekick:anchor",
-          "chat",
-          view.focused,
-        ),
-      );
+      items.push(...anchored(chatWindow(view, context), "sidekick:anchor", "chat", view.focused));
       items.push(
         ...(workspace === undefined
           ? sidekickControls(state, live.sidekick, view, claim, context)
@@ -6111,17 +6200,167 @@ function livesHere(model: ReplModel, selection: ReplSelection): boolean {
  * beneath it as lines. A turn's control is keyed by its slot, so a turn that
  * publishes keeps the node — and the focus — it already had.
  */
+interface ReplSessionRow {
+  readonly key: string;
+  readonly label: string;
+  readonly style: ReplRowStyle;
+  readonly action?: Readonly<Record<string, Json>>;
+  readonly claim?: boolean;
+  readonly runs?: readonly ReplTokenRun[];
+}
+
+interface ReplSessionSequence {
+  readonly rows: readonly ReplSessionRow[];
+  readonly positions: ReadonlyMap<string, number>;
+}
+
+function sessionLine(
+  key: string,
+  label: string,
+  style: ReplRowStyle,
+  runs?: readonly ReplTokenRun[],
+): ReplSessionRow {
+  return Object.freeze({ key, label, style, runs });
+}
+
+function sessionControl(
+  key: string,
+  label: string,
+  action: Readonly<Record<string, Json>>,
+  style: ReplRowStyle,
+  options: { readonly claim?: boolean; readonly runs?: readonly ReplTokenRun[] } = {},
+): ReplSessionRow {
+  return Object.freeze({ key, label, action: Object.freeze({ ...action }), style, ...options });
+}
+
+function materializeSessionRow(
+  one: ReplSessionRow,
+  focused: string | undefined,
+  claimed: string | undefined,
+): Described {
+  return one.action === undefined
+    ? line(one.key, one.label, one.style, one.runs)
+    : row(one.key, one.label, one.action, one.style, {
+        here: focused,
+        claim: one.claim ? claimed : undefined,
+        runs: one.runs,
+      });
+}
+
+interface ReplSessionPreparationStore {
+  prepare(view: ReplView, width: number): ReplSessionSequence;
+  materialize: typeof materializeSessionRow;
+}
+
+function createSessionPreparationStore(): ReplSessionPreparationStore {
+  let held:
+    | {
+        readonly facts: readonly (string | number | boolean | null | undefined)[];
+        readonly sequence: ReplSessionSequence;
+      }
+    | undefined;
+  return {
+    materialize: materializeSessionRow,
+    prepare(view, width) {
+      const turns = chronology(view.model, view.live);
+      const sidekick = view.live.sidekick;
+      const compact = staged(view) !== undefined;
+      const facts: (string | number | boolean | null | undefined)[] = [
+        width,
+        view.size.columns,
+        view.size.rows,
+        compact,
+        view.state.route.session,
+        view.state.route.surface,
+        view.state.filtering,
+        turns.length,
+      ];
+      for (const turn of turns) {
+        facts.push(
+          turn.key,
+          turn.prompt,
+          turn.state,
+          turn.text,
+          turn.agent,
+          turn.sessionKey,
+          turn.status,
+          turn.stopReason,
+          turn.failure,
+          turn.marker,
+          turn.request?.key,
+          turn.request?.title,
+          turn.request?.toolCallId,
+          turn.audits.length,
+        );
+        for (const audit of turn.audits) {
+          facts.push(audit.title, audit.toolCallId, outcomeOf(audit));
+        }
+        facts.push(turn.inputResults?.length);
+        for (const event of turn.inputResults ?? []) {
+          const result = event.result;
+          facts.push(
+            event.type,
+            event.type === "question_answer_result" ? event.questionId : event.permissionId,
+            event.inputId,
+            result.status,
+          );
+          if (result.status === "invalid") {
+            facts.push(result.reason);
+            if (result.reason === "schema") {
+              facts.push(result.issues.length);
+              for (const issue of result.issues) {
+                facts.push(issue.instancePath, issue.message);
+              }
+            }
+          }
+        }
+      }
+      facts.push(sidekick !== undefined, sidekick?.refusal, sidekick?.availability.sessions.length);
+      facts.push(...(sidekick?.availability.sessions ?? []));
+      facts.push(sidekick?.turns.length);
+      for (const turn of sidekick?.turns ?? []) {
+        facts.push(
+          turn.key,
+          turn.conversation,
+          turn.agent,
+          turn.turn,
+          turn.title,
+          turn.state,
+          turn.running,
+          turn.failed,
+          turn.sessionKey,
+          turn.text,
+          turn.failure,
+        );
+      }
+      if (compact) {
+        for (const item of sidekick?.chat ?? []) {
+          if (item.kind === "person") {
+            facts.push(item.conversation, item.turn, item.origin?.kind);
+          }
+        }
+      }
+      if (
+        held !== undefined &&
+        facts.length === held.facts.length &&
+        facts.every((one, at) => one === held?.facts[at])
+      ) {
+        return held.sequence;
+      }
+      const rows = sessionRows(view.state, turns, width, sidekick, compact);
+      const sequence = { rows, positions: new Map(rows.map((one, at) => [one.key, at])) };
+      held = { facts, sequence };
+      return sequence;
+    },
+  };
+}
+
 function sessionRows(
   state: ReplState,
   turns: readonly ReplSessionTurn[],
-  focused: string | undefined,
-  claim: string | undefined,
   /**
    * How wide the frame measured the region these rows land in.
    *
-   * None where there is nothing to fit to: counting the reading needs the same
-   * rows and no width, because what a label gives up does not change how many
-   * rows there are.
    */
   width: number | undefined,
   /**
@@ -6147,8 +6386,8 @@ function sessionRows(
    * it.
    */
   compact = false,
-): readonly Described[] {
-  const items: Described[] = [];
+): readonly ReplSessionRow[] {
+  const items: ReplSessionRow[] = [];
   const filter = state.route.session;
   // Entry keys in their own order, then the Sidekick's in its own, each
   // earliest-observed first and a duplicate offered once. Which section a key
@@ -6166,17 +6405,17 @@ function sessionRows(
     // something a person does, and a list that could only be narrowed would
     // leave them holding a view they cannot get out of.
     items.push(
-      row(
+      sessionControl(
         "sessions:all",
         filter === undefined ? "  All conversations" : "  All conversations (filtered)",
         { select: "all-sessions" },
         styleOf("action", { selected: filter === undefined }),
-        { here: focused },
+        {},
       ),
     );
     for (const key of offered) {
       items.push(
-        row(
+        sessionControl(
           `sessions:conversation:${key}`,
           fitControl(
             [{ text: `  ${filter === key ? "> " : ""}` }, { text: headline(key), elide: true }],
@@ -6184,7 +6423,7 @@ function sessionRows(
           ),
           { select: "session", session: key },
           styleOf("pane-heading", { selected: filter === key }),
-          { here: focused },
+          {},
         ),
       );
     }
@@ -6200,9 +6439,9 @@ function sessionRows(
   // which conversation it was in, so owner authority is read from the rows
   // rather than asserted by a heading over a block of them.
   if (sidekick !== undefined && !compact) {
-    items.push(line("sessions:section:entries", "  Entry agents", styleOf("pane-heading")));
+    items.push(sessionLine("sessions:section:entries", "  Entry agents", styleOf("pane-heading")));
   }
-  const entries: Described[] = [];
+  const entries: ReplSessionRow[] = [];
   let named: string | undefined;
   for (const turn of turns) {
     if (filter !== undefined && turn.sessionKey !== filter) {
@@ -6212,7 +6451,7 @@ function sessionRows(
       const whose = [turn.agent, turn.sessionKey].filter((fact) => fact !== undefined).join(" · ");
       if (whose !== "" && whose !== named) {
         entries.push(
-          line(
+          sessionLine(
             `sessions:turn:${turn.key}:whose`,
             fitLine([{ text: CONTROL_ROOM }, { text: whose, elide: true }], width),
             styleOf("metadata"),
@@ -6220,11 +6459,11 @@ function sessionRows(
         );
       }
       named = whose;
-      entries.push(...compactTurn(turn, width, focused, claim));
+      entries.push(...compactTurn(turn, width));
       continue;
     }
     entries.push(
-      row(
+      sessionControl(
         `sessions:turn:${turn.key}`,
         // The state comes last and stays: it is why this row is on the screen,
         // and a prompt nobody bounded must not be what takes it off.
@@ -6248,13 +6487,13 @@ function sessionRows(
         turnStyle(turn),
         // A settled permission sends focus back to the turn that was waiting, so
         // this is the row that may be claimed.
-        { here: focused, claim },
+        { claim: true },
       ),
     );
     if (turn.agent !== undefined || turn.sessionKey !== undefined) {
       const said = [turn.agent, turn.sessionKey].filter((fact) => fact !== undefined);
       entries.push(
-        line(
+        sessionLine(
           `sessions:turn:${turn.key}:whose`,
           fitLine([{ text: "    " }, { text: said.join(" · "), elide: true }], width),
           styleOf("metadata"),
@@ -6264,7 +6503,7 @@ function sessionRows(
     entries.push(...inputResultRows(turn, width));
     if (turn.text.length > 0) {
       entries.push(
-        line(
+        sessionLine(
           `sessions:turn:${turn.key}:text`,
           fitLine([{ text: "    " }, { text: headline(turn.text), elide: true }], width),
           styleOf("output"),
@@ -6273,7 +6512,7 @@ function sessionRows(
     }
     if (turn.stopReason !== undefined) {
       entries.push(
-        line(
+        sessionLine(
           `sessions:turn:${turn.key}:stop`,
           fitLine([{ text: "    stopped: " }, { text: turn.stopReason, elide: true }], width),
           styleOf("metadata"),
@@ -6282,7 +6521,7 @@ function sessionRows(
     }
     if (turn.failure !== undefined) {
       entries.push(
-        line(
+        sessionLine(
           `sessions:turn:${turn.key}:failed`,
           fitLine([{ text: "    " }, { text: headline(turn.failure), elide: true }], width),
           styleOf("failed-outcome"),
@@ -6302,21 +6541,25 @@ function sessionRows(
       ];
       entries.push(
         state.route.surface === "sessions"
-          ? row(
+          ? sessionControl(
               `sessions:request:${request.key}`,
               fitControl(asks, width),
               { select: "permission", request: request.key },
               styleOf("waiting"),
-              { here: focused },
+              {},
             )
-          : line(`sessions:request:${request.key}`, fitLine(asks, width), styleOf("waiting")),
+          : sessionLine(
+              `sessions:request:${request.key}`,
+              fitLine(asks, width),
+              styleOf("waiting"),
+            ),
       );
     }
     for (const [at, audit] of turn.audits.entries()) {
       // Read, never answered: a record is what a turn was granted, and offering
       // a control here would invite somebody to answer a question nobody asked.
       entries.push(
-        line(
+        sessionLine(
           `sessions:audit:${turn.key}:${at}`,
           // The outcome comes last and stays, for the same reason a turn's state
           // does: it is the whole of what a retained audit says.
@@ -6343,10 +6586,10 @@ function sessionRows(
     // Said rather than left blank: a section that drew nothing would read as a
     // gap, and a reader cannot tell a gap from a list that failed to appear.
     // One list has no section to report empty, so it says so once at the end.
-    items.push(line("sessions:entries:none", "    No entry turns.", styleOf("metadata")));
+    items.push(sessionLine("sessions:entries:none", "    No entry turns.", styleOf("metadata")));
   }
   if (!compact) {
-    items.push(line("sessions:section:sidekick", "  Sidekick", styleOf("pane-heading")));
+    items.push(sessionLine("sessions:section:sidekick", "  Sidekick", styleOf("pane-heading")));
   }
   if (sidekick.refusal !== undefined) {
     // A chat history this version cannot read. Its own reason stands here, and
@@ -6354,7 +6597,11 @@ function sessionRows(
     // somebody an empty section for a file that holds their conversations is
     // the one answer that cannot be corrected later.
     items.push(
-      line("sessions:sidekick:refusal", `    ${sidekick.refusal}`, styleOf("failed-outcome")),
+      sessionLine(
+        "sessions:sidekick:refusal",
+        `    ${sidekick.refusal}`,
+        styleOf("failed-outcome"),
+      ),
     );
     return items;
   }
@@ -6365,14 +6612,32 @@ function sessionRows(
       // A Transcript that said "no Sidekick turns" under an entry turn it is
       // already showing would be naming a section this reading does not have.
       if (entries.length === 0) {
-        items.push(line("sessions:none", `${CONTROL_ROOM}(none retained)`, styleOf("metadata")));
+        items.push(
+          sessionLine("sessions:none", `${CONTROL_ROOM}(none retained)`, styleOf("metadata")),
+        );
       }
       return items;
     }
-    items.push(line("sessions:sidekick:none", "    No Sidekick turns.", styleOf("metadata")));
+    items.push(
+      sessionLine("sessions:sidekick:none", "    No Sidekick turns.", styleOf("metadata")),
+    );
     return items;
   }
   if (compact) {
+    const origins = new Map<string, Map<number, ReplOriginMark>>();
+    for (const item of sidekick.chat) {
+      if (item.kind !== "person" || item.turn === null) {
+        continue;
+      }
+      let turns = origins.get(item.conversation);
+      if (turns === undefined) {
+        turns = new Map();
+        origins.set(item.conversation, turns);
+      }
+      if (!turns.has(item.turn)) {
+        turns.set(item.turn, originMark(item.origin));
+      }
+    }
     let label: string | undefined;
     for (const turn of chat) {
       const whose = [turn.agent, turn.conversation, turn.sessionKey]
@@ -6380,7 +6645,7 @@ function sessionRows(
         .join(" \u00b7 ");
       if (whose !== label) {
         items.push(
-          line(
+          sessionLine(
             `sessions:${turn.key}:whose`,
             fitLine([{ text: CONTROL_ROOM }, { text: whose, elide: true }], width),
             styleOf("metadata"),
@@ -6388,13 +6653,19 @@ function sessionRows(
         );
       }
       label = whose;
-      items.push(...compactSidekickTurn(turn, sidekick, width, focused));
+      items.push(
+        ...compactSidekickTurn(
+          turn,
+          width,
+          origins.get(turn.conversation)?.get(turn.turn ?? -1) ?? PERSON_MARK,
+        ),
+      );
     }
     return items;
   }
   for (const turn of chat) {
     items.push(
-      row(
+      sessionControl(
         `sessions:${turn.key}`,
         fitControl(
           [
@@ -6422,7 +6693,7 @@ function sessionRows(
           : turn.failed
             ? styleOf("failed-outcome")
             : styleOf("output"),
-        { here: focused },
+        {},
       ),
     );
     // Whose work this was: this section's own owner, then the chat's agent and
@@ -6434,7 +6705,7 @@ function sessionRows(
       whose.push(turn.sessionKey);
     }
     items.push(
-      line(
+      sessionLine(
         `sessions:${turn.key}:whose`,
         fitLine([{ text: "      " }, { text: whose.join(" \u00b7 "), elide: true }], width),
         styleOf("metadata"),
@@ -6442,7 +6713,7 @@ function sessionRows(
     );
     if (turn.text.length > 0) {
       items.push(
-        line(
+        sessionLine(
           `sessions:${turn.key}:text`,
           fitLine([{ text: "      " }, { text: headline(turn.text), elide: true }], width),
           styleOf("output"),
@@ -6451,7 +6722,7 @@ function sessionRows(
     }
     if (turn.failure !== undefined) {
       items.push(
-        line(
+        sessionLine(
           `sessions:${turn.key}:failed`,
           fitLine([{ text: "      " }, { text: headline(turn.failure), elide: true }], width),
           styleOf("failed-outcome"),
@@ -6460,30 +6731,6 @@ function sessionRows(
     }
   }
   return items;
-}
-
-/**
- * How many rows the Sessions reading holds, whatever the window shows.
- *
- * Counted by building the same rows the window slices, so the number a scroll
- * clamps against cannot disagree with the list it is clamping: one definition of
- * what the reading is, asked twice.
- */
-function sessionContentRows(
-  state: ReplState,
-  model: ReplModel,
-  live: ReplLive,
-  compact = false,
-): number {
-  return sessionRows(
-    state,
-    chronology(model, live),
-    undefined,
-    undefined,
-    undefined,
-    live.sidekick,
-    compact,
-  ).length;
 }
 
 /**
@@ -8005,18 +8252,35 @@ function flatReveals(
   return found;
 }
 
-function transcriptReveals(rows: readonly Described[], from: number, count: number) {
-  const found = new Map(flatReveals(rows, from, count));
+function transcriptReveals(rows: readonly ReplSessionRow[], from: number, count: number) {
+  const controls = rows
+    .map((one, at) => ({ one, at }))
+    .filter(({ one }) => one.action !== undefined);
+  const found = new Map<string, Readonly<Record<string, string>>>();
+  for (const [index, row] of controls.entries()) {
+    if (row.at < from || row.at >= from + count) {
+      continue;
+    }
+    const targets: Record<string, string> = {};
+    for (const [step, arrow, alt] of [
+      [-1, "ArrowUp", "Alt+ArrowUp"],
+      [1, "ArrowDown", "Alt+ArrowDown"],
+    ] satisfies readonly (readonly [number, string, string])[]) {
+      const other = controls[index + step];
+      if (other !== undefined && (other.at < from || other.at >= from + count)) {
+        targets[arrow] = other.one.key;
+        targets[alt] = other.one.key;
+      }
+    }
+    found.set(row.one.key, targets);
+  }
   const turns = rows
     .map((one, at) => ({ one, at }))
-    .filter(({ one }) => {
-      const read = readDescription(one.description);
-      const input = fields(read.input);
-      return (
-        isControl(read.component, read.input) &&
-        (one.key.startsWith("sessions:turn:") || input?.["select"] === "sidekick-turn")
-      );
-    });
+    .filter(
+      ({ one }) =>
+        one.action !== undefined &&
+        (one.key.startsWith("sessions:turn:") || one.action["select"] === "sidekick-turn"),
+    );
   for (const [index, row] of turns.entries()) {
     if (row.at < from || row.at >= from + count) {
       continue;
@@ -8840,6 +9104,10 @@ export interface ReplPresentationContext {
    * reveal lands on are all the same rows.
    */
   readonly chat: readonly ReplFittedLine[] | undefined;
+  readonly chatSequence?: ReplChatSequence;
+  readonly sessions?: ReplSessionSequence;
+  readonly sessionMaterialize?: ReplSessionPreparationStore["materialize"];
+  readonly chatMaterialize?: typeof materializeChatRow;
   /**
    * The rows this frame is drawing of the message's own value, or none.
    *
@@ -10294,8 +10562,9 @@ export function admissionFor(input: {
   readonly reading?: ReplPreparedReading | undefined;
   /** The presented question or permission text, fitted before admission. */
   readonly preview?: readonly ReplFittedLine[] | undefined;
-  /** The chat, fitted, which its own window admits rows of. */
-  readonly chat?: readonly ReplFittedLine[] | undefined;
+  /** The prepared chat, or none where this frame has no chat window. */
+  readonly chatSequence: ReplChatSequence | undefined;
+  readonly sessions: ReplSessionSequence;
   /** The tray's messages, fitted, which its own window admits rows of. */
   readonly queue?: readonly ReplFittedLine[] | undefined;
   /** The drawer's notices, fitted, which its own window admits rows of. */
@@ -10303,8 +10572,13 @@ export function admissionFor(input: {
   readonly details?: readonly ReplFittedLine[] | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
-  const { view, manifest, widths, reading, preview, chat, queue, notices, details, boundsOf } =
+  const { view, manifest, widths, reading, preview, queue, notices, details, boundsOf, sessions } =
     input;
+  const sequence = input.chatSequence ?? {
+    rows: [],
+    positions: new Map<string, number>(),
+    fitted: undefined,
+  };
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
@@ -10315,11 +10589,12 @@ export function admissionFor(input: {
       widths,
       reading,
       preview,
-      chat,
       queue,
       notices,
       details,
       slot.window,
+      sequence,
+      sessions,
     );
     const rows =
       slot.window === DRAWER_WINDOW
@@ -10333,21 +10608,22 @@ export function admissionFor(input: {
                 : `queue:${one.message.key}:row:${one.offset}`,
             }))
           : slot.window === SIDEKICK_WINDOW
-            ? sidekickReadingRows(view.live.sidekick, view.focused, chat, chatStagingOf(view))
+            ? sequence.rows
             : slot.window === SESSIONS_WINDOW
-              ? sessionRows(
-                  view.state,
-                  chronology(view.model, view.live),
-                  view.focused,
-                  undefined,
-                  widths.listBody,
-                  view.live.sidekick,
-                  staged(view) !== undefined,
-                )
+              ? sessions.rows
               : slot.window === ENTRIES_WINDOW
                 ? entryContent(view.model, view.focused, view.selection.entry?.key, widths.listBody)
                 : undefined;
-    const focused = rows?.findIndex((one) => one.key === view.focused) ?? -1;
+    const focused =
+      slot.window === SIDEKICK_WINDOW
+        ? view.focused === undefined
+          ? -1
+          : (sequence.positions.get(view.focused) ?? -1)
+        : slot.window === SESSIONS_WINDOW
+          ? view.focused === undefined
+            ? -1
+            : (sessions.positions.get(view.focused) ?? -1)
+          : (rows?.findIndex((one) => one.key === view.focused) ?? -1);
     windows.set(slot.window, {
       ...admitRows({
         offset: offsetFor(
@@ -10355,12 +10631,13 @@ export function admissionFor(input: {
           slot.window,
           capacity,
           total,
-          chat,
           queue,
           widths,
           preview,
           notices,
           details,
+          sequence,
+          sessions,
         ),
         total,
         capacity,
@@ -10409,12 +10686,13 @@ function offsetFor(
   window: string,
   capacity: number,
   total: number,
-  chat: readonly ReplFittedLine[] | undefined,
   queue: readonly ReplFittedLine[] | undefined,
   widths: ReplMeasuredWidths,
   preview: readonly ReplFittedLine[] | undefined,
   notices: ReplPreparedNotices | undefined,
   details: readonly ReplFittedLine[] | undefined,
+  sequence: ReplChatSequence,
+  sessions: ReplSessionSequence,
 ): number {
   const held = offsetOf(view, window);
   if (window === QUEUE_WINDOW && capacity > 0 && view.state.restore?.kind === "reveal") {
@@ -10436,7 +10714,7 @@ function offsetFor(
     // asked for that turn and not for whatever arrived since.
     const reveal = view.state.revealing;
     if (reveal !== undefined) {
-      const at = revealedAt(reveal, view.live.sidekick, capacity, chat, chatStagingOf(view));
+      const at = revealedAt(reveal, view.live.sidekick, capacity, sequence);
       if (at !== undefined) {
         return at;
       }
@@ -10459,19 +10737,14 @@ function offsetFor(
   ) {
     const rows =
       window === SESSIONS_WINDOW
-        ? sessionRows(
-            view.state,
-            chronology(view.model, view.live),
-            undefined,
-            undefined,
-            widths.listBody,
-            view.live.sidekick,
-            staged(view) !== undefined,
-          )
+        ? sessions.rows
         : (drawerContent(view, widths.drawer, preview, notices, details)?.content.map(
             (one) => one.described,
           ) ?? []);
-    const at = rows.findIndex((one) => one.key === requested.key);
+    const at =
+      window === SESSIONS_WINDOW
+        ? (sessions.positions.get(requested.key) ?? -1)
+        : rows.findIndex((one) => one.key === requested.key);
     if (at >= 0) {
       if (
         window === DRAWER_WINDOW &&
@@ -10555,24 +10828,25 @@ function totalOf(
   widths: ReplMeasuredWidths,
   reading: ReplPreparedReading | undefined,
   preview: readonly ReplFittedLine[] | undefined,
-  chat: readonly ReplFittedLine[] | undefined,
   queue: readonly ReplFittedLine[] | undefined,
   notices: ReplPreparedNotices | undefined,
   details: readonly ReplFittedLine[] | undefined,
   window: string,
+  sequence: ReplChatSequence,
+  sessions: ReplSessionSequence,
 ): number {
   if (window === QUEUE_WINDOW) {
     return queue?.length ?? 0;
   }
   if (window === SESSIONS_WINDOW) {
-    return sessionContentRows(view.state, view.model, view.live, staged(view) !== undefined);
+    return sessions.rows.length;
   }
   if (window === SIDEKICK_WINDOW) {
     // Counted by the builder that produces those rows, so what a scroll clamps
     // against cannot disagree with the list it is clamping — fitted rows
     // included, because a message that occupies three rows is three rows to
     // scroll past.
-    return sidekickReadingRows(view.live.sidekick, undefined, chat, chatStagingOf(view)).length;
+    return sequence.rows.length;
   }
   if (window === ENTRIES_WINDOW) {
     return entriesRowCount(view.model);
@@ -10730,8 +11004,6 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
 function workspaceChatComposed(
   reading: ReplSidekickReading,
   staging: ReplChatStaging,
-  /** The key of whatever holds focus, for the one row that wears the marker. */
-  focused: string | undefined,
 ): readonly ReplChatComposed[] {
   const items: ReplChatComposed[] = [];
   const text = (
@@ -10809,17 +11081,14 @@ function workspaceChatComposed(
         items.push(
           Object.freeze({
             kind: "control" as const,
-            described: row(
-              `sidekick:retry:${item.retry.message}`,
-              `${MARKER_ROOM}[retry]`,
-              {
-                select: "retry-message",
-                conversation: item.retry.conversation,
-                message: item.retry.message,
-              },
-              styleOf("action"),
-              { here: focused },
-            ),
+            key: `sidekick:retry:${item.retry.message}`,
+            label: `${MARKER_ROOM}[retry]`,
+            action: {
+              select: "retry-message",
+              conversation: item.retry.conversation,
+              message: item.retry.message,
+            },
+            style: styleOf("action"),
           }),
         );
       }
@@ -10847,7 +11116,7 @@ function workspaceChatComposed(
   // reference separates them. Display only: a gap is no message.
   const spaced: ReplChatComposed[] = [];
   for (const [at, one] of items.entries()) {
-    const key = one.kind === "text" ? one.key : one.described.key;
+    const key = one.key;
     const continues = one.kind === "text" && key.endsWith(":output");
     if (at > 0 && !continues) {
       spaced.push(
@@ -10996,7 +11265,10 @@ function workspaceHeadings(
  * The same keys and the same activation the ordinary rows have, so selecting a
  * turn goes where it always did.
  */
-function inputResultRows(turn: ReplSessionTurn, width: number | undefined): readonly Described[] {
+function inputResultRows(
+  turn: ReplSessionTurn,
+  width: number | undefined,
+): readonly ReplSessionRow[] {
   return (turn.inputResults ?? []).flatMap((event, index) => {
     const kind =
       event.type === "question_answer_result" ? "Question answer" : "Permission decision";
@@ -11010,7 +11282,7 @@ function inputResultRows(turn: ReplSessionTurn, width: number | undefined): read
         : []),
     ];
     return messages.map((text, offset) =>
-      line(
+      sessionLine(
         `sessions:turn:${turn.key}:input:${index}:${offset}`,
         fitLine([{ text: "    " }, { text, elide: true }], width),
         styleOf(
@@ -11021,13 +11293,8 @@ function inputResultRows(turn: ReplSessionTurn, width: number | undefined): read
   });
 }
 
-function compactTurn(
-  turn: ReplSessionTurn,
-  width: number | undefined,
-  focused: string | undefined,
-  claim: string | undefined,
-): readonly Described[] {
-  const rows: Described[] = [];
+function compactTurn(turn: ReplSessionTurn, width: number | undefined): readonly ReplSessionRow[] {
+  const rows: ReplSessionRow[] = [];
   const style = turnStyle(turn);
   const label = fitControl(
     [
@@ -11039,20 +11306,20 @@ function compactTurn(
     width,
   );
   rows.push(
-    row(
+    sessionControl(
       `sessions:turn:${turn.key}`,
       label,
       turn.marker === undefined
         ? { select: "surface", surface: "sessions" }
         : { select: "marker", marker: turn.marker },
       style,
-      { here: focused, claim, runs: markedRuns(AGENT_MARK, label, style.role) },
+      { claim: true, runs: markedRuns(AGENT_MARK, label, style.role) },
     ),
   );
   rows.push(...inputResultRows(turn, width));
   if (turn.text.length > 0) {
     rows.push(
-      line(
+      sessionLine(
         `sessions:turn:${turn.key}:text`,
         fitLine(
           [{ text: `${CONTROL_ROOM}${MARKER_ROOM}` }, { text: headline(turn.text), elide: true }],
@@ -11070,7 +11337,7 @@ function compactTurn(
     // staged one that kept only the first would drop the provider's own word
     // for what happened.
     rows.push(
-      line(
+      sessionLine(
         `sessions:turn:${turn.key}:stop`,
         fitLine(
           [
@@ -11085,7 +11352,7 @@ function compactTurn(
   }
   if (turn.failure !== undefined) {
     rows.push(
-      line(
+      sessionLine(
         `sessions:turn:${turn.key}:failed`,
         fitLine(
           [
@@ -11111,12 +11378,12 @@ function compactTurn(
       { text: headline(request.title ?? request.toolCallId), elide: true },
     ];
     rows.push(
-      row(
+      sessionControl(
         `sessions:request:${request.key}`,
         fitControl(asks, width),
         { select: "permission", request: request.key },
         styleOf("waiting"),
-        { here: focused },
+        {},
       ),
     );
   }
@@ -11133,19 +11400,10 @@ function compactTurn(
  */
 function compactSidekickTurn(
   turn: ReplSidekickTurnRow,
-  sidekick: ReplSidekickReading,
   width: number | undefined,
-  focused: string | undefined,
-): readonly Described[] {
-  const rows: Described[] = [];
-  const asked = sidekick.chat.find(
-    (item) =>
-      item.kind === "person" &&
-      item.conversation === turn.conversation &&
-      item.turn !== null &&
-      item.turn === turn.turn,
-  );
-  const mark = originMark(asked?.origin);
+  mark: ReplOriginMark,
+): readonly ReplSessionRow[] {
+  const rows: ReplSessionRow[] = [];
   const style = turn.running
     ? styleOf("waiting")
     : turn.failed
@@ -11161,7 +11419,7 @@ function compactSidekickTurn(
     width,
   );
   rows.push(
-    row(
+    sessionControl(
       `sessions:${turn.key}`,
       label,
       {
@@ -11170,7 +11428,7 @@ function compactSidekickTurn(
         ...(turn.turn === null ? {} : { turn: turn.turn }),
       },
       style,
-      { here: focused, runs: markedRuns(mark, label, style.role) },
+      { runs: markedRuns(mark, label, style.role) },
     ),
   );
   if (turn.text.length > 0) {
@@ -11182,7 +11440,7 @@ function compactSidekickTurn(
       width,
     );
     rows.push(
-      line(
+      sessionLine(
         `sessions:${turn.key}:text`,
         said,
         styleOf("output"),
@@ -11195,7 +11453,7 @@ function compactSidekickTurn(
   }
   if (turn.failure !== undefined) {
     rows.push(
-      line(
+      sessionLine(
         `sessions:${turn.key}:failed`,
         fitLine(
           [
@@ -12856,13 +13114,6 @@ function workspacePresentation(input: {
 
 /** How many rows of the draft's own value the staged Draft shows. */
 const DRAFT_VALUE_ROWS = WORKSPACE_DRAFT_ROWS - 1;
-
-/** The chat lines this view's frame fits, the staged composition's included. */
-export function chatLinesFor(
-  view: ReplView,
-): readonly { readonly key: string; readonly text: string }[] {
-  return sidekickChatLines(view.live.sidekick, chatStagingOf(view));
-}
 
 /** The staged queue's messages as the lines its text column fits, or none. */
 export function queueLinesOf(

@@ -1,3 +1,4 @@
+import type { ReplChatPreparationStore } from "./application.ts";
 import { recoveryReference } from "./sidekick/recovery-record.ts";
 import type { ReplRecovering } from "./application.ts";
 import type { RecoveryReview } from "./sidekick/owner.ts";
@@ -80,7 +81,7 @@ import {
   SIDEBAR_BODY,
   SIDEKICK_BODY,
   SIDEKICK_WINDOW,
-  chatLinesFor,
+  createChatPreparationStore,
   draftFieldWidth,
   configureNoticesOf,
   draftLinesOf,
@@ -746,11 +747,7 @@ function* drive(
   // lives exactly as long as the command does and no frame outside it can
   // reach one process's cuts.
   const fits = createFitStore();
-  // The chat's own line cuts, in storage of its own beside that one. Two stores
-  // rather than one slot shared: the entry reading's geometry reserves a rail
-  // and a status column that plain text has neither of, and one slot would make
-  // the two evict each other every time a reader looked at the other pane.
-  const chatFits = createPlainFitStore();
+  const chatFits = createChatPreparationStore(createPlainFitStore());
   // And the composer's own, for the same reason again: its lines are not the
   // chat's, and settling them into the chat's store would evict the chat on
   // every keystroke.
@@ -3589,7 +3586,7 @@ function* paint(
   screen: ReplScreen,
   compose: ReplCompose,
   store?: ReplFitStore,
-  chat?: ReplPlainFitStore,
+  chat?: ReplChatPreparationStore,
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
@@ -3632,7 +3629,7 @@ function* prepared(
   screen: ReplScreen,
   compose: ReplCompose,
   store?: ReplFitStore,
-  chat?: ReplPlainFitStore,
+  chat?: ReplChatPreparationStore,
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
@@ -3800,7 +3797,7 @@ export function* commitReplFrame(
    */
   sizeNow?: () => Operation<ReplTerminalSize>,
   store?: ReplFitStore,
-  chat?: ReplPlainFitStore,
+  chat?: ReplChatPreparationStore,
   message?: ReplPlainFitStore,
   guidance?: ReplPlainFitStore,
   draft?: ReplPlainFitStore,
@@ -4042,13 +4039,13 @@ export function* prepareFrame(
    */
   store?: ReplFitStore,
   /**
-   * Where this command is holding the chat cuts it has already measured.
+   * Where this command is holding chat preparation and its measured cuts.
    *
    * Separate from `store` and for the same reason it exists: a typed key moves
    * neither the entry reading nor the chat, and refitting every chat line was
    * what a keystroke came to cost once a conversation had any length to it.
    */
-  chatStore?: ReplPlainFitStore,
+  chatStore?: ReplChatPreparationStore,
   /**
    * Where this command is holding the message's own cuts.
    *
@@ -4401,11 +4398,14 @@ export function* prepareFrame(
   // every keystroke. Showing or revealing the chat publishes that window again,
   // and this is the pass that fits it against the geometry it has now.
   const presentsChat = measured.manifest.viewports.some((slot) => slot.window === SIDEKICK_WINDOW);
-  const chatLines = chatRoom < 1 || !presentsChat ? undefined : chatLinesFor(view);
   const chat =
-    chatLines === undefined
+    chatRoom < 1 || !presentsChat
       ? Ok(undefined)
-      : yield* fitPlain(renderer, view.size, chatLines, chatRoom, chatStore);
+      : yield* (chatStore ?? createChatPreparationStore(createPlainFitStore())).prepare(
+          view,
+          renderer,
+          chatRoom,
+        );
   if (!chat.ok) {
     return chat;
   }
@@ -4572,13 +4572,16 @@ export function* prepareFrame(
   if (!details.ok) {
     return details;
   }
+  const sessions = (chatStore ?? createChatPreparationStore(createPlainFitStore())).sessions;
+  const sessionSequence = sessions.prepare(view, widths.listBody);
   const admission = admissionFor({
+    sessions: sessionSequence,
     view,
     manifest: placed.manifest,
     widths,
     reading: reading.value,
     preview: preview.value,
-    chat: chat.value,
+    chatSequence: chat.value,
     queue: queued.value,
     notices: notices.value,
     details: details.value,
@@ -4593,7 +4596,11 @@ export function* prepareFrame(
     capture: "capture",
     reading: reading.value,
     preview: preview.value,
-    chat: chat.value,
+    chat: chat.value?.fitted,
+    chatSequence: chat.value,
+    chatMaterialize: chatStore?.materialize,
+    sessions: sessionSequence,
+    sessionMaterialize: sessions.materialize,
     message: shown,
     guidance: guidanceRows,
     refusal: refusalRows,

@@ -1535,7 +1535,9 @@ Replacing what is displayed rewrites no submitted source and no record.
 ## Everything on this screen was measured
 
 Measurement and committed presentation both omit retired window controls; their
-former rows become viewport capacity.
+former rows become viewport capacity. Ordinary composer edits reuse stable chat
+and Transcript preparation. The measured windows select their rows before
+descriptions are made.
 
 No text is clipped and none is estimated. Every width is an answer from the
 engine that will draw it, asked through a probe that draws nothing, and every
