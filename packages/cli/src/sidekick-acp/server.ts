@@ -24,6 +24,7 @@ import type { ReplSession } from "../repl/session.ts";
 import type { ReplLiveScreen } from "../repl/live-screen.ts";
 
 interface AttachmentRoot {
+  readonly available?: () => boolean;
   readonly child?: {
     readonly sessionId: string;
     readonly session: ReplSession;
@@ -95,6 +96,7 @@ type PublicExchange = ReturnType<typeof publicExchange>;
 function pair(root: AttachmentRoot, descriptor: Descriptor): void {
   const read = root.owner.reading;
   if (
+    root.available?.() === false ||
     !read.ok ||
     read.value.active !== descriptor.conversation ||
     !read.value.conversations.some(
@@ -282,7 +284,11 @@ function* observe(
     }
   });
 }
-export function* useSidekickAttachment(path: string, root: AttachmentRoot): Operation<Descriptor> {
+export function* useSidekickAttachment(
+  path: string,
+  root: AttachmentRoot,
+  prepared?: string,
+): Operation<Descriptor> {
   const host = yield* SidekickTransport.expect();
   if (!host.supported()) {
     throw new Error("Sidekick ACP requires a same-user POSIX Unix socket.");
@@ -291,10 +297,15 @@ export function* useSidekickAttachment(path: string, root: AttachmentRoot): Oper
   if (!read.ok) {
     throw read.error;
   }
-  const conversation = read.value.active;
+  const conversation = prepared ?? read.value.active;
   if (
     conversation === undefined ||
-    !read.value.conversations.some((one) => one.id === conversation && one.phase === "activated")
+    !read.value.conversations.some(
+      (one) =>
+        one.id === conversation &&
+        (one.phase === "activated" ||
+          (root.child !== undefined && prepared === conversation && one.phase === "prepared")),
+    )
   ) {
     throw new Error("Sidekick ACP initialization did not establish a selected conversation.");
   }

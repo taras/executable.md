@@ -689,3 +689,76 @@ describe("shared Sidekick dispatch", () => {
     expect(dispatch.current).toBe(undefined);
   });
 });
+
+describe("987 — held recovery admission and queue", () => {
+  for (const replace of [false, true]) {
+    it(`reserves one recovery and preserves waiting associations (${replace ? "replacement" : "original"})`, function* () {
+      const held = yield* useHarness();
+      const admission = createSidekickAdmission();
+      const dispatch = yield* service(held, admission);
+      held.fake.script({ held: true, reply: "<REPL.Bindings />" });
+      held.fake.script({ reply: "", failure: "Internal error" });
+      const first = yield* send(dispatch, "Inspect established work.");
+      yield* held.fake.holdingTurns(1);
+      const queued = [yield* send(dispatch, "Waiting one."), yield* send(dispatch, "Waiting two.")];
+      held.fake.releaseTurn();
+      yield* first.completion;
+      const review = yield* held.owner.reviewRecovery();
+      if (!review.ok) {
+        throw review.error;
+      }
+      const reservation = admission.configure("recover", review.value.conversation);
+      if (!reservation.ok) {
+        throw reservation.error;
+      }
+      dispatch.hold();
+      for (const kind of ["recover", "replace", "inspect", "save"]) {
+        if (kind === "recover" || kind === "replace" || kind === "inspect" || kind === "save") {
+          expect(admission.configure(kind, review.value.conversation).ok).toBe(false);
+        }
+      }
+      expect((yield* dispatch.send("Conflicting Send.")).ok).toBe(false);
+      expect(dispatch.queue.pending.map((one) => one.text)).toEqual([
+        "Waiting one.",
+        "Waiting two.",
+      ]);
+      held.fake.script({ reply: "<Output>A distinct new instruction.</Output>" });
+      const result = yield* held.owner.recover(
+        review.value,
+        "Propose a distinct next step.",
+        replace,
+        { current: () => true },
+      );
+      if (!result.ok) {
+        throw result.error;
+      }
+      admission.releaseConfiguration(reservation.value);
+      expect(held.fake.prompts).toHaveLength(3);
+      expect(dispatch.queue.pending.map((one) => one.text)).toEqual([
+        "Waiting one.",
+        "Waiting two.",
+      ]);
+      expect(dispatch.queue.held).toBeDefined();
+      if (!replace) {
+        held.fake.script({ reply: "<Output>One.</Output>" });
+        held.fake.script({ reply: "<Output>Two.</Output>" });
+      }
+      const resumed = yield* dispatch.resume();
+      if (replace) {
+        expect(resumed.ok).toBe(true);
+        yield* awaitedFact(
+          "the original queue association refusing the new conversation",
+          function* () {
+            return dispatch.queue.held?.kind === "failure";
+          },
+        );
+        expect(dispatch.queue.pending).toHaveLength(2);
+      } else {
+        for (const exchange of queued) {
+          yield* exchange.completion;
+        }
+      }
+      expect(held.fake.prompts).toHaveLength(replace ? 3 : 5);
+    });
+  }
+});

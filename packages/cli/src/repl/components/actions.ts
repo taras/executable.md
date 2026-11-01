@@ -24,9 +24,17 @@ export type ReplFieldPurpose =
   | "message"
   | "answer"
   | "sidekick-answer"
-  | "configure-agent";
+  | "configure-agent"
+  | "recovery";
 
 export type ReplAction =
+  | { readonly kind: "open-recovery" }
+  | { readonly kind: "close-recovery" }
+  | { readonly kind: "recovery-replace" }
+  | { readonly kind: "recovery-continue" }
+  | { readonly kind: "recovery-reference-ack" }
+  | { readonly kind: "recovery-reference-cancel" }
+  | { readonly kind: "scroll-recovery"; readonly delta: number }
   | { readonly kind: "viewport-wheel"; readonly window: string; readonly direction: "up" | "down" }
   | {
       readonly kind: "reading-key";

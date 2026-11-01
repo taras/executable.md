@@ -1,8 +1,9 @@
+import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { attachChildUi } from "../src/headless/ui.ts";
 import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, race, scoped, spawn, suspend, until, withResolvers } from "effection";
+import { ensure, Err, race, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import { API } from "@executablemd/runtime";
 import { cliCommand } from "@executablemd/test-support/launch";
 import { usePosixSidekickTransport } from "../src/sidekick-acp/posix.ts";
@@ -11,7 +12,7 @@ import { runReplProgram } from "../src/repl/program.ts";
 import type { HeadlessReplRoot } from "../src/repl/program.ts";
 import { useReplLiveScreen } from "../src/repl/live-screen.ts";
 import { ReplTerminal } from "../src/repl/terminal.ts";
-import { useMountedHost } from "./support/mounted-repl.ts";
+import { recordingTerminal, useMountedHost } from "./support/mounted-repl.ts";
 import { useHeadlessFixture, START_CHILD, promptChild } from "./support/headless-repl.ts";
 import { attachmentDescriptor, requestAttachment } from "../src/sidekick-acp/client.ts";
 import { Reply, SidekickTransport } from "../src/sidekick-acp/protocol.ts";
@@ -750,5 +751,239 @@ describe("parent-owned headless REPL", () => {
       read.sessionId,
     );
     yield* root.halt();
+  });
+});
+
+function* useManagedRecoveryChild(publicationFailure: { armed: boolean }) {
+  yield* usePosixSidekickTransport(process.platform);
+  yield* API.Env.around({
+    *command([args = []]) {
+      const launch = cliCommand(args);
+      return [launch.command, ...launch.arguments];
+    },
+  });
+  const host = yield* useMountedHost({ hostFiles: true });
+  const transport = yield* SidekickTransport.expect();
+  yield* SidekickTransport.set({
+    ...transport,
+    *publish(path, descriptor) {
+      if (publicationFailure.armed) {
+        throw new Error("Fresh publication refused.");
+      }
+      return yield* transport.publish(path, descriptor);
+    },
+  });
+  const ready = withResolvers<{
+    root: Parameters<HeadlessReplRoot["ready"]>[0];
+    headless: HeadlessReplRoot;
+  }>();
+  const children = yield* useHeadlessChildren(function* (headless) {
+    const outcome = yield* runReplProgram({
+      profile: host.profile,
+      root: host.root,
+      headless: {
+        ...headless,
+        *ready(root) {
+          yield* headless.ready(root);
+          ready.resolve({ root, headless });
+        },
+      },
+    });
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+  });
+  const factory = children.factory({
+    createRuntime: host.fake.create,
+    agentRegistry: makeRegistry({}),
+    sessionStore: makeStore(),
+  });
+  const path = join(host.root, "managed-recovery.md");
+  yield* ensureDir(host.root);
+  yield* writeTextFile(
+    path,
+    '<Agent name="xmd"><Session><XMD.Session as="child" /><Json value={child} /></Session></Agent>',
+  );
+  const execution = yield* executeInstalled({ path, stream: new InMemoryStream() }, [
+    children.installation,
+    {
+      components: agentIdentityComponents(),
+      *install() {
+        yield* installAgentComponents({
+          rootProvider: { factory, options: { defaultAgent: "xmd", permissionMode: "deny-all" } },
+        });
+      },
+    },
+  ]);
+  const output = yield* execution.output;
+  let rendered = "";
+  let next = yield* output.next();
+  while (!next.done) {
+    rendered += next.value;
+    next = yield* output.next();
+  }
+  const ended = yield* execution;
+  if (!ended.ok) {
+    throw ended.error;
+  }
+  const reference = z.object({ sessionId: z.string().uuid() }).strict().parse(JSON.parse(rendered));
+  return { host, children, reference, ...(yield* ready.operation) };
+}
+
+describe("987 — owned reference disposition", () => {
+  for (const cut of ["publication", "active-unwind"]) {
+    it(`keeps authoritative selection and reference lifetime at ${cut}`, function* () {
+      const publication = { armed: false };
+      const held = yield* useManagedRecoveryChild(publication);
+      held.host.fake.script({ reply: "<REPL.Bindings />" });
+      held.host.fake.script({ reply: "", failure: "Internal error" });
+      yield* held.root.owner.message("Inspect established work.");
+      const review = yield* held.root.owner.reviewRecovery();
+      if (!review.ok) {
+        throw review.error;
+      }
+      const preparedDirectory = yield* until(
+        mkdtemp(join(yield* until(realpath(held.host.root)), "original-prepared-")),
+      );
+      const preparedPath = join(preparedDirectory, "attachment.json");
+      yield* useSidekickAttachment(preparedPath, held.root);
+      expect((yield* attachmentDescriptor(preparedPath)).conversation).toBe(
+        review.value.conversation,
+      );
+      let fresh: string | undefined;
+      publication.armed = cut === "publication";
+      const result = yield* held.root.owner.recover(review.value, "A distinct instruction.", true, {
+        current: () => true,
+        *handoff(decision, activate) {
+          const handoff = held.headless.handoffReference;
+          if (handoff === undefined) {
+            throw new Error("Expected actual manager handoff.");
+          }
+          const result = yield* handoff(
+            { decision: decision.id, previous: decision.conversation, next: decision.target },
+            function* (reference) {
+              fresh = reference.sessionId;
+              const selected = yield* activate();
+              return selected.ok
+                ? Err(new Error("Trusted continuation failed after activation."))
+                : selected;
+            },
+          );
+          return result.ok ? Err(new Error("Expected the controlled failure.")) : result;
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(held.host.fake.prompts).toHaveLength(2);
+      const reading = held.root.owner.reading;
+      if (!reading.ok) {
+        throw reading.error;
+      }
+      if (cut === "publication") {
+        expect(fresh).toBeUndefined();
+        expect(reading.value.active).toBe(review.value.conversation);
+        expect(
+          (yield* attachmentDescriptor(yield* childAddressPath(held.reference.sessionId)))
+            .conversation,
+        ).toBe(review.value.conversation);
+      } else {
+        if (fresh === undefined) {
+          throw new Error("Expected the actual published reference.");
+        }
+        const descriptor = yield* attachmentDescriptor(yield* childAddressPath(fresh));
+        expect(descriptor.execution).toBe(held.root.execution);
+        expect(descriptor.conversation).toBe(reading.value.active);
+        expect(reading.value.active).not.toBe(review.value.conversation);
+        let refused: Error | undefined;
+        try {
+          yield* requestAttachment(preparedPath, { method: "status" });
+        } catch (error) {
+          refused = error instanceof Error ? error : new Error(String(error));
+        }
+        expect(refused).toBeDefined();
+      }
+      expect(reading.value.recoveries[0]?.used).toBe(false);
+      yield* held.children.close();
+    });
+  }
+});
+
+describe("987 — original child input ownership", () => {
+  it("keeps an entry question through inspection, UI detach and same-original recovery", function* () {
+    const held = yield* useManagedRecoveryChild({ armed: false });
+    held.host.fake.script({ reply: "<REPL.Bindings />" });
+    held.host.fake.script({ held: true, reply: "<Output>Interrupted feedback turn.</Output>" });
+    const original = yield* spawn(() => held.root.owner.message("Inspect established work."));
+    yield* held.host.fake.holdingTurns(1);
+    const entry = yield* held.root.session.submit(
+      '<Elicit as="answer" schema={{type:"object",properties:{answer:{type:"string"}},required:["answer"],additionalProperties:false}}>Original entry question.</Elicit>',
+    );
+    if (!entry.ok) {
+      throw entry.error;
+    }
+    const changes = yield* held.root.session.elicitation.changes;
+    while (held.root.session.elicitation.pending === undefined) {
+      yield* changes.next();
+    }
+    const question = held.root.session.elicitation.pending;
+    const path = yield* childAddressPath(held.reference.sessionId);
+    const before = yield* attachmentDescriptor(path);
+    for (let pass = 0; pass < 2; pass++) {
+      const terminal = recordingTerminal();
+      const ui = yield* spawn(function* () {
+        yield* terminal.install();
+        yield* attachChildUi(held.reference.sessionId);
+      });
+      yield* race([
+        (function* () {
+          while (!terminal.terminal.screen?.rows().some((one) => one.includes("[detach]"))) {
+            yield* terminal.terminal.after(terminal.terminal.drawn);
+          }
+        })(),
+        (function* () {
+          yield* sleep(15000);
+          throw new Error("The original child did not attach.");
+        })(),
+      ]);
+      terminal.terminal.end();
+      yield* ui;
+      expect(held.root.session.elicitation.pending).toBe(question);
+      const count = held.host.fake.prompts.length;
+      yield* requestAttachment(path, { method: "status" });
+      expect(held.host.fake.prompts).toHaveLength(count);
+      if (pass === 0) {
+        const review = yield* held.root.owner.reviewRecovery();
+        if (!review.ok) {
+          throw review.error;
+        }
+        held.host.fake.script({ reply: "<Output>Continue from the established result.</Output>" });
+        const cleanup = held.host.fake.holdCancellation();
+        yield* ensure(() => cleanup.release());
+        const recovering = yield* spawn(() =>
+          held.root.owner.recover(review.value, "Propose a distinct next step.", false, {
+            current: () => true,
+          }),
+        );
+        const stopping = yield* race([cleanup.reached, recovering]);
+        if (stopping !== undefined) {
+          throw new Error("The child recovery did not wait for its owned Stop.");
+        }
+        expect(held.host.fake.prompts).toHaveLength(2);
+        expect(held.root.session.elicitation.pending).toBe(question);
+        yield* requestAttachment(path, { method: "status" });
+        cleanup.release();
+        const result = yield* recovering;
+        yield* original;
+        if (!result.ok) {
+          throw result.error;
+        }
+      }
+    }
+    expect(yield* attachmentDescriptor(path)).toEqual(before);
+    expect(held.root.session.elicitation.pending).toBe(question);
+    expect(held.root.session.model.entries).toHaveLength(1);
+    expect(question?.submit({ answer: "Only the original owner answers." }).kind).toBe("answered");
+    expect((yield* entry.value.join()).ok).toBe(true);
+    expect(held.host.fake.prompts).toHaveLength(3);
+    yield* held.children.close();
   });
 });

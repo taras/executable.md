@@ -69,6 +69,8 @@ import type { Operation } from "effection";
 import { createHash } from "node:crypto";
 
 import { ReplHost } from "../host.ts";
+import { recoveryDecision, recoveryReference } from "./recovery-record.ts";
+import type { RecoveryDecisionRecord, RecoveryReferenceRecord } from "./recovery-record.ts";
 import { readRecords, RetainedReplStream } from "../journal.ts";
 import type { MovableWriter, RetainedStream } from "../journal.ts";
 import { fileFingerprint, forEachLine, measureLines } from "../record-file.ts";
@@ -141,6 +143,8 @@ export interface RetainedPrefix {
  * canonical Core and provider facts, and they stay there.
  */
 export type SidekickRecord =
+  | RecoveryDecisionRecord
+  | RecoveryReferenceRecord
   | OwnerRecord
   | ReadyRecord
   | ConversationRecord
@@ -366,6 +370,12 @@ export interface FeedbackRecord {
  * ends in one.
  */
 export function serializeSidekickRecord(record: SidekickRecord): string {
+  if (
+    (record.kind === "recovery-decision" || record.kind === "recovery-reference") &&
+    parseSidekickRecord(JSON.stringify(record)) === undefined
+  ) {
+    throw new SidekickHistoryError("this recovery record does not match its closed declaration.");
+  }
   return `${JSON.stringify(record)}\n`;
 }
 
@@ -391,6 +401,14 @@ export function parseSidekickRecord(line: string): SidekickRecord | undefined {
     return undefined;
   }
   switch (value.kind) {
+    case "recovery-decision": {
+      const parsed = recoveryDecision.safeParse(value);
+      return parsed.success ? parsed.data : undefined;
+    }
+    case "recovery-reference": {
+      const parsed = recoveryReference.safeParse(value);
+      return parsed.success ? parsed.data : undefined;
+    }
     case "owner":
       return ownerOf(value);
     case "ready":
@@ -860,6 +878,19 @@ export function* readSidekickRecords(path: string): Operation<SidekickRecord[]> 
       );
     }
     records.push(parsed);
+  }
+  for (const [index, record] of records.entries()) {
+    if (record.kind !== "recovery-decision") {
+      continue;
+    }
+    const measured = yield* measureRetainedPrefix(path, record.retained.records);
+    if (
+      record.retained.records !== index ||
+      measured.measured?.bytes !== record.retained.bytes ||
+      measured.measured.sha256 !== record.retained.sha256
+    ) {
+      throw new SidekickHistoryError("this recovery decision names a different retained history.");
+    }
   }
   return records;
 }

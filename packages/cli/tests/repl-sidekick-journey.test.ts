@@ -989,7 +989,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     if (!reading.ok) {
       throw reading.error;
     }
-    expect(reading.value.submit).toBe(undefined);
+    expect(reading.value.submits.filter((one) => !one.settled)).toEqual([]);
     expect(answered.value.output).toContain("I will prepare source first.");
   });
 

@@ -1,3 +1,7 @@
+import { useSidekickOwner } from "../src/repl/sidekick/owner.ts";
+import { rootReads } from "../src/repl/sidekick/requests.ts";
+import { attachChildUi } from "../src/headless/ui.ts";
+import { useHeadlessFixture, promptChild } from "./support/headless-repl.ts";
 /**
  * Tier R2 — what a reopened Sidekick knows, and what it refuses to assert (#883, J8).
  *
@@ -26,8 +30,11 @@
  * are here now.
  */
 
-import { cwd } from "@executablemd/runtime";
+import { cwd, agentSessionKeyDigest } from "@executablemd/runtime";
+import { ReplHost } from "../src/repl/host.ts";
+import { inspectRecoveryOwnership } from "../src/repl/sidekick/recovery-owner.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
+import { useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -35,10 +42,10 @@ import { expect } from "@executablemd/test-support/expect";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensure, Ok, scoped, spawn, suspend, until, withResolvers } from "effection";
+import { ensure, Err, Ok, race, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { useTempFileCompiler, Elicitation } from "@executablemd/core";
-import { serializeDurableEvent } from "@executablemd/durable-streams";
+import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
@@ -47,6 +54,7 @@ import {
   ENTRIES_FILE,
   PAIRED_DIRECTORY,
   parseEntryRecords,
+  parseSidekickRecord,
   readSidekickRecords,
   SIDEKICK_FILE,
   serializeSidekickRecord,
@@ -58,7 +66,13 @@ import { sidekickChatRows } from "../src/repl/program.ts";
 import type { ReplSidekickChatRow } from "../src/repl/application.ts";
 import type { SidekickReading } from "../src/repl/sidekick/model.ts";
 import { pairedReplRepository } from "../src/repl/sidekick/repository.ts";
-import { admitting, controlJournal, submitForSidekick } from "../src/repl/sidekick/admission.ts";
+import {
+  admitting,
+  coldReservations,
+  controlJournal,
+  retainResolution,
+  submitForSidekick,
+} from "../src/repl/sidekick/admission.ts";
 import { ROOT_IMPORT } from "../src/repl/entries.ts";
 import { openReplSession } from "../src/repl/session.ts";
 import {
@@ -73,6 +87,8 @@ import {
   mountedExecution,
   operationGate,
   useMountedHost,
+  awaitedFact,
+  recordingTerminal,
 } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { useReplPage } from "./support/repl-page.ts";
@@ -1552,6 +1568,161 @@ describe("Tier R2 — a reservation binds what the writer has acknowledged", () 
   });
 });
 
+describe("987 — whole-set Submit findings", () => {
+  it("validates all slots before retaining findings and resumes only missing outcomes", function* () {
+    yield* useTempFileCompiler();
+    const root = yield* useRepositoryRoot();
+    const pair = yield* pairedReplRepository(root.repository).create();
+    if (pair.chat.form !== "paired") {
+      throw new Error("a created execution is published as a pair");
+    }
+    for (const record of [...opened().slice(2), turn(1, "working"), reply(1, "working")]) {
+      yield* pair.chat.writer.append(record);
+    }
+    const openedSession = yield* openReplSession({ execution: pair });
+    if (!openedSession.ok) {
+      throw openedSession.error;
+    }
+    const session = openedSession.value;
+    const journal = controlJournal(pair.chat.writer, { conversation: CHAT, response: "r1" });
+    for (const source of ["First established entry.\n", "Second established entry.\n"]) {
+      yield* pair.stream.settled();
+      const ordinal = session.model.entries.length;
+      yield* journal.began(
+        { component: "REPL.Submit", arguments: {} },
+        {
+          ordinal,
+          entry: `entry-${ordinal + 1}`,
+          source,
+          revision: ordinal,
+          workspace: true,
+          retained: yield* bindRetainedPrefix(pair.stream.path),
+        },
+      );
+      const submitted = yield* session.submit(source);
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      yield* submitted.value.join();
+    }
+    const records = yield* pair.chat.writer.readAll();
+    const before = yield* until(readFile(pair.chat.location.sidekick, "utf8"));
+    const findings = yield* coldReservations(records, session.model.entries, pair.stream.path);
+    if (!findings.ok) {
+      throw findings.error;
+    }
+    expect(findings.value.map((one) => one.finding)).toEqual([
+      { kind: "admitted", entry: "entry-1" },
+      { kind: "admitted", entry: "entry-2" },
+    ]);
+    expect(findings.value.map((one) => one.intent.workspace)).toEqual([true, true]);
+    expect(yield* until(readFile(pair.chat.location.sidekick, "utf8"))).toBe(before);
+
+    for (const change of ["prefix", "ordinal", "key", "source", "competing slot"]) {
+      const conflicting = records.map((record): SidekickRecord => {
+        if (record.kind !== "control" || record.order !== 1 || record.submit === undefined) {
+          return record;
+        }
+        const submit = record.submit;
+        return {
+          ...record,
+          submit: {
+            ...submit,
+            ...(change === "prefix"
+              ? { retained: { ...submit.retained, sha256: "0".repeat(64) } }
+              : {}),
+            ...(change === "ordinal" ? { ordinal: 3 } : {}),
+            ...(change === "key" ? { entry: "entry-other" } : {}),
+            ...(change === "source" ? { source: "different" } : {}),
+            ...(change === "competing slot" ? { ordinal: 0, entry: "entry-1" } : {}),
+          },
+        };
+      });
+      const refused = yield* coldReservations(conflicting, session.model.entries, pair.stream.path);
+      expect(refused.ok).toBe(false);
+      expect(yield* until(readFile(pair.chat.location.sidekick, "utf8"))).toBe(before);
+    }
+
+    const first = findings.value[0];
+    if (first === undefined) {
+      throw new Error("the first reservation is missing");
+    }
+    const storage = pair.chat;
+    yield* scoped(function* () {
+      const failure = new Error("Late outcome append failed.");
+      yield* ReplHost.around(
+        {
+          *appendRecord([path, line], next) {
+            const record = parseSidekickRecord(line.trim());
+            if (record?.kind === "control-outcome") {
+              throw failure;
+            }
+            yield* next(path, line);
+          },
+        },
+        { at: "max" },
+      );
+      let observed: unknown;
+      try {
+        yield* retainResolution(storage.writer, first);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(yield* until(readFile(storage.location.sidekick, "utf8"))).toBe(before);
+    });
+    yield* retainResolution(pair.chat.writer, first);
+    const partial = yield* readSidekickRecords(pair.chat.location.sidekick);
+    const afterFirst = yield* until(readFile(pair.chat.location.sidekick, "utf8"));
+    const remaining = yield* coldReservations(partial, session.model.entries, pair.stream.path);
+    if (!remaining.ok) {
+      throw remaining.error;
+    }
+    expect(remaining.value.map((one) => one.finding)).toEqual([
+      { kind: "admitted", entry: "entry-2" },
+    ]);
+    expect(yield* until(readFile(pair.chat.location.sidekick, "utf8"))).toBe(afterFirst);
+    for (const finding of remaining.value) {
+      yield* retainResolution(pair.chat.writer, finding);
+    }
+    const settled = yield* coldReservations(
+      yield* pair.chat.writer.readAll(),
+      session.model.entries,
+      pair.stream.path,
+    );
+    expect(settled).toEqual(Ok([]));
+    expect(session.model.entries.map((one) => one.source)).toEqual([
+      "First established entry.\n",
+      "Second established entry.\n",
+    ]);
+    expect(
+      (yield* pair.chat.writer.readAll()).filter((one) => one.kind === "control-outcome"),
+    ).toHaveLength(2);
+    const absent = {
+      ordinal: 2,
+      entry: "entry-3",
+      source: "Never admitted.\n",
+      revision: 2,
+      retained: yield* bindRetainedPrefix(pair.stream.path),
+    };
+    yield* journal.began({ component: "REPL.Submit", arguments: {} }, absent);
+    const oneAbsent = yield* coldReservations(
+      yield* pair.chat.writer.readAll(),
+      session.model.entries,
+      pair.stream.path,
+    );
+    expect(oneAbsent.ok && oneAbsent.value.map((one) => one.finding)).toEqual([{ kind: "absent" }]);
+    yield* journal.began({ component: "REPL.Submit", arguments: {} }, absent);
+    const competing = yield* coldReservations(
+      yield* pair.chat.writer.readAll(),
+      session.model.entries,
+      pair.stream.path,
+    );
+    expect(competing.ok).toBe(false);
+    expect(session.model.entries).toHaveLength(2);
+  });
+});
+
 describe("Tier SS — what a saved Sidekick turn establishes about itself", () => {
   it("SS6: each actual nonempty key is filter evidence, and a record lacking one gains none", function* () {
     // Four turns of one conversation, each carrying what its own record
@@ -2585,7 +2756,7 @@ describe("975 — placement survives cold Submit reconciliation", () => {
         if (!reading.ok) {
           throw reading.error;
         }
-        expect(reading.value.submit).toBe(undefined);
+        expect(reading.value.submits.filter((one) => !one.settled)).toEqual([]);
         expect(
           reading.value.submits.some(
             (intent) =>
@@ -2611,4 +2782,917 @@ describe("975 — placement survives cold Submit reconciliation", () => {
       });
     });
   }
+});
+
+describe("987 — distinct instruction after unknown feedback", () => {
+  it("joins the exact owned turn before a distinct same-session instruction", function* () {
+    let effects = 0;
+    let independent = false;
+    let acknowledgements = 0;
+    const admittedWork = withResolvers<void>();
+    const held = yield* useHarness(undefined, {
+      *acknowledge() {
+        acknowledgements++;
+      },
+      state: (initial) => ({ ...initial, message: "Message remains", draft: "Draft remains" }),
+      entryInstallation: {
+        components: [
+          {
+            name: "EstablishedEffect",
+            origin: "test",
+            props: { type: "object", additionalProperties: false },
+            factory: () =>
+              function* () {
+                effects++;
+                return "established once";
+              },
+          },
+          {
+            name: "IndependentWork",
+            origin: "test",
+            props: { type: "object", additionalProperties: false },
+            factory: () =>
+              function* () {
+                yield* ensure(() => {
+                  independent = false;
+                });
+                independent = true;
+                admittedWork.resolve();
+                yield* suspend();
+                return null;
+              },
+          },
+        ],
+      },
+    });
+    const completed = yield* held.session.submit("<EstablishedEffect />");
+    if (!completed.ok) {
+      throw completed.error;
+    }
+    yield* completed.value.join();
+    const active = yield* held.session.submit("<IndependentWork />");
+    if (!active.ok) {
+      throw active.error;
+    }
+    yield* admittedWork.operation;
+    held.fake.script({ reply: "<REPL.Bindings />" });
+    held.fake.script({ deltas: ["<Output>Thinking", " further.</Output>"], holdAfter: 1 });
+    const original = yield* spawn(() => held.owner.message("Inspect the retained bindings."));
+    yield* held.fake.streamingTurns(1);
+    const review = yield* held.owner.reviewRecovery();
+    if (!review.ok) {
+      throw review.error;
+    }
+    expect(review.value.requests).toHaveLength(1);
+    const before = held.fake.prompts[1];
+    const cleanup = held.fake.holdCancellation();
+    yield* ensure(() => cleanup.release());
+    held.fake.script({ reply: "<Output>Continuing from the established result.</Output>" });
+    const recovering = yield* spawn(() =>
+      held.owner.recover(
+        review.value,
+        "Propose the next step from the established result.",
+        false,
+        { current: () => true },
+      ),
+    );
+    const stopping = yield* race([cleanup.reached, recovering]);
+    if (stopping !== undefined) {
+      throw stopping.ok ? new Error("Recovery returned before the cleanup gate.") : stopping.error;
+    }
+    expect(held.fake.prompts).toHaveLength(2);
+    cleanup.release();
+    const result = yield* recovering;
+    if (!result.ok) {
+      throw result.error;
+    }
+    yield* original;
+    expect(held.fake.prompts).toHaveLength(3);
+    expect(held.fake.prompts[2]).toContain("Propose the next step from the established result.");
+    expect(held.fake.prompts[2]).toContain("acceptance remains unknown");
+    expect(held.fake.prompts[2]).not.toBe(before);
+    expect(held.fake.turns[2]?.handle.sessionKey).toBe(held.fake.turns[0]?.handle.sessionKey);
+    expect(held.session.model.entries).toHaveLength(2);
+    expect(effects).toBe(1);
+    expect(independent).toBe(true);
+    expect(acknowledgements).toBe(1);
+    expect(held.state().message).toBe("Message remains");
+    expect(held.state().draft).toBe("Draft remains");
+    expect(held.fake.prompts[2]).toContain("Entry entry-1: completed");
+    expect(held.fake.prompts[2]).toContain("Entry entry-2: running");
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    expect(reading.value.unestablished).toHaveLength(1);
+    expect(reading.value.recoveries.map((one) => one.used)).toEqual([true]);
+    expect(reading.value.recoveryPending).toBe(false);
+    held.fake.script({ reply: "<Output>A subsequent ordinary message.</Output>" });
+    const subsequent = yield* held.owner.message("Continue normally.");
+    expect(subsequent.ok).toBe(true);
+    expect(held.fake.prompts).toHaveLength(4);
+  });
+});
+
+describe("987 — retained unsuccessful feedback", () => {
+  for (const status of ["failed", "cancelled"]) {
+    it(`continues after a locally joined ${status} attempt without evaluating its controls`, function* () {
+      const held = yield* useHarness();
+      held.fake.script({ reply: "<REPL.Bindings />" });
+      held.fake.script({
+        reply: "<REPL.Submit /><Output>Untrusted failed reply.</Output>",
+        ...(status === "failed" ? { failure: "Internal error" } : { cancelled: true }),
+      });
+      yield* held.owner.message("Inspect established work.");
+      const before = held.owner.reading;
+      if (!before.ok) {
+        throw before.error;
+      }
+      expect(before.value.turns.at(-1)?.status).toBe(status);
+      if (status === "failed") {
+        expect(before.value.turns.at(-1)?.incomplete?.failure).toContain("Internal error");
+      }
+      expect(held.session.model.entries).toHaveLength(0);
+      const review = yield* held.owner.reviewRecovery();
+      if (!review.ok) {
+        throw review.error;
+      }
+      held.fake.script({ reply: "<Output>A distinct new request.</Output>" });
+      const result = yield* held.owner.recover(
+        review.value,
+        "Inspect the established result and propose the next step.",
+        false,
+        { current: () => true },
+      );
+      if (!result.ok) {
+        throw result.error;
+      }
+      expect(held.fake.prompts).toHaveLength(3);
+      expect(held.fake.turns[2]?.handle.sessionKey).toBe(held.fake.turns[0]?.handle.sessionKey);
+      expect(held.fake.prompts[2]).toContain("earlier feedback".replace("earlier", "Earlier"));
+      expect(held.session.model.entries).toHaveLength(0);
+      expect(held.owner.reading.ok && held.owner.reading.value.recoveryPending).toBe(false);
+    });
+  }
+});
+
+describe("987 — exact retained ownership eligibility", () => {
+  it("uses only the captured construction and clean release, without forcing ownership", function* () {
+    const held = yield* useHarness();
+    held.fake.script({ reply: "<REPL.Bindings />" });
+    held.fake.script({ reply: "", failure: "Internal error" });
+    yield* held.owner.message("Inspect established work.");
+    const review = yield* held.owner.reviewRecovery();
+    if (!review.ok) {
+      throw review.error;
+    }
+    if (held.execution.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    const records = yield* held.execution.chat.writer.readAll();
+    const key = held.fake.turns[0]?.handle.sessionKey;
+    if (key === undefined) {
+      throw new Error("The canonical turn has no session key.");
+    }
+    const expected = agentSessionKeyDigest({
+      provider: "acpx",
+      agent: "scripted-sidekick-cmd",
+      sessionKey: key,
+    });
+    const cases: {
+      state: "active" | "idle";
+      release: "none" | "quiesced" | "forced";
+      accepted: boolean;
+    }[] = [
+      { state: "idle", release: "quiesced", accepted: true },
+      { state: "idle", release: "forced", accepted: false },
+      { state: "active", release: "none", accepted: false },
+    ];
+    for (const one of cases) {
+      let inspected: string | undefined;
+      const result = yield* inspectRecoveryOwnership(records, review.value.conversation, {
+        *inspectOwnership(keyDigest) {
+          inspected = keyDigest;
+          return Ok({
+            keyDigest,
+            recordRevision: "retained-revision",
+            record: {
+              keyDigest,
+              state: one.state,
+              release: one.release,
+              ownerKind: "session",
+              operationId: "retained-owner",
+              lastForcedRecovery: null,
+            },
+          });
+        },
+        *forceRecoverOwnership() {
+          throw new Error("Recovery must not force ownership.");
+        },
+      });
+      expect(inspected).toBe(expected);
+      expect(result.ok).toBe(one.accepted);
+    }
+    expect(
+      (yield* inspectRecoveryOwnership(records, review.value.conversation, undefined)).ok,
+    ).toBe(false);
+    expect(held.fake.prompts).toHaveLength(2);
+  });
+});
+
+describe("987 — recovery recording failures", () => {
+  for (const cut of ["recovery-decision", "message"]) {
+    it(`sends nothing and retains the actual unused state when ${cut} append fails`, function* () {
+      const held = yield* useHarness();
+      held.fake.script({ reply: "<REPL.Bindings />" });
+      held.fake.script({ reply: "", failure: "Internal error" });
+      yield* held.owner.message("Inspect established work.");
+      const review = yield* held.owner.reviewRecovery();
+      if (!review.ok) {
+        throw review.error;
+      }
+      const failure = new Error(`Recording failure at ${cut}`);
+      let refused = false;
+      yield* ReplHost.around(
+        {
+          *appendRecord([path, line], next) {
+            const record = parseSidekickRecord(line.trim());
+            if (record?.kind === cut) {
+              refused = true;
+              throw failure;
+            }
+            if (refused) {
+              throw new Error("A failed append must not cause a compensating write.");
+            }
+            yield* next(path, line);
+          },
+        },
+        { at: "max" },
+      );
+      let observed: unknown;
+      try {
+        yield* scoped(() =>
+          held.owner.recover(review.value, "Inspect the actual established result.", false, {
+            current: () => true,
+          }),
+        );
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(held.fake.prompts).toHaveLength(2);
+      if (held.execution.chat.form !== "paired") {
+        throw new Error("Expected paired history.");
+      }
+      const records = yield* held.execution.chat.writer.readAll();
+      const decisions = records.filter((one) => one.kind === "recovery-decision");
+      expect(decisions).toHaveLength(cut === "message" ? 1 : 0);
+      const reading = projectSidekick(records);
+      if (!reading.ok) {
+        throw reading.error;
+      }
+      expect(reading.value.recoveries.every((one) => !one.used)).toBe(true);
+      const before = held.fake.prompts.length;
+      yield* held.owner.reviewRecovery();
+      expect(held.fake.prompts).toHaveLength(before);
+    });
+  }
+});
+
+describe("987 — recovery permission consumption", () => {
+  for (const cut of ["decision", "message", "prompt"]) {
+    it(`observes passively and never reuses consumed permission after ${cut}`, function* () {
+      const reached = withResolvers<void>();
+      const held = yield* useHarness();
+      held.fake.script({ reply: "<REPL.Bindings />" });
+      held.fake.script({ reply: "", failure: "Internal error" });
+      const initial = yield* held.owner.message("Inspect established work.");
+      if (!initial.ok && held.fake.prompts.length === 0) {
+        throw initial.error;
+      }
+      const review = yield* held.owner.reviewRecovery();
+      if (!review.ok) {
+        throw review.error;
+      }
+      let gate = cut === "message" ? held.fake.holdStatus() : undefined;
+      yield* ensure(() => gate?.release());
+      if (cut === "message") {
+        held.fake.configuration({
+          model: { selected: "fast", choices: [{ id: "fast", name: "Fast" }] },
+        });
+        const saved = yield* held.owner.configure({ model: "fast" });
+        if (!saved.ok) {
+          throw saved.error;
+        }
+      }
+      let holdMessage = true;
+      yield* ReplHost.around(
+        {
+          *appendRecord([path, line], next) {
+            const record = parseSidekickRecord(line.trim());
+            if (holdMessage && cut === "decision" && record?.kind === "message") {
+              reached.resolve();
+              yield* suspend();
+            }
+            yield* next(path, line);
+          },
+        },
+        { at: "max" },
+      );
+      held.fake.script({ held: true, reply: "<Output>A distinct request.</Output>" });
+      const task = yield* spawn(() =>
+        held.owner.recover(review.value, "Inspect the actual established result.", false, {
+          current: () => true,
+        }),
+      );
+      if (cut === "decision") {
+        yield* reached.operation;
+      } else if (gate !== undefined) {
+        yield* gate.reached;
+      } else {
+        yield* held.fake.holdingTurns(1);
+      }
+      if (held.execution.chat.form !== "paired") {
+        throw new Error("Expected paired history.");
+      }
+      const during = projectSidekick(yield* held.execution.chat.writer.readAll());
+      if (!during.ok) {
+        throw during.error;
+      }
+      expect(during.value.recoveries[0]?.used).toBe(cut !== "decision");
+      expect(held.fake.prompts).toHaveLength(cut === "prompt" ? 3 : 2);
+      yield* task.halt();
+      gate?.release();
+      gate = undefined;
+      yield* held.owner.stop();
+      const before = yield* readSidekickRecords(held.execution.chat.writer.path);
+      yield* held.repository.open(held.execution.id);
+      yield* held.owner.reviewRecovery();
+      expect(yield* readSidekickRecords(held.execution.chat.writer.path)).toEqual(before);
+      const promptCount = held.fake.prompts.length;
+      if (cut === "decision") {
+        holdMessage = false;
+        const activated = yield* spawn(() =>
+          held.owner.recover(review.value, "Inspect the actual established result.", false, {
+            current: () => true,
+          }),
+        );
+        const arrival = yield* race([held.fake.holdingTurns(1), activated]);
+        if (arrival !== undefined) {
+          throw arrival.ok
+            ? new Error("The deliberate activation returned without its new turn.")
+            : arrival.error;
+        }
+        held.fake.releaseTurn();
+        const result = yield* activated;
+        if (!result.ok) {
+          throw result.error;
+        }
+        const after = held.owner.reading;
+        if (!after.ok) {
+          throw after.error;
+        }
+        expect(after.value.recoveries).toHaveLength(1);
+        expect(after.value.recoveries[0]?.used).toBe(true);
+      }
+      if (cut !== "decision") {
+        const next = yield* held.owner.recover(
+          review.value,
+          "Inspect the actual established result.",
+          false,
+          { current: () => true },
+        );
+        expect(next.ok).toBe(false);
+        expect(held.fake.prompts).toHaveLength(promptCount);
+      }
+    });
+  }
+});
+
+describe("987 — outer Prompt refusal", () => {
+  it("refuses recovery without rewriting an outer failed canonical Prompt", function* () {
+    const held = yield* useHarness();
+    held.fake.script({ reply: "<Output>Established first turn.</Output>" });
+    yield* held.owner.message("Inspect the original conversation.");
+    const known = held.owner.reading;
+    if (!known.ok || known.value.active === undefined || held.execution.chat.form !== "paired") {
+      throw new Error("Expected the original readable paired conversation.");
+    }
+    const event = parseDurableEvent(
+      JSON.stringify({
+        type: "yield",
+        coroutineId: "root",
+        description: { type: AGENT_PROMPT, name: "turn:2", input: "uncertain request" },
+        result: { status: "err", error: { name: "Error", message: "Outer Prompt failure" } },
+      }),
+    );
+    if (!event.ok) {
+      throw event.error;
+    }
+    const writer = held.execution.chat.writer;
+    yield* writer.append({
+      kind: "event",
+      conversation: known.value.active,
+      sequence: 999,
+      event: serializeDurableEvent(event.value),
+    });
+    const before = yield* writer.readAll();
+    const review = yield* held.owner.reviewRecovery();
+    expect(review.ok).toBe(false);
+    expect(held.fake.prompts).toHaveLength(1);
+    expect(yield* writer.readAll()).toEqual(before);
+    expect(before.some((one) => one.kind === "recovery-decision")).toBe(false);
+  });
+});
+
+describe("987 — joined recovery before canonical feedback publication", () => {
+  it("keeps accepted old input unknown and sends only the new instruction after joined Stop", function* () {
+    const reached = withResolvers<void>();
+    let prompts = 0;
+    yield* ReplHost.around(
+      {
+        *appendRecord([path, line], next) {
+          const record = parseSidekickRecord(line.trim());
+          if (record?.kind === "event") {
+            const event = parseDurableEvent(record.event);
+            if (
+              event.ok &&
+              event.value.type === "yield" &&
+              event.value.description.type === AGENT_PROMPT &&
+              ++prompts === 2
+            ) {
+              reached.resolve();
+              yield* suspend();
+            }
+          }
+          yield* next(path, line);
+        },
+      },
+      { at: "max" },
+    );
+    const held = yield* useHarness();
+    held.fake.script({ reply: "<REPL.Bindings />" });
+    held.fake.script({ reply: "<Output>The old accepted result.</Output>" });
+    const original = yield* spawn(() => held.owner.message("Inspect established work."));
+    yield* reached.operation;
+    expect(held.fake.prompts).toHaveLength(2);
+    const review = yield* held.owner.reviewRecovery();
+    if (!review.ok) {
+      throw review.error;
+    }
+    expect(review.value.requests).toHaveLength(1);
+    held.fake.script({ reply: "<Output>A distinct next step.</Output>" });
+    const recovered = yield* held.owner.recover(
+      review.value,
+      "Propose the distinct next step.",
+      false,
+      { current: () => true },
+    );
+    if (!recovered.ok) {
+      throw recovered.error;
+    }
+    yield* original;
+    expect(held.fake.prompts).toHaveLength(3);
+    expect(held.fake.prompts[2]).toContain("Propose the distinct next step.");
+    expect(held.fake.turns[2]?.handle.sessionKey).toBe(held.fake.turns[0]?.handle.sessionKey);
+    expect(held.owner.reading.ok && held.owner.reading.value.unestablished).toHaveLength(1);
+  });
+});
+
+describe("987 — actual child reference recording faults", () => {
+  for (const cut of ["offered", "acknowledged", "activation", "activation-uncertain"]) {
+    it(`sends nothing and retains fatal recording precedence at ${cut}`, function* () {
+      const failure = new Error(`Reference recording failure: ${cut}`);
+      let asserted = false;
+      try {
+        yield* scoped(function* () {
+          let armed = false;
+          let reached = false;
+          yield* ReplHost.around(
+            {
+              *appendRecord([path, line], next) {
+                const record = parseSidekickRecord(line.trim());
+                const selected =
+                  armed &&
+                  ((record?.kind === "recovery-reference" && record.phase === cut) ||
+                    (record?.kind === "conversation" &&
+                      record.phase === "activated" &&
+                      cut.startsWith("activation")));
+                if (selected) {
+                  reached = true;
+                  if (cut === "activation-uncertain") {
+                    yield* next(path, line);
+                  }
+                  throw failure;
+                }
+                if (reached) {
+                  throw new Error("Recording failure caused a compensating append.");
+                }
+                yield* next(path, line);
+              },
+            },
+            { at: "max" },
+          );
+          const held = yield* useHeadlessFixture();
+          held.host.fake.script({ reply: "<REPL.Bindings />" });
+          held.host.fake.script({ reply: "<REPL.Submit />", failure: "Internal error" });
+          const sent = yield* held.root.session.submit(promptChild("Inspect established work."));
+          if (!sent.ok) {
+            throw sent.error;
+          }
+          yield* sent.value.join();
+          const terminal = recordingTerminal();
+          const ui = yield* spawn(function* () {
+            yield* terminal.install();
+            try {
+              yield* attachChildUi(held.reference.sessionId);
+            } catch (error) {
+              return error;
+            }
+            return undefined;
+          });
+          const click = function* (label: string, wait = true) {
+            yield* held.input.ready(terminal.terminal);
+            const rows = terminal.terminal.screen?.rows() ?? [];
+            const found = rows.flatMap((line, row) => {
+              const column = line.indexOf(label);
+              return column < 0 ? [] : [{ row, column }];
+            });
+            const at = found.length === 1 ? found[0] : undefined;
+            if (at === undefined) {
+              throw new Error(`Expected one ${label}: ${rows.join("\n")}`);
+            }
+            const bytes = `\x1b[<0;${at.column + 1};${at.row + 1}M`;
+            if (wait) {
+              yield* held.input.input(terminal.terminal, bytes);
+            } else {
+              terminal.terminal.feed(bytes);
+            }
+          };
+          yield* held.input.ready(terminal.terminal);
+          yield* click("[review recovery]");
+          yield* held.input.input(
+            terminal.terminal,
+            "Inspect the established result and propose the next step.",
+          );
+          yield* click("[different conversation]");
+          armed = true;
+          yield* click("[abandon; new chat]", false);
+          if (cut !== "offered") {
+            yield* awaitedFact("the actual offered reference", function* () {
+              return (yield* readSidekickRecords(
+                pairedLocation(held.host.root, held.descriptor.execution).sidekick,
+              )).some((one) => one.kind === "recovery-reference" && one.phase === "offered");
+            });
+            yield* held.input.ready(terminal.terminal);
+            yield* click("[saved reference; continue]", false);
+          }
+          yield* ui;
+          expect(reached).toBe(true);
+          expect(held.host.fake.prompts).toHaveLength(2);
+          const location = pairedLocation(held.host.root, held.descriptor.execution);
+          const records = yield* readSidekickRecords(location.sidekick);
+          const projected = projectSidekick(records);
+          if (!projected.ok) {
+            throw projected.error;
+          }
+          expect(projected.value.active === held.descriptor.conversation).toBe(
+            cut !== "activation-uncertain",
+          );
+          expect(
+            records.filter((one) => one.kind === "recovery-reference" && one.phase === "offered"),
+          ).toHaveLength(cut === "offered" ? 0 : 1);
+          expect(
+            records.filter(
+              (one) => one.kind === "recovery-reference" && one.phase === "acknowledged",
+            ),
+          ).toHaveLength(cut.startsWith("activation") ? 1 : 0);
+          expect(
+            records.filter((one) => one.kind === "conversation" && one.phase === "failed"),
+          ).toHaveLength(0);
+          yield* held.host.repository.open(held.descriptor.execution);
+          expect(held.host.fake.prompts).toHaveLength(2);
+          asserted = true;
+        });
+      } catch (error) {
+        const messages: string[] = [];
+        let cause: unknown = error;
+        while (cause instanceof Error) {
+          messages.push(cause.message);
+          cause = cause.cause;
+        }
+        expect(messages.some((one) => one.includes(failure.message))).toBe(true);
+      }
+      expect(asserted).toBe(true);
+    });
+  }
+});
+
+describe("987 — exact missing original and deliberate fallback", () => {
+  it("refuses unsupported cold stopping and replaces only after exact load failure and explicit action", function* () {
+    const held = yield* useHarness();
+    held.fake.script({ reply: "<REPL.Bindings />" });
+    held.fake.script({ reply: "", failure: "Internal error" });
+    yield* held.owner.message("Inspect established work.");
+    const original = held.fake.turns[0]?.handle.sessionKey;
+    if (original === undefined) {
+      throw new Error("Expected the original native session.");
+    }
+    const reopened = yield* held.repository.open(held.execution.id);
+    if (reopened.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    const chat = reopened.chat;
+    let clean = false;
+    const cold = yield* useSidekickOwner({
+      assembly: {
+        ...held.profile.sidekickAssembly,
+        ownershipAdministration: {
+          *inspectOwnership(keyDigest) {
+            return clean
+              ? Ok({
+                  keyDigest,
+                  recordRevision: "clean",
+                  record: {
+                    keyDigest,
+                    state: "idle",
+                    release: "quiesced",
+                    ownerKind: "session",
+                    operationId: "joined-owner",
+                    lastForcedRecovery: null,
+                  },
+                })
+              : Err(new Error("No supported retained controller."));
+          },
+          *forceRecoverOwnership() {
+            throw new Error("Recovery cannot force a backend stop.");
+          },
+        },
+      },
+      chat,
+      *establish() {
+        return Ok(chat);
+      },
+      root: {
+        ...rootReads(held.session, held.profile),
+        *fill() {
+          return Err(new Error("This witness admits no draft fill."));
+        },
+      },
+      *submit() {
+        return Err(new Error("This witness admits no entry."));
+      },
+      revision: () => 0,
+      *acknowledge() {},
+      draft: () => "",
+    });
+    const review = yield* cold.reviewRecovery();
+    if (!review.ok) {
+      throw review.error;
+    }
+    const before = yield* reopened.chat.writer.readAll();
+    const refused = yield* cold.recover(review.value, "Inspect the established result.", false, {
+      current: () => true,
+    });
+    expect(refused.ok).toBe(false);
+    expect(yield* reopened.chat.writer.readAll()).toEqual(before);
+    expect(held.fake.prompts).toHaveLength(2);
+    clean = true;
+    held.fake.missingSession(original);
+    const missing = yield* cold.recover(review.value, "Inspect the established result.", false, {
+      current: () => true,
+    });
+    expect(missing.ok ? missing.value.failure : missing.error.message).toContain(
+      "exact retained backend session is missing",
+    );
+    expect(held.fake.prompts).toHaveLength(2);
+    const afterFailure = cold.reading;
+    if (!afterFailure.ok) {
+      throw afterFailure.error;
+    }
+    expect(afterFailure.value.active).toBe(review.value.conversation);
+    const replacement = yield* cold.reviewRecovery();
+    if (!replacement.ok) {
+      throw replacement.error;
+    }
+    held.fake.script({ reply: "<Output>A deliberately different conversation.</Output>" });
+    const result = yield* cold.recover(
+      replacement.value,
+      "Continue from the established result in a different conversation.",
+      true,
+      { current: () => true },
+    );
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(held.fake.prompts).toHaveLength(3);
+    expect(held.fake.turns[2]?.handle.sessionKey).not.toBe(original);
+    expect(cold.agent).toBe(held.owner.agent);
+    expect(held.session.model.entries).toHaveLength(0);
+  });
+});
+
+describe("987 — root whole-set reconciliation", () => {
+  for (const interrupted of [false, true]) {
+    it(`reconciles the acknowledged head while inspecting older History${interrupted ? " across the first outcome cut" : ""}`, function* () {
+      const host = yield* useMountedHost();
+      const pair = yield* host.repository.create();
+      if (pair.chat.form !== "paired") {
+        throw new Error("Expected paired history.");
+      }
+      const chat = pair.chat;
+      for (const record of [...opened().slice(2), turn(1, "working"), reply(1, "working")]) {
+        yield* chat.writer.append(record);
+      }
+      let marker = "";
+      yield* scoped(function* () {
+        const profile = yield* host.profile.finalize(chat.location.directory);
+        const opened = yield* openReplSession({
+          execution: pair,
+          includes: profile.includes,
+          installations: profile.installations,
+          permissionMode: profile.permissionMode,
+        });
+        if (!opened.ok) {
+          throw opened.error;
+        }
+        const session = opened.value;
+        const journal = controlJournal(chat.writer, { conversation: CHAT, response: "r1" });
+        for (const source of [
+          "First actual established entry.\n",
+          "Second actual established entry.\n",
+        ]) {
+          yield* pair.stream.settled();
+          const ordinal = session.model.entries.length;
+          yield* journal.began(
+            { component: "REPL.Submit", arguments: {} },
+            {
+              ordinal,
+              entry: `entry-${ordinal + 1}`,
+              source,
+              revision: ordinal,
+              workspace: true,
+              retained: yield* bindRetainedPrefix(pair.stream.path),
+            },
+          );
+          const entry = yield* session.submit(source);
+          if (!entry.ok) {
+            throw entry.error;
+          }
+          yield* entry.value.join();
+          if (ordinal === 0) {
+            marker = session.model.checkpoints.at(-1)?.marker ?? "";
+          }
+        }
+      });
+      yield* chat.writer.append({
+        kind: "feedback",
+        conversation: CHAT,
+        response: "r1",
+        turn: null,
+        text: "The old feedback with unknown acceptance.",
+      });
+      const entriesBefore = yield* until(readFile(chat.location.entries, "utf8"));
+      const originalLocation = encodeLocation({
+        ...initialState(pair.id).route,
+        at: marker,
+        inspect: true,
+        view: "sidekick",
+      });
+      let hold = interrupted;
+      const reached = withResolvers<void>();
+      yield* ReplHost.around(
+        {
+          *appendRecord([path, line], next) {
+            const record = parseSidekickRecord(line.trim());
+            if (hold && record?.kind === "control-outcome" && record.order === 1) {
+              reached.resolve();
+              yield* suspend();
+            }
+            yield* next(path, line);
+          },
+        },
+        { at: "max" },
+      );
+      const activate = function* (page: import("./support/repl-page.ts").ReplPage) {
+        yield* page.until("the root recovery action", (one) => one.shows("[review recovery]"));
+        yield* page.press("[review recovery]");
+        yield* page.until("the root recovery account", (one) =>
+          one.shows("Earlier feedback acceptance remains unknown."),
+        );
+        const pending = yield* readSidekickRecords(chat.location.sidekick);
+        expect(host.fake.prompts).toHaveLength(0);
+        expect(pending.filter((one) => one.kind === "recovery-decision")).toHaveLength(0);
+        yield* page.until("the new instruction field", (one) => one.shows(">> New instruction:"));
+        yield* page.type("Propose the next distinct step.");
+        yield* page.until("the reviewed new instruction", (one) =>
+          one.shows("Propose the next distinct step."),
+        );
+        yield* page.press("[different conversation]");
+        yield* page.until("the deliberate replacement confirmation", (one) =>
+          one.shows("[abandon; new chat]"),
+        );
+        yield* page.press("[abandon; new chat]");
+      };
+      if (interrupted) {
+        yield* scoped(function* () {
+          const page = yield* useReplPage({ host, location: originalLocation });
+          yield* activate(page);
+          yield* reached.operation;
+          const partial = yield* readSidekickRecords(chat.location.sidekick);
+          expect(partial.filter((one) => one.kind === "control-outcome")).toHaveLength(1);
+          page.repl.terminal.end();
+          yield* awaited("the interrupted root joining", () => page.repl.outcome() !== undefined);
+        });
+        hold = false;
+      }
+      const beforeOpen = yield* until(readFile(chat.location.sidekick, "utf8"));
+      const page = yield* useReplPage({ host, location: originalLocation });
+      expect(yield* until(readFile(chat.location.sidekick, "utf8"))).toBe(beforeOpen);
+      host.fake.script({ reply: "<Output>Only the new instruction ran.</Output>" });
+      yield* activate(page);
+      yield* page.until("the new recovery response", (one) =>
+        one.shows("Only the new instruction ran."),
+      );
+      const final = yield* readSidekickRecords(chat.location.sidekick);
+      expect(final.filter((one) => one.kind === "control-outcome")).toHaveLength(2);
+      expect(yield* until(readFile(chat.location.entries, "utf8"))).toBe(entriesBefore);
+      expect(host.fake.prompts).toHaveLength(1);
+      expect(host.fake.prompts[0]).toContain("Entry entry-1: completed");
+      expect(host.fake.prompts[0]).toContain("Entry entry-2: completed");
+    });
+  }
+});
+
+describe("987 — replacement preparation disposition", () => {
+  for (const cut of ["setup failure", "cancelled preparation"]) {
+    it(`preserves the original and never recreates a target after ${cut}`, function* () {
+      const held = yield* useHarness();
+      held.fake.script({ reply: "<REPL.Bindings />" });
+      held.fake.script({ reply: "", failure: "Internal error" });
+      yield* held.owner.message("Inspect established work.");
+      const review = yield* held.owner.reviewRecovery();
+      if (!review.ok) {
+        throw review.error;
+      }
+      const waiting = withResolvers<void>();
+      if (cut === "setup failure") {
+        held.fake.unavailable(held.owner.agent, new Error("The new session could not be started."));
+      }
+      const attempt = yield* spawn(() =>
+        held.owner.recover(review.value, "A distinct replacement instruction.", true, {
+          current: () => true,
+          *handoff() {
+            waiting.resolve();
+            yield* suspend();
+            return Ok(undefined);
+          },
+        }),
+      );
+      if (cut === "cancelled preparation") {
+        yield* waiting.operation;
+        yield* attempt.halt();
+      } else {
+        expect((yield* attempt).ok).toBe(false);
+      }
+      const reading = held.owner.reading;
+      if (!reading.ok) {
+        throw reading.error;
+      }
+      expect(reading.value.active).toBe(review.value.conversation);
+      expect(reading.value.conversations.filter((one) => one.phase === "failed")).toHaveLength(1);
+      expect(reading.value.recoveries[0]?.withdrawn).toBe(true);
+      if (held.execution.chat.form !== "paired") {
+        throw new Error("Expected paired history.");
+      }
+      const before = yield* held.execution.chat.writer.readAll();
+      yield* held.owner.reviewRecovery();
+      yield* held.repository.open(held.execution.id);
+      expect(yield* held.execution.chat.writer.readAll()).toEqual(before);
+      expect(held.fake.prompts).toHaveLength(2);
+    });
+  }
+});
+
+describe("987 correction — cold prepared replacement", () => {
+  it("withdraws only on deliberate action and permits a fresh decision after a real process cut", function* () {
+    const root = yield* createRepositoryRoot();
+    yield* ensure(() => root.discard());
+    yield* runPhase("chat-open", root, "cold-preparation");
+    const cut = yield* runPhase("recovery-prepared-cut", root, "cold-preparation");
+    expect(cut.prompts).toBe(2);
+    const before = yield* runPhase("bytes", root, "cold-preparation");
+    expect(before.sidekick).toContain('"phase":"prepared"');
+    expect(before.sidekick).not.toContain('"phase":"failed"');
+    const resumed = yield* runPhase("recovery-prepared-reopen", root, "cold-preparation");
+    expect(resumed.passive).toBe(true);
+    expect(resumed.firstRefused).toBe(true);
+    expect(resumed.withdrawn).toBe(true);
+    expect(resumed.originalSelected).toBe(true);
+    expect(resumed.renewed).toBe(true);
+    expect(resumed.prompts).toHaveLength(1);
+    expect(JSON.stringify(resumed.prompts)).toContain("A new deliberate replacement instruction.");
+    expect(resumed.decisions).toHaveLength(2);
+    expect(resumed.unknown).toBeGreaterThan(0);
+  });
 });
