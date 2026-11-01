@@ -200,6 +200,11 @@ invocation produced. The install and the type check therefore resolve every
 sibling from the working tree, which is what a branch changing a shared API
 needs, and no build asks npm for a package from its own release.
 
+After dnt emits a package, the build restores its supplied `.d.ts` files and
+type-only siblings in directories present in the emitted type graph. These exact
+declarations reach dependent builds before installation and type checking, so a
+vendored JavaScript module keeps the interface its source package supplies.
+
 **Phase 2 finalizes every manifest together**, once the last dnt call has
 returned. Each internal `file:` range becomes the sibling's `^<version>`, taken
 from the workspace manifests rather than from the version on the command line.

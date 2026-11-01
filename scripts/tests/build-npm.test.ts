@@ -79,6 +79,36 @@ function* packedArtifact(outDir: string): Operation<Record<string, string>> {
 }
 
 describe("build-npm skip-install mode", () => {
+  it("preserves supplied JavaScript declarations and their type-only siblings", function* () {
+    const root = yield* useNpmWorkspace();
+    const pkg = path.join(root, "packages/durable-streams");
+    yield* ensureDir(path.join(pkg, "src"));
+    yield* writeTextFile(
+      path.join(pkg, "mod.ts"),
+      (yield* readTextFile(path.join(pkg, "mod.ts"))) +
+        '\n// @ts-types="./src/declared.d.ts"\nexport * from "./src/declared.js";\n',
+    );
+    yield* writeTextFile(
+      path.join(pkg, "src/declared.js"),
+      "export function registry(options) { return { resolve(name) { return name; } }; }\n",
+    );
+    const declaration = [
+      'import type { Settings } from "./settings.d.ts";',
+      "export interface Runtime { ensure(input: string): Promise<string>; }",
+      "export declare function registry(options?: Settings): { resolve(name: string): string };",
+      "",
+    ].join("\n");
+    const settings = "export interface Settings { name?: string; }\n";
+    yield* writeTextFile(path.join(pkg, "src/declared.d.ts"), declaration);
+    yield* writeTextFile(path.join(pkg, "src/settings.d.ts"), settings);
+    const built = yield* buildNpm(root, "packages/durable-streams");
+    if (built.code !== 0) {
+      throw new Error(`declaration fixture exited ${built.code}\n${built.stderr}`);
+    }
+    expect(yield* readTextFile(path.join(pkg, "npm/types/src/declared.d.ts"))).toBe(declaration);
+    expect(yield* readTextFile(path.join(pkg, "npm/types/src/settings.d.ts"))).toBe(settings);
+  });
+
   it("refuses a package with workspace dependencies and names them", function* () {
     const root = yield* useNpmWorkspace();
     const result = yield* buildNpm(root, "packages/acp");
