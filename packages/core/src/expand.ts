@@ -16,7 +16,7 @@
 import type { FilesystemExpansion } from "./filesystem-placement.ts";
 import { invokeFixedFilesystem, fixedFilesystemByFunction } from "./components/fixed-filesystem.ts";
 
-import { all, ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
+import { all, createContext, ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import type {
   FunctionComponent,
@@ -333,6 +333,37 @@ export interface OutputFrame {
   readonly private: boolean;
   readonly marks: WeakMap<Segment, readonly string[]>;
   readonly stringSelection?: Set<string>;
+}
+
+const ExecutingOutput = createContext<OutputFrame | undefined>(
+  "@executablemd/core:executing-output",
+);
+
+function* projectInExecutingBlock(
+  projection: ProjectionHandle,
+  request: ProjectionRequest,
+): Operation<string> {
+  return yield* projection.projectToString(request, yield* ExecutingOutput.get());
+}
+
+function* withExecutingOutput<T>(
+  frame: OutputFrame | undefined,
+  body: () => Operation<T>,
+): Operation<T> {
+  // Persist eval runs on its earlier-created loop task. Publish there too;
+  // ordinary and nested blocks keep their own task-local frame.
+  const host = (yield* evalScope)?.scope;
+  const original = host?.hasOwn(ExecutingOutput) ? host.get(ExecutingOutput) : undefined;
+  try {
+    host?.set(ExecutingOutput, frame);
+    return yield* ExecutingOutput.with(frame, body);
+  } finally {
+    if (original === undefined) {
+      host?.delete(ExecutingOutput);
+    } else {
+      host?.set(ExecutingOutput, original);
+    }
+  }
 }
 
 function bodyOutput(segments: Segment[], path: string, inherited?: OutputFrame): OutputFrame {
@@ -1552,20 +1583,23 @@ function* expandListSegments(
             : { ...outputFrame, stringSelection: projectedSelection };
         if (evalEnv && projection) {
           evalEnv.values.renderChildren = (override?: unknown, mode?: ErrorMode) =>
-            projection.projectToString(
-              { kind: "children", override: validateRenderOverride(override), mode },
-              projectedFrame,
-            );
+            projectInExecutingBlock(projection, {
+              kind: "children",
+              override: validateRenderOverride(override),
+              mode,
+            });
           evalEnv.values.render = (markdown: unknown, mode?: ErrorMode) =>
-            projection.projectToString(
-              { kind: "markdown", segments: scanSegments(String(markdown)), mode },
-              projectedFrame,
-            );
+            projectInExecutingBlock(projection, {
+              kind: "markdown",
+              segments: scanSegments(String(markdown)),
+              mode,
+            });
           evalEnv.values.useContent = (slot?: unknown, mode?: ErrorMode) =>
-            projection.projectToString(
-              { kind: "slot", name: slot === undefined ? undefined : String(slot), mode },
-              projectedFrame,
-            );
+            projectInExecutingBlock(projection, {
+              kind: "slot",
+              name: slot === undefined ? undefined : String(slot),
+              mode,
+            });
         }
         const lastModifier = segment.modifiers[segment.modifiers.length - 1];
         const isEvalTerminal = lastModifier !== undefined && lastModifier.name === "eval";
@@ -1648,7 +1682,9 @@ function* expandListSegments(
         }
 
         try {
-          const codeResult = yield* applyModifiers(segment.modifiers, context);
+          const codeResult = yield* withExecutingOutput(projectedFrame, () =>
+            applyModifiers(segment.modifiers, context),
+          );
 
           // What the command printed and whether it failed are two separate
           // questions, and the exit code alone answers the second one (#307).

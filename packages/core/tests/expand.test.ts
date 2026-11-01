@@ -3,6 +3,13 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, withResolvers } from "effection";
 import type { Subscription } from "effection";
 import { createBlockCounter, expandSegments } from "../src/expand.ts";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { useStubFs } from "@executablemd/runtime/test";
+import { execute } from "../src/execute.ts";
+import { collect } from "../src/collect.ts";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
+import { useNormalizedOutput } from "../src/output/normalize.ts";
+import { asText } from "./helpers.ts";
 import { regionStream } from "../src/expansion-region.ts";
 import { elementFrame, elementSite, extendPath, getExpansion } from "../src/expansion.ts";
 import { admitInstalledDeclarations, Structural } from "../src/execution-declarations.ts";
@@ -2151,5 +2158,47 @@ describe("993 nested selection and private renderings", () => {
       const rendered = yield* expandSegments(scanSegments("<Root />"), {}, {}, new Set());
       expect(renderSegments(rendered)).toBe("[chosen]");
     });
+  }
+});
+
+describe("993 exported projection helpers with production eval", () => {
+  for (const helper of ["renderChildren", "useContent", "render"]) {
+    for (const terminal of helper === "renderChildren" ? ["eval", "persist eval"] : ["eval"]) {
+      for (const sameBlock of [true, false]) {
+        it(`${helper} (${terminal}): ${sameBlock ? "same-block control" : "exported helper called in a later block"}`, function* () {
+          yield* useTempFileCompiler();
+          yield* useNormalizedOutput();
+          const call = helper === "render" ? 'render("sel")' : `${helper}()`;
+          const consume = [
+            "const projected = yield* project();",
+            'if (projected !== "sel") { throw new Error("wrong projected input: " + projected); }',
+            'output("[" + projected + "]");',
+          ].join("\n");
+          const body = [
+            `\`\`\`ts ${terminal}`,
+            `function* project() { return yield* ${call}; }`,
+            sameBlock ? consume : "",
+            "```",
+            `\`\`\`ts ${terminal}`,
+            sameBlock ? "" : consume,
+            "```",
+          ].join("\n");
+          yield* useStubFs({
+            "root.md":
+              helper === "render"
+                ? "<If condition={false}><Output>unreached</Output></If><Render />"
+                : "Documentation.<Render>documentation<Output>sel</Output></Render>",
+            "components/Render.md": body,
+          });
+          const stream = new InMemoryStream();
+          const output = asText(yield* collect(yield* execute({ path: "root.md", stream })));
+          expect(output.trim()).toBe(helper === "render" ? "" : "[sel]");
+          const evals = stream
+            .snapshot()
+            .filter((event) => event.type === "yield" && event.description.type === "eval");
+          expect(evals).toHaveLength(2);
+        });
+      }
+    }
   }
 });
