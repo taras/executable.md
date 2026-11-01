@@ -442,29 +442,36 @@ export interface ColdReservation {
  * history already on disk. Nothing is appended, no provider is created and no
  * conversation is opened by asking.
  */
-export function* coldReservation(
+/** Validate every unanswered Submit before retaining any of its findings. */
+export function* coldReservations(
   records: readonly SidekickRecord[],
   entries: readonly AdmittedEntry[],
-  /** The entry journal's path, because the binding is of its bytes. */
   entriesPath: string,
-): Operation<Result<ColdReservation | undefined>> {
+): Operation<Result<readonly ColdReservation[]>> {
   const reading = projectSidekick(records);
   if (!reading.ok) {
     return reading;
   }
-  const intent = reading.value.submit;
-  if (intent === undefined) {
-    return Ok(undefined);
+  const findings: ColdReservation[] = [];
+  const slots = new Set<number>();
+  const keys = new Set<string>();
+  for (const intent of reading.value.submits) {
+    if (intent.settled) {
+      continue;
+    }
+    if (slots.has(intent.ordinal) || keys.has(intent.entry)) {
+      return Err(new AdmissionRefused("this chat holds competing entry reservations."));
+    }
+    slots.add(intent.ordinal);
+    keys.add(intent.entry);
+    const measured = yield* measureRetainedPrefix(entriesPath, intent.retained.records);
+    const finding = resolved(reserved(intent), { entries, ...measured });
+    if (!finding.ok) {
+      return finding;
+    }
+    findings.push({ intent, finding: finding.value });
   }
-  // The file, not a re-encoding of what was parsed out of it. Measuring the
-  // records this process rebuilt would compare one valid encoding of a history
-  // against another and call them the same bytes.
-  const measured = yield* measureRetainedPrefix(entriesPath, intent.retained.records);
-  const finding = resolved(reserved(intent), { entries, ...measured });
-  if (!finding.ok) {
-    return finding;
-  }
-  return Ok({ intent, finding: finding.value });
+  return Ok(findings);
 }
 
 export function* coldWorkspaceEntry(

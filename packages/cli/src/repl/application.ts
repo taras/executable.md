@@ -1,3 +1,4 @@
+import type { RecoveryReview } from "./sidekick/owner.ts";
 /**
  * Own screen state and reduce semantic actions against one resolved model prefix
  * and this process's live overlay. Components receive detached view data, with
@@ -458,6 +459,7 @@ export interface ReplSidekickReading {
    */
   readonly chat: readonly ReplSidekickChatRow[];
   /** Whether the current exchange is running. */
+  readonly recovery?: boolean;
   readonly busy: boolean;
   /** The agent the chat being read was held with. */
   readonly agent: string;
@@ -793,6 +795,18 @@ export interface ReplOfferedChoice {
  * over: they were made about an agent and a conversation, and neither survives
  * being pointed at another one.
  */
+export interface ReplRecovering {
+  readonly open: boolean;
+  readonly text: string;
+  readonly revision: number;
+  readonly offset: number;
+  readonly replacing: boolean;
+  readonly review?: RecoveryReview;
+  readonly reference?: string;
+  readonly refusal?: string;
+  readonly caret?: ReplCaret;
+}
+
 export interface ReplConfiguring {
   readonly caret?: ReplCaret;
   readonly conversation: string | undefined;
@@ -1067,6 +1081,7 @@ export interface ReplState {
    * process-local and absent from the location.
    */
   readonly configuring: ReplConfiguring;
+  readonly recovering?: ReplRecovering;
   /** Why the last action changed nothing, or none. */
   readonly refusal: string | undefined;
   /**
@@ -1147,6 +1162,9 @@ export interface ReplState {
 
 /** What the root must perform, because a component cannot. */
 export type ReplIntent =
+  | { readonly kind: "review-recovery" }
+  | { readonly kind: "recover-sidekick"; readonly held: ReplRecovering }
+  | { readonly kind: "recovery-reference"; readonly accept: boolean }
   | { readonly kind: "none" }
   /**
    * Admit this exact source as the next entry.
@@ -1944,6 +1962,7 @@ export function readsGeometry(action: ReplAction): boolean {
     action.kind === "scroll-sidekick-question" ||
     action.kind === "scroll-sidekick" ||
     action.kind === "scroll-configure" ||
+    action.kind === "scroll-recovery" ||
     action.kind === "scroll-sessions" ||
     action.kind === "scroll-entries" ||
     action.kind === "scroll-reading"
@@ -1999,8 +2018,70 @@ export function reduceRepl(
   // drawer holding focus is where the keys a person presses are going — and
   // whether Escape is addressed to this drawer.
   const configuring = presented?.kind === "configure" && state.configuring.open;
+  const recovering = presented?.kind === "recovery" && state.recovering?.open === true;
 
   switch (action.kind) {
+    case "open-recovery": {
+      if (live.sidekick?.current === false || live.sidekick?.recovery !== true) {
+        return settled(state);
+      }
+      const held =
+        state.recovering !== undefined &&
+        state.recovering.review?.conversation === live.sidekick.conversation
+          ? state.recovering
+          : {
+              text: "",
+              revision: (state.recovering?.revision ?? 0) + 1,
+              offset: 0,
+              replacing: false,
+              open: false,
+            };
+      return {
+        state: { ...state, recovering: { ...held, open: true } },
+        intent: { kind: "review-recovery" },
+      };
+    }
+    case "close-recovery":
+      return state.recovering === undefined
+        ? settled(state)
+        : settled({ ...state, recovering: { ...state.recovering, open: false } });
+    case "recovery-replace":
+      return !recovering || state.recovering === undefined
+        ? settled(state)
+        : settled({
+            ...state,
+            recovering: { ...state.recovering, replacing: !state.recovering.replacing, offset: 0 },
+          });
+    case "recovery-continue":
+      return !recovering ||
+        state.recovering === undefined ||
+        state.recovering.text.trim().length === 0
+        ? refuse(state, "Enter a new instruction before continuing.")
+        : { state, intent: { kind: "recover-sidekick", held: state.recovering } };
+    case "recovery-reference-ack":
+    case "recovery-reference-cancel":
+      return !recovering || state.recovering?.reference === undefined
+        ? settled(state)
+        : {
+            state,
+            intent: {
+              kind: "recovery-reference",
+              accept: action.kind === "recovery-reference-ack",
+            },
+          };
+    case "scroll-recovery": {
+      if (!recovering || state.recovering === undefined) {
+        return settled(state);
+      }
+      const window = admission.windows.get(DRAWER_WINDOW);
+      return settled({
+        ...state,
+        recovering: {
+          ...state.recovering,
+          offset: window === undefined ? state.recovering.offset : scrolled(window, action.delta),
+        },
+      });
+    }
     case "noop":
       return settled(state);
     case "viewport-wheel": {
@@ -2033,13 +2114,15 @@ export function reduceRepl(
               : action.window === READING_WINDOW
                 ? "scroll-reading"
                 : action.window === DRAWER_WINDOW
-                  ? presented?.kind === "configure"
-                    ? "scroll-configure"
-                    : asking !== undefined
-                      ? "scroll-sidekick-question"
-                      : state.catalog
-                        ? "scroll-entries"
-                        : "scroll"
+                  ? presented?.kind === "recovery"
+                    ? "scroll-recovery"
+                    : presented?.kind === "configure"
+                      ? "scroll-configure"
+                      : asking !== undefined
+                        ? "scroll-sidekick-question"
+                        : state.catalog
+                          ? "scroll-entries"
+                          : "scroll"
                   : undefined;
       return kind === undefined
         ? settled(given)
@@ -2070,13 +2153,15 @@ export function reduceRepl(
           ? "scroll-reading"
           : action.reading === "chat"
             ? "scroll-sidekick"
-            : presented?.kind === "configure"
-              ? "scroll-configure"
-              : asking !== undefined
-                ? "scroll-sidekick-question"
-                : state.catalog
-                  ? "scroll-entries"
-                  : "scroll";
+            : recovering
+              ? "scroll-recovery"
+              : presented?.kind === "configure"
+                ? "scroll-configure"
+                : asking !== undefined
+                  ? "scroll-sidekick-question"
+                  : state.catalog
+                    ? "scroll-entries"
+                    : "scroll";
       return reduceRepl(state, { kind, delta }, model, live, admission, presented);
     }
     // Typing is always typing the *next* entry. Which entry is selected, and
@@ -2305,6 +2390,9 @@ export function reduceRepl(
         return settled({ ...state, catalog: false });
       }
       if (state.route.drawers.length === 0) {
+        if (recovering && state.recovering !== undefined) {
+          return settled({ ...state, recovering: { ...state.recovering, open: false } });
+        }
         // Escape over Configure closes Configure, by the one transition its own
         // Close control produces. Two ways out of a modal that disagreed about
         // what closing means would be two different closes, and the one a
@@ -3154,9 +3242,14 @@ function editCaret(
             live.question !== undefined &&
             presented?.kind === "entry-question" &&
             presented.question === live.question
-          : action.purpose === "configure-agent"
-            ? top === undefined && configuring
-            : top === undefined && presented === undefined && asking === undefined && !configuring);
+          : action.purpose === "recovery"
+            ? top === undefined && presented?.kind === "recovery" && state.recovering?.open === true
+            : action.purpose === "configure-agent"
+              ? top === undefined && configuring
+              : top === undefined &&
+                presented === undefined &&
+                asking === undefined &&
+                !configuring);
     if (
       !available ||
       ((action.purpose === "answer" || action.purpose === "sidekick-answer") &&
@@ -3175,6 +3268,18 @@ function editCaret(
     }
     return action.caret?.value === value ? caretFor(value, action.caret) : caret;
   };
+  if (presented?.kind === "recovery" && state.recovering !== undefined) {
+    const caret = change(state.recovering.text, state.recovering.caret);
+    return settled({
+      ...state,
+      recovering: {
+        ...state.recovering,
+        caret,
+        text: caret.value,
+        revision: state.recovering.revision + (action.kind === "move-caret" ? 0 : 1),
+      },
+    });
+  }
   if (configuring) {
     const caret = change(state.configuring.agent, state.configuring.caret);
     const next = action.kind === "move-caret" ? state : renaming(state, caret.value).state;
@@ -4087,6 +4192,24 @@ function sidekickControls(
     // A history nobody can read has nothing to send into, and a chat this
     // Sidekick is not continuing is not a conversation anybody may continue.
     return items;
+  }
+  if (reading.recovery) {
+    items.push(
+      line(
+        "sidekick:recovery-announcement",
+        "Feedback acceptance is unknown. Review recovery to see what ran and how to continue.",
+        styleOf("waiting"),
+      ),
+    );
+    items.push(
+      row(
+        "sidekick:recovery",
+        "[review recovery]",
+        { select: "recovery-open" },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
   }
   // What this conversation is with, and the way to change it. In the header,
   // because an agent and its settings are facts about the whole conversation
@@ -6537,6 +6660,9 @@ export function previewedMessage(view: ReplView): string | undefined {
 function presentedAsking(
   view: ReplView,
 ): { readonly held: ReplAsking; readonly question: ReplSidekickQuestion } | undefined {
+  if (presentedRecovering(view)) {
+    return undefined;
+  }
   // A route drawer owns the modal while it is open, and owning it means owning
   // its content, its width, its window, its close and its focus. The Sidekick's
   // form is still *held* underneath — its question is waiting and its values are
@@ -6584,9 +6710,13 @@ function currentChat(view: ReplView): boolean {
 export type ReplPresented =
   | { readonly kind: "entry-question"; readonly question: ReplQuestion }
   | { readonly kind: "question"; readonly question: string }
-  | { readonly kind: "configure" };
+  | { readonly kind: "configure" }
+  | { readonly kind: "recovery" };
 
 export function presentedDrawer(view: ReplView): ReplPresented | undefined {
+  if (presentedRecovering(view)) {
+    return { kind: "recovery" };
+  }
   if (
     !view.state.heldHistory &&
     view.selection.drawers.at(-1)?.kind === "live-elicit" &&
@@ -6610,7 +6740,19 @@ export function presentedDrawer(view: ReplView): ReplPresented | undefined {
  * them is ever open — opening either hides the other's presentation and keeps
  * everything in it.
  */
+function presentedRecovering(view: ReplView): boolean {
+  return (
+    view.selection.drawers.length === 0 &&
+    view.state.recovering?.open === true &&
+    showingSidekick(view) &&
+    currentChat(view)
+  );
+}
+
 function presentedConfiguring(view: ReplView): ReplConfiguring | undefined {
+  if (presentedRecovering(view)) {
+    return undefined;
+  }
   if (view.selection.drawers.length > 0) {
     return undefined;
   }
@@ -6658,7 +6800,8 @@ function modalOpen(view: ReplView): boolean {
     view.selection.drawers.length > 0 ||
     presentedCatalog(view) ||
     presentedAsking(view) !== undefined ||
-    presentedConfiguring(view) !== undefined
+    presentedConfiguring(view) !== undefined ||
+    presentedRecovering(view)
   );
 }
 
@@ -6690,7 +6833,9 @@ function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBo
   const rect =
     view.selection.drawers.length > 0 || presentedCatalog(view)
       ? (context.drawer ?? drawerRect(view.size, workspace))
-      : presentedAsking(view) !== undefined || presentedConfiguring(view) !== undefined
+      : presentedAsking(view) !== undefined ||
+          presentedConfiguring(view) !== undefined ||
+          presentedRecovering(view)
         ? sidekickDrawerRect(view.size, workspace)
         : undefined;
   if (rect === undefined || !workspace) {
@@ -6751,6 +6896,7 @@ function drawerFor(
   const catalog = presentedCatalog(view);
   const asking = presentedAsking(view)?.question.key;
   const configuring = presentedConfiguring(view) !== undefined;
+  const recovering = presentedRecovering(view);
   const overHeld =
     view.selection.drawers.at(-1)?.kind === "history" && view.state.heldHistory === true;
   const rows: Described[] = [];
@@ -6764,7 +6910,7 @@ function drawerFor(
         );
   const admitted = windowed(content, context, entering, view.focused, asking, reveals);
   const readings =
-    configuring &&
+    (configuring || recovering) &&
     view.focused !== "drawer:reading:anchor" &&
     admitted.some((one) => {
       const read = readDescription(one.description);
@@ -6774,6 +6920,41 @@ function drawerFor(
       : anchored(admitted, "drawer:reading:anchor", "drawer", view.focused);
   for (const placed of readings) {
     rows.push(placed);
+  }
+  if (recovering) {
+    const held = view.state.recovering;
+    if (held?.reference === undefined) {
+      rows.push(
+        row(
+          "drawer:recovery:continue",
+          held?.replacing
+            ? "[abandon and start different conversation]"
+            : "[continue with new instruction]",
+          { select: "recovery-continue" },
+          styleOf("action"),
+          { here: view.focused },
+        ),
+      );
+    } else {
+      rows.push(
+        row(
+          "drawer:recovery:ack",
+          "[saved reference; continue]",
+          { select: "recovery-reference-ack" },
+          styleOf("action"),
+          { here: view.focused },
+        ),
+      );
+      rows.push(
+        row(
+          "drawer:recovery:cancel",
+          "[cancel switch]",
+          { select: "recovery-reference-cancel" },
+          styleOf("action"),
+          { here: view.focused },
+        ),
+      );
+    }
   }
 
   // The two nodes the footer would have drawn, inside the modal focus root. A
@@ -6831,11 +7012,13 @@ function drawerFor(
             // entry's means. The question form keeps its question and its
             // values; Configure discards what was chosen and not applied, and
             // saves and changes nothing.
-            configuring
-            ? { select: "configure-close" }
-            : asking === undefined
-              ? { select: "close" }
-              : { select: "sidekick-question-close" },
+            presentedRecovering(view)
+            ? { select: "recovery-close" }
+            : configuring
+              ? { select: "configure-close" }
+              : asking === undefined
+                ? { select: "close" }
+                : { select: "sidekick-question-close" },
       styleOf("action"),
       { here: view.focused },
     ),
@@ -6965,6 +7148,9 @@ function drawerContent(
     // No route drawer, so this is one of the Sidekick's own two drawers if
     // anything is. Configure first: opening it hides the question form's
     // presentation, so both are never open at once.
+    if (presentedRecovering(view)) {
+      return recoveryContent(view, width, notices);
+    }
     const settings = presentedConfiguring(view);
     if (settings !== undefined) {
       return configureContent(view, settings, width, notices);
@@ -7362,6 +7548,9 @@ export const NOTICE_INDENT = "  ";
  * came to be drawn as nothing at all.
  */
 export function configureNoticesOf(view: ReplView): readonly ReplDrawerNotice[] {
+  if (presentedRecovering(view)) {
+    return recoveryNotices(view);
+  }
   const held = presentedConfiguring(view);
   return held === undefined ? [] : noticesOf(view, held);
 }
@@ -7399,6 +7588,77 @@ function noticesOf(view: ReplView, held: ReplConfiguring): readonly ReplDrawerNo
     });
   }
   return Object.freeze(found);
+}
+
+function recoveryNotices(view: ReplView): readonly ReplDrawerNotice[] {
+  const held = view.state.recovering;
+  if (held === undefined) {
+    return [];
+  }
+  const text =
+    held.reference === undefined
+      ? [
+          `Original conversation: ${held.review?.conversation ?? "reading"}`,
+          held.review?.request ?? "",
+          held.review?.account ?? "Reading the original conversation...",
+          "Continue in this conversation with a new instruction. The earlier feedback may have been received; its acceptance remains unknown. Completed work will not run again. This action does not resend that feedback. Entries already running keep running.",
+          view.live.sidekick?.busy
+            ? "This stops and joins the current Sidekick exchange before continuing. Entries keep running."
+            : "",
+          held.replacing
+            ? "This starts a different conversation with the same agent and provider settings. The original history and unknown acceptance remain saved. It does not resend the interrupted request."
+            : "",
+        ]
+      : [
+          `The different conversation is ready. Save this new reference before continuing:\n\nxmd repl --attach ${held.reference}\n\n{sessionId: "${held.reference}"}\n\nContinuing disconnects this UI. The original reference will no longer attach or select a conversation. This is the same live REPL; its entries and running work remain. No new instruction has been sent yet.`,
+        ];
+  return [...text, ...(held.refusal === undefined ? [] : [held.refusal])]
+    .flatMap((one) => one.split("\n"))
+    .filter((one) => one.length > 0)
+    .map((text, index) => ({ key: `drawer:recovery:notice:${index}`, text }));
+}
+
+function recoveryContent(
+  view: ReplView,
+  width: number,
+  notices?: ReplPreparedNotices,
+): DrawerContent {
+  const held = view.state.recovering;
+  const content: DrawerRow[] = [];
+  if (held !== undefined) {
+    for (const notice of recoveryNotices(view)) {
+      content.push(...noticeRows(notice.key, notice.text, width, styleOf("metadata"), notices));
+    }
+    if (held.reference === undefined) {
+      content.push({
+        described: field(
+          "drawer:recovery:instruction",
+          "> New instruction: ",
+          held.text,
+          "recovery",
+          styleOf("field-value"),
+          { here: view.focused, caret: held.caret },
+        ),
+        field: { name: "recovery", value: held.text },
+      });
+      content.push({
+        described: row(
+          "drawer:recovery:replace",
+          held.replacing ? "[back to original recovery]" : "[start a different conversation]",
+          { select: "recovery-replace" },
+          styleOf("action"),
+          { here: view.focused },
+        ),
+      });
+    }
+  }
+  return {
+    title: "Review recovery",
+    titleStyle: styleOf("drawer-title"),
+    dismissing: undefined,
+    entering: view.focused === undefined || !view.focused.startsWith("drawer:"),
+    content,
+  };
 }
 
 function configureContent(
@@ -8811,6 +9071,9 @@ export function drawerOffsetOf(state: ReplState, open: ReplDrawerRef | undefined
     }
     // No route drawer, so one of the Sidekick's own drawers is being read if
     // any is. Its own offset, because each window is its own.
+    if (state.recovering?.open) {
+      return state.recovering.offset;
+    }
     if (state.configuring.open) {
       return state.viewports.configure;
     }
@@ -8896,7 +9159,14 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:open") {
     return "drawer-title";
   }
-  if (key === "drawer:close" || key === "drawer:sidekick:stop" || key === "drawer:form:submit") {
+  if (
+    key === "drawer:close" ||
+    key === "drawer:sidekick:stop" ||
+    key === "drawer:form:submit" ||
+    key === "drawer:recovery:continue" ||
+    key === "drawer:recovery:ack" ||
+    key === "drawer:recovery:cancel"
+  ) {
     return "drawer-actions";
   }
   if (key.startsWith("drawer:")) {
@@ -9129,7 +9399,15 @@ function isControl(component: ReplComponent<ReplAction>, input: ReplViewData): b
  * header does cost is one row for its edge, which belongs to the band these rows
  * sit in and is measured there.
  */
-function drawerActions(candidates: readonly ReplCandidate[]): ReplBox {
+function drawerActions(candidates: readonly ReplCandidate[], width?: number): ReplBox {
+  if (candidates.some((one) => one.key.startsWith("drawer:recovery:"))) {
+    return box({
+      id: "box:drawer:actions",
+      region: "drawer",
+      props: stackProps("fit"),
+      children: candidates.map((one) => rowBox(one, "drawer", width)),
+    });
+  }
   return box({
     id: "box:drawer:actions",
     region: "drawer",
@@ -9904,7 +10182,7 @@ export function presentationFor(
               rowBox(candidate, "drawer", context.widths?.drawer),
             ),
           }),
-          drawerActions(of("drawer-actions")),
+          drawerActions(of("drawer-actions"), context.widths?.drawer),
         ],
       }),
     );
@@ -10978,6 +11256,17 @@ function workspaceControls(
       { here: view.focused, ...(claim === "sidekick:configure" ? { focus: true } : {}) },
     ),
   );
+  if (reading.recovery) {
+    items.push(
+      row(
+        "sidekick:recovery",
+        "[review recovery]",
+        { select: "recovery-open" },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
+  }
   const question = reading.question;
   if (question !== undefined) {
     items.push(
@@ -12405,7 +12694,7 @@ function workspacePresentation(input: {
             props: viewportProps(),
             children: of("drawer").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
           }),
-          drawerActions(of("drawer-actions")),
+          drawerActions(of("drawer-actions"), context.widths?.drawer),
         ],
       }),
     );

@@ -1,4 +1,14 @@
-import { spawn, until, useScope, withResolvers } from "effection";
+import {
+  createSignal,
+  ensure,
+  race,
+  scoped,
+  sleep,
+  spawn,
+  until,
+  useScope,
+  withResolvers,
+} from "effection";
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
 import { cliCommand } from "@executablemd/test-support/launch";
@@ -14,10 +24,214 @@ import { resolveAgentStack } from "../../src/agent-stack.ts";
 import { assembleReplProfile } from "../../src/repl-profile.ts";
 import { NO_PLUGINS } from "../../src/plugin-host.ts";
 import { runReplProgram } from "../../src/repl/program.ts";
-import type { HeadlessReplRoot } from "../../src/repl/program.ts";
+import type { ReplInputPass, HeadlessReplRoot } from "../../src/repl/program.ts";
 import { useReplLiveScreen } from "../../src/repl/live-screen.ts";
 import { childAddressPath } from "../../src/headless/host.ts";
 import { attachmentDescriptor } from "../../src/sidekick-acp/client.ts";
+import { SidekickTransport } from "../../src/sidekick-acp/protocol.ts";
+import { physical, applied, presentation } from "../../src/headless/ui-schema.ts";
+import type { Terminal } from "./mounted-repl.ts";
+import type { ReplScreenEvent } from "../../src/repl/screen.ts";
+
+interface ObservedConnection {
+  readonly execution: string;
+  readonly inputs: { event: ReplScreenEvent; index: number; matched: boolean }[];
+  readonly completed: Map<number, boolean>;
+  frame?: z.infer<typeof presentation>;
+  acknowledged?: number;
+  ready?: ReplInputPass;
+  ended: boolean;
+}
+
+/** Observe host input settlement; a client write alone establishes no ready frame. */
+function* observeChildPasses() {
+  const changed = createSignal<void, void>();
+  const connections: ObservedConnection[] = [];
+  let heldAck:
+    | {
+        reached: ReturnType<typeof withResolvers<void>>;
+        release: ReturnType<typeof withResolvers<void>>;
+      }
+    | undefined;
+  let heldRelease:
+    | {
+        reached: ReturnType<typeof withResolvers<void>>;
+        release: ReturnType<typeof withResolvers<void>>;
+      }
+    | undefined;
+  const transport = yield* SidekickTransport.expect();
+  yield* SidekickTransport.set({
+    ...transport,
+    *publish(path, descriptor) {
+      const listener = yield* transport.publish(path, descriptor);
+      return {
+        ...listener,
+        *accept() {
+          const incoming = yield* listener.accept();
+          return (function* () {
+            const wire = yield* incoming;
+            let connection: ObservedConnection | undefined;
+            yield* ensure(function* () {
+              if (connection !== undefined) {
+                connection.ended = true;
+                connection.ready = undefined;
+                changed.send();
+                const gate = heldRelease;
+                heldRelease = undefined;
+                if (gate !== undefined) {
+                  gate.reached.resolve();
+                  yield* gate.release.operation;
+                }
+              }
+            });
+            return {
+              *receive() {
+                const packet = yield* wire.receive();
+                const request = z
+                  .object({ request: z.object({ method: z.literal("ui") }).passthrough() })
+                  .passthrough()
+                  .safeParse(packet);
+                if (request.success) {
+                  connection = {
+                    execution: descriptor.execution,
+                    inputs: [],
+                    completed: new Map(),
+                    ended: false,
+                  };
+                  connections.push(connection);
+                }
+                if (connection !== undefined) {
+                  const event = physical.safeParse(packet);
+                  if (event.success && event.data.kind !== "eof") {
+                    connection.inputs.push({
+                      event: event.data,
+                      index: connection.inputs.length + 1,
+                      matched: false,
+                    });
+                  }
+                  const acknowledgement = applied.safeParse(packet);
+                  if (acknowledgement.success) {
+                    const gate = heldAck;
+                    heldAck = undefined;
+                    if (gate !== undefined) {
+                      gate.reached.resolve();
+                      yield* gate.release.operation;
+                    }
+                    if (acknowledgement.data.applied) {
+                      connection.acknowledged = acknowledgement.data.sequence;
+                    }
+                  }
+                }
+                return packet;
+              },
+              *send(packet) {
+                const frame = presentation.safeParse(packet);
+                if (connection !== undefined && frame.success) {
+                  connection.frame = { ...frame.data, bytes: [...frame.data.bytes] };
+                }
+                yield* wire.send(packet);
+              },
+              close() {
+                wire.close();
+                if (connection !== undefined) {
+                  connection.ended = true;
+                  connection.ready = undefined;
+                  changed.send();
+                }
+              },
+            };
+          })();
+        },
+      };
+    },
+  });
+  function matching(terminal: Terminal): ObservedConnection | undefined {
+    return connections.findLast((one) => {
+      const last = terminal.presented.at(-1);
+      return (
+        !one.ended &&
+        one.ready?.view.connected &&
+        one.ready.generation === one.ready.view.generation &&
+        one.frame !== undefined &&
+        one.acknowledged === one.frame.sequence &&
+        last !== undefined &&
+        last.length === one.frame.bytes.length &&
+        one.frame.bytes.every((byte, index) => last[index] === byte)
+      );
+    });
+  }
+  function wait(
+    terminal: Terminal,
+    input?: { connection: ObservedConnection; index: number },
+  ): Operation<ObservedConnection> {
+    return race([
+      (function* () {
+        const changes = yield* changed;
+        while (true) {
+          const connection = matching(terminal);
+          if (
+            connection !== undefined &&
+            (input === undefined ||
+              (connection === input.connection && connection.completed.has(input.index)))
+          ) {
+            if (input !== undefined && !connection.completed.get(input.index)) {
+              throw new Error("The host rejected the observed input.");
+            }
+            return connection;
+          }
+          yield* changes.next();
+        }
+      })(),
+      (function* (): Operation<never> {
+        yield* sleep(15000);
+        throw new Error(`No completed child input/frame: ${terminal.screen?.rows().join("\n")}`);
+      })(),
+    ]);
+  }
+  return {
+    observe(reading: ReplInputPass): void {
+      const connection = connections.findLast(
+        (one) => !one.ended && one.execution === reading.execution,
+      );
+      if (connection === undefined) {
+        return;
+      }
+      connection.ready = undefined;
+      if (reading.phase === "complete") {
+        for (const handled of reading.events) {
+          const input = connection.inputs.find(
+            (one) => !one.matched && JSON.stringify(one.event) === JSON.stringify(handled.event),
+          );
+          if (input !== undefined) {
+            input.matched = true;
+            connection.completed.set(input.index, handled.accepted);
+          }
+        }
+        connection.ready = reading;
+      }
+      changed.send();
+    },
+    ready: (terminal: Terminal) => wait(terminal),
+    *input(terminal: Terminal, bytes: string) {
+      const connection = yield* wait(terminal);
+      const index = connection.inputs.length + 1;
+      terminal.feed(bytes);
+      yield* wait(terminal, { connection, index });
+    },
+    holdUiRelease() {
+      const reached = withResolvers<void>();
+      const release = withResolvers<void>();
+      heldRelease = { reached, release };
+      return { reached: reached.operation, release: release.resolve };
+    },
+    holdNextAcknowledgement() {
+      const reached = withResolvers<void>();
+      const release = withResolvers<void>();
+      heldAck = { reached, release };
+      return { reached: reached.operation, release: release.resolve };
+    },
+  };
+}
 
 export const REFERENCE_SCHEMA = {
   type: "object",
@@ -47,6 +261,7 @@ export function* useHeadlessFixture(
       return [launch.command, ...launch.arguments];
     },
   });
+  const input = yield* observeChildPasses();
   const host = yield* useMountedHost({
     hostFiles: true,
     ...(dataRoot === undefined ? {} : { dataRoot }),
@@ -70,6 +285,7 @@ export function* useHeadlessFixture(
   const task = yield* spawn(function* () {
     const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
       sidekickAgent: MOUNTED_AGENT,
+      observeChildInputPass: input.observe,
       acp: {
         sessionStore: store,
         agentRegistry: makeRegistry({ [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd` }),
@@ -157,7 +373,7 @@ export function* useHeadlessFixture(
   const reference = z.object({ sessionId: z.string().uuid() }).strict().parse(bindings.value.child);
   const path = yield* childAddressPath(reference.sessionId);
   const descriptor = yield* attachmentDescriptor(path);
-  return { host, root, task, view, reference, path, descriptor, store };
+  return { host, root, task, view, reference, path, descriptor, store, input };
 }
 
 export function promptChild(text: string): string {

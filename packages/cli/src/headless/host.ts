@@ -1,5 +1,5 @@
 import { childRuntime } from "./runtime.ts";
-import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
+import { ensure, Err, Ok, scoped, suspend, useScope, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
 import { ensureDir } from "@effectionx/fs";
 import { Agent, content, hasContent } from "@executablemd/core";
@@ -49,7 +49,21 @@ interface Child {
   close(): Operation<void>;
   readonly path: string;
   readonly descriptor: Descriptor;
+  endpoint: ChildEndpoint;
 }
+interface ChildEndpoint {
+  readonly task: Task<void>;
+  readonly closed: Operation<Result<void>>;
+  reported?: Error;
+}
+function* stopEndpoint(endpoint: ChildEndpoint): Operation<void> {
+  yield* endpoint.task.halt();
+  const closed = yield* endpoint.closed;
+  if (!closed.ok && closed.error !== endpoint.reported) {
+    throw closed.error;
+  }
+}
+
 interface Allocation {
   readonly sessionId: string;
   readonly fresh: boolean;
@@ -66,11 +80,12 @@ export function* useHeadlessChildren(
 ): Operation<HeadlessChildren> {
   const parent = yield* useScope();
   const live = new Map<string, Child>();
+  const associations = new Map<string, { child: Child; conversation: string; path: string }>();
   const issued = new WeakMap<object, string>();
   let ended = false;
 
   function owned(sessionId: string): Child {
-    const child = live.get(sessionId);
+    const child = live.get(sessionId) ?? associations.get(sessionId)?.child;
     if (ended || child === undefined) {
       throw new Error(
         `XMD child ${sessionId} is unavailable or ended; no replacement was started.`,
@@ -85,7 +100,8 @@ export function* useHeadlessChildren(
     if (!reading.ok) {
       throw reading.error;
     }
-    if (reading.value.active !== child.descriptor.conversation) {
+    const conversation = associations.get(sessionId)?.conversation ?? child.descriptor.conversation;
+    if (reading.value.active !== conversation) {
       throw new Error(
         `XMD child ${sessionId} no longer selects its original Sidekick conversation.`,
       );
@@ -94,7 +110,7 @@ export function* useHeadlessChildren(
   }
 
   function* acquire(allocation: Allocation): Operation<Child> {
-    const known = live.get(allocation.sessionId);
+    const known = live.get(allocation.sessionId) ?? associations.get(allocation.sessionId)?.child;
     if (known !== undefined) {
       return lookup(allocation.sessionId);
     }
@@ -121,28 +137,173 @@ export function* useHeadlessChildren(
       try {
         yield* scoped(function* () {
           const view = yield* useReplLiveScreen();
+          const childScope = yield* useScope();
+          const endpoints: ChildEndpoint[] = [];
+          yield* ensure(function* () {
+            const failures: Error[] = [];
+            for (const endpoint of endpoints) {
+              try {
+                yield* stopEndpoint(endpoint);
+              } catch (error) {
+                failures.push(error instanceof Error ? error : new Error(String(error)));
+              }
+            }
+            if (failures.length > 0) {
+              throw new AggregateError(failures, "Child endpoint cleanup failed.");
+            }
+          });
+          function publishEndpoint(
+            root: Root,
+            path: string,
+            sessionId: string,
+            conversation?: string,
+            available?: () => boolean,
+          ) {
+            const ready = withResolvers<Result<Descriptor>>();
+            const closed = withResolvers<Result<void>>();
+            const task = childScope.run(function* () {
+              let failure: Error | undefined;
+              try {
+                yield* scoped(function* () {
+                  ready.resolve(
+                    Ok(
+                      yield* useSidekickAttachment(
+                        path,
+                        {
+                          owner: root.owner,
+                          dispatch: root.dispatch,
+                          reads: root.reads,
+                          execution: root.execution,
+                          cwd: root.cwd,
+                          ...(available === undefined ? {} : { available }),
+                          child: { sessionId, session: root.session, view },
+                        },
+                        conversation,
+                      ),
+                    ),
+                  );
+                  yield* suspend();
+                });
+              } catch (error) {
+                failure = error instanceof Error ? error : new Error(String(error));
+                ready.resolve(Err(failure));
+              } finally {
+                closed.resolve(failure === undefined ? Ok(undefined) : Err(failure));
+              }
+            });
+            const service: ChildEndpoint = { task, closed: closed.operation };
+            endpoints.push(service);
+            return { service, ready: ready.operation };
+          }
+          let registered: Child | undefined;
+          let pendingReference = false;
           yield* start({
             view,
+            handoffReference(change, acknowledgeAndActivate) {
+              return scoped(function* () {
+                const child = registered;
+                if (child === undefined) {
+                  return Err(new Error("The child is not registered."));
+                }
+                if (pendingReference) {
+                  return Err(new Error("This child already has a reference handoff in progress."));
+                }
+                yield* ensure(() => {
+                  pendingReference = false;
+                });
+                pendingReference = true;
+                const reading = child.root.owner.reading;
+                if (!reading.ok) {
+                  return reading;
+                }
+                const decision = reading.value.recoveries.find(
+                  (one) => one.decision.id === change.decision,
+                )?.decision;
+                const next = reading.value.conversations.find((one) => one.id === change.next);
+                if (
+                  reading.value.active !== change.previous ||
+                  decision?.action !== "replace" ||
+                  decision.conversation !== change.previous ||
+                  decision.target !== change.next ||
+                  next?.phase !== "prepared" ||
+                  next.previous !== change.previous
+                ) {
+                  return Err(
+                    new Error(
+                      "The child reference change no longer matches its acknowledged decision and preparation.",
+                    ),
+                  );
+                }
+                const sessionId = (yield* SidekickTransport.expect()).identify();
+                const reference = { sessionId };
+                const path = yield* childAddressPath(sessionId);
+                let endpoint: ChildEndpoint | undefined;
+                let available = false;
+                yield* ensure(function* () {
+                  const selected = child.root.owner.reading;
+                  if (!selected.ok) {
+                    throw selected.error;
+                  }
+                  if (selected.value.active === change.next) {
+                    if (endpoint !== undefined) {
+                      associations.set(sessionId, { child, conversation: change.next, path });
+                      const previous = child.endpoint;
+                      child.endpoint = endpoint;
+                      yield* stopEndpoint(previous);
+                      available = true;
+                    }
+                  } else if (endpoint !== undefined) {
+                    yield* stopEndpoint(endpoint);
+                  }
+                });
+                const publication = publishEndpoint(
+                  child.root,
+                  path,
+                  sessionId,
+                  change.next,
+                  () => available,
+                );
+                endpoint = publication.service;
+                const published = yield* publication.ready;
+                if (!published.ok) {
+                  endpoint.reported = published.error;
+                  return published;
+                }
+                const activated = yield* acknowledgeAndActivate(reference);
+                if (!activated.ok) {
+                  return activated;
+                }
+                const selected = child.root.owner.reading;
+                if (!selected.ok) {
+                  return selected;
+                }
+                if (selected.value.active !== change.next) {
+                  return Err(new Error("The fresh reference was not canonically selected."));
+                }
+                return Ok(reference);
+              });
+            },
             *ready(root) {
               const selected = yield* root.owner.configure({});
               if (!selected.ok) {
                 throw selected.error;
               }
               const path = yield* childAddressPath(allocation.sessionId);
-              const descriptor = yield* useSidekickAttachment(path, {
-                owner: root.owner,
-                dispatch: root.dispatch,
-                reads: root.reads,
-                execution: root.execution,
-                cwd: root.cwd,
-                child: { sessionId: allocation.sessionId, session: root.session, view },
-              });
+              const publication = publishEndpoint(root, path, allocation.sessionId);
+              const published = yield* publication.ready;
+              if (!published.ok) {
+                publication.service.reported = published.error;
+                throw published.error;
+              }
+              const descriptor = published.value;
+              const endpoint = publication.service;
               const child: Child = {
                 sessionId: allocation.sessionId,
                 root,
                 view,
                 path,
                 descriptor,
+                endpoint,
                 task: childTask,
                 *close() {
                   yield* childTask.halt();
@@ -152,6 +313,7 @@ export function* useHeadlessChildren(
                   }
                 },
               };
+              registered = child;
               live.set(child.sessionId, child);
               established = true;
               ready.resolve(Ok(child));
@@ -172,6 +334,11 @@ export function* useHeadlessChildren(
         return Err(error);
       } finally {
         live.delete(allocation.sessionId);
+        for (const [id, association] of associations) {
+          if (association.child.sessionId === allocation.sessionId) {
+            associations.delete(id);
+          }
+        }
         closed.resolve(failure === undefined ? Ok(undefined) : Err(failure));
       }
     });
@@ -218,12 +385,10 @@ export function* useHeadlessChildren(
             }
           },
           createRuntime(runtimeOptions) {
-            return childRuntime(
-              runtimeOptions,
-              createRuntime,
-              providerScope,
-              (id) => lookup(id).path,
-            );
+            return childRuntime(runtimeOptions, createRuntime, providerScope, (id) => {
+              const child = lookup(id);
+              return associations.get(id)?.path ?? child.path;
+            });
           },
           sessions: {
             *requestSession(request) {
@@ -245,9 +410,10 @@ export function* useHeadlessChildren(
               }
               const identity = request.sessionIdentity;
               if (identity === undefined) {
-                const selected = lookup(reference.parse({ sessionId: request.session }).sessionId);
+                const sessionId = reference.parse({ sessionId: request.session }).sessionId;
+                const selected = lookup(sessionId);
                 return {
-                  sessionKey: selected.sessionId,
+                  sessionKey: sessionId,
                   cwd: selected.root.cwd,
                   state: "existing",
                 };
@@ -272,7 +438,7 @@ export function* useHeadlessChildren(
               };
             },
             *recordSessionIdentity(details, identity) {
-              if (live.has(details.sessionKey)) {
+              if (live.has(details.sessionKey) || associations.has(details.sessionKey)) {
                 lookup(details.sessionKey);
               } else if (dependencies.sessions !== undefined) {
                 yield* dependencies.sessions.recordSessionIdentity(details, identity);

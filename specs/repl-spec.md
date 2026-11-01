@@ -2098,6 +2098,19 @@ recorded output replaces it.
 
 ## Attaching to the live Sidekick
 
+Explicit recovery fallback in an established child offers a fresh reference to
+the same live REPL before selecting its different conversation. The receipt shows
+the actual `xmd repl --attach <sessionId>` command and `{sessionId: "<sessionId>"}`
+for later parent composition. `[saved reference; continue]` retains the person's
+acknowledgement and activates that conversation; frame acknowledgement and UI
+loss do neither. Before that action, reattaching with the original ID shows the
+same pending offer. `[cancel switch]` joins and retires its unused endpoint.
+After activation the old endpoint/UI service and host lease join before the new
+instruction starts. Explicit fresh attachment sends nothing. Old references
+refuse attachment and selection but retain the owning parent's Shutdown authority
+over the same child. Shutdown through either owned reference ends all its
+associations; saved ended IDs recreate nothing.
+
 The entry composition `Agent name="xmd"` with a canonical Session starts a
 parent-owned headless child before `XMD.Session` reads its exact `{sessionId}`.
 Reading sends no Prompt; Session names remain labels and distinct declarations
@@ -2191,6 +2204,28 @@ obtains the owner's current facts. After owner-process loss joined completion
 is unavailable, rather than reconstructed from a saved preview or text.
 
 ## Who owns what
+
+When feedback has no exact completed canonical input, `[review recovery]` shows
+the original request, saved failure, established entries and unfinished controls.
+Inspection, closing and resizing send nothing and record no decision. The person
+enters a distinct New instruction, then chooses `[continue with new instruction]`.
+The shared admission owner holds dispatch, joins the captured Sidekick exchange
+and reconciles the entire unresolved Submit set before retaining that decision.
+The new message uses the same readable canonical conversation and native identity;
+it neither delivers the old feedback nor re-evaluates interrupted controls.
+Unknown old acceptance remains visible. Running entries retain their own lifetime.
+The separate Message and Draft values survive review.
+
+A cold original continues only with exact retained clean ownership evidence.
+An outer failed Prompt outcome or unreadable/fatal canonical history refuses.
+A free lock or forced release supplies no joined-stop evidence. Deliberate
+abandonment prepares a different same-agent conversation before canonical
+activation; setup failure leaves the original selected. Recovery decisions bind
+the exact retained prefix, uncertainty positions, unfinished controls and one new
+message. A used decision cannot dispatch again; an unused one requires renewed
+deliberate action and exact checks. No inspection or reference record dispatches
+a message. Fatal recording failure retains precedence and causes no compensating
+history append.
 
 Repository and issue behavior belong to the entry that is executing, and to
 nothing wider. The command selects it; the entry's own task prepares it, once, inside

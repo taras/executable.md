@@ -30,6 +30,7 @@ import type { CommandPlugins } from "./plugin-host.ts";
 import { useHeadlessChildren } from "./headless/host.ts";
 import type { HeadlessChildren } from "./headless/host.ts";
 import { runReplProgram } from "./repl/program.ts";
+import type { ReplInputPass } from "./repl/program.ts";
 import { ReplEntryHost } from "./repl-entry-installation.ts";
 import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
 import { renderSyntaxDocumentation, renderSyntaxMarkdown, syntaxSymbols } from "./syntax.ts";
@@ -48,6 +49,7 @@ const REPL_INCLUDES: readonly string[] = Object.freeze(["components", "."]);
  * would read and remove directories under the developer's own home.
  */
 export interface ReplProfileSeams {
+  readonly observeChildInputPass?: (reading: ReplInputPass) => void;
   readonly acp?: AcpxProviderDependencies;
   readonly planWriterRoot?: string;
 }
@@ -217,7 +219,15 @@ export function* assembleReplProfile(
   const dependencies = facts.acp ?? hostAcpDependencies(stack);
   const children = yield* useHeadlessChildren(function* (headless) {
     const profile = yield* assembleReplProfile(stack, plugins, facts);
-    const outcome = yield* runReplProgram({ profile, headless });
+    const outcome = yield* runReplProgram({
+      profile,
+      headless: {
+        ...headless,
+        ...(facts.observeChildInputPass === undefined
+          ? {}
+          : { observeInputPass: facts.observeChildInputPass }),
+      },
+    });
     if (!outcome.ok) {
       throw outcome.error;
     }
@@ -232,14 +242,18 @@ export function* assembleReplProfile(
 
   const entryInstallation = yield* ReplEntryHost.get();
   const host = yield* useScope();
-  const sidekick = sidekickAssembly(agent, {
-    ...dependencies,
-    agentCwd:
-      dependencies.agentCwd ??
-      function* () {
-        return projectCwd;
-      },
-  });
+  const sidekick = sidekickAssembly(
+    agent,
+    {
+      ...dependencies,
+      agentCwd:
+        dependencies.agentCwd ??
+        function* () {
+          return projectCwd;
+        },
+    },
+    stack.sessions?.ownershipAdministration,
+  );
   const context = planAgentContext(stack, facts.acp);
   const planWriterRoot = facts.planWriterRoot;
   const sessions = stack.sessions;

@@ -45,7 +45,7 @@ import { pairedReplRepository } from "../../../../src/repl/sidekick/repository.t
 import { bindRetainedPrefix } from "../../../../src/repl/sidekick/history.ts";
 import {
   admitting,
-  coldReservation,
+  coldReservations,
   controlJournal,
   retainResolution,
   submitForSidekick,
@@ -479,7 +479,7 @@ function* readingOf(owner: SidekickOwner): Operation<Record<string, unknown>> {
     unfinished: value.unfinished.map((one) => [one.component, one.status]),
     delivered: value.delivered,
     unestablished: value.unestablished,
-    submit: value.submit === undefined ? null : value.submit.entry,
+    submit: value.submits.find((one) => !one.settled)?.entry ?? null,
   };
 }
 
@@ -882,7 +882,7 @@ function* phases(): Operation<unknown> {
     const live = opened.value;
     // Cold: the records already on disk and the entries already on disk. This
     // is the whole of what reopening does with an unanswered reservation.
-    const cold = yield* coldReservation(pair.chat.records, live.model.entries, entries);
+    const cold = yield* coldReservations(pair.chat.records, live.model.entries, entries);
     if (!cold.ok) {
       return {
         opened: true,
@@ -891,7 +891,7 @@ function* phases(): Operation<unknown> {
         appended: appended.length,
       };
     }
-    const found = cold.value;
+    const found = cold.value[0];
     const before = appended.length;
     const answer = {
       opened: true,
@@ -919,8 +919,8 @@ function* phases(): Operation<unknown> {
       // a later reading finds nothing left to reconcile. This is a second
       // projection inside this process, not a further process boundary.
       again: yield* (function* (): Operation<string> {
-        const re = yield* coldReservation(after, live.model.entries, entries);
-        return re.ok ? (re.value === undefined ? "resolved" : re.value.finding.kind) : "refused";
+        const re = yield* coldReservations(after, live.model.entries, entries);
+        return re.ok ? (re.value.length === 0 ? "resolved" : re.value[0]!.finding.kind) : "refused";
       })(),
       entriesAfter: live.model.entries.map((entry) => entry.key),
     };

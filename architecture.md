@@ -6518,6 +6518,26 @@ pure and answers with the exact objects that model holds.
 
 ### Local Sidekick attachments
 
+The recovery records stay with the CLI Sidekick owner. `sidekick/recovery-record.ts`
+parses the closed decision and reference facts; `sidekick/recovery-state.ts`
+checks their exact request and offer linkage during history projection.
+`sidekick/recovery-owner.ts` reads the existing logical-session ownership
+administration for the captured provider identity. None of these facts repairs
+canonical Prompt history or establishes old backend acceptance.
+
+Deliberate recovery fallback in a child prepares a different conversation in
+the same root and publishes a fresh exact reference. The original stays selected
+while its UI shows the actual attach command and one-field session reference.
+Semantic saved-reference acknowledgement is retained before canonical activation;
+an applied frame establishes no such acknowledgement. The existing child manager's
+private `handoffReference` operation owns publication and reads actual canonical
+selection when its continuation unwinds. An unused association is retired; an
+acknowledged selected association survives continuation failure. The old endpoint
+and its UI service and screen lease join before the bound new instruction runs.
+Old references refuse attachment and selection, retain the owning parent's
+Shutdown route, and never follow the new conversation. Every association ends
+with this one child. Prepared Sidekick attachments keep their original rights.
+
 A headless XMD child publishes an opaque address association containing only
 `version`, `transport`, `socket`, `owner`, `execution`, `conversation` and `cwd`.
 The public sessionId identifies that live root and exact selected conversation;

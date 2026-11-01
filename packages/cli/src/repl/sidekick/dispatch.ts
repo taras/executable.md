@@ -24,7 +24,7 @@ export interface MessageReservation {
   readonly instruction?: Instruction;
 }
 export interface ConfigurationReservation {
-  readonly kind: "inspect" | "save" | "replace";
+  readonly kind: "inspect" | "save" | "replace" | "recover";
   readonly conversation: string | undefined;
   task: Task<void> | undefined;
 }
@@ -33,11 +33,13 @@ export function createSidekickAdmission() {
   let message: MessageReservation | undefined;
   let configuration: ConfigurationReservation | undefined;
   let pending = 0;
-  function occupied(kind: "message" | "inspect" | "save" | "replace"): string | undefined {
+  function occupied(
+    kind: "message" | "inspect" | "save" | "replace" | "recover",
+  ): string | undefined {
     if ((kind === "replace" || kind === "inspect") && pending > 0) {
       return "remove waiting Sidekick messages before changing or inspecting the conversation.";
     }
-    if (kind !== "save" && kind !== "replace" && message !== undefined) {
+    if (kind !== "save" && kind !== "replace" && kind !== "recover" && message !== undefined) {
       return "the Sidekick is already working on a message.";
     }
     if (configuration === undefined) {
@@ -178,7 +180,11 @@ export function* useSidekickDispatch(options: {
     if (!reading.ok) {
       return reading;
     }
-    if (reading.value.unestablished.some((one) => one.conversation === reading.value.active)) {
+    if (
+      reading.value.recoveryPending ||
+      (reading.value.recoveries.length === 0 &&
+        reading.value.unestablished.some((one) => one.conversation === reading.value.active))
+    ) {
       return Err(
         new Error("This conversation holds feedback whose acceptance cannot be established."),
       );
@@ -215,10 +221,8 @@ export function* useSidekickDispatch(options: {
       return Object.freeze({ pending: Object.freeze(pending.map((one) => one.row)), held });
     },
     hold() {
-      if (current !== undefined) {
-        held = Object.freeze({ kind: "stopped", reason: "Stopped. Resume queue to continue." });
-        updated();
-      }
+      held = Object.freeze({ kind: "stopped", reason: "Stopped. Resume queue to continue." });
+      updated();
     },
     *resume() {
       const ready = guard();

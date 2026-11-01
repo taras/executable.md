@@ -1,6 +1,7 @@
+import { readTextFile } from "@effectionx/fs";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createSignal, race, scoped, sleep, spawn } from "effection";
+import { createSignal, ensure, race, scoped, sleep, spawn } from "effection";
 import type { Operation, Scope } from "effection";
 import { api } from "effection/experimental";
 import { attachChildUi } from "../src/headless/ui.ts";
@@ -16,8 +17,252 @@ import { z } from "zod";
 import { useTerminalScreen } from "./support/terminal-screen.ts";
 import { withResolvers } from "effection";
 import { XmdResponse } from "@executablemd/acp";
+import { childAddressPath } from "../src/headless/host.ts";
+import { pairedLocation, readSidekickRecords } from "../src/repl/sidekick/history.ts";
 
 type AppliedFrames = WeakMap<Terminal, () => Operation<void>>;
+
+describe("987 — fresh child recovery reference", () => {
+  it("keeps host readiness pending while an applied acknowledgement is held", function* () {
+    const held = yield* useHeadlessFixture();
+    const gate = held.input.holdNextAcknowledgement();
+    yield* ensure(() => gate.release());
+    const terminal = recordingTerminal();
+    const ui = yield* spawn(function* () {
+      yield* terminal.install();
+      yield* attachChildUi(held.reference.sessionId);
+    });
+    yield* gate.reached;
+    expect(terminal.terminal.presented.length).toBeGreaterThan(1);
+    let completed = false;
+    const waiting = withResolvers<void>();
+    const readiness = yield* spawn(function* () {
+      waiting.resolve();
+      yield* held.input.ready(terminal.terminal);
+      completed = true;
+    });
+    yield* waiting.operation;
+    expect(completed).toBe(false);
+    gate.release();
+    yield* readiness;
+    yield* held.input.input(terminal.terminal, "\t");
+    expect(held.host.fake.prompts).toHaveLength(0);
+    terminal.terminal.end();
+    yield* ui;
+  });
+  for (const branch of ["continue", "lose UI and cancel"]) {
+    it(`keeps the original selected until semantic acknowledgement: ${branch}`, function* () {
+      const held = yield* useHeadlessFixture();
+      held.host.fake.script({
+        reply:
+          '<Let as="code" select="code">\n```xmd\n<Output>Established child entry.</Output>\n```\n</Let><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />',
+      });
+      held.host.fake.script({ reply: "<REPL.Submit />", failure: "Internal error" });
+      const submitted = yield* held.root.session.submit(promptChild("Inspect established work."));
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      yield* submitted.value.join();
+      const terminal = recordingTerminal();
+      const frames: AppliedFrames = new WeakMap();
+      const click = function* (terminal: Terminal, label: string) {
+        yield* held.input.ready(terminal);
+        const at = yield* locate(terminal, label, frames);
+        yield* held.input.input(terminal, `\x1b[<0;${at.column + 1};${at.row + 1}M`);
+      };
+      const ui = yield* spawn(function* () {
+        yield* terminal.install();
+        yield* observeAppliedFrames(terminal.terminal, frames);
+        try {
+          yield* attachChildUi(held.reference.sessionId);
+        } catch (error) {
+          return error instanceof Error ? error : new Error(String(error));
+        }
+        return undefined;
+      });
+      yield* visible(terminal.terminal, "[review recovery]", frames);
+      yield* click(terminal.terminal, "[review recovery]");
+      yield* visible(terminal.terminal, "Earlier feedback acceptance remains unknown.", frames);
+      yield* held.input.ready(terminal.terminal);
+      const contentAt = yield* locate(terminal.terminal, "Original conversation:", frames);
+      for (let page = 0; page < 60; page++) {
+        yield* held.input.ready(terminal.terminal);
+        if (terminal.terminal.screen?.rows().some((row) => row.includes("New instruction:"))) {
+          break;
+        }
+        yield* held.input.input(
+          terminal.terminal,
+          `\x1b[<65;${contentAt.column + 1};${contentAt.row + 1}M`,
+        );
+      }
+      for (let traversal = 0; traversal < 12; traversal++) {
+        yield* held.input.ready(terminal.terminal);
+        if (terminal.terminal.screen?.rows().some((row) => row.includes(">> New instruction:"))) {
+          break;
+        }
+        yield* held.input.input(terminal.terminal, "\x1b[Z");
+      }
+      yield* visible(terminal.terminal, ">> New instruction:", frames);
+      yield* held.input.input(terminal.terminal, "Propose a distinct next step.");
+      yield* visible(terminal.terminal, "Propose a distinct next step.", frames);
+      yield* click(terminal.terminal, "[start a different conversation]");
+      yield* visible(terminal.terminal, "[abandon and start different conversation]", frames);
+      yield* click(terminal.terminal, "[abandon and start different conversation]");
+      yield* visible(terminal.terminal, "[saved reference; continue]", frames);
+      yield* held.input.ready(terminal.terminal);
+      const text = terminal.terminal.screen?.rows().join("\n") ?? "";
+      const fresh = z
+        .string()
+        .uuid()
+        .parse(/xmd repl --attach ([0-9a-f-]+)/.exec(text)?.[1]);
+      expect(fresh).not.toBe(held.reference.sessionId);
+      expect(text).toContain(`{sessionId: "${fresh}"}`);
+      if (branch === "continue") {
+        console.log(
+          JSON.stringify({
+            kind: "recovery-reference-receipt",
+            sessionId: fresh,
+            rows: terminal.terminal.screen?.rows(),
+          }),
+        );
+      }
+      const path = yield* childAddressPath(fresh);
+      const descriptor = yield* scoped(function* () {
+        return (yield* (yield* SidekickTransport.expect()).connect(path)).descriptor;
+      });
+      expect(descriptor.execution).toBe(held.descriptor.execution);
+      expect(descriptor.cwd).toBe(held.descriptor.cwd);
+      expect(descriptor.conversation).not.toBe(held.descriptor.conversation);
+      let dormant: Error | undefined;
+      try {
+        yield* requestAttachment(path, { method: "status" });
+      } catch (error) {
+        dormant = error instanceof Error ? error : new Error(String(error));
+      }
+      expect(dormant).toBeDefined();
+      expect(held.host.fake.prompts).toHaveLength(2);
+      const location = pairedLocation(held.host.root, held.descriptor.execution);
+      const entriesBefore = yield* readTextFile(location.entries);
+      expect(entriesBefore).toContain("Established child entry.");
+      const before = yield* readSidekickRecords(location.sidekick);
+      expect(
+        before.filter((one) => one.kind === "recovery-reference" && one.phase === "acknowledged"),
+      ).toHaveLength(0);
+      if (branch === "lose UI and cancel") {
+        terminal.terminal.end();
+        expect(yield* ui).toBeUndefined();
+        const restored = recordingTerminal();
+        const restoredUi = yield* spawn(function* () {
+          yield* restored.install();
+          yield* observeAppliedFrames(restored.terminal, frames);
+          yield* attachChildUi(held.reference.sessionId);
+        });
+        yield* visible(restored.terminal, fresh, frames);
+        expect(held.host.fake.prompts).toHaveLength(2);
+        expect(
+          (yield* readSidekickRecords(location.sidekick)).filter(
+            (one) => one.kind === "recovery-reference" && one.phase === "offered",
+          ),
+        ).toHaveLength(1);
+        yield* click(restored.terminal, "[cancel switch]");
+        yield* visible(restored.terminal, "[abandon and start different conversation]", frames);
+        yield* held.input.ready(restored.terminal);
+        const cancelledAt = yield* locate(restored.terminal, "Original conversation:", frames);
+        for (let page = 0; page < 60; page++) {
+          yield* held.input.ready(restored.terminal);
+          if (
+            restored.terminal.screen?.rows().some((row) => row.includes("switch was cancelled"))
+          ) {
+            break;
+          }
+          yield* held.input.input(
+            restored.terminal,
+            `\x1b[<65;${cancelledAt.column + 1};${cancelledAt.row + 1}M`,
+          );
+        }
+        yield* visible(restored.terminal, "switch was cancelled", frames);
+        let withdrawn: Error | undefined;
+        try {
+          yield* attachmentDescriptor(path);
+        } catch (error) {
+          withdrawn = error instanceof Error ? error : new Error(String(error));
+        }
+        expect(withdrawn).toBeDefined();
+        expect((yield* attachmentDescriptor(held.path)).conversation).toBe(
+          held.descriptor.conversation,
+        );
+        restored.terminal.end();
+        yield* restoredUi;
+        expect(held.host.fake.prompts).toHaveLength(2);
+      } else {
+        held.host.fake.script({ reply: "<Output>The fresh conversation answered.</Output>" });
+        const releasing = held.input.holdUiRelease();
+        yield* ensure(() => releasing.release());
+        yield* held.input.ready(terminal.terminal);
+        yield* press(terminal.terminal, "[saved reference; continue]", frames);
+        yield* releasing.reached;
+        expect(held.host.fake.prompts).toHaveLength(2);
+        let premature: Error | undefined;
+        try {
+          yield* attachmentDescriptor(path);
+        } catch (error) {
+          premature = error instanceof Error ? error : new Error(String(error));
+        }
+        expect(premature).toBeDefined();
+        releasing.release();
+        const disconnected = yield* ui;
+        expect(disconnected).toBeDefined();
+        yield* held.host.fake.startedTurns(3);
+        const freshTerminal = recordingTerminal();
+        const freshUi = yield* spawn(function* () {
+          yield* freshTerminal.install();
+          yield* attachChildUi(fresh);
+        });
+        yield* visible(freshTerminal.terminal, "The fresh conversation answered.");
+        expect(held.host.fake.prompts).toHaveLength(3);
+        expect(yield* readTextFile(location.entries)).toBe(entriesBefore);
+        const after = yield* readSidekickRecords(location.sidekick);
+        expect(
+          after.filter((one) => one.kind === "recovery-reference" && one.phase === "acknowledged"),
+        ).toHaveLength(1);
+        freshTerminal.terminal.end();
+        yield* freshUi;
+        const selected = yield* held.root.session.submit(
+          `<Agent name="xmd"><XMD.Session sessionId="${fresh}" /></Agent>`,
+        );
+        if (!selected.ok) {
+          throw selected.error;
+        }
+        const selection = yield* selected.value.join();
+        if (!selection.ok) {
+          throw selection.error;
+        }
+        expect(held.host.fake.prompts).toHaveLength(3);
+        const old = yield* held.root.session.submit(
+          `<Agent name="xmd"><XMD.Session sessionId="${held.reference.sessionId}" /></Agent>`,
+        );
+        if (!old.ok) {
+          throw old.error;
+        }
+        expect((yield* old.value.join()).ok).toBe(false);
+      }
+      const shutdown = yield* held.root.session.submit(
+        '<Agent name="xmd"><XMD.Session.Shutdown sessionId={child.sessionId} /></Agent>',
+      );
+      if (!shutdown.ok) {
+        throw shutdown.error;
+      }
+      expect((yield* shutdown.value.join()).ok).toBe(true);
+      let ended: Error | undefined;
+      try {
+        yield* attachmentDescriptor(path);
+      } catch (error) {
+        ended = error instanceof Error ? error : new Error(String(error));
+      }
+      expect(ended).toBeDefined();
+    });
+  }
+});
 
 function* observeAppliedFrames(terminal: Terminal, appliedFrames: AppliedFrames): Operation<void> {
   const transport = yield* SidekickTransport.expect();
@@ -74,7 +319,6 @@ function visible(terminal: Terminal, text: string, appliedFrames?: AppliedFrames
     })(),
     (function* (): Operation<never> {
       yield* sleep(10000);
-      console.error(`Waiting for ${text}: ${terminal.screen?.rows().join("\n")}`);
       throw new Error(
         `The attached screen did not show ${JSON.stringify(text)}: ${terminal.screen?.rows().join("\n")}`,
       );

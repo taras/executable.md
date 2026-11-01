@@ -1,3 +1,6 @@
+import { recoveryReference } from "./sidekick/recovery-record.ts";
+import type { ReplRecovering } from "./application.ts";
+import type { RecoveryReview } from "./sidekick/owner.ts";
 import { useSidekickAttachment } from "../sidekick-acp/server.ts";
 import { SidekickTransport } from "../sidekick-acp/protocol.ts";
 import { testForSidekick } from "./sidekick/admission.ts";
@@ -141,7 +144,7 @@ import { entryKey } from "./entries.ts";
 import {
   admitting as newAdmitting,
   blocking,
-  coldReservation,
+  coldReservations,
   coldWorkspaceEntry,
   retainResolution,
   submitForSidekick,
@@ -205,7 +208,28 @@ import { ReplTerminal } from "./terminal.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import type { ReplLiveScreen } from "./live-screen.ts";
 
+export interface ChildReferenceChange {
+  readonly decision: string;
+  readonly previous: string;
+  readonly next: string;
+}
+export interface ChildReference {
+  readonly sessionId: string;
+}
+export interface ReplInputPass {
+  readonly phase: "start" | "complete" | "ended";
+  readonly execution: string;
+  readonly view: ReplLiveScreen;
+  readonly pass: number;
+  readonly generation: number;
+  readonly events: readonly { readonly event: ReplScreenEvent; readonly accepted: boolean }[];
+}
 export interface HeadlessReplRoot {
+  readonly observeInputPass?: (reading: ReplInputPass) => void;
+  handoffReference?(
+    change: ChildReferenceChange,
+    acknowledgeAndActivate: (reference: ChildReference) => Operation<Result<void>>,
+  ): Operation<Result<ChildReference>>;
   readonly view: ReplLiveScreen;
   ready(root: {
     readonly session: ReplSession;
@@ -340,14 +364,14 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
   const profile =
     "finalize" in options.profile ? yield* options.profile.finalize(workspace) : options.profile;
   const projectCwd = profile.projectCwd ?? (yield* cwd());
-  let unresolved: ColdReservation | undefined;
+  let unresolved: readonly ColdReservation[] = [];
   let resumedWorkspaceEntry: string | undefined;
   if (execution.chat.form === "paired") {
     const projected = projectRepl(yield* execution.stream.readAll());
     if (!projected.ok) {
       return yield* refuse(state, projected.error.message);
     }
-    const cold = yield* coldReservation(
+    const cold = yield* coldReservations(
       execution.chat.records,
       projected.value.entries,
       execution.chat.location.entries,
@@ -687,7 +711,7 @@ function* drive(
   options: ReplProgramOptions & { readonly profile: ReplExecutionProfile },
   /** Where this execution lives, for the one write that replaces it. */
   repository: PairedReplRepository,
-  cold: ColdReservation | undefined,
+  cold: readonly ColdReservation[],
   workspace: string,
 ): Operation<Result<ReplOutcome>> {
   let state = start;
@@ -898,14 +922,29 @@ function* drive(
      */
     function* settleReservation(): Operation<void> {
       const held = unresolved;
-      if (held === undefined || execution.chat.form !== "paired") {
+      if (held.length === 0 || execution.chat.form !== "paired") {
         return;
       }
       // Cleared first, so a failed append is not retried by the next keystroke
       // ahead of the action that asked for it. The finding is still in the file
       // it came from, so the next process asks the same question again.
-      unresolved = undefined;
-      yield* retainResolution(execution.chat.writer, held);
+      unresolved = [];
+      yield* execution.stream.settled();
+      const entries = session.reading(undefined);
+      if (!entries.ok) {
+        throw entries.error;
+      }
+      const current = yield* coldReservations(
+        yield* execution.chat.writer.readAll(),
+        entries.value.model.entries,
+        execution.chat.location.entries,
+      );
+      if (!current.ok) {
+        throw current.error;
+      }
+      for (const finding of current.value) {
+        yield* retainResolution(execution.chat.writer, finding);
+      }
     }
 
     /**
@@ -992,6 +1031,15 @@ function* drive(
      * behind it, because a reply that filled the draft did so after the message
      * that produced it was saved.
      */
+    let referenceWait: { readonly id: string; settle(result: Result<void>): void } | undefined;
+    const recoveryReports: {
+      revision: number;
+      review?: RecoveryReview;
+      active?: string;
+      reference?: string;
+      refusal?: string;
+      done?: true;
+    }[] = [];
     const sidekickReports: (
       | { readonly kind: "acknowledged"; readonly held: Instruction; settle(): void }
       | { readonly kind: "refused"; readonly refusal: string }
@@ -1032,6 +1080,28 @@ function* drive(
     )[] = [];
 
     function applySidekickReports(): void {
+      for (const report of recoveryReports.splice(0)) {
+        const held = state.recovering;
+        const readingIsCurrent =
+          report.review !== undefined &&
+          sidekick.reading.ok &&
+          report.active === sidekick.reading.value.active;
+        if (held !== undefined && (held.revision === report.revision || readingIsCurrent)) {
+          const { active: _active, ...update } = report;
+          state = {
+            ...state,
+            recovering: {
+              ...held,
+              ...update,
+              revision: held.revision,
+              ...(report.done ? { open: false, reference: undefined } : {}),
+              ...(held.text.length === 0 && report.review?.unused !== undefined
+                ? { text: report.review.unused.text, replacing: report.review.unused.replace }
+                : {}),
+            },
+          };
+        }
+      }
       for (const report of sidekickReports.splice(0)) {
         if (report.kind === "acknowledged") {
           state = instructed(state, report.held);
@@ -1503,6 +1573,190 @@ function* drive(
         reopening,
         {
           owner: sidekick,
+          reviewRecovery(): void {
+            const held = state.recovering;
+            if (held === undefined) {
+              return;
+            }
+            renderingOwner.run(function* () {
+              const conversation = sidekick.reading.ok ? sidekick.reading.value.active : undefined;
+              const read = yield* sidekick.reviewRecovery();
+              if (!sidekick.reading.ok || sidekick.reading.value.active !== conversation) {
+                return;
+              }
+              recoveryReports.push({
+                revision: held.revision,
+                active: conversation,
+                ...(read.ok ? { review: read.value } : { refusal: read.error.message }),
+              });
+              wakes.send({ kind: "session" });
+            });
+          },
+          reference(accept): void {
+            const pending = referenceWait;
+            if (pending === undefined || state.recovering?.reference !== pending.id) {
+              return;
+            }
+            pending.settle(
+              accept ? Ok(undefined) : Err(new Error("The conversation switch was cancelled.")),
+            );
+          },
+          recover(held): void {
+            if (held.review === undefined || state.recovering !== held) {
+              return;
+            }
+            const taken = admissions.configure("recover", held.review.conversation);
+            if (!taken.ok) {
+              sidekickReports.push({ kind: "refused", refusal: taken.error.message });
+              return;
+            }
+            dispatch.hold();
+            const exchange = dispatch.current;
+            const job = taken.value;
+            const review = held.review;
+            const current = () =>
+              state.recovering?.revision === held.revision &&
+              state.recovering.text === held.text &&
+              state.recovering.replacing === held.replacing &&
+              state.recovering.review?.conversation === review.conversation;
+            job.task = renderingOwner.run(function* () {
+              yield* ensure(() => {
+                admissions.releaseConfiguration(job);
+                referenceWait = undefined;
+                wakes.send({ kind: "session" });
+              });
+              if (exchange !== undefined) {
+                yield* exchange.cancel();
+              }
+              if (execution.chat.form !== "paired") {
+                throw new Error("Recovery requires its acknowledged paired history.");
+              }
+              yield* execution.stream.settled();
+              const entries = session.reading(undefined);
+              if (!entries.ok) {
+                throw entries.error;
+              }
+              const findings = yield* coldReservations(
+                yield* execution.chat.writer.readAll(),
+                entries.value.model.entries,
+                execution.chat.location.entries,
+              );
+              if (!findings.ok) {
+                recoveryReports.push({ revision: held.revision, refusal: findings.error.message });
+                return;
+              }
+              for (const finding of findings.value) {
+                yield* retainResolution(execution.chat.writer, finding);
+              }
+              unresolved = [];
+              const reconciled = yield* sidekick.reviewRecovery();
+              if (!reconciled.ok) {
+                recoveryReports.push({
+                  revision: held.revision,
+                  refusal: reconciled.error.message,
+                });
+                return;
+              }
+              const resolvedControls = new Set(
+                findings.value.map((one) => `${one.intent.response}\0${one.intent.order}`),
+              );
+              const expectedControls = review.controls.filter(
+                (one) => !resolvedControls.has(`${one.response}\0${one.order}`),
+              );
+              if (
+                reconciled.value.conversation !== review.conversation ||
+                JSON.stringify(reconciled.value.requests) !== JSON.stringify(review.requests) ||
+                JSON.stringify(reconciled.value.controls) !== JSON.stringify(expectedControls)
+              ) {
+                recoveryReports.push({
+                  revision: held.revision,
+                  refusal:
+                    "The recovery target changed during Submit reconciliation. Review it again.",
+                });
+                return;
+              }
+              const result = yield* sidekick.recover(reconciled.value, held.text, held.replacing, {
+                current,
+                ...(options.headless?.handoffReference === undefined
+                  ? {}
+                  : {
+                      *handoff(decision, activate) {
+                        const handoff = options.headless?.handoffReference;
+                        if (handoff === undefined || execution.chat.form !== "paired") {
+                          return Err(new Error("The child reference owner is unavailable."));
+                        }
+                        const answer = yield* handoff(
+                          {
+                            decision: decision.id,
+                            previous: decision.conversation,
+                            next: decision.target,
+                          },
+                          function* (reference) {
+                            if (execution.chat.form !== "paired") {
+                              return Err(new Error("The recovery history is unavailable."));
+                            }
+                            if (!current()) {
+                              return Err(
+                                new Error(
+                                  "The reviewed target changed before reference publication was recorded.",
+                                ),
+                              );
+                            }
+                            const offered = {
+                              kind: "recovery-reference",
+                              conversation: decision.conversation,
+                              decision: decision.id,
+                              previous: decision.conversation,
+                              next: decision.target,
+                              sessionId: reference.sessionId,
+                              phase: "offered",
+                            };
+                            const parsed = recoveryReference.parse(offered);
+                            yield* execution.chat.writer.append(parsed);
+                            const wait = withResolvers<Result<void>>();
+                            referenceWait = { id: reference.sessionId, settle: wait.resolve };
+                            recoveryReports.push({
+                              revision: held.revision,
+                              reference: reference.sessionId,
+                            });
+                            wakes.send({ kind: "session" });
+                            const acknowledged = yield* wait.operation;
+                            if (!acknowledged.ok) {
+                              return acknowledged;
+                            }
+                            if (!current()) {
+                              return Err(
+                                new Error(
+                                  "The displayed reference no longer belongs to the reviewed instruction.",
+                                ),
+                              );
+                            }
+                            yield* execution.chat.writer.append({
+                              ...parsed,
+                              phase: "acknowledged",
+                            });
+                            return yield* activate();
+                          },
+                        );
+                        return answer.ok ? Ok(undefined) : answer;
+                      },
+                    }),
+              });
+              if (!result.ok) {
+                recoveryReports.push({
+                  revision:
+                    state.recovering?.review?.conversation === review.conversation
+                      ? state.recovering.revision
+                      : held.revision,
+                  refusal: result.error.message,
+                  reference: undefined,
+                });
+              } else {
+                recoveryReports.push({ revision: held.revision, done: true });
+              }
+              wakes.send({ kind: "session" });
+            });
+          },
           toggleFollow() {
             follow = !follow;
           },
@@ -1689,6 +1943,28 @@ function* drive(
       );
     }
     const draw = () => (liveScreen === undefined ? paintCurrent() : liveScreen.draw(paintCurrent));
+    let observedPass = 0;
+    let observedEvents: { event: ReplScreenEvent; accepted: boolean }[] = [];
+    const observer = options.headless?.observeInputPass;
+    const observePass = (phase: ReplInputPass["phase"]): void => {
+      if (liveScreen !== undefined) {
+        observer?.({
+          phase,
+          execution: execution.id,
+          view: liveScreen,
+          pass: observedPass,
+          generation: liveScreen.generation,
+          events: [...observedEvents],
+        });
+      }
+    };
+    if (observer !== undefined) {
+      yield* ensure(() => observePass("ended"));
+    }
+    if (observer !== undefined) {
+      observedPass++;
+      observePass("start");
+    }
     const first = yield* draw();
     rendered = first?.rendered;
     presenting = first === undefined ? undefined : presentedDrawer(first.view);
@@ -1704,12 +1980,20 @@ function* drive(
       rendered = marked?.rendered;
       presenting = marked === undefined ? undefined : presentedDrawer(marked.view);
     }
+    if (observer !== undefined && rendered !== undefined && liveScreen?.connected) {
+      observePass("complete");
+    }
 
     let formQuestion = current.overlay.question;
     while (true) {
       const taken = yield* wakes.take();
       if (taken.length === 0) {
         return Ok({ location: exitLocation(state), refusal: undefined });
+      }
+      if (observer !== undefined) {
+        observedPass++;
+        observedEvents = [];
+        observePass("start");
       }
 
       if (liveScreen !== undefined && generation !== liveScreen.generation) {
@@ -1735,8 +2019,14 @@ function* drive(
         if (departing) {
           break;
         }
-        if (wake.kind === "screen" && liveScreen !== undefined && !liveScreen.accepts(wake.event)) {
-          continue;
+        if (wake.kind === "screen") {
+          const accepted = liveScreen === undefined || liveScreen.accepts(wake.event);
+          if (observer !== undefined) {
+            observedEvents.push({ event: wake.event, accepted });
+          }
+          if (!accepted) {
+            continue;
+          }
         }
         if (wake.kind === "session") {
           reading = { model: current.model, navigation: current.navigation };
@@ -1989,6 +2279,9 @@ function* drive(
         state = focusSettled(again.view, settledFocus, again.admission);
         focused = settledFocus;
       }
+      if (observer !== undefined && rendered !== undefined && liveScreen?.connected) {
+        observePass("complete");
+      }
       if (ended) {
         // Ending is a lifecycle outcome, whether end of input or `[exit]` brought
         // it about: the last frame is drawn, and then the command is over. Nothing
@@ -2151,6 +2444,10 @@ function sidekickReadingOf(
   // current association, which is what a person who has not chosen is reading.
   const reading = selected ?? active;
   return Object.freeze({
+    recovery:
+      read.value.recoveryPending ||
+      (read.value.recoveries.length === 0 &&
+        read.value.unestablished.some((one) => one.conversation === active)),
     chat: sidekickChatRows(read.value, owner.previewing),
     // What the replies of this history actually did to this execution's
     // entries, as the coordinates their records hold. Detached from the chat
@@ -2853,6 +3150,9 @@ function* perform(
    */
   chat: {
     readonly owner: SidekickOwner;
+    reviewRecovery(): void;
+    recover(held: ReplRecovering): void;
+    reference(accept: boolean): void;
     toggleFollow(): void;
     readonly dispatch: SidekickDispatch;
     /** Say why the Sidekick refused, on the next pass of the loop. */
@@ -2914,6 +3214,15 @@ function* perform(
   refuse: (refusal: string) => void,
 ): Operation<Performed> {
   switch (intent.kind) {
+    case "review-recovery":
+      chat.reviewRecovery();
+      return {};
+    case "recover-sidekick":
+      chat.recover(intent.held);
+      return {};
+    case "recovery-reference":
+      chat.reference(intent.accept);
+      return {};
     case "none":
       return {};
     case "exit":

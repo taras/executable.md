@@ -1,3 +1,5 @@
+import { projectRecovery, recoveryBlocked } from "./recovery-state.ts";
+import type { RecoveryDisposition } from "./recovery-state.ts";
 /**
  * What a Sidekick history says, read without running anything.
  *
@@ -370,6 +372,9 @@ export interface SidekickPreferences {
 
 /** Everything a reopened Sidekick knows before anybody says anything. */
 export interface SidekickReading {
+  readonly recoveryPending: boolean;
+  readonly recoveries: readonly RecoveryDisposition[];
+  readonly requests: readonly SidekickRequest[];
   readonly submits: readonly SidekickSubmitIntent[];
   readonly conversations: readonly SidekickConversation[];
   /**
@@ -401,8 +406,6 @@ export interface SidekickReading {
    * and is never re-asked, because asking again is asking a second question.
    */
   readonly unfinished: readonly SidekickOperation[];
-  /** The one Submit intent still to be reconciled, when there is one. */
-  readonly submit: SidekickSubmitIntent | undefined;
   /**
    * Feedback whose acceptance a saved turn establishes, per conversation.
    *
@@ -536,6 +539,22 @@ export function retryable(
   if (asked === undefined || asked.kind !== "person") {
     return Err(
       new SidekickProjectionError("this chat history holds no such request to ask again."),
+    );
+  }
+  const request = known.requests.find(
+    (one) => one.conversation === conversation && one.kind === "message" && one.message === message,
+  );
+  if (
+    known.recoveries.some(
+      (one) =>
+        one.decision.message === asked.id ||
+        (request !== undefined && one.decision.requests.includes(request.at)),
+    )
+  ) {
+    return Err(
+      new SidekickProjectionError(
+        "This request belongs to a recovery decision and is not offered for Retry.",
+      ),
     );
   }
   if (asked.turn === null) {
@@ -806,6 +825,10 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
   const requests = requestsFromHistory(records);
   if (!requests.ok) {
     return requests;
+  }
+  const recovery = projectRecovery(records, requests.value);
+  if (!recovery.ok) {
+    return recovery;
   }
   /** Each request by the record that began it. */
   const began = new Map<number, SidekickRequest>(
@@ -1302,23 +1325,6 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
   }
   unfinished.sort((left, right) => left.order - right.order);
 
-  // The one Submit still to be reconciled. More than one unresolved
-  // reservation is not a history this version can continue: the entry journal
-  // holds one next slot, and two intents claiming it cannot both be true.
-  const reservations = [...intents.values()].filter((held) => held.record.submit !== undefined);
-  const unresolved = reservations.filter(
-    (held) => !settled.has(slot(held.record.conversation, held.record.response, held.record.order)),
-  );
-  if (unresolved.length > 1) {
-    return Err(
-      new SidekickProjectionError(
-        "this chat history holds more than one unresolved entry reservation, so which entry it " +
-          "was waiting for cannot be established here.",
-      ),
-    );
-  }
-  const reserved = unresolved[0] ?? undefined;
-
   // Which request each saved turn belongs to, through the same boundaries the
   // chat is built from. One request is one turn, so this is a lookup rather
   // than a choice: a turn no request bounds is a turn this history cannot say
@@ -1425,24 +1431,10 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
       operations: Object.freeze(operations.map((held) => Object.freeze(held))),
       preferences: preferences === undefined ? undefined : Object.freeze(preferences),
       unfinished: Object.freeze(unfinished.map((held) => Object.freeze(held))),
-      submit:
-        reserved === undefined
-          ? undefined
-          : Object.freeze({
-              conversation: reserved.record.conversation,
-              response: reserved.record.response,
-              order: reserved.record.order,
-              ordinal: reserved.record.submit!.ordinal,
-              entry: reserved.record.submit!.entry,
-              source: reserved.record.submit!.source,
-              revision: reserved.record.submit!.revision,
-              retained: Object.freeze({ ...reserved.record.submit!.retained }),
-              ...(reserved.record.submit!.workspace === true ? { workspace: true } : {}),
-              settled: false,
-              // Unresolved by definition: this is the one reservation with no
-              // outcome at all, so nothing has observed anything of it yet.
-              admitted: false,
-            }),
+      recoveryPending:
+        active !== undefined && recoveryBlocked(records, requests.value, recovery.value, active),
+      recoveries: recovery.value,
+      requests: requests.value,
       submits: Object.freeze(
         [...intents.entries()].flatMap(([key, held]) => {
           const submit = held.record.submit;
