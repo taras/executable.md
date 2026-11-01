@@ -20,7 +20,7 @@ import { SidekickOwnerError } from "../src/repl/sidekick/owner.ts";
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { scoped } from "effection";
-import { ensureDir, writeTextFile, rm, exists } from "@effectionx/fs";
+import { ensureDir, writeTextFile, readTextFile, rm, exists } from "@effectionx/fs";
 import { API, cwd, useHostFiles, Permissions } from "@executablemd/runtime";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { readGuideChapter } from "../src/repl/sidekick/guide.ts";
@@ -4035,7 +4035,198 @@ describe("REPL syntax matches ordinary entry execution (#1053)", () => {
     ).toContain(name);
   }
 
+  it("ordinary assertions execute the advertised source (#1066)", function* () {
+    const directory = yield* useTemporary("xmd-1066-success-");
+    yield* API.Env.around({
+      *cwd() {
+        return directory;
+      },
+    });
+    const held = yield* useHarness();
+    const outcomes = yield* exchange(
+      held,
+      submission(`<Let as="actual" value={2 + 2} />
+<AssertEquals actual={actual} expected={4} />
+<Output>Check passed.</Output>`),
+    );
+    const outcome = outcomes.at(-1);
+    if (outcome?.outcome.status === "err") {
+      throw new Error(outcome.outcome.error.message);
+    }
+    expect(outcome?.outcome.status).toBe("ok");
+    expect(held.session.model.entries.at(-1)?.terminal).toMatchObject({
+      status: "ok",
+      output: "Check passed.",
+    });
+  });
+
+  it("ordinary assertion failure joins cleanup before the next entry (#1066)", function* () {
+    const directory = yield* useTemporary("xmd-1066-failure-");
+    yield* API.Env.around({
+      *cwd() {
+        return directory;
+      },
+    });
+    yield* useHostFiles();
+    let writes = 0;
+    yield* API.Files.around({
+      *writeTextFile(args, next) {
+        writes += 1;
+        return yield* next(...args);
+      },
+    });
+    const cleaning = withResolvers<void>();
+    const release = withResolvers<void>();
+    let installations = 0;
+    let cleanups = 0;
+    const held = yield* useHarness(undefined, {
+      entryInstallation: {
+        *install() {
+          installations += 1;
+          if (installations === 1) {
+            yield* ensure(function* () {
+              cleaning.resolve();
+              yield* release.operation;
+              cleanups += 1;
+            });
+          }
+        },
+      },
+    });
+    yield* ensure(() => release.resolve());
+    const submitted = yield* held.session.submit(
+      '<AssertEquals actual="actual-1066" expected="expected-1066" />\n<File path="sentinel.txt">unwritten</File>',
+    );
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    let joined = false;
+    const joining = yield* spawn(function* () {
+      const result = yield* submitted.value.join();
+      joined = true;
+      return result;
+    });
+    yield* cleaning.operation;
+    expect(held.session.admits().ok).toBe(false);
+    const successor = yield* spawn(() => held.session.submit("Too early."));
+    expect((yield* successor).ok).toBe(false);
+    expect(joined).toBe(false);
+    expect(cleanups).toBe(0);
+    expect(writes).toBe(0);
+    expect(yield* exists(join(directory, "sentinel.txt"))).toBe(false);
+    release.resolve();
+    const failed = yield* joining;
+    expect(failed.ok).toBe(false);
+    expect(cleanups).toBe(1);
+    const terminal = held.session.model.entries[0]?.terminal;
+    expect(terminal?.status).toBe("err");
+    expect(terminal?.message).toContain("actual-1066");
+    expect(terminal?.message).toContain("expected-1066");
+    const next = yield* held.session.submit(
+      "<Assert expr={true} /><Output>Next entry passed.</Output>",
+    );
+    if (!next.ok) {
+      throw next.error;
+    }
+    expect(next.value.entry).not.toBe(submitted.value.entry);
+    expect((yield* next.value.join()).ok).toBe(true);
+    expect(held.session.model.entries[1]?.terminal).toMatchObject({
+      status: "ok",
+      output: "Next entry passed.",
+    });
+    expect(yield* submitted.value.join()).toEqual(failed);
+    expect(held.session.model.entries[0]?.terminal).toEqual(terminal);
+    expect(cleanups).toBe(1);
+    expect(installations).toBe(2);
+    expect(held.fake.prompts).toHaveLength(0);
+    const journal = yield* readTextFile(held.execution.stream.path);
+    expect(journal).not.toContain("test_result");
+    expect(journal).not.toContain("testing_boundary");
+  });
+
+  it("ordinary assertions retain forms, validation and explicit test boundaries (#1066)", function* () {
+    const directory = yield* useTemporary("xmd-1066-forms-");
+    yield* API.Env.around({
+      *cwd() {
+        return directory;
+      },
+    });
+    yield* useHostFiles();
+    let writes = 0;
+    yield* API.Files.around({
+      *writeTextFile(args, next) {
+        writes += 1;
+        return yield* next(...args);
+      },
+    });
+    const held = yield* useHarness();
+    const forms = yield* held.session
+      .submit(`<AssertThrows message={/cannot read/} as="caught"><File path="missing-1066.txt" /></AssertThrows>
+<AssertEquals actual={caught.source} expected="File" />
+<AssertStringIncludes actual={caught.message} expected="cannot read" />
+<AssertEquals actual="paired">paired</AssertEquals>
+<Output>Forms passed.</Output>`);
+    if (!forms.ok) {
+      throw forms.error;
+    }
+    const formResult = yield* forms.value.join();
+    if (!formResult.ok) {
+      throw formResult.error;
+    }
+    expect(held.session.model.entries.at(-1)?.terminal?.output).toBe("Forms passed.");
+    const invalid = yield* held.session.submit(
+      '<Assert expr={true} bogus="invalid" /><File path="invalid.txt">unwritten</File>',
+    );
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) {
+      expect(invalid.error.message).toContain("bogus");
+    }
+    expect(held.session.model.entries).toHaveLength(1);
+    const missing = yield* held.session.submit(
+      '<AssertThrows><File path="missing-1066.txt" /></AssertThrows>',
+    );
+    if (!missing.ok) {
+      throw missing.error;
+    }
+    const missingResult = yield* missing.value.join();
+    expect(missingResult.ok).toBe(false);
+    if (!missingResult.ok) {
+      expect(missingResult.error.message).toContain('requires a "message"');
+    }
+    const bare = yield* held.session.submit(
+      '<Test name="inactive"><File path="test-body.txt">unwritten</File></Test>',
+    );
+    if (!bare.ok) {
+      throw bare.error;
+    }
+    expect((yield* bare.value.join()).ok).toBe(false);
+    expect(held.session.model.entries.at(-1)?.terminal?.message).toContain(
+      "requires a testing package",
+    );
+    const agent = yield* held.session.submit(
+      '<TestAgent><File path="agent-body.txt">unwritten</File></TestAgent>',
+    );
+    expect(agent.ok).toBe(false);
+    if (!agent.ok) {
+      expect(agent.error.message).toContain("Cannot resolve component: TestAgent");
+    }
+    expect(writes).toBe(0);
+    for (const path of ["invalid.txt", "test-body.txt", "agent-body.txt"]) {
+      expect(yield* exists(join(directory, path))).toBe(false);
+    }
+    expect(held.fake.prompts).toHaveLength(0);
+    const journal = yield* readTextFile(held.execution.stream.path);
+    expect(journal).not.toContain("test_result");
+    expect(journal).not.toContain("testing_boundary");
+  });
+
   it("A1-A4/A7: discovery, admission, permissions and Markdown tests agree", function* () {
+    const directory = yield* useTemporary("xmd-1066-discovery-");
+    yield* API.Env.around({
+      *cwd() {
+        return directory;
+      },
+    });
     yield* useHostFiles();
     let writesRequested = 0;
     yield* Permissions.around({
@@ -4054,41 +4245,37 @@ describe("REPL syntax matches ordinary entry execution (#1053)", () => {
 <REPL.Syntax names={["Json"]} />
 <REPL.Syntax names={["Assert"]} />
 <REPL.Syntax names={["AssertEquals"]} />
-<REPL.Syntax names={["File"]} />`,
+<REPL.Syntax names={["File"]} />
+<REPL.Syntax names={["Testing"]} />`,
     );
     const listing = documented(discovery);
     expect(listing).toContain("### `<Json>`");
     expect(listing).toContain("### `<File>`");
-    for (const name of ["Assert", "AssertEquals", "Verbose", "WebForm"]) {
+    for (const name of ["Assert", "AssertEquals"]) {
+      expect(listing).toContain(`### \`<${name}>\``);
+    }
+    for (const name of ["Testing", "Verbose", "WebForm"]) {
       expect(listing).not.toContain(`### \`<${name}>\``);
     }
     expect(documented(discovery, 1)).toContain("**Available in this evaluation:** yes");
     expect(documented(discovery, 4)).toContain("**Available in this evaluation:** yes");
     for (const index of [2, 3]) {
-      const text = documented(discovery, index);
-      expect(text).toContain("**Available in this evaluation:** no");
-      expect(text).toContain("ordinary entry");
-      expect(text).toContain("Markdown test");
-      expect(text).toContain("<Assert expr={true} />");
-      expect(text).toContain('<AssertEquals actual="yes" expected="yes" />');
-      expect(text).toContain('<REPL.Test path="components/assertions.test.md" />');
+      expect(documented(discovery, index)).toContain("**Available in this evaluation:** yes");
     }
+    const reference = documented(discovery, 5);
+    expect(reference).toContain("**Available in this evaluation:** no");
+    expect(reference).toContain("Markdown test");
+    expect(reference).toContain('<REPL.Test path="components/assertions.test.md" />');
     expect(held.session.model.entries).toHaveLength(0);
     expect(yield* exists(join(held.workspace, "sentinel.txt"))).toBe(false);
-    for (const source of [
-      "<Assert expr={true} />",
-      '<AssertEquals actual="yes" expected="yes" />',
-      "<NotAComponent1053 />",
-    ]) {
-      const outcomes = yield* exchange(
-        held,
-        submission(`${source}<File path="sentinel.txt">unwritten</File>`),
-      );
-      refused(outcomes, "Cannot resolve component");
-      expect(held.session.model.entries).toHaveLength(0);
-      expect(yield* exists(join(held.workspace, "sentinel.txt"))).toBe(false);
-      expect(writesRequested).toBe(0);
-    }
+    const outcomes = yield* exchange(
+      held,
+      submission('<NotAComponent1053 /><File path="sentinel.txt">unwritten</File>'),
+    );
+    refused(outcomes, "Cannot resolve component");
+    expect(held.session.model.entries).toHaveLength(0);
+    expect(yield* exists(join(held.workspace, "sentinel.txt"))).toBe(false);
+    expect(writesRequested).toBe(0);
     const unknown = yield* exchange(
       held,
       `<REPL.Syntax names={["NotAComponent1053"]} />
@@ -4111,7 +4298,7 @@ describe("REPL syntax matches ordinary entry execution (#1053)", () => {
     expect(yield* exists(join(held.workspace, "refused.txt"))).toBe(false);
     expect(writesRequested).toBeGreaterThan(0);
     yield* ensureDir(join(held.workspace, "components"));
-    const examples = documented(discovery, 2).split("```xmd\n");
+    const examples = reference.split("```xmd\n");
     const testSource = examples[1]?.split("\n```")[0];
     const testRequest = examples[2]?.split("\n```")[0];
     if (testSource === undefined || testRequest === undefined) {
@@ -4129,7 +4316,7 @@ describe("REPL syntax matches ordinary entry execution (#1053)", () => {
   it("A5: fresh asks follow session component creation, edits and removal", function* () {
     const held = yield* useHarness();
     const before = yield* exchange(held, '<REPL.Syntax names={["Assert"]} />');
-    expect(documented(before)).toContain("**Available in this evaluation:** no");
+    expect(documented(before)).toContain("**Available in this evaluation:** yes");
     yield* ensureDir(join(held.workspace, "components"));
     const path = join(held.workspace, "components/Assert.md");
     for (const version of ["first", "second"]) {
@@ -4161,14 +4348,13 @@ Session body ${version}.`,
       `<REPL.Syntax />
 <REPL.Syntax names={["Assert"]} />`,
     );
-    expect(documented(removed)).not.toContain("### `<Assert>`");
-    expect(documented(removed, 1)).toContain("**Available in this evaluation:** no");
-    refused(
-      yield* exchange(held, submission("<Assert expr={true} />")),
-      "Cannot resolve component: Assert",
-    );
-    expect(held.session.model.entries).toHaveLength(2);
-    expect(documented(before)).toContain("**Available in this evaluation:** no");
+    expect(documented(removed)).toContain("### `<Assert>`");
+    expect(documented(removed, 1)).toContain("**Available in this evaluation:** yes");
+    expect(documented(removed, 1)).not.toContain("Session assertion");
+    yield* exchange(held, submission("<Assert expr={true} />"));
+    expect(held.session.model.entries.at(-1)?.terminal?.status).toBe("ok");
+    expect(held.session.model.entries).toHaveLength(3);
+    expect(documented(before)).toContain("**Available in this evaluation:** yes");
     const retained = yield* records(held.execution);
     expect(retained).toContainEqual(before[0]);
   });

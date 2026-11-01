@@ -644,6 +644,11 @@ distinct `Error` values with the same name and message now compare equal, where
 previously their stacks made them differ. Pathological operands — an invalid
 `Date`, a `WeakMap` — are not specified and may differ between runtimes.
 
+Ordinary REPL entries carry the existing assertion defaults without installing
+testing behavior or a TestAgent. Their discovery and execution use the same
+assertion forms and validation as ordinary xmd run; REPL.Test remains the
+explicit Markdown-test boundary.
+
 Assertion components work inside and outside tests. A failed assertion throws an
 `AssertionError`. Outside a test, that error aborts document expansion. Inside a
 test, `<Test>` contains and records it.

@@ -59,6 +59,36 @@ describe("xmd CLI", () => {
     expect(result.stderr).toContain("no tests were discovered");
   });
 
+  it("run continues after the advertised ordinary assertion", function* () {
+    const result = yield* runCli(
+      [
+        "run",
+        "--eval",
+        `<Let as="actual" value={2 + 2} />
+<AssertEquals actual={actual} expected={4} />
+<Output>Check passed.</Output>`,
+      ],
+      RUN,
+    ).join();
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe("Check passed.");
+  });
+
+  it("run fails an assertion with operand diagnostics before later output", function* () {
+    const result = yield* runCli(
+      [
+        "run",
+        "--eval",
+        '<AssertEquals actual="actual-1066" expected="expected-1066" /><Output>LATER-EFFECT-1066</Output>',
+      ],
+      RUN,
+    ).join();
+    expect(result.code).toBe(1);
+    expect(result.stdout + result.stderr).toContain("actual-1066");
+    expect(result.stdout + result.stderr).toContain("expected-1066");
+    expect(result.stdout).not.toContain("LATER-EFFECT-1066");
+  });
+
   it("run skips tests entirely and exits 0", function* () {
     const result = yield* runCli(["run", "packages/testing/tests/fixtures/failing.md"], RUN).join();
     expect(result.code).toBe(0);
