@@ -4572,7 +4572,10 @@ export function* prepareFrame(
   if (!details.ok) {
     return details;
   }
+  const sessions = (chatStore ?? createChatPreparationStore(createPlainFitStore())).sessions;
+  const sessionSequence = sessions.prepare(view, widths.listBody);
   const admission = admissionFor({
+    sessions: sessionSequence,
     view,
     manifest: placed.manifest,
     widths,
@@ -4596,6 +4599,8 @@ export function* prepareFrame(
     chat: chat.value?.fitted,
     chatSequence: chat.value,
     chatMaterialize: chatStore?.materialize,
+    sessions: sessionSequence,
+    sessionMaterialize: sessions.materialize,
     message: shown,
     guidance: guidanceRows,
     refusal: refusalRows,

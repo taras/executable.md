@@ -19,9 +19,15 @@ function* completedKey(page: ReplPage, key: PageKey): Operation<void> {
   yield* page.key(key);
   yield* page.until("the completed key write", (one) => one.index > before);
 }
-import type { ReplSidekickChatRow } from "../src/repl/application.ts";
+import type { ReplView, ReplSidekickChatRow } from "../src/repl/application.ts";
+import type { ReplAgentTurn } from "../src/repl/model.ts";
+import type { ReplLiveTurn } from "../src/repl/agent.ts";
 import { projectRepl } from "../src/repl/model.ts";
-import { createChatPreparationStore, SIDEKICK_WINDOW } from "../src/repl/application.ts";
+import {
+  createChatPreparationStore,
+  SIDEKICK_WINDOW,
+  SESSIONS_WINDOW,
+} from "../src/repl/application.ts";
 import { createPlainFitStore } from "../src/repl/fitting.ts";
 import { prepareFrame } from "../src/repl/program.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
@@ -48,6 +54,12 @@ describe("1048 — prepare only admitted chat descriptions", () => {
           throw warm.error;
         }
         const keys: string[] = [];
+        const sessionKeys: string[] = [];
+        const sessionBuild = store.sessions.materialize;
+        store.sessions.materialize = (one, focused, claim) => {
+          sessionKeys.push(one.key);
+          return sessionBuild(one, focused, claim);
+        };
         const build = store.materialize;
         store.materialize = (one, focused) => {
           keys.push(one.key);
@@ -70,6 +82,24 @@ describe("1048 — prepare only admitted chat descriptions", () => {
         const admitted = sequence.rows
           .slice(window.from, window.from + window.count)
           .map((one) => one.key);
+        const sessions = next.value.context.sessions;
+        const sessionWindow = next.value.admission.windows.get(SESSIONS_WINDOW);
+        if (sessions === undefined || sessionWindow === undefined) {
+          throw new Error("The Transcript has no prepared window.");
+        }
+        const admittedSessions = sessions.rows
+          .slice(sessionWindow.from, sessionWindow.from + sessionWindow.count)
+          .map((one) => one.key);
+        expect(sessionKeys).toEqual([...admittedSessions, ...admittedSessions]);
+        console.log(
+          JSON.stringify({
+            rounds,
+            sessionRows: sessions.rows.length,
+            admittedSessions: admittedSessions.length,
+            sessionDescriptions: sessionKeys.length,
+          }),
+        );
+        expect(sessions).toBe(warm.value.context.sessions);
         expect(keys).toEqual([...admitted, ...admitted]);
         expect(sequence).toBe(warm.value.context.chatSequence);
         expect(window.from).toBeGreaterThan(32);
@@ -337,5 +367,253 @@ describe("1048 — generated retained output", () => {
     expect(location.value.draft).toBe("draf!t");
     expect(location.value.at).toBeUndefined();
     expect(location.value.scopes).toEqual([]);
+  });
+});
+
+describe("1048 — reuse Transcript facts", () => {
+  it("invalidates consumed source facts while retaining only the current sequence", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    const read = yield* generateTypingHistory(page, 2, 32);
+    const original = typingView(read, WIDE);
+    const store = createChatPreparationStore(createPlainFitStore()).sessions;
+    const first = store.prepare(original, 48);
+    for (let edit = 0; edit < 100; edit++) {
+      expect(
+        store.prepare(
+          {
+            ...original,
+            focused: "sidekick:message",
+            state: { ...original.state, message: String(edit), draft: "draft" },
+          },
+          48,
+        ),
+      ).toBe(first);
+    }
+    const sidekick = original.live.sidekick;
+    if (sidekick === undefined) {
+      throw new Error("The generated fixture has no Sidekick.");
+    }
+    const cases: ReplView[] = [];
+    for (const change of [
+      { title: "changed request" },
+      { text: "streaming update", running: true },
+      { state: "failed", failure: "failed update", failed: true },
+      { key: "replacement-key" },
+      { agent: "different agent", conversation: "another chat", turn: null },
+      { sessionKey: "provider-session" },
+    ]) {
+      cases.push({
+        ...original,
+        live: {
+          ...original.live,
+          sidekick: {
+            ...sidekick,
+            turns: sidekick.turns.map((one, at) => (at === 0 ? { ...one, ...change } : one)),
+          },
+        },
+      });
+    }
+    cases.push(
+      { ...original, live: { ...original.live, sidekick: { ...sidekick, refusal: "unreadable" } } },
+      {
+        ...original,
+        live: {
+          ...original.live,
+          sidekick: {
+            ...sidekick,
+            availability: { ...sidekick.availability, sessions: ["filter-choice"] },
+          },
+        },
+      },
+      {
+        ...original,
+        live: {
+          ...original.live,
+          sidekick: {
+            ...sidekick,
+            chat: sidekick.chat.map((one) =>
+              one.kind === "person"
+                ? { ...one, origin: { kind: "acp", attachment: "attachment" } }
+                : one,
+            ),
+          },
+        },
+      },
+      { ...original, state: { ...original.state, filtering: true } },
+      {
+        ...original,
+        state: { ...original.state, route: { ...original.state.route, session: "absent" } },
+      },
+      { ...original, workspace: undefined },
+    );
+    for (const [at, changed] of cases.entries()) {
+      const width = at % 2 === 0 ? 48 : 31;
+      const cached = store.prepare(changed, width);
+      const fresh = createChatPreparationStore(createPlainFitStore()).sessions.prepare(
+        changed,
+        width,
+      );
+      expect(cached).toEqual(fresh);
+      expect(cached).not.toBe(first);
+      expect(store.prepare(changed, width)).toBe(cached);
+    }
+    const liveTurn = {
+      key: "entry-turn",
+      entry: "entry-1",
+      prompt: "entry request",
+      state: "active" as const,
+      text: "partial reply",
+      agent: "entry agent",
+      sessionKey: "entry-session",
+      agentSessionId: undefined,
+      status: undefined,
+      stopReason: undefined,
+      failure: undefined,
+    };
+    const live: ReplView = {
+      ...original,
+      live: {
+        ...original.live,
+        agent: {
+          ...original.live.agent,
+          turns: [liveTurn],
+          slots: [
+            {
+              key: liveTurn.key,
+              entry: liveTurn.entry,
+              order: 1,
+              durable: undefined,
+              last: undefined,
+            },
+          ],
+          requests: [
+            {
+              key: "permission",
+              turn: liveTurn.key,
+              toolCallId: "tool",
+              title: "May I read?",
+              kind: "read",
+              choices: [],
+            },
+          ],
+        },
+      },
+    };
+    for (const changed of [
+      live,
+      {
+        ...live,
+        live: {
+          ...live.live,
+          agent: {
+            ...live.live.agent,
+            requests: [],
+            turns: [
+              {
+                ...liveTurn,
+                text: "completed reply",
+                state: "terminal" as const,
+                status: "completed" as const,
+                stopReason: "finished",
+              },
+            ],
+          },
+        },
+      },
+      {
+        ...live,
+        state: { ...live.state, route: { ...live.state.route, surface: "entries" as const } },
+        workspace: undefined,
+      },
+    ]) {
+      expect(store.prepare(changed, 48)).toEqual(
+        createChatPreparationStore(createPlainFitStore()).sessions.prepare(changed, 48),
+      );
+    }
+    const notices: ReplLiveTurn["inputResults"] = [
+      {
+        type: "question_answer_result",
+        questionId: "question",
+        inputId: "input",
+        result: { status: "invalid", reason: "response-format" },
+      },
+      {
+        type: "permission_decision_result",
+        permissionId: "permission",
+        inputId: "decision",
+        result: { status: "stale" },
+      },
+    ];
+    const withNotice = {
+      ...live,
+      live: {
+        ...live.live,
+        agent: { ...live.live.agent, turns: [{ ...liveTurn, inputResults: notices }] },
+      },
+    };
+    expect(store.prepare(withNotice, 48)).toEqual(
+      createChatPreparationStore(createPlainFitStore()).sessions.prepare(withNotice, 48),
+    );
+    const recorded: ReplAgentTurn = {
+      marker: "recorded-turn",
+      entry: "entry-1",
+      sequence: 1,
+      name: "Prompt",
+      input: "saved request",
+      scope: "root",
+      position: { path: undefined, generatedSource: undefined, offset: 0, line: 1, column: 1 },
+      agent: "recorded agent",
+      sessionKey: "saved-session",
+      agentSessionId: undefined,
+      status: "completed",
+      stopReason: "finished",
+      text: "saved reply",
+      failure: undefined,
+      configuration: undefined,
+      permissions: [
+        {
+          toolCallId: "read",
+          title: "Read file",
+          kind: "read",
+          options: [{ optionId: "yes", name: "Allowed", kind: "allow_once" }],
+          outcome: "selected",
+          selected: "yes",
+        },
+      ],
+    };
+    for (const turn of [
+      recorded,
+      {
+        ...recorded,
+        marker: "new-marker",
+        input: "changed request",
+        text: "changed reply",
+        agent: "other",
+        sessionKey: "other-session",
+        failure: "failure",
+      },
+      {
+        ...recorded,
+        permissions: recorded.permissions.map((one) => ({
+          ...one,
+          selected: "no",
+          title: "Changed title",
+        })),
+      },
+    ]) {
+      const changed = { ...original, model: { ...original.model, turns: [turn] } };
+      expect(store.prepare(changed, 48)).toEqual(
+        createChatPreparationStore(createPlainFitStore()).sessions.prepare(changed, 48),
+      );
+    }
+    for (const size of [WIDE, { columns: 120, rows: 30 }, { columns: 72, rows: 20 }]) {
+      const changed = { ...original, size };
+      const sequence = store.prepare(changed, 31);
+      expect(sequence).toEqual(
+        createChatPreparationStore(createPlainFitStore()).sessions.prepare(changed, 31),
+      );
+      expect(sequence.rows.some((one) => one.label.includes("streaming update"))).toBe(false);
+    }
+    expect(store.prepare(original, 48)).toEqual(first);
   });
 });
