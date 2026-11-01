@@ -20,7 +20,7 @@ import { SidekickOwnerError } from "../src/repl/sidekick/owner.ts";
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { scoped } from "effection";
-import { ensureDir } from "@effectionx/fs";
+import { ensureDir, writeTextFile, rm, exists } from "@effectionx/fs";
 import { API, cwd, useHostFiles, Permissions } from "@executablemd/runtime";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { readGuideChapter } from "../src/repl/sidekick/guide.ts";
@@ -46,7 +46,7 @@ import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { Component, DocumentOutput, Elicitation, Execution } from "@executablemd/core";
 import { openReplSession } from "../src/repl/session.ts";
-import { previewGeneratedXmdRoot } from "@executablemd/core/host";
+import { Markdown, sourceDigest, previewGeneratedXmdRoot } from "@executablemd/core/host";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import type { SidekickReading } from "../src/repl/sidekick/model.ts";
 import { sidekickChatLines } from "../src/repl/application.ts";
@@ -3990,6 +3990,237 @@ describe("Follow: submitted rounds in the running command", () => {
     });
     expect(page.repl.fake.prompts).toHaveLength(3);
     expect(page.screen().shows("[ ] Follow")).toBe(true);
+  });
+});
+
+describe("REPL syntax matches ordinary entry execution (#1053)", () => {
+  function submission(source: string): string {
+    return `<Let as="code" value={${JSON.stringify(source)}} />
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />`;
+  }
+
+  function* exchange(held: Harness, reply: string) {
+    const before = (yield* records(held.execution)).length;
+    held.fake.script({ reply });
+    held.fake.script({ reply: "<Output>Checked.</Output>" });
+    const answer = yield* held.owner.message("Run the controlled syntax check.");
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(answer.value.failure).toBeUndefined();
+    return (yield* records(held.execution))
+      .slice(before)
+      .filter((record) => record.kind === "control-outcome");
+  }
+
+  function documented(outcomes: readonly SidekickRecord[], index = 0): string {
+    const outcome = outcomes[index];
+    if (
+      outcome?.kind !== "control-outcome" ||
+      outcome.outcome.status !== "ok" ||
+      typeof outcome.observed !== "string"
+    ) {
+      throw new Error(`No syntax text at ${index}: ${JSON.stringify(outcome)}`);
+    }
+    return outcome.observed;
+  }
+
+  function refused(outcomes: readonly SidekickRecord[], name: string): void {
+    const last = outcomes[outcomes.length - 1];
+    expect(
+      last?.kind === "control-outcome" && last.outcome.status === "err"
+        ? last.outcome.error.message
+        : "",
+    ).toContain(name);
+  }
+
+  it("A1-A4/A7: discovery, admission, permissions and Markdown tests agree", function* () {
+    yield* useHostFiles();
+    let writesRequested = 0;
+    yield* Permissions.around({
+      files: ([operation], next) => {
+        if (operation === "write") {
+          writesRequested += 1;
+          return false;
+        }
+        return next(operation);
+      },
+    });
+    const held = yield* useHarness();
+    const discovery = yield* exchange(
+      held,
+      `<REPL.Syntax />
+<REPL.Syntax names={["Json"]} />
+<REPL.Syntax names={["Assert"]} />
+<REPL.Syntax names={["AssertEquals"]} />
+<REPL.Syntax names={["File"]} />`,
+    );
+    const listing = documented(discovery);
+    expect(listing).toContain("### `<Json>`");
+    expect(listing).toContain("### `<File>`");
+    for (const name of ["Assert", "AssertEquals", "Verbose", "WebForm"]) {
+      expect(listing).not.toContain(`### \`<${name}>\``);
+    }
+    expect(documented(discovery, 1)).toContain("**Available in this evaluation:** yes");
+    expect(documented(discovery, 4)).toContain("**Available in this evaluation:** yes");
+    for (const index of [2, 3]) {
+      const text = documented(discovery, index);
+      expect(text).toContain("**Available in this evaluation:** no");
+      expect(text).toContain("ordinary entry");
+      expect(text).toContain("Markdown test");
+      expect(text).toContain("<Assert expr={true} />");
+      expect(text).toContain('<AssertEquals actual="yes" expected="yes" />');
+      expect(text).toContain('<REPL.Test path="components/assertions.test.md" />');
+    }
+    expect(held.session.model.entries).toHaveLength(0);
+    expect(yield* exists(join(held.workspace, "sentinel.txt"))).toBe(false);
+    for (const source of [
+      "<Assert expr={true} />",
+      '<AssertEquals actual="yes" expected="yes" />',
+      "<NotAComponent1053 />",
+    ]) {
+      const outcomes = yield* exchange(
+        held,
+        submission(`${source}<File path="sentinel.txt">unwritten</File>`),
+      );
+      refused(outcomes, "Cannot resolve component");
+      expect(held.session.model.entries).toHaveLength(0);
+      expect(yield* exists(join(held.workspace, "sentinel.txt"))).toBe(false);
+      expect(writesRequested).toBe(0);
+    }
+    const unknown = yield* exchange(
+      held,
+      `<REPL.Syntax names={["NotAComponent1053"]} />
+<REPL.Syntax names={["Json", "NotAComponent1053"]} />`,
+    );
+    for (const outcome of unknown) {
+      expect(outcome.outcome.status).toBe("err");
+      expect(outcome.observed).toBeUndefined();
+    }
+    refused(unknown, "NotAComponent1053");
+    yield* exchange(held, submission('<Json value="yes" />'));
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(held.session.model.entries[0]?.terminal?.output.trim()).toBe('"yes"');
+    yield* exchange(held, submission('<File path="refused.txt">unwritten</File>'));
+    expect(held.session.model.entries).toHaveLength(2);
+    expect(held.session.model.entries[1]?.terminal?.status).toBe("ok");
+    expect(held.session.model.entries[1]?.terminal?.output).toContain(
+      'cannot resolve "refused.txt": permission denied',
+    );
+    expect(yield* exists(join(held.workspace, "refused.txt"))).toBe(false);
+    expect(writesRequested).toBeGreaterThan(0);
+    yield* ensureDir(join(held.workspace, "components"));
+    const examples = documented(discovery, 2).split("```xmd\n");
+    const testSource = examples[1]?.split("\n```")[0];
+    const testRequest = examples[2]?.split("\n```")[0];
+    if (testSource === undefined || testRequest === undefined) {
+      throw new Error("The assertion reference has no complete test and response examples");
+    }
+    yield* writeTextFile(join(held.workspace, "components/assertions.test.md"), testSource);
+    const tested = yield* exchange(held, testRequest);
+    expect(tested[0]?.observed).toMatchObject({
+      status: "passed",
+      documents: [{ status: "passed", tests: [{ name: "assertions", status: "pass" }] }],
+    });
+    expect(held.session.model.entries).toHaveLength(2);
+  });
+
+  it("A5: fresh asks follow session component creation, edits and removal", function* () {
+    const held = yield* useHarness();
+    const before = yield* exchange(held, '<REPL.Syntax names={["Assert"]} />');
+    expect(documented(before)).toContain("**Available in this evaluation:** no");
+    yield* ensureDir(join(held.workspace, "components"));
+    const path = join(held.workspace, "components/Assert.md");
+    for (const version of ["first", "second"]) {
+      yield* writeTextFile(
+        path,
+        `---
+description: Session assertion ${version}.
+---
+Session body ${version}.`,
+      );
+      const changed = yield* exchange(
+        held,
+        `<REPL.Syntax />
+<REPL.Syntax names={["Assert"]} />`,
+      );
+      expect(documented(changed)).toContain("### `<Assert>`");
+      const named = documented(changed, 1);
+      expect(named).toContain(path);
+      expect(named).toContain(`Session assertion ${version}.`);
+      expect(named).toContain("**Available in this evaluation:** yes");
+      yield* exchange(held, submission("<Assert />"));
+      expect(held.session.model.entries.at(-1)?.terminal?.output).toContain(
+        `Session body ${version}.`,
+      );
+    }
+    yield* rm(path);
+    const removed = yield* exchange(
+      held,
+      `<REPL.Syntax />
+<REPL.Syntax names={["Assert"]} />`,
+    );
+    expect(documented(removed)).not.toContain("### `<Assert>`");
+    expect(documented(removed, 1)).toContain("**Available in this evaluation:** no");
+    refused(
+      yield* exchange(held, submission("<Assert expr={true} />")),
+      "Cannot resolve component: Assert",
+    );
+    expect(held.session.model.entries).toHaveLength(2);
+    expect(documented(before)).toContain("**Available in this evaluation:** no");
+    const retained = yield* records(held.execution);
+    expect(retained).toContainEqual(before[0]);
+  });
+
+  it("A6: each command describes and executes its selected Plugin", function* () {
+    for (const selected of [true, false]) {
+      yield* scoped(function* () {
+        const held = yield* useHarness(undefined, {
+          plugins: selected
+            ? [
+                {
+                  name: "syntax-1053",
+                  *install() {
+                    return {
+                      components: [
+                        Markdown({
+                          name: "Selected1053",
+                          origin: "syntax-1053",
+                          source: "Selected plugin body.",
+                          digest: sourceDigest("Selected plugin body."),
+                        }),
+                      ],
+                    };
+                  },
+                },
+              ]
+            : [],
+        });
+        const discovery = yield* exchange(
+          held,
+          `<REPL.Syntax />
+<REPL.Syntax names={["Selected1053"]} />`,
+        );
+        if (selected) {
+          expect(documented(discovery)).toContain("### `<Selected1053>`");
+          expect(documented(discovery, 1)).toContain("syntax-1053");
+          yield* exchange(held, submission("<Selected1053 />"));
+          expect(held.session.model.entries).toHaveLength(1);
+          expect(held.session.model.entries[0]?.terminal?.output).toContain(
+            "Selected plugin body.",
+          );
+        } else {
+          expect(documented(discovery)).not.toContain("### `<Selected1053>`");
+          refused(discovery, "Selected1053");
+          refused(
+            yield* exchange(held, submission("<Selected1053 />")),
+            "Cannot resolve component: Selected1053",
+          );
+          expect(held.session.model.entries).toHaveLength(0);
+        }
+      });
+    }
   });
 });
 

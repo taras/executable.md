@@ -466,7 +466,7 @@ const PROFILE: ReplExecutionProfile = {
   // opens a Sidekick conversation.
   sidekickAssembly: sidekickAssembly(DEFAULT_AGENT_NAME, {}),
   plugins: NO_PLUGINS.plugins.map((plugin) => plugin.name),
-  vocabulary: entryVocabulary([], NO_PLUGINS),
+  vocabulary: entryVocabulary([]),
 };
 
 function installations(): readonly ExecutionInstallation[] {

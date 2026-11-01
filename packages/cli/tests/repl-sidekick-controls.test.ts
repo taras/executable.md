@@ -1486,7 +1486,7 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     includes: ["components", "."],
     permissionMode: "deny-all",
     plugins: NO_PLUGINS.plugins.map((plugin) => plugin.name),
-    vocabulary: entryVocabulary(["components", "."], NO_PLUGINS),
+    vocabulary: entryVocabulary(["components", "."]),
   } as const;
 
   /**
@@ -2256,7 +2256,7 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
     includes: ["components", "."],
     permissionMode: "deny-all",
     plugins: NO_PLUGINS.plugins.map((plugin) => plugin.name),
-    vocabulary: entryVocabulary(["components", "."], NO_PLUGINS),
+    vocabulary: entryVocabulary(["components", "."]),
   } as const;
 
   /** The saved events, read with the reader the command reads them with. */

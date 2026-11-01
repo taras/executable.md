@@ -12,7 +12,13 @@ Sidekick responses that write an entry, and the REPL entry program they write.
 - Your response and the entry you prepare are two different XMD documents. A
   component admitted in an entry is not thereby admitted in your response. List
   the entry vocabulary with `<REPL.Syntax />` and read a named component with
-  `<REPL.Syntax names={["Elicit"]} />`.
+  `<REPL.Syntax names={["Elicit"]} />`. Availability means the component resolves
+  in an ordinary entry; each effect still requires permission and can fail.
+  Fresh asks read current session components and this command's selected Plugins.
+- Built-in assertions absent from the ordinary entry profile are Markdown-test
+  components. Named lookup explains their test context and `REPL.Test` invocation.
+  Save the test document and request it with `REPL.Test`; submitting assertions as
+  an ordinary entry does not activate testing.
 - Quoted props are strings: `as="code"`. Braced props supply data:
   `limit={16384}`, `entry={-2}`, `names={["Elicit"]}`.
 - In a response, braced props accept JSON literals, arrays, objects, object
