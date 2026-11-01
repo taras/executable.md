@@ -3698,28 +3698,13 @@ export function elicitWithdrawn(state: ReplState): ReplState {
  * turn is about to be read in. None where this frame cannot place it: no
  * measured chat window, no reading, or a chat that holds no such turn.
  *
- * The rows are built for the chat the reveal names, through the one builder the
- * description and the measurement both use, so the row this lands on is the row
- * the screen draws.
+ * Positions come from the prepared sequence this frame admits and draws.
  */
 function revealedAt(
   reveal: ReplSidekickReveal,
   reading: ReplSidekickReading | undefined,
   capacity: number,
-  /** The rows this frame fitted, so a reveal lands on a row that is drawn. */
-  fitted: readonly ReplFittedLine[] | undefined,
-  /**
-   * What this process is holding for the chat being read.
-   *
-   * The same staging the description pass gives the builder. Without it the row
-   * list this searches is a *different* list from the one the window counts
-   * rows of — measured, a twelve-turn chat the frame drew as 47 rows came back
-   * from here as 24, and the index found in the short list named a row the long
-   * one has somewhere else. A reveal is an index into the drawn list or it is
-   * nothing.
-   */
-  staging: ReplChatStaging | undefined,
-  sequence?: ReplChatSequence,
+  sequence: ReplChatSequence,
 ): number | undefined {
   if (capacity < 1 || reading === undefined) {
     return undefined;
@@ -3745,17 +3730,8 @@ function revealedAt(
   if (candidates.length === 0) {
     return undefined;
   }
-  // Focus is not a fact about where a row is, so none is stated: the marker
-  // would change what one row's text says and not which row it is.
-  const positions = (
-    sequence ??
-    chatSequence(
-      sidekickComposedRows({ ...reading, reading: reveal.conversation }, staging),
-      fitted,
-    )
-  ).positions;
   const at = candidates
-    .map((key) => positions.get(`sidekick:${key}`))
+    .map((key) => sequence.positions.get(`sidekick:${key}`))
     .find((found) => found !== undefined);
   if (at === undefined) {
     return undefined;
@@ -3878,7 +3854,8 @@ function sidekickComposedRows(
     key: string,
     label: string,
     action: { readonly [name: string]: Json },
-  ): ReplChatComposed => ({ kind: "control", key, label, action, style: styleOf("action") });
+  ): ReplChatComposed =>
+    Object.freeze({ kind: "control" as const, key, label, action, style: styleOf("action") });
   if (reading === undefined) {
     // No Sidekick on this screen at all. Said rather than drawn as an empty
     // conversation, because the two are different facts.
@@ -4128,10 +4105,6 @@ function chatSequence(
   return { rows, positions, fitted };
 }
 
-function chatSequenceFor(view: ReplView, fitted?: readonly ReplFittedLine[]): ReplChatSequence {
-  return chatSequence(sidekickComposedRows(view.live.sidekick, chatStagingOf(view)), fitted);
-}
-
 function materializeChatRow(one: ReplChatPreparedRow, focused: string | undefined): Described {
   return one.kind === "control"
     ? row(one.key, one.label, one.action, one.style, { here: focused })
@@ -4140,10 +4113,10 @@ function materializeChatRow(one: ReplChatPreparedRow, focused: string | undefine
 
 function chatWindow(view: ReplView, context: ReplPresentationContext): readonly Described[] {
   const held = context.admission.windows.get(SIDEKICK_WINDOW);
-  if (context.measuring || held === undefined) {
+  const sequence = context.chatSequence;
+  if (context.measuring || held === undefined || sequence === undefined) {
     return [];
   }
-  const sequence = context.chatSequence ?? chatSequenceFor(view, context.chat);
   const materialize = context.chatMaterialize ?? materializeChatRow;
   return sequence.rows
     .slice(held.from, held.from + held.count)
@@ -10424,9 +10397,8 @@ export function admissionFor(input: {
   readonly reading?: ReplPreparedReading | undefined;
   /** The presented question or permission text, fitted before admission. */
   readonly preview?: readonly ReplFittedLine[] | undefined;
-  /** The chat, fitted, which its own window admits rows of. */
-  readonly chat?: readonly ReplFittedLine[] | undefined;
-  readonly chatSequence?: ReplChatSequence;
+  /** The prepared chat, or none where this frame has no chat window. */
+  readonly chatSequence: ReplChatSequence | undefined;
   /** The tray's messages, fitted, which its own window admits rows of. */
   readonly queue?: readonly ReplFittedLine[] | undefined;
   /** The drawer's notices, fitted, which its own window admits rows of. */
@@ -10434,13 +10406,12 @@ export function admissionFor(input: {
   readonly details?: readonly ReplFittedLine[] | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
-  const { view, manifest, widths, reading, preview, chat, queue, notices, details, boundsOf } =
-    input;
-  const sequence =
-    input.chatSequence ??
-    (manifest.viewports.some((slot) => slot.window === SIDEKICK_WINDOW)
-      ? chatSequenceFor(view, chat)
-      : { rows: [], positions: new Map<string, number>(), fitted: undefined });
+  const { view, manifest, widths, reading, preview, queue, notices, details, boundsOf } = input;
+  const sequence = input.chatSequence ?? {
+    rows: [],
+    positions: new Map<string, number>(),
+    fitted: undefined,
+  };
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
@@ -10496,7 +10467,6 @@ export function admissionFor(input: {
           slot.window,
           capacity,
           total,
-          chat,
           queue,
           widths,
           preview,
@@ -10551,7 +10521,6 @@ function offsetFor(
   window: string,
   capacity: number,
   total: number,
-  chat: readonly ReplFittedLine[] | undefined,
   queue: readonly ReplFittedLine[] | undefined,
   widths: ReplMeasuredWidths,
   preview: readonly ReplFittedLine[] | undefined,
@@ -10579,14 +10548,7 @@ function offsetFor(
     // asked for that turn and not for whatever arrived since.
     const reveal = view.state.revealing;
     if (reveal !== undefined) {
-      const at = revealedAt(
-        reveal,
-        view.live.sidekick,
-        capacity,
-        chat,
-        chatStagingOf(view),
-        sequence,
-      );
+      const at = revealedAt(reveal, view.live.sidekick, capacity, sequence);
       if (at !== undefined) {
         return at;
       }

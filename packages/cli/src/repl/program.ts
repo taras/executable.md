@@ -747,10 +747,6 @@ function* drive(
   // lives exactly as long as the command does and no frame outside it can
   // reach one process's cuts.
   const fits = createFitStore();
-  // The chat's preparation and cuts, in storage of its own beside that one. Two stores
-  // rather than one slot shared: the entry reading's geometry reserves a rail
-  // and a status column that plain text has neither of, and one slot would make
-  // the two evict each other every time a reader looked at the other pane.
   const chatFits = createChatPreparationStore(createPlainFitStore());
   // And the composer's own, for the same reason again: its lines are not the
   // chat's, and settling them into the chat's store would evict the chat on
