@@ -75,6 +75,7 @@ import {
   DRAFT_VALUE,
   draftShows,
   draftText,
+  drawerLines,
   entrySettles,
   openHistory,
   pasteDraft,
@@ -2907,28 +2908,77 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
   });
 });
 
-describe("REPL terminal: twelve and further History entries at 160x36 (#1017)", () => {
-  it("keeps the command running with whole-cell History controls past the twelfth entry", function* () {
+/** The drawer's own "admitted"/"recorded" rows, trimmed. Read from the open
+ * drawer rather than the transcript, which keeps showing an entry's text long
+ * after admission. */
+function historyMarkers(reading: ScreenReading): string[] {
+  return drawerLines(reading)
+    .filter((row) => /(?:admitted|recorded)/.test(row))
+    .map((row) => row.trim());
+}
+
+/**
+ * Submit one plain entry and wait for the next one to be invited.
+ *
+ * Not `submit()`/`entrySettles`: once the row is past its row-full point the
+ * compact rail clips a late entry's own mark, which is exactly the shortened
+ * band this correction accepts — so an entry settling is read from the next
+ * prompt rather than from a mark the band may no longer have room to show.
+ */
+function* submitPast(page: ReplPage, order: number): Operation<void> {
+  yield* pasteDraft(page, `Entry ${order} text.`);
+  yield* page.key("Enter");
+  yield* page.until(`ready for entry ${order + 1}`, (one) => one.shows(`Ready for Entry ${order + 1}`));
+}
+
+describe("REPL terminal: History past the row-full point (#1017)", () => {
+  it("keeps every action reachable and preserves results, selection and the draft", function* () {
     const page = yield* useReplPage({ size: WIDE });
-    for (let order = 1; order <= 14; order += 1) {
-      yield* submit(page, order, `Entry ${order} text.`);
+    // Past the row-full point: the compact map's text grows roughly three
+    // cells an entry and nothing else bounds it, so twenty-four entries at
+    // this width overruns what the row's two controls leave long before the
+    // correction here shortens the map instead.
+    const total = 24;
+    for (let order = 1; order <= total; order += 1) {
+      yield* submitPast(page, order);
+      const row = page.screen().rows.find((one) => one.includes("HISTORY")) ?? "";
+      expect([order, row.includes("[history]"), row.includes("[exit]")]).toEqual([
+        order,
+        true,
+        true,
+      ]);
     }
-    // Still running: a committed frame never threw ReplRenderError out of the
-    // command loop.
-    expect(page.repl.terminal.ending).toBeUndefined();
-    // Every earlier entry's own result is still the rail's reading, not just
+    // The earliest entry's own result is still the rail's reading, not only
     // the latest one.
     expect(railMark(page.screen(), 1)).toBe(RAIL.ok);
-    expect(railMark(page.screen(), 12)).toBe(RAIL.ok);
-    expect(railMark(page.screen(), 14)).toBe(RAIL.ok);
-    // The draft survives the entries that came before it.
-    yield* draftText(page, "kept past twelve entries");
-    expect(draftShows(page.screen(), "kept past twelve entries")).toBe(true);
-    // History's own actions stay reachable: its drawer still opens and shows
-    // the entries just admitted.
+    // The draft survives every entry submitted before it.
+    yield* draftText(page, "kept past the row-full point");
+    expect(draftShows(page.screen(), "kept past the row-full point")).toBe(true);
+    // The drawer's own rows list what it actually admitted — not the
+    // transcript, which already shows an entry's text before the drawer ever
+    // opens and proves nothing about the drawer's own content.
     yield* openHistory(page);
-    expect(page.screen().shows("Entry 14")).toBe(true);
+    expect(historyMarkers(page.screen()).some((row) => row.includes("Entry 1 admitted"))).toBe(true);
+    // Selecting an earlier position and closing the drawer keeps that
+    // selection and the draft untouched.
+    yield* page.press("Entry 1 admitted", { rightOf: "[close]" });
+    yield* page.until("the first position retained", (one) => one.shows("[live]"));
     yield* closeDrawer(page);
+    expect(page.screen().shows("[live]")).toBe(true);
+    expect(draftShows(page.screen(), "kept past the row-full point")).toBe(true);
+  });
+
+  it("bounds the same row at 200x36 without losing a control", function* () {
+    const page = yield* useReplPage({ size: { columns: 200, rows: 36 } });
+    // Past this width's own row-full point (twenty-five, measured) without
+    // adding a viewport matrix: one further size, driven through the same
+    // harness as the 160-column case above.
+    for (let order = 1; order <= 30; order += 1) {
+      yield* submitPast(page, order);
+    }
+    const row = page.screen().rows.find((one) => one.includes("HISTORY")) ?? "";
+    expect(row.includes("[history]")).toBe(true);
+    expect(row.includes("[exit]")).toBe(true);
   });
 });
 

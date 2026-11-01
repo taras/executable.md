@@ -81,11 +81,10 @@ import {
   configureNoticesOf,
   draftLinesOf,
   NOTICE_INDENT,
-  historyGapWidth,
   historyMapWidth,
   historyProbeOf,
   historySplitOf,
-  wideHistoryMapWidth,
+  wideHistoryWidths,
   queueTextWidth,
   draftRowsOf,
   GUIDANCE_ROW,
@@ -3799,8 +3798,8 @@ export function* prepareFrame(
    */
   let historyParts: { readonly map: number; readonly actions: number } | undefined;
   /**
-   * The accepted wide row's own map, stated rather than left to the drawing
-   * engine's own `fit()`. See {@link wideHistoryMapWidth}.
+   * The accepted wide row's own map, bounded by its controls' own need. See
+   * {@link wideHistoryWidths}.
    */
   let historyWideMap: number | undefined;
   const queuing = (context: ReplPresentationContext): ReplPresentationContext => ({
@@ -3886,34 +3885,37 @@ export function* prepareFrame(
     (id) => fitted.value.boundsOf(id)?.width,
     widths.body,
   );
-  // What the accepted wide row's gap is, from the row and the map this frame
-  // measured. Taken here, from the pass that already holds a fitted map and
-  // the whole footer, and before anything is admitted: the question is how to
-  // divide the room the map leaves, which no admitted set changes.
-  historySpace = historyGapWidth((id) => fitted.value.boundsOf(id)?.width);
-  historyWideMap = wideHistoryMapWidth((id) => fitted.value.boundsOf(id)?.width);
   historyRoom = historyMapWidth(
     probed.manifest,
     (id) => fitted.value.boundsOf(id)?.width,
     view.size.columns,
   );
-  // And how the non-wide row divides itself, from its two parts asked on their
-  // own. One bounded measurement of a tree that mounts nothing and publishes no
-  // target: a fitted row holding exactly the offered control nodes with their
-  // own labels and gap, and a fitted row holding the map's own runs. What is
-  // copied out is two whole widths, before the next engine call takes the
-  // engine's memory of this one.
+  // How each row divides itself, from its two parts asked on their own. One
+  // bounded measurement of a tree that mounts nothing and publishes no target:
+  // a fitted row holding exactly the offered control nodes with their own
+  // labels and gap, and a fitted row holding the map's own runs. What is
+  // copied out is whole widths, before the next engine call takes the engine's
+  // memory of this one.
   //
   // Not a loop, and not derived from the row that was compressed: the question
   // is what these things need, and a rectangle one of them was squeezed into is
   // the answer this replaces.
-  if (profileFor(view.size) !== "wide") {
-    const parts = historyProbeOf(probed.manifest, view.size);
-    if (parts !== undefined) {
-      const apart = yield* renderer.measure(skeletonOps(parts), view.size);
-      if (!apart.ok) {
-        return apart;
+  const parts = historyProbeOf(probed.manifest, view.size);
+  if (parts !== undefined) {
+    const apart = yield* renderer.measure(skeletonOps(parts), view.size);
+    if (!apart.ok) {
+      return apart;
+    }
+    if (profileFor(view.size) === "wide") {
+      const bounded = wideHistoryWidths(
+        (id) => fitted.value.boundsOf(id)?.width,
+        (id) => apart.value.boundsOf(id)?.width,
+      );
+      if (bounded !== undefined) {
+        historyWideMap = bounded.map;
+        historySpace = bounded.gap;
       }
+    } else {
       historyParts = historySplitOf((id) => apart.value.boundsOf(id)?.width, view.size.columns);
     }
   }
