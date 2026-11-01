@@ -793,6 +793,12 @@ value keeps its own caret through focus departure, modal coverage and resize;
 an explicitly replaced value or a new question starts at its end. Enter keeps
 each field's submission or Apply meaning, and Control-J inserts a newline.
 
+While the screen is open it enables bracketed paste. A framed paste inserts one
+text value at the caret, preserving blank lines, indentation, tabs and Unicode.
+CR, LF and CRLF line separators become LF in the value; framing markers never
+enter it. Paste does not activate a field's submission or other keyboard actions.
+The screen disables paste mode with its terminal reset on every exit.
+
 Selected work, Sidekick chat, empty Bindings and drawer readings have one stable
 focusable anchor on their first visible row. The anchor adds no row or pointer
 target. Up/Down scrolls one fitted row, PageUp/PageDown moves one page less a row,
@@ -991,6 +997,11 @@ your own line breaks, blank lines and whitespace and none of the breaks the pane
 drew — and long words are broken only between graphemes. The block is one field
 throughout: one focus owner, one value, one Tab stop, and Enter and `[send]`
 mean exactly what they meant on one row.
+
+A multiline paste remains one editable Message and starts no send, waiting
+message, entry or provider work. One deliberate Enter or `[send]` submits the
+complete value once, including text inserted at a middle caret. Pasting while a
+turn is running leaves that draft unsent when the turn finishes.
 
 While the Sidekick is working the box stays editable, because composing the next
 question while a reply comes back is the ordinary case — and what was typed then

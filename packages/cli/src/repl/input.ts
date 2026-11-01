@@ -1,7 +1,11 @@
 /**
  * Turning terminal bytes into the events the tree already understands.
  *
- * The tty scanner does the decoding; this decides which decoded events the
+ * Framed paste is text, including bytes that otherwise name keyboard commands.
+ * Its payload waits for the closing marker so UTF-8 and line separators can
+ * cross reads without becoming partial text or submission keys.
+ *
+ * The tty scanner decodes ordinary input; this decides which decoded events the
  * composition layer has a meaning for and hands them over in its own closed
  * shape. Nothing here knows an action name: a normalized event says what
  * happened and where, and what it means is decided by whichever mounted node
@@ -103,9 +107,9 @@ const ALT_KEYS: ReadonlyMap<string, ReplKey> = new Map([
 ]);
 
 /**
- * The physical key a pasted newline arrives as.
+ * The physical key an unframed LF arrives as.
  *
- * A terminal sends `LF` inside a paste, and the decoder reports `LF` as
+ * An unframed newline arrives as `LF`, and the decoder reports `LF` as
  * Control-J with no text of its own. Pasting a multi-line document is the whole
  * point of an XMD draft, so this one chord is text — and it is the only chord
  * that is.
@@ -278,27 +282,96 @@ export interface ReplDecoder {
 export function useReplDecoder(
   options: { readonly escLatency?: number } = {},
 ): Operation<ReplDecoder> {
-  const settings = options.escLatency === undefined ? {} : { escLatency: options.escLatency };
+  const settings = { escLatency: options.escLatency ?? 25 };
   return resource<ReplDecoder>(function* (provide) {
     let input: Input = yield* until(createInput(settings));
+    let prefix: number[] = [];
+    let paste: number[] | undefined;
+    const opening = new TextEncoder().encode("\x1b[200~");
+    const closing = new TextEncoder().encode("\x1b[201~");
+
+    function* keys(bytes?: Uint8Array): Operation<ReplInputScan> {
+      const drained = drain(input, bytes);
+      const settling =
+        bytes === undefined && drained.pendingFor !== undefined && drained.ordered.length === 0;
+      if (!settling) {
+        return drained;
+      }
+      // The spent ESC otherwise joins the next keystroke as an Alt modifier.
+      input = yield* until(createInput(settings));
+      return Object.freeze({
+        ordered: Object.freeze([{ kind: "input", event: ESCAPE } satisfies ReplPhysicalInput]),
+        events: Object.freeze([ESCAPE]),
+        pointers: Object.freeze([]),
+        resized: drained.resized,
+        pendingFor: undefined,
+      });
+    }
+
     yield* provide({
       *scan(bytes?: Uint8Array): Operation<ReplInputScan> {
-        const drained = drain(input, bytes);
-        const settling =
-          bytes === undefined && drained.pendingFor !== undefined && drained.ordered.length === 0;
-        if (!settling) {
-          return drained;
+        const passes: ReplInputScan[] = [];
+        let ordinary: number[] = [];
+        if (bytes === undefined) {
+          if (paste === undefined && prefix.length > 0) {
+            passes.push(yield* keys(Uint8Array.from(prefix)));
+            prefix = [];
+          }
+          passes.push(yield* keys());
+        } else {
+          for (const byte of bytes) {
+            if (paste !== undefined) {
+              paste.push(byte);
+              if (
+                paste.length >= closing.length &&
+                closing.every(
+                  (one, index) => paste?.[paste.length - closing.length + index] === one,
+                )
+              ) {
+                const text = new TextDecoder()
+                  .decode(Uint8Array.from(paste.slice(0, -closing.length)))
+                  .replace(/\r\n|\r/g, "\n");
+                const event: ReplInputEvent = Object.freeze({ kind: "text", text });
+                passes.push({
+                  ordered: [{ kind: "input", event }],
+                  events: [event],
+                  pointers: [],
+                  resized: false,
+                  pendingFor: undefined,
+                });
+                paste = undefined;
+              }
+              continue;
+            }
+            if (prefix.length > 0 && byte !== opening[prefix.length]) {
+              ordinary.push(...prefix);
+              prefix = [];
+            }
+            if (byte === opening[prefix.length]) {
+              prefix.push(byte);
+              if (prefix.length === opening.length) {
+                passes.push(yield* keys(Uint8Array.from(ordinary)));
+                ordinary = [];
+                prefix = [];
+                paste = [];
+              }
+            } else {
+              ordinary.push(byte);
+            }
+          }
+          passes.push(yield* keys(Uint8Array.from(ordinary)));
         }
-        // Nothing followed the held ESC, so it was the key. A fresh scanner,
-        // because the spent byte is still in this one's buffer and would
-        // otherwise become the first byte of whatever is typed next.
-        input = yield* until(createInput(settings));
         return Object.freeze({
-          ordered: Object.freeze([{ kind: "input", event: ESCAPE } satisfies ReplPhysicalInput]),
-          events: Object.freeze([ESCAPE]),
-          pointers: Object.freeze([]),
-          resized: drained.resized,
-          pendingFor: undefined,
+          ordered: Object.freeze(passes.flatMap((pass) => pass.ordered)),
+          events: Object.freeze(passes.flatMap((pass) => pass.events)),
+          pointers: Object.freeze(passes.flatMap((pass) => pass.pointers)),
+          resized: passes.some((pass) => pass.resized),
+          pendingFor:
+            prefix.length === 1
+              ? settings.escLatency
+              : prefix.length > 1 || paste !== undefined
+                ? undefined
+                : passes.at(-1)?.pendingFor,
         });
       },
     });

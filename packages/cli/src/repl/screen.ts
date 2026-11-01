@@ -81,6 +81,10 @@ export function replModes(): Setting {
     alternateBuffer({ clear: true }),
     cursor(false),
     mouseTracking(),
+    {
+      apply: new TextEncoder().encode("\x1b[?2004h"),
+      revert: new TextEncoder().encode("\x1b[?2004l"),
+    },
     // Level 1: disambiguated escape codes, which is what makes a lone Escape
     // decidable at all on terminals that support it.
     progressiveInput(1),

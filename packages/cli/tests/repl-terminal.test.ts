@@ -59,6 +59,7 @@ import { close, fixed, open, percent, text } from "@bomb.sh/tty";
 import type { Op } from "@bomb.sh/tty";
 import { nearestCommonAncestor, ReplClock, useReplFrames } from "../src/repl/frame.ts";
 import type { ReplFrameSubscription } from "../src/repl/frame.ts";
+import { useReplDecoder } from "../src/repl/input.ts";
 import { replModes, useReplScreen } from "../src/repl/screen.ts";
 import type { ReplScreenEvent } from "../src/repl/screen.ts";
 import { installReplTerminal, nodeInputStream } from "../src/repl/terminal-host.ts";
@@ -69,6 +70,7 @@ import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplDispatched } from "../src/repl/reconcile.ts";
 import type { ReplInputEvent } from "../src/repl/description.ts";
 import { useReplPage } from "./support/repl-page.ts";
+import { settledReading } from "./support/mounted-history.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import {
   closeDrawer,
@@ -1177,6 +1179,8 @@ interface TerminalLog {
   readonly raw: boolean[];
   /** Suspending writes that completed. */
   writes: number;
+  readonly applied: string[];
+  readonly reverted: string[];
   /** Unsuspending writes, which is how the final reset is written. */
   resets: number;
   /** Resize listeners still attached. */
@@ -1225,6 +1229,8 @@ function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }):
   const log: TerminalLog = {
     raw: [],
     writes: 0,
+    applied: [],
+    reverted: [],
     resets: 0,
     listeners: 0,
     readers: 0,
@@ -1283,17 +1289,19 @@ function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }):
     size(): ReplTerminalSize {
       return log.size;
     },
-    *write(_bytes: Uint8Array): Operation<void> {
+    *write(bytes: Uint8Array): Operation<void> {
       if (log.hold) {
         // Never completes: what a terminal that has stopped accepting bytes
         // looks like from here, and where a cancellation can land.
         yield* suspend();
       }
+      log.applied.push(new TextDecoder().decode(bytes));
       log.writes += 1;
       // A write that completed, which still costs the caller a turn.
       yield* sleep(0);
     },
-    writeNow(_bytes: Uint8Array): void {
+    writeNow(bytes: Uint8Array): void {
+      log.reverted.push(new TextDecoder().decode(bytes));
       log.resets += 1;
     },
     setRaw(raw: boolean): void {
@@ -1362,6 +1370,11 @@ function recordingTerminal(size: ReplTerminalSize = { columns: 160, rows: 36 }):
 function givenBack(log: TerminalLog): void {
   // Exactly once, however the owner ended.
   expect(log.resets).toBe(1);
+  expect(log.reverted).toHaveLength(1);
+  expect(log.reverted[0]).toContain("\x1b[?2004l");
+  if (log.applied.length > 0) {
+    expect(log.applied[0]).toContain("\x1b[?2004h");
+  }
   expect(log.raw[log.raw.length - 1]).toBe(false);
   expect(log.listeners).toBe(0);
   expect(log.readers).toBe(0);
@@ -1934,6 +1947,8 @@ describe("REPL terminal: giving the terminal back", () => {
     yield* clock.install();
 
     const modes = replModes();
+    expect(new TextDecoder().decode(modes.apply)).toContain("\x1b[?2004h");
+    expect(new TextDecoder().decode(modes.revert)).toContain("\x1b[?2004l");
     expect(modes.apply.length).toBeGreaterThan(0);
     expect(modes.revert.length).toBeGreaterThan(0);
 
@@ -2001,6 +2016,87 @@ function normalizedFrom(reported: readonly ReplScreenEvent[]): ReplInputEvent[] 
   }
   return events;
 }
+
+function* decoded(chunks: readonly Uint8Array[]): Operation<ReplInputEvent[]> {
+  return yield* scoped(function* () {
+    const decoder = yield* useReplDecoder();
+    const events: ReplInputEvent[] = [];
+    for (const bytes of chunks) {
+      const scan = yield* decoder.scan(bytes);
+      expect(scan.pointers).toEqual([]);
+      expect(scan.ordered.every((one) => one.kind === "input")).toBe(true);
+      events.push(...scan.events);
+    }
+    return events;
+  });
+}
+
+function framed(text: string): Uint8Array {
+  return BYTES.encode(`\x1b[200~${text}\x1b[201~`);
+}
+
+describe("REPL bracketed paste", () => {
+  const payload = "first\n\n\t  é界🙂\nlast\n";
+  for (const separator of ["\r", "\n", "\r\n"]) {
+    it(`keeps framed ${JSON.stringify(separator)} as text only`, function* () {
+      expect(yield* decoded([framed(payload.replaceAll("\n", separator))])).toEqual([
+        { kind: "text", text: payload },
+      ]);
+    });
+  }
+
+  it("keeps every two-read split and byte-by-byte Unicode and framing", function* () {
+    const bytes = framed(payload.replaceAll("\n", "\r\n"));
+    for (let split = 0; split <= bytes.length; split += 1) {
+      expect(yield* decoded([bytes.slice(0, split), bytes.slice(split)])).toEqual([
+        { kind: "text", text: payload },
+      ]);
+    }
+    expect(yield* decoded(Array.from(bytes, (byte) => Uint8Array.of(byte)))).toEqual([
+      { kind: "text", text: payload },
+    ]);
+  });
+
+  it("keeps a long paste and subsequent typed text and Enter in order", function* () {
+    const payload = `begin${"a".repeat(2200)}\n界🙂middle${"b".repeat(2200)}end`;
+    const bytes = BYTES.encode(`before\x1b[200~${payload}\x1b[201~x\r`);
+    const chunks: Uint8Array[] = [];
+    for (let at = 0; at < bytes.length; ) {
+      const next = at + [1, 17, 131, 509][chunks.length % 4];
+      chunks.push(bytes.slice(at, next));
+      at = next;
+    }
+    for (const partition of [[bytes], chunks]) {
+      const events = yield* decoded(partition);
+      expect(
+        events
+          .filter((one) => one.kind === "text")
+          .map((one) => one.text)
+          .join(""),
+      ).toBe(`before${payload}x`);
+      expect(events.filter((one) => one.kind === "key")).toEqual([{ kind: "key", key: "Enter" }]);
+      expect(events.at(-2)).toEqual({ kind: "text", text: "x" });
+      expect(events.at(-1)).toEqual({ kind: "key", key: "Enter" });
+    }
+  });
+
+  it("keeps a framed Draft editable until a deliberate Enter", function* () {
+    const page = yield* useReplPage();
+    const source = "<Output>first\n\n  é界🙂 last</Output>";
+    page.repl.terminal.bytes(framed(source.replaceAll("\n", "\r\n")));
+    yield* page.until(
+      "the whole framed Draft",
+      (one) => one.found("last</Output>", DRAFT_VALUE) > 0,
+    );
+    expect(page.repl.fake.prompts).toHaveLength(0);
+    expect((yield* settledReading(page.repl)).model.entries).toHaveLength(0);
+    yield* page.key("Enter");
+    yield* entrySettles(page, 1, "ok");
+    const history = yield* settledReading(page.repl);
+    expect(history.model.entries).toHaveLength(1);
+    expect(history.model.entries[0].source).toBe(source);
+  });
+});
 
 describe("REPL terminal: what the host normalizes, and what it refuses to guess", () => {
   it("I1: a key becomes a normalized event and a mouse press becomes a position", function* () {
