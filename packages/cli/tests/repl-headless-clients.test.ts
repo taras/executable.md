@@ -12,7 +12,12 @@ import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { createRequire } from "node:module";
 import process from "node:process";
 import { createPermissionBridge } from "../../acp/src/permission-bridge.ts";
-import { responseNotification } from "../src/headless/presentations.ts";
+import { useChildPresentations, responseNotification } from "../src/headless/presentations.ts";
+import * as acp from "@agentclientprotocol/sdk";
+import { createChildRequests } from "../src/headless/requests.ts";
+import { Envelope, SidekickTransport } from "../src/sidekick-acp/protocol.ts";
+import { useReplElicitation } from "../src/repl/elicitation.ts";
+import { action, until } from "effection";
 import { Elicitation } from "@executablemd/core";
 import type { Scope } from "effection";
 import type { AgentPromptEvent } from "@executablemd/core";
@@ -32,6 +37,156 @@ const conditional = {
 function entryResponse(source: string): string {
   return `<Let as="code" select="code">\n\x60\x60\x60xmd\n${source}\n\x60\x60\x60\n</Let><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />`;
 }
+
+describe("headless presentation lifetime", () => {
+  it("releases more than 64 UI-resolved presentations after callbacks join and preserves an in-flight stale response", function* () {
+    const held = yield* useHeadlessFixture();
+    const questions = yield* useReplElicitation();
+    let sequence = 0;
+    const requests = createChildRequests(
+      { ...held.root.owner, questions },
+      held.root.session,
+      () => `lifetime-${++sequence}`,
+    );
+    const scope = yield* useScope();
+    let cycle = 0;
+    let callbacks = 0;
+    let released = 0;
+    let retired = 0;
+    let offered = 0;
+    const outstanding = new Set<string>();
+    const started = Array.from({ length: 66 }, () => withResolvers<void>());
+    const finished = Array.from({ length: 66 }, () => withResolvers<void>());
+    const late = withResolvers<acp.CreateElicitationResponse>();
+    const classified = withResolvers<void>();
+    const notices: XmdResponse[] = [];
+    const client = new acp.ClientApp()
+      .onNotification("session/update", ({ params }) => {
+        if (params.update.sessionUpdate === "tool_call_update") {
+          const output = z.object({ [XMD_RESPONSE]: XmdResponse }).parse(params.update.rawOutput);
+          notices.push(output[XMD_RESPONSE]);
+        }
+      })
+      .onRequest("elicitation/create", ({ signal }) =>
+        scope.run(function* () {
+          const index = cycle;
+          callbacks++;
+          try {
+            started[index]?.resolve();
+            if (index === 0) {
+              return yield* late.operation;
+            }
+            return yield* action<acp.CreateElicitationResponse>((resolve) => {
+              const abort = () => resolve({ action: "cancel" });
+              signal.addEventListener("abort", abort);
+              if (signal.aborted) {
+                abort();
+              }
+              return () => signal.removeEventListener("abort", abort);
+            });
+          } finally {
+            callbacks--;
+            finished[index]?.resolve();
+          }
+        }),
+      );
+    let connection: acp.AgentConnection | undefined;
+    yield* ensure(function* () {
+      connection?.close();
+      if (connection !== undefined) {
+        yield* until(connection.closed);
+      }
+    });
+    connection = new acp.AgentApp().connect(client);
+    const transport = yield* SidekickTransport.expect();
+    yield* SidekickTransport.set({
+      ...transport,
+      *connect() {
+        let reply: unknown;
+        return {
+          descriptor: held.descriptor,
+          wire: {
+            *send(value) {
+              const { id, request } = Envelope.parse(value);
+              let result: unknown = null;
+              if (request.method === "hello") {
+                result = held.descriptor;
+              } else if (request.method === "child-offer") {
+                const offer = requests.offer(request.requestId);
+                result = offer;
+                if (offer !== null) {
+                  outstanding.add(offer.presentationId);
+                }
+                offered++;
+              } else if (request.method === "child-retire") {
+                result = requests.retire(request.presentationId) ?? null;
+                retired++;
+                if (cycle === 0) {
+                  late.resolve({ action: "accept", content: { decision: "reject" } });
+                  yield* classified.operation;
+                }
+              } else if (request.method === "child-response") {
+                result = requests.respond(request);
+                expect(XmdResponse.parse(result)).toMatchObject({
+                  event: "response",
+                  outcome: "stale",
+                });
+                classified.resolve();
+              } else if (request.method === "child-release") {
+                expect(outstanding.delete(request.presentationId)).toBe(true);
+                requests.release(request.presentationId);
+                released++;
+              } else {
+                throw new Error(`Unexpected ${request.method}`);
+              }
+              reply = { id, kind: "value", value: result };
+            },
+            *receive() {
+              return reply;
+            },
+            close() {},
+          },
+        };
+      },
+    });
+    yield* scoped(function* () {
+      const presentations = yield* useChildPresentations(
+        held.path,
+        held.descriptor,
+        connection.client,
+        "lifetime",
+        true,
+      );
+      for (cycle = 0; cycle < 66; cycle++) {
+        const changes = yield* questions.changes;
+        const question = yield* spawn(() =>
+          Elicitation.operations.elicit({ message: `UI question ${cycle}`, schema: conditional }),
+        );
+        let pending = questions.pending;
+        while (pending === undefined) {
+          yield* changes.next();
+          pending = questions.pending;
+        }
+        yield* presentations.update(requests.list());
+        yield* started[cycle]!.operation;
+        expect(pending.submit({ decision: "reject" }).kind).toBe("answered");
+        yield* question;
+        yield* presentations.update([]);
+        yield* finished[cycle]!.operation;
+        expect(callbacks).toBe(0);
+        expect(released).toBe(cycle + 1);
+      }
+    });
+    expect(offered).toBe(66);
+    expect(retired).toBe(66);
+    expect(released).toBe(66);
+    expect(outstanding.size).toBe(0);
+    expect(
+      notices.filter((notice) => notice.event === "response" && notice.outcome === "stale"),
+    ).toHaveLength(1);
+    yield* held.task.halt();
+  });
+});
 
 describe("headless child ACP clients", () => {
   it("H5: every closed response variant closes only its correlated presentation and retirement proves no answer", function* () {

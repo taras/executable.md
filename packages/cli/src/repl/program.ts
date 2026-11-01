@@ -41,6 +41,9 @@ import {
   race,
   spawn,
   type Subscription,
+  type Task,
+  suspend,
+  useScope,
   withResolvers,
 } from "effection";
 import type { ReplExecutionProfile, ReplProfileAssembly } from "../repl-profile.ts";
@@ -742,9 +745,31 @@ function* drive(
     const events: Subscription<ReplScreenEvent, void> = yield* screen.events();
     const tree = yield* useReplTree<ReplAction>();
     const frames = yield* useReplFrames();
-    const size = yield* screen.size();
-    let renderer = yield* useReplRenderer({ columns: size.columns, rows: size.rows });
+    const renderingOwner = yield* useScope();
+    let renderer =
+      liveScreen === undefined ? yield* useReplRenderer(yield* screen.size()) : undefined;
+    let renderingTask: Task<void> | undefined;
     let generation = liveScreen?.generation;
+    function* rendering(): Operation<ReplRenderer> {
+      if (renderer === undefined) {
+        const ready = withResolvers<ReplRenderer>();
+        // A frame runs in the connection's draw task; the generation outlives that task.
+        renderingTask = yield* renderingOwner.spawn(function* () {
+          ready.resolve(yield* useReplRenderer(yield* screen.size()));
+          yield* suspend();
+        });
+        renderer = yield* ready.operation;
+      }
+      return renderer;
+    }
+    function* releaseRenderer(): Operation<void> {
+      renderer = undefined;
+      const task = renderingTask;
+      renderingTask = undefined;
+      if (task !== undefined) {
+        yield* task.halt();
+      }
+    }
 
     // One queue, so the loop has exactly one place it waits — and so a burst is
     // one frame. A paste arrives as hundreds of text events in a few chunks; a
@@ -1364,7 +1389,7 @@ function* drive(
     function* remount(): Operation<void> {
       const at = yield* screen.size();
       const ready = yield* prepareFrame(
-        renderer,
+        yield* rendering(),
         yield* build(
           state,
           reading,
@@ -1432,7 +1457,7 @@ function* drive(
       let geometry = NOTHING_ADMITTED;
       if (readsGeometry(dispatched.value.action)) {
         const ready = yield* prepareFrame(
-          renderer,
+          yield* rendering(),
           yield* build(
             state,
             reading,
@@ -1648,11 +1673,11 @@ function* drive(
           : refusedView(state, broken, at, focused);
       return liveScreen === undefined ? view : { ...view, detachable: true };
     };
-    const paintCurrent = () =>
-      paint(
+    function* paintCurrent() {
+      return yield* paint(
         frames,
         tree,
-        renderer,
+        yield* rendering(),
         screen,
         compose,
         fits,
@@ -1662,6 +1687,7 @@ function* drive(
         draftFits,
         queueFits,
       );
+    }
     const draw = () => (liveScreen === undefined ? paintCurrent() : liveScreen.draw(paintCurrent));
     const first = yield* draw();
     rendered = first?.rendered;
@@ -1684,6 +1710,13 @@ function* drive(
       const taken = yield* wakes.take();
       if (taken.length === 0) {
         return Ok({ location: exitLocation(state), refusal: undefined });
+      }
+
+      if (liveScreen !== undefined && generation !== liveScreen.generation) {
+        yield* releaseRenderer();
+        generation = liveScreen.generation;
+        rendered = undefined;
+        presenting = undefined;
       }
 
       // What stands now, to return to if what is attempted does not resolve.
@@ -1710,7 +1743,7 @@ function* drive(
         } else if (wake.event.kind === "eof") {
           ended = true;
         } else if (wake.event.kind === "resize") {
-          renderer.resize(wake.event.size);
+          renderer?.resize(wake.event.size);
         } else if (wake.event.kind === "pointer" || wake.event.kind === "wheel") {
           // Resolved only against the frame that produced these coordinates. A
           // stale frame, a node the tree has removed and a target behind a drawer
@@ -1785,14 +1818,15 @@ function* drive(
       state = askingFor(state, askingNow());
 
       if (liveScreen !== undefined && generation !== liveScreen.generation) {
+        yield* releaseRenderer();
         generation = liveScreen.generation;
-        renderer = yield* useReplRenderer(yield* screen.size());
         rendered = undefined;
         presenting = undefined;
       }
 
       if (departing && liveScreen !== undefined) {
         liveScreen.detach();
+        yield* releaseRenderer();
         rendered = undefined;
         presenting = undefined;
         continue;
@@ -1840,6 +1874,7 @@ function* drive(
       }
 
       if (liveScreen !== undefined && !liveScreen.connected) {
+        yield* releaseRenderer();
         rendered = undefined;
         presenting = undefined;
         continue;

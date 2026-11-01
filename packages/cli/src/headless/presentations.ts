@@ -129,10 +129,11 @@ export function* useChildPresentations(
         if (inputs.some((one) => one.requestId === id && one.kind === held.input.kind)) {
           continue;
         }
-        if (held.presentationId !== undefined) {
+        const presentationId = held.presentationId;
+        if (presentationId !== undefined) {
           const result = yield* exactRequest({
             method: "child-retire",
-            presentationId: held.presentationId,
+            presentationId,
           });
           if (result !== null) {
             yield* notify(XmdResponse.parse(result));
@@ -141,6 +142,9 @@ export function* useChildPresentations(
         held.abort?.abort();
         if (held.task !== undefined) {
           yield* held.task.halt();
+        }
+        if (presentationId !== undefined) {
+          yield* exactRequest({ method: "child-release", presentationId });
         }
         active.delete(id);
       }

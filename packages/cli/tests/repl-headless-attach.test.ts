@@ -1,7 +1,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createSignal, race, scoped, sleep, spawn } from "effection";
-import type { Operation } from "effection";
+import type { Operation, Scope } from "effection";
+import { api } from "effection/experimental";
 import { attachChildUi } from "../src/headless/ui.ts";
 import { ReplTerminal } from "../src/repl/terminal.ts";
 import { useReplScreen } from "../src/repl/screen.ts";
@@ -108,6 +109,88 @@ function pressAt(terminal: Terminal, at: { row: number; column: number }): void 
 function* press(terminal: Terminal, label: string, appliedFrames: AppliedFrames): Operation<void> {
   pressAt(terminal, yield* locate(terminal, label, appliedFrames));
 }
+
+describe("headless renderer lifetime", () => {
+  it("releases every detached renderer scope while the exact child remains live", function* () {
+    const live = new Set<Scope>();
+    const parents = new WeakMap<Scope, Scope>();
+    const changed = createSignal<void, void>();
+    yield* api.Scope.around({
+      create([parent], next) {
+        const result = next(parent);
+        live.add(result[0]);
+        parents.set(result[0], parent);
+        changed.send();
+        return result;
+      },
+      *destroy([scope], next) {
+        try {
+          yield* next(scope);
+        } finally {
+          // Parent teardown also joins children whose destructor bypasses Scope.destroy.
+          for (const held of live) {
+            let ancestor: Scope | undefined = held;
+            while (ancestor !== undefined && ancestor !== scope) {
+              ancestor = parents.get(ancestor);
+            }
+            if (ancestor === scope) {
+              live.delete(held);
+            }
+          }
+          changed.send();
+        }
+      },
+    });
+    const held = yield* useHeadlessFixture();
+    for (let cycle = 0; cycle < 4; cycle++) {
+      const baseline = new Set(live);
+      const terminal = recordingTerminal();
+      const ui = yield* spawn(function* () {
+        yield* terminal.install();
+        yield* attachChildUi(held.reference.sessionId);
+      });
+      yield* visible(terminal.terminal, "[detach]");
+      if (cycle > 0) {
+        const first = yield* scoped(function* () {
+          const screen = yield* useTerminalScreen(terminal.terminal.size);
+          // Opening ReplScreen writes terminal modes before the first frame.
+          screen.feed(terminal.terminal.presented[1] ?? new Uint8Array());
+          return screen.rows().join("\n");
+        });
+        expect(first).toContain("retained renderer draft");
+      }
+      if (cycle === 0) {
+        terminal.terminal.feed("retained renderer draft");
+      }
+      yield* visible(terminal.terminal, "retained renderer draft");
+      const attached = [...live].filter((scope) => !baseline.has(scope));
+      expect(attached.length).toBeGreaterThan(0);
+      terminal.terminal.end();
+      yield* ui;
+      // The first frame mounts the root-owned tree; later generations reuse it.
+      if (cycle > 0) {
+        yield* race([
+          (function* () {
+            const changes = yield* changed;
+            while (attached.some((scope) => live.has(scope))) {
+              yield* changes.next();
+            }
+          })(),
+          (function* () {
+            yield* sleep(5000);
+            throw new Error(
+              `Detached UI retained ${attached.filter((scope) => live.has(scope)).length} scopes`,
+            );
+          })(),
+        ]);
+      }
+      expect(terminal.terminal.readers).toBe(0);
+      expect(terminal.terminal.listeners).toBe(0);
+      expect(yield* attachmentDescriptor(held.path)).toEqual(held.descriptor);
+    }
+    yield* held.task.halt();
+  });
+});
 
 describe("headless live UI", () => {
   it("H4/H5/J3: attached UI and capable ACP share the actual conditional question and permission owners", function* () {
@@ -343,6 +426,16 @@ describe("headless live UI", () => {
       throw working.error;
     }
     const permission = yield* permissionAddress.operation;
+    const stalePermission = z
+      .object({ presentationId: z.string() })
+      .passthrough()
+      .parse(
+        yield* requestAttachment(held.path, {
+          method: "child-offer",
+          requestId: permission.requestId,
+        }),
+      );
+    expect(stalePermission.presentationId).not.toBe(permission.presentationId);
     yield* visible(terminal.terminal, "asks: Write", appliedFrames);
     yield* press(terminal.terminal, "asks: Write", appliedFrames);
     yield* visible(terminal.terminal, "[Allow]", appliedFrames);
@@ -357,7 +450,7 @@ describe("headless live UI", () => {
         method: "child-response",
         kind: "permission",
         requestId: permission.requestId,
-        presentationId: permission.presentationId,
+        presentationId: stalePermission.presentationId,
         value: { outcome: { outcome: "selected", optionId: "allow" } },
       }),
     );
