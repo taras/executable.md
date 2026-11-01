@@ -81,6 +81,125 @@ function* completedKey(page: ReplPage, key: Parameters<ReplPage["key"]>[0]): Ope
 }
 
 describe("987 — mounted original recovery", () => {
+  for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
+    it(`reads actual saved multiline entry feedback by keyboard at ${size.columns} columns`, function* () {
+      const page = yield* useReplPage({ size: WIDE });
+      expect(page.screen().shows("Review recovery")).toBe(false);
+      const lines = [
+        "OUTPUT-BEGIN: verified",
+        ...Array.from(
+          { length: 8 },
+          (_, at) => `ROW${String(at + 1).padStart(2, "0")}: item verified`,
+        ),
+        "OUTPUT-END: retained",
+      ];
+      page.repl.fake.script({
+        reply: `<Let as="code" select="code">\n\`\`\`xmd\n<Output>${lines.join("\n")}</Output>\n\`\`\`\n</Let><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />`,
+      });
+      page.repl.fake.script({ reply: "", failure: "Internal error" });
+      yield* sendMessage(page, "Inspect output.");
+      yield* page.until("the failed feedback recovery action", (one) =>
+        one.shows("[review recovery]"),
+      );
+      const before = yield* settledReading(page.repl);
+      const feedback = before.chat.find((one) => one.kind === "feedback");
+      if (feedback?.kind !== "feedback") {
+        throw new Error("The actual entry feedback is missing.");
+      }
+      for (const line of lines) {
+        expect(feedback.text).toContain(line);
+      }
+      yield* page.press("[review recovery]");
+      yield* page.until("the saved recovery account", (one) => one.shows("Original conversation:"));
+      if (size.columns !== 160) {
+        yield* page.resize(size);
+      }
+      {
+        yield* page.until("the recovery account frame", (one) => one.shows("Review recovery"));
+        const heading = page.screen().locate("Review recovery");
+        for (let step = 0; step < 60 && !page.screen().shows("New instruction:"); step++) {
+          const before = page.screen().index;
+          yield* page.wheel("down", { column: heading.column + 2, row: heading.row + 2 });
+          yield* page.until("the account reveals its field", (one) => one.index > before);
+        }
+        for (let step = 0; step < 12 && !page.screen().shows(">> New instruction:"); step++) {
+          yield* completedKey(page, "Backtab");
+        }
+        yield* page.until("the Content field owns focus", (one) =>
+          one.shows(">> New instruction:"),
+        );
+        for (let step = 0; step < 8; step++) {
+          yield* completedKey(page, "PageUp");
+        }
+        const seen = new Set<string>();
+        for (let step = 0; step < 100; step++) {
+          const column = page.screen().locate("Review recovery").column;
+          const rendered = page
+            .screen()
+            .rows.slice(3, -3)
+            .map((row) => row.slice(column))
+            .join("")
+            .replace(/\s+/g, "");
+          for (const line of lines) {
+            if (rendered.includes(line.replace(/\s+/g, ""))) {
+              seen.add(line);
+            }
+          }
+          if (seen.size === lines.length) {
+            break;
+          }
+          const before = page.screen().rows.slice(3, -3).join("");
+          yield* completedKey(page, "Alt+ArrowUp");
+          yield* completedKey(page, "PageDown");
+          if (page.screen().rows.slice(3, -3).join("") === before) {
+            yield* completedKey(page, "Tab");
+          }
+        }
+        expect(lines.filter((line) => seen.has(line))).toEqual(lines);
+      }
+      yield* page.key("Escape");
+      yield* page.until("the closed account", (one) => !one.shows("Review recovery"));
+      if (size.columns !== 160) {
+        yield* page.resize(WIDE);
+      }
+      yield* page.press("[review recovery]");
+      yield* page.until("the reopened saved account", (one) => one.shows("Review recovery"));
+      const passive = yield* settledReading(page.repl);
+      expect(passive.chat).toEqual(before.chat);
+      expect(passive.model.entries).toEqual(before.model.entries);
+      expect(page.repl.fake.prompts).toHaveLength(2);
+      const heading = page.screen().locate("Review recovery");
+      for (let step = 0; step < 60 && !page.screen().shows("New instruction:"); step++) {
+        const at = page.screen().index;
+        yield* page.wheel("down", { column: heading.column + 2, row: heading.row + 2 });
+        yield* page.until("the reopened field is revealed", (one) => one.index > at);
+      }
+      for (let step = 0; step < 12 && !page.screen().shows(">> New instruction:"); step++) {
+        yield* completedKey(page, "Backtab");
+      }
+      yield* page.until("the new instruction owns focus", (one) =>
+        one.shows(">> New instruction:"),
+      );
+      const instruction = "Summarize the verified inventory.";
+      yield* completedKey(page, "End");
+      yield* page.type(instruction);
+      yield* page.until("the distinct instruction is visible", (one) => one.shows("inventory."));
+      page.repl.fake.script({ reply: "<Output>Inventory recovery continued once.</Output>" });
+      yield* page.press("[send new instruction]");
+      yield* page.until(
+        "the explicit continuation completed",
+        (one) => one.shows("Inventory recovery continued once.") && sidekickIdle(one),
+      );
+      const after = yield* settledReading(page.repl);
+      expect(page.repl.fake.prompts).toHaveLength(3);
+      expect(page.repl.fake.prompts[2]).toContain(instruction);
+      expect(page.repl.fake.prompts[2]).not.toContain("OUTPUT-BEGIN:");
+      expect(page.repl.fake.turns[2]?.handle.sessionKey).toBe(
+        page.repl.fake.turns[0]?.handle.sessionKey,
+      );
+      expect(after.model.entries).toEqual(before.model.entries);
+    });
+  }
   function* draftFromComposer(page: ReplPage): Operation<void> {
     yield* intoComposer(page);
     for (let index = 0; index < 24 && !page.screen().shows("Type here"); index++) {

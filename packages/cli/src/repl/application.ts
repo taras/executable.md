@@ -12511,6 +12511,15 @@ function workspacePresentation(input: {
       );
     }
     const composer = [...byKey("sidekick:message"), ...startingWith("sidekick:message:value:")];
+    const trayHeader = headerRows("tray", region, REPL_PALETTE.composerSurface);
+    const statusRows = startingWith("queue-status:");
+    // Recovery adds reading controls while the chat body grows. Keep its tray
+    // on whole rows using the same admitted parts this manifest places.
+    const trayRows =
+      allocation?.tray ??
+      (view.live.sidekick?.recovery === true
+        ? trayHeader.length + statusRows.length + queueRows.length + composer.length
+        : "fit");
     return [
       ...headerRows("conversation", region, header),
       box({
@@ -12537,14 +12546,14 @@ function workspacePresentation(input: {
               id: "box:tray",
               region,
               props: workspaceBlockProps(
-                allocation?.tray ?? "fit",
+                trayRows,
                 REPL_PALETTE.composerSurface,
                 WORKSPACE_LIST_GUTTER,
                 inside,
               ),
               children: [
-                ...headerRows("tray", region, REPL_PALETTE.composerSurface),
-                ...startingWith("queue-status:").map((one) => rowBox(one, region, room)),
+                ...trayHeader,
+                ...statusRows.map((one) => rowBox(one, region, room)),
                 // A tray whose rows fit places them where the accepted screen
                 // has them. One that does not is a window of the rows it was
                 // allocated, whose room the engine measures like any other.
