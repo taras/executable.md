@@ -478,6 +478,18 @@ describe("Tier GX — the complete fragment is read first", () => {
 
   it("GX4c: passive references are admitted but prose reads and executable blocks refuse", function* () {
     const transport = yield* useTransport(() => ({ status: 200 }));
+    yield* Component.around(
+      {
+        env: () => ({
+          values: {
+            matches: true,
+            source: "CALLER_SOURCE_1050",
+            props: { name: "CALLER_PROP_1050" },
+          },
+        }),
+      },
+      { at: "min" },
+    );
     const literal =
       "```xmd\n<If condition={matches}>\n{source} {props.name} {meta.title}\n" +
       `<Fetch url="${URL_ONE}" />\n</If>\n` +
