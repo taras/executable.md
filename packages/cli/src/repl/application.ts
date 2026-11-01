@@ -8727,14 +8727,17 @@ export interface ReplPresentationContext {
    */
   readonly historyMap?: number | undefined;
   /**
-   * How wide the accepted wide row's gap is, once its map has been measured.
-   *
-   * Declared so that the controls beside it are the row's one growing child:
-   * two growing siblings halve what the map leaves, and half of an odd number
-   * of cells is a position the renderer refuses. Absent until that measurement,
-   * and absent at every other profile, whose rows are arranged differently.
+   * How wide the accepted wide row's gap is. See {@link wideHistoryWidths}.
+   * Absent until measured, and absent at every other profile — computed only
+   * on the wide profile, whose row is arranged differently from the rest.
    */
   readonly historyGap?: number | undefined;
+  /**
+   * The accepted wide row's own map width. See {@link wideHistoryWidths}.
+   * Absent until measured, and absent at every other profile — computed only
+   * on the wide profile, whose row asks its map a different way.
+   */
+  readonly wideHistoryMap?: number | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -11370,34 +11373,53 @@ export function historySplitOf(
 }
 
 /**
- * How wide the accepted wide row's gap is, for this exact measured frame.
+ * The accepted wide row's own map and the gap after it, for this exact
+ * measured frame.
  *
- * That row is a fitted map, this gap, and the controls — and the gap and the
- * controls both grow, so the engine divides what the map leaves between them.
- * It divides it in halves, and half of an odd number of cells is not a cell:
- * measured, an ordinary root's 25-cell map left 135, which came out 67.5 and
- * 67.5, and put History at x=92.5 where the renderer refuses to draw it. The
- * accepted fixture's map happens to leave 126, so its halves were whole and
- * nothing said the arrangement only worked for even remainders.
+ * Both stated rather than asked of a `fit()`: the map's own text grows by
+ * about three cells with every entry and nothing otherwise bounds it, and a
+ * `fit()` text box long enough can answer a fraction of a cell on either
+ * engine, measuring or drawing — measured, an eighty-four-cell map this
+ * frame's measuring pass confirmed whole came back `82.0078125` from the
+ * engine that commits the frame at the twelfth entry, and by the nineteenth
+ * the measuring pass's own answer for the same box was itself fractional.
+ * Neither engine's `fit()` is a width this function trusts past that point.
  *
- * So the gap is declared instead, and the controls stay the one growing child.
- * This is an integer budget decided before anything is placed — the engine
- * still measures where each control lands and how many of them there is room
- * for, and every control is still fitted to its own label. The odd cell goes
- * to the controls, which are what somebody is aiming at.
+ * The gap and the controls both grow, so the engine divides what the map
+ * leaves between them in halves, and half of an odd number of cells is not a
+ * cell — the same arithmetic that made `82.0078125` possible. So the split is
+ * declared here, in whole cells, before anything is placed.
+ *
+ * Bounded by what the controls need, the way the non-wide row already bounds
+ * its own map (see {@link historySplitOf}): once the map's own text is long
+ * enough that the halved remainder would leave the controls less room than
+ * their own labels need — or long enough that this frame cannot even answer a
+ * whole width for it — the map is shortened to what the controls leave
+ * instead, and the gap drops to zero rather than taking a share of room the
+ * controls own. The controls' own combined width is short, stable text and
+ * stays reliable independent of how long the map has grown.
  */
-export function historyGapWidth(widthOf: (id: string) => number | undefined): number | undefined {
+export function wideHistoryWidths(
+  widthOf: (id: string) => number | undefined,
+  probedWidthOf: (id: string) => number | undefined,
+): { readonly map: number; readonly gap: number } | undefined {
   const row = widthOf(HISTORY_ROW);
-  const map = widthOf(HISTORY_MAP);
-  if (row === undefined || map === undefined) {
+  const needed = probedWidthOf(HISTORY_PROBE_ACTIONS);
+  if (
+    row === undefined ||
+    needed === undefined ||
+    !Number.isInteger(row) ||
+    !Number.isInteger(needed)
+  ) {
     return undefined;
   }
-  // Both from this frame, and both whole: a width the engine had already
-  // divided into halves of a cell is not a budget to divide again.
-  if (!Number.isInteger(row) || !Number.isInteger(map)) {
-    return undefined;
+  const bounded = { map: Math.max(0, row - needed), gap: 0 };
+  const natural = widthOf(HISTORY_MAP);
+  if (natural === undefined || !Number.isInteger(natural)) {
+    return bounded;
   }
-  return Math.floor(Math.max(0, row - map) / 2);
+  const gap = Math.floor(Math.max(0, row - natural) / 2);
+  return row - natural - gap >= needed ? { map: natural, gap } : bounded;
 }
 
 /**
@@ -12434,32 +12456,21 @@ function workspacePresentation(input: {
                   box({
                     id: HISTORY_MAP,
                     region: "footer",
-                    // The accepted wide row fits this map to its own text and
-                    // has room for it. Every other profile states it, at the
-                    // width this frame measured the row's two parts to need —
-                    // the map's own natural width, or what the controls leave,
-                    // whichever is smaller. Fitting it there instead makes its
-                    // text a minimum that competes with complete control
-                    // labels: measured, a 72-cell row gave a 29-cell map its
-                    // whole text and left the controls 43 where they need 51,
-                    // and every one of them came back on part of a cell.
-                    props:
-                      accepted || context.historySplit === undefined
+                    // Stated on every profile, at a width this frame already
+                    // measured: see wideHistoryWidths and historySplitOf.
+                    props: accepted
+                      ? context.wideHistoryMap === undefined
+                        ? fittedPartProps()
+                        : statedPartProps(context.wideHistoryMap)
+                      : context.historySplit === undefined
                         ? fittedPartProps()
                         : statedPartProps(context.historySplit.map),
                     text: runText(map),
                     runs: map,
                     style: styleOf("history", { inspected }),
                   }),
-                  // The accepted wide screen divides what the map leaves
-                  // between a gap and this row, which is where its controls
-                  // were reviewed. Two growing siblings split a remainder in
-                  // the engine's own arithmetic and that arithmetic is not
-                  // whole — measured, a 72-column row placed a control at
-                  // x=41.9921875 — so every other profile states one growing
-                  // child and puts the controls at the trailing edge. Whether
-                  // the wide screen should follow them is a question for the
-                  // image review, not one to answer by moving an accepted row.
+                  // The gap between the map and the controls, stated rather
+                  // than grown beside them: see wideHistoryWidths.
                   ...(accepted
                     ? [
                         context.historyGap === undefined
