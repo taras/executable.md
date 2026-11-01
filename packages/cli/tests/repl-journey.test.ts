@@ -1785,13 +1785,39 @@ describe("REPL original first-use paths and question ownership", () => {
 
 describe("REPL original completed-screen lifecycle", () => {
   it("reads typing, diffs and every profile off completed presentations", function* () {
+    yield* ReplHost.around(
+      {
+        *identify(_args, next) {
+          return `abc${yield* next()}`;
+        },
+      },
+      { at: "max" },
+    );
     const page = yield* referencePage();
     const terminal = page.repl.terminal;
     const top = page.screen().rows[0];
     const session = top.trim().split(/\s+/).at(-1) ?? "";
     expect(session.length).toBeGreaterThan(0);
+    expect(page.screen().shows("abc")).toBe(true);
+    expect(page.screen().found("abc", DRAFT_VALUE)).toBe(0);
     const before = terminal.drawn;
-    yield* draftText(page, "abc");
+    terminal.holdNextPresent();
+    let typingCompleted = false;
+    const typing = yield* spawn(function* () {
+      yield* page.type("abc");
+      yield* page.until(
+        "the completed Draft holding abc",
+        (one) => one.found("abc", DRAFT_VALUE) === 1,
+      );
+      typingCompleted = true;
+    });
+    yield* awaited("the typing write being held", () => terminal.holdPresent !== undefined);
+    expect(typingCompleted).toBe(false);
+    expect(terminal.drawn).toBe(before);
+    expect(page.screen().found("abc", DRAFT_VALUE)).toBe(0);
+    terminal.holdPresent?.release();
+    yield* typing;
+    expect(page.screen().found("abc", DRAFT_VALUE)).toBe(1);
     expect(terminal.drawn).toBeGreaterThan(before);
     expect(
       terminal.presented.some((bytes) => new TextDecoder().decode(bytes).includes(session)),
