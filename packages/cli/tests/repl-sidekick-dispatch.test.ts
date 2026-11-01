@@ -14,6 +14,7 @@ import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
+import { useReplDecoder } from "../src/repl/input.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import {
   asked,
@@ -24,6 +25,7 @@ import {
   COMPOSER_VALUE,
   draftText,
   DRAFT_VALUE,
+  sidekickIdle,
 } from "./support/screen-journeys.ts";
 
 function service(
@@ -84,6 +86,66 @@ function fills(source: string): string {
 }
 
 describe("shared Sidekick dispatch", () => {
+  for (const busy of [false, true]) {
+    it(`keeps one pasted Message at its caret while ${busy ? "busy" : "idle"}`, function* () {
+      const page = yield* useReplPage();
+      if (busy) {
+        page.repl.fake.script({ reply: "<Output>original joined</Output>", held: true });
+        yield* sendMessage(page, "original request");
+        yield* page.repl.fake.startedTurns(1);
+      }
+      yield* intoComposer(page);
+      yield* typed(page, "beforeafter");
+      for (let at = 0; at < "after".length; at += 1) {
+        const before = page.screen().index;
+        yield* page.key("ArrowLeft");
+        yield* page.until("middle caret", (one) => one.index > before);
+      }
+      const payload = "first\n\n\t  é界🙂\nlast";
+      const raw = new TextEncoder().encode(`\x1b[200~${payload.replaceAll("\n", "\r\n")}\x1b[201~`);
+      const decoder = yield* useReplDecoder();
+      expect((yield* decoder.scan(raw)).events).toEqual([{ kind: "text", text: payload }]);
+      const initial = yield* settledReading(page.repl);
+      page.repl.terminal.bytes(raw);
+      yield* page.until(
+        "pasted tail at the middle caret",
+        (one) => one.found("lastafter", COMPOSER_VALUE) > 0,
+      );
+      expect(page.screen().shows("QUEUE 0/16")).toBe(true);
+      expect(page.repl.fake.prompts).toHaveLength(busy ? 1 : 0);
+      const pasted = yield* settledReading(page.repl);
+      expect(pasted.chat.filter((one) => one.kind === "message")).toEqual(
+        initial.chat.filter((one) => one.kind === "message"),
+      );
+      expect(pasted.model.entries).toEqual(initial.model.entries);
+      if (busy) {
+        page.repl.fake.releaseTurn();
+        yield* page.until(
+          "joined idle without queued paste",
+          (one) => sidekickIdle(one) && one.shows("original joined"),
+        );
+        expect(page.screen().found("lastafter", COMPOSER_VALUE)).toBe(1);
+        expect(page.screen().shows("QUEUE 0/16")).toBe(true);
+        expect(page.repl.fake.prompts).toHaveLength(1);
+        expect(
+          (yield* settledReading(page.repl)).chat.filter((one) => one.kind === "message"),
+        ).toHaveLength(1);
+      }
+      page.repl.fake.script({ reply: "<Output>paste submitted once</Output>" });
+      yield* page.key("Enter");
+      yield* page.until(
+        "one deliberate full submission",
+        (one) => sidekickIdle(one) && one.shows("paste submitted once"),
+      );
+      const after = yield* settledReading(page.repl);
+      const messages = after.chat.filter((one) => one.kind === "message");
+      expect(messages).toHaveLength(busy ? 2 : 1);
+      expect(messages.at(-1)?.text).toBe(`before${payload}after`);
+      expect(page.repl.fake.prompts).toHaveLength(busy ? 2 : 1);
+      expect(after.model.entries).toEqual(initial.model.entries);
+    });
+  }
+
   it("keeps the mounted UI's real controls, generated entry and final answer", function* () {
     const page = yield* useReplPage();
     const repl = page.repl;

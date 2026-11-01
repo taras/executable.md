@@ -7408,8 +7408,13 @@ Text is its own member of that normalized union, not a key with a payload: a
 named key — submit, dismiss, traverse, move, erase — is a command whoever
 handles it recognizes, and text is content that goes wherever content goes.
 Text carries what the terminal decoded, so shifted, accented and multi-byte
-characters arrive already assembled, and a newline inside a paste arrives as
-one. A chord carries a letter in its physical key code, and reading that code
+characters arrive already assembled. The screen owns bracketed-paste mode with
+its other terminal settings. The decoder consumes framing across reads and
+publishes a completed paste as text, normalizing CR, LF and CRLF to LF. Payload
+bytes never become submission keys; deliberate keys outside the frame retain
+their meaning. Incomplete paste state belongs to that decoder's scope.
+
+A chord carries a letter in its physical key code, and reading that code
 would type the letter somebody held Control with, so a chord is dropped whole —
 payload included. Arrows, Home, End, the Page keys and Alt+Up/Down are named as
 pressed rather than dropped: they carry no text.
