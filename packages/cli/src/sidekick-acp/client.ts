@@ -16,10 +16,14 @@ export function requestAttachment(
   path: string,
   request: Request,
   update?: (value: unknown) => Operation<void>,
+  expected?: Descriptor,
 ): Operation<unknown> {
   return scoped(function* () {
     const host = yield* SidekickTransport.expect();
     const { descriptor, wire } = yield* host.connect(path);
+    if (expected !== undefined && JSON.stringify(descriptor) !== JSON.stringify(expected)) {
+      throw new Error("The attachment association now names a different live owner.");
+    }
     yield* wire.send({ id: 0, request: { method: "hello", descriptor } });
     const hello = Reply.parse(yield* wire.receive());
     if (hello.id !== 0 || hello.kind !== "value") {

@@ -506,6 +506,64 @@ describe("Tier AF — the engine owns props", () => {
 });
 
 describe("Tier AF — the engine owns `as`", () => {
+  it("AF: live child input notices contribute neither Prompt capture nor durable Prompt fields", function* () {
+    let delivered = 0;
+    const notices: AgentPromptEvent[] = [
+      {
+        type: "question_answer_result",
+        questionId: "transient-question",
+        inputId: "transient-question-input",
+        result: { status: "accepted" },
+      },
+      {
+        type: "permission_decision_result",
+        permissionId: "transient-permission",
+        inputId: "transient-permission-input",
+        result: { status: "invalid", reason: "option-not-offered" },
+      },
+    ];
+    const { output, result, events } = yield* runDoc(
+      '<Prompt text="hi" as="answer" />Captured: {answer}',
+      {
+        *handler() {
+          yield* Agent.around({
+            *prompt([text, options], next) {
+              const original = yield* next(text, options);
+              return {
+                *[Symbol.iterator]() {
+                  const source = yield* original;
+                  let index = -1;
+                  return {
+                    *next() {
+                      if (index === -1) {
+                        index = 0;
+                        return yield* source.next();
+                      }
+                      const notice = notices[index];
+                      if (notice !== undefined) {
+                        index += 1;
+                        delivered += 1;
+                        return { done: false, value: notice };
+                      }
+                      return yield* source.next();
+                    },
+                  };
+                },
+              };
+            },
+          });
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(output).toContain("Captured: [hi]");
+    expect(delivered).toBe(2);
+    expect(JSON.stringify(events)).not.toContain("transient-question");
+    expect(JSON.stringify(events)).not.toContain("transient-permission");
+    expect(JSON.stringify(events)).not.toContain("question_answer_result");
+    expect(JSON.stringify(events)).not.toContain("permission_decision_result");
+  });
+
   it("AF5: the returned string is captured once and not also emitted", function* () {
     const { output, result } = yield* runDoc('<Prompt text="hi" as="answer" />\n\nGot: {answer}\n');
 

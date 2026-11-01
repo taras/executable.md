@@ -330,6 +330,21 @@ export function* usePosixSidekickTransport(
     probes?.pin?.readName ??
     ((name: string): Promise<BigIntStats> => lstat(name, { bigint: true }));
   yield* SidekickTransport.set({
+    *canonicalDirectory(path) {
+      if (uid === undefined) {
+        throw new Error("A private XMD endpoint requires a same-user POSIX host.");
+      }
+      const canonical = yield* until(realpath(path));
+      try {
+        yield* privateDirectory(canonical, uid, false);
+      } catch (cause) {
+        throw new Error(
+          `XMD cannot publish a private live endpoint in ${canonical}. Select an absolute directory owned by your user that is not writable by group or others.`,
+          { cause },
+        );
+      }
+      return canonical;
+    },
     supported: () => platform !== "win32" && uid !== undefined,
     identify: randomUUID,
     publish(path, binding) {
@@ -654,7 +669,8 @@ export function* usePosixSidekickTransport(
           server = createServer(connected);
           server.on("error", serverFailed);
           yield* action<void>((resolve, reject) => {
-            const error = () => reject(new Error("The Sidekick listener could not start."));
+            const error = (cause: Error) =>
+              reject(new Error("The Sidekick listener could not start.", { cause }));
             server!.on("error", error);
             server!.listen(socketPath, () => resolve());
             return () => server?.off("error", error);

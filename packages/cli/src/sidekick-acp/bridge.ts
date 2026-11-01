@@ -1,12 +1,15 @@
-import { Err, Ok, resource, until, useScope } from "effection";
+import { Err, Ok, resource, scoped, until, useScope } from "effection";
 import type { Operation, Result } from "effection";
 import * as acp from "@agentclientprotocol/sdk";
+import { useChildPresentations } from "../headless/presentations.ts";
+import { ChildInput } from "../headless/requests.ts";
 import { z } from "zod";
 import { attachmentDescriptor, requestAttachment } from "./client.ts";
 import { MAX_TEXT, SidekickTransport } from "./protocol.ts";
 
 const publicSnapshot = z
   .object({
+    inputs: z.array(ChildInput).optional(),
     message: z
       .object({ execution: z.string(), conversation: z.string(), id: z.string() })
       .strict()
@@ -37,17 +40,26 @@ const loaded = z
     status: z.unknown(),
   })
   .strict();
-export function* runSidekickBridge(path: string): Operation<void> {
+export function* runSidekickBridge(path: string, childId?: string): Operation<void> {
   const descriptor = yield* attachmentDescriptor(path);
+  const child = childId !== undefined;
+  if (child && descriptor.owner !== childId) {
+    throw new Error("The live association belongs to another XMD child.");
+  }
+  const exactRequest = (
+    request: import("./protocol.ts").Request,
+    update?: (value: unknown) => Operation<void>,
+  ) => requestAttachment(path, request, update, descriptor);
   const streams = yield* (yield* SidekickTransport.expect()).stdio();
   const scope = yield* useScope();
   let loadFailed = false;
+  let formCapable = false;
   const sessions = new Set<string>();
   function handle<T>(operation: () => Operation<T>): Promise<T> {
     return scope
       .run(function* (): Operation<Result<T>> {
         try {
-          return Ok(yield* operation());
+          return Ok(yield* scoped(operation));
         } catch (error) {
           return Err(
             error instanceof Error ? error : new Error("The Sidekick attachment request failed."),
@@ -87,10 +99,13 @@ export function* runSidekickBridge(path: string): Operation<void> {
   const connection = yield* resource<acp.AgentConnection>(function* (provide) {
     const connection = acp
       .agent({ name: "xmd-sidekick" })
-      .onRequest("initialize", () => ({
-        protocolVersion: 1,
-        agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } },
-      }))
+      .onRequest("initialize", (ctx) => {
+        formCapable = ctx.params.clientCapabilities?.elicitation?.form != null;
+        return {
+          protocolVersion: 1,
+          agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } },
+        };
+      })
       .onRequest("session/new", (ctx) =>
         handle(function* () {
           if (loadFailed) {
@@ -101,7 +116,7 @@ export function* runSidekickBridge(path: string): Operation<void> {
           }
           overrides(ctx.params);
           const value = attached.parse(
-            yield* requestAttachment(path, { method: "attach", cwd: ctx.params.cwd }),
+            yield* exactRequest({ method: "attach", cwd: ctx.params.cwd }),
           );
           sessions.add(value.attachment);
           return { sessionId: value.attachment, _meta: { agentSessionId: value.attachment } };
@@ -112,7 +127,7 @@ export function* runSidekickBridge(path: string): Operation<void> {
           try {
             overrides(ctx.params);
             const value = loaded.parse(
-              yield* requestAttachment(path, {
+              yield* exactRequest({
                 method: "load",
                 attachment: ctx.params.sessionId,
                 cwd: ctx.params.cwd,
@@ -161,11 +176,23 @@ export function* runSidekickBridge(path: string): Operation<void> {
               "Sidekick text must be nonempty and at most 64 KiB.",
             );
           }
+          const inputs = child
+            ? yield* useChildPresentations(
+                path,
+                descriptor,
+                ctx.client,
+                ctx.params.sessionId,
+                formCapable,
+              )
+            : undefined;
           let accepted = false;
           const activities = new Set<string>();
           const output = new Map<string, string>();
           const update = function* (raw: unknown): Operation<void> {
             const snapshot = publicSnapshot.parse(raw);
+            if (inputs !== undefined) {
+              yield* inputs.update(snapshot.inputs ?? []);
+            }
             if (snapshot.message !== null && !accepted) {
               accepted = true;
               yield* until(
@@ -305,13 +332,13 @@ export function* runSidekickBridge(path: string): Operation<void> {
           return;
         }
         void handle(function* () {
-          yield* requestAttachment(path, { method: "cancel", attachment: ctx.params.sessionId });
+          yield* exactRequest({ method: "cancel", attachment: ctx.params.sessionId });
         }).catch(() => {});
       })
       .onRequest("session/close", (ctx) =>
         handle(function* () {
           assertSession(ctx.params.sessionId);
-          yield* requestAttachment(path, { method: "close", attachment: ctx.params.sessionId });
+          yield* exactRequest({ method: "close", attachment: ctx.params.sessionId });
           sessions.delete(ctx.params.sessionId);
           return {};
         }),

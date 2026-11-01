@@ -562,6 +562,13 @@ export function* runPrompt(
       let next = yield* subscription.next();
       while (!next.done) {
         const event = next.value;
+        if (
+          event.type === "question_answer_result" ||
+          event.type === "permission_decision_result"
+        ) {
+          next = yield* subscription.next();
+          continue;
+        }
         if (event.type === "started") {
           result.started = true;
           result.agent = event.agent;

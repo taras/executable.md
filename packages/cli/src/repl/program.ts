@@ -4,11 +4,10 @@ import { testForSidekick } from "./sidekick/admission.ts";
 /**
  * The command, as one scope.
  *
- * One scope owns the repository, the session, the keyed tree, the acknowledged
- * frame stream, the renderer and the terminal, and it ends all of them together.
- * Everything below it is either a kernel that was settled in an earlier slice or
- * the pure application reduction — this module only arranges them, decides when a
- * frame is owed, and performs the effects a component asked for and cannot do.
+ * The root owns the repository, session, keyed tree and transitions. A connected
+ * screen owns its terminal and frame demand; losing that connection leaves a
+ * headless root alive. This module arranges those owners, decides when a frame
+ * is owed, and performs the effects a component asks for.
  *
  * ## Nothing is drawn on a clock
  *
@@ -33,6 +32,7 @@ import { testForSidekick } from "./sidekick/admission.ts";
  */
 
 import {
+  ensure,
   Err,
   type Operation,
   Ok,
@@ -42,6 +42,8 @@ import {
   spawn,
   type Subscription,
   type Task,
+  suspend,
+  useScope,
   withResolvers,
 } from "effection";
 import type { ReplExecutionProfile, ReplProfileAssembly } from "../repl-profile.ts";
@@ -70,7 +72,6 @@ import {
   retainedDetailsOf,
   MESSAGE_VALUE_ROWS,
   footerSentence,
-  guidanceSentence,
   readinessOf,
   readingOf,
   SIDEBAR_BODY,
@@ -146,9 +147,9 @@ import {
   submitForSidekick,
   take,
 } from "./sidekick/admission.ts";
-import type { Admitting, ColdReservation, Reported } from "./sidekick/admission.ts";
+import type { Admitting, ColdReservation } from "./sidekick/admission.ts";
 import { fillable, stillAdmissible } from "./sidekick/gate.ts";
-import type { DraftFacts, Instruction, Reservation } from "./sidekick/gate.ts";
+import type { DraftFacts, Instruction } from "./sidekick/gate.ts";
 import { rootReads } from "./sidekick/requests.ts";
 import type { RootReading } from "./sidekick/requests.ts";
 import type { SubmitReceipt } from "./sidekick/controls.ts";
@@ -169,7 +170,7 @@ import { projectSidekick, retryable, SAVED_WITHOUT_REPLY } from "./sidekick/mode
 import type { SidekickReading, SidekickSavedTurn } from "./sidekick/model.ts";
 import type { ReplExecution } from "./journal.ts";
 import { lifecycleRefusal, openReplSession } from "./session.ts";
-import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
+import type { ReplReading, ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
@@ -199,10 +200,23 @@ import { caretFor } from "./caret.ts";
 import { useReplTree } from "./reconcile.ts";
 import type { ReplTree } from "./reconcile.ts";
 import { projectRepl } from "./model.ts";
-import type { ReplModel } from "./model.ts";
 import { useReplRoot } from "./storage.ts";
 import { ReplTerminal } from "./terminal.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
+import type { ReplLiveScreen } from "./live-screen.ts";
+
+export interface HeadlessReplRoot {
+  readonly view: ReplLiveScreen;
+  ready(root: {
+    readonly session: ReplSession;
+    readonly owner: SidekickOwner;
+    readonly dispatch: SidekickDispatch;
+    readonly reads: RootReading;
+    readonly execution: string;
+    readonly workspace: string;
+    readonly cwd: string;
+  }): Operation<void>;
+}
 
 /**
  * What one `xmd repl` invocation was asked to do.
@@ -214,6 +228,7 @@ import type { ReplTerminalSize } from "./terminal.ts";
  * run under different rules from the first.
  */
 export interface ReplProgramOptions {
+  readonly headless?: HeadlessReplRoot;
   readonly sidekickAcp?: string;
   /** The location to reopen, or none to start a fresh execution. */
   readonly location?: string;
@@ -239,7 +254,16 @@ export interface ReplOutcome {
  * something this command cannot show, and the difference decides whether a
  * terminal was ever opened.
  */
-export function* runReplProgram(options: ReplProgramOptions): Operation<Result<ReplOutcome>> {
+export function runReplProgram(options: ReplProgramOptions): Operation<Result<ReplOutcome>> {
+  return scoped(function* () {
+    if (options.profile.children !== undefined) {
+      yield* ensure(options.profile.children.close);
+    }
+    return yield* openReplProgram(options);
+  });
+}
+
+function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOutcome>> {
   // Before a path is formed, a file is opened or a terminal is touched: what the
   // caller named has to be a location this grammar defines.
   if (options.location !== undefined) {
@@ -257,7 +281,7 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
   // command has already created an execution — leaving an empty history behind
   // for a session that was never going to open. Asked here, "there is no
   // terminal" is a refusal instead of wreckage.
-  if (!(yield* ReplTerminal.operations.interactive())) {
+  if (options.headless === undefined && !(yield* ReplTerminal.operations.interactive())) {
     return Err(
       new ReplRefusedError(
         "the REPL runs where a terminal is: it is not available over a pipe.",
@@ -284,6 +308,9 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
         ? yield* repository.create()
         : yield* repository.open(requireExecution(options.location));
   } catch (error) {
+    if (options.headless !== undefined) {
+      throw error;
+    }
     return yield* refuse(state, error instanceof Error ? error.message : String(error));
   }
   if (options.location === undefined) {
@@ -302,6 +329,9 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
   if (options.location !== undefined) {
     const reachable = yield* resolvable(execution, state);
     if (!reachable.ok) {
+      if (options.headless !== undefined) {
+        return reachable;
+      }
       return yield* refuse(state, reachable.error.message);
     }
   }
@@ -354,6 +384,9 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
   });
 
   if (!opened.ok) {
+    if (options.headless !== undefined) {
+      return opened;
+    }
     // A history that cannot be projected mounts the refusal and nothing else:
     // no provider, no observer, no execution task, and no append.
     return yield* refuse(state, opened.error.message);
@@ -707,12 +740,36 @@ function* drive(
   const draftFits = createPlainFitStore();
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
-    const screen = yield* useReplScreen();
+    const liveScreen = options.headless?.view;
+    const screen = liveScreen?.screen ?? (yield* useReplScreen());
     const events: Subscription<ReplScreenEvent, void> = yield* screen.events();
     const tree = yield* useReplTree<ReplAction>();
     const frames = yield* useReplFrames();
-    const size = yield* screen.size();
-    const renderer = yield* useReplRenderer({ columns: size.columns, rows: size.rows });
+    const renderingOwner = yield* useScope();
+    let renderer =
+      liveScreen === undefined ? yield* useReplRenderer(yield* screen.size()) : undefined;
+    let renderingTask: Task<void> | undefined;
+    let generation = liveScreen?.generation;
+    function* rendering(): Operation<ReplRenderer> {
+      if (renderer === undefined) {
+        const ready = withResolvers<ReplRenderer>();
+        // A frame runs in the connection's draw task; the generation outlives that task.
+        renderingTask = yield* renderingOwner.spawn(function* () {
+          ready.resolve(yield* useReplRenderer(yield* screen.size()));
+          yield* suspend();
+        });
+        renderer = yield* ready.operation;
+      }
+      return renderer;
+    }
+    function* releaseRenderer(): Operation<void> {
+      renderer = undefined;
+      const task = renderingTask;
+      renderingTask = undefined;
+      if (task !== undefined) {
+        yield* task.halt();
+      }
+    }
 
     // One queue, so the loop has exactly one place it waits — and so a burst is
     // one frame. A paste arrives as hundreds of text events in a few chunks; a
@@ -738,8 +795,10 @@ function* drive(
             next.value.event?.kind === "key" &&
             next.value.event.key === "Interrupt")
         ) {
-          ending = true;
-          shutdown.resolve();
+          if (liveScreen === undefined) {
+            ending = true;
+            shutdown.resolve();
+          }
         }
         wakes.send({ kind: "screen", event: next.value });
       }
@@ -1128,6 +1187,17 @@ function* drive(
       workspace,
       changed: () => wakes.send({ kind: "session" }),
     });
+    if (options.headless !== undefined) {
+      yield* options.headless.ready({
+        session: current,
+        owner: sidekick,
+        dispatch,
+        reads: sidekickRoot,
+        execution: execution.id,
+        workspace,
+        cwd: options.profile.projectCwd ?? workspace,
+      });
+    }
     if (options.sidekickAcp !== undefined) {
       try {
         if (ending) {
@@ -1319,7 +1389,7 @@ function* drive(
     function* remount(): Operation<void> {
       const at = yield* screen.size();
       const ready = yield* prepareFrame(
-        renderer,
+        yield* rendering(),
         yield* build(
           state,
           reading,
@@ -1387,7 +1457,7 @@ function* drive(
       let geometry = NOTHING_ADMITTED;
       if (readsGeometry(dispatched.value.action)) {
         const ready = yield* prepareFrame(
-          renderer,
+          yield* rendering(),
           yield* build(
             state,
             reading,
@@ -1587,44 +1657,27 @@ function* drive(
     // taken from a later snapshot.
     let broken: string | undefined;
     const compose: ReplCompose = function* (at): Operation<ReplView> {
-      return broken === undefined
-        ? yield* build(
-            state,
-            reading,
-            current,
-            at,
-            focused,
-            preparingOf(admitting),
-            sidekickReading(state),
-            dispatch.queue,
-            follow,
-          )
-        : refusedView(state, broken, at, focused);
+      const view =
+        broken === undefined
+          ? yield* build(
+              state,
+              reading,
+              current,
+              at,
+              focused,
+              preparingOf(admitting),
+              sidekickReading(state),
+              dispatch.queue,
+              follow,
+            )
+          : refusedView(state, broken, at, focused);
+      return liveScreen === undefined ? view : { ...view, detachable: true };
     };
-    const first = yield* paint(
-      frames,
-      tree,
-      renderer,
-      screen,
-      compose,
-      fits,
-      chatFits,
-      messageFits,
-      guidanceFits,
-      draftFits,
-      queueFits,
-    );
-    rendered = first.rendered;
-    presenting = presentedDrawer(first.view);
-    // The first frame has the same obligation as every other one: draw again
-    // only if the tree settled focus somewhere the frame did not mark.
-    const settled = keyOfFocus(tree);
-    if (settled !== focused) {
-      focused = settled;
-      const marked = yield* paint(
+    function* paintCurrent() {
+      return yield* paint(
         frames,
         tree,
-        renderer,
+        yield* rendering(),
         screen,
         compose,
         fits,
@@ -1634,8 +1687,22 @@ function* drive(
         draftFits,
         queueFits,
       );
-      rendered = marked.rendered;
-      presenting = presentedDrawer(marked.view);
+    }
+    const draw = () => (liveScreen === undefined ? paintCurrent() : liveScreen.draw(paintCurrent));
+    const first = yield* draw();
+    rendered = first?.rendered;
+    presenting = first === undefined ? undefined : presentedDrawer(first.view);
+    // The first frame has the same obligation as every other one: draw again
+    // only if the tree settled focus somewhere the frame did not mark.
+    const settled = keyOfFocus(tree);
+    if (first !== undefined && settled !== focused) {
+      focused = settled;
+      const marked = yield* draw();
+      if (marked === undefined) {
+        focused = keyOfFocus(tree);
+      }
+      rendered = marked?.rendered;
+      presenting = marked === undefined ? undefined : presentedDrawer(marked.view);
     }
 
     let formQuestion = current.overlay.question;
@@ -1643,6 +1710,13 @@ function* drive(
       const taken = yield* wakes.take();
       if (taken.length === 0) {
         return Ok({ location: exitLocation(state), refusal: undefined });
+      }
+
+      if (liveScreen !== undefined && generation !== liveScreen.generation) {
+        yield* releaseRenderer();
+        generation = liveScreen.generation;
+        rendered = undefined;
+        presenting = undefined;
       }
 
       // What stands now, to return to if what is attempted does not resolve.
@@ -1661,12 +1735,15 @@ function* drive(
         if (departing) {
           break;
         }
+        if (wake.kind === "screen" && liveScreen !== undefined && !liveScreen.accepts(wake.event)) {
+          continue;
+        }
         if (wake.kind === "session") {
           reading = { model: current.model, navigation: current.navigation };
         } else if (wake.event.kind === "eof") {
           ended = true;
         } else if (wake.event.kind === "resize") {
-          renderer.resize(wake.event.size);
+          renderer?.resize(wake.event.size);
         } else if (wake.event.kind === "pointer" || wake.event.kind === "wheel") {
           // Resolved only against the frame that produced these coordinates. A
           // stale frame, a node the tree has removed and a target behind a drawer
@@ -1740,6 +1817,21 @@ function* drive(
       // because publication is the owner's, not a keystroke's.
       state = askingFor(state, askingNow());
 
+      if (liveScreen !== undefined && generation !== liveScreen.generation) {
+        yield* releaseRenderer();
+        generation = liveScreen.generation;
+        rendered = undefined;
+        presenting = undefined;
+      }
+
+      if (departing && liveScreen !== undefined) {
+        liveScreen.detach();
+        yield* releaseRenderer();
+        rendered = undefined;
+        presenting = undefined;
+        continue;
+      }
+
       if (departing) {
         // The configuration job first, before the return below unwinds the scope
         // that owns the writer and the provider. A save already reaching the
@@ -1779,6 +1871,13 @@ function* drive(
           state = elicitWithdrawn(state);
         }
         formQuestion = current.overlay.question;
+      }
+
+      if (liveScreen !== undefined && !liveScreen.connected) {
+        yield* releaseRenderer();
+        rendered = undefined;
+        presenting = undefined;
+        continue;
       }
 
       // A route that names a history position needs the model projected *at* that
@@ -1859,19 +1958,10 @@ function* drive(
           reading = back.reading;
         }
       }
-      const painted = yield* paint(
-        frames,
-        tree,
-        renderer,
-        screen,
-        compose,
-        fits,
-        chatFits,
-        messageFits,
-        guidanceFits,
-        draftFits,
-        queueFits,
-      );
+      const painted = yield* draw();
+      if (painted === undefined) {
+        continue;
+      }
       rendered = painted.rendered;
       presenting = presentedDrawer(painted.view);
       // Focus is read against the view that was committed, which a resize may
@@ -1889,19 +1979,10 @@ function* drive(
       state = focusSettled(view, settledFocus, painted.admission);
       if (settledFocus !== focused) {
         focused = settledFocus;
-        const again = yield* paint(
-          frames,
-          tree,
-          renderer,
-          screen,
-          compose,
-          fits,
-          chatFits,
-          messageFits,
-          guidanceFits,
-          draftFits,
-          queueFits,
-        );
+        const again = yield* draw();
+        if (again === undefined) {
+          continue;
+        }
         rendered = again.rendered;
         presenting = presentedDrawer(again.view);
         settledFocus = keyOfFocus(tree);
@@ -3288,7 +3369,14 @@ function* prepared(
       if (committed.ok) {
         // 5. Present the copied bytes. 6. The caller retains the returned map.
         // And only then 7. acknowledge that this timestamp has been applied.
-        yield* screen.present(committed.value.rendered.output);
+        try {
+          yield* screen.present(committed.value.rendered.output, committed.value.rendered.size);
+        } catch (error) {
+          if (error instanceof Error && isStaleFrame(error)) {
+            continue;
+          }
+          throw error;
+        }
         held.value.acknowledge();
         return {
           rendered: committed.value.rendered,

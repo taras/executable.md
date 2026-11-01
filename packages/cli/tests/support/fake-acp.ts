@@ -875,17 +875,27 @@ export function createFakeAcp(): FakeAcp {
             // Nothing settles it. `cancel()` is the only way out.
             released.resolve();
           } else {
-            void allowed.then(() => {
-              if (turn.cancelled === true) {
-                settled.resolve({ status: "cancelled" });
-                return;
-              }
-              settled.resolve({
-                status: "completed",
-                stopReason: turn.stopReason ?? "end_turn",
-                ...(turn.turnId === undefined ? {} : { _meta: { codex: { turnId: turn.turnId } } }),
-              });
-            });
+            void allowed.then(
+              () => {
+                if (turn.cancelled === true) {
+                  settled.resolve({ status: "cancelled" });
+                  return;
+                }
+                settled.resolve({
+                  status: "completed",
+                  stopReason: turn.stopReason ?? "end_turn",
+                  ...(turn.turnId === undefined
+                    ? {}
+                    : { _meta: { codex: { turnId: turn.turnId } } }),
+                });
+              },
+              (error) => {
+                settled.resolve({
+                  status: "failed",
+                  error: { message: error instanceof Error ? error.message : String(error) },
+                });
+              },
+            );
           }
 
           return {
