@@ -155,6 +155,23 @@ describe("Tier GP — an unfinished prefix says what it has", () => {
   });
 });
 
+describe("Tier GP — Output rescans retain authored line context", () => {
+  it("GP22: unfinished and finished regions agree before and after an unfinished child", function* () {
+    const fence = "```xmd\n{source}\n```\n";
+    for (const leading of ["", "\n"]) {
+      for (const child of ["", "<Probe>"]) {
+        const source = "<Output>" + leading + fence + child;
+        const output = leading === "" ? "" : leading + fence;
+        expect(preview(source)).toEqual({ output, incomplete: true });
+        expect(preview(source + (child === "" ? "" : "</Probe>") + "</Output>")).toEqual({
+          output,
+          incomplete: false,
+        });
+      }
+    }
+  });
+});
+
 describe("Tier GP — only settled meaning projects", () => {
   it("GP14: literal text projects and interpolation waits", function* () {
     expect(preview("<Output>Hello, {who}!</Output>").output).toBe("");

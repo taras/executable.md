@@ -234,11 +234,13 @@ export function scanSegments(
    * and a tag it ran out of text in the middle of.
    */
   unfinished?: UnfinishedConstruct[],
+  /** A suffix rescan retains its authored prefix for line-boundary decisions. */
+  start = 0,
 ): Segment[] {
   const index: PositionIndex = { origin, lineStarts: computeLineStarts(text) };
   const segments: Segment[] = [];
-  let pos = 0;
-  let textStart = 0;
+  let pos = start;
+  let textStart = start;
 
   while (pos < text.length) {
     const fenceMatch = matchFenceOpen(text, pos);

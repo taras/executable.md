@@ -161,12 +161,33 @@ function unfinishedRegion(
   }
   // The same walk again over the content delivered so far, so what counts as a
   // nested tag, a fence or an inline code span is decided once.
-  const content = settledTail(source.slice(pending.contentStart));
+  const content = source.slice(
+    0,
+    pending.contentStart + settledTail(source.slice(pending.contentStart)).length,
+  );
   const unfinished: UnfinishedConstruct[] = [];
-  const segments = scanSegments(content, undefined, undefined, undefined, unfinished);
+  const segments = scanSegments(
+    content,
+    undefined,
+    undefined,
+    undefined,
+    unfinished,
+    pending.contentStart,
+  );
   const first = earliest(unfinished);
   return {
-    output: literal(first === undefined ? segments : scanSegments(content.slice(0, first.start))),
+    output: literal(
+      first === undefined
+        ? segments
+        : scanSegments(
+            content.slice(0, first.start),
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            pending.contentStart,
+          ),
+    ),
   };
 }
 
