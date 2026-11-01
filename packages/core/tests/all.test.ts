@@ -1786,6 +1786,95 @@ describe("993 retained source selection", () => {
     });
   }
 
+  it("W7-R correction: string-projected empty caller selection survives completed Spawn replay", function* () {
+    const source = "Documentation.<Reply><Output /></Reply>";
+    const body = [
+      "<Output><All><Spawn>",
+      "```ts eval",
+      "const projected = yield* renderChildren();",
+      "output(projected);",
+      "```",
+      "same</Spawn><Spawn>suffix</Spawn></All></Output>",
+    ].join("\n");
+    let liveEvals = 0;
+    const live = yield* run(source, {
+      files: { "components/Reply.md": body },
+      *install() {
+        yield* Component.around({
+          *applyModifiers([modifiers, context], next) {
+            liveEvals++;
+            return yield* next(modifiers, context);
+          },
+        });
+      },
+    });
+    expect(live.ok).toBe(true);
+    expect(live.output).toBe("\nsamesuffix");
+    expect(liveEvals).toBe(1);
+    const prefix = beforeRootClose(live.events, 2);
+    expect(closes(prefix)).toEqual(
+      expect.arrayContaining([
+        { id: "root.0", status: "ok" },
+        { id: "root.1", status: "ok" },
+      ]),
+    );
+    let replayEvals = 0;
+    const replay = yield* run(source, {
+      files: { "components/Reply.md": body },
+      stream: new InMemoryStream(prefix),
+      *install() {
+        yield* Component.around({
+          *applyModifiers() {
+            replayEvals++;
+            throw new Error("completed Spawn eval executed during replay");
+          },
+        });
+      },
+    });
+    expect(replay.ok).toBe(true);
+    expect(replay.output).toBe(live.output);
+    expect(replayEvals).toBe(0);
+    expect(childCloseValues(replay.events)).toEqual(childCloseValues(live.events));
+    const child = childCloseValues(live.events).find(([id]) => id === "root.0")?.[1];
+    const sibling = childCloseValues(live.events).find(([id]) => id === "root.1")?.[1];
+    if (
+      child === undefined ||
+      child === null ||
+      Array.isArray(child) ||
+      typeof child !== "object" ||
+      !Array.isArray(child.runs) ||
+      sibling === undefined ||
+      sibling === null ||
+      Array.isArray(sibling) ||
+      typeof sibling !== "object" ||
+      !Array.isArray(sibling.runs)
+    ) {
+      throw new Error("missing retained Spawn runs");
+    }
+    const runs = child.runs.flatMap((run) =>
+      run !== null && !Array.isArray(run) && typeof run === "object" ? [run] : [],
+    );
+    expect(runs.map((run) => run.text).join("")).toBe("\nsame");
+    expect(runs.every((run) => run.exact === false)).toBe(true);
+    const calleeSources = new Set(
+      sibling.runs.flatMap((run) =>
+        run !== null &&
+        !Array.isArray(run) &&
+        typeof run === "object" &&
+        Array.isArray(run.selection)
+          ? run.selection
+          : [],
+      ),
+    );
+    expect(
+      runs.some(
+        (run) =>
+          Array.isArray(run.selection) &&
+          run.selection.some((source) => !calleeSources.has(source)),
+      ),
+    ).toBe(true);
+  });
+
   it("W7-R: repeated executions of one definition retain only A's caller selection", function* () {
     const source =
       'Documentation.<Reply name="A"><Output /></Reply><Reply name="B"><Output /></Reply>';

@@ -332,6 +332,7 @@ export interface OutputFrame {
   readonly active: boolean;
   readonly private: boolean;
   readonly marks: WeakMap<Segment, readonly string[]>;
+  readonly stringSelection?: Set<string>;
 }
 
 function bodyOutput(segments: Segment[], path: string, inherited?: OutputFrame): OutputFrame {
@@ -1544,21 +1545,26 @@ function* expandListSegments(
         // mangle JS template literals like `${name}` into `$<value>`.
         const evalEnv = yield* env;
         const projection = yield* ActiveProjection.get();
+        const projectedSelection = new Set<string>();
+        const projectedFrame =
+          outputFrame === undefined
+            ? undefined
+            : { ...outputFrame, stringSelection: projectedSelection };
         if (evalEnv && projection) {
           evalEnv.values.renderChildren = (override?: unknown, mode?: ErrorMode) =>
             projection.projectToString(
               { kind: "children", override: validateRenderOverride(override), mode },
-              outputFrame,
+              projectedFrame,
             );
           evalEnv.values.render = (markdown: unknown, mode?: ErrorMode) =>
             projection.projectToString(
               { kind: "markdown", segments: scanSegments(String(markdown)), mode },
-              outputFrame,
+              projectedFrame,
             );
           evalEnv.values.useContent = (slot?: unknown, mode?: ErrorMode) =>
             projection.projectToString(
               { kind: "slot", name: slot === undefined ? undefined : String(slot), mode },
-              outputFrame,
+              projectedFrame,
             );
         }
         const lastModifier = segment.modifiers[segment.modifiers.length - 1];
@@ -1683,7 +1689,11 @@ function* expandListSegments(
               ),
             );
           }
-          // A successful block that printed nothing adds nothing (e.g., silent)
+          if (codeResult.exitCode === 0 && projectedSelection.size > 0) {
+            const reached: Segment = { type: "text", content: "" };
+            markSelection(outputFrame, [reached], projectedSelection);
+            result.push(reached);
+          }
         } catch (error) {
           const fatal = fatalCause(error);
           if (fatal !== undefined) {
@@ -3373,7 +3383,7 @@ function* expandComponent(
         stringRendered: (segments, frame) => {
           if (!frame?.private && (!bodyHasOutput(definition.bodySegments) || frame?.active)) {
             for (const source of selectionSources(frame ?? outputFrame, segments)) {
-              stringSelection.add(source);
+              (frame?.stringSelection ?? stringSelection).add(source);
             }
           }
         },
