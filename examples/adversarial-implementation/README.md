@@ -300,9 +300,11 @@ nor permission to merge. The Sidekick running Codex handles metadata and the
 repository's normal delivery gates afterwards.
 
 Give existing external independent-review assignments the
-[Reviewer guide](../../.agents/reviewer.md). It checks correctness, evidence and
-whether existing APIs can satisfy the accepted behavior before adding a new
-surface. This guide adds no workflow phase or review stage.
+[Reviewer guide](../../.agents/reviewer.md). It focuses on correctness,
+minimalism, and performance when UI or performance-sensitive paths are affected,
+including whether existing APIs suffice. Mechanical validation and review
+bookkeeping stay with their existing workflow or coordinator owners. This guide
+adds no workflow phase or review stage.
 
 Start required Fable reviews when the exact feedback commit and focused evidence
 are ready, without waiting for CI on `main` or the reviewed branch. When Fable
