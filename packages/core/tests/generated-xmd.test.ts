@@ -476,6 +476,41 @@ describe("Tier GX — the complete fragment is read first", () => {
     });
   }
 
+  it("GX4c: passive references are admitted but prose reads and executable blocks refuse", function* () {
+    const transport = yield* useTransport(() => ({ status: 200 }));
+    yield* Component.around(
+      {
+        env: () => ({
+          values: {
+            matches: true,
+            source: "CALLER_SOURCE_1050",
+            props: { name: "CALLER_PROP_1050" },
+          },
+        }),
+      },
+      { at: "min" },
+    );
+    const literal =
+      "```xmd\n<If condition={matches}>\n{source} {props.name} {meta.title}\n" +
+      `<Fetch url="${URL_ONE}" />\n</If>\n` +
+      "```\n";
+    const accepted = yield* evaluate(request(literal, [pinnedFetch(), probe()]));
+    expect(accepted.failure).toBe(undefined);
+    expect(accepted.output).toBe(literal);
+    expect(admittedFragments(accepted.events)).toHaveLength(1);
+    expect(transport.performed).toHaveLength(0);
+    for (const suffix of ["{source}", "```sh exec\necho {source}\n```\n"]) {
+      const refused = yield* evaluate(
+        request(`<Fetch url="${URL_ONE}" />\n` + literal + suffix, [pinnedFetch(), probe()]),
+      );
+      expect(refused.failure).toContain(
+        suffix === "{source}" ? "interpolation" : "executable code block",
+      );
+      expect(admittedFragments(refused.events)).toHaveLength(0);
+      expect(transport.performed).toHaveLength(0);
+    }
+  });
+
   const REFUSED: Array<[string, string, string]> = [
     [
       "an eval block that imports",

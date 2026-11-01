@@ -155,6 +155,23 @@ describe("Tier GP — an unfinished prefix says what it has", () => {
   });
 });
 
+describe("Tier GP — Output rescans retain authored line context", () => {
+  it("GP22: unfinished and finished regions agree before and after an unfinished child", function* () {
+    const fence = "```xmd\n{source}\n```\n";
+    for (const leading of ["", "\n"]) {
+      for (const child of ["", "<Probe>"]) {
+        const source = "<Output>" + leading + fence + child;
+        const output = leading === "" ? "" : leading + fence;
+        expect(preview(source)).toEqual({ output, incomplete: true });
+        expect(preview(source + (child === "" ? "" : "</Probe>") + "</Output>")).toEqual({
+          output,
+          incomplete: false,
+        });
+      }
+    }
+  });
+});
+
 describe("Tier GP — only settled meaning projects", () => {
   it("GP14: literal text projects and interpolation waits", function* () {
     expect(preview("<Output>Hello, {who}!</Output>").output).toBe("");
@@ -197,13 +214,27 @@ describe("Tier GP — only settled meaning projects", () => {
     expect(projected.incomplete).toBe(false);
   });
 
-  it("GP21: a passive fence that reads a binding waits, because expansion reads it", function* () {
-    // A fence is a text segment, and interpolation runs over text segments.
-    // Showing this brace would show a person something the finished root
-    // replaces.
-    const source = '<Output>\n```md\n<Each in={names} let="name">\n</Each>\n```\n</Output>';
+  it("GP21: a passive example projects all its literal references", function* () {
+    const body =
+      "\n```xmd\n<If condition={matches}>\n{source} {props.name} {meta.title}\n</If>\n```\n";
+    expect(preview("<Output>" + body + "</Output>")).toEqual({ output: body, incomplete: false });
+  });
 
-    expect(preview(source).output).toBe("");
+  it("GP21b: a longer fence quotes executable fences and Output tags", function* () {
+    const body = "\n````xmd\n```sh exec\necho {source}\n```\n<Output>{props.name}</Output>\n````\n";
+    expect(preview("<Output>" + body + "</Output>")).toEqual({ output: body, incomplete: false });
+  });
+
+  it("GP21c: mixed text withholds interpolated prose and projects settled fences", function* () {
+    const fence = "~~~xmd\n<If condition={matches}>{source} {props.name}</If>\n~~~\n";
+    expect(preview("<Output>before {source}\n" + fence + "after {props.name}</Output>")).toEqual({
+      output: fence,
+      incomplete: false,
+    });
+    expect(preview("<Output>before {source}\n~~~xmd\n{matches}")).toEqual({
+      output: "",
+      incomplete: true,
+    });
   });
 });
 

@@ -307,6 +307,23 @@ function* workspace(files: Record<string, string>): Operation<string> {
   return root;
 }
 
+describe("Tier DM — retained text context", () => {
+  it("DM1b: canonical retention keeps midline interpolation and passive source", function* () {
+    const source = [
+      '<Let as="source" value="CURRENT_1050" />',
+      '<Let as="prefix" value={0} />```xmd',
+      "{source}",
+      "```",
+      "",
+      "~~~xmd",
+      "{source}",
+      "~~~",
+    ].join("\n");
+    const output = yield* run("<Policy />", [declared(source)]);
+    expect(output).toBe("\n```xmd\nCURRENT_1050\n```\n\n~~~xmd\n{source}\n~~~");
+  });
+});
+
 describe("Tier DM — a declaration is held to its own bytes", () => {
   it("DM1: a declared name resolves to the declared source with no search path", function* () {
     expect(yield* run("<Policy />\n")).toContain("The policy ran.");

@@ -10,6 +10,7 @@ props:
     profile: {type: object}
     implementationProvider: {enum: [claude, codex]}
     inputs: {type: array, items: {type: object}}
+    maxResponseCorrections: {type: integer, minimum: 0, maximum: 3, default: 3}
   required: [assignment, role, session, attempt, raw, profile, implementationProvider, inputs]
   additionalProperties: false
 returns: {type: object}
@@ -54,6 +55,7 @@ returns: {type: object}
 </Ticket.Capture>
 <Let as="frozen" value={established === null ? null : {...(established.exactCorrection === undefined ? {} : {exactCorrection:established.exactCorrection}),assessment:assessmentValidation.status === "completed" ? established.assessment : null,outcome:established.outcome,revision:established.revision,summary:established.summary,artifacts:established.artifacts,evidence:established.evidence,findings:established.findings,blocker:established.blocker ?? null,contract:props.role === "architect" && props.assignment.phase === "discovery" ? established.contract ?? null : null,discoveryRequests:(established.discoveryRequests ?? []).filter(request => request.role === props.role),discoveryGaps:(established.discoveryGaps ?? []).filter(gap => gap.request.role === props.role)}} />
 <Loop max={3}>
+<If condition={round >= props.maxResponseCorrections}><Break /></If>
 <If condition={checked.ok}><Break /></If>
 <If condition={checked.rejection.terminal || frozen === null}><Break /></If>
 <Let as="round" value={round + 1} />
@@ -64,7 +66,7 @@ returns: {type: object}
 mkdir -- {quoted}
 ```
 <If condition={reserved.exitCode !== 0}><Fail message="A correction reservation is occupied or uncertain; preserve it and reconcile without another prompt." /></If>
-<Let as="packet" value={{schema:"phase-response-correction.v1",role:props.role,session:props.session,provider:roleProfile.provider,initialize:false,phase:props.assignment.phase,work:props.assignment.work,revision:props.assignment.revision,assignment:props.attempt + "/assignment.json",ordinal:round,remaining:3-round,raw:rawPath,rejectedText:raw,rejection:checked.rejection,resultSchema:schemas.result,profile:props.profile,established:frozen,report:props.profile.establishedPath ?? null,applied:props.profile.kind === "delivery-editorial" && established?.outcome === "pass" ? applied : null,references:[...new Set([...(props.assignment.artifacts ?? []),...props.inputs.map(input => input.path)])],permitted:"Only rejected syntax/schema/identity/routing/handoff/provenance metadata and an assessment that was missing or invalid; preserve any valid established assessment, substantive outcome, source and genuine evidence. Other owners' gaps stay referenced, not redeclared."}} />
+<Let as="packet" value={{schema:"phase-response-correction.v1",role:props.role,session:props.session,provider:roleProfile.provider,initialize:false,phase:props.assignment.phase,work:props.assignment.work,revision:props.assignment.revision,assignment:props.attempt + "/assignment.json",ordinal:round,remaining:props.maxResponseCorrections-round,raw:rawPath,rejectedText:raw,rejection:checked.rejection,resultSchema:schemas.result,profile:props.profile,established:frozen,report:props.profile.establishedPath ?? null,applied:props.profile.kind === "delivery-editorial" && established?.outcome === "pass" ? applied : null,references:[...new Set([...(props.assignment.artifacts ?? []),...props.inputs.map(input => input.path)])],permitted:"Only rejected syntax/schema/identity/routing/handoff/provenance metadata and an assessment that was missing or invalid; preserve any valid established assessment, substantive outcome, source and genuine evidence. Other owners' gaps stay referenced, not redeclared."}} />
 <If condition={JSON.stringify(packet).length > 64000}><Fail message="The correction packet exceeds 64000 characters; preserve the missing delivery fact without truncation or dispatch." /></If>
 <Dir path={directory}><File path="request.json"><Json value={packet} /></File><File path="diagnostic.json"><Json value={checked.rejection} /></File><File path="original-inputs.json"><Json value={props.inputs} /></File></Dir>
 <Let as="quotedAssignment" value={"'" + (props.attempt + "/assignment.json").replaceAll("'","'\"'\"'") + "'"} />
@@ -91,8 +93,8 @@ shasum -a 256 -- {quoted}/request.json {quoted}/diagnostic.json {quoted}/origina
 <If condition={!checked.ok}><Let as="diagnostics" value={[...diagnostics,directory + "/disposition.json"]} /></If>
 </Loop>
 <If condition={!checked.ok}>
-<Let as="code" value={round === 3 ? "response_correction_exhausted" : "response_correction_unestablished"} />
-<Dir path={props.attempt}><File path="response-disposition.json"><Json value={{status:"failed_without_result",dispatchable:false,code,consumed:round,limit:3,diagnostics,lastRejection:checked.rejection,substantiveEstablished:frozen !== null}} /></File></Dir>
+<Let as="code" value={props.maxResponseCorrections === 0 ? "response_correction_disabled" : round === props.maxResponseCorrections ? "response_correction_exhausted" : "response_correction_unestablished"} />
+<Dir path={props.attempt}><File path="response-disposition.json"><Json value={{status:"failed_without_result",dispatchable:false,code,consumed:round,limit:props.maxResponseCorrections,diagnostics,lastRejection:checked.rejection,substantiveEstablished:frozen !== null}} /></File></Dir>
 <Fail message={code + ": " + round + " corrections consumed; no canonical result or successor. Inspect " + props.attempt + "/response-disposition.json"} />
 </If>
 </If>
