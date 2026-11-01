@@ -32,7 +32,8 @@ import { installReplHost } from "../../../../src/repl-assembly.ts";
 import { resolveAgentStack } from "../../../../src/agent-stack.ts";
 import { assembleReplProfile } from "../../../../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../../../../src/repl-profile.ts";
-import { NO_PLUGINS } from "../../../../src/plugin-host.ts";
+import { installPlugins } from "../../../../src/plugin-host.ts";
+import type { Plugin } from "@executablemd/core/api";
 import { openReplSession } from "../../../../src/repl/session.ts";
 import type { ReplSession } from "../../../../src/repl/session.ts";
 import { admitted, filled, initialState } from "../../../../src/repl/application.ts";
@@ -113,6 +114,7 @@ export function* useHarness(
      * being admitted, and that interval is inside the entry's execution.
      */
     readonly entryInstallation?: ExecutionInstallation;
+    readonly plugins?: readonly Plugin[];
     readonly state?: (initial: ReplState) => ReplState;
     readonly acknowledge?: () => Operation<void>;
     /**
@@ -160,19 +162,23 @@ export function* useHarness(
     throw stack.error;
   }
   const workspace = pairedLocation(join(dataRoot, "repl"), execution.id).directory;
-  const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
-    acp: {
-      createRuntime: fake.create,
-      sessionStore: makeStore(),
-      agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+  const profile = yield* (yield* assembleReplProfile(
+    stack.value,
+    yield* installPlugins(extra.plugins ?? [], { command: "repl", args: [] }),
+    {
+      acp: {
+        createRuntime: fake.create,
+        sessionStore: makeStore(),
+        agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+      },
+      // The scripted agent, named to the profile rather than left to the
+      // environment: the Sidekick assembly is built with it, and a conversation
+      // opened under an agent this registry does not know would fail as an
+      // availability refusal rather than reaching the fake.
+      sidekickAgent: AGENT,
+      planWriterRoot: yield* useTemporary("xmd-sidekick-plan-"),
     },
-    // The scripted agent, named to the profile rather than left to the
-    // environment: the Sidekick assembly is built with it, and a conversation
-    // opened under an agent this registry does not know would fail as an
-    // availability refusal rather than reaching the fake.
-    sidekickAgent: AGENT,
-    planWriterRoot: yield* useTemporary("xmd-sidekick-plan-"),
-  })).finalize(workspace);
+  )).finalize(workspace);
 
   const opened = yield* openReplSession({
     execution,

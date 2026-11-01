@@ -2389,9 +2389,23 @@ more.
 A reply's own vocabulary and an entry's are described separately, because they
 differ: a construct that is ordinary in an entry can be unavailable in a reply.
 What a reply may write is the compact surface derived from what is admitted; what
-an entry may write is a read, answered from the same construction and renderer
-that answers on the command line, over this command's own includes and plugins.
-Describing a component neither resolves nor admits it.
+an entry may write is a read, using core's selection and renderer over the
+ordinary entry's current registry, finalized includes and host declarations.
+It does not enter the broader CLI run profile's testing, Verbose or web
+bootstrap. Each ask reads current session component files; Plugin selection is
+captured once per command, and another configured command describes its own
+selection. Earlier saved discovery stays historical feedback.
+
+Bare REPL.Syntax omits testing-package components absent from the ordinary
+profile and points to Markdown tests. Named lookup can describe those components
+with availability `no`, their package documentation, a complete test example and
+the supported REPL.Test invocation. Ordinary same-named components keep their
+usual precedence. Names absent from both contexts refuse, including a mixed
+request containing an unknown name; no partial documentation is returned.
+Availability means resolvable in the described ordinary entry, not authorized for
+every effect or guaranteed successful. Describing admits and authorizes nothing;
+reference-only registrations and middleware end with the ask. CLI xmd syntax
+and xmd run retain their run-profile assertion support.
 
 The host's facts are read where they are known. The working directory and the
 platform are contextual and read at the ask; the runtime, the build and the
