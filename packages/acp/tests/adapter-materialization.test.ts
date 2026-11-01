@@ -15,7 +15,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { all, ensure, spawn, until } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, FsApi, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -645,6 +645,118 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(yield* until(readFile(entry))).toEqual(
       yield* until(readFile(join(donorTree, "node_modules", CODEX_PACKAGE, "dist", "index.js"))),
     );
+  });
+
+  it("AM21: a recovery adopts a verified publication that wins after removal", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const winner = createEmbeddedAdapters(root);
+    const recovering = createEmbeddedAdapters(root);
+    yield* ensureDir(target);
+    yield* writeTextFile(join(target, "stale.txt"), "abandoned\n");
+
+    let removals = 0;
+    let winningBytes: Uint8Array | undefined;
+    yield* FsApi.around({
+      *rm([path, options], next) {
+        yield* next(path, options);
+        if (path === target) {
+          removals += 1;
+          expect(yield* exists(target)).toBe(false);
+          yield* winner.materialize("codex");
+          winningBytes = yield* until(readFile(winner.executablePath("codex")));
+          yield* writeTextFile(join(target, "winner"), "published by the other attempt\n");
+        }
+      },
+    });
+
+    yield* recovering.materialize("codex");
+
+    expect(removals).toBe(1);
+    expect(yield* until(readFile(recovering.executablePath("codex")))).toEqual(winningBytes);
+    expect(yield* exists(join(target, "winner"))).toBe(true);
+    expect(yield* exists(join(target, "stale.txt"))).toBe(false);
+    expect((yield* until(readdir(root))).sort()).toEqual([
+      digestOf("codex"),
+      `${digestOf("codex")}.claims`,
+    ]);
+    expect((yield* until(readdir(root))).filter((name) => name.startsWith(".staging-"))).toEqual(
+      [],
+    );
+    expect(yield* exists(join(`${target}.claims`, "0", "done"))).toBe(true);
+    yield* winner.materialize("codex");
+    expect(removals).toBe(1);
+  });
+
+  it("AM22: a recovery refuses an invalid publication that appears after removal", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const adapters = createEmbeddedAdapters(root);
+    yield* ensureDir(target);
+    yield* writeTextFile(join(target, "stale.txt"), "abandoned\n");
+
+    let removals = 0;
+    yield* FsApi.around({
+      *rm([path, options], next) {
+        yield* next(path, options);
+        if (path === target) {
+          removals += 1;
+          yield* ensureDir(join(target, "node_modules", CODEX_PACKAGE, "dist"));
+          yield* writeTextFile(adapters.executablePath("codex"), "not the recorded bytes\n");
+          yield* writeTextFile(
+            join(target, ".xmd-adapter"),
+            JSON.stringify({ snapshot: digestOf("codex"), content: "0".repeat(64) }),
+          );
+        }
+      },
+    });
+
+    const refused = yield* refusal(() => adapters.materialize("codex"));
+
+    expect(refused).toBeInstanceOf(Error);
+    expect(["EEXIST", "ENOTEMPTY"]).toContain(Reflect.get(Object(refused), "code"));
+    expect(removals).toBe(1);
+    expect(yield* until(readFile(adapters.executablePath("codex"), "utf8"))).toBe(
+      "not the recorded bytes\n",
+    );
+    expect((yield* until(readdir(root))).filter((name) => name.startsWith(".staging-"))).toEqual(
+      [],
+    );
+    expect(yield* exists(join(`${target}.claims`, "0", "done"))).toBe(true);
+  });
+
+  it("AM23: a recovery preserves an unrelated rename failure beside a valid winner", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const winner = createEmbeddedAdapters(root);
+    const recovering = createEmbeddedAdapters(root);
+    yield* ensureDir(target);
+    yield* writeTextFile(join(target, "stale.txt"), "abandoned\n");
+
+    yield* FsApi.around({
+      *rm([path, options], next) {
+        yield* next(path, options);
+        if (path === target) {
+          const staging = (yield* until(readdir(root))).filter((name) =>
+            name.startsWith(".staging-"),
+          );
+          expect(staging).toHaveLength(1);
+          yield* rm(join(root, staging[0]), { recursive: true, force: true });
+          yield* winner.materialize("codex");
+        }
+      },
+    });
+
+    const refused = yield* refusal(() => recovering.materialize("codex"));
+
+    expect(refused).toBeInstanceOf(Error);
+    expect(Reflect.get(Object(refused), "code")).toBe("ENOENT");
+    expect(yield* exists(winner.executablePath("codex"))).toBe(true);
+    expect((yield* until(readdir(root))).filter((name) => name.startsWith(".staging-"))).toEqual(
+      [],
+    );
+    expect(yield* exists(join(`${target}.claims`, "0", "done"))).toBe(true);
+    yield* winner.materialize("codex");
   });
 
   it("AM9: edited adapter bytes are refused rather than executed", function* () {

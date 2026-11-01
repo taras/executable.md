@@ -544,7 +544,16 @@ export function createEmbeddedAdapters(
           return;
         }
         yield* rm(target, { recursive: true, force: true });
-        yield* until(renamePath(staging, target));
+        try {
+          yield* until(renamePath(staging, target));
+        } catch (error) {
+          // Recovery excludes other recoveries, but a lock-free publication
+          // can win the gap between removal and rename.
+          const code = Reflect.get(Object(error), "code");
+          if ((code !== "EEXIST" && code !== "ENOTEMPTY") || !(yield* published(snapshot))) {
+            throw error;
+          }
+        }
         settled = true;
       });
     });
