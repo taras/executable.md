@@ -353,8 +353,17 @@ describe("C1 — the command line this REPL runs under", () => {
     expect(reached).toEqual([]);
     expect(settled.permissionMode).toBe("approve-reads");
     expect(settled.includes).toEqual([join(settled.projectCwd!, "components"), settled.projectCwd]);
-    expect(settled.installations).toHaveLength(1);
-    const own = settled.installations[0]!;
+    expect(
+      settled.installations.map((installation) => ({
+        components: (installation.components ?? []).map((component) => component.name),
+        declarations: (installation.declarations ?? []).map((declaration) => declaration.name),
+      })),
+    ).toEqual([
+      { components: ["XMD.Session", "XMD.Session.Shutdown"], declarations: [] },
+      { components: ["Session"], declarations: ["Plan"] },
+    ]);
+    expect(settled.installations[0]).toBe(settled.children?.installation);
+    const own = settled.installations[1]!;
     expect((own.declarations ?? []).map((declaration) => declaration.name)).toEqual(["Plan"]);
     expect(settled.generated).toEqual({
       File: ["self-closing", "paired"],
@@ -365,6 +374,8 @@ describe("C1 — the command line this REPL runs under", () => {
     });
     expect(Object.isFrozen(settled)).toBe(true);
     expect(Object.isFrozen(settled.installations)).toBe(true);
+    expect(Object.isFrozen(own)).toBe(true);
+    expect(Object.isFrozen(own.declarations)).toBe(true);
   });
 
   it("C1: each permission switch is the mode the profile carries", function* () {

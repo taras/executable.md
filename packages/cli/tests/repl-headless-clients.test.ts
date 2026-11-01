@@ -9,7 +9,7 @@ import { z } from "zod";
 import { exec } from "@effectionx/process";
 import { cliShellCommand } from "@executablemd/test-support/launch";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import process from "node:process";
 import { createPermissionBridge } from "../../acp/src/permission-bridge.ts";
 import { responseNotification } from "../src/headless/presentations.ts";
@@ -183,12 +183,7 @@ describe("headless child ACP clients", () => {
   it("H6/J4: stock ACPX displays the complete conditional question and capability refusal while the child stays pending", function* () {
     const held = yield* useHeadlessFixture();
     const home = yield* useTemporary("xmd-headless-stock-form-home-");
-    const stock = fileURLToPath(
-      new URL(
-        "../../../node_modules/.deno/acpx@0.21.1/node_modules/acpx/dist/cli.js",
-        import.meta.url,
-      ),
-    );
+    const stock = createRequire(new URL("../../acp/package.json", import.meta.url)).resolve("acpx");
     held.host.fake.script({
       reply: `<Elicit as="answer" schema={${JSON.stringify(conditional)}}>Stock actual conditional question.</Elicit>`,
     });
@@ -284,12 +279,7 @@ describe("headless child ACP clients", () => {
   it("J4: stock ACPX 0.21.1 receives an offered permission and records its own default policy", function* () {
     const held = yield* useHeadlessFixture();
     const home = yield* useTemporary("xmd-headless-stock-permission-home-");
-    const stock = fileURLToPath(
-      new URL(
-        "../../../node_modules/.deno/acpx@0.21.1/node_modules/acpx/dist/cli.js",
-        import.meta.url,
-      ),
-    );
+    const stock = createRequire(new URL("../../acp/package.json", import.meta.url)).resolve("acpx");
     held.host.fake.script({
       reply: entryResponse(
         '<Agent name="scribe"><Session name="native"><Prompt>Use the requested tool.</Prompt></Session></Agent>',
@@ -977,12 +967,7 @@ describe("headless child ACP clients", () => {
   it("H5/J4: stock ACPX 0.21.1 sends two actual prompts to the exact live child", function* () {
     const held = yield* useHeadlessFixture();
     const home = yield* useTemporary("xmd-headless-stock-home-");
-    const stock = fileURLToPath(
-      new URL(
-        "../../../node_modules/.deno/acpx@0.21.1/node_modules/acpx/dist/cli.js",
-        import.meta.url,
-      ),
-    );
+    const stock = createRequire(new URL("../../acp/package.json", import.meta.url)).resolve("acpx");
     const version = yield* exec("node", { arguments: [stock, "--version"] }).join();
     expect(version.stdout.trim()).toBe("0.21.1");
     const token = "retained-through-stock-two-prompts";
