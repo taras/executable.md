@@ -119,6 +119,10 @@ focused test fails, fix it and rerun it before creating the feedback commit.
 suite, and CI are not prerequisites for a feedback commit. Waiting for them
 withholds the commit the feedback exists to be given against.
 
+Assign independent reviewers the [Reviewer guide](.agents/reviewer.md), including
+its check that existing APIs and supported composition cannot satisfy the
+accepted behavior before introducing a new API.
+
 **Start Fable reviews without waiting for CI on `main` or the reviewed branch.**
 Review the exact feedback commit once its focused evidence is ready, including
 while CI is pending or red. Main health and the branch's required checks remain
