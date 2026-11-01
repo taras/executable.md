@@ -6,7 +6,7 @@ import { attachChildUi } from "../src/headless/ui.ts";
 import { ReplTerminal } from "../src/repl/terminal.ts";
 import { useReplScreen } from "../src/repl/screen.ts";
 import { Reply, SidekickTransport } from "../src/sidekick-acp/protocol.ts";
-import { applied, presentation } from "../src/headless/ui-schema.ts";
+import { applied, physical, presentation } from "../src/headless/ui-schema.ts";
 import { attachmentDescriptor, requestAttachment } from "../src/sidekick-acp/client.ts";
 import { useHeadlessFixture, START_CHILD, promptChild } from "./support/headless-repl.ts";
 import { recordingTerminal } from "./support/mounted-repl.ts";
@@ -191,9 +191,46 @@ describe("headless live UI", () => {
         }),
       );
     const terminal = recordingTerminal();
+    let holdSubmit: { row: number; column: number } | undefined;
+    const interceptedSubmit = withResolvers<z.infer<typeof physical>>();
+    const releaseSubmit = withResolvers<void>();
+    const deliveredSubmit = withResolvers<void>();
     const ui = yield* spawn(function* () {
       yield* terminal.install();
       yield* observeAppliedFrames(terminal.terminal, appliedFrames);
+      const transport = yield* SidekickTransport.expect();
+      yield* SidekickTransport.set({
+        ...transport,
+        *connect(path) {
+          const connected = yield* transport.connect(path);
+          const wire = connected.wire;
+          return {
+            ...connected,
+            wire: {
+              ...wire,
+              *send(value) {
+                const packet = physical.safeParse(value);
+                if (
+                  holdSubmit !== undefined &&
+                  packet.success &&
+                  packet.data.kind === "pointer" &&
+                  packet.data.at.row === holdSubmit.row &&
+                  packet.data.at.column === holdSubmit.column
+                ) {
+                  holdSubmit = undefined;
+                  interceptedSubmit.resolve(packet.data);
+                  console.log(JSON.stringify({ observation: "late-ui-press-held", packet: value }));
+                  yield* releaseSubmit.operation;
+                  yield* wire.send(value);
+                  deliveredSubmit.resolve();
+                } else {
+                  yield* wire.send(value);
+                }
+              },
+            },
+          };
+        },
+      });
       yield* attachChildUi(held.reference.sessionId);
     });
     yield* visible(terminal.terminal, "[answer sidekick]", appliedFrames);
@@ -248,11 +285,15 @@ describe("headless live UI", () => {
     yield* visible(terminal.terminal, "Enter answers", appliedFrames);
     yield* press(terminal.terminal, "( ) approve", appliedFrames);
     yield* visible(terminal.terminal, "(x) approve", appliedFrames);
-    // The UI's own old submission of this exact question, retained unsent:
-    // its physical submit control is located now, while the drawer still
-    // answers it, so the same coordinates can be pressed again once the
-    // embedded channel has already settled the request.
+    yield* press(terminal.terminal, "[submit]", appliedFrames);
+    yield* visible(terminal.terminal, "must have required property 'reason'", appliedFrames);
+    yield* visible(terminal.terminal, "Shared conditional question.", appliedFrames);
+    expect(held.root.session.elicitation.pending).toBe(pending);
     const retainedSubmit = yield* locate(terminal.terminal, "[submit]", appliedFrames);
+    holdSubmit = retainedSubmit;
+    pressAt(terminal.terminal, retainedSubmit);
+    const lateUiPacket = yield* interceptedSubmit.operation;
+    expect(lateUiPacket).toEqual({ kind: "pointer", at: retainedSubmit });
     expect(held.root.session.elicitation.pending).toBe(pending);
     expect(pending.submit({ decision: "approve", reason: "reviewed" }).kind).toBe("answered");
     const answered = yield* asking.value.join();
@@ -260,13 +301,23 @@ describe("headless live UI", () => {
       throw answered.error;
     }
     expect(held.root.session.elicitation.pending).toBeUndefined();
-    // The late UI submission: the same physical input the person would have
-    // sent, at the same coordinates, pressed only after the capable embedded
-    // answer already won. The original question is gone, so this has no
-    // successor to settle and no effect on the answer already returned.
+    yield* visible(terminal.terminal, "Shared question completed.", appliedFrames);
+    const joinedOutput = z.string().parse(answered.value);
+    const promptsBeforeLateUi = held.host.fake.prompts.length;
+    const questionsBeforeLateUi = held.root.session.elicitation.asked;
     const afterLate = terminal.terminal.drawn;
-    pressAt(terminal.terminal, retainedSubmit);
+    releaseSubmit.resolve();
+    yield* deliveredSubmit.operation;
     yield* terminal.terminal.after(afterLate);
+    expect(held.root.session.elicitation.pending).toBeUndefined();
+    expect(held.root.session.elicitation.asked).toBe(questionsBeforeLateUi);
+    expect(held.host.fake.prompts).toHaveLength(promptsBeforeLateUi);
+    expect(yield* asking.value.join()).toEqual(answered);
+    expect(joinedOutput).toContain("Shared question completed.");
+    expect(held.host.fake.prompts.at(-1)).toContain('"reason": "reviewed"');
+    const afterStaleTarget = terminal.terminal.drawn;
+    pressAt(terminal.terminal, retainedSubmit);
+    yield* terminal.terminal.after(afterStaleTarget);
     yield* visible(terminal.terminal, "Shared question completed.", appliedFrames);
     expect(terminal.terminal.screen?.rows().join("\n")).not.toContain("[submit]");
     expect(held.root.session.elicitation.pending).toBeUndefined();
@@ -325,6 +376,9 @@ describe("headless live UI", () => {
           requestId: address.requestId,
           invalidUiStayedPending: true,
           correctedEmbedded: true,
+          lateUiPacket,
+          lateUiDeliveredAfterJoin: true,
+          lateUiChangedAnswerOrSuccessor: false,
           stale: stale.event === "response" ? stale.outcome : stale.event,
         },
         permission: {

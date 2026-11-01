@@ -863,6 +863,14 @@ describe("headless child ACP clients", () => {
     release.resolve();
     const result = yield* joining;
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // The retained cause: the public result carries an `AgentPromptError`,
+      // but its message still names the exact `XmdResponse.parse` failure —
+      // the corrupted payload's own unrecognized "not" key — rather than a
+      // generic, unattributed failure.
+      expect(result.error.message).toContain("Unrecognized key");
+      expect(result.error.message).toContain('"not"');
+    }
     const status = z
       .object({ busy: z.boolean() })
       .passthrough()
@@ -871,10 +879,16 @@ describe("headless child ACP clients", () => {
     // Exactly the one asking prompt, and at most the child's own ordinary
     // automatic-feedback round over the answer it actually received — which
     // may or may not have been reached yet when the outer turn's own
-    // cancellation won the race against it — but never a resend of either.
+    // cancellation won the race against it. A resubmission of the original
+    // request, not merely a second prompt, is what would actually prove a
+    // resend — so check the one discriminator that tells them apart: no
+    // later prompt repeats the original request text.
     expect(held.host.fake.prompts.length).toBeGreaterThanOrEqual(1);
     expect(held.host.fake.prompts.length).toBeLessThanOrEqual(2);
     expect(held.host.fake.prompts[0]).toContain("Ask through the malformed B result.");
+    for (const later of held.host.fake.prompts.slice(1)) {
+      expect(later).not.toContain("Ask through the malformed B result.");
+    }
     yield* held.task.halt();
   });
   it("H6/J5: a lost B notification remains unknown through the ordinary terminal path, with no resend", function* () {
@@ -948,8 +962,12 @@ describe("headless child ACP clients", () => {
     // ordinary terminal path completes exactly once with no resend — the
     // second recorded prompt is the child's own ordinary automatic-feedback
     // round over the answer it actually received, not a retry of anything.
+    // A resend would repeat the original request text; a feedback round
+    // instead carries the answer — that is the discriminator, not the count.
     expect(notices.some((one) => one.type === "question_answer_result")).toBe(false);
     expect(held.host.fake.prompts).toHaveLength(2);
+    expect(held.host.fake.prompts[0]).toContain("Ask through a lost B notification.");
+    expect(held.host.fake.prompts[1]).not.toContain("Ask through a lost B notification.");
     yield* held.task.halt();
   });
   it("H5/J4: stock ACPX 0.21.1 sends two actual prompts to the exact live child", function* () {
