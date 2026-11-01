@@ -17,8 +17,8 @@
  *
  * ## Incomplete is not invalid
  *
- * `<Output>Hello` is the beginning of something; `<If condition={true}>
- * <Output>ok</Output></If>` is a finished thing the language does not allow. The
+ * `<Output>Hello` is the beginning of something; `<Output invalid>ok</Output>`
+ * is a finished thing the language does not allow. The
  * first waits, the second refuses, and conflating them would either hide a real
  * mistake behind "still arriving" or report a mistake about text that has not
  * been written yet. The scanner's own walk is what tells them apart — it is the
@@ -30,8 +30,8 @@
  * Everything before the first construct the scan could not finish is text the
  * scan committed, and it reads the same whether more arrives or not. From there
  * on it does not: an `<Output>` written inside an `<If>` that has not closed
- * looks like a top-level region until the `</If>` arrives and makes it a
- * misplaced one. So the projection ends there — with one exception, which is the
+ * depends on execution even when the `</If>` arrives. So the projection ends
+ * there — with one exception, which is the
  * case this whole module exists for: when the unfinished construct *is* a
  * top-level `<Output>` whose opening tag completed, the literal text already
  * inside it is exactly what the person should be reading.
@@ -39,7 +39,7 @@
  * ## Only text whose meaning is already settled
  *
  * A region's literal text projects. An expression, an interpolation and a
- * nested component do not — their meaning is what evaluation decides, and a
+ * component other than Output do not — their meaning is what evaluation decides, and a
  * preview that guessed would show the person something the finished root never
  * says. What is left out waits rather than being approximated.
  */
@@ -175,19 +175,23 @@ function unfinishedRegion(
     pending.contentStart,
   );
   const first = earliest(unfinished);
+  const tail = unfinishedRegion(content, first);
   return {
-    output: literal(
-      first === undefined
-        ? segments
-        : scanSegments(
-            content.slice(0, first.start),
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            pending.contentStart,
-          ),
-    ),
+    output:
+      literal(
+        first === undefined
+          ? segments
+          : scanSegments(
+              content.slice(0, first.start),
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              pending.contentStart,
+            ),
+        true,
+      ) + (tail?.output ?? ""),
+    violation: tail?.violation,
   };
 }
 
@@ -251,16 +255,23 @@ function regions(segments: readonly Segment[]): { element: ComponentElement }[] 
  * ordinary text to the scanner and projects as the literal example it is, which
  * is why a tag written inside one creates no region.
  */
-function literal(segments: readonly Segment[]): string {
+function literal(segments: readonly Segment[], unfinished = false): string {
   let text = "";
   for (const segment of segments) {
-    if (segment.type === "text") {
-      text += readsBinding(segment)
-        ? splitTextFences(segment)
-            .filter((slice) => slice.passive)
-            .map((slice) => slice.content)
-            .join("")
-        : segment.content;
+    if (segment.type === "component" && segment.name === "Output") {
+      text += literal(segment.children);
+    } else if (segment.type === "text") {
+      const pendingBinding =
+        unfinished &&
+        segment === segments.at(-1) &&
+        readsBinding({ ...segment, content: segment.content + "}" });
+      text +=
+        readsBinding(segment) || pendingBinding
+          ? splitTextFences(segment)
+              .filter((slice) => slice.passive)
+              .map((slice) => slice.content)
+              .join("")
+          : segment.content;
     }
   }
   return text;

@@ -1763,12 +1763,6 @@ interface Lexical {
    * Whether the next segment is written as a direct child of the source's own
    * top level.
    *
-   * What decides whether a root's `<Output>` is a declaration or a misplaced
-   * element, and the same lexical question `validateOutputStructure()` answers
-   * for an authored body: only a direct top-level child declares a region. It
-   * is false everywhere inside anything — a construct's branches, a loop body, a
-   * component's children — because none of those is the top level, whatever runs
-   * there.
    */
   readonly topLevel: boolean;
 }
@@ -1883,7 +1877,7 @@ function* structural(
     // props rule is that body's as well, read from the same function rather
     // than restated, because `<Output>` accepting a prop here and refusing one
     // there would be two contracts.
-    if (lexical.language !== "root" || !lexical.topLevel) {
+    if (lexical.language !== "root") {
       throw new Refusal("structure");
     }
     if (outputPropsViolation(segment) !== undefined) {
@@ -2382,7 +2376,7 @@ function expand(
     const path = extendPath("", { f: "gen", id });
     const counter = createBlockCounter();
     if (language === "root" && bodyHasOutput(segments)) {
-      // A root declaring top-level `<Output>` selects what renders, and
+      // A root declaring `<Output>` selects what renders, and
       // selecting needs the whole body: `expandBody` executes the
       // documentation around the regions and emits the regions, exactly as the
       // document root does, so one rule decides what a root renders.

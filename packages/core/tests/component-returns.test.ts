@@ -1028,9 +1028,9 @@ describe("Tier RV — component return values", () => {
           "",
           BODY_EFFECT,
           "",
-          "<Output>",
+          "<If condition={false}><Output>",
           "text",
-          "</Output>",
+          "</Output></If>",
           "",
           '<Return value="one" />',
           "",
@@ -1409,5 +1409,23 @@ describe("Tier RV — component return values", () => {
         "shipped",
       );
     });
+  });
+});
+
+describe("993 value invocation privacy", () => {
+  it("W5: a value body requesting caller text does not select the outer source", function* () {
+    const result = yield* run({
+      "doc.md": 'docs<Value as="held"><Output>private</Output></Value>',
+      "Value.md": '---\nreturns: { type: string }\n---\n<Content /><Return value="answer" />',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.output).toBe("");
+  });
+  it("W5: a value root refuses nested declarations before its first effect", function* () {
+    const result = yield* run({
+      "doc.md": `---\nreturns: { type: string }\n---\n${BODY_EFFECT}\n<If condition={false}><Output /></If><Return value="answer" />`,
+    });
+    expect(said(result)).toContain("exclusive");
+    expect(result.commands).toEqual([]);
   });
 });

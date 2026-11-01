@@ -239,14 +239,35 @@ describe("Tier GP — only settled meaning projects", () => {
 });
 
 describe("Tier GP — invalid source is refused, and says nothing of the prefix", () => {
-  it("GP23: a region written below the top level is refused once it is whole", function* () {
-    expect(refused("<If condition={true}>\n<Output>ok</Output>\n</If>\n")).toContain(
-      "top-level child",
-    );
+  it("GP23/W10: executable ancestors withhold nested declarations even for true", function* () {
+    for (const source of [
+      "<If condition={true}><Output>hidden</Output></If>",
+      "<Each items={[1]}><Output>hidden</Output></Each>",
+      '<Dir path="x"><Output>hidden</Output></Dir>',
+      "<Wrap><Output>hidden</Output></Wrap>",
+      "<Content><Output>hidden</Output></Content>",
+      "<All><Spawn><Output>hidden</Output></Spawn><Spawn>x</Spawn></All>",
+    ]) {
+      for (let end = 0; end <= source.length; end += 1) {
+        expect(preview(source.slice(0, end)).output).toBe("");
+      }
+      expect(preview(source).incomplete).toBe(false);
+    }
   });
 
-  it("GP24: a region nested inside another is refused", function* () {
-    expect(refused("<Output>outer <Output>inner</Output></Output>")).toContain("top-level child");
+  it("W10: an unfinished nested interpolation waits for its value", function* () {
+    expect(preview("<Output>A<Output>{computed")).toEqual({ output: "A", incomplete: true });
+    expect(preview("<Output>A<Output>{computed}</Output>C</Output>")).toEqual({
+      output: "AC",
+      incomplete: false,
+    });
+  });
+
+  it("GP24/W10: unconditional directly nested Output contributes once", function* () {
+    expect(preview("<Output>A<Output>B</Output>C</Output>")).toEqual({
+      output: "ABC",
+      incomplete: false,
+    });
   });
 
   it("GP25: a <Return> is refused, because a root declares no returns", function* () {
@@ -261,13 +282,14 @@ describe("Tier GP — invalid source is refused, and says nothing of the prefix"
   it("GP27: an invalid region is refused rather than reported incomplete", function* () {
     // The same text that refuses whole stays a refusal: this is not a prefix
     // waiting for more input.
-    const whole = previewGeneratedXmdRoot("<Output>outer <Output>inner</Output></Output>");
+    const whole = previewGeneratedXmdRoot("<Output>outer <Output invalid>inner</Output></Output>");
     expect(whole.ok).toBe(false);
   });
 });
 
 describe("Tier GP — the transport's boundaries do not decide the answer", () => {
   const STREAMED = [
+    "<Output>A<Output>B</Output>C</Output>",
     "<Output>\nHello, world!\n</Output>\n",
     '<Probe value={{ "name": "Ada" }} />\n\n<Output>done</Output>\n',
     "<Output>\n```md\n<Output>example</Output>\n```\n</Output>\n",

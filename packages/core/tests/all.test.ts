@@ -19,7 +19,7 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { race, resource, scoped, sleep, spawn, withResolvers } from "effection";
+import { ensure, race, resource, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { createDurableOperation, ephemeral, InMemoryStream } from "@executablemd/durable-streams";
 import type {
@@ -37,6 +37,7 @@ import type { GeneratedObservation, GeneratedFragmentRequest } from "../src/gene
 import type { DurablePreparation, ExecutionInstallation } from "../host.ts";
 import { forEach } from "@effectionx/stream-helpers";
 import { collect } from "../src/collect.ts";
+import { DocumentOutput } from "../src/api.ts";
 import { Component, retain } from "../src/component-api.ts";
 import { getExpansion } from "../src/expansion.ts";
 import { retainedSource } from "../src/root-source.ts";
@@ -478,8 +479,8 @@ describe("Tier ALL — PA2: durable identity follows the source", () => {
     // child and a replay has nothing else to read the disposition from.
     expect(new Map(childCloseValues(result.events))).toEqual(
       new Map([
-        ["root.1", [{ text: "[two]", exact: false }]],
-        ["root.0", [{ text: "[one]", exact: false }]],
+        ["root.1", { runs: [{ text: "[two]", exact: false, selection: [] }] }],
+        ["root.0", { runs: [{ text: "[one]", exact: false, selection: [] }] }],
       ]),
     );
   });
@@ -1670,4 +1671,364 @@ describe("Tier PA10c — nesting and replay with ordinary Sessions", () => {
     expect(partial.output).toBe(first.output);
     expect(prompts(partial.events).map((entry) => entry.coroutineId)).toEqual(["root.0", "root.1"]);
   });
+});
+
+describe("993 retained source selection", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  const reply =
+    '---\nprops:\n  name: { type: string, default: "" }\n---\n<Output><All><Spawn><Ready name={props.name} as="ready" /><If condition={ready}><Content /></If>{props.name}same</Spawn><Spawn>suffix</Spawn></All></Output>';
+
+  function ready(value: (name: string) => boolean, calls: string[]): Operation<void> {
+    return registerComponents([
+      {
+        name: "Ready",
+        origin: "993",
+        props: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+          additionalProperties: false,
+        },
+        *fn(props) {
+          const name = String(props.name);
+          calls.push(name);
+          return value(name);
+        },
+      },
+    ]);
+  }
+
+  function beforeRootClose(events: DurableEvent[], children: number): DurableEvent[] {
+    const at = events.findIndex((event) => event.type === "close" && event.coroutineId === "root");
+    expect(at).toBeGreaterThan(0);
+    const prefix = events.slice(0, at);
+    expect(prefix.filter((event) => event.type === "close")).toHaveLength(children);
+    expect(prefix.some((event) => event.type === "close" && event.coroutineId === "root")).toBe(
+      false,
+    );
+    return prefix;
+  }
+
+  for (const selected of [true, false]) {
+    it(`W7-R: restores caller-owned reached-empty=${selected} after both child closes without body work`, function* () {
+      const source = "Documentation.<Reply><Output /></Reply>";
+      const calls: string[] = [];
+      const first = yield* run(source, {
+        files: { "components/Reply.md": reply },
+        install: () => ready(() => selected, calls),
+      });
+      expect(first.ok).toBe(true);
+      expect(calls).toEqual([""]);
+      expect(first.output).toBe(selected ? "samesuffix" : "");
+      const saved = childCloseValues(first.events).map(([, value]) => value);
+      expect(saved).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runs: expect.arrayContaining([
+              expect.objectContaining({ text: "suffix", exact: false }),
+            ]),
+          }),
+          expect.objectContaining({
+            runs: expect.arrayContaining([expect.objectContaining({ text: "same", exact: false })]),
+          }),
+        ]),
+      );
+      const serialized = JSON.stringify(saved);
+      const firstChild = childCloseValues(first.events).find(([id]) => id === "root.0")?.[1];
+      if (
+        firstChild === undefined ||
+        firstChild === null ||
+        Array.isArray(firstChild) ||
+        typeof firstChild !== "object" ||
+        !Array.isArray(firstChild.runs)
+      ) {
+        throw new Error("missing current child runs");
+      }
+      expect(
+        firstChild.runs
+          .map((run) =>
+            typeof run === "object" && run !== null && !Array.isArray(run) ? run.text : "",
+          )
+          .join(""),
+      ).toBe("same");
+      expect(
+        firstChild.runs.every(
+          (run) =>
+            typeof run === "object" && run !== null && !Array.isArray(run) && run.exact === false,
+        ),
+      ).toBe(true);
+      expect(serialized.includes('"selection":[')).toBe(true);
+      expect(
+        firstChild.runs.some(
+          (run) =>
+            typeof run === "object" &&
+            run !== null &&
+            !Array.isArray(run) &&
+            Array.isArray(run.selection) &&
+            run.selection.length > 1,
+        ),
+      ).toBe(selected);
+      const prefix = beforeRootClose(first.events, 2);
+      const resumedCalls: string[] = [];
+      const replayed = yield* run(source, {
+        files: { "components/Reply.md": reply },
+        stream: new InMemoryStream(prefix),
+        install: () =>
+          ready(() => {
+            throw new Error("completed child executed");
+          }, resumedCalls),
+      });
+      expect(replayed.ok).toBe(true);
+      expect(replayed.output).toBe(first.output);
+      expect(resumedCalls).toEqual([]);
+      expect(childCloseValues(replayed.events)).toEqual(childCloseValues(first.events));
+    });
+  }
+
+  it("W7-R correction: string-projected empty caller selection survives completed Spawn replay", function* () {
+    const source = "Documentation.<Reply><Output /></Reply>";
+    const body = [
+      "<Output><All><Spawn>",
+      "```ts eval",
+      "const projected = yield* renderChildren();",
+      "output(projected);",
+      "```",
+      "same</Spawn><Spawn>suffix</Spawn></All></Output>",
+    ].join("\n");
+    let liveEvals = 0;
+    const live = yield* run(source, {
+      files: { "components/Reply.md": body },
+      *install() {
+        yield* Component.around({
+          *applyModifiers([modifiers, context], next) {
+            liveEvals++;
+            return yield* next(modifiers, context);
+          },
+        });
+      },
+    });
+    expect(live.ok).toBe(true);
+    expect(live.output).toBe("\nsamesuffix");
+    expect(liveEvals).toBe(1);
+    const prefix = beforeRootClose(live.events, 2);
+    expect(closes(prefix)).toEqual(
+      expect.arrayContaining([
+        { id: "root.0", status: "ok" },
+        { id: "root.1", status: "ok" },
+      ]),
+    );
+    let replayEvals = 0;
+    const replay = yield* run(source, {
+      files: { "components/Reply.md": body },
+      stream: new InMemoryStream(prefix),
+      *install() {
+        yield* Component.around({
+          *applyModifiers() {
+            replayEvals++;
+            throw new Error("completed Spawn eval executed during replay");
+          },
+        });
+      },
+    });
+    expect(replay.ok).toBe(true);
+    expect(replay.output).toBe(live.output);
+    expect(replayEvals).toBe(0);
+    expect(childCloseValues(replay.events)).toEqual(childCloseValues(live.events));
+    const child = childCloseValues(live.events).find(([id]) => id === "root.0")?.[1];
+    const sibling = childCloseValues(live.events).find(([id]) => id === "root.1")?.[1];
+    if (
+      child === undefined ||
+      child === null ||
+      Array.isArray(child) ||
+      typeof child !== "object" ||
+      !Array.isArray(child.runs) ||
+      sibling === undefined ||
+      sibling === null ||
+      Array.isArray(sibling) ||
+      typeof sibling !== "object" ||
+      !Array.isArray(sibling.runs)
+    ) {
+      throw new Error("missing retained Spawn runs");
+    }
+    const runs = child.runs.flatMap((run) =>
+      run !== null && !Array.isArray(run) && typeof run === "object" ? [run] : [],
+    );
+    expect(runs.map((run) => run.text).join("")).toBe("\nsame");
+    expect(runs.every((run) => run.exact === false)).toBe(true);
+    const calleeSources = new Set(
+      sibling.runs.flatMap((run) =>
+        run !== null &&
+        !Array.isArray(run) &&
+        typeof run === "object" &&
+        Array.isArray(run.selection)
+          ? run.selection
+          : [],
+      ),
+    );
+    expect(
+      runs.some(
+        (run) =>
+          Array.isArray(run.selection) &&
+          run.selection.some((source) => !calleeSources.has(source)),
+      ),
+    ).toBe(true);
+  });
+
+  it("W7-R: repeated executions of one definition retain only A's caller selection", function* () {
+    const source =
+      'Documentation.<Reply name="A"><Output /></Reply><Reply name="B"><Output /></Reply>';
+    const calls: string[] = [];
+    const first = yield* run(source, {
+      files: { "components/Reply.md": reply },
+      install: () => ready((name) => name === "A", calls),
+    });
+    expect(first.ok).toBe(true);
+    expect(calls).toEqual(["A", "B"]);
+    expect(first.output).toBe("Asamesuffix");
+    const prefix = beforeRootClose(first.events, 4);
+    const replayed = yield* run(source, {
+      files: { "components/Reply.md": reply },
+      stream: new InMemoryStream(prefix),
+      install: () =>
+        ready(() => {
+          throw new Error("completed child executed");
+        }, []),
+    });
+    expect(replayed.ok).toBe(true);
+    expect(replayed.output).toBe("Asamesuffix");
+    expect(childCloseValues(replayed.events)).toEqual(childCloseValues(first.events));
+  });
+
+  it("W7: nested declarations stay private until the ordered all-success join", function* () {
+    const first = harness();
+    const emitted: string[] = [];
+    yield* DocumentOutput.around({
+      *output([text], next) {
+        emitted.push(text);
+        return yield* next(text);
+      },
+    });
+    const source =
+      '<All><Spawn>docs<If condition={true}><Output><Gate name="one" /></Output></If></Spawn><Spawn>docs<If condition={true}><Output><Gate name="two" /></Output></If></Spawn></All>';
+    const result = yield* run(source, {
+      shared: first,
+      *drive(shared) {
+        yield* shared.arrival("one");
+        yield* shared.arrival("two");
+        shared.release("two");
+        yield* shared.append("two");
+        expect(emitted).toEqual([]);
+        shared.release("one");
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe("[one][two]");
+    expect(gateOrder(result.events)).toEqual(["two", "one"]);
+    const prefix = beforeRootClose(result.events, 2);
+    const replayed = yield* run(source, { stream: new InMemoryStream(prefix), shared: harness() });
+    expect(replayed.output).toBe(result.output);
+  });
+
+  it("K1: an obsolete consumed child payload refuses without replaying work or publishing buffers", function* () {
+    const source =
+      '<All><Spawn><Ready name="one" as="held" />same</Spawn><Spawn>suffix</Spawn></All><Probe name="later" />';
+    const first = yield* run(source, { install: () => ready(() => true, []) });
+    expect(first.ok).toBe(true);
+    const lastChild = first.events.reduce(
+      (last, event, index) =>
+        event.type === "close" && event.coroutineId !== "root" ? index : last,
+      -1,
+    );
+    const seed = first.events.slice(0, lastChild + 1);
+    const original = JSON.stringify(seed);
+    const corrupt: DurableEvent[] = seed.map((event) =>
+      event.type === "close" && event.coroutineId === "root.0"
+        ? { ...event, result: { status: "ok", value: [{ text: "same", exact: false }] } }
+        : event,
+    );
+    const shared = harness();
+    const replayed = yield* run(source, {
+      shared,
+      stream: new InMemoryStream(corrupt),
+      install: () =>
+        ready(() => {
+          throw new Error("completed child executed");
+        }, []),
+    });
+    expect(replayed.ok).toBe(false);
+    expect(replayed.failure).toContain("retained close cannot be read");
+    expect(replayed.output).toBe("");
+    expect(shared.ran).toEqual([]);
+    expect(JSON.stringify(seed)).toBe(original);
+    expect(replayed.events).toEqual(corrupt);
+  });
+});
+
+describe("993 nested Spawn joined cleanup", () => {
+  for (const cancel of [false, true]) {
+    it(`W7: ${cancel ? "parent cancellation" : "child failure"} waits for held sibling cleanup without publication`, function* () {
+      const shared = harness();
+      const cleanup = signal();
+      const releaseCleanup = signal();
+      const stream = new InMemoryStream();
+      let settled = false;
+      const install = function* () {
+        yield* registerComponents([
+          {
+            name: "Held",
+            origin: "993",
+            props: NO_PROPS,
+            *fn() {
+              yield* retain(() =>
+                resource(function* (provide) {
+                  yield* ensure(function* () {
+                    cleanup.publish();
+                    yield* awaiting("cleanup release", releaseCleanup.published);
+                  });
+                  yield* provide(undefined);
+                }),
+              );
+              shared.announce("held");
+              yield* suspend();
+              return "unreachable";
+            },
+          },
+        ]);
+      };
+      const source =
+        '<All><Spawn><Output>private-one<Fail name="bad" /></Output></Spawn><Spawn><Output>private-two<Held /></Output></Spawn></All><Probe name="later" />';
+      const task = yield* spawn(function* () {
+        const result = yield* run(source, { shared, stream, install });
+        settled = true;
+        return result;
+      });
+      yield* shared.arrival("bad");
+      yield* shared.arrival("held");
+      const stopping = cancel ? yield* spawn(() => task.halt()) : undefined;
+      if (!cancel) {
+        shared.release("bad");
+      }
+      yield* awaiting("sibling cleanup", cleanup.published);
+      expect(settled).toBe(false);
+      expect(
+        stream.snapshot().some((event) => event.type === "close" && event.coroutineId === "root"),
+      ).toBe(false);
+      expect(shared.ran).not.toContain("probe:later");
+      releaseCleanup.publish();
+      if (stopping !== undefined) {
+        yield* stopping;
+        expect(
+          closes(stream.snapshot())
+            .filter((entry) => entry.id.startsWith("root."))
+            .every((entry) => entry.status === "cancelled"),
+        ).toBe(true);
+      } else {
+        const result = yield* task;
+        expect(result.ok).toBe(false);
+        expect(result.output).toBe("");
+        expect(result.failure).toContain("FAILED:bad");
+      }
+    });
+  }
 });
