@@ -1122,10 +1122,11 @@ function pushText(segments: Segment[], text: string, start: number, end = text.l
   }
 
   const segment: TextSegment = { type: "text", content };
-  // A tag can end mid-line; detaching its following text must not turn an
-  // inline span into a fence. This lexical fact stays outside the public IR.
+  // Retained definitions use structuredClone; this lexical fact must travel
+  // with their text so the canonical copy keeps the authored line context.
   Object.defineProperty(segment, TEXT_LINE_START, {
     value: start === 0 || text[start - 1] === "\n",
+    enumerable: true,
   });
   segments.push(segment);
 }
