@@ -280,7 +280,7 @@ describe("1048 — generated retained output", () => {
         }
       }
     }
-    expect([...seen].toSorted()).toEqual([...sentinels].toSorted());
+    expect([...seen].sort()).toEqual([...sentinels].sort());
     yield* page.resize(WIDE);
     yield* page.type("!");
     yield* page.until("the saved middle Message caret", (one) => one.shows("ab!界"));
