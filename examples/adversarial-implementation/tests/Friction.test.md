@@ -36,6 +36,85 @@ git rev-parse HEAD
 </TempDir>
 </Test>
 
+<Test name="the phase response limit preserves valid replies and bounds repair prompts" timeout="60s">
+  <Each in={[
+    {limit:0,request:"inspect",corrections:0,accepted:true},
+    {limit:0,request:"oversized-summary",corrections:0,accepted:false},
+    {limit:1,request:"oversized-summary",corrections:1,accepted:true},
+    {limit:null,request:"oversized-summary",corrections:1,accepted:true},
+    {limit:1,request:"uncorrectable-summary",corrections:1,accepted:false},
+    {limit:null,request:"uncorrectable-summary",corrections:3,accepted:false}
+  ]} let="scenario">
+    <TempDir>
+      <Fixture.Repository as="fixture" />
+      <Dir path={fixture.repository}>
+```bash exec as="observed"
+git rev-parse HEAD
+```
+      </Dir>
+      <Let as="attempt" value={fixture.root + "/limited-review"} />
+      <Let as="assignment" value={{phase:"review",work:"test",repository:fixture.repository,revision:observed.stdout.trim(),priorRevision:null,request:scenario.request,changedPaths:[],artifacts:[],evidence:[],findings:[],assessment,continuation:{phase:"ready",role:null}}} />
+      <Fixture.Entry entry="phase" value={{role:"planner",session:"original-planner",assignment,attempt,...(scenario.limit === null ? {} : {maxResponseCorrections:scenario.limit})}} command={runner} root={root} as="child" />
+      <AssertEquals actual={child.exitCode === 0} expected={scenario.accepted} />
+      <Dir path={attempt}>
+        <Glob include={["response-corrections/**/called.json"]} as="repairs" />
+        <Glob include={["result.json","response-acceptance.json"]} as="acceptedFiles" />
+      </Dir>
+      <AssertEquals actual={repairs.length} expected={scenario.corrections} />
+      <AssertEquals actual={acceptedFiles.length} expected={scenario.accepted ? 2 : 0} />
+      <Ticket.Text path={attempt + "/called.json"} as="calledText" />
+      <Parse schema={{type:"object"}} as="called">{calledText}</Parse>
+      <AssertEquals actual={called.session} expected="original-planner" />
+      <Ticket.Text path={attempt + "/raw.txt"} as="raw" />
+      <If condition={scenario.request !== "inspect"}>
+        <AssertStringIncludes actual={raw} expected={"x".repeat(1201)} />
+      </If>
+      <If condition={scenario.corrections > 0}>
+        <Ticket.Text path={attempt + "/response-corrections/0001/called.json"} as="repairText" />
+        <Parse schema={{type:"object"}} as="repair">{repairText}</Parse>
+        <AssertEquals actual={repair.session} expected="original-planner" />
+        <AssertEquals actual={repair.initialize} expected={false} />
+        <AssertEquals actual={repair.remaining} expected={(scenario.limit ?? 3) - 1} />
+      </If>
+      <If condition={scenario.accepted}>
+        <Parse schema={{type:"object"}} as="result">{child.stdout}</Parse>
+        <AssertEquals actual={result.revision} expected={assignment.revision} />
+      <Else>
+        <Ticket.Text path={attempt + "/response-rejection-0000.json"} as="rejection" />
+        <Parse schema={{type:"object"}} as="rejected">{rejection}</Parse>
+        <AssertEquals actual={rejected.code} expected="schema" />
+        <Ticket.Text path={attempt + "/response-disposition.json"} as="dispositionText" />
+        <Parse schema={{type:"object"}} as="disposition">{dispositionText}</Parse>
+        <AssertEquals actual={disposition.code} expected={scenario.limit === 0 ? "response_correction_disabled" : "response_correction_exhausted"} />
+        <AssertEquals actual={disposition.consumed} expected={scenario.corrections} />
+        <AssertEquals actual={disposition.limit} expected={scenario.limit ?? 3} />
+        <AssertEquals actual={disposition.dispatchable} expected={false} />
+      </Else>
+      </If>
+    </TempDir>
+  </Each>
+</Test>
+
+<Test name="invalid response limits refuse before reserving an attempt or calling a role" timeout="60s">
+  <TempDir>
+    <Fixture.Repository as="fixture" />
+    <Each in={[-1,0.5,4,"0"]} let="limit">
+      <Let as="attempt" value={fixture.root + "/never-started"} />
+      <Fixture.Entry entry="phase" value={{role:"planner",session:"never-called",assignment:{},attempt,maxResponseCorrections:limit}} command={runner} root={root} as="child" />
+      <AssertEquals actual={child.exitCode === 0} expected={false} />
+      <Ticket.Capture as="refused">
+        <Phase.Run phase="review" role="planner" session="never-called"
+          assignment={{}} attempt={attempt} maxResponseCorrections={limit}
+          successor="ready" as="unexpected" />
+      </Ticket.Capture>
+      <AssertEquals actual={refused.status} expected="failed" />
+      <AssertStringIncludes actual={refused.failure} expected="maxResponseCorrections" />
+      <Dir path={fixture.root}><Glob include={["never-started/**"]} as="effects" /></Dir>
+      <AssertEquals actual={effects} expected={[]} />
+    </Each>
+  </TempDir>
+</Test>
+
 <Test name="response correction freezes canonical evidence and still rejects substantive changes" timeout="60s">
 <TempDir>
 <Fixture.Repository as="fixture" />
