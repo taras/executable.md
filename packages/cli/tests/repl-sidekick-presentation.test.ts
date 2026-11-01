@@ -85,6 +85,29 @@ describe("987 — mounted original recovery", () => {
     expect(page.screen().shows("Type here")).toBe(true);
   }
 
+  it("keeps recovery closed through healthy idle and running work, and removes the action on an exact completed match", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    expect(page.screen().shows("Review recovery")).toBe(false);
+    expect(page.screen().shows("[review recovery]")).toBe(false);
+    page.repl.fake.script({ reply: "<REPL.Bindings />", held: true });
+    page.repl.fake.script({ reply: "<Output>Healthy completed match.</Output>", held: true });
+    yield* sendMessage(page, "An ordinary healthy request.");
+    yield* page.repl.fake.holdingTurns(1);
+    expect(page.screen().shows("Review recovery")).toBe(false);
+    expect(page.screen().shows("[review recovery]")).toBe(false);
+    page.repl.fake.releaseTurn();
+    yield* page.repl.fake.startedTurns(2);
+    yield* page.repl.fake.holdingTurns(1);
+    yield* page.until("the ordinary feedback turn running", (one) => one.shows("[stop]"));
+    expect(page.screen().shows("Review recovery")).toBe(false);
+    page.repl.fake.releaseTurn();
+    yield* page.until(
+      "the healthy feedback completing",
+      (one) => sidekickIdle(one) && one.shows("Healthy completed match."),
+    );
+    expect(page.screen().shows("Review recovery")).toBe(false);
+    expect(page.screen().shows("[review recovery]")).toBe(false);
+  });
   it("routes recovery edits and Close without changing either owner's held form values", function* () {
     const page = yield* useReplPage({ size: WIDE });
     yield* draftText(page, "A retained entry draft.");
@@ -216,6 +239,43 @@ describe("987 — mounted original recovery", () => {
     expect(page.repl.fake.prompts).toHaveLength(2);
     expect(page.screen().shows("Independent entry question.")).toBe(true);
   });
+  it("closes a completed recovery after edits during its new prompt and retains newer values", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    page.repl.fake.script({ reply: "<REPL.Bindings />" });
+    page.repl.fake.script({ reply: "", failure: "Internal error" });
+    yield* sendMessage(page, "Inspect established work.");
+    yield* page.until("unresolved feedback", (one) => one.shows("[review recovery]"));
+    yield* draftFromComposer(page);
+    yield* typed(page, "A held Draft.");
+    yield* intoComposer(page);
+    yield* typed(page, "A held Message.");
+    yield* page.press("[review recovery]");
+    yield* page.until("the account", (one) =>
+      one.shows("Earlier feedback acceptance remains unknown."),
+    );
+    yield* typed(page, "The authorized instruction.");
+    page.repl.fake.script({ reply: "<Output>Recovery completed once.</Output>", held: true });
+    yield* page.press("[continue with new instruction]");
+    yield* page.repl.fake.holdingTurns(1);
+    yield* page.press("New instruction:");
+    yield* page.type("A newer unused instruction.");
+    yield* page.until("the newer instruction suffix", (one) =>
+      one.rows.some(
+        (row) => row.includes("New instruction:") && row.trimEnd().endsWith("unused instruction."),
+      ),
+    );
+    page.repl.fake.releaseTurn();
+    yield* page.until(
+      "the completed recovery drawer closing",
+      (one) => !one.shows("Review recovery") && one.shows("Recovery completed once."),
+    );
+    expect(page.screen().shows("[review recovery]")).toBe(false);
+    expect(draftHolds(page.screen(), "A held Draft.")).toBe(true);
+    expect(composerHolds(page.screen(), "A held Message.")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(3);
+    expect(page.repl.fake.prompts[2]).toContain("The authorized instruction.");
+    expect(page.repl.fake.prompts[2]).not.toContain("A newer unused instruction.");
+  });
   for (const change of ["instruction", "action"]) {
     it(`refuses stale held preparation after changing the ${change} without losing edits`, function* () {
       const gate = appendGate();
@@ -246,7 +306,18 @@ describe("987 — mounted original recovery", () => {
         })(),
       ]);
       if (change === "instruction") {
-        yield* page.press("New instruction:");
+        for (
+          let traversal = 0;
+          traversal < 8 && !page.screen().shows(">> New instruction:");
+          traversal++
+        ) {
+          const before = page.screen().index;
+          yield* page.key("Tab");
+          yield* page.until("the next recovery traversal", (one) => one.index > before);
+        }
+        yield* page.until("the instruction focused after resizing", (one) =>
+          one.shows(">> New instruction:"),
+        );
         yield* typed(page, " Newer instruction text.");
       } else {
         yield* page.press("[start a different conversation]");

@@ -29,6 +29,7 @@ import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
 
+import { ReplHost } from "../../../../src/repl/host.ts";
 import { installReplHost } from "../../../../src/repl-assembly.ts";
 import { REPL_DIRECTORY } from "../../../../src/repl/storage.ts";
 import {
@@ -602,6 +603,94 @@ function* phases(): Operation<unknown> {
   const sidekick = join(repository, PAIRED_DIRECTORY, execution, SIDEKICK_FILE);
   const entries = join(repository, PAIRED_DIRECTORY, execution, ENTRIES_FILE);
 
+  if (phase === "recovery-prepared-cut") {
+    const held = yield* useConversing(dataRoot, execution, { replies: [] });
+    held.fake.script({ reply: "<REPL.Bindings />" });
+    held.fake.script({ reply: "", failure: "Internal error" });
+    yield* held.owner.message("Inspect established work.");
+    const review = yield* held.owner.reviewRecovery();
+    if (!review.ok) {
+      throw review.error;
+    }
+    yield* ReplHost.around(
+      {
+        *appendRecord([path, line], next) {
+          yield* next(path, line);
+          const record = parseSidekickRecord(line.trim());
+          if (record?.kind === "conversation" && record.phase === "prepared") {
+            const output =
+              JSON.stringify({
+                prepared: record.conversation,
+                original: review.value.conversation,
+                prompts: held.fake.prompts.length,
+              }) + "\n";
+            yield* until(
+              new Promise<void>((resolve, reject) =>
+                process.stdout.write(output, (error) => (error ? reject(error) : resolve())),
+              ),
+            );
+            process.exit(0);
+          }
+        },
+      },
+      { at: "max" },
+    );
+    return yield* held.owner.recover(
+      review.value,
+      "The interrupted replacement instruction.",
+      true,
+      { current: () => true },
+    );
+  }
+  if (phase === "recovery-prepared-reopen") {
+    const held = yield* useConversing(dataRoot, execution, { replies: [] });
+    const before = yield* held.chat.writer.readAll();
+    const review = yield* held.owner.reviewRecovery();
+    if (!review.ok) {
+      throw review.error;
+    }
+    const passive = JSON.stringify(yield* held.chat.writer.readAll()) === JSON.stringify(before);
+    const refused = yield* held.owner.recover(
+      review.value,
+      "The interrupted replacement instruction.",
+      true,
+      { current: () => true },
+    );
+    const afterRefusal = held.owner.reading;
+    if (!afterRefusal.ok) {
+      throw afterRefusal.error;
+    }
+    const next = yield* held.owner.reviewRecovery();
+    if (!next.ok) {
+      throw next.error;
+    }
+    held.fake.script({ reply: "<Output>A new deliberately authorized request.</Output>" });
+    const renewed = yield* held.owner.recover(
+      next.value,
+      "A new deliberate replacement instruction.",
+      true,
+      { current: () => true },
+    );
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    return {
+      passive,
+      firstRefused: !refused.ok,
+      withdrawn: afterRefusal.value.recoveries[0]?.withdrawn,
+      originalSelected: afterRefusal.value.active === review.value.conversation,
+      renewed: renewed.ok,
+      prompts: held.fake.prompts,
+      decisions: reading.value.recoveries.map((one) => ({
+        id: one.decision.id,
+        target: one.decision.target,
+        used: one.used,
+        withdrawn: one.withdrawn,
+      })),
+      unknown: reading.value.unestablished.length,
+    };
+  }
   if (phase === "workspace-start" || phase === "workspace-continue") {
     const mounted = yield* until(import("../../../support/mounted-repl.ts"));
     const { useReplPage } = yield* until(import("../../../support/repl-page.ts"));

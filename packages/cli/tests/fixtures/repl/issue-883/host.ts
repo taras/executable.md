@@ -161,6 +161,8 @@ export function* runPhase(
     | "chat-open"
     | "chat-say"
     | "chat-read"
+    | "recovery-prepared-cut"
+    | "recovery-prepared-reopen"
     | "workspace-start"
     | "workspace-continue",
   root: RepositoryRoot,

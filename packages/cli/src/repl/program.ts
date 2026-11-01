@@ -1036,6 +1036,7 @@ function* drive(
       revision: number;
       review?: RecoveryReview;
       active?: string;
+      conversation?: string;
       reference?: string;
       refusal?: string;
       done?: true;
@@ -1086,8 +1087,13 @@ function* drive(
           report.review !== undefined &&
           sidekick.reading.ok &&
           report.active === sidekick.reading.value.active;
-        if (held !== undefined && (held.revision === report.revision || readingIsCurrent)) {
-          const { active: _active, ...update } = report;
+        const outcomeIsCurrent =
+          report.conversation !== undefined && held?.review?.conversation === report.conversation;
+        if (
+          held !== undefined &&
+          (held.revision === report.revision || readingIsCurrent || outcomeIsCurrent)
+        ) {
+          const { active: _active, conversation: _conversation, ...update } = report;
           state = {
             ...state,
             recovering: {
@@ -1614,6 +1620,13 @@ function* drive(
             const exchange = dispatch.current;
             const job = taken.value;
             const review = held.review;
+            const reportRecovery = (refusal?: string): void => {
+              recoveryReports.push({
+                revision: held.revision,
+                conversation: review.conversation,
+                ...(refusal === undefined ? { done: true } : { refusal, reference: undefined }),
+              });
+            };
             const current = () =>
               state.recovering?.revision === held.revision &&
               state.recovering.text === held.text &&
@@ -1642,7 +1655,7 @@ function* drive(
                 execution.chat.location.entries,
               );
               if (!findings.ok) {
-                recoveryReports.push({ revision: held.revision, refusal: findings.error.message });
+                reportRecovery(findings.error.message);
                 return;
               }
               for (const finding of findings.value) {
@@ -1651,10 +1664,7 @@ function* drive(
               unresolved = [];
               const reconciled = yield* sidekick.reviewRecovery();
               if (!reconciled.ok) {
-                recoveryReports.push({
-                  revision: held.revision,
-                  refusal: reconciled.error.message,
-                });
+                reportRecovery(reconciled.error.message);
                 return;
               }
               const resolvedControls = new Set(
@@ -1668,11 +1678,9 @@ function* drive(
                 JSON.stringify(reconciled.value.requests) !== JSON.stringify(review.requests) ||
                 JSON.stringify(reconciled.value.controls) !== JSON.stringify(expectedControls)
               ) {
-                recoveryReports.push({
-                  revision: held.revision,
-                  refusal:
-                    "The recovery target changed during Submit reconciliation. Review it again.",
-                });
+                reportRecovery(
+                  "The recovery target changed during Submit reconciliation. Review it again.",
+                );
                 return;
               }
               const result = yield* sidekick.recover(reconciled.value, held.text, held.replacing, {
@@ -1742,18 +1750,7 @@ function* drive(
                       },
                     }),
               });
-              if (!result.ok) {
-                recoveryReports.push({
-                  revision:
-                    state.recovering?.review?.conversation === review.conversation
-                      ? state.recovering.revision
-                      : held.revision,
-                  refusal: result.error.message,
-                  reference: undefined,
-                });
-              } else {
-                recoveryReports.push({ revision: held.revision, done: true });
-              }
+              reportRecovery(result.ok ? undefined : result.error.message);
               wakes.send({ kind: "session" });
             });
           },

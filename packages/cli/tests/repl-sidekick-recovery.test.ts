@@ -3673,3 +3673,26 @@ describe("987 — replacement preparation disposition", () => {
     });
   }
 });
+
+describe("987 correction — cold prepared replacement", () => {
+  it("withdraws only on deliberate action and permits a fresh decision after a real process cut", function* () {
+    const root = yield* createRepositoryRoot();
+    yield* ensure(() => root.discard());
+    yield* runPhase("chat-open", root, "cold-preparation");
+    const cut = yield* runPhase("recovery-prepared-cut", root, "cold-preparation");
+    expect(cut.prompts).toBe(2);
+    const before = yield* runPhase("bytes", root, "cold-preparation");
+    expect(before.sidekick).toContain('"phase":"prepared"');
+    expect(before.sidekick).not.toContain('"phase":"failed"');
+    const resumed = yield* runPhase("recovery-prepared-reopen", root, "cold-preparation");
+    expect(resumed.passive).toBe(true);
+    expect(resumed.firstRefused).toBe(true);
+    expect(resumed.withdrawn).toBe(true);
+    expect(resumed.originalSelected).toBe(true);
+    expect(resumed.renewed).toBe(true);
+    expect(resumed.prompts).toHaveLength(1);
+    expect(JSON.stringify(resumed.prompts)).toContain("A new deliberate replacement instruction.");
+    expect(resumed.decisions).toHaveLength(2);
+    expect(resumed.unknown).toBeGreaterThan(0);
+  });
+});

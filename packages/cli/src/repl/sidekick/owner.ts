@@ -1283,6 +1283,43 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           new SidekickOwnerError("The recovery target changed. Review it again before continuing."),
         );
       }
+      const existing = reading.ok
+        ? reading.value.recoveries.find(
+            (one) =>
+              !one.used && !one.withdrawn && one.decision.conversation === review.conversation,
+          )
+        : undefined;
+      const stale =
+        existing?.decision.action === "replace" && reading.ok
+          ? reading.value.conversations.find(
+              (one) => one.id === existing.decision.target && one.phase === "prepared",
+            )
+          : undefined;
+      if (
+        stale !== undefined &&
+        reading.ok &&
+        reading.value.active !== stale.id &&
+        held?.conversation !== stale.id
+      ) {
+        yield* storage.writer.append({
+          kind: "conversation",
+          conversation: stale.id,
+          agent: stale.agent,
+          phase: "failed",
+          previous: review.conversation,
+          error: serializeError(
+            new Error(
+              "The replacement preparation ended before activation and has no live handle in this root.",
+            ),
+          ),
+        });
+        yield* refresh();
+        return Err(
+          new SidekickOwnerError(
+            "The interrupted replacement preparation is withdrawn. Review recovery again before choosing a new instruction or conversation.",
+          ),
+        );
+      }
       let basis: RecoveryDecisionRecord["basis"] = "explicit-abandonment";
       if (!replace) {
         if (stopped === undefined || !reading.ok || stopped !== stoppedTarget(reading.value)) {
@@ -1304,12 +1341,6 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           new SidekickOwnerError("The instruction changed during preparation. Review it again."),
         );
       }
-      const existing = reading.ok
-        ? reading.value.recoveries.find(
-            (one) =>
-              !one.used && !one.withdrawn && one.decision.conversation === review.conversation,
-          )
-        : undefined;
       let decision = existing?.decision;
       if (
         decision !== undefined &&

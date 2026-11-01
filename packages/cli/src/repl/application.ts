@@ -9399,8 +9399,12 @@ function isControl(component: ReplComponent<ReplAction>, input: ReplViewData): b
  * header does cost is one row for its edge, which belongs to the band these rows
  * sit in and is measured there.
  */
-function drawerActions(candidates: readonly ReplCandidate[], width?: number): ReplBox {
-  if (candidates.some((one) => one.key.startsWith("drawer:recovery:"))) {
+function drawerActions(
+  candidates: readonly ReplCandidate[],
+  width: number | undefined,
+  stacked: boolean,
+): ReplBox {
+  if (stacked) {
     return box({
       id: "box:drawer:actions",
       region: "drawer",
@@ -10182,7 +10186,7 @@ export function presentationFor(
               rowBox(candidate, "drawer", context.widths?.drawer),
             ),
           }),
-          drawerActions(of("drawer-actions"), context.widths?.drawer),
+          drawerActions(of("drawer-actions"), context.widths?.drawer, presentedRecovering(view)),
         ],
       }),
     );
@@ -12694,7 +12698,7 @@ function workspacePresentation(input: {
             props: viewportProps(),
             children: of("drawer").map((one) => rowBox(one, "drawer", context.widths?.drawer)),
           }),
-          drawerActions(of("drawer-actions"), context.widths?.drawer),
+          drawerActions(of("drawer-actions"), context.widths?.drawer, presentedRecovering(view)),
         ],
       }),
     );
