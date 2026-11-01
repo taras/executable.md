@@ -1221,21 +1221,24 @@ describe("Tier GR — a root fills an entry draft with literal captured source",
     expect(fills).toEqual(["Hello"]);
   });
 
-  it("GR20: the entry's own braces survive the capture, and none of it runs", function* () {
-    const entry = '<Each in={names} let="name">\nHello, {name}!\n</Each>';
-    const { attempt, fills } = yield* fill(
+  it("GR20: colliding root bindings leave both captures literal", function* () {
+    const entry =
+      '<If condition={matches}>\n<File path="copy.txt">{source} {props.name}</File>\n</If>';
+    const capture =
       '<Let as="code" select="code">\n```xmd\n' +
-        entry +
-        "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n",
+      entry +
+      "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n";
+    const { attempt, fills } = yield* fill(
+      '<Let as="matches" value={true} />\n<Let as="source" value="FIRST" />\n' +
+        '<Let as="props" value={{ name: "FIRST_PROP" }} />\n' +
+        capture +
+        '<Let as="matches" value={false} />\n<Let as="source" value="CHANGED" />\n' +
+        '<Let as="props" value={{ name: "CHANGED_PROP" }} />\n' +
+        capture,
     );
 
     expect(answered(attempt).ok).toBe(true);
-    // `names` and `name` belong to the entry this draft will run as. They are
-    // not response bindings and do not need to be: a root resolves only what it
-    // bound, so an entry-only reference arrives as the text it is. An `<Each>`
-    // the response had actually expanded would have rendered its body instead
-    // of handing the element over.
-    expect(fills).toEqual([entry]);
+    expect(fills).toEqual([entry, entry]);
   });
 
   /**
@@ -1274,9 +1277,12 @@ describe("Tier GR — a root fills an entry draft with literal captured source",
   it("GR21: a nested passive fence survives the capture", function* () {
     // The outer fence has to be longer than the one it contains, which is the
     // ordinary Markdown rule and the one the accepted instructions state.
-    const entry = "Run this:\n\n```sh\nxmd run greeting.md\n```";
+    const entry =
+      "Run this:\n\n```sh exec\necho {source} {props.name}\n```\n<If condition={matches}>quoted</If>";
     const { attempt, fills } = yield* fill(
-      '<Let as="code" select="code">\n````xmd\n' +
+      '<Let as="source" value="CURRENT" />\n<Let as="matches" value={true} />\n' +
+        '<Let as="props" value={{ name: "CURRENT_PROP" }} />\n' +
+        '<Let as="code" select="code">\n````xmd\n' +
         entry +
         "\n````\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n",
     );

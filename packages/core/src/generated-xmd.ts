@@ -140,6 +140,7 @@ import { GeneratedDataExpressions, validateDataExpression } from "./generated-ex
 import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
+import { readsBinding } from "./generated-interpolation.ts";
 import { SourceOwner, sourceOwnerDescription } from "./source-owner.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 // The ordinary source rules, read rather than reimplemented: a construct means
@@ -1350,25 +1351,6 @@ function admitted(entries: readonly Entry[]): Map<string, Entry[]> {
   return table;
 }
 
-/**
- * Whether this text would read anything.
- *
- * The two interpolation passes a text segment goes through are definitive
- * on what a reference is, so this asks them rather than guessing: `\{` is
- * protected exactly as expansion protects it, and what remains is matched by
- * the same shapes `interpolate()` and `interpolateEvalBindings()` consume.
- * Braces that neither pass would read — prose, a JSON sample, a CSS rule — are
- * left alone.
- */
-const ESCAPED_BRACE_PLACEHOLDER = "\uE000";
-const FRONTMATTER_REFERENCE = /\{(meta|props)\.[^}]+\}/;
-const BINDING_REFERENCE = /\{[a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*\}/;
-
-function reads(content: string): boolean {
-  const protectedEscapes = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
-  return FRONTMATTER_REFERENCE.test(protectedEscapes) || BINDING_REFERENCE.test(protectedEscapes);
-}
-
 /** Two lists of the same strings, in the same order. */
 function sameStrings(one: readonly string[], other: readonly string[]): boolean {
   return one.length === other.length && one.every((value, index) => value === other[index]);
@@ -1671,7 +1653,7 @@ function* walk(
         // own `<Let>` capture — and with it the one way a response has of
         // writing an entry draft, whose source is entry text that legitimately
         // carries braces of its own.
-        if (lexical.language !== "root" && reads(segment.content)) {
+        if (lexical.language !== "root" && readsBinding(segment)) {
           throw new Refusal("interpolation");
         }
         break;

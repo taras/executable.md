@@ -6094,7 +6094,9 @@ Segment expansion rewrites a list of segments into rendered segments, in
 document order:
 
 - **Text** is healed at segment boundaries (§2.3), then interpolated for
-  `{meta.key}` / `{props.key}` (§6.4) and for eval bindings (§6.6).
+  `{meta.key}` / `{props.key}` (§6.4) and for eval bindings (§6.6) outside
+  passive fences. The scanner's fence grammar identifies those slices once,
+  before either substitution pass; fenced source passes through unchanged.
 - **`<Let>`** stores the named binding in the current scope and itself renders
   nothing: it expands its children there and stores the rendered result —
   optionally narrowed by a `select` prop — or, written with `value`, stores
@@ -6381,7 +6383,9 @@ Rules:
 - Nested access via dot notation: `{meta.config.retry.count}`
 - Missing key → empty string (no error)
 - Arrays → comma-joined: `{meta.tags}` → `"alpha, beta"`
-- Inside fenced code blocks: never interpolated
+- Inside passive fenced code blocks: never interpolated, including when a
+  reference names a bound value. An executable language label alone remains
+  passive; `exec` and `eval` modifiers decide execution (§3.2).
 - Inside backtick code spans: interpolated (use `\{...\}` for literal braces)
 - Escaped braces: `\{not interpolated\}` → literal `{not interpolated}`
 
@@ -6390,15 +6394,30 @@ no journal entry.
 
 #### Text segment interpolation pipeline
 
-Text segments undergo two interpolation passes in sequence:
+After Markdown healing, passive fenced slices are set aside using the scanner's
+fence grammar: backticks or tildes, matching closing character and sufficient
+closing length, supported indentation and inline-code exclusions. Text detached
+after a component keeps its original line context: backticks immediately after
+the tag on the same line remain an inline span. A longer
+passive fence quotes shorter fences, including executable examples. The remaining
+text undergoes two interpolation passes in sequence:
 
 ```
 text segment
   → remend (heal markdown)
+  → set aside passive fenced slices
   → interpolate {meta.key}, {props.key} from the current frame ← first pass
   → interpolateEvalBindings {name}, {props.name} ← second pass
+  → restore passive fenced slices unchanged
   → output
 ```
+
+Both passes and escape restoration leave the protected source alone, including
+its backslashes. Prose before and after a fence still interpolates. A replacement
+value containing fence-shaped text does not create new protected source between
+passes. Capturing with `<Let select="code">` and saving with `<File>` therefore
+retain the authored references until that saved program is explicitly executed.
+Capture keeps its existing selector and trailing-whitespace rules (§6.5).
 
 The second pass (`interpolateEvalBindings`) runs on text segments
 when an `EvalEnv` is present on the scope. It resolves bare `{name}`
@@ -7399,8 +7418,9 @@ merging nothing back — before the fragment performs its first effect.
 Bare `{name}` references (no namespace prefix) resolve against
 `env.values` — the eval binding environment populated by preceding
 `eval` blocks within the same component. This applies to both
-**code block content** and **text segments** (see §6.4 for the text
-segment interpolation pipeline).
+**executable block inputs** and **text outside passive fences** (see §6.4 for
+the text segment interpolation pipeline). Passive source remains literal with
+unbound, bound and rebound names alike.
 
 ````markdown
 ```ts eval
@@ -7447,9 +7467,10 @@ Eval binding interpolation runs in `expandSegments` in two places:
    for a `codeBlock` segment. By the time any modifier factory receives
    `ctx.content`, the content is already fully interpolated — modifiers
    are not responsible for text preparation. This resolves `{props.name}`
-   from `env.values.props` without changing the modifier API.
+   from `env.values.props` without changing the modifier API. Fence-shaped text
+   inside that input is part of the command and does not protect references.
 
-2. **Text segments** — after `{meta.*}`/`{props.*}` interpolation
+2. **Text outside passive fences** — after `{meta.*}`/`{props.*}` interpolation
    (§6.4). The second pass resolves bare and dotted references from
    `env.values` when an `EvalEnv` is present on the scope.
 
@@ -13918,6 +13939,13 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | P6 | Binding interpolation runs before modifier chain | Resulting `ctx.content` in modifier contains substituted value |
 | P7 | Same-run env populated before interpolation | Eval result sets `port`; subsequent block interpolates correctly |
 | P8 | Non-serializable binding remains current-run only | Function is usable in the current component expansion and absent from the trace |
+| P9 | Passive source with colliding bindings | Guard, text, metadata and props references stay literal with names absent, bound and rebound; surrounding prose and inline code still interpolate |
+| P10 | Capture nested examples | Let/select removes a longer backtick or tilde outer fence, retaining inner executable examples, escaped braces and references without invoking quoted components |
+| P11 | Save and execute later | Capture and File readback equal an independently authored literal; fresh FIRST and CHANGED inputs pass, while a deliberate comparison mismatch reaches Fail and produces a failed completion |
+| P12 | Generated root capture | Two captures before and after rebinding deliver the same literal source once each to their paired receiver |
+| P13 | Generated preview | Complete passive examples project literally, including nested quoted Output tags; unfinished fences wait and interpolating prose stays withheld |
+| P14 | Generated fragment admission | Passive references are no caller-binding read; an equivalent prose reference and an actual executable block refuse before effects |
+| P15 | Executable input controls | Exec inputs substitute bare and props values even inside fence-shaped command text; eval source keeps JavaScript template literals unchanged |
 
 ### Tier Q — `daemon` modifier
 

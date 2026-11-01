@@ -14,6 +14,10 @@ import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
+import { API, useHostFiles } from "@executablemd/runtime";
+import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { join } from "node:path";
+import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
@@ -23,7 +27,7 @@ import type { HostExecution } from "../src/execute.ts";
 import { inlineSource } from "../src/root-source.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { asText } from "./helpers.ts";
+import { asText, completion, failureMessage } from "./helpers.ts";
 import type { ComponentDefinition, EvalEnv, JsonObject, Segment } from "../src/types.ts";
 import type { ExecutionInstallation } from "../src/execute.ts";
 
@@ -93,6 +97,146 @@ function counter(): { calls: number; bump: () => number } {
   const state = { calls: 0, bump: () => ++state.calls };
   return state;
 }
+
+describe("Tier LET — passive source", () => {
+  beforeAll(() => useTempFileCompiler());
+  it("LET13: bound and rebound names leave captured source literal", function* () {
+    const program = [
+      "<If condition={matches}>",
+      '<File path="copy.txt">{source} {props.name} {meta.title}</File>',
+      "</If>",
+    ].join("\n");
+    const capture = '<Let as="program" select="code">\n```xmd\n' + program + "\n```\n</Let>";
+    for (const seed of [{ matches: true, source: "FIRST", props: { name: "FIRST_PROP" } }, {}]) {
+      const result = yield* run(
+        capture +
+          '\n<Let as="first" value={program} />\n' +
+          '<Let as="matches" value={false} />\n<Let as="source" value="CHANGED" />\n' +
+          '<Let as="props" value={{ name: "CHANGED_PROP" }} />\n' +
+          capture,
+        seed,
+      );
+      expect(result.values.first).toBe(program);
+      expect(result.values.program).toBe(program);
+      expect(result.imports).toEqual([]);
+    }
+  });
+
+  it("LET14: longer and tilde fences preserve nested executable examples and escapes", function* () {
+    const program = [
+      "<If condition={matches}>",
+      "```sh exec",
+      "echo {source} {props.name}",
+      "```",
+      "\\{source} {meta.title}",
+      "</If>",
+    ].join("\n");
+    for (const fence of ["````", "~~~~"]) {
+      const result = yield* run(
+        '<Let as="program" select="code">\n' +
+          fence +
+          "xmd\n" +
+          program +
+          "\n" +
+          fence +
+          "\n</Let>",
+        { matches: true, source: "CURRENT", props: { name: "CURRENT_PROP" } },
+      );
+      expect(result.values.program).toBe(program);
+      expect(result.imports).toEqual([]);
+    }
+  });
+
+  it("LET15: saved source runs with fresh inputs and its mismatch arm really fails", function* () {
+    yield* useHostFiles();
+    const temporary = yield* API.Files.operations.temporaryDirectory();
+    if (!temporary.ok) {
+      throw temporary.error;
+    }
+    const directory = temporary.value;
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return directory;
+        },
+      },
+      { at: "min" },
+    );
+    const program = [
+      "---",
+      "props:",
+      "  type: object",
+      "  properties:",
+      "    sourcePath: { type: string }",
+      "    copyPath: { type: string }",
+      "  required: [sourcePath, copyPath]",
+      "  additionalProperties: false",
+      "---",
+      '<File path={props.sourcePath} as="source" />',
+      '<File path={props.copyPath} as="copied" />',
+      "```ts eval",
+      "const matches = source === copied;",
+      "```",
+      "<Output>",
+      "<If condition={matches}>MATCHED {source}<Else>",
+      '<Fail message="SAVED_VERIFIER_MISMATCH_1050" />',
+      "</Else></If>",
+      "</Output>",
+    ].join("\n");
+    const capture = yield* executeInstalled(
+      {
+        ...inlineSource(
+          [
+            '<Let as="matches" value={true} />',
+            '<Let as="source" value="CAPTURE_TIME_SOURCE" />',
+            '<Let as="copied" value="CAPTURE_TIME_SOURCE" />',
+            '<Let as="props" value={{ sourcePath: "old.txt", copyPath: "old-copy.txt" }} />',
+            '<Let as="program" select="code">',
+            "````xmd",
+            program,
+            "````",
+            "</Let>",
+            '<File path="verifier.md">{program}</File>',
+            '<File path="verifier.md" as="readback" />',
+          ].join("\n"),
+        ),
+        stream: new InMemoryStream(),
+      },
+      [],
+    );
+    expect((yield* capture).ok).toBe(true);
+    const bindings = yield* capture.bindings();
+    if (!bindings.ok) {
+      throw bindings.error;
+    }
+    expect(bindings.value.program).toBe(program);
+    expect(bindings.value.readback).toBe(program);
+    expect(yield* readTextFile(join(directory, "verifier.md"))).toBe(program);
+
+    for (const data of [
+      { source: "FIRST_1050", copied: "FIRST_1050", passes: true },
+      { source: "CHANGED_1050", copied: "CHANGED_1050", passes: true },
+      { source: "CHANGED_1050", copied: "DELIBERATE_MISMATCH", passes: false },
+    ]) {
+      yield* writeTextFile(join(directory, "source.txt"), data.source);
+      yield* writeTextFile(join(directory, "copy.txt"), data.copied);
+      const result = yield* scoped(function* () {
+        yield* useNormalizedOutput();
+        return yield* completion({
+          path: join(directory, "verifier.md"),
+          stream: new InMemoryStream(),
+          props: { sourcePath: "source.txt", copyPath: "copy.txt" },
+        });
+      });
+      expect(result.ok).toBe(data.passes);
+      if (result.ok) {
+        expect(asText(result.value).trim()).toBe(`MATCHED ${data.source}`);
+      } else {
+        expect(failureMessage(result)).toContain("SAVED_VERIFIER_MISMATCH_1050");
+      }
+    }
+  });
+});
 
 describe("Tier LET — the direct-value source", () => {
   it("LET1: value={42} binds the number, and both direct forms emit nothing", function* () {

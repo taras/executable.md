@@ -26,6 +26,11 @@ Sidekick responses, and the root bindings a REPL entry inherits.
   execute JavaScript and does not re-parse the result as XMD; interpolating an
   object is not JSON serialization. Write `\{` for a literal brace. Inline
   backticks do not prevent interpolation.
+- Passive fenced source preserves its tags, references and escaped braces even
+  when the response or entry has already bound the same names. Capture it with
+  `<Let as="code" select="code">` for later execution; use a longer outer fence
+  when that source contains fences of its own. Read `<Guide.Entries />` for the
+  complete authoring pattern.
 - Bindings created inside a component body or an `Each` iteration do not escape
   to later siblings. Use that construct's documented return or capture.
 - An entry inherits the JSON state earlier entries published, so a value an

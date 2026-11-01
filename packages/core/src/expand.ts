@@ -149,7 +149,7 @@ import { SourceOwner } from "./source-owner.ts";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
-import { scanSegments } from "./scanner.ts";
+import { scanSegments, splitTextFences } from "./scanner.ts";
 import { declareChildAnswers, expandAnswers, strayAnswerError } from "./answers.ts";
 import { DeclarationScan } from "./declaration-scan.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
@@ -995,23 +995,27 @@ function* expandListSegments(
         // Heal incomplete markdown constructs at segment boundaries (spec §2.3)
         // Runs synchronously — no yield, no journal entry
         const healed = healSegment(segment.content);
-        const protectedEscapes = healed.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
         const textEvalEnv = yield* env;
         const textProps =
           textEvalEnv !== undefined && "props" in textEvalEnv.values
             ? textEvalEnv.values.props
             : parentProps;
-        // Interpolate {meta.key} and {props.key} — runtime, no journal
-        const interpolated = interpolate(protectedEscapes, parentMeta, textProps);
-        // Interpolate bare {name} refs from eval bindings (spec §6.4/§6.6).
-        // Runs after meta/props interpolation so component contract takes
-        // precedence. Only runs when a binding environment is in scope.
-        const final = textEvalEnv
-          ? interpolateEvalBindings(interpolated, textEvalEnv.values)
-          : interpolated;
+        const final = splitTextFences(segment, healed)
+          .map(({ content, passive }) => {
+            if (passive) {
+              return content;
+            }
+            const protectedEscapes = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
+            const interpolated = interpolate(protectedEscapes, parentMeta, textProps);
+            const bound = textEvalEnv
+              ? interpolateEvalBindings(interpolated, textEvalEnv.values)
+              : interpolated;
+            return bound.replaceAll(ESCAPED_BRACE_PLACEHOLDER, "{");
+          })
+          .join("");
         result.push({
           type: "text",
-          content: final.replaceAll(ESCAPED_BRACE_PLACEHOLDER, "{"),
+          content: final,
         });
         break;
       }
