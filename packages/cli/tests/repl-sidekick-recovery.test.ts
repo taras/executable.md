@@ -3335,9 +3335,9 @@ describe("987 — actual child reference recording faults", () => {
             terminal.terminal,
             "Inspect the established result and propose the next step.",
           );
-          yield* click("[start a different conversation]");
+          yield* click("[different conversation]");
           armed = true;
-          yield* click("[abandon and start different conversation]", false);
+          yield* click("[abandon; new chat]", false);
           if (cut !== "offered") {
             yield* awaitedFact("the actual offered reference", function* () {
               return (yield* readSidekickRecords(
@@ -3588,11 +3588,11 @@ describe("987 — root whole-set reconciliation", () => {
         yield* page.until("the reviewed new instruction", (one) =>
           one.shows("Propose the next distinct step."),
         );
-        yield* page.press("[start a different conversation]");
+        yield* page.press("[different conversation]");
         yield* page.until("the deliberate replacement confirmation", (one) =>
-          one.shows("[abandon and start different conversation]"),
+          one.shows("[abandon; new chat]"),
         );
-        yield* page.press("[abandon and start different conversation]");
+        yield* page.press("[abandon; new chat]");
       };
       if (interrupted) {
         yield* scoped(function* () {

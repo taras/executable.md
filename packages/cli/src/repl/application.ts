@@ -6927,9 +6927,7 @@ function drawerFor(
       rows.push(
         row(
           "drawer:recovery:continue",
-          held?.replacing
-            ? "[abandon and start different conversation]"
-            : "[continue with new instruction]",
+          held?.replacing ? "[abandon; new chat]" : "[send new instruction]",
           { select: "recovery-continue" },
           styleOf("action"),
           { here: view.focused },
@@ -7644,7 +7642,7 @@ function recoveryContent(
       content.push({
         described: row(
           "drawer:recovery:replace",
-          held.replacing ? "[back to original recovery]" : "[start a different conversation]",
+          held.replacing ? "[keep original]" : "[different conversation]",
           { select: "recovery-replace" },
           styleOf("action"),
           { here: view.focused },

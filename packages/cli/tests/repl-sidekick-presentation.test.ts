@@ -74,6 +74,12 @@ import {
 const WIDE = { columns: 160, rows: 36 };
 const NARROW = { columns: 72, rows: 20 };
 
+function* completedKey(page: ReplPage, key: Parameters<ReplPage["key"]>[0]): Operation<void> {
+  const before = page.screen().index;
+  yield* page.key(key);
+  yield* page.until(`the completed ${key} frame`, (one) => one.index > before);
+}
+
 describe("987 — mounted original recovery", () => {
   function* draftFromComposer(page: ReplPage): Operation<void> {
     yield* intoComposer(page);
@@ -176,15 +182,48 @@ describe("987 — mounted original recovery", () => {
     expect(page.repl.fake.prompts).toHaveLength(2);
     yield* page.until("the new instruction field", (one) => one.shows("New instruction:"));
     yield* page.until("the focused new instruction", (one) => one.shows(">> New instruction:"));
-    yield* typed(page, "Propose a distinct next step.");
+    const instruction = "Inspect the established result and propose the next step.";
+    yield* page.type(instruction);
+    yield* page.until("the instruction end", (one) => one.shows("propose the next step."));
     yield* page.resize({ columns: 120, rows: 30 });
     yield* page.resize(NARROW);
     yield* page.until("fixed recovery action at narrow size", (one) =>
-      one.shows("[continue with new instruction]"),
+      one.shows("[send new instruction]"),
     );
+    for (let pageAt = 0; pageAt < 30 && !page.screen().shows("New instruction:"); pageAt++) {
+      const before = page.screen().index;
+      yield* page.wheel("down", { column: 2, row: 4 });
+      yield* page.until("the recovery drawer scrolling", (one) => one.index > before);
+    }
+    for (
+      let traversal = 0;
+      traversal < 12 && !page.screen().shows(">> New instruction:");
+      traversal++
+    ) {
+      yield* completedKey(page, "Backtab");
+    }
+    yield* page.until("the focused narrow instruction", (one) => one.shows(">> New instruction:"));
+    for (let at = 0; at < instruction.length; at++) {
+      yield* completedKey(page, "ArrowLeft");
+    }
+    yield* completedKey(page, "Home");
+    yield* page.until("the narrow instruction prefix", (one) =>
+      one.shows("New instruction: Inspect"),
+    );
+    for (let at = 0; at < 28; at++) {
+      yield* completedKey(page, "ArrowRight");
+    }
+    yield* page.type("X");
+    yield* page.until("the narrow instruction middle", (one) => one.shows("resuXlt"));
+    yield* completedKey(page, "Backspace");
+    for (let at = 28; at < instruction.length; at++) {
+      yield* completedKey(page, "ArrowRight");
+    }
+    yield* completedKey(page, "End");
+    yield* page.until("the narrow instruction end", (one) => one.shows("step."));
     const refused = yield* page.resize({ columns: 60, rows: 18 });
     expect(refused.shows("needs at least 72x20")).toBe(true);
-    expect(refused.shows("[continue with new instruction]")).toBe(false);
+    expect(refused.shows("[send new instruction]")).toBe(false);
     expect(refused.shows("[close]")).toBe(false);
     yield* page.resize(NARROW);
     yield* page.key("Escape");
@@ -193,12 +232,12 @@ describe("987 — mounted original recovery", () => {
     expect(draftHolds(page.screen(), "Draft survives review.")).toBe(true);
     expect(composerHolds(page.screen(), "Message survives review.")).toBe(true);
     yield* page.press("[review recovery]");
-    yield* page.until("the saved instruction", (one) => one.shows("Propose a distinct next step."));
+    yield* page.until("the saved instruction", (one) => one.shows("propose the next step."));
     expect(page.repl.fake.prompts).toHaveLength(2);
     page.repl.fake.script({ reply: "<Output>Continued once.</Output>" });
-    yield* page.press("[continue with new instruction]");
+    yield* page.press("[send new instruction]");
     yield* awaited("one distinct recovery request", () => page.repl.fake.prompts.length === 3);
-    expect(page.repl.fake.prompts[2]).toContain("Propose a distinct next step.");
+    expect(page.repl.fake.prompts[2]).toContain(instruction);
     expect(page.repl.fake.turns[2]?.handle.sessionKey).toBe(
       page.repl.fake.turns[0]?.handle.sessionKey,
     );
@@ -255,7 +294,7 @@ describe("987 — mounted original recovery", () => {
     );
     yield* typed(page, "The authorized instruction.");
     page.repl.fake.script({ reply: "<Output>Recovery completed once.</Output>", held: true });
-    yield* page.press("[continue with new instruction]");
+    yield* page.press("[send new instruction]");
     yield* page.repl.fake.holdingTurns(1);
     yield* page.press("New instruction:");
     yield* page.type("A newer unused instruction.");
@@ -297,7 +336,7 @@ describe("987 — mounted original recovery", () => {
         (path, record) =>
           path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"recovery-decision"'),
       );
-      yield* page.press("[continue with new instruction]");
+      yield* page.press("[send new instruction]");
       yield* race([
         decision.started(),
         (function* () {
@@ -320,7 +359,7 @@ describe("987 — mounted original recovery", () => {
         );
         yield* typed(page, " Newer instruction text.");
       } else {
-        yield* page.press("[start a different conversation]");
+        yield* page.press("[different conversation]");
       }
       yield* page.key("Escape");
       yield* page.until(
