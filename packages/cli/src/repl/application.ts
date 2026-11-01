@@ -11369,7 +11369,12 @@ export function wideHistoryWidths(
 ): { readonly map: number; readonly gap: number } | undefined {
   const row = widthOf(HISTORY_ROW);
   const needed = probedWidthOf(HISTORY_PROBE_ACTIONS);
-  if (row === undefined || needed === undefined || !Number.isInteger(row) || !Number.isInteger(needed)) {
+  if (
+    row === undefined ||
+    needed === undefined ||
+    !Number.isInteger(row) ||
+    !Number.isInteger(needed)
+  ) {
     return undefined;
   }
   const bounded = { map: Math.max(0, row - needed), gap: 0 };

@@ -2928,7 +2928,9 @@ function historyMarkers(reading: ScreenReading): string[] {
 function* submitPast(page: ReplPage, order: number): Operation<void> {
   yield* pasteDraft(page, `Entry ${order} text.`);
   yield* page.key("Enter");
-  yield* page.until(`ready for entry ${order + 1}`, (one) => one.shows(`Ready for Entry ${order + 1}`));
+  yield* page.until(`ready for entry ${order + 1}`, (one) =>
+    one.shows(`Ready for Entry ${order + 1}`),
+  );
 }
 
 describe("REPL terminal: History past the row-full point (#1017)", () => {
@@ -2958,7 +2960,9 @@ describe("REPL terminal: History past the row-full point (#1017)", () => {
     // transcript, which already shows an entry's text before the drawer ever
     // opens and proves nothing about the drawer's own content.
     yield* openHistory(page);
-    expect(historyMarkers(page.screen()).some((row) => row.includes("Entry 1 admitted"))).toBe(true);
+    expect(historyMarkers(page.screen()).some((row) => row.includes("Entry 1 admitted"))).toBe(
+      true,
+    );
     // Selecting an earlier position and closing the drawer keeps that
     // selection and the draft untouched.
     yield* page.press("Entry 1 admitted", { rightOf: "[close]" });
