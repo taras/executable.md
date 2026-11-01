@@ -255,6 +255,14 @@ describe("Tier GP — invalid source is refused, and says nothing of the prefix"
     }
   });
 
+  it("W10: an unfinished nested interpolation waits for its value", function* () {
+    expect(preview("<Output>A<Output>{computed")).toEqual({ output: "A", incomplete: true });
+    expect(preview("<Output>A<Output>{computed}</Output>C</Output>")).toEqual({
+      output: "AC",
+      incomplete: false,
+    });
+  });
+
   it("GP24/W10: unconditional directly nested Output contributes once", function* () {
     expect(preview("<Output>A<Output>B</Output>C</Output>")).toEqual({
       output: "ABC",
