@@ -119,6 +119,20 @@ focused test fails, fix it and rerun it before creating the feedback commit.
 suite, and CI are not prerequisites for a feedback commit. Waiting for them
 withholds the commit the feedback exists to be given against.
 
+**Start ordinary code reviews only after CI proves `main`'s exact current head green.**
+The coordinating agent checks main health before launching a Planner or Architect
+implementation review or an independent review such as Fable. Use the
+authoritative `push` run for the current `main` head, with the run and attempt
+selection described under `main-green` below; a successful older head does not
+qualify. Wait while that result is absent or pending, and prioritize main repair
+when it fails. A maintainer-labelled `ci-main-red-fix` PR retains its existing
+exception so the repair itself can be reviewed. Apply this gate to new review
+calls; preserve work and review calls already in flight.
+
+Create the feedback commit promptly while this review gate waits. The reviewed
+branch's full CI remains a delivery requirement, not a prerequisite for the
+focused review verdict.
+
 The specialized procedures in this document are not ordinary confidence checks,
 and each still applies when a change touches what it covers: dependency layout
 and mutation, release targets and the release specification, generated

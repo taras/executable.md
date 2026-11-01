@@ -299,6 +299,13 @@ only to affected responsibilities. `feedback_ready` is neither CI completion
 nor permission to merge. The Sidekick running Codex handles metadata and the
 repository's normal delivery gates afterwards.
 
+Before launching a code review, the coordinating Sidekick applies the
+[current-main health gate](../../AGENTS.md#feedback-commits). Ordinary reviews
+wait for successful CI on `main`'s exact current head; maintainer-labelled
+`ci-main-red-fix` repair PRs retain their exception. Feedback commits remain
+prompt, and the reviewed branch's full CI remains a delivery gate. This rule
+governs review dispatch rather than the simple, standard or migration route.
+
 ## Test without paid agents
 
 ```bash

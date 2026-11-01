@@ -250,10 +250,11 @@ missing decisions, evidence and required plan changes.
 Reviewing an implementation is the same act against the frozen matrix. Resolve
 the exact feedback-commit SHA and the focused commands reported with it, review
 that commit, and accept when the frozen acceptance criteria and selected
-evidence pass. Do not inspect, monitor or wait for CI: its status is neither
-positive nor negative evidence for this verdict, and it is inspected only when
-the user explicitly assigns CI troubleshooting. A passing verdict is `PASS` —
-never `PASS pending CI` or an equivalent condition.
+evidence pass. The coordinator applies the repository's current-main health gate
+before launching this code review. Once admitted, do not inspect, monitor or wait
+for the reviewed branch's CI: its status is neither positive nor negative
+evidence for this verdict, and troubleshooting requires an explicit assignment.
+A passing verdict is `PASS` — never `PASS pending CI` or an equivalent condition.
 
 During review, assess necessity independently of plan compliance. Ask what can
 be removed while preserving the accepted behavior and boundaries. An accepted
