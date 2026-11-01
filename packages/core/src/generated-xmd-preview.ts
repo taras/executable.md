@@ -49,7 +49,7 @@ import type { Result } from "effection";
 
 import { readsBinding } from "./generated-interpolation.ts";
 import { outputPropsViolation, validateBodyStructure } from "./body-structure.ts";
-import { scanSegments } from "./scanner.ts";
+import { scanSegments, splitTextFences } from "./scanner.ts";
 import type { UnfinishedConstruct } from "./scanner.ts";
 import type { ComponentElement, Segment } from "./types.ts";
 
@@ -161,8 +161,13 @@ function unfinishedRegion(
   }
   // The same walk again over the content delivered so far, so what counts as a
   // nested tag, a fence or an inline code span is decided once.
-  const content = source.slice(pending.contentStart);
-  return { output: literal(scanSegments(settledTail(content))) };
+  const content = settledTail(source.slice(pending.contentStart));
+  const unfinished: UnfinishedConstruct[] = [];
+  const segments = scanSegments(content, undefined, undefined, undefined, unfinished);
+  const first = earliest(unfinished);
+  return {
+    output: literal(first === undefined ? segments : scanSegments(content.slice(0, first.start))),
+  };
 }
 
 /**
@@ -228,8 +233,13 @@ function regions(segments: readonly Segment[]): { element: ComponentElement }[] 
 function literal(segments: readonly Segment[]): string {
   let text = "";
   for (const segment of segments) {
-    if (segment.type === "text" && !readsBinding(segment.content)) {
-      text += segment.content;
+    if (segment.type === "text") {
+      text += readsBinding(segment.content)
+        ? splitTextFences(segment.content)
+            .filter((slice) => slice.passive)
+            .map((slice) => slice.content)
+            .join("")
+        : segment.content;
     }
   }
   return text;

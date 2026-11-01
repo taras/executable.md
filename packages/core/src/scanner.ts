@@ -370,6 +370,36 @@ export function scanComponentSpans(text: string): ComponentSpan[] {
   return spans;
 }
 
+/** Passive fences stay authored source through text interpolation. */
+export function splitTextFences(text: string): { content: string; passive: boolean }[] {
+  const slices: { content: string; passive: boolean }[] = [];
+  let start = 0;
+  let pos = 0;
+  while (pos < text.length) {
+    const fence = matchFenceOpen(text, pos);
+    if (fence) {
+      const end = findFenceClose(text, fence.contentStart, fence.fenceChar, fence.fenceLen);
+      if (!parseInfoString(fence.infoString).executable) {
+        if (pos > start) {
+          slices.push({ content: text.slice(start, pos), passive: false });
+        }
+        slices.push({ content: text.slice(pos, end.fenceEnd), passive: true });
+        start = end.fenceEnd;
+      }
+      pos = end.fenceEnd;
+    } else if (text[pos] === "`") {
+      const end = skipInlineCode(text, pos);
+      pos = end === -1 ? pos + 1 : end;
+    } else {
+      pos += 1;
+    }
+  }
+  if (start < text.length) {
+    slices.push({ content: text.slice(start), passive: false });
+  }
+  return slices;
+}
+
 interface FenceOpen {
   fenceChar: string;
   fenceLen: number;

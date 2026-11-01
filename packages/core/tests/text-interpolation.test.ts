@@ -280,7 +280,22 @@ describe("Text interpolation — eval bindings in text segments", () => {
   // TI16: Code blocks unchanged
   it("TI16: code block interpolation still works as before", function* () {
     const captured: string[] = [];
-    const segments = scanSegments("```bash exec\necho {port}\n```\n");
+    const segments = scanSegments(
+      [
+        "````bash exec",
+        "echo {port} {props.name}",
+        "cat <<'EOF'",
+        "```xmd",
+        "{source} {props.name}",
+        "```",
+        "EOF",
+        "````",
+        "```ts eval",
+        "const text = `${source}`;",
+        "```",
+        "",
+      ].join("\n"),
+    );
     yield* scoped(function* () {
       yield* Component.around(
         {
@@ -289,14 +304,50 @@ describe("Text interpolation — eval bindings in text segments", () => {
             captured.push(block.content);
             return { output: "ok\n", exitCode: 0, stderr: "" };
           },
-          env: () => ({ values: { port: 8080 } }),
+          env: () => ({ values: { port: 8080, source: "CURRENT", props: { name: "PROP" } } }),
         },
         { at: "min" },
       );
       return yield* expandSegments(segments, {}, {}, new Set());
     });
-    // The code block content should have been interpolated
-    expect(captured[0]).toBe("echo 8080\n");
+    expect(captured).toEqual([
+      "echo 8080 PROP\ncat <<'EOF'\n```xmd\nCURRENT PROP\n```\nEOF\n",
+      "const text = `${source}`;\n",
+    ]);
+  });
+
+  it("TI18: passive slices stay literal while prose and inline code interpolate", function* () {
+    const example = "<If condition={matches}>{source} {props.name} {meta.title} \\{source}</If>\n";
+    for (const opening of ["```xmd", "~~~ts", "   ````xmd"]) {
+      const closing = opening.startsWith("~~~")
+        ? "~~~"
+        : opening.startsWith("   ")
+          ? "   ````"
+          : "```";
+      const fence = opening + "\n" + example + closing + "\n";
+      const segments = scanSegments(
+        "{source} {props.name} {meta.title} `{source}`\n" + fence + "after {source}",
+      );
+      for (const source of ["FIRST", "CHANGED"]) {
+        const output = yield* expandWithBindings(
+          segments,
+          {},
+          { source, matches: false, props: { name: "PROP" } },
+          { title: "META" },
+        );
+        expect(output).toBe(`${source} PROP META \`${source}\`\n` + fence + `after ${source}`);
+      }
+    }
+  });
+
+  it("TI19: a first-pass value containing fences does not change the second pass's slices", function* () {
+    const output = yield* expandWithBindings(
+      scanSegments("{meta.example}"),
+      {},
+      { source: "CURRENT" },
+      { example: "```xmd\n{source}\n```" },
+    );
+    expect(output).toBe("```xmd\nCURRENT\n```");
   });
 });
 

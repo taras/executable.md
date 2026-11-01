@@ -23,11 +23,18 @@
  * whether it will change when evaluated is exactly its question.
  */
 
+import { splitTextFences } from "./scanner.ts";
+
 const ESCAPED_BRACE_PLACEHOLDER = "";
 const FRONTMATTER_REFERENCE = /\{(meta|props)\.[^}]+\}/;
 const BINDING_REFERENCE = /\{[a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*\}/;
 
 export function readsBinding(content: string): boolean {
-  const protectedEscapes = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
-  return FRONTMATTER_REFERENCE.test(protectedEscapes) || BINDING_REFERENCE.test(protectedEscapes);
+  return splitTextFences(content).some((slice) => {
+    if (slice.passive) {
+      return false;
+    }
+    const protectedEscapes = slice.content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
+    return FRONTMATTER_REFERENCE.test(protectedEscapes) || BINDING_REFERENCE.test(protectedEscapes);
+  });
 }

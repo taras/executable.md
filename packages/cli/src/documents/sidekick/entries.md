@@ -22,7 +22,9 @@ Sidekick responses that write an entry, and the REPL entry program they write.
   does not.
 - A fenced block with no `exec` or `eval` modifier is passive text, including
   its tags and braces. The language label alone does not make a fence
-  executable, and executable fences are unavailable in a response.
+  executable. References inside it stay literal even when your response or an
+  entry already bound the same names. Executable fences are unavailable in a
+  response.
 - Capture passive source with `<Let as="code" select="code">`, then pass the
   captured string to `<REPL.EntryInput>`. That fills the shared draft and runs
   none of it.
@@ -39,6 +41,7 @@ Sidekick responses that write an entry, and the REPL entry program they write.
 ## Example
 
 ````xmd
+<Let as="names" value={["response-only"]} />
 <Let as="code" select="code">
 ```xmd
 <Let as="names" value={["Ada", "Lin"]} />
@@ -53,10 +56,28 @@ Hello, {name}!
 ````
 
 The shared draft now holds that program as literal source and nothing has run.
-The `names` binding belongs to the future entry; `code` belongs to this
-response. `select="code"` extracts the first matching fenced block without its
+The response's `names` does not replace `{names}` in the fenced source. The
+entry binds its own `names` when run; `code` belongs to this response.
+`select="code"` extracts the first matching fenced block without its
 fence, and trims trailing whitespace — pass a direct string value when exact
 string boundaries matter.
+
+Use a longer outer fence when the saved entry contains an executable block:
+
+`````xmd
+<Let as="code" select="code">
+````xmd
+<Let as="message" value="hello" />
+```sh exec
+printf '%s\n' {message}
+```
+````
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+`````
+
+This fills the draft with the Let and exec block as source. Explicit submission
+runs that entry, where `{message}` resolves to `hello`.
 
 ### Create and use a session component across responses
 
