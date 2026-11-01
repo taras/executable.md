@@ -203,12 +203,10 @@ export interface ReplPlainFitStore {
   /**
    * Keep the lines this preparation actually prepared, and nothing else.
    *
-   * Called once a preparation has succeeded, so a replaced Preview version, a
-   * message that is no longer in the chat and the cuts of a size nothing is
-   * drawn at now all leave rather than accumulating for the command's whole
-   * life. A preparation that failed or was cancelled calls none of this: the
-   * cuts it did complete are exact answers and stay, and the set it never
-   * finished is not published as one.
+   * Successful fitting retains its completed texts and geometry. Chat preparation
+   * also prunes to its candidate before fitting, then clears that candidate on
+   * refusal or cancellation. Other failed preparations retain completed per-line
+   * cuts without publishing a completed sequence.
    */
   settle(texts: readonly string[], room: number, size: ReplTerminalSize): void;
   /** Measured stops relative to one fitted row, independent of its source offset. */
