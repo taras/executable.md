@@ -42,6 +42,7 @@ import type { SyntaxSymbols } from "@executablemd/core";
 import { useTestingComponents } from "@executablemd/testing";
 import { useWebComponents } from "@executablemd/web";
 import { useVerboseComponent } from "./verbose-component.ts";
+import type { IdentityComponent } from "@executablemd/core/host";
 import type { ExecutionDeclaration } from "@executablemd/core/host";
 import { NO_PLUGINS } from "./plugin-host.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
@@ -70,9 +71,10 @@ export { renderSyntaxMarkdown };
 export function* syntaxSymbols(
   includes: readonly string[],
   plugins: CommandPlugins = NO_PLUGINS,
+  components: readonly IdentityComponent[] = [],
 ): Operation<SyntaxSymbols> {
   return yield* scoped(function* () {
-    yield* useCommandSyntax(includes, plugins);
+    yield* useCommandSyntax(includes, plugins, components);
     return yield* Syntax.operations.symbols;
   });
 }
@@ -95,6 +97,7 @@ export function* syntaxSymbols(
 export function* useCommandSyntax(
   includes: readonly string[],
   plugins: CommandPlugins = NO_PLUGINS,
+  components: readonly IdentityComponent[] = [],
 ): Operation<void> {
   yield* useCommandComponents();
   const inputs = {
@@ -103,7 +106,7 @@ export function* useCommandSyntax(
     // The engine's own invocation-named components. A Plugin's vocabulary is
     // in the registry this captured above, so describing it reaches no
     // identity: inspection reads metadata and calls no factory.
-    components: agentIdentityComponents(),
+    components: [...agentIdentityComponents(), ...components],
     // `<Plan>` is part of the run profile, so symbols that left it out would
     // describe a vocabulary no run has. Described from the packaged bytes:
     // inspection mints nothing, so it reports the Component's identity and
@@ -218,9 +221,10 @@ export function* renderSyntaxDocumentation(
   includes: readonly string[],
   names: readonly string[],
   plugins: CommandPlugins = NO_PLUGINS,
+  components: readonly IdentityComponent[] = [],
 ): Operation<string> {
   return yield* scoped(function* () {
-    yield* useCommandSyntax(includes, plugins);
+    yield* useCommandSyntax(includes, plugins, components);
     return yield* Syntax.operations.documentation(names);
   });
 }

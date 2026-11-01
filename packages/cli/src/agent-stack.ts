@@ -22,7 +22,7 @@ import {
 } from "@executablemd/core";
 import type { AgentProviderFactory, PermissionMode } from "@executablemd/core";
 import { installForegroundLauncher, env as readEnv } from "@executablemd/runtime";
-import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
+import { createAcpxProvider, createAcpxSessionStore, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 // A separate entrypoint because the embedded adapters are temporary (#636) and
 // must not become part of the package's stable surface.
@@ -148,7 +148,10 @@ export function* resolveAgentStack(
  */
 export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDependencies {
   const { sessions } = stack;
-  const adapters = embeddedAdapterDependencies(stack.adapters);
+  const adapters = {
+    ...embeddedAdapterDependencies(stack.adapters),
+    sessionStore: createAcpxSessionStore(join(homedir(), ".acpx")),
+  };
   if (sessions === undefined) {
     return adapters;
   }
@@ -186,8 +189,9 @@ export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDepende
 export function* installAgentProviderStack(
   stack: AgentStack,
   acp?: AcpxProviderDependencies,
+  selectedFactory?: AgentProviderFactory,
 ): Operation<void> {
-  const acpx = createAcpxProvider(acp ?? hostAcpDependencies(stack));
+  const acpx = selectedFactory ?? createAcpxProvider(acp ?? hostAcpDependencies(stack));
   yield* registerAgentProvider("acpx", acpx);
 
   // The trusted host selects its own root provider by name. Document-level

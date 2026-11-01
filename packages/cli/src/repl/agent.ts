@@ -116,6 +116,10 @@ export interface ReplLiveTurn {
   readonly state: ReplLiveTurnState;
   /** What the provider has streamed so far. */
   readonly text: string;
+  readonly inputResults?: readonly Extract<
+    AgentPromptEvent,
+    { type: "question_answer_result" | "permission_decision_result" }
+  >[];
   readonly agent: string | undefined;
   readonly sessionKey: string | undefined;
   readonly agentSessionId: string | undefined;
@@ -263,6 +267,10 @@ interface LiveTurn {
   readonly prompt: string;
   state: ReplLiveTurnState;
   text: string;
+  inputResults: Extract<
+    AgentPromptEvent,
+    { type: "question_answer_result" | "permission_decision_result" }
+  >[];
   agent: string | undefined;
   sessionKey: string | undefined;
   agentSessionId: string | undefined;
@@ -299,6 +307,7 @@ function frozenTurn(turn: LiveTurn): ReplLiveTurn {
     prompt: turn.prompt,
     state: turn.state,
     text: turn.text,
+    inputResults: Object.freeze([...turn.inputResults]),
     agent: turn.agent,
     sessionKey: turn.sessionKey,
     agentSessionId: turn.agentSessionId,
@@ -552,6 +561,7 @@ export function useReplAgent(
         prompt,
         state: "queued",
         text: "",
+        inputResults: [],
         agent: undefined,
         sessionKey: undefined,
         agentSessionId: undefined,
@@ -584,7 +594,12 @@ export function useReplAgent(
       } else if (event.type === "text_delta") {
         turn.state = "active";
         turn.text += event.text;
-      } else {
+      } else if (
+        event.type === "question_answer_result" ||
+        event.type === "permission_decision_result"
+      ) {
+        turn.inputResults.push(event);
+      } else if (event.type === "terminal") {
         turn.state = "terminal";
         turn.status = event.status;
         turn.stopReason = event.stopReason;

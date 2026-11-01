@@ -16,11 +16,13 @@
  * refused by the host names nothing.
  */
 
-import { each, stream, until } from "effection";
+import { each, race, stream, until } from "effection";
 import type { Channel, Operation } from "effection";
 import type { AgentPromptCheckpoint, AgentPromptEvent, Session } from "@executablemd/core";
 import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "./acpx-runtime.ts";
 import { checkpointFromResult } from "./checkpoint.ts";
+import { XmdResponse, XMD_RESPONSE, xmdPromptEvent } from "./xmd-response.ts";
+import type { Registration } from "./permission-bridge.ts";
 
 export interface TurnIdentity {
   agent: string;
@@ -52,18 +54,50 @@ export function* consumeTurn(
   markCompleted: () => void,
   refused?: TurnRefusal,
   checkpoint?: TurnCheckpoint,
+  inputs?: Registration,
+  closeFailed?: () => Operation<void>,
 ): Operation<void> {
   yield* channel.send({ type: "started", agent: identity.agent, session: identity.session });
   let text = "";
   let terminal: AgentPromptEvent;
   let named: AgentPromptCheckpoint | undefined;
   try {
-    for (const event of yield* each(stream(turn.events))) {
-      if (event.type === "text_delta" && (event.stream ?? "output") === "output") {
-        text += event.text;
-        yield* channel.send({ type: "text_delta", text: event.text });
+    const reading = function* (): Operation<void> {
+      for (const event of yield* each(stream(turn.events))) {
+        if (event.type === "text_delta" && (event.stream ?? "output") === "output") {
+          text += event.text;
+          yield* channel.send({ type: "text_delta", text: event.text });
+        }
+        if (
+          event.type === "tool_call" &&
+          event.rawOutput !== null &&
+          typeof event.rawOutput === "object" &&
+          XMD_RESPONSE in event.rawOutput
+        ) {
+          const response = XmdResponse.parse(Reflect.get(event.rawOutput, XMD_RESPONSE));
+          if (response.event === "retired") {
+            if (inputs !== undefined) {
+              yield* inputs.retire(response.presentationId);
+            }
+          } else {
+            const mapped = xmdPromptEvent(response);
+            if (mapped !== undefined) {
+              yield* channel.send(mapped);
+            }
+          }
+        }
+        yield* each.next();
       }
-      yield* each.next();
+    };
+    if (inputs === undefined) {
+      yield* reading();
+    } else {
+      yield* race([
+        reading(),
+        (function* (): Operation<never> {
+          throw yield* inputs.failed;
+        })(),
+      ]);
     }
     const result = yield* until(turn.result);
     terminal = mapResult(result);
@@ -74,10 +108,26 @@ export function* consumeTurn(
       named = checkpointFromResult(result);
     }
   } catch (error) {
+    const original = error instanceof Error ? error : new Error(String(error));
+    const cleanup: Error[] = [];
+    for (const finish of [
+      () => until(turn.cancel()),
+      () => until(turn.result),
+      ...(closeFailed === undefined ? [] : [closeFailed]),
+    ]) {
+      try {
+        yield* finish();
+      } catch (cause) {
+        cleanup.push(cause instanceof Error ? cause : new Error(String(cause)));
+      }
+    }
     terminal = {
       type: "terminal",
       status: "failed",
-      error: error instanceof Error ? error : new Error(String(error)),
+      error:
+        cleanup.length === 0
+          ? original
+          : new AggregateError([original, ...cleanup], original.message, { cause: original }),
     };
   }
   const refusal = refused?.();

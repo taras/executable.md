@@ -163,6 +163,22 @@ routes an opaque request and cannot manufacture that result.
 
 ### The provider-factory seam
 
+The CLI REPL entry assembly uses this delivered coordinator for its XMD-only
+headless child integration. The canonical document Session remains the issuer.
+Its requestSession callback prepares and journals an opaque address before native
+acquisition. A setup decorator calls genuine activate with the original provider,
+command and construction configuration, returns its original Err immediately,
+and acquires only after genuine Ok. It forwards finish with the actual Session
+and new/existing configuration operation, retaining the original result and
+failures. No public Context or authored name supplies this authority.
+
+The ordinary document journal owns the xmd_session allocation. Only its live body
+permits acquisition; replay looks up the exact original child and refuses absence.
+Parent registration occurs synchronously after the root, selected Sidekick
+association and private endpoint are ready. Creator cancellation joins startup
+before registration; afterwards the parent owns the child independently of the
+entry provider's finalizers.
+
 A provider is a factory that installs `Agent` middleware for its scope, and —
 if it serves saved conversations — one provider object for them. Core delivers
 its coordinator directly to the factory; it never travels through Agent
@@ -489,6 +505,15 @@ root. Filesystem accessibility and rendered agent instructions remain separate:
 the cwd is not injected as text, and rendered instructions grant no directory.
 
 ## A conversation a trusted host holds open
+
+The parent and child Sidekicks retain this ordinary constrained provider assembly
+and mailbox. Headless child placement belongs to the separate entry document's
+canonical Session; the child-enabled entry factory is not installed as the root
+provider of a held XMD chat. The held history retains its own construction and
+Prompt ordering. A saved child reference neither replaces that history nor starts
+a fresh conversation after uncertain acceptance. Reconnection first establishes
+the exact original live child; missing identity or outcome remains uncertain and
+never authorizes resend.
 
 `<Session>` and `<Prompt>` are written inside an expansion, with an element to
 name the session and a journal already around them. A host that discusses
@@ -1400,6 +1425,81 @@ none.
 
 
 ## The CLI Sidekick attachment as an ACP backend
+
+The headless XMD child backend uses the same live dispatch and original input
+owners through its separately admitted child connection. `xmd repl --attach
+<sessionId>` attaches a UI to the same root and selected conversation. Its opaque
+child ID is distinct from every outer ACP attachment mapping. ACP cancel/close
+joins its exact exchange, while UI detachment and ACP connection loss leave the
+parent-owned child alive. Shutdown and parent termination join actual cleanup;
+reply text, accepted input, saved acknowledgement and joined round are distinct.
+
+Questions use standard `elicitation/create`, mode `form`, with the actual message
+and standard requestedSchema. Optional metadata is exactly
+`_meta["executablemd.xmd-question/v1"] = {requestId, presentationId, schema}`:
+the owner-held request ID, this callback presentation ID, and the complete
+normalized schema. For a decision approve/reject where approve requires a reason
+of at least eight characters, standard required contains only decision; readable
+text describes the condition and the complete schema retains if/then. The entire
+question and rules appear as standard tool content before callback or capability
+refusal. A generic client can read them without interpreting metadata.
+
+Permissions keep standard `session/request_permission`, actual offered options and
+existing policy. Optional `_meta["executablemd.xmd-permission/v1"]` contains exactly
+requestId and presentationId. Each callback submits to the captured exact original
+owner with no suspension between current-owner check and settlement. Invalid
+responses keep it pending; corrections receive a fresh presentation. No answer or
+permission is supplied automatically.
+
+A presentation starts as standard tool_call, kind other, readable XMD title,
+in_progress status and actual request content. Its response or retirement is a
+standard tool_call_update with the same toolCallId, kind/title, readable content
+and sole rawOutput member `executablemd.xmd-response/v1`. That closed payload
+contains kind, requestId and presentationId plus:
+
+| event | Outcome/detail | Final presentation status |
+| --- | --- | --- |
+| response | accepted | completed |
+| response | stale or not-submitted | failed |
+| response | invalid, reason schema, original nonempty normalized issues; question only | failed |
+| response | invalid, reason option-not-offered; permission only | failed |
+| response | invalid, reason response-format | failed |
+| retired | reason request-ended | completed |
+
+No answer values, retained history or receipt sequence are added. Each presentation
+classifies at most one response and receives at most one retirement while open.
+Retirement and a later in-flight stale response are separate facts. Final status
+ends the presentation only. Acceptance proves original-owner acceptance, not
+publication, successful Prompt, completed round or cleanup. Missing matching
+response after submission stays unknown even if retirement or terminal arrives.
+Connection loss promises no delivery and authorizes no resend or receipt replay.
+
+The trusted embedded XMD runtime advertises only form elicitation before initialize.
+Its private callback re-enters the exact subscriber scope already registered by
+the permission bridge and calls Core prepareElicitation/runPreparedElicitation
+with the actual message and complete schema. Core validates the parent input;
+the original child validator decides final acceptance. Abort, Prompt teardown or
+exact presentation retirement halts and joins that callback, removing parent
+input through existing signals without inventing a child denial or dismissal.
+Callback/parse/publication failure retains its cause and cancels/joins the local
+runtime before terminal and stream completion; it does not shut down the child.
+
+The single native event reader maps responses into only two transient Prompt
+variants: question_answer_result carries questionId/inputId/result, and
+permission_decision_result carries permissionId/inputId/result. Request and
+presentation IDs map respectively to those IDs; result keeps status and invalid
+reason/issues. Retirement removes its exact input and produces neither variant.
+The existing live-turn/root view shows these separately from reply text. Core
+reply and durable Prompt records retain their text and terminal facts only;
+ordinary providers need not emit these notices.
+
+Stock ACPX 0.21.1 provides no form input. It receives complete readable question
+content followed by a precise capability refusal, with the child still pending.
+A capable client or attached UI can answer that same original. Standard text/JSON
+notices remain useful without metadata; quiet output supplies no complete
+interaction receipt. Stock permission handling retains actual policy and gains no
+auto-approval flags. The older prepared Sidekick backend below still cannot answer
+questions and retains its existing configuration and permission limits.
 
 `xmd sidekick acp --attach FILE` serves the existing live REPL Sidekick over
 ACP protocol 1. Its session ID and `agentSessionId` metadata name the issued

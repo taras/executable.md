@@ -111,6 +111,7 @@ export const GUIDE_CHAPTERS = [
   "Lifetimes",
   "Recovery",
   "Environment",
+  "Children",
 ] as const;
 
 export type GuideChapter = (typeof GUIDE_CHAPTERS)[number];

@@ -345,6 +345,24 @@ describe(
         throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
       }
 
+      for (const declaration of [
+        "runtime.d.ts",
+        "agent-registry.d.ts",
+        "client-D12zqSyN.d.ts",
+        "session-options-BlnP3WAc.d.ts",
+      ]) {
+        const source = path.join(workspace, "packages/acp/vendor/acpx/generated", declaration);
+        const published = path.join(
+          workspace,
+          "packages/acp/npm/types/vendor/acpx/generated",
+          declaration,
+        );
+        const original = yield* until(readFile(source));
+        const restored = yield* until(readFile(published));
+        expect(digest(restored)).toBe(digest(original));
+        evidence.emitted[`ACP declaration ${declaration}`] = digest(restored);
+      }
+
       // The emitted manifest declares the exact pinned engine, which is what a
       // consumer installs: a build that dropped it would resolve nothing.
       const emitted = JSON.parse(

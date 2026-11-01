@@ -95,6 +95,8 @@ export type ReplFormOutcome =
 
 /** One question waiting for an answer in this process. */
 export interface ReplQuestion {
+  readonly schema?: Json;
+  readonly active?: boolean;
   readonly message: string;
   readonly form: ReplQuestionForm;
   /**
@@ -469,10 +471,13 @@ export function* useReplElicitation(
           return yield* action<Json>(function (resolve) {
             let settled = false;
             const question: ReplQuestion = {
+              get schema() {
+                return structuredClone(request.schema);
+              },
+              get active() {
+                return !settled;
+              },
               message: request.message,
-              // No schema member. The parsed form is everything a reader needs,
-              // and retaining the caller's object would hand a live reference to
-              // whatever built it out to the application.
               form,
               submit(values: Readonly<Record<string, string>>): ReplFormOutcome {
                 if (settled) {
@@ -484,11 +489,8 @@ export function* useReplElicitation(
                 // well accept; dropping it would answer a different question from
                 // the one on the screen. A field nobody has touched is absent.
                 const assembled: Record<string, Json> = {};
-                for (const field of form.fields) {
-                  const value = values[field.name];
-                  if (value !== undefined) {
-                    assembled[field.name] = value;
-                  }
+                for (const [name, value] of Object.entries(values)) {
+                  assembled[name] = value;
                 }
                 const issues = validateParsed(prepared.validate, assembled);
                 if (issues.length > 0) {

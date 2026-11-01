@@ -53,7 +53,7 @@ import {
   writeTextFile,
 } from "@effectionx/fs";
 import { listWorkspacePaths } from "./lib/workspace.ts";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 // Only what `@effectionx/fs` does not provide: recursive directory copy,
 // temp-dir creation, and a recursive listing — its own `readdir` takes no
 // options. Everything else on this path goes through the package.
@@ -418,6 +418,16 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
         },
       }),
     );
+
+    // dnt emits inferred declarations for JavaScript even when a supplied .d.ts
+    // declares its interface. Keep those declarations and their type-only siblings
+    // in directories the emitted graph actually contains.
+    for (const name of yield* until(readdir(srcCopy, { recursive: true }))) {
+      const target = join(fromFileUrl(outDir), "types", name);
+      if (name.endsWith(".d.ts") && (yield* exists(dirname(target)))) {
+        yield* copyFile(join(srcCopy, name), target);
+      }
+    }
   });
 
   const license = new URL("LICENSE", repoRoot);

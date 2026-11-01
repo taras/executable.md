@@ -206,6 +206,14 @@ Determinism is two properties:
 
 ### State ownership
 
+The parent REPL also owns each established headless XMD child. Registration follows
+readiness of the child's root, exact selected Sidekick conversation and private
+endpoint. Before registration, creator cancellation joins startup; afterwards,
+entry completion and connection loss leave the child with its parent. Parent
+termination and explicit child Shutdown join actual resource cleanup. A UI
+connection owns its terminal modes, readers, presentations and lease, separately
+from that root.
+
 All state is scoped to the operation that owns it, so it is torn down when
 the operation is torn down: created inside the operation it describes,
 provided via context. A cwd binding belongs on the task that performs the work,
@@ -3485,9 +3493,23 @@ native CLI would accept is one.
 
 #### Inert placement
 
+The CLI REPL's trusted XMD entry integration establishes a parent-owned child
+during canonical Session placement. This exception applies to `Agent name="xmd"`;
+it sends no Prompt. The genuine opaque request and directly delivered coordinator
+retain Session configuration and completion authority. `requestSession` records
+`{type:"xmd_session", name: sessionIdentity + "/xmd-child"}` with result exactly
+`{sessionId}` in the issuing document's journal before acquiring resources. The
+live allocation body alone permits fresh startup. The trusted setup forwards
+original construction configuration to genuine activation, returns its original
+failure without acquisition, and acquires only after its successful Result.
+Genuine finish then settles the provider-issued Session unchanged. An unfinished
+document replays allocation and performs exact live lookup; an ended original
+refuses without recreation. The separate constrained Sidekick assembly retains
+its ordinary held-conversation journal and provider.
+
 A pending session placement is an exact provider-issued `Session` capability carrying
 where a logical session will live and which agent it is compatible with, and nothing
-more: no construction route, no provider handle, no resumable identity. A fresh
+more: no construction route, no provider handle, no resumable identity. For ordinary agents, a fresh
 `<Session>` produces one, and the first consuming operation chooses how the session is
 constructed.
 
@@ -5255,6 +5277,13 @@ secret gate, so replay reaches neither deterministic provider.
 
 #### Trusted host orchestration
 
+REPL entry assembly captures its XMD child manager and identity components
+before document code runs. The manager receives genuine Session identity through
+the factory-delivered setup, keeps preparation associated with that exact request,
+and associates the genuine finished Session object with its child. Public labels,
+Context values and copied Session properties do not establish identity or parent
+shutdown authority. A captured JSON reference is inert data, not a new owner.
+
 A **trusted host** is the code that decides what an execution is for — a CLI
 entrypoint, a workflow runner — as distinct from the document, the components it
 expands, and the middleware packages composed around it.
@@ -6465,6 +6494,13 @@ no requirement to snapshot, validate or recover an entire checkout.
 
 ## The private REPL composition kernel
 
+The live root runs independently of a screen connection. A headless root owns
+one ReplSession, evaluator, journal writer, transition loop, Sidekick owner and
+dispatch, and the original question and permission owners. Attachment connects
+the existing ReplScreen boundary to that root; history projection and root state
+stay there. Detachment releases UI work without starting another evaluator or
+replaying completed entries.
+
 `packages/cli/src/repl/` is a private CLI feature, not a package boundary and
 not part of `@executablemd/core`'s surface. Its layers are one direction:
 
@@ -6481,6 +6517,26 @@ holds a `DurableEvent` and nothing above can change one. Route resolution is
 pure and answers with the exact objects that model holds.
 
 ### Local Sidekick attachments
+
+A headless XMD child publishes an opaque address association containing only
+`version`, `transport`, `socket`, `owner`, `execution`, `conversation` and `cwd`.
+The public sessionId identifies that live root and exact selected conversation;
+outer ACP session IDs remain connection mappings. Files alone prove no liveness:
+selection and attachment verify the live exact tuple. Unknown, ended or mismatched
+references refuse without starting a replacement. One interactive lease is
+allowed; a second refuses without taking over. The POSIX adapter resolves a
+symlinked temporary input to a validated canonical private directory and preserves
+ownership, mode, no-follow and identity-checked cleanup protections.
+
+Child ACP delivers actual pending questions through standard form elicitation and
+actual permission choices through standard permission callbacks. Both paths submit
+to the same original owners as the UI. Invalid answers leave that owner pending;
+a stale response cannot reach its successor. Presentation retirement removes the
+exact inherited callback input and joins its task, without answering the child.
+Response outcomes and retirement use bounded standard tool updates; the two
+transient Prompt notices reach the live root without entering reply text or
+durable Prompt records. Prepared Sidekick attachments retain their narrower
+rights and cannot answer questions.
 
 The CLI-private `sidekick-acp` composition attaches observers and an ACP stdio
 bridge to the live root's existing Sidekick dispatch. With `--sidekick-acp` and
@@ -7081,6 +7137,17 @@ and field names, so a rule about spelling would have taken the pointer away from
 a conversation or a field whose name happened to look like something else.
 
 ### From a frame to a terminal, and back
+
+For a connected child UI, the terminal sends only the existing closed physical
+input, pointer, wheel, resize and EOF shapes. The root normalizes and dispatches
+once through its mounted tree. Each connection numbers presentations; its terminal
+acknowledges only after the exact bytes apply at matching dimensions. The root
+keeps frame subscription, tick, current size, commit/layout/render, presentation,
+then frame acknowledgement in that order. A refused resize redraws without
+acknowledging unapplied geometry or accepting stale targets. Slow or failed UI
+connections release their own lease and frame work; a detached root holds no
+screen frame demand. The root retains draft, focus and current work across
+reattachment.
 
 Below the tree, one more direction — and it begins before anything is mounted:
 
@@ -8724,6 +8791,14 @@ state Stop leaves.
 
 #### Follow and the two Stops
 
+Neither Stop ends a parent-owned XMD child. An attached child UI offers
+`[detach]`; choosing it, EOF or connection loss joins that UI's readers, modes,
+rendering and lease while the root continues. `XMD.Session.Shutdown` in the owning
+parent and parent termination stop the child and join its actual cleanup.
+Prompt reply, accepted response, acknowledged publication, completed round and
+joined cleanup remain separate observations. Lost acceptance or a missing response
+result authorizes neither resend nor a replacement conversation.
+
 Follow continues a Sidekick Send through the evaluation that Send invokes. It is
 a setting of the running REPL: on when the REPL starts, kept across rounds and
 navigation, and saved nowhere, so no preference, history or configuration record
@@ -9239,6 +9314,7 @@ Status is measured against main.
 | testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer [Invariant](#capability-backed-nested-execution); [Interface and evidence](specs/testing-spec.md#nested-executions). | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | nested run-profile Agent and elicitation declarations | Configures one isolated run-profile child with frozen TestAgent scenarios and non-delegating Answers, preserving ordinary component shadowing. [Invariant](#capability-backed-nested-execution); [Interface and evidence](specs/testing-spec.md#nested-executions). | Built on #641; controlled Plan label routing added by #728. |
 | `Config` run deadline / exec default / Fetch default / verbosity | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer, and contextual verbosity — a boolean that is false unless configured, seeded by the command line and overridable for a lexical subtree, bounding nothing and deciding no permission [Invariant](#contextual-run-configuration). | built on this stack |
+| Parent-owned headless XMD child | Canonical REPL entry placement starts one terminal-free root and selected Sidekick conversation; XMD.Session reads/selects its exact reference, one UI attaches/detaches, and Shutdown or parent end joins cleanup. [Ownership and attachment](#local-sidekick-attachments). | Built in the CLI REPL; ordinary providers and prepared attachment rights remain separate. |
 | Agent session configuration (`<Session model effort>` / `Agent.options()`) | Applies and verifies exact provider model and effort settings for the final routed session; inspection starts no turn. [Full contract](#native-agent-sessions). | Built; [provider availability and compatibility](#native-agent-sessions). |
 | native session launch (`<Session.Launch>` / `launchAgentSession()`) | Hands one durable session to its provider native UI, retaining construction and build compatibility through interruption. [Full contract](#native-agent-sessions). | Built; [provider availability and compatibility](#native-agent-sessions). |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component [Interface and evidence](specs/executable-mdx-spec.md#618-reading-over-http-fetch). | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |

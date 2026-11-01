@@ -86,5 +86,7 @@ than be filled in.
 
 ## Read next
 
+Read `<Guide.Children />` before delegating a program to a headless XMD child.
+
 Read `<Guide.Lifetimes />` before starting processes or connections, and
 `<Guide.Entries />` for the pattern that prepares the entry itself.

@@ -6499,6 +6499,12 @@ JSON-safe array of normalized Ajv issues, each
 
 #### Binding: `as` and `<Let>`
 
+Within a CLI REPL XMD Session, `<XMD.Session as="child" />` captures exactly
+`{sessionId}` for its already-started child, without sending a Prompt. Capturing
+this data extends no resource lifetime and a nested binding does not automatically
+become root data. Publish the returned object through the existing eligible root
+binding rules when another entry needs it. Prompt captures remain reply text.
+
 Two expansion-level mechanisms write into `env.values` instead of the
 document:
 
@@ -9639,6 +9645,13 @@ itself.
 
 #### 6.16.1 The Elicitation Api
 
+The CLI's embedded headless-child ACP callback uses this same contextual provider
+in the original Prompt subscriber scope. It supplies the actual message and full
+normalized schema, including conditional requirements. Core retains compilation,
+validation, capture, recording and replay. Transport withdrawal removes the live
+interaction and supplies no schema answer. Child response notices are transient
+Prompt events and never enter reply text or durable Prompt records.
+
 The contextual provider receives the rendered request and the compiled schema,
 and nothing else:
 
@@ -12738,6 +12751,32 @@ Each row names the derivation it kills.
 | XP26 | Nested projection under iteration | One `<Content />` written inside `<Each>` gives each item its own identifier, and re-expansion reproduces the ordered pair — an identity taken from the element rather than the path it expands under would report one twice |
 
 ### Tier AF — Agent components as function components
+
+The CLI REPL adds `XMD.Session` and `XMD.Session.Shutdown` through its trusted
+entry installation. They do not change ordinary Agent/Session/Prompt behavior:
+
+```xmd
+<Agent name="xmd">
+<Session name="worker">
+<XMD.Session as="child" />
+<Json value={child} />
+<Prompt>Run the requested program.</Prompt>
+</Session>
+</Agent>
+```
+
+The canonical XMD Session establishes its parent-owned headless child before its
+content. Read returns exactly the opaque sessionId and sends no prompt. Labels
+remain descriptive and distinct Session declarations retain distinct identities.
+The genuine provider coordinator owns configuration activation and finish;
+ordinary agents retain inert fresh placement and exact nested Prompt pinning.
+
+`<Agent name="xmd"><XMD.Session sessionId={child.sessionId}><Prompt>Continue.</Prompt></XMD.Session></Agent>`
+selects the same live child. `<XMD.Session.Shutdown sessionId={child.sessionId} />`
+in the owning parent stops it and waits for cleanup. Unknown/ended references
+refuse without replacement. A saved JSON reference grants no other parent's
+shutdown authority. UI attachment uses `xmd repl --attach <sessionId>`; detach
+leaves the child alive, and parent termination performs owned shutdown.
 
 | # | Test | Verify |
 |---|------|--------|

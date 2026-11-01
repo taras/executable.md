@@ -27,6 +27,9 @@ import { ordinaryGeneratedSelection } from "./evaluation-profile.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./plan-writer-profile.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
+import { useHeadlessChildren } from "./headless/host.ts";
+import type { HeadlessChildren } from "./headless/host.ts";
+import { runReplProgram } from "./repl/program.ts";
 import { ReplEntryHost } from "./repl-entry-installation.ts";
 import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
 import { renderSyntaxDocumentation, renderSyntaxMarkdown, syntaxSymbols } from "./syntax.ts";
@@ -93,12 +96,14 @@ export interface EntryVocabulary {
 
 /** The captured command basis, before its execution directory is known. */
 export interface ReplProfileAssembly {
+  readonly children?: HeadlessChildren;
   readonly projectCwd: string;
   finalize(workspace?: string): Operation<ReplExecutionProfile>;
 }
 
 /** One finalized execution profile, shared by validation, descriptions and entries. */
 export interface ReplExecutionProfile {
+  readonly children?: HeadlessChildren;
   readonly mounts?: WorkspaceMountTable;
   readonly testing?: ReplTesting;
   readonly projectCwd?: string;
@@ -209,7 +214,15 @@ export function* assembleReplProfile(
   const configuredIncludes = Object.freeze(
     (facts.includes ?? REPL_INCLUDES).map((path) => resolve(projectCwd, path)),
   );
-  yield* installAgentProviderStack(stack, facts.acp);
+  const dependencies = facts.acp ?? hostAcpDependencies(stack);
+  const children = yield* useHeadlessChildren(function* (headless) {
+    const profile = yield* assembleReplProfile(stack, plugins, facts);
+    const outcome = yield* runReplProgram({ profile, headless });
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+  });
+  yield* installAgentProviderStack(stack, dependencies, children.factory(dependencies));
   // Settled here, with the stack and the Plugins, because it is a fact about
   // the command a person invoked rather than about any conversation they later
   // have. Resolved rather than retained as "unstated": a profile that carried
@@ -219,7 +232,6 @@ export function* assembleReplProfile(
 
   const entryInstallation = yield* ReplEntryHost.get();
   const host = yield* useScope();
-  const dependencies = facts.acp ?? hostAcpDependencies(stack);
   const sidekick = sidekickAssembly(agent, {
     ...dependencies,
     agentCwd:
@@ -235,6 +247,7 @@ export function* assembleReplProfile(
   const names = Object.freeze(plugins.plugins.map((plugin) => plugin.name));
   const installations = Object.freeze([...plugins.installations]);
   return Object.freeze({
+    children,
     projectCwd,
     *finalize(workspace?: string): Operation<ReplExecutionProfile> {
       const includes = Object.freeze([
@@ -262,10 +275,11 @@ export function* assembleReplProfile(
       });
 
       const profile = Object.freeze({
+        children,
         mounts,
         includes,
         projectCwd,
-        vocabulary: entryVocabulary(includes, plugins),
+        vocabulary: entryVocabulary(includes, plugins, children.installation.components),
         // Read off the admitted assembly here, once, while it is in hand. Copied
         // rather than referenced so nothing downstream can reach a Plugin value
         // through the profile, and frozen because a profile is read and never
@@ -273,6 +287,7 @@ export function* assembleReplProfile(
         plugins: names,
         installations: Object.freeze([
           ...installations,
+          children.installation,
           Object.freeze({
             components: agentIdentityComponents(),
             declarations: Object.freeze([plan]),
@@ -315,13 +330,14 @@ export function* assembleReplProfile(
 export function entryVocabulary(
   includes: readonly string[],
   plugins: CommandPlugins,
+  components: import("@executablemd/core/host").ExecutionInstallation["components"] = [],
 ): EntryVocabulary {
   return Object.freeze({
     *symbols(): Operation<string> {
-      return renderSyntaxMarkdown(yield* syntaxSymbols(includes, plugins));
+      return renderSyntaxMarkdown(yield* syntaxSymbols(includes, plugins, components));
     },
     documentation(names: readonly string[]): Operation<string> {
-      return renderSyntaxDocumentation(includes, names, plugins);
+      return renderSyntaxDocumentation(includes, names, plugins, components);
     },
   });
 }
