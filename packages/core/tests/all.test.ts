@@ -19,7 +19,7 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { race, resource, scoped, sleep, spawn, suspend, withResolvers } from "effection";
+import { ensure, race, resource, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { createDurableOperation, ephemeral, InMemoryStream } from "@executablemd/durable-streams";
 import type {
@@ -1982,12 +1982,11 @@ describe("993 nested Spawn joined cleanup", () => {
             *fn() {
               yield* retain(() =>
                 resource(function* (provide) {
-                  try {
-                    yield* provide(undefined);
-                  } finally {
+                  yield* ensure(function* () {
                     cleanup.publish();
                     yield* awaiting("cleanup release", releaseCleanup.published);
-                  }
+                  });
+                  yield* provide(undefined);
                 }),
               );
               shared.announce("held");
