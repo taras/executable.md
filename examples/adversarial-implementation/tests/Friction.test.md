@@ -9,6 +9,7 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect the saved test evidence.",evidence:["intent.md"]}} />
 
 <Test name="the phase entry carries source and selected documents and needs no SHA correction" timeout="60s">
+<Each in={["short-revision","omitted-metadata"]} let="request">
 <TempDir>
 <Fixture.Repository as="fixture" />
 <Dir path={fixture.repository}>
@@ -19,21 +20,22 @@ git rev-parse HEAD
 <Let as="checkout" value={{head:observed.stdout.trim()}} />
 <Dir path={fixture.repository}><File path="guide.md">Use the saved consumer evidence.</File></Dir>
 <Let as="attempt" value={fixture.root + "/review"} />
-<Let as="assignment" value={{phase:"review",work:"test",repository:fixture.repository,revision:checkout.head,priorRevision:null,request:"short-revision",changedPaths:[],artifacts:[],evidence:[],findings:[],assessment,handoffInputs:["guide.md"],continuation:{phase:"ready",role:null}}} />
-<Fixture.Entry entry="phase" value={{role:"planner",session:"original-planner",assignment,attempt}} command={runner} root={root} as="child" />
+<Let as="assignment" value={{phase:"review",work:"test",repository:fixture.repository,revision:checkout.head,priorRevision:null,request,changedPaths:[],artifacts:[],evidence:[],findings:[],assessment,handoffInputs:["guide.md"],continuation:{phase:"ready",role:null}}} />
+<Fixture.Entry entry="phase" value={{role:"planner",session:"original-planner",assignment,attempt,maxResponseCorrections:0}} command={runner} root={root} as="child" />
 <If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
 <Parse schema={{type:"object"}} as="result">{child.stdout}</Parse>
 <AssertEquals actual={result.evidence[0].revision} expected={checkout.head} />
 <Ticket.Text path={attempt + "/response-acceptance.json"} as="receiptText" />
 <Parse schema={{type:"object"}} as="receipt">{receiptText}</Parse>
 <AssertEquals actual={receipt.round} expected={0} />
-<AssertEquals actual={receipt.normalizations} expected={[{abbreviation:checkout.head.slice(0,8),revision:checkout.head}]} />
+<AssertEquals actual={receipt.normalizations} expected={request === "short-revision" ? [{abbreviation:checkout.head.slice(0,8),revision:checkout.head}] : []} />
 <Ticket.Text path={attempt + "/called.json"} as="calledText" />
 <Parse schema={{type:"object"}} as="called">{calledText}</Parse>
 <AssertEquals actual={called.inputPaths} expected={["guide.md"]} />
 <Ticket.Text path={attempt + "/raw.txt"} as="original" />
-<AssertStringIncludes actual={original} expected={'"revision": "' + checkout.head.slice(0,8) + '"'} />
+<AssertStringIncludes actual={original} expected={request === "short-revision" ? '"revision": "' + checkout.head.slice(0,8) + '"' : '"outcome": "pass"'} />
 </TempDir>
+</Each>
 </Test>
 
 <Test name="the phase response limit preserves valid replies and bounds repair prompts" timeout="60s">

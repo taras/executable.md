@@ -82,16 +82,20 @@ test -f {referencePath} -a -r {referencePath}
 <Ticket.Documents repository={task.repository} paths={[...task.inputs,...guidePaths]} as="documents" />
 <If condition={Object.values(documents).reduce((total,input) => total + input.content.length,0) > 64000}><Let as="work" value={{status:"hold",reason:"Selected initial evidence and role guides exceed 64000 characters. Prepare a concise accepted packet and keep full logs as references.",history:[]}} /><Break /></If>
 <Let as="inputs" value={task.inputs.map(path => documents[path])} />
+<Ticket.Capture as="deliveryCheck"><Delivery.Prepare task={task} inputs={inputs} as="delivery" /><Json value={delivery} /></Ticket.Capture>
+<If condition={deliveryCheck.status !== "completed"}><Let as="work" value={{status:"hold",reason:deliveryCheck.failure,history:[]}} /><Break /></If>
+<Parse schema={{type:"object"}} as="delivery">{deliveryCheck.output}</Parse>
 <Let as="plannerGuide" value={documents[guidePaths[0]]} />
 <Let as="implementorGuide" value={documents[guidePaths[1]]} />
 <If condition={task.scope.decisions.openQuestions.length !== 0}><Let as="work" value={{status:"hold",reason:"Resolve these material questions before launch: " + task.scope.decisions.openQuestions.join("; ") + ". Evidence: " + task.scope.decisions.evidence.join(", ") + ". Record accepted answers under fresh references and prepare the task again.",history:[]}} /><Break /></If>
 <If condition={task.scope.migration !== null}>
-<Adversarial.Run task={{work:task.work,repository:task.repository,directory:task.directory,request:task.request + "\n\nAccepted migration commitments: " + JSON.stringify(task.scope.migration),inputs:task.inputs,sessions:task.sessions,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs}} plannerGuide={plannerGuide} implementorGuide={implementorGuide} documents={Object.fromEntries(inputs.map(input => [input.path,input]))} assessment={task.assessment} as="work" />
+<Adversarial.Run delivery={delivery} task={{work:task.work,repository:task.repository,directory:task.directory,request:task.request + "\n\nAccepted migration commitments: " + JSON.stringify(task.scope.migration),inputs:task.inputs,sessions:task.sessions,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs}} plannerGuide={plannerGuide} implementorGuide={implementorGuide} documents={Object.fromEntries(inputs.map(input => [input.path,input]))} assessment={task.assessment} as="work" />
 <Else>
 ```bash exec as="reserved"
 mkdir -- {directoryPath}
 ```
 <If condition={reserved.exitCode !== 0}><Let as="work" value={{status:"hold",reason:"The fresh work directory could not be reserved: " + task.directory + ". Preserve any existing effects and reconcile the original record before retrying. " + reserved.stderr,history:[]}} /><Break /></If>
+<Dir path={task.directory + "/delivery"}><File path="requirements.json"><Json value={delivery} /></File></Dir>
 <Let as="assignment" value={{phase:"implementation",work:task.work,repository:task.repository,revision:task.revision,priorRevision:null,request:task.request,assessment:task.assessment,changedPaths:[],artifacts:[],evidence:[],findings:[]}} />
 <Let as="planned" value={false} />
 <Let as="deliveredInputs" value={{}} />
@@ -116,10 +120,14 @@ mkdir -- {directoryPath}
 <Let as="planned" value={true} />
 <Let as="deliveredInputs" value={{[task.sessions.planner]:[...new Set([...task.inputs,plannerGuide.path])]}} />
 </If>
-<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,deliveredInputs,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:"claude",initialized:planned},implementor:{session:task.sessions.implementor,provider:"claude",initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,delivery,deliveredInputs,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:"claude",initialized:planned},implementor:{session:task.sessions.implementor,provider:"claude",initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
 <Dir path={task.directory}><File path="implementation.json"><Json value={manifest} /></File></Dir>
 <Ticket.Run manifest={task.directory + "/implementation.json"} as="work" />
 </Else>
 </If>
 </Loop>
+<If condition={work.status === "feedback_ready"}>
+<If condition={task.scope.migration !== null}><Dir path={delivery.directory}><File path="feedback.json"><Json value={{status:work.status,revision:work.revision}} /></File></Dir></If>
+<Let as="work" value={{...work,delivery:{...delivery,status:"review_pending"},remainingRequiredDeliveryWork:delivery.required,nextAction:{entry:"delivery.md",record:delivery.directory + "/requirements.json",action:"review"}}} />
+</If>
 <Output><Json value={work} /></Output>

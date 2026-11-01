@@ -34,5 +34,21 @@
       "evidence": ["/absolute/work/accepted-scope-and-checks.md"]
     },
     "migration": null
+  },
+  "delivery": {
+    "repository": "taras/executable.md",
+    "reviewer": {
+      "provider": "claude",
+      "model": "claude-fable-5-1[1m]",
+      "effort": null,
+      "session": "bounded-parser-fix-independent-review"
+    },
+    "acceptance": [
+      {
+        "id": "parser-behavior",
+        "source": "/absolute/work/accepted-scope-and-checks.md",
+        "requirement": "Preserve the accepted parser behavior and demonstrate the focused regression."
+      }
+    ]
   }
 }

@@ -1,9 +1,10 @@
 # Adversarial implementation
 
-Deliver accepted work through one launch. Prepared scope facts select direct
+Run implementation feedback from accepted work through one launch. Prepared scope facts select direct
 implementation, ordinary planning followed by implementation, or a validated API
 foundation followed by remaining consumer migration. Existing impact policy
-selects independent review separately from that route.
+selects internal feedback separately from that route. Delivery additionally requires
+the recorded independent review and current CI.
 
 ## Applies to
 
@@ -17,7 +18,7 @@ change a running role's model or a live workflow's include directory.
 
 Prepare this repository with `deno task setup`. Copy `task.example.json` to a
 local file and replace its source, exact revision, output directory, accepted
-request, selected evidence paths and unused session names. Prepare the selected
+request, selected evidence paths, delivery policy and unused session names. Prepare the selected
 source through its own repository instructions. Its feedback commits use its
 configured Git signing and verification. Run from that source checkout:
 
@@ -129,6 +130,102 @@ and include version. Keep the original session identities and recorded inputs.
 The roles use the normal agent permission policy. Running this example invokes
 paid coding agents and permits the assigned implementation work. Publication,
 issue/PR metadata and delivery remain with the Sidekick running Codex.
+
+## Complete delivery from recorded requirements
+
+Use this after implementation feedback, for ordinary runs and REPL entries.
+`feedback_ready` establishes the selected internal feedback; it leaves independent
+review, required CI and current main health outstanding. `run.md` requires a
+`delivery` declaration before any role starts and writes its original captured
+acceptance text to `delivery/requirements.json`. A missing declaration refuses
+launch. Clause IDs are distinct and each source selects an original `task.inputs`
+reference. The independent reviewer uses a separate conversation from all three
+implementation roles.
+
+Publish the branch and draft PR through the existing owner, then run from the
+same source checkout:
+
+```bash
+xmd run /absolute/path/to/workflow/examples/adversarial-implementation/delivery.md \
+  --props-record /absolute/work/fresh-bounded-parser-fix/delivery/requirements.json \
+  --props-number 123 --props-action status \
+  --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
+```
+
+`status` starts no model. It reads the saved joined review, the current PR and
+GitHub's CI workflow runs. Its `nextAction` is computed from the same facts as
+its `status` and `remaining` fields. When it requests `review`, select
+`--props-action review` on that command to perform one independent review with
+the provider, model, effort and session recorded at launch. Prepare the installed
+client for that model beforehand; a provider refusal retains its original
+attempt and grants no fallback. The review uses normal coding-agent permissions.
+It receives the original captured acceptance text and may inspect source and run
+focused checks; it receives no implementation, delegation, posting or merge task.
+
+```text
+feedback pending -> continue original feedback
+feedback ready   -> independent review pending -> joined exact-commit verdict
+                      | incomplete/uncertain       -> reconcile original call
+                      | blocking finding           -> request approved repair
+                      | pass + required CI + main   -> finish PR metadata
+                      | all passed + PR ready       -> await authorized merge
+                      | confirmed merge             -> delivered
+```
+
+A complete review covers every recorded clause and has no blocking finding.
+The component writes its completion receipt after the role operation has returned
+and its scope has unwound. Status compares that receipt with the actual saved
+execution reply, reviewer configuration and acceptance clauses. A matching JSON
+summary alone supplies none of this correspondence. An occupied attempt is held
+for reconciliation, including a failure before a result or receipt exists; a
+second invocation never repeats that model call automatically. A new source
+commit requires matching implementation feedback and independent review. A
+repair keeps the original conversations and its separately approved correction
+allowance; this entry grants no repair round.
+
+The PR must name the checkout's exact current commit and branch with base main.
+Readback checks the PR and main heads again after the remote reads, and checks
+the checkout again. CI selection follows the highest run number and attempt for
+the exact PR commit and requires that attempt's actual `green` job to succeed. Main health reuses the repository's authoritative selection
+rule for a push to main's exact current head. Pending, cancelled, skipped and
+failed runs cannot pass. The maintainer-applied `ci-main-red-fix` exception keeps
+the repository's CI contract: it substitutes composability for the main lookup
+inside CI. A draft PR remains `publication_pending`; only a confirmed merge with
+a merge commit reports `delivered`. Refresh status before acting on readiness.
+
+The saved `status.json` is the last observation, not a second execution state.
+Use the command for a current answer. Local records are trusted workflow
+artifacts, not signatures or remotely verifiable attestations. GitHub does not
+read them, and this gate does not prevent an arbitrary chat message or a person
+from claiming readiness or merging independently.
+
+## Prepare requests without metadata repair turns
+
+These rules apply to separate phase requests and Ticket role calls.
+`Phase.Request` renders the complete prompt before entering an Agent, including
+initial repository instructions, role instructions, assignment, selected text and
+response schema. A missing selected component or input fails there; a packet
+above 64000 characters refuses before provider dispatch. Provider configuration
+and client compatibility retain their existing checks before a turn starts.
+No paid prompt probes installation or repairs launch metadata.
+
+`Phase.Response` supplies omitted phase and work from the assignment, and the
+assigned revision for a read-only phase. It supplies the accepted continuation
+for complete/pass. Explicit conflicting fields remain errors. The Implementor
+still supplies its actual resulting commit, and every role supplies its real
+verdict, findings and evidence. The existing zero-response-correction option
+continues to validate and retain a reply at zero; missing substantive facts are
+never synthesized to make a reply pass.
+
+Acceptance clauses preserve their original source and wording through delivery.
+A reviewer reports a material ambiguity as blocked instead of strengthening a
+criterion. This records traceability; it does not mechanically decide whether two
+natural-language requirements mean the same thing.
+
+Submission-owned progress and joined entry completion remain separate work in
+[#1062](https://github.com/taras/executable.md/issues/1062). Fatal entry outcome
+diagnostics remain [#1059](https://github.com/taras/executable.md/issues/1059).
+Neither is replaced by the delivery status file or an attachment observer.
 
 ## Run a separate phase or continue a saved ticket
 

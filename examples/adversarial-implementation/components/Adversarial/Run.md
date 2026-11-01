@@ -7,6 +7,7 @@ props:
     plannerGuide: {type: object}
     implementorGuide: {type: object}
     documents: {type: object}
+    delivery: {type: object}
     assessment: {type: object}
   required: [task, plannerGuide, implementorGuide]
   additionalProperties: false
@@ -23,6 +24,7 @@ returns: {type: object}
 mkdir -- {quoted}
 ```
 <If condition={reserved.exitCode !== 0}><Fail message="The work directory must be fresh. Resume its original XMD execution instead of starting another writer." /></If>
+<If condition={props.delivery !== undefined}><Dir path={task.directory + "/delivery"}><File path="requirements.json"><Json value={props.delivery} /></File></Dir></If>
 <If condition={props.documents === undefined}>
 <Ticket.Documents repository={task.repository} paths={task.inputs} documents={{}} as="documents" />
 <Else><Let as="documents" value={props.documents} /></Else>

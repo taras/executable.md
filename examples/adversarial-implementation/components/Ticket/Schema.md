@@ -20,6 +20,7 @@ returns: {type: object}
       "pattern": "^/"
     },
     "api": {"type": "object"},
+    "delivery": {"type": "object"},
     "assignment": {
       "type": "object"
     },

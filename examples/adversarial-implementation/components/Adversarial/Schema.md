@@ -4,6 +4,7 @@ returns: {type: object}
 ---
 
 <Phase.Schema as="phases" />
+<Delivery.Schema as="delivery" />
 <ReviewPolicy.Schema as="assessment" />
 <Let as="text" value={{type:"string",minLength:1}} />
 <Let as="texts" value={{type:"array",items:text}} />
@@ -83,6 +84,7 @@ returns: {type: object}
       "maximum": 10
     },
     assessment,
+    delivery:delivery.policy,
     "scope": {
       "type": "object",
       "properties": {
@@ -223,7 +225,8 @@ returns: {type: object}
     "inputs",
     "sessions",
     "assessment",
-    "scope"
+    "scope",
+    "delivery"
   ],
   "additionalProperties": false
 },
