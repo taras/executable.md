@@ -52,7 +52,11 @@ export function layerProjectedContentEnvironment(
   caller: EvalEnv | undefined,
   authored: EvalEnv | undefined,
 ): EvalEnv | undefined {
-  return layerEnvironments(authored, caller, false);
+  const callerProps =
+    caller !== undefined && "props" in caller.values
+      ? derivedEnvironment(caller, { props: caller.values.props })
+      : undefined;
+  return layerEnvironments(callerProps, authored);
 }
 
 /** Bindings the snapshot rebinds; the shared record holds the unbound originals. */

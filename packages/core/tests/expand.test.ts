@@ -2067,7 +2067,7 @@ describe("993 nested selection and private renderings", () => {
         ),
         Twice: makeComponent("Twice", '<Let as="name" value="callee" /><Content /><Content />'),
       }),
-    ).toBe("callercaller");
+    ).toBe("calleecallee");
     expect(
       yield* expand(scanSegments("<Root />"), {
         Root: makeComponent("Root", "<Discard><Output>caller</Output></Discard>"),

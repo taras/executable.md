@@ -1454,8 +1454,7 @@ function answeringOpenName(definition: ImportedDefinition): ExecutionInstallatio
 }
 
 /**
- * The `{ text, exact }` runs one child's close retained, read rather than
- * asserted.
+ * The current rendered runs one child's close retained, read rather than asserted.
  *
  * A row about what a durable value *is* cannot cast it into the shape it
  * describes, so every member is parsed here and anything else throws — naming
@@ -1467,13 +1466,26 @@ function retainedRuns(event: DurableEvent): { text: string; exact: boolean }[] {
     return [];
   }
   const value = event.result.value;
-  if (!Array.isArray(value)) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 1 ||
+    !Array.isArray(value.runs)
+  ) {
     throw new Error(`the close of ${event.coroutineId} retained no runs: ${JSON.stringify(value)}`);
   }
-  return value.map((entry) => {
+  return value.runs.map((entry) => {
     if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
-      const { text, exact } = entry;
-      if (typeof text === "string" && typeof exact === "boolean") {
+      const { text, exact, selection } = entry;
+      if (
+        Object.keys(entry).length === 3 &&
+        typeof text === "string" &&
+        typeof exact === "boolean" &&
+        Array.isArray(selection) &&
+        selection.every((source) => typeof source === "string") &&
+        new Set(selection).size === selection.length
+      ) {
         return { text, exact };
       }
     }
@@ -1721,15 +1733,15 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
       (event) => !(event.type === "close" && event.coroutineId === "root"),
     );
 
-    // Every way a retained close can stop being a list of runs: a value that is
-    // not a list, a member that is not a run, a member missing one of the two
-    // things a run is, and a member carrying something else besides.
     const damaged: Json[] = [
       "not emission runs",
-      [{ text: PRESENTABLE }],
-      [{ text: PRESENTABLE, exact: "yes" }],
-      [{ text: PRESENTABLE, exact: true, presented: false }],
-      [PRESENTABLE],
+      [{ text: PRESENTABLE, exact: true }],
+      { runs: [{ text: PRESENTABLE }] },
+      { runs: [{ text: PRESENTABLE, exact: "yes", selection: [] }] },
+      { runs: [{ text: PRESENTABLE, exact: true, selection: [], presented: false }] },
+      { runs: [PRESENTABLE] },
+      { runs: [{ text: PRESENTABLE, exact: true, selection: [1] }] },
+      { runs: [{ text: PRESENTABLE, exact: true, selection: ["same", "same"] }] },
     ];
 
     for (const value of damaged) {
