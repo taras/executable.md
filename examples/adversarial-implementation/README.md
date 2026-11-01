@@ -299,12 +299,14 @@ only to affected responsibilities. `feedback_ready` is neither CI completion
 nor permission to merge. The Sidekick running Codex handles metadata and the
 repository's normal delivery gates afterwards.
 
-Before launching a code review, the coordinating Sidekick applies the
-[current-main health gate](../../AGENTS.md#feedback-commits). Ordinary reviews
-wait for successful CI on `main`'s exact current head; maintainer-labelled
-`ci-main-red-fix` repair PRs retain their exception. Feedback commits remain
-prompt, and the reviewed branch's full CI remains a delivery gate. This rule
-governs review dispatch rather than the simple, standard or migration route.
+Start required Fable reviews when the exact feedback commit and focused evidence
+are ready, without waiting for CI on `main` or the reviewed branch. When Fable
+is unavailable, including exhausted Claude quota, use an independent Codex Astra
+(`gpt-6-astra`) reviewer under the same scope, effort policy and correction
+limits. Reconcile any in-flight call and preserve its findings before fallback.
+Record the review provider/model. The repository's
+[review rules](../../AGENTS.md#feedback-commits) retain main health and required
+CI as merge gates; review acceptance waives neither.
 
 ## Test without paid agents
 

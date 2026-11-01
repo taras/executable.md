@@ -237,10 +237,9 @@ requiring more machinery to defend it.
 Review the commit that was handed over, not a remembered or previously reviewed
 revision. State the reviewed commit in the result.
 
-The coordinator applies the repository's current-main health gate before
-launching a code review. Once admitted, do not inspect, monitor or wait for the
-reviewed branch's CI. Its status is neither positive nor negative evidence for
-this verdict, and troubleshooting requires an explicit assignment.
+Do not inspect, monitor or wait for CI. Its status is neither positive nor
+negative evidence for this verdict, and CI is inspected only when the user
+explicitly assigns CI troubleshooting.
 
 ## Resolve decisions with the user
 
