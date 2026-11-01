@@ -2016,7 +2016,7 @@ the read that asked for it rather than appearing in it.
 | `src/components/generated-metadata.ts` | `GeneratedForm`, `GeneratedForms`, `admitGeneratedForms()`, `generatedRefusal()`, `definitionGeneratedRefusal()`, `offeredForm()` — what a declaration says about the generated use of each of its authored spellings: the absolute `https://executable.md/` identity a continuation is compared against, and whether that spelling observes or mutates. One pass reads each member once, validates it and answers with the copy a caller retains, and every live admission reads a definition through it (§5.3) |
 | `src/invocation-forms.ts` | `formsRefusal()`, `acceptedForms()` — the canonical authored-forms declaration both a registration and its generated metadata are held to (§5.3) |
 | `src/generated-root-owner.ts` | `createGeneratedRootOwner()`, `isGeneratedRootEvent()`, `HostExecutionError`, `BoundRootEvaluator` — the live owner of one execution's explicit root evaluations. It allocates each evaluation a durable sequence of its own past every evaluation the retained history holds, partitions it from the document's continuation through Core-owned views of one journal, and holds the bound operation a trusted handle exposes. The operation refuses rather than waits where the execution ended without activating the runner, and an authoritative failure one evaluation raised becomes the execution's own outcome rather than being raised into the document's scope |
-| `src/generated-xmd-preview.ts` | `previewGeneratedXmdRoot()`, `GeneratedXmdRootPreview`, `GeneratedXmdPreviewError` — projecting the literal top-level `<Output>` text a response prefix already says. It takes the whole accumulated prefix and returns `Result<GeneratedXmdRootPreview>` directly rather than an `Operation`, because it performs no suspended work: no file is read, no name resolved, no component invoked, no expression evaluated, no admission granted and no history written. A prefix still arriving is a success stating `incomplete`, and source the language does not allow where it is written is an `Err` — told apart by the scan's own report of the constructs it began and could not finish. Only settled meaning projects: an expression, an interpolation and a nested component wait, and a passive fence is the literal example it looks like |
+| `src/generated-xmd-preview.ts` | `previewGeneratedXmdRoot()`, `GeneratedXmdRootPreview`, `GeneratedXmdPreviewError` — projecting settled literal `<Output>` text a response prefix already says, including direct nested Output and withholding executable ancestors (§6.9). It takes the whole accumulated prefix and returns `Result<GeneratedXmdRootPreview>` directly rather than an `Operation`, because it performs no suspended work: no file is read, no name resolved, no component invoked, no expression evaluated, no admission granted and no history written. A prefix still arriving is a success stating `incomplete`, and source the language does not allow where it is written is an `Err` — told apart by the scan's own report of the constructs it began and could not finish. Only settled meaning projects: an expression, an interpolation and a nested component wait, and a passive fence is the literal example it looks like |
 | `src/generated-interpolation.ts` | `readsBinding()` — the one rule deciding whether a piece of text would read a binding, shared by admission, which refuses such text in a fragment, and by the prefix preview, which leaves it out. Text one of them called literal and the other called a read would be two readings of one rule |
 | `src/agent/conversation.ts` | `useAgentConversation()`, `AgentConversation`, `AgentConversationRequest`, `AgentConversationError` — one retained agent conversation a trusted host holds open over the history stream it supplies, under the installations it captured through `executeInstalled()`. A host-declared identity component in a synthetic root core owns, because a provider and its placement coordinator are installed inside `Execution.document`; the session is placed under the engine's own claimant-issued identity and the host's conversation id names the history alone. The element serves turns and does not return, so the root records no terminal and reopening resumes a partial continuation. Each turn is one journaled Prompt under its own durable name, run in a task of its own, reaching the same `runPrompt()` the component does rather than a copy. `evaluateGeneratedXmdRoot()` is a third job on the same mailbox, sharing its admission guard and cancellation-join protocol: the element obtains the actual method on its own execution's handle through a private readiness bridge before announcing the conversation ready, and an evaluation sends no provider prompt, changes no configuration, and runs on a durable sequence distinct from the conversation's turns |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
@@ -2056,7 +2056,7 @@ the read that asked for it rather than appearing in it.
 | `packages/cli/src/deno-workflow.ts` | the Deno run store and Workspace attachment; Node and Bun install the refusing host instead |
 | `packages/workflow/src/deno/workspace/files.ts` | the transaction-bound `API.Files` provider — one durable Workspace effect per document read, write, directory ensure and search |
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
-| `src/generated-xmd-preview.ts` | `previewGeneratedXmdRoot()`, `GeneratedXmdRootPreview`, `GeneratedXmdPreviewError` — projecting the literal top-level `<Output>` text a response prefix already says. It takes the whole accumulated prefix and returns `Result<GeneratedXmdRootPreview>` directly rather than an `Operation`, because it performs no suspended work: no file is read, no name resolved, no component invoked, no expression evaluated, no admission granted and no history written. A prefix still arriving is a success stating `incomplete`, and source the language does not allow where it is written is an `Err` — told apart by the scan's own report of the constructs it began and could not finish, through the same walk that decides what a fence, a quoted `>`, an inline code span and a tag-like expression are. Only settled meaning projects: an expression, an interpolation and a nested component wait, and a passive fence is the literal example it looks like |
+| `src/generated-xmd-preview.ts` | `previewGeneratedXmdRoot()`, `GeneratedXmdRootPreview`, `GeneratedXmdPreviewError` — projecting settled literal `<Output>` text a response prefix already says, including direct nested Output and withholding executable ancestors (§6.9). It takes the whole accumulated prefix and returns `Result<GeneratedXmdRootPreview>` directly rather than an `Operation`, because it performs no suspended work: no file is read, no name resolved, no component invoked, no expression evaluated, no admission granted and no history written. A prefix still arriving is a success stating `incomplete`, and source the language does not allow where it is written is an `Err` — told apart by the scan's own report of the constructs it began and could not finish, through the same walk that decides what a fence, a quoted `>`, an inline code span and a tag-like expression are. Only settled meaning projects: an expression, an interpolation and a nested component wait, and a passive fence is the literal example it looks like |
 | `src/generated-interpolation.ts` | `readsBinding()` — the one rule deciding whether a piece of text would read a binding, shared by admission, which refuses such text, and by the prefix preview, which leaves it out. Text one of them called literal and the other called a read would be two readings of one rule |
 | `src/agent/publication.ts` | `useAgentPromptPublisher()`, `AgentPromptPublisher`, `AgentPromptPublication`, `AgentPromptObservation`, `AgentPromptHandle`, `AgentPromptAssociation` — where a trusted host retains something beside a canonical Prompt, and is shown that Prompt while it is still talking. `begin()` is called before the provider is asked and its opaque return is carried back on `publish()`, which appends the record inside whatever transaction the host opened; the optional `observe()` is offered the whole source received so far, already cleared for disclosure by the execution the turn runs in, after each delta and once more when the stream returns text the deltas did not say. An observation is a snapshot and not an account: no session, checkpoint, turn number or append, `null` withdraws the body for the rest of that turn, and an empty string is a cleared prefix that says nothing. A publisher that observes must also begin, refused where it is installed; a publisher with no `observe` accumulates no prefix and is scanned for nothing. A host that raises from either call has failed a trusted operation, so the run's durability failure is activated with its own error and no record claims the turn — never an agent failure |
 | `src/agent/conversation.ts` | `useAgentConversation()`, `AgentConversation`, `AgentConversationRequest`, `AgentConversationError` — one retained agent conversation a trusted host holds open over the history stream it supplies, under the installations it captured through `executeInstalled()`. A host-declared identity component in a synthetic root core owns, because a provider and its launch coordinator are installed inside `Execution.document` and a durable preparation precedes both; the session is therefore placed under the engine's own claimant-issued identity and the host's conversation id names the history alone. The element serves turns and does not return, so the root records no terminal and reopening resumes a partial continuation. Each turn is one journaled Prompt under its own durable name, run in a task of its own, reaching the same `runPrompt()` the component does rather than a copy. Every operation of the conversation goes to the one `AgentConversationProvider` its host installed, read once from Context in the element's own scope after installation and before readiness — so a handler cannot forward a request's name past the setup that carries the configuration requirement, nor replace a prompt's session after one was checked, and a provider that installs no object refuses the opening before the conversation is bound rather than falling back to routing. The conversation's agent is resolved through that provider before the turn's session is resolved and is then stated to both of the turn's operations, so the session and the prompt are the same agent's while the request itself still carries no agent. The conversation keeps private evidence of the exact `Session` settling its own request produced, and refuses one it never settled or one substituted afterwards before asking for a prompt stream. `evaluateGeneratedXmdRoot()` is a third job on the same mailbox, sharing its admission guard and cancellation-join protocol: the element obtains the actual method on its own execution's handle through a private readiness bridge before announcing the conversation ready, and an evaluation sends no provider prompt, changes no configuration, and runs on a durable sequence distinct from the conversation's turns. A failure of the run that a caller caught is raised again by the release that ends the conversation, because a root that records no terminal leaves no completion for it to travel through. The first turn's activation commits one `agent_conversation_configuration` record — the provider, the resolved command and the complete active provider configuration — before any native work may begin, and every later activation compares against it and writes nothing; a reopening re-offers that record in its own position so the turns written after it replay in order, and a difference refuses before reattachment without replacing the conversation, its turns, its native identity or its configuration |
@@ -4636,10 +4636,12 @@ that document's environment, which is why it may not read a binding through
 interpolation and why `<Output>` is not among the constructs it may write. A
 root is admitted by the execution that captured the selection it runs under; it
 begins with an empty environment, so the only names it resolves are the ones it
-bound itself, and a direct top-level `<Output>` declares the region it renders.
+bound itself, and its own `<Output>` declares selected rendering at any supported
+nesting depth (§6.9).
 `<Content>` and `<Return>` are unavailable to both: neither has a caller to
-claim content from nor a value body to answer, and an `<Output>` written
-anywhere below the top level declares nothing in either kind.
+receive content from nor a value body to answer. A fragment still refuses
+independent `<Output>` selection at every depth. Nested placement grants no
+additional component, form, expression or effect permission.
 
 The admission record carries which kind it is as its own marker, at the result
 and inside its policy, and an evaluation reads only its own. A fragment record
@@ -4852,10 +4854,12 @@ output is emitted depends on whether it declares one. Without `<Output>`, the
 root's top-level segments are expanded in document order and each segment's
 rendered text is emitted incrementally through the Document Output Api (§9) as
 it is produced. With `<Output>`, the whole body is expanded before anything is
-emitted; only the selected content is emitted, and only after the body has
-completed successfully — a failure while executing documentation produces no
-emission, and an empty selection emits nothing. A component invoked within the
-root expands recursively and its result is buffered into the surrounding
+emitted. On success the selected content is emitted once; on ordinary failure
+the selected partial content entitled to render before the failure is emitted
+before the failure is reported (§6.9 Partial output). Documentation and private
+capture buffers contribute none of their own text, and an empty selection emits
+nothing. Declaration discovery includes nested and unexecuted regions. A
+component invoked within the root expands recursively and its result is buffered into the surrounding
 output in both cases.
 
 **A root is fail-capable, and `<Output>` changes only selection.** A text root
@@ -7840,67 +7844,128 @@ sentence rather than the missing-`<Return>` message (§6.10).
 
 ### 6.9 Component-declared output: `<Output>`
 
-A component (or root document) declares which region of its body renders using
-an `<Output>…</Output>` boundary tag. Everything outside the declared regions
-is **documentation**: it executes for its side effects — eval and exec blocks
-run, `<Let>` populates bindings, nested components run — but its rendered
-result never reaches the consumer. Without `<Output>`, the whole body renders,
-so existing components are unaffected.
+Declare the response where its condition, bindings and working directory are
+available. An `<Output>…</Output>` selects rendered text in a root document or
+Markdown component definition, including inside control flow and scoped
+components:
 
-````markdown
-# Release Config Files
+```markdown
+<Let as="ready" value={true} />
 
-The following files participate in the release process. (Documentation — it
-does not render into the consumer.)
-
-<Let as="releaseConfigFiles">
-- .github/workflows/release.yml
-</Let>
-
-```ts eval
-const releaseChanged = files.filter((p) => releaseConfigFiles.includes(`- ${p}`));
+<If condition={ready}>
+  <Output>Review complete.</Output>
+  <Else>
+    <Output>Review pending.</Output>
+  </Else>
+</If>
 ```
 
-<Output>
+The result is `Review complete.`. With `ready` false, it is `Review pending.`.
+Only the selected branch executes. A declaration inside a directory reads the
+binding while that directory is active:
 
-<If condition={releaseChanged.length > 0}>
+```markdown
+<Dir path="reports">
+  <File path="result.json" as="result" />
+  <Output>{result}</Output>
+</Dir>
+```
 
-> [!WARNING]
-> Release configuration changed — update the release spec.
+The result is the contents of `reports/result.json`. Neither the file read nor
+the binding moves outside the directory.
 
-</If>
-
-</Output>
-````
+When the declaring source contains Output, surrounding **documentation** still
+executes in document order for its side effects, but its rendered text is
+discarded. Discovery includes declarations in untaken branches, zero-iteration
+bodies and children a component never requests. If none of those declarations
+executes, selected output is empty and documentation stays hidden. A source
+without any declaration retains its ordinary whole-body rendering.
 
 #### Structure
 
-Only a **direct top-level** `<Output>` is a valid declaration. Structure is
-checked against the component's (or root's) source structure, including regions
-that never render — content inside `<If condition={false}>`, content passed to a
-component that has no `<Content />`, an `<Output>` nested inside another
-`<Output>`, or the children of any component that declines to render them. An
-`<Output>` anywhere other than the top level is misplaced; all misplaced
-occurrences in a single component are reported together as one printed error that
-advises `<Output>` must be a direct top-level declaration and that conditional
-rendering uses `<If>` inside `<Output>`.
+Discover declarations in the declaring source before its body executes and
+before caller content is substituted. Depth is not a restriction: declarations
+can appear under structural constructs, scoped component invocations, projected
+children and another Output. Source discovery neither evaluates conditions nor
+forces a component to render its children.
 
-Structure is owned by the declaring component. Child expansion cannot
-introduce, remove, or redefine it, and an `<Output>` a caller passes as content
-is diagnosed against the caller's own structure — it never becomes the callee's
-declaration.
+The declaration set belongs to the source it was written in. Called definitions
+do not add declarations to their caller, and caller-projected content does not
+add declarations to the receiving definition. A value definition still excludes
+Output anywhere in its own source (§6.10). `<Output>` accepts no props;
+`<Output />` and `<Output></Output>` are equivalent empty regions.
 
 #### Definition-owned structure and rendering
 
-A component's output regions are fixed by its own source, independent of the
-content a caller projects through `<Content />`, so caller content can neither
-add an output region nor suppress the declared body. `<Content />` inside a
-top-level `<Output>` projects the caller's content into that region.
-`<Output>` accepts no props. `<Output />` and `<Output></Output>` are
-equivalent and contribute no rendered content. Multiple top-level `<Output>`
-regions render in document order and concatenate. A component invoked with
-`as="binding"` captures only its selected output; its documentation executes
-but is neither rendered nor captured.
+Execute a declaration where it was authored, with that position's bindings and
+contextual services. Only executed branches, iterations and requested
+projections contribute. Caller content retains its declaration ownership through
+`<Content />`, `content()`, `renderChildren()` and `useContent()`, while the
+existing binding precedence and invocation-owned resource scopes remain (§6.3).
+A receiving definition keeps its own selection: content discarded in its
+documentation does not escape through a caller's declaration.
+
+Separate declarations concatenate in execution order. Each actual iteration and
+requested projection counts, so projecting one declaration twice can render two
+copies. Do not deduplicate by source location or equal text. Nested regions
+contribute once through their enclosing rendering:
+
+```markdown
+<Output>A<Output>B</Output>C</Output>
+```
+
+This renders `ABC`, with `B` once. The inner declaration neither replaces the
+enclosing selection nor appends a second copy.
+
+#### Components, transformations and capture
+
+Requested caller content follows that source's selection before the component
+consumes the rendered string. Surrounding documentation does not become input
+text merely because the projection is private.
+
+An uncaptured text invocation whose normal child rendering reaches caller-owned
+Output contributes its normal returned text, including transformations and
+wrappers. It returns once even when several declarations supplied its input.
+For example:
+
+```markdown
+<Slice length={2}><Output>ABCD</Output></Slice>
+```
+
+This renders Slice's ordinary result:
+
+```text
+Text excerpt: code points [0, 2) of 4 (zero-based, end exclusive).
+AB
+```
+
+The original `ABCD` is not published separately. A component that reads the
+selected children and returns replacement text contributes that replacement;
+returning an empty string contributes nothing. A component that never requests
+the relevant children executes none of their declarations or effects. An empty
+executed Output is still reached; an Output in an untaken branch is not.
+
+Capture retains its existing boundary. Component `as`, `<Let as>` and
+`<Each as>` capture privately and emit no text at their site. A declaration
+inside such a capture neither leaks its bytes nor selects an outer wrapper
+through that capture. A later explicit Output can render the captured value:
+
+```markdown
+<Let as="held"><Output>private</Output></Let>
+<Output>{held}</Output>
+```
+
+Only the second element emits `private`. Value invocations render nothing, and
+string projections retain private buffers; nested selection creates no global
+write. Dynamically scanned `render(markdown)` cannot declare selection for its
+surrounding source. An admitted generated root is a separate owned body, while
+an Evaluate fragment has no independent Output context.
+
+All/Spawn retains its private buffers and authored-order join (§6.5). Each child
+selects its rendering privately; only an all-success join publishes those
+renderings. Failure or cancellation joins unfinished work and publishes none of
+the child buffers. Nested declarations add no record field, output channel or
+shared mutable collector.
 
 #### Execution order and error behavior
 
@@ -8031,6 +8096,36 @@ output is emitted, not what executes, so replay is deterministic.
 The declaration decides that and nothing else. Both roots run under the same
 fail-capable mode, so the two differ in what a reader sees and when, never in
 what an uncaught failure means.
+
+#### Generated roots and preview
+
+A generated root uses the same declaration ownership, nesting and selection
+rules. Whole-source admission still checks every branch before the first effect;
+Output grants no component, form, expression or effect permission. An Evaluate
+fragment still refuses independent Output at every depth (§5.3.3).
+
+Preview is a pure reading of disclosed source, not an execution. It projects
+only settled literal text in unconditional Output. Output directly nested in
+such a region is transparent and contributes once; passive fenced examples stay
+literal. Interpolations and component results wait for evaluation.
+
+Text beneath If/Else, iteration, scoped components, projection, All/Spawn or
+another executable ancestor is withheld, even for a literal true condition. A
+complete conditional-only response is valid but previews no text. Incomplete
+delimiters, expressions and fences keep their existing pending behavior; an
+unfinished enclosing construct is never healed into a top-level declaration.
+
+The evaluated root reports its actual output and whether its admitted source
+declares Output. Declaration presence stays true when no output-bearing branch
+executes. Sidekick replaces the same preview item with the acknowledged
+evaluated selected result, including ordinary selected partial output; a root
+with no declaration supplies no fallback chat. An admission refusal has no
+partial rendering, and fatal storage, Files, disclosure and cleanup outcomes
+keep their existing classification.
+
+Selection itself adds no durable event. Partial replay rebuilds it through
+ordinary expansion while completed effects restore; completed root replay
+restores the retained result without expanding the body.
 
 #### Outcomes and the journal
 
@@ -12011,10 +12106,10 @@ visible warning blocks, gather into a separate error report).
 | C36 | Markdown preserved in `<Output>` | A `> [!WARNING]` admonition survives intact |
 | C37 | Empty-tag parity | `<Output />` and `<Output></Output>` both contribute no content |
 | C38 | `<Output>` props rejected | Props/expression props on `<Output>` produce an ErrorSegment |
-| C39 | `<Content />` in `<Output>` | Caller content projects into a top-level `<Output>` region |
+| C39 | `<Content />` in `<Output>` | Caller content projects into a selected `<Output>` region at any supported depth, retaining its caller ownership |
 | C40 | `as=` captures selected output | A component invoked with `as=` captures only its `<Output>` regions; documentation is neither rendered nor captured |
-| C41 | Structure | Nested/misplaced `<Output>` (including inside `<If condition={false}>` or a content-discarding component) produces one aggregate printed error and runs no body side effects |
-| C42 | Caller-projected `<Output>` inert | Projecting `<Output>` through `<Content />` neither activates nor alters the callee's error mode |
+| C41 | Nested declarations | Output under control flow, scopes and another Output is valid; declarations in untaken or discarded content hide surrounding documentation without executing that content |
+| C42 | Caller-projected `<Output>` ownership | Projection preserves the caller's declaration ownership without redefining the callee's selection; normal returned transformations and private captures follow §6.9 |
 | C43 | Documentation and region failures | A failure in documentation (direct, inside `<Let>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; an error inside `<Output>` fails the run, and one under `<PrintErrors>` or in a body with no `<Output>` stays a comment |
 | C44 | **Array element-type mismatch** | `files` is `{ type: array, items: { type: string } }`; passing `["a", 3]` → PropValidationError |
 | C45 | **Object-shape rejected** | A nested object with `required: [symbol]` / `additionalProperties: false` rejects a missing `symbol` or an unknown key → PropValidationError |
@@ -12023,6 +12118,26 @@ visible warning blocks, gather into a separate error report).
 | C48 | **No bare prop binding** | Declaring `name` makes `{props.name}` available but leaves `{name}` verbatim until authored code creates that binding |
 | C49 | **Validated object identity** | The environment and function-component argument observe the exact defaulted object returned by validation |
 | C50 | Nested `<Content />` | Caller content projects from a position inside another invocation, inside a structural construct, several levels deep, and inside an `<Output>` region; a nested named slot resolves and consumes its `slot` prop; wrapping a projection in `<Section slot="header">` reaches a nested invocation's named slot; two projections at different depths receive the same content; slot errors are still emitted once; an unclaimed `<Content />` passed through nested bodies stays the reserved-name failure |
+
+### Tier NO — Nested Output (§6.9)
+
+These are the approved product journeys for #993. They state required behavior,
+not a report that the runtime implements it. Lower-level evidence derives from
+these journeys without adding acceptance permutations.
+
+| ID | Journey | Required observation |
+| --- | --- | --- |
+| NO1 / P1 | Both ready/pending outcomes through a document, Markdown component and actual REPL entry | Only the selected sentence and that branch's marker file; no helper prose or untaken branch effect |
+| NO2 / P2 | Distinct ROOT and REPORT file contents, with Output inside Dir, also inside a reusable Markdown component | The scoped result is REPORT; a later read after leaving Dir obtains ROOT |
+| NO3 / P3 | The only declaration is in a false branch or zero-item Each; a control declares none | Successful empty selection hides surrounding documentation; the no-declaration control renders normally |
+| NO4 / P4 | Separate declarations, iterations, nested A/B/C, and two requested projections | Contributions retain execution order; nested text is ABC once; two projections can produce two copies |
+| NO5 / P5 | Normal component invocation, component as, Let and Each capture, then explicit rendering | The component selects its own text; captures emit nothing at their site; later Output renders held values; callee declarations do not redefine caller selection |
+| NO6 / P6 | Dir, Slice and replacement consumers; unrequested children and named slots | Normal returned transformations render without separate raw-child leakage; unrequested content performs no output or effects |
+| NO7 / P7 | Concurrent children finish in reverse order, then one fails while another owns unfinished work | All-success publication is authored order; failure stops unfinished work, joins cleanup and publishes neither private child buffer |
+| NO8 / P8 | Ordinary failure after a selected prefix, the same inside capture, and recorded replay | Entitled partial text remains; later work does not start; captured prefixes do not leak; replay repeats no completed effects |
+| NO9 / P9 | Stream conditional generated Output, then finish evaluation | Neither branch previews; the evaluated selected result replaces the same chat item; unselected/no-Output controls leak no documentation or fallback chat |
+| NO10 / P10 | Stream unconditional literal and directly nested Output, passive examples and computed content across delimiters; interrupt generation | Settled literal text previews once; examples stay literal; computed text waits; an incomplete provider stream stays an attempt rather than an evaluated reply |
+| NO11 / P11 | Generated root containing a denied operation in an untaken branch; permitted root and Evaluate-fragment controls | Denied source refuses before effects; permitted roots retain existing permissions; fragments refuse independent Output |
 
 ### Tier LET — `<Let>` sources (§6.5)
 
@@ -14854,7 +14969,7 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 65 | Whitespace normalization is middleware, not post-processing | Stateful across calls; composes with other middleware; can be disabled via `--raw`; mutable closure state scoped per `useNormalizedOutput()` call |
 | 66 | Terminal formatting is middleware, not a separate renderer | Composes with normalization; conditional on TTY; disabled for piped output; uses `marked-terminal` with `async: false` |
 | 67 | Channel-based delivery, not direct `process.stdout.write` | Decouples production from consumption; enables buffered collection for piped output; consumer task lifetime tied to document run scope; `channel.close()` in `finally` block guarantees consumer exits cleanly |
-| 68 | Per-root-segment emission for roots without `<Output>`; full buffering for roots that declare it | Streaming UX for the common case — root segments are sequential and independent, and component-internal expansion is recursive and buffered. A root declaring top-level `<Output>` (§6.9) buffers completely and emits the selected regions only after successful expansion, so a later documentation failure yields no partial output; an empty selection emits nothing |
+| 68 | Per-root-segment emission for roots without `<Output>`; full buffering for roots that declare it | Streaming UX for the common case — root segments are sequential and independent, and component-internal expansion is recursive and buffered. A root declaring `<Output>` at any supported depth (§6.9) buffers selection and emits it once, including entitled selected partial text on ordinary failure; documentation and private capture buffers add none of their text, and an empty selection emits nothing |
 | 69 | `blockId` counter threaded through expansion context | Per-segment expansion resets `result.length`; mutable counter preserves unique diagnostic IDs; counter guarded by expansion scope cancellation |
 | 70 | `output()` wrapped in `ephemeral()` | Output emission is a non-durable side effect; journal records durable effects only; output text is derived from journaled expansion results; all middleware/side effects execute on the ephemeral side |
 | 71 | Middleware installation order: normalize outer, terminal inner, channel innermost | `scope.around` later-installed handlers wrap earlier ones; execution flows outer → inner: normalize → terminal → channel; install order is reverse of execution order; must be documented to prevent reordering |

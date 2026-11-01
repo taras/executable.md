@@ -567,6 +567,61 @@ therefore agree on the ID of every element they both retain, and may share IDs
 without sharing effects — run identity and workflow-definition identity are
 what tell those runs apart.
 
+### Definition-owned output selection
+
+A root or Markdown definition selects rendered text with the `<Output>` elements
+written in its own source, including those inside control flow, scoped
+invocations and projected children. Source discovery happens before body
+execution and before content substitution. It includes declarations in untaken
+branches and unrequested children, but never imports another definition to add
+its declarations to the caller's. A source that declares output hides its
+surrounding documentation even when no declaration executes; a source declaring
+none retains its ordinary rendering.
+
+Discovery does no work on the author's behalf. Only an executed branch,
+iteration or requested projection reaches a declaration, at its existing binding
+and working-directory scope. Caller projection keeps the caller's declaration
+ownership through `<Content />`, `content()`, `renderChildren()` and
+`useContent()`. A called definition owns its own selection; neither source can
+redefine the other's. Dynamically scanned `render(markdown)` declares nothing
+for the surrounding source. An admitted generated root owns a separate body;
+an Evaluate fragment owns no independent output selection.
+
+**A component keeps its returned text.** When normal child rendering reaches
+caller-owned Output through an uncaptured text invocation, that invocation's
+normal returned string is its contribution, transformations and wrapper text
+included. `<Slice length={2}><Output>ABCD</Output></Slice>` therefore contributes
+Slice's excerpt note followed by `AB`, never the original `ABCD` beside it. One
+invocation returns once even if several child declarations supplied its input.
+A component that requests no relevant children reaches no declaration; one that
+consumes them and returns replacement text contributes that replacement. An empty
+executed Output is reached, while an Output in an untaken branch is not.
+
+Several declarations concatenate in execution order. Iterations and repeated
+projections count their actual executions rather than unique source sites.
+Nested selection adds no second copy of text already in its enclosing rendering:
+`<Output>A<Output>B</Output>C</Output>` contributes `ABC`.
+
+**Selection never bypasses a rendering owner.** Component `as`, `<Let>`,
+`<Each as>`, value returns, string projections and documentation keep their
+private buffers. A captured declaration neither leaks text nor selects an outer
+wrapper through the capture. A callee that discards projected rendering in its
+own documentation publishes none of it. Value bodies still exclude Output in
+their own source. Each Spawn selects within its own private buffer and joins on
+the existing all-success, authored-order terms; no concurrent child writes into
+a shared selected-output buffer. Only the existing unrecovered `content()`
+failure path hands an entitled prefix to a caller's rendering region.
+
+The body owns selection for its execution, separately from the accumulator that
+receives rendered text. It introduces no global write, contextual permission,
+registry, output channel or public protocol. Partial replay rebuilds selection
+through ordinary expansion while completed effects restore from their records;
+completed root replay restores the retained result without expanding the body.
+Error modes, fatal precedence, cancellation and joined teardown are unchanged.
+The [language contract](specs/executable-mdx-spec.md#69-component-declared-output-output)
+owns authored forms and [nested-output conformance](specs/executable-mdx-spec.md#tier-no--nested-output-69)
+owns the approved product journeys.
+
 ### Definition-owned return state
 
 A value body — a value root, or a Markdown component that declares `returns` —
@@ -4455,9 +4510,9 @@ Syntax implementation and read core's own asset for its chapters.
 A root begins with an empty binding environment, which is what makes a brace it
 writes resolve only names it bound itself; a fragment expands against the
 document that admitted it and may not read a binding through interpolation at
-all. A direct top-level `<Output>` declares what a root renders, through the
-same body rule and the same props rule an authored body uses; below the top
-level it declares nothing in either kind, and `<Content>` and `<Return>` stay
+all. A root's own `<Output>` declares what it renders at any supported nesting
+depth, through the same body and props rules an authored body uses. A fragment
+has no independent output selection, and `<Content>` and `<Return>` stay
 unavailable to both. A root's ordinary failure carries what it had already
 rendered; a fragment's propagates, and a failure of the *run* — durability,
 Files infrastructure, secret policy, teardown — keeps its own classification
@@ -5597,8 +5652,8 @@ that envelope once and splices the root's own parsed segments in at each
 placeholder. The segments are the ones the root was parsed to, at the offsets,
 lines and paths they were authored at, so an element's source position and its
 expansion identity are what they would have been with no Plugin at all; splicing
-rather than nesting is also what keeps the root's own top-level `<Output>` a
-top-level child and its `<Return>` in the value body's flow. With no middleware
+rather than nesting also preserves the root's own Output declaration ownership
+and keeps its `<Return>` in the value body's flow. With no middleware
 the envelope is exactly the placeholder and the execution runs the definition it
 imported, so there is nothing for a run whose Plugins compose no middleware to
 observe — which the bundled Git Plugin does not. A middleware may
@@ -8633,6 +8688,14 @@ fresh object, and everything after is addressed by that exact object rather than
 by text, recency or a guessed ordinal. A notification for a response that was
 stopped, replaced or already answered changes nothing.
 
+Nested declarations do not make executable source previewable. A declaration
+under a conditional, iteration, component, projection or concurrent join waits
+for evaluation, even when its condition is a literal true. A complete such
+subtree can therefore be valid and preview no text. Literal Output nested
+directly inside unconditional Output is transparent and contributes once;
+passive examples remain literal. Neither an incomplete enclosing construct nor
+healing its prefix turns a nested declaration into a top-level preview.
+
 It stays a preview while the response runs its controls, and the acknowledged
 evaluated reply replaces that same item — the response it was registered under
 is what the reply's own record holds, so neither of them has to be inferred —
@@ -9280,7 +9343,7 @@ Status is measured against main.
 | `<Slice offset length>` | Returns a Unicode code-point window of its content's completed rendering, labelled when partial. It calls `content()` once and waits for the whole string for every offset, so it bounds rendered text rather than the producer's work or memory; child captures, enclosed order, nesting as ordinary text, failure and cancellation stay ordinary. [Forms, window arithmetic, the note and exact capture](specs/executable-mdx-spec.md#621-showing-a-text-window-slice). | built on this stack |
 | root failure settlement | a text root installs the fail-capable `output` mode for its whole body, so an uncaught, undecided failure is the document execution's own outcome, whether or not the root declares `<Output>` [Invariant](#3-error-mode-is-lexical). | built on the #453 stack |
 | `<Output>` region `output` mode | an undecided error fails the document execution [Invariant](#3-error-mode-is-lexical). | built on main |
-| `<Output>` rendering selection | chooses which regions of a body render, and buffers a root that declares one; it decides nothing about failure [Interface and evidence](specs/executable-mdx-spec.md#69-component-declared-output-output). | built on main |
+| `<Output>` rendering selection | Selects definition-owned regions at their authored scope, including nested declarations, and buffers a declaring root; captures and component transformations retain their existing owners. [Ownership](#definition-owned-output-selection); [interface and evidence](specs/executable-mdx-spec.md#69-component-declared-output-output). | Direct selection built; nested composition specified by #993. |
 | `Expansion` / `getExpansion()` | describes the current logical element expansion [Invariant](#expansion-identity). | built on main |
 | `Component.expand` | Observes one complete element expansion without deciding its outcome or delaying execution. [Expansion observation](#1a-one-elements-expansion-can-be-surrounded). | built on this stack |
 | `inspectSource()` | Locates executable delimiters using the engine scanner without interpreting source. [Source inspection](#1b-where-a-texts-elements-are-without-running-it). | built on this stack |

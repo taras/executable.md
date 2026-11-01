@@ -1009,6 +1009,14 @@ Nothing of it has happened — no control has run, no entry has been filled, no
 turn is acknowledged — and a prefix that happens to read as finished is not
 permission to run it.
 
+An Output declaration can sit inside control flow or a scoped component. Its
+text waits for evaluation when an executable ancestor decides whether or how it
+renders: neither arm of an If previews, even with a literal true condition.
+Unconditional Output directly nested inside Output previews its literal text
+once. Passive examples stay literal, and unfinished enclosing syntax does not
+expose its nested declarations as top-level text. A complete conditional response
+can therefore be valid and have no preview text.
+
 A preview stays a preview while the response runs its controls, and only the
 evaluated reply replaces it: actual Output, including the partial Output an
 ordinary runtime failure leaves, with the effects it performed before failing
@@ -2565,6 +2573,12 @@ A successful complete reply is evaluated as a root under the selection this
 conversation's execution captured, through that execution, on a durable sequence
 separate from the turn that produced it. Only the root's Output reaches the
 person.
+
+Nested declarations follow the ordinary source ownership, component-return and
+capture rules of language §6.9. A declaration in an unexecuted branch still
+hides surrounding documentation and can produce empty selected output. It does
+not make that branch previewable or widen the response's component and effect
+permissions.
 
 The controls are captured once, when the conversation opens: each control the
 REPL defines is published as a component answer under its own name and the
