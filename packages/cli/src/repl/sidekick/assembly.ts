@@ -52,6 +52,7 @@ const PERMISSION_MODE: PermissionMode = "deny-all";
 export function sidekickAssembly(
   agent: string,
   dependencies: AcpxProviderDependencies,
+  ownershipAdministration?: import("@executablemd/runtime").AgentSessionOwnershipAdministration,
 ): SidekickAssembly {
   const options = { defaultAgent: agent, permissionMode: PERMISSION_MODE };
   const factory = createAcpxProvider({
@@ -74,5 +75,9 @@ export function sidekickAssembly(
       });
     },
   };
-  return { agent, installations: [installation] };
+  return {
+    agent,
+    installations: [installation],
+    ...(ownershipAdministration === undefined ? {} : { ownershipAdministration }),
+  };
 }

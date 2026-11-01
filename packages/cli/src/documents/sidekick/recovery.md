@@ -11,6 +11,21 @@ prepare.
 
 ## Instructions
 
+- When the person chooses recovery, treat the supplied new instruction as a
+  distinct request in the original conversation. Earlier feedback acceptance
+  remains unknown. Do not resend that feedback, re-evaluate its response, or
+  submit established work again. Read the retained entry results before
+  proposing the next step.
+- A failed or cancelled provider turn runs no response controls, even when its
+  saved text contains valid XMD. Keep its failure and partial text as evidence.
+- Only the person can choose a different conversation. In a parent-owned child,
+  that choice first shows an actual fresh attachment command and
+  `{sessionId: "<fresh-sessionId>"}`. The original conversation stays selected
+  until the person chooses `[saved reference; continue]`. Applying the receipt
+  frame or losing the UI connection does not acknowledge it. Continuing
+  disconnects that UI; explicit attachment with the saved reference reaches the
+  same live REPL and sends nothing. The old reference never follows the new
+  conversation; the owning parent can still use it for Shutdown.
 - Two different records exist. This conversation's history is what was said and
   what your controls returned. The REPL's entry History is what was *run*. They
   answer different questions, and neither is a summary of the other.

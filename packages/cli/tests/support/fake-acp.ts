@@ -139,6 +139,7 @@ export interface ScriptedTurn {
    * that is being torn down appends nothing.
    */
   readonly cancelled?: boolean;
+  readonly failure?: string;
   /**
    * The pieces this turn streams, in order, instead of one whole `reply`.
    *
@@ -279,6 +280,7 @@ export interface FakeAcp {
    * turn alike.
    */
   unavailable(agent: string, reason: Error): void;
+  missingSession(sessionKey: string): void;
   /**
    * Report this native conversation identity instead of a derived one.
    *
@@ -424,6 +426,7 @@ export function createFakeAcp(): FakeAcp {
   const running = new Map<string, Running>();
   /** Agents whose session this runtime refuses to establish, by reason. */
   const refusals = new Map<string, Error>();
+  const missingSessions = new Set<string>();
   let advertised: ScriptedConfiguration | undefined;
   /** The native identity every session of this runtime reports, when scripted. */
   let asserted: string | undefined;
@@ -595,6 +598,9 @@ export function createFakeAcp(): FakeAcp {
     unavailable(agent, reason) {
       refusals.set(agent, reason);
     },
+    missingSession(sessionKey) {
+      missingSessions.add(sessionKey);
+    },
     identity(value) {
       asserted = value;
     },
@@ -725,6 +731,9 @@ export function createFakeAcp(): FakeAcp {
         },
         ensureSession(input) {
           ensured.push(input);
+          if (missingSessions.has(input.sessionKey)) {
+            return Promise.reject(new Error("The exact retained backend session is missing."));
+          }
           const refused = refusals.get(input.agent);
           if (refused !== undefined) {
             // Refused before anything is marked started, because an agent whose
@@ -877,6 +886,10 @@ export function createFakeAcp(): FakeAcp {
           } else {
             void allowed.then(
               () => {
+                if (turn.failure !== undefined) {
+                  settled.resolve({ status: "failed", error: { message: turn.failure } });
+                  return;
+                }
                 if (turn.cancelled === true) {
                   settled.resolve({ status: "cancelled" });
                   return;

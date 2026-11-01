@@ -1,3 +1,6 @@
+import { recoveryDecision, recoveryReference } from "../src/repl/sidekick/recovery-record.ts";
+import { projectRecovery } from "../src/repl/sidekick/recovery-state.ts";
+import { requestsFromHistory } from "../src/repl/sidekick/model.ts";
 /**
  * Tier R1 — the paired history, and the one moment its writer moves (#883, J8).
  *
@@ -1077,5 +1080,64 @@ describe("message attribution", () => {
     const { origin: _origin, ...noOrigin } = attributed;
     expect(parseSidekickRecord(JSON.stringify(noId))).toBe(undefined);
     expect(parseSidekickRecord(JSON.stringify(noOrigin))).toBe(undefined);
+  });
+});
+
+describe("987 — closed recovery reference linkage", () => {
+  it("accepts the exact offered reference and rejects target, ID and acknowledgement mismatches", function* () {
+    const feedback: SidekickRecord = {
+      kind: "feedback",
+      conversation: "original",
+      response: "response",
+      turn: null,
+      text: "Old input with unknown acceptance.",
+    };
+    const decision = recoveryDecision.parse({
+      kind: "recovery-decision",
+      id: "decision",
+      conversation: "original",
+      retained: { records: 1, bytes: 0, sha256: "0".repeat(64) },
+      requests: [0],
+      controls: [],
+      message: "new-message",
+      text: "A distinct new instruction.",
+      origin: { kind: "ui" },
+      action: "replace",
+      basis: "explicit-abandonment",
+      target: "next",
+    });
+    const offered = recoveryReference.parse({
+      kind: "recovery-reference",
+      conversation: "original",
+      decision: "decision",
+      previous: "original",
+      next: "next",
+      sessionId: "00000000-0000-4000-8000-000000000001",
+      phase: "offered",
+    });
+    const acknowledged = recoveryReference.parse({ ...offered, phase: "acknowledged" });
+    const requests = requestsFromHistory([feedback]);
+    if (!requests.ok) {
+      throw requests.error;
+    }
+    expect(parseSidekickRecord(JSON.stringify(decision))).toEqual(decision);
+    expect(parseSidekickRecord(JSON.stringify({ ...offered, extra: true }))).toBeUndefined();
+    expect(projectRecovery([feedback, decision, offered, acknowledged], requests.value).ok).toBe(
+      true,
+    );
+    const variants = [
+      [feedback, decision, acknowledged],
+      [feedback, decision, offered, { ...acknowledged, next: "other" }],
+      [
+        feedback,
+        decision,
+        offered,
+        { ...acknowledged, sessionId: "00000000-0000-4000-8000-000000000002" },
+      ],
+      [feedback, { ...decision, requests: [99] }, offered, acknowledged],
+    ];
+    for (const records of variants) {
+      expect(projectRecovery(records, requests.value).ok).toBe(false);
+    }
   });
 });

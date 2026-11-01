@@ -1,3 +1,6 @@
+import { initialState, reduceRepl, NO_AGENT } from "../src/repl/application.ts";
+import type { ReplState, ReplLive } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 /** Read Sidekick work from the pane and controls the terminal actually shows. */
 
 import {
@@ -13,7 +16,7 @@ import { FsApi, ensureDir, readdir, readTextFile, writeTextFile } from "@effecti
 import { join } from "node:path";
 import { API } from "@executablemd/runtime";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { ensure, withResolvers, scoped, sleep } from "effection";
+import { ensure, withResolvers, scoped, sleep, race } from "effection";
 import { decodeLocation } from "../src/repl/route.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import {
@@ -70,6 +73,446 @@ import {
 
 const WIDE = { columns: 160, rows: 36 };
 const NARROW = { columns: 72, rows: 20 };
+
+function* completedKey(page: ReplPage, key: Parameters<ReplPage["key"]>[0]): Operation<void> {
+  const before = page.screen().index;
+  yield* page.key(key);
+  yield* page.until(`the completed ${key} frame`, (one) => one.index > before);
+}
+
+describe("987 — mounted original recovery", () => {
+  for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
+    it(`reads actual saved multiline entry feedback by keyboard at ${size.columns} columns`, function* () {
+      const page = yield* useReplPage({ size: WIDE });
+      expect(page.screen().shows("Review recovery")).toBe(false);
+      const lines = [
+        "OUTPUT-BEGIN: verified",
+        ...Array.from(
+          { length: 8 },
+          (_, at) => `ROW${String(at + 1).padStart(2, "0")}: item verified`,
+        ),
+        "OUTPUT-END: retained",
+      ];
+      page.repl.fake.script({
+        reply: `<Let as="code" select="code">\n\`\`\`xmd\n<Output>${lines.join("\n")}</Output>\n\`\`\`\n</Let><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />`,
+      });
+      page.repl.fake.script({ reply: "", failure: "Internal error" });
+      yield* sendMessage(page, "Inspect output.");
+      yield* page.until("the failed feedback recovery action", (one) =>
+        one.shows("[review recovery]"),
+      );
+      const before = yield* settledReading(page.repl);
+      const feedback = before.chat.find((one) => one.kind === "feedback");
+      if (feedback?.kind !== "feedback") {
+        throw new Error("The actual entry feedback is missing.");
+      }
+      for (const line of lines) {
+        expect(feedback.text).toContain(line);
+      }
+      yield* page.press("[review recovery]");
+      yield* page.until("the saved recovery account", (one) => one.shows("Original conversation:"));
+      if (size.columns !== 160) {
+        yield* page.resize(size);
+      }
+      {
+        yield* page.until("the recovery account frame", (one) => one.shows("Review recovery"));
+        const heading = page.screen().locate("Review recovery");
+        for (let step = 0; step < 60 && !page.screen().shows("New instruction:"); step++) {
+          const before = page.screen().index;
+          yield* page.wheel("down", { column: heading.column + 2, row: heading.row + 2 });
+          yield* page.until("the account reveals its field", (one) => one.index > before);
+        }
+        for (let step = 0; step < 12 && !page.screen().shows(">> New instruction:"); step++) {
+          yield* completedKey(page, "Backtab");
+        }
+        yield* page.until("the Content field owns focus", (one) =>
+          one.shows(">> New instruction:"),
+        );
+        for (let step = 0; step < 8; step++) {
+          yield* completedKey(page, "PageUp");
+        }
+        const seen = new Set<string>();
+        for (let step = 0; step < 100; step++) {
+          const column = page.screen().locate("Review recovery").column;
+          const rendered = page
+            .screen()
+            .rows.slice(3, -3)
+            .map((row) => row.slice(column))
+            .join("")
+            .replace(/\s+/g, "");
+          for (const line of lines) {
+            if (rendered.includes(line.replace(/\s+/g, ""))) {
+              seen.add(line);
+            }
+          }
+          if (seen.size === lines.length) {
+            break;
+          }
+          const before = page.screen().rows.slice(3, -3).join("");
+          yield* completedKey(page, "Alt+ArrowUp");
+          yield* completedKey(page, "PageDown");
+          if (page.screen().rows.slice(3, -3).join("") === before) {
+            yield* completedKey(page, "Tab");
+          }
+        }
+        expect(lines.filter((line) => seen.has(line))).toEqual(lines);
+      }
+      yield* page.key("Escape");
+      yield* page.until("the closed account", (one) => !one.shows("Review recovery"));
+      if (size.columns !== 160) {
+        yield* page.resize(WIDE);
+      }
+      yield* page.press("[review recovery]");
+      yield* page.until("the reopened saved account", (one) => one.shows("Review recovery"));
+      const passive = yield* settledReading(page.repl);
+      expect(passive.chat).toEqual(before.chat);
+      expect(passive.model.entries).toEqual(before.model.entries);
+      expect(page.repl.fake.prompts).toHaveLength(2);
+      const heading = page.screen().locate("Review recovery");
+      for (let step = 0; step < 60 && !page.screen().shows("New instruction:"); step++) {
+        const at = page.screen().index;
+        yield* page.wheel("down", { column: heading.column + 2, row: heading.row + 2 });
+        yield* page.until("the reopened field is revealed", (one) => one.index > at);
+      }
+      for (let step = 0; step < 12 && !page.screen().shows(">> New instruction:"); step++) {
+        yield* completedKey(page, "Backtab");
+      }
+      yield* page.until("the new instruction owns focus", (one) =>
+        one.shows(">> New instruction:"),
+      );
+      const instruction = "Summarize the verified inventory.";
+      yield* completedKey(page, "End");
+      yield* page.type(instruction);
+      yield* page.until("the distinct instruction is visible", (one) => one.shows("inventory."));
+      page.repl.fake.script({ reply: "<Output>Inventory recovery continued once.</Output>" });
+      yield* page.press("[send new instruction]");
+      yield* page.until(
+        "the explicit continuation completed",
+        (one) => one.shows("Inventory recovery continued once.") && sidekickIdle(one),
+      );
+      const after = yield* settledReading(page.repl);
+      expect(page.repl.fake.prompts).toHaveLength(3);
+      expect(page.repl.fake.prompts[2]).toContain(instruction);
+      expect(page.repl.fake.prompts[2]).not.toContain("OUTPUT-BEGIN:");
+      expect(page.repl.fake.turns[2]?.handle.sessionKey).toBe(
+        page.repl.fake.turns[0]?.handle.sessionKey,
+      );
+      expect(after.model.entries).toEqual(before.model.entries);
+    });
+  }
+  function* draftFromComposer(page: ReplPage): Operation<void> {
+    yield* intoComposer(page);
+    for (let index = 0; index < 24 && !page.screen().shows("Type here"); index++) {
+      const before = page.screen().index;
+      yield* page.key("Tab");
+      yield* page.until("the next keyboard traversal", (one) => one.index > before);
+    }
+    expect(page.screen().shows("Type here")).toBe(true);
+  }
+
+  it("keeps recovery closed through healthy idle and running work, and removes the action on an exact completed match", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    expect(page.screen().shows("Review recovery")).toBe(false);
+    expect(page.screen().shows("[review recovery]")).toBe(false);
+    page.repl.fake.script({ reply: "<REPL.Bindings />", held: true });
+    page.repl.fake.script({ reply: "<Output>Healthy completed match.</Output>", held: true });
+    yield* sendMessage(page, "An ordinary healthy request.");
+    yield* page.repl.fake.holdingTurns(1);
+    expect(page.screen().shows("Review recovery")).toBe(false);
+    expect(page.screen().shows("[review recovery]")).toBe(false);
+    page.repl.fake.releaseTurn();
+    yield* page.repl.fake.startedTurns(2);
+    yield* page.repl.fake.holdingTurns(1);
+    yield* page.until("the ordinary feedback turn running", (one) => one.shows("[stop]"));
+    expect(page.screen().shows("Review recovery")).toBe(false);
+    page.repl.fake.releaseTurn();
+    yield* page.until(
+      "the healthy feedback completing",
+      (one) => sidekickIdle(one) && one.shows("Healthy completed match."),
+    );
+    expect(page.screen().shows("Review recovery")).toBe(false);
+    expect(page.screen().shows("[review recovery]")).toBe(false);
+  });
+  it("routes recovery edits and Close without changing either owner's held form values", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    yield* draftText(page, "A retained entry draft.");
+    yield* intoComposer(page);
+    yield* typed(page, "A retained message.");
+    const saved = yield* settledReading(page.repl);
+    const form = {
+      values: { answer: "Entry's partial answer" },
+      field: "answer",
+      messages: [],
+      offset: 0,
+    };
+    const asking = {
+      key: "original-question",
+      open: false,
+      form: { ...form, values: { answer: "Sidekick's partial answer" } },
+    };
+    const state: ReplState = {
+      ...initialState(saved.execution),
+      draft: "A retained entry draft.",
+      message: "A retained message.",
+      form,
+      asking,
+      recovering: { open: true, text: "", revision: 0, offset: 0, replacing: false },
+    };
+    const live: ReplLive = {
+      output: "",
+      question: undefined,
+      expansion: "playing",
+      pausable: false,
+      running: false,
+      agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
+    };
+    const edited = reduceRepl(
+      state,
+      { kind: "type", text: "A distinct instruction." },
+      saved.model,
+      live,
+      undefined,
+      { kind: "recovery" },
+    ).state;
+    const closed = reduceRepl(edited, { kind: "close-recovery" }, saved.model, live).state;
+    expect(closed.recovering?.text).toBe("A distinct instruction.");
+    expect(closed.recovering?.open).toBe(false);
+    expect(closed.form).toBe(form);
+    expect(closed.asking).toBe(asking);
+    expect(closed.draft).toBe(state.draft);
+    expect(closed.message).toBe(state.message);
+    expect(closed.route).toBe(state.route);
+  });
+  it("reviews without work, preserves a new instruction through resize and sends it once", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    page.repl.fake.script({ reply: "<REPL.Bindings />" });
+    page.repl.fake.script({ reply: "<REPL.Submit />", failure: "Internal error" });
+    yield* sendMessage(page, "Inspect the established result.");
+    yield* page.until("the recovery action", (one) => one.shows("[review recovery]"));
+    yield* draftFromComposer(page);
+    yield* draftText(page, "Draft survives review.");
+    yield* intoComposer(page);
+    yield* typed(page, "Message survives review.");
+    yield* page.press("[review recovery]");
+    yield* page.until("the original recovery account", (one) =>
+      one.shows("Earlier feedback acceptance remains unknown."),
+    );
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    yield* page.until("the new instruction field", (one) => one.shows("New instruction:"));
+    yield* page.until("the focused new instruction", (one) => one.shows(">> New instruction:"));
+    const instruction = "Inspect the established result and propose the next step.";
+    yield* page.type(instruction);
+    yield* page.until("the instruction end", (one) => one.shows("propose the next step."));
+    yield* page.resize({ columns: 120, rows: 30 });
+    yield* page.resize(NARROW);
+    yield* page.until("fixed recovery action at narrow size", (one) =>
+      one.shows("[send new instruction]"),
+    );
+    for (let pageAt = 0; pageAt < 30 && !page.screen().shows("New instruction:"); pageAt++) {
+      const before = page.screen().index;
+      yield* page.wheel("down", { column: 2, row: 4 });
+      yield* page.until("the recovery drawer scrolling", (one) => one.index > before);
+    }
+    for (
+      let traversal = 0;
+      traversal < 12 && !page.screen().shows(">> New instruction:");
+      traversal++
+    ) {
+      yield* completedKey(page, "Backtab");
+    }
+    yield* page.until("the focused narrow instruction", (one) => one.shows(">> New instruction:"));
+    for (let at = 0; at < instruction.length; at++) {
+      yield* completedKey(page, "ArrowLeft");
+    }
+    yield* completedKey(page, "Home");
+    yield* page.until("the narrow instruction prefix", (one) =>
+      one.shows("New instruction: Inspect"),
+    );
+    for (let at = 0; at < 28; at++) {
+      yield* completedKey(page, "ArrowRight");
+    }
+    yield* page.type("X");
+    yield* page.until("the narrow instruction middle", (one) => one.shows("resuXlt"));
+    yield* completedKey(page, "Backspace");
+    for (let at = 28; at < instruction.length; at++) {
+      yield* completedKey(page, "ArrowRight");
+    }
+    yield* completedKey(page, "End");
+    yield* page.until("the narrow instruction end", (one) => one.shows("step."));
+    const refused = yield* page.resize({ columns: 60, rows: 18 });
+    expect(refused.shows("needs at least 72x20")).toBe(true);
+    expect(refused.shows("[send new instruction]")).toBe(false);
+    expect(refused.shows("[close]")).toBe(false);
+    yield* page.resize(NARROW);
+    yield* page.key("Escape");
+    yield* page.until("the closed recovery drawer", (one) => !one.shows("Review recovery"));
+    yield* page.resize(WIDE);
+    expect(draftHolds(page.screen(), "Draft survives review.")).toBe(true);
+    expect(composerHolds(page.screen(), "Message survives review.")).toBe(true);
+    yield* page.press("[review recovery]");
+    yield* page.until("the saved instruction", (one) => one.shows("propose the next step."));
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    page.repl.fake.script({ reply: "<Output>Continued once.</Output>" });
+    yield* page.press("[send new instruction]");
+    yield* awaited("one distinct recovery request", () => page.repl.fake.prompts.length === 3);
+    expect(page.repl.fake.prompts[2]).toContain(instruction);
+    expect(page.repl.fake.turns[2]?.handle.sessionKey).toBe(
+      page.repl.fake.turns[0]?.handle.sessionKey,
+    );
+  });
+  it("keeps an independent entry question waiting through recovery inspection and resize", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    page.repl.fake.script({ reply: "<REPL.Bindings />" });
+    page.repl.fake.script({ reply: "", failure: "Internal error" });
+    yield* sendMessage(page, "Inspect established work.");
+    yield* page.until("unknown feedback", (one) => one.shows("[review recovery]"));
+    yield* draftFromComposer(page);
+    yield* pasteDraft(
+      page,
+      '<Elicit as="answer" schema={{type:"object",properties:{answer:{type:"string"}},required:["answer"],additionalProperties:false}}>Independent entry question.</Elicit>',
+    );
+    yield* page.key("Enter");
+    yield* page.until("the independent question", (one) => one.shows("[answer]"));
+    yield* page.press("[answer]");
+    yield* page.until("the entry's form", (one) => one.shows("[submit]"));
+    yield* page.press("*answer:");
+    yield* typed(page, "An unfinished answer.");
+    yield* page.key("Escape");
+    yield* page.until("closed entry form", (one) => !one.shows("[submit]"));
+    yield* selectPane(page, "sidekick");
+    yield* page.press("[review recovery]");
+    yield* page.until("recovery account", (one) =>
+      one.shows("Earlier feedback acceptance remains unknown."),
+    );
+    yield* page.resize(NARROW);
+    yield* page.resize(WIDE);
+    yield* page.key("Escape");
+    yield* page.until("closed recovery", (one) => !one.shows("Review recovery"));
+    yield* page.press("[answer]");
+    yield* page.until(
+      "the original waiting question",
+      (one) => one.shows("Independent entry question.") && one.shows("[submit]"),
+    );
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    expect(page.screen().shows("Independent entry question.")).toBe(true);
+  });
+  it("closes a completed recovery after edits during its new prompt and retains newer values", function* () {
+    const page = yield* useReplPage({ size: WIDE });
+    page.repl.fake.script({ reply: "<REPL.Bindings />" });
+    page.repl.fake.script({ reply: "", failure: "Internal error" });
+    yield* sendMessage(page, "Inspect established work.");
+    yield* page.until("unresolved feedback", (one) => one.shows("[review recovery]"));
+    yield* draftFromComposer(page);
+    yield* typed(page, "A held Draft.");
+    yield* intoComposer(page);
+    yield* typed(page, "A held Message.");
+    yield* page.press("[review recovery]");
+    yield* page.until("the account", (one) =>
+      one.shows("Earlier feedback acceptance remains unknown."),
+    );
+    yield* typed(page, "The authorized instruction.");
+    page.repl.fake.script({ reply: "<Output>Recovery completed once.</Output>", held: true });
+    yield* page.press("[send new instruction]");
+    yield* page.repl.fake.holdingTurns(1);
+    yield* page.press("New instruction:");
+    yield* page.type("A newer unused instruction.");
+    yield* page.until("the newer instruction suffix", (one) =>
+      one.rows.some(
+        (row) => row.includes("New instruction:") && row.trimEnd().endsWith("unused instruction."),
+      ),
+    );
+    page.repl.fake.releaseTurn();
+    yield* page.until(
+      "the completed recovery drawer closing",
+      (one) => !one.shows("Review recovery") && one.shows("Recovery completed once."),
+    );
+    expect(page.screen().shows("[review recovery]")).toBe(false);
+    expect(draftHolds(page.screen(), "A held Draft.")).toBe(true);
+    expect(composerHolds(page.screen(), "A held Message.")).toBe(true);
+    expect(page.repl.fake.prompts).toHaveLength(3);
+    expect(page.repl.fake.prompts[2]).toContain("The authorized instruction.");
+    expect(page.repl.fake.prompts[2]).not.toContain("A newer unused instruction.");
+  });
+  for (const change of ["instruction", "action"]) {
+    it(`refuses stale held preparation after changing the ${change} without losing edits`, function* () {
+      const gate = appendGate();
+      const host = yield* useMountedHost({ gate });
+      const page = yield* useReplPage({ host, size: WIDE });
+      host.fake.script({ reply: "<REPL.Bindings />" });
+      host.fake.script({ reply: "", failure: "Internal error" });
+      yield* sendMessage(page, "Inspect established work.");
+      yield* page.until("recovery after failed feedback", (one) => one.shows("[review recovery]"));
+      yield* page.press("[review recovery]");
+      yield* page.until("focused new instruction", (one) => one.shows(">> New instruction:"));
+      yield* typed(page, "An unused original instruction.");
+      yield* page.until("the account settling without replacing newer text", (one) =>
+        one.shows("Earlier feedback acceptance remains unknown."),
+      );
+      yield* page.resize({ columns: 120, rows: 30 });
+      yield* page.resize(WIDE);
+      const decision = gate.holdNext(
+        (path, record) =>
+          path.endsWith(SIDEKICK_FILE) && record.includes('"kind":"recovery-decision"'),
+      );
+      yield* page.press("[send new instruction]");
+      yield* race([
+        decision.started(),
+        (function* () {
+          yield* sleep(5000);
+          throw new Error("The recovery decision was not reached. " + page.describe());
+        })(),
+      ]);
+      if (change === "instruction") {
+        for (
+          let traversal = 0;
+          traversal < 8 && !page.screen().shows(">> New instruction:");
+          traversal++
+        ) {
+          const before = page.screen().index;
+          yield* page.key("Tab");
+          yield* page.until("the next recovery traversal", (one) => one.index > before);
+        }
+        yield* page.until("the instruction focused after resizing", (one) =>
+          one.shows(">> New instruction:"),
+        );
+        yield* typed(page, " Newer instruction text.");
+      } else {
+        yield* page.press("[different conversation]");
+      }
+      yield* page.key("Escape");
+      yield* page.until(
+        "closed while preparation stays held",
+        (one) => !one.shows("Review recovery"),
+      );
+      yield* draftFromComposer(page);
+      yield* draftText(page, "Newer held Draft.");
+      yield* intoComposer(page);
+      yield* typed(page, "Newer held Message.");
+      expect(host.fake.prompts).toHaveLength(2);
+      yield* page.press("[review recovery]");
+      yield* page.until("the retained instruction", (one) =>
+        one.shows(
+          change === "instruction" ? "Newer instruction text." : "An unused original instruction.",
+        ),
+      );
+      if (change === "instruction") {
+        expect(page.screen().shows("Newer instruction text.")).toBe(true);
+      }
+      decision.release();
+      yield* page.until("stale preparation refusal", (one) => one.shows("instruction changed"));
+      expect(host.fake.prompts).toHaveLength(2);
+      yield* page.key("Escape");
+      yield* page.until(
+        "the preserved composer values",
+        (one) =>
+          one.shows(COMPOSER) &&
+          composerHolds(one, "Newer held Message.") &&
+          draftHolds(one, "Newer held Draft."),
+      );
+    });
+  }
+});
 
 describe("Sidekick presentation: visible work owns its controls", () => {
   it("sends one message through the Sidekick pane and reads the reply", function* () {

@@ -29,6 +29,7 @@ import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
 
+import { ReplHost } from "../../../../src/repl/host.ts";
 import { installReplHost } from "../../../../src/repl-assembly.ts";
 import { REPL_DIRECTORY } from "../../../../src/repl/storage.ts";
 import {
@@ -45,7 +46,7 @@ import { pairedReplRepository } from "../../../../src/repl/sidekick/repository.t
 import { bindRetainedPrefix } from "../../../../src/repl/sidekick/history.ts";
 import {
   admitting,
-  coldReservation,
+  coldReservations,
   controlJournal,
   retainResolution,
   submitForSidekick,
@@ -479,7 +480,7 @@ function* readingOf(owner: SidekickOwner): Operation<Record<string, unknown>> {
     unfinished: value.unfinished.map((one) => [one.component, one.status]),
     delivered: value.delivered,
     unestablished: value.unestablished,
-    submit: value.submit === undefined ? null : value.submit.entry,
+    submit: value.submits.find((one) => !one.settled)?.entry ?? null,
   };
 }
 
@@ -602,6 +603,94 @@ function* phases(): Operation<unknown> {
   const sidekick = join(repository, PAIRED_DIRECTORY, execution, SIDEKICK_FILE);
   const entries = join(repository, PAIRED_DIRECTORY, execution, ENTRIES_FILE);
 
+  if (phase === "recovery-prepared-cut") {
+    const held = yield* useConversing(dataRoot, execution, { replies: [] });
+    held.fake.script({ reply: "<REPL.Bindings />" });
+    held.fake.script({ reply: "", failure: "Internal error" });
+    yield* held.owner.message("Inspect established work.");
+    const review = yield* held.owner.reviewRecovery();
+    if (!review.ok) {
+      throw review.error;
+    }
+    yield* ReplHost.around(
+      {
+        *appendRecord([path, line], next) {
+          yield* next(path, line);
+          const record = parseSidekickRecord(line.trim());
+          if (record?.kind === "conversation" && record.phase === "prepared") {
+            const output =
+              JSON.stringify({
+                prepared: record.conversation,
+                original: review.value.conversation,
+                prompts: held.fake.prompts.length,
+              }) + "\n";
+            yield* until(
+              new Promise<void>((resolve, reject) =>
+                process.stdout.write(output, (error) => (error ? reject(error) : resolve())),
+              ),
+            );
+            process.exit(0);
+          }
+        },
+      },
+      { at: "max" },
+    );
+    return yield* held.owner.recover(
+      review.value,
+      "The interrupted replacement instruction.",
+      true,
+      { current: () => true },
+    );
+  }
+  if (phase === "recovery-prepared-reopen") {
+    const held = yield* useConversing(dataRoot, execution, { replies: [] });
+    const before = yield* held.chat.writer.readAll();
+    const review = yield* held.owner.reviewRecovery();
+    if (!review.ok) {
+      throw review.error;
+    }
+    const passive = JSON.stringify(yield* held.chat.writer.readAll()) === JSON.stringify(before);
+    const refused = yield* held.owner.recover(
+      review.value,
+      "The interrupted replacement instruction.",
+      true,
+      { current: () => true },
+    );
+    const afterRefusal = held.owner.reading;
+    if (!afterRefusal.ok) {
+      throw afterRefusal.error;
+    }
+    const next = yield* held.owner.reviewRecovery();
+    if (!next.ok) {
+      throw next.error;
+    }
+    held.fake.script({ reply: "<Output>A new deliberately authorized request.</Output>" });
+    const renewed = yield* held.owner.recover(
+      next.value,
+      "A new deliberate replacement instruction.",
+      true,
+      { current: () => true },
+    );
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    return {
+      passive,
+      firstRefused: !refused.ok,
+      withdrawn: afterRefusal.value.recoveries[0]?.withdrawn,
+      originalSelected: afterRefusal.value.active === review.value.conversation,
+      renewed: renewed.ok,
+      prompts: held.fake.prompts,
+      decisions: reading.value.recoveries.map((one) => ({
+        id: one.decision.id,
+        target: one.decision.target,
+        used: one.used,
+        withdrawn: one.withdrawn,
+      })),
+      unknown: reading.value.unestablished.length,
+    };
+  }
   if (phase === "workspace-start" || phase === "workspace-continue") {
     const mounted = yield* until(import("../../../support/mounted-repl.ts"));
     const { useReplPage } = yield* until(import("../../../support/repl-page.ts"));
@@ -882,7 +971,7 @@ function* phases(): Operation<unknown> {
     const live = opened.value;
     // Cold: the records already on disk and the entries already on disk. This
     // is the whole of what reopening does with an unanswered reservation.
-    const cold = yield* coldReservation(pair.chat.records, live.model.entries, entries);
+    const cold = yield* coldReservations(pair.chat.records, live.model.entries, entries);
     if (!cold.ok) {
       return {
         opened: true,
@@ -891,7 +980,7 @@ function* phases(): Operation<unknown> {
         appended: appended.length,
       };
     }
-    const found = cold.value;
+    const found = cold.value[0];
     const before = appended.length;
     const answer = {
       opened: true,
@@ -919,8 +1008,8 @@ function* phases(): Operation<unknown> {
       // a later reading finds nothing left to reconcile. This is a second
       // projection inside this process, not a further process boundary.
       again: yield* (function* (): Operation<string> {
-        const re = yield* coldReservation(after, live.model.entries, entries);
-        return re.ok ? (re.value === undefined ? "resolved" : re.value.finding.kind) : "refused";
+        const re = yield* coldReservations(after, live.model.entries, entries);
+        return re.ok ? (re.value.length === 0 ? "resolved" : re.value[0]!.finding.kind) : "refused";
       })(),
       entriesAfter: live.model.entries.map((entry) => entry.key),
     };

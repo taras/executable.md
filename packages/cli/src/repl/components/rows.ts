@@ -315,6 +315,24 @@ function activation(input: ReplViewData): ReplAction | undefined {
     const question = named["question"];
     return typeof question === "string" ? { kind: "answer-sidekick", question } : undefined;
   }
+  if (select === "recovery-open") {
+    return { kind: "open-recovery" };
+  }
+  if (select === "recovery-close") {
+    return { kind: "close-recovery" };
+  }
+  if (select === "recovery-replace") {
+    return { kind: "recovery-replace" };
+  }
+  if (select === "recovery-continue") {
+    return { kind: "recovery-continue" };
+  }
+  if (select === "recovery-reference-ack") {
+    return { kind: "recovery-reference-ack" };
+  }
+  if (select === "recovery-reference-cancel") {
+    return { kind: "recovery-reference-cancel" };
+  }
   if (select === "configure") {
     const conversation = named["conversation"];
     return {
@@ -451,7 +469,8 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
         purpose !== "message" &&
         purpose !== "answer" &&
         purpose !== "sidekick-answer" &&
-        purpose !== "configure-agent"
+        purpose !== "configure-agent" &&
+        purpose !== "recovery"
       ) {
         return undefined;
       }
@@ -513,6 +532,9 @@ function submission(input: ReplViewData): ReplAction | undefined {
   }
   if (purpose === "answer") {
     return { kind: "answer" };
+  }
+  if (purpose === "recovery") {
+    return { kind: "type", text: "\n", purpose: "recovery" };
   }
   if (purpose === "configure-agent") {
     // Enter in the agent field asks for what Configure holds, exactly as Enter
