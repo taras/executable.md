@@ -374,9 +374,7 @@ describe("headless child ACP clients", () => {
       .map((one) => one.params.update.rawOutput["executablemd.xmd-response/v1"])
       .find((one) => one.requestId === requestId);
     if (response === undefined) {
-      throw new Error(
-        "Stock permission traffic omitted its readable response/refusal: " + stdout,
-      );
+      throw new Error("Stock permission traffic omitted its readable response/refusal: " + stdout);
     }
     // Stock ACPX's own non-interactive policy, observed rather than assumed,
     // with no approve-all or other automatic-grant flag passed to it: it
@@ -805,7 +803,10 @@ describe("headless child ACP clients", () => {
       (input) => ({
         ...input,
         onElicitation: () =>
-          Promise.resolve({ action: "accept", content: { decision: "approve", reason: "reviewed" } }),
+          Promise.resolve({
+            action: "accept",
+            content: { decision: "approve", reason: "reviewed" },
+          }),
       }),
       undefined,
       undefined,
@@ -897,7 +898,10 @@ describe("headless child ACP clients", () => {
       (input) => ({
         ...input,
         onElicitation: () =>
-          Promise.resolve({ action: "accept", content: { decision: "approve", reason: "reviewed" } }),
+          Promise.resolve({
+            action: "accept",
+            content: { decision: "approve", reason: "reviewed" },
+          }),
       }),
       undefined,
       undefined,
