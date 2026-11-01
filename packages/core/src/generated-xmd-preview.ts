@@ -234,8 +234,8 @@ function literal(segments: readonly Segment[]): string {
   let text = "";
   for (const segment of segments) {
     if (segment.type === "text") {
-      text += readsBinding(segment.content)
-        ? splitTextFences(segment.content)
+      text += readsBinding(segment)
+        ? splitTextFences(segment)
             .filter((slice) => slice.passive)
             .map((slice) => slice.content)
             .join("")

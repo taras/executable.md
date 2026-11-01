@@ -244,7 +244,7 @@ export function scanSegments(
     const fenceMatch = matchFenceOpen(text, pos);
     if (fenceMatch) {
       if (pos > textStart) {
-        pushText(segments, text.slice(textStart, pos));
+        pushText(segments, text, textStart, pos);
       }
 
       const fenceEnd = findFenceClose(
@@ -257,7 +257,6 @@ export function scanSegments(
         unfinished?.push({ start: pos });
       }
       const content = text.slice(fenceMatch.contentStart, fenceEnd.contentEnd);
-      const fullFence = text.slice(pos, fenceEnd.fenceEnd);
 
       const parsed = parseInfoString(fenceMatch.infoString);
 
@@ -273,7 +272,7 @@ export function scanSegments(
         } satisfies ExecutableCodeBlock);
       } else {
         // Non-executable code block: preserve as text
-        pushText(segments, fullFence);
+        pushText(segments, text, pos, fenceEnd.fenceEnd);
       }
 
       pos = fenceEnd.fenceEnd;
@@ -298,7 +297,7 @@ export function scanSegments(
       const component = parseComponentTag(text, pos, index, elements, unfinished);
       if (component) {
         if (pos > textStart) {
-          pushText(segments, text.slice(textStart, pos));
+          pushText(segments, text, textStart, pos);
         }
         segments.push(component.segment);
         spans?.push({ start: pos, end: component.end });
@@ -312,7 +311,7 @@ export function scanSegments(
   }
 
   if (textStart < text.length) {
-    pushText(segments, text.slice(textStart));
+    pushText(segments, text, textStart);
   }
 
   return segments;
@@ -370,13 +369,21 @@ export function scanComponentSpans(text: string): ComponentSpan[] {
   return spans;
 }
 
-/** Passive fences stay authored source through text interpolation. */
-export function splitTextFences(text: string): { content: string; passive: boolean }[] {
+const TEXT_LINE_START = "executablemd.core.scanner.text-line-start";
+
+/** Detached text keeps the scanner's original line boundary, even after healing. */
+export function splitTextFences(
+  segment: TextSegment,
+  text = segment.content,
+): { content: string; passive: boolean }[] {
   const slices: { content: string; passive: boolean }[] = [];
   let start = 0;
   let pos = 0;
   while (pos < text.length) {
-    const fence = matchFenceOpen(text, pos);
+    const fence =
+      pos === 0 && Reflect.get(segment, TEXT_LINE_START) === false
+        ? null
+        : matchFenceOpen(text, pos);
     if (fence) {
       const end = findFenceClose(text, fence.contentStart, fence.fenceChar, fence.fenceLen);
       if (!parseInfoString(fence.infoString).executable) {
@@ -981,7 +988,7 @@ function parseChildren(
   while (pos < text.length) {
     if (text.startsWith(closingTag, pos)) {
       if (pos > textStart) {
-        pushText(children, text.slice(textStart, pos));
+        pushText(children, text, textStart, pos);
       }
       return { children, end: pos + closingTag.length };
     }
@@ -989,7 +996,7 @@ function parseChildren(
     const fenceMatch = matchFenceOpen(text, pos);
     if (fenceMatch) {
       if (pos > textStart) {
-        pushText(children, text.slice(textStart, pos));
+        pushText(children, text, textStart, pos);
       }
 
       const fenceEnd = findFenceClose(
@@ -1002,7 +1009,6 @@ function parseChildren(
         unfinished?.push({ start: pos });
       }
       const content = text.slice(fenceMatch.contentStart, fenceEnd.contentEnd);
-      const fullFence = text.slice(pos, fenceEnd.fenceEnd);
       const parsed = parseInfoString(fenceMatch.infoString);
 
       if (parsed.executable) {
@@ -1016,7 +1022,7 @@ function parseChildren(
           position: positionAt(index, pos),
         } satisfies ExecutableCodeBlock);
       } else {
-        pushText(children, fullFence);
+        pushText(children, text, pos, fenceEnd.fenceEnd);
       }
 
       pos = fenceEnd.fenceEnd;
@@ -1038,7 +1044,7 @@ function parseChildren(
       const nested = parseComponentTag(text, pos, index, elements, unfinished);
       if (nested) {
         if (pos > textStart) {
-          pushText(children, text.slice(textStart, pos));
+          pushText(children, text, textStart, pos);
         }
         children.push(nested.segment);
         pos = nested.end;
@@ -1102,7 +1108,8 @@ function skipWhitespace(text: string, pos: number): number {
   return pos;
 }
 
-function pushText(segments: Segment[], content: string): void {
+function pushText(segments: Segment[], text: string, start: number, end = text.length): void {
+  const content = text.slice(start, end);
   if (content.length === 0) {
     return;
   }
@@ -1114,5 +1121,11 @@ function pushText(segments: Segment[], content: string): void {
     return;
   }
 
-  segments.push({ type: "text", content } satisfies TextSegment);
+  const segment: TextSegment = { type: "text", content };
+  // A tag can end mid-line; detaching its following text must not turn an
+  // inline span into a fence. This lexical fact stays outside the public IR.
+  Object.defineProperty(segment, TEXT_LINE_START, {
+    value: start === 0 || text[start - 1] === "\n",
+  });
+  segments.push(segment);
 }

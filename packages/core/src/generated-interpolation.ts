@@ -24,13 +24,14 @@
  */
 
 import { splitTextFences } from "./scanner.ts";
+import type { TextSegment } from "./types.ts";
 
 const ESCAPED_BRACE_PLACEHOLDER = "";
 const FRONTMATTER_REFERENCE = /\{(meta|props)\.[^}]+\}/;
 const BINDING_REFERENCE = /\{[a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*\}/;
 
-export function readsBinding(content: string): boolean {
-  return splitTextFences(content).some((slice) => {
+export function readsBinding(segment: TextSegment): boolean {
+  return splitTextFences(segment).some((slice) => {
     if (slice.passive) {
       return false;
     }

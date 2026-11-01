@@ -13,6 +13,8 @@ import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { interpolateEvalBindings } from "../src/eval-interpolate.ts";
+import { readsBinding } from "../src/generated-interpolation.ts";
+import { previewGeneratedXmdRoot } from "../src/generated-xmd-preview.ts";
 import type { Operation } from "effection";
 import type {
   Segment,
@@ -348,6 +350,23 @@ describe("Text interpolation — eval bindings in text segments", () => {
       { example: "```xmd\n{source}\n```" },
     );
     expect(output).toBe("```xmd\nCURRENT\n```");
+  });
+
+  it("TI20: a multiline inline span after a component still interpolates", function* () {
+    const source = '<Let as="prefix" value={0} />```xmd\n{source}\n```\n';
+    const segments = scanSegments(source);
+    const output = yield* expandWithBindings(segments, {}, { source: "CURRENT_1050" });
+    expect(output).toBe("```xmd\nCURRENT_1050\n```\n");
+    const text = segments[1];
+    if (text?.type !== "text") {
+      throw new Error("expected text after the component");
+    }
+    expect(readsBinding(text)).toBe(true);
+    const preview = previewGeneratedXmdRoot("<Output>" + source + "</Output>");
+    if (!preview.ok) {
+      throw preview.error;
+    }
+    expect(preview.value).toEqual({ output: "", incomplete: false });
   });
 });
 

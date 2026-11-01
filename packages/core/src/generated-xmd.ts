@@ -1653,7 +1653,7 @@ function* walk(
         // own `<Let>` capture — and with it the one way a response has of
         // writing an entry draft, whose source is entry text that legitimately
         // carries braces of its own.
-        if (lexical.language !== "root" && readsBinding(segment.content)) {
+        if (lexical.language !== "root" && readsBinding(segment)) {
           throw new Refusal("interpolation");
         }
         break;

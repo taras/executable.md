@@ -6396,7 +6396,9 @@ no journal entry.
 
 After Markdown healing, passive fenced slices are set aside using the scanner's
 fence grammar: backticks or tildes, matching closing character and sufficient
-closing length, supported indentation and inline-code exclusions. A longer
+closing length, supported indentation and inline-code exclusions. Text detached
+after a component keeps its original line context: backticks immediately after
+the tag on the same line remain an inline span. A longer
 passive fence quotes shorter fences, including executable examples. The remaining
 text undergoes two interpolation passes in sequence:
 

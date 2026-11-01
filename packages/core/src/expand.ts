@@ -1000,7 +1000,7 @@ function* expandListSegments(
           textEvalEnv !== undefined && "props" in textEvalEnv.values
             ? textEvalEnv.values.props
             : parentProps;
-        const final = splitTextFences(healed)
+        const final = splitTextFences(segment, healed)
           .map(({ content, passive }) => {
             if (passive) {
               return content;
