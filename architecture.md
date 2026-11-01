@@ -615,8 +615,10 @@ failure path hands an entitled prefix to a caller's rendering region.
 The body owns selection for its execution, separately from the accumulator that
 receives rendered text. It introduces no global write, contextual permission,
 registry, output channel or public protocol. Partial replay rebuilds selection
-through ordinary expansion while completed effects restore from their records;
-completed root replay restores the retained result without expanding the body.
+through resumed expansion and restores completed effects from their records.
+Completed Spawn children restore their rendered runs and source-owned selection
+from their existing successful closes without executing their bodies. Completed
+root replay restores the retained result without expanding the body.
 Error modes, fatal precedence, cancellation and joined teardown are unchanged.
 The [language contract](specs/executable-mdx-spec.md#69-component-declared-output-output)
 owns authored forms and [nested-output conformance](specs/executable-mdx-spec.md#tier-no--nested-output-69)
@@ -752,11 +754,24 @@ coroutine of the one that reached the `<All>`, and nesting produces the existing
 hierarchical identity. Effects inside a child keep their ordinary descriptions
 under that coroutine, so two children may derive the same local block id without
 colliding, and work after `</All>` continues on the parent counter it would have
-had without any child. Each successful child closes with the ordered `{ text, exact }` runs it
-rendered. Exact presentation is a provenance recorded against the segment
-objects expansion marked, and those segments do not cross the join — so the runs
-are what carries it, live and on replay alike, and a retained close that does
-not read as that shape fails the run instead of rebuilding part of a document.
+had without any child. Each successful child closes with its ordered rendered
+runs, including exact-source presentation, and the source-owned output-selection
+information needed to resume enclosing renderings. This includes an executed
+empty declaration and distinguishes the declaring body execution, including
+repeated invocations. Selection stays subject to the existing projection,
+capture, value, documentation and Spawn owners; it grants no other source
+selection authority. Exact presentation remains provenance recorded against the
+segments expansion marked, not an encoding of selection. Neither those segment
+objects nor live selection owners cross the join: the existing child Close
+retains data that restores both rendering and selection without child execution.
+No separate record family, global writer or public protocol is introduced.
+
+The complete current child result is parsed under the
+[prerelease persistence policy](#internal-persistence-during-prerelease).
+An obsolete incompatible shape fails the run clearly rather than rebuilding
+part of a document. Journal age alone does not invalidate a history whose data
+still satisfies the current format. Reading preserves the stored bytes and adds
+no version tag, negotiation, legacy reader, migration or compatibility branch.
 
 **Output is authored order; the journal is completion order.** A child emits
 into its private buffer, and `<All>` appends the renderings to its caller's

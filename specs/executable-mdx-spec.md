@@ -7962,10 +7962,22 @@ surrounding source. An admitted generated root is a separate owned body, while
 an Evaluate fragment has no independent Output context.
 
 All/Spawn retains its private buffers and authored-order join (§6.5). Each child
-selects its rendering privately; only an all-success join publishes those
-renderings. Failure or cancellation joins unfinished work and publishes none of
-the child buffers. Nested declarations add no record field, output channel or
-shared mutable collector.
+selects its rendering privately; only an all-success join publishes its rendering
+and selection. Failure or cancellation joins unfinished work and publishes
+neither from the child buffers. The existing successful Spawn Close retains
+ordered rendered runs with exact-source presentation and the source-owned
+selection information needed to resume enclosing renderings, including an
+executed empty declaration. Ownership distinguishes repeated body invocations;
+selection never bypasses a projection, capture, value or documentation owner.
+Completed children restore both without executing their bodies. Selection is
+not encoded as text or exactness and introduces no separate record family,
+output channel, global writer or shared mutable collector.
+
+The reader validates one complete current saved-result shape. Obsolete
+incompatible Spawn results refuse clearly; a journal is not invalidated solely
+because it is older. Stored bytes are preserved. There is no version tag,
+negotiation, legacy reader, migration, adapter or compatibility branch, following
+the [prerelease persistence policy](../architecture.md#internal-persistence-during-prerelease).
 
 #### Execution order and error behavior
 
