@@ -444,7 +444,7 @@ describe("Tier DV: recursive Markdown sources", () => {
       "# Other",
       "",
       "<If condition={true}>",
-      "<Output>bad</Output>",
+      '<Return value="bad" />',
       "</If>",
       "",
     ].join("\n");
@@ -456,10 +456,10 @@ describe("Tier DV: recursive Markdown sources", () => {
 
     // The root was asked about one section, and its projection is clean. The
     // `<Foo />` written there selects the *whole* definition, whose body puts
-    // an `<Output>` where the contract does not allow one.
-    expect(codes(result)).toEqual(["body-shape-invalid"]);
+    // an `<Return>` where the contract does not allow one.
+    expect(codes(result)).toEqual(["return-usage-invalid"]);
     const [diagnostic] = result.diagnostics;
-    expect(diagnostic!.component).toBe("Output");
+    expect(diagnostic!.component).toBe("Return");
     expect(diagnostic!.position?.path).toBe("components/Foo.md");
     expect(result.outcome).toBe("invalid");
 
@@ -471,7 +471,7 @@ describe("Tier DV: recursive Markdown sources", () => {
     // The projection is source zero and the full definition follows it in FIFO
     // order; selecting the path a second time reuses that view rather than
     // scanning it again.
-    expect(names(result)).toEqual(["Foo", "Foo", "If", "Output"]);
+    expect(names(result)).toEqual(["Foo", "Foo", "If", "Return"]);
 
     // One read, two views: the retained bytes answered both parses, and nothing
     // the document wrote was executed to find any of this out.
@@ -1046,13 +1046,13 @@ describe("Tier DV: static answers and opacity", () => {
 
   it("DV8: an independent body-shape defect wins over a dynamic prop", function* () {
     const { result } = yield* validateText("<Shape count={n} />\n", {
-      tree: { "components/Shape.md": "text\n\n<If condition={true}>\n<Output>x</Output>\n</If>\n" },
+      tree: { "components/Shape.md": "text\n\n<If condition={true}>\n<Return />\n</If>\n" },
     });
 
     const invocation = named(result, "Shape");
     expect(invocation.outcome).toBe("invalid");
     expect(diagnosticsOf(result, invocation).map((diagnostic) => diagnostic.code)).toEqual([
-      "body-shape-invalid",
+      "return-usage-invalid",
     ]);
   });
 
@@ -1133,20 +1133,20 @@ describe("Tier DV: root ownership and body contracts", () => {
 
   it("DV10: a definition's body diagnostics keep its path and its authored position", function* () {
     const { result } = yield* validateText("<Shape />\n", {
-      tree: { "components/Shape.md": "text\n\n<If condition={true}>\n<Output>x</Output>\n</If>\n" },
+      tree: { "components/Shape.md": "text\n\n<If condition={true}>\n<Return />\n</If>\n" },
     });
 
-    expect(codes(result)).toEqual(["body-shape-invalid"]);
+    expect(codes(result)).toEqual(["return-usage-invalid"]);
     const [diagnostic] = result.diagnostics;
-    expect(diagnostic!.component).toBe("Output");
+    expect(diagnostic!.component).toBe("Return");
     expect(diagnostic!.position?.path).toBe("components/Shape.md");
     expect(diagnostic!.position?.line).toBe(4);
-    // The invocation of the definition and the `<Output>` itself both point at
+    // The invocation of the definition and the `<Return>` itself both point at
     // the one diagnostic the definition's own source produced.
     expect(named(result, "Shape").outcome === "invalid" && named(result, "Shape").outcome).toBe(
       "invalid",
     );
-    expect(named(result, "Output").outcome).toBe("invalid");
+    expect(named(result, "Return").outcome).toBe("invalid");
   });
 
   it("DV10: a value component invoked without `as` is a return-usage failure", function* () {
@@ -1262,13 +1262,12 @@ describe("Tier DV: one parser, one rule catalog", () => {
     // diagnostic per violation under its own code.
     const aggregate = validateBodyStructure(definition.bodySegments, definition.returns);
     expect(aggregate).toEqual(renderBodyStructure(facts));
-    expect(aggregate!.message).toContain("Misplaced <Output> found");
     expect(aggregate!.message).toContain("<Return> requires a document or component");
 
     const { result } = yield* validateText("<Shape />\n", {
       tree: { "components/Shape.md": body },
     });
-    expect(codes(result)).toEqual(["body-shape-invalid", "return-usage-invalid"]);
+    expect(codes(result)).toEqual(["return-usage-invalid"]);
   });
 });
 
@@ -1711,5 +1710,25 @@ describe("Tier ED — declared structure", () => {
     // leaves it valid rather than opaque — which is what it reported before a
     // declaration existed, and what it reports beside one.
     expect(named(result, "If").outcome).toBe("valid");
+  });
+});
+
+describe("993 nested Output validation", () => {
+  it("W11: accepts nested text bodies and refuses props and value declarations at their authored depth", function* () {
+    for (const output of [
+      "<Output />",
+      "<Output></Output>",
+      "<Output>x<Output>y</Output></Output>",
+    ]) {
+      const { result } = yield* validateText(`<If condition={false}>${output}</If>`);
+      expect(result.diagnostics).toEqual([]);
+    }
+    const invalid = yield* validateText("<If condition={false}><Output invalid /></If>");
+    expect(invalid.result.outcome).toBe("invalid");
+    expect(invalid.result.diagnostics.some((item) => item.message.includes("no props"))).toBe(true);
+    const value = yield* validateText(
+      '---\nreturns: { type: string }\n---\n<If condition={false}><Output /></If><Return value="answer" />',
+    );
+    expect(value.result.diagnostics.some((item) => item.message.includes("exclusive"))).toBe(true);
   });
 });

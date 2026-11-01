@@ -1346,8 +1346,8 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
      * One sequence of prefixes, each the whole of what has arrived.
      *
      * A delimiter split mid-tag, an interpolation whose value nothing has
-     * computed, a passive fence that only looks like a region, and a region
-     * nested inside another — which is refused rather than shown. What the
+     * computed, a passive fence that only looks like a region, and an attributed
+     * nested region — which is refused rather than shown. What the
      * screen may say about each is the pure reader's answer, so the reader is
      * what each one is compared against rather than a string chosen here.
      */
@@ -1356,7 +1356,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
       "put>one</Output>\n",
       "<Output>then {computed}</Output>\n",
       "Here is an example:\n\n```md\n<Output>not a region</Output>\n```\n",
-      "<Output>outer <Output>inner</Output></Output>\n",
+      "<Output>outer <Output invalid>inner</Output></Output>\n",
     ];
     // Held before every piece after the first, and once more when they have
     // all arrived: the last prefix is the invalid one, and what it does to the
@@ -1396,7 +1396,7 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     }
 
     // The whole candidate has arrived and the provider has not finished. Its
-    // last piece nests a region inside another, which the reader refuses — so
+    // last piece gives a region a prop, which the reader refuses — so
     // the body is gone now, before anything was evaluated.
     yield* repl.fake.streamingTurns(1);
     expect(previewGeneratedXmdRoot(pieces.join("")).ok).toBe(false);
@@ -3991,4 +3991,187 @@ describe("Follow: submitted rounds in the running command", () => {
     expect(page.repl.fake.prompts).toHaveLength(3);
     expect(page.screen().shows("[ ] Follow")).toBe(true);
   });
+});
+
+describe("993 mounted nested Output journeys", () => {
+  for (const ready of [true, false]) {
+    it(`W1: an actual Draft entry selects branch ${ready} and only that marker`, function* () {
+      const workspace = yield* useTemporary("nested-repl-");
+      const writes: string[] = [];
+      yield* API.Files.around({
+        *writeTextFile([input], next) {
+          writes.push(input.path);
+          return yield* next(input);
+        },
+      });
+      const page = yield* useReplPage({ projectCwd: workspace, hostFiles: true });
+      const source = `<Let as="ready" value={${ready}} />\n<If condition={ready}>\n<File path="complete">done</File>\n<Output>Review complete.</Output>\n<Else>\n<File path="pending">waiting</File>\n<Output>Review pending.</Output>\n</Else>\n</If>`;
+      yield* pasteDraft(page, source);
+      yield* page.key("Enter");
+      yield* entrySettles(page, 1, "ok");
+      const expected = ready ? "Review complete." : "Review pending.";
+      yield* page.until("the selected entry output", (reading) => reading.shows(expected));
+      const saved = yield* settledReading(page.repl);
+      expect(saved.model.entries[0]?.source).toBe(source);
+      expect(saved.model.entries[0]?.terminal?.output).toBe(expected);
+      expect(writes).toEqual([ready ? "complete" : "pending"]);
+      expect(
+        page.screen().rows.some((row) => row.includes(expected) && !row.includes("<Output>")),
+      ).toBe(true);
+      expect(
+        (yield* until(readdir(workspace))).filter(
+          (name) => name === "complete" || name === "pending",
+        ),
+      ).toEqual([ready ? "complete" : "pending"]);
+      expect(yield* until(readFile(join(workspace, ready ? "complete" : "pending"), "utf8"))).toBe(
+        ready ? "done" : "waiting",
+      );
+      expect(page.repl.fake.prompts).toEqual([]);
+    });
+  }
+
+  it("W9: streamed conditional source waits for completion and publishes one acknowledged selected reply", function* () {
+    const page = yield* useReplPage();
+    const repl = page.repl;
+    const pieces = [
+      "Documentation.<If condition={true}><Output>Review ",
+      "complete.</Output><Else><Output>Review pending.</Output></Else></If><REPL.EntryInput>prepared</REPL.EntryInput>",
+    ];
+    repl.fake.script({ deltas: pieces, holdsEachPiece: true, holdAfter: pieces.length });
+    repl.fake.script({ reply: "No further documentation." });
+    yield* sendMessage(page, "review it");
+    for (let index = 0; index < pieces.length; index += 1) {
+      yield* repl.fake.streamingTurns(1);
+      const during = yield* settledReading(repl);
+      expect(
+        during.chat.filter((record) => record.kind === "response" || record.kind === "control"),
+      ).toEqual([]);
+      expect(during.model.entries).toEqual([]);
+      expect(page.screen().shows("Review complete.")).toBe(false);
+      expect(page.screen().shows("Review pending.")).toBe(false);
+      expect(page.screen().shows("Documentation.")).toBe(false);
+      repl.fake.releaseDeltas();
+    }
+    yield* savedReplies(repl, 2);
+    yield* page.until("the evaluated nested reply", (reading) =>
+      saidBySidekick(reading, "Review complete."),
+    );
+    yield* page.until("the settled Sidekick", sidekickIdle);
+    const saved = yield* settledReading(repl);
+    expect(
+      saved.chat.filter((record) => record.kind === "response" && record.response === "response:1"),
+    ).toEqual([expect.objectContaining({ output: "Review complete.", hasOutput: true })]);
+    const known = yield* projected(saved.chat);
+    const rows = sidekickChatRows(known, undefined).filter(
+      (row) => row.kind === "reply" && row.turn === 1,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.text).toBe("Review complete.");
+    expect(paneCount(page, "Review complete.")).toBe(1);
+    expect(draftHolds(page.screen(), "prepared")).toBe(true);
+    const prompts = [...repl.fake.prompts];
+    const reopened = yield* repl.repository.open(saved.execution);
+    if (reopened.chat === undefined || reopened.chat.form !== "paired") {
+      throw new Error("missing acknowledged chat");
+    }
+    const cold = yield* projected(reopened.chat.records);
+    expect(sidekickChatRows(cold, undefined)).toEqual(sidekickChatRows(known, undefined));
+    expect(repl.fake.prompts).toEqual(prompts);
+    expect((yield* settledReading(repl)).chat).toEqual(saved.chat);
+  });
+
+  for (const { source, hasOutput } of [
+    { source: "Documentation.<If condition={false}><Output>hidden</Output></If>", hasOutput: true },
+    { source: "Documentation.", hasOutput: false },
+  ]) {
+    it(`W9: silent generated control retains hasOutput=${hasOutput} without fallback chat`, function* () {
+      const page = yield* useReplPage();
+      page.repl.fake.script({ reply: source });
+      yield* sendMessage(page, "silent");
+      yield* savedReplies(page.repl, 1);
+      yield* page.until("silent reply settlement", sidekickIdle);
+      const saved = yield* settledReading(page.repl);
+      expect(saved.chat.find((record) => record.kind === "response")).toMatchObject({ hasOutput });
+      if (hasOutput) {
+        expect(saved.chat.find((record) => record.kind === "response")).toMatchObject({
+          output: "",
+        });
+      }
+      expect(page.screen().shows("Documentation.")).toBe(false);
+      expect(page.screen().shows("hidden")).toBe(false);
+      if (!hasOutput) {
+        expect(yield* composedChat(page.repl)).toEqual(["  you: silent"]);
+      }
+    });
+  }
+
+  it("W9: an ordinary nested failure publishes its selected partial with the failure", function* () {
+    const page = yield* useReplPage();
+    page.repl.fake.script({
+      reply:
+        '<If condition={true}><Output>Before.</Output></If><Syntax names={["DefinitelyMissing"]} /><Output>After.</Output>',
+    });
+    page.repl.fake.script({ reply: "<Output />" });
+    yield* sendMessage(page, "fail after the prefix");
+    yield* savedReplies(page.repl, 1);
+    yield* page.until("the failed selected response", (reading) => reading.shows("Before."));
+    const saved = yield* settledReading(page.repl);
+    expect(
+      saved.chat.filter((record) => record.kind === "response" && record.response === "response:1"),
+    ).toEqual([
+      expect.objectContaining({
+        hasOutput: true,
+        output: "Before.",
+        outcome: expect.objectContaining({ status: "err" }),
+      }),
+    ]);
+    expect(page.screen().shows("After.")).toBe(false);
+  });
+
+  for (const stop of [false, true]) {
+    it(`W10: ${stop ? "Stop" : "provider refusal"} retains the same incomplete item without evaluation`, function* () {
+      const page = yield* useReplPage();
+      const repl = page.repl;
+      repl.fake.script({
+        deltas: [
+          "<Output>A<Output>B</Output>C</Output>",
+          "<REPL.EntryInput>never</REPL.EntryInput>",
+        ],
+        holdAfter: 1,
+        ...(stop ? {} : { stopReason: "refusal" }),
+      });
+      yield* sendMessage(page, "stream a reply");
+      yield* repl.fake.streamingTurns(1);
+      yield* page.until("direct nested literal preview", (reading) =>
+        reading.shows(`${MOUNTED_AGENT} (preview): ABC`),
+      );
+      if (stop) {
+        yield* page.press("[stop]", SIDEKICK_PANE);
+      } else {
+        repl.fake.releaseDeltas();
+      }
+      yield* page.until("the provider attempt settling", sidekickIdle);
+      yield* page.until("the interrupted attempt remaining in its item", (reading) =>
+        reading.shows(
+          stop ? `${MOUNTED_AGENT} (unfinished): ABC` : `${MOUNTED_AGENT} (unfinished):`,
+        ),
+      );
+      const saved = yield* settledReading(repl);
+      expect(
+        saved.chat.filter((record) => record.kind === "response" || record.kind === "control"),
+      ).toEqual([]);
+      if (stop) {
+        expect(paneCount(page, "ABC")).toBe(1);
+      }
+      if (!stop) {
+        const known = yield* projected(saved.chat);
+        const rows = sidekickChatRows(known, undefined).filter((row) => row.kind !== "person");
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ kind: "incomplete", text: "ABC" });
+        expect(known.turns[0]?.status).toBe("failed");
+      }
+      expect(draftHolds(page.screen(), "never")).toBe(false);
+      expect(saved.model.entries).toEqual([]);
+    });
+  }
 });

@@ -2,7 +2,7 @@
  * Tier GR — evaluating generated source as a root.
  *
  * A trusted host that means to show somebody what an Agent's reply *says* needs
- * the one construct a fragment has no context for: a top-level `<Output>`, which
+ * the one construct a fragment has no context for: an `<Output>`, which
  * selects what the reply renders and leaves everything around it as work. So
  * `evaluateGeneratedXmdRoot()` admits the same source the fragment evaluator
  * does, through the same walk, the same durable record and the same pinned
@@ -626,12 +626,6 @@ describe("Tier GR — the root context admits one construct more, and no others"
     ["<Content />", "<Output>\n<Content />\n</Output>\n", "structural construct", {}],
     ["<Return />", '<Output>\nok\n</Output>\n\n<Return value="x" />\n', "structural construct", {}],
     [
-      "an <Output> written below the top level",
-      "<If condition={true}>\n<Output>\nok\n</Output>\n</If>\n",
-      "structural construct",
-      {},
-    ],
-    [
       "an <Output> carrying a prop",
       '<Output name="chat">\nok\n</Output>\n',
       "structural construct",
@@ -680,10 +674,14 @@ describe("Tier GR — the root context admits one construct more, and no others"
     });
   }
 
-  it("GR10: a fragment still has no context for a top-level Output", function* () {
-    const attempt = yield* evaluateFragment(request("<Output>\nok\n</Output>\n"));
-
-    expect(attempt.failure).toContain("structural construct");
+  it("GR10: a fragment still has no context for direct or nested Output", function* () {
+    for (const source of [
+      "<Output>ok</Output>",
+      "<If condition={false}><Output>hidden</Output></If>",
+    ]) {
+      const attempt = yield* evaluateFragment(request(source));
+      expect(attempt.failure).toContain("structural construct");
+    }
   });
 });
 
@@ -1715,5 +1713,52 @@ describe("Tier GR — a root asks the canonical question", () => {
     // Exactly the provider's answer: the substitute returns a different
     // decision and a field of its own, so neither could survive this.
     expect(JSON.parse(rendered(outcome.attempt).output)).toEqual({ decision: "reject" });
+  });
+});
+
+describe("993 generated nested roots", () => {
+  beforeAll(() => useTempFileCompiler());
+  for (const ready of [true, false]) {
+    it(`W9/W11: executes only the selected conditional root path (${ready})`, function* () {
+      const performed: string[] = [];
+      const attempt = yield* evaluateRoot(
+        request(
+          `docs<If condition={${ready}}><Probe /><Output>Review complete.</Output><Else><Output>Review pending.</Output></Else></If>`,
+          { observations: [countedProbe(performed)] },
+        ),
+      );
+      expect(rendered(attempt)).toEqual({
+        output: ready ? "Review complete." : "Review pending.",
+        hasOutput: true,
+      });
+      expect(performed).toEqual(ready ? ["probed"] : []);
+    });
+  }
+  it("W9: retains the declaration flag for an untaken path and entitled nested failure prefixes", function* () {
+    expect(
+      rendered(
+        yield* evaluateRoot(request("docs<If condition={false}><Output>hidden</Output></If>")),
+      ),
+    ).toEqual({ output: "", hasOutput: true });
+    const performed: string[] = [];
+    const attempt = yield* evaluateRoot(
+      request("<If condition={true}><Output>prefix<Boom />later</Output></If>", {
+        observations: [failing(performed)],
+      }),
+    );
+    expect(failed(attempt).partial).toEqual({ output: "prefix", hasOutput: true });
+    expect(performed).toEqual(["boomed"]);
+  });
+  it("W11: preflights untaken denied work and invalid props before any permitted effect", function* () {
+    for (const denied of ["<Unknown />", "<Output invalid />"]) {
+      const performed: string[] = [];
+      const attempt = yield* evaluateRoot(
+        request(`<Probe /><If condition={false}>${denied}</If><Output>answer</Output>`, {
+          observations: [countedProbe(performed)],
+        }),
+      );
+      expect(failed(attempt).partial).toBeUndefined();
+      expect(performed).toEqual([]);
+    }
   });
 });

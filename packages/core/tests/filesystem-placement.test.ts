@@ -24,7 +24,7 @@ describe("document component preservation", () => {
   });
 });
 
-import { API, cwd, fileWriteSuccess } from "@executablemd/runtime";
+import { API, cwd, fileWriteSuccess, useHostFiles } from "@executablemd/runtime";
 import { Ok, ensure, spawn, suspend, withResolvers } from "effection";
 import { collect, inlineSource } from "@executablemd/core";
 import { Component } from "../src/component-api.ts";
@@ -318,4 +318,53 @@ describe("mapped scope exits", () => {
     expect(released).toBe(true);
     expect(yield* cwd()).toBe("/host");
   });
+});
+
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { ensureDir, writeTextFile } from "@effectionx/fs";
+import { registerComponents } from "../src/components/registration.ts";
+import { useNormalizedOutput } from "../src/output/normalize.ts";
+
+describe("993 nested canonical directory projection", () => {
+  for (const reusable of [false, true]) {
+    it(`W2: selects REPORT inside the canonical frame and reads ROOT after its Dir closes (${reusable})`, function* () {
+      const directory = yield* useTempDirectory("nested-canonical-");
+      yield* ensureDir(`${directory}/reports`);
+      yield* writeTextFile(`${directory}/result.txt`, "ROOT");
+      yield* writeTextFile(`${directory}/reports/result.txt`, "REPORT");
+      yield* useHostFiles();
+      yield* useNormalizedOutput();
+      const before = yield* cwd();
+      const observed: unknown[] = [];
+      yield* registerComponents([
+        {
+          origin: "993",
+          name: "Observe",
+          props: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+          *fn(props) {
+            observed.push(props.value);
+            return "";
+          },
+        },
+      ]);
+      const source =
+        '<Dir path="/document"><Dir path="reports"><File path="result.txt" as="report" /><Output>{report}</Output></Dir><File path="result.txt" as="root" /><Observe value={root} /></Dir>';
+      yield* ensureDir(`${directory}/components`);
+      yield* writeTextFile(`${directory}/components/Report.md`, source);
+      expect(
+        yield* collect(
+          yield* executeInstalled(
+            {
+              ...inlineSource(reusable ? "<Report />" : source),
+              includes: [`${directory}/components`],
+              stream: new InMemoryStream(),
+            },
+            [workspaceMountInstallation([{ source: directory, target: "/document" }])],
+          ),
+        ),
+      ).toBe("REPORT");
+      expect(observed).toEqual(["ROOT"]);
+      expect(yield* cwd()).toBe(before);
+    });
+  }
 });

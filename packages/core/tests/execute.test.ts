@@ -12,7 +12,12 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useFailingExec } from "@executablemd/runtime/test";
-import { API } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { readTextFile, writeTextFile, ensureDir, exists } from "@effectionx/fs";
+import { registerComponents } from "../src/components/registration.ts";
+import { useNormalizedOutput } from "../src/output/normalize.ts";
+import { dirBody, props as dirProps } from "../src/components/Dir.ts";
 import { forEach } from "@effectionx/stream-helpers";
 import type { Operation } from "effection";
 import { scoped } from "effection";
@@ -1340,10 +1345,10 @@ describe("component-declared output — document workflow", () => {
     expect(second).toContain("ROOT_SHOWN");
   });
 
-  it("diagnoses a misplaced root <Output> and runs no body side effects", function* () {
+  it("diagnoses an invalid root <Output> and runs no body side effects", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
-      "README.md": "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output>x</Output>\n</Wrapper>\n",
+      "README.md": "```bash exec\nSIDE\n```\n\n<Wrapper>\n<Output invalid>x</Output>\n</Wrapper>\n",
     });
     yield* useFailingExec(1, "should not run");
 
@@ -1353,12 +1358,144 @@ describe("component-declared output — document workflow", () => {
       return yield* collect(yield* execute({ path: "README.md", stream }));
     });
 
-    expect(message).toContain("must be a direct top-level");
+    expect(message).toContain("no props");
 
     const events = stream.snapshot();
     const execEvents = events.flatMap((e) =>
       e.type === "yield" && e.description.type === "exec" ? [e] : [],
     );
     expect(execEvents).toHaveLength(0);
+  });
+});
+
+describe("993 nested document execution", () => {
+  for (const ready of [true, false]) {
+    for (const reusable of [false, true]) {
+      it(`W1: branch ${ready} in ${reusable ? "a Markdown definition" : "the root"} writes only its own marker`, function* () {
+        const directory = yield* useTempDirectory("nested-output-");
+        yield* useHostFiles();
+        yield* useNormalizedOutput();
+        yield* API.Env.around(
+          {
+            *cwd() {
+              return directory;
+            },
+          },
+          { at: "min" },
+        );
+        const source = `<Let as="ready" value={${ready}} />docs<If condition={ready}><File path="complete">done</File><Output>Review complete.</Output><Else><File path="pending">waiting</File><Output>Review pending.</Output></Else></If>`;
+        yield* useStubFs({
+          "doc.md": reusable ? "<Reply />" : source,
+          ...(reusable ? { "components/Reply.md": source } : {}),
+        });
+        const writes: string[] = [];
+        yield* API.Files.around({
+          *writeTextFile([input], next) {
+            writes.push(input.path);
+            return yield* next(input);
+          },
+        });
+        const text = yield* collect(
+          yield* execute({ path: "doc.md", stream: new InMemoryStream() }),
+        );
+        expect(text).toBe(ready ? "Review complete." : "Review pending.");
+        expect(writes).toEqual([ready ? "complete" : "pending"]);
+        expect(yield* exists(`${directory}/complete`)).toBe(ready);
+        expect(yield* exists(`${directory}/pending`)).toBe(!ready);
+      });
+    }
+  }
+
+  for (const reusable of [false, true]) {
+    it(`W2: the direct Dir content route retains scoped files and restores cwd (${reusable})`, function* () {
+      const directory = yield* useTempDirectory("nested-dir-");
+      yield* ensureDir(`${directory}/reports`);
+      yield* writeTextFile(`${directory}/result.txt`, "ROOT");
+      yield* writeTextFile(`${directory}/reports/result.txt`, "REPORT");
+      yield* useHostFiles();
+      yield* useNormalizedOutput();
+      yield* API.Env.around(
+        {
+          *cwd() {
+            return directory;
+          },
+        },
+        { at: "min" },
+      );
+      const observed: unknown[] = [];
+      yield* registerComponents([
+        { origin: "993", name: "DirectDir", props: dirProps, fn: (props) => dirBody(props) },
+        {
+          origin: "993",
+          name: "Observe",
+          props: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+          *fn(props) {
+            observed.push(props.value);
+            return "";
+          },
+        },
+      ]);
+      const source =
+        'docs<DirectDir path="reports"><File path="result.txt" as="report" /><Output>{report}</Output></DirectDir><File path="result.txt" as="root" /><Observe value={root} />';
+      yield* ensureDir(`${directory}/components`);
+      yield* writeTextFile(`${directory}/doc.md`, reusable ? "<Report />" : source);
+      yield* writeTextFile(`${directory}/components/Report.md`, source);
+      expect(
+        yield* collect(
+          yield* execute({
+            path: `${directory}/doc.md`,
+            includes: [`${directory}/components`],
+            stream: new InMemoryStream(),
+          }),
+        ),
+      ).toBe("REPORT");
+      expect(observed).toEqual(["ROOT"]);
+      expect(yield* readTextFile(`${directory}/result.txt`)).toBe("ROOT");
+    });
+  }
+
+  it("W3/W8: empty selection emits nothing and partial replay rebuilds ordered selection around completed effects", function* () {
+    yield* useNormalizedOutput();
+    for (const body of [
+      "docs<If condition={false}><Output>hidden</Output></If>",
+      'docs<Each in={[]} let="n"><Output>hidden</Output></Each>',
+    ]) {
+      yield* scoped(function* () {
+        yield* useStubFs({ "doc.md": body });
+        const execution = yield* execute({ path: "doc.md", stream: new InMemoryStream() });
+        const chunks: string[] = [];
+        yield* forEach(function* (chunk) {
+          chunks.push(chunk);
+        }, execution.output);
+        expect((yield* execution).ok).toBe(true);
+        expect(chunks).toEqual([]);
+      });
+    }
+    const source =
+      "<If condition={true}><Output>A</Output></If>\n```bash exec silent\nfirst\n```\n<Output>B</Output>\n```bash exec silent\nsecond\n```\n<Output>C</Output>";
+    yield* useStubFs({ "doc.md": source });
+    const calls: string[] = [];
+    yield* API.Process.around({
+      *exec([options]) {
+        calls.push((options.command[2] ?? "").trim());
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    const seed = new InMemoryStream();
+    expect(yield* collect(yield* execute({ path: "doc.md", stream: seed }))).toBe("ABC");
+    const events = seed.snapshot();
+    const first = events.findIndex(
+      (event) => event.type === "yield" && event.description.type === "exec",
+    );
+    expect(first).toBeGreaterThan(0);
+    const cut = new InMemoryStream(events.slice(0, first + 1));
+    calls.length = 0;
+    expect(yield* collect(yield* execute({ path: "doc.md", stream: cut }))).toBe("ABC");
+    expect(calls).toEqual(["second"]);
+    calls.length = 0;
+    expect(
+      yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream(events) })),
+    ).toBe("ABC");
+    expect(calls).toEqual([]);
   });
 });
