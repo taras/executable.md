@@ -17,6 +17,12 @@ answer.
 - Write session components under `components/`, copied inputs under `inputs/`,
   and generated files at an appropriate workspace-relative path. These files
   survive reopening; another session has its own directory.
+- On Deno and compiled hosts, a fresh `<Repository>` selection in a submitted
+  entry places its checkout beneath this workspace's `repositories/`. Worktrees
+  follow that root. Read the actual returned checkout path and current workspace
+  before deriving a relative address; do not guess the slot layout. Later entries
+  can read that relative path without acquiring again, including after reopening.
+  Existing recorded placements keep their paths. Placement grants no permission.
 - Component lookup searches the invocation's configured directories first,
   then this session's `components/`, then ordinary registered defaults. Explicit
   includes replace the project defaults. Read the selected origin through
