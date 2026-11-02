@@ -203,15 +203,8 @@ refused when something that is not a directory is there or on the way to it.
 Content never begins on the far side of a refusal, because a document that named
 a directory asked for that directory.
 
-`path` can be relative or absolute. A relative path resolves from the enclosing
-working directory, so one `<Dir>` inside another nests. An absolute path selects
-a directory in the current host's filesystem namespace; a workflow uses its
-logical Workspace paths. In a REPL configured
-with `--mount /work/fixtures:/fixtures`, `<Dir path="/fixtures">` selects
-`/work/fixtures`; a `<File path="sales.json" />` inside it reads that directory's
-file. File paths remain relative, and selecting a mount grants no permission.
-
-The enclosing directory is restored when the element ends, on
+`path` is relative to the enclosing working directory, so one `<Dir>` inside
+another nests. The enclosing directory is restored when the element ends, on
 success and on failure alike — and a directory it created stays, because a
 failure inside it says nothing about whether the directory should exist.
 

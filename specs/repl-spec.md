@@ -85,14 +85,6 @@ ensures ordinary host `/`, and only its own Unit allows children there. Scope
 exit restores `/reference` and its source. On Windows, component-changing document
 spellings refuse before provider work; native SOURCE paths keep native spelling.
 
-`<REPL.Environment />` reports the captured document mount targets and their
-host sources, or `none` when the invocation declares no mounts. Paths are quoted
-so spaces, quotes and line breaks remain unambiguous. Reading these facts
-does not inspect or create the source directories. The Sidekick environment
-guide and the entry's `Dir` documentation describe selecting a mounted target
-with `<Dir>` and reading relative file paths inside it. `REPL.ImportAsset`
-uses host source paths rather than the document mount namespace.
-
 Everything that can be refused is refused in this order, and each step happens
 before anything the next one would touch:
 
@@ -144,9 +136,9 @@ caller and sibling scopes at their own cwd. This grants no permission or native
 tool, changes no source bytes and selects no Repository.
 
 The original project cwd remains the basis for ambient repository discovery,
-ordinary commit identity and invocation-relative options. To read project input,
-enter its explicitly known path with Dir, capture the read, then write
-`inputs/request.md` after Dir restores workspace cwd. Native Git likewise needs
+ordinary commit identity and invocation-relative options. For non-repository
+project input, Sidekick requests an approved asset import and reads the returned
+workspace-relative path. Native Git likewise needs
 a valid selected checkout at its authored cwd; it has no hidden project fallback.
 The Sidekick's native conversation keeps project placement, or an explicitly
 supplied agentCwd dependency, and its recorded native identity and configuration.
@@ -154,6 +146,12 @@ supplied agentCwd dependency, and its recorded native identity and configuration
 Read `<Guide.Environment />` and `<Guide.Entries />` for the component-writing,
 discovery, later submission and output-reading journey. Current
 `<REPL.Environment />` reports the response's actual cwd.
+
+The guides teach relative paths resolved from the current working directory,
+including inside a scoped Dir. A leading slash does not mean the workspace
+root. Sidekick uses the approved import control for intentional external host
+file inputs instead of reaching them through absolute File, command or Dir
+paths. This guidance does not change filesystem path resolution or permissions.
 
 ## Importing a host asset
 

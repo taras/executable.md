@@ -14,6 +14,13 @@ answer.
   session's workspace, beside its journals. A manually submitted entry starts
   in the invocation's project directory. Read `<REPL.Environment />` for your
   current cwd; do not infer a project path from the workspace path.
+- Resolve relative paths against the current working directory. For example,
+  `inputs/sales.json` names a file beneath that directory. Do not add a leading
+  slash or reinterpret an absolute path as relative to the workspace.
+- Use relative paths for ordinary file and command work. Do not use absolute
+  host paths in File, commands or Dir to reach files outside the workspace.
+  When you intentionally need an external non-repository file, request approval
+  to import it with `<REPL.ImportAsset />`, then use its returned relative path.
 - Write session components under `components/`, copied inputs under `inputs/`,
   and generated files at an appropriate workspace-relative path. These files
   survive reopening; another session has its own directory.
@@ -46,20 +53,11 @@ answer.
   A directory selects `**/*.test.md` recursively and retains configured-first
   component lookup. Tests have effects and use the command's ordinary permissions.
   Read `<Guide.Entries />` for the create, test, fix and reuse sequence.
-- A nested `<Dir>` selects another known, authorized directory for its content;
-  later siblings return to the workspace. To copy project input, enter its
-  explicitly known project path, capture the read there, then write the copy
-  after leaving Dir. Ask for the project path if you do not know it.
-- `<REPL.Environment />` lists document directory mounts as target-to-host-source
-  pairs, or `none`. Enter a listed target with `<Dir>` in an entry, then read
-  files relative to that directory. For example, with
-  `"/fixtures" -> "/work/fixtures"`, read `sales.json` inside
-  `<Dir path="/fixtures">`. The mapping selects a directory; ordinary permissions
-  and missing-file behavior still apply.
-- `<File>` takes a relative path within the selected directory.
-  `<REPL.ImportAsset source>` instead takes a host filesystem path for a copy
-  into the workspace; it does not interpret document mount targets. A file
-  already reachable through a mount can be read there without importing it.
+- To change the working directory for part of a document, use a nested `<Dir>`
+  with a known, authorized relative path. Paths inside it resolve from that
+  directory; later siblings return to the enclosing directory. A context change
+  grants no permission. `<REPL.ImportAsset>` always copies into the session
+  workspace, even when a response changes its working directory.
 - Reopening restores acknowledged results, not file snapshots. A retained read
   answers with its old text; a retained write does not replace an external edit.
   Work performed before its acknowledgement may repeat after interruption.
@@ -108,12 +106,14 @@ read. After Import succeeds, feedback gives `inputs/mock ü.html`. A later
 <File path="inputs/mock ü.html" />
 ```
 
-For a listed `/fixtures` mount, an **entry** reads the mounted file directly:
+The same imported file can be read inside an explicit relative directory
+context. Here `mock ü.html` resolves from `inputs/`; after `Dir` ends, the
+enclosing working directory is restored:
 
 ```xmd
-<Dir path="/fixtures">
-<File path="sales.json" as="salesText" />
-<Output>{salesText}</Output>
+<Dir path="inputs">
+<File path="mock ü.html" as="mock" />
+<Output>{mock}</Output>
 </Dir>
 ```
 

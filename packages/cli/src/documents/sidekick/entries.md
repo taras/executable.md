@@ -145,14 +145,15 @@ remain local to their response; the later response does not inherit `code`.
 
 An entry can ask a selected checkout four questions. Read their exact forms
 with `<REPL.Syntax names={["Git.Files", "Git.Changes", "Git.Diff", "Git.File"]} />`
-first. Enter the explicitly known checkout path before asking Git; the workspace
-is not a hidden route back to the project. Replace `/known/project` below with
-the actual known checkout path:
+first. Enter the selected checkout before asking Git; the workspace is not a
+hidden route back to the project. Acquire the repository as shown below when it
+is not already available in the workspace. Replace `RELATIVE_CHECKOUT` below
+with its observed path relative to the current working directory:
 
 ````xmd
 <Let as="code" select="code">
 ```xmd
-<Dir path="/known/project">
+<Dir path="RELATIVE_CHECKOUT">
 <Git.Files prefix="packages/core/" limit={5} as="files" />
 <Json value={files.paths} />
 </Dir>

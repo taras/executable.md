@@ -37,7 +37,6 @@ import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/core";
 
 import type { EntryVocabulary } from "../../repl-profile.ts";
-import type { WorkspaceMountTable } from "../../workspace-mounts.ts";
 import type { ReplModel } from "../model.ts";
 import type { ReplHostFact } from "../host.ts";
 import type { ReplPrinting, ReplSession } from "../session.ts";
@@ -144,7 +143,6 @@ export function rootReads(
     readonly permissionMode: string;
     readonly plugins: readonly string[];
     readonly vocabulary: EntryVocabulary;
-    readonly mounts?: WorkspaceMountTable;
   },
 ): RootReads {
   return {
@@ -168,9 +166,9 @@ export function rootReads(
     },
     vocabulary: profile.vocabulary,
     // What this command knows and the host does not: where a declared name is
-    // looked for, which directories are mounted, which Plugins are active,
-    // and how a permission request is answered here. These are facts about the
-    // invocation rather than the machine, so they follow the host's own.
+    // looked for, which Plugins are active, and how a permission request is
+    // answered here. All three are facts about the invocation rather than about
+    // the machine, so they are reported after the host's own.
     //
     // An empty list is reported as `none` rather than as an absent fact. A
     // command that installed no Plugin has *said* something about what an entry
@@ -185,17 +183,6 @@ export function rootReads(
       Object.freeze({
         label: "active plugins",
         value: profile.plugins.length === 0 ? "none" : profile.plugins.join(", "),
-      }),
-      Object.freeze({
-        label: "document directory mounts (target -> host source)",
-        value:
-          profile.mounts === undefined || profile.mounts.length === 0
-            ? "none"
-            : profile.mounts
-                .map(
-                  ({ target, source }) => `${JSON.stringify(target)} -> ${JSON.stringify(source)}`,
-                )
-                .join(", "),
       }),
       Object.freeze({ label: "agent permission requests", value: profile.permissionMode }),
     ]),
