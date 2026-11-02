@@ -8,7 +8,8 @@
  * operation, but fail to start at all. Only `deno.ts`, `compiled.ts` and the
  * two REPL hosts beside them import this file, and all of them are Deno.
  *
- * Managed checkouts live beneath `~/.xmd/repositories` and survive every
+ * Ordinary managed checkouts live beneath `~/.xmd/repositories`; workspace-marked
+ * REPL entries use their session workspace. Checkouts survive every
  * execution: what is in one is somebody's work, and nothing deletes one. There
  * is no environment variable naming a different root, because the only caller
  * that needs one is a test, and a test is handed the root directly.
@@ -28,6 +29,7 @@ import { Execution } from "@executablemd/core/api";
 import type { Plugin, PluginInstallRequest, PluginInstallation } from "@executablemd/core/api";
 import type { Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
+import { join } from "node:path";
 import { gitPlugin } from "@executablemd/git";
 import { useRunComposition } from "@executablemd/git/deno";
 import { replRepositoryInstallation } from "./repl/repositories/deno/provider.ts";
@@ -135,7 +137,7 @@ export function denoReplEntry(helper: HelperAssembly, root: string): ReplEntryIn
   return (owner, placement) =>
     replRepositoryInstallation(owner, {
       helper: configured,
-      root,
+      root: placement?.workspace === undefined ? root : join(placement.workspace, "repositories"),
       ...placement,
     });
 }

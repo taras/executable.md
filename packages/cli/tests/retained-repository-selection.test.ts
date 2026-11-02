@@ -21,6 +21,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { cliCommand } from "@executablemd/test-support/launch";
 import {
   ensure,
   race,
@@ -34,10 +35,25 @@ import {
 } from "effection";
 import type { Operation, Result } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { mkdir, mkdtemp, readdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, writeFile, readFile, rename } from "node:fs/promises";
 import { runGit } from "./support/fixture-git.ts";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
+import { createHash } from "node:crypto";
+import { ensureDir, FsApi } from "@effectionx/fs";
+import { Permissions } from "@executablemd/runtime";
+import { Repository } from "@executablemd/git/api";
+import { denoReplEntry } from "../src/deno-repositories.ts";
+import { entryInitialBindings } from "../src/repl/model.ts";
+import { initialState } from "../src/repl/application.ts";
+import { encodeLocation } from "../src/repl/route.ts";
+import { pairedLocation } from "../src/repl/sidekick/history.ts";
+import { readGuideChapter } from "../src/repl/sidekick/guide.ts";
+import { awaited, awaitedFact, mountedExecution, useMountedHost } from "./support/mounted-repl.ts";
+import { settledReading } from "./support/mounted-history.ts";
+import { useReplPage } from "./support/repl-page.ts";
+import type { ReplPage } from "./support/repl-page.ts";
+import { sendMessage } from "./support/screen-journeys.ts";
 import { API, hostFilesHandler } from "@executablemd/runtime";
 import type {
   FilePathInput,
@@ -1138,3 +1154,358 @@ function* commonOf(fixture: Fixture, name: string): Operation<string> {
   const slot = repositorySlot(fixture.managed, fixture.origin, name);
   return yield* until(realpath(join(slot, "checkout", ".git")));
 }
+
+function sourceHash(source: string): string {
+  return createHash("sha256").update(source).digest("hex");
+}
+
+function* slotBytes(path: string): Operation<unknown> {
+  const entries = yield* FsApi.operations.readdirDirents(path);
+  const bytes: unknown[] = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const target = join(path, entry.name);
+    bytes.push([
+      entry.name,
+      entry.isDirectory()
+        ? yield* slotBytes(target)
+        : createHash("sha256")
+            .update(yield* until(readFile(target)))
+            .digest("hex"),
+    ]);
+  }
+  return bytes;
+}
+
+describe("1051 — repositories in the existing Sidekick workspace", () => {
+  it("acquires, reads, reopens and reuses saved source with different repository inputs", function* () {
+    const fixture = yield* useFixture();
+    const chapter = yield* readGuideChapter("Entries");
+    if (!chapter.ok) {
+      throw chapter.error;
+    }
+    const examples = chapter.value
+      .split("### Acquire a repository for later entries")[1]
+      ?.split("### Test, fix")[0];
+    if (examples === undefined) {
+      throw new Error("the acquisition guidance is missing");
+    }
+    const programs = [...examples.matchAll(/^```xmd\n([\s\S]*?)\n```$/gm)].map((one) => one[1]);
+    expect(programs).toHaveLength(2);
+    const acquire = programs[0]
+      .replace('url="/known/repository"', "url={repositoryInput}")
+      .replace('base="KNOWN_COMMIT"', "base={creationBase}");
+    const read = programs[1].replace('path="RELATIVE_CHECKOUT/README.md"', "path={readPath}");
+    const saved = join(fixture.root, "saved");
+    yield* ensureDir(saved);
+    yield* writeTextFile(join(saved, "acquire.xmd"), acquire);
+    yield* writeTextFile(join(saved, "read.xmd"), read);
+    const artifactRoot = yield* API.Env.operations.env("XMD_1051_ARTIFACTS");
+    if (artifactRoot !== undefined) {
+      yield* ensureDir(artifactRoot);
+      yield* writeTextFile(join(artifactRoot, "acquire.xmd"), acquire);
+      yield* writeTextFile(join(artifactRoot, "read.xmd"), read);
+    }
+    const observations: unknown[] = [];
+    const submissions: unknown[] = [];
+    let serial = 0;
+    function* receipt(): Operation<void> {
+      if (artifactRoot !== undefined) {
+        yield* writeTextFile(
+          join(artifactRoot, "observations.json"),
+          JSON.stringify(
+            {
+              sourceHashes: { acquire: sourceHash(acquire), read: sourceHash(read) },
+              observations,
+              submissions,
+            },
+            null,
+            2,
+          ),
+        );
+      }
+    }
+    function* exchange(
+      page: ReplPage,
+      source: string,
+    ): Operation<ReturnType<typeof entryInitialBindings>> {
+      const done = `finished-1051-${serial++}`;
+      const response = `<Let as="code" value={${JSON.stringify(source)}} />\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />`;
+      const submission = { source, response, done };
+      submissions.push(submission);
+      yield* receipt();
+      page.repl.fake.script({ reply: response });
+      page.repl.fake.script({ reply: `<Output>${done}</Output>` });
+      yield* sendMessage(page, `perform ${done}`);
+      yield* page.until(done, (one) => one.shows(done));
+      yield* awaitedFact("acknowledged 1051 response", function* () {
+        return (yield* settledReading(page.repl)).chat.some(
+          (one) => one.kind === "response" && one.output.includes(done),
+        );
+      });
+      const model = (yield* settledReading(page.repl)).model;
+      submissions.push({
+        done,
+        terminal: model.entries.at(-1)?.terminal,
+        bindings: model.entries.at(-1)?.scope.bindings,
+      });
+      yield* receipt();
+      return entryInitialBindings(model);
+    }
+    function* close(page: ReplPage): Operation<void> {
+      page.repl.terminal.end();
+      yield* awaited("1051 command exit", () => page.repl.outcome() !== undefined);
+      const outcome = page.repl.outcome();
+      expect(outcome?.ok).toBe(true);
+    }
+    function* input(page: ReplPage, origin: string, base: string): Operation<void> {
+      yield* exchange(
+        page,
+        `<Let as="repositoryInput" value={${JSON.stringify(origin)}} />\n<Let as="creationBase" value={${JSON.stringify(base)}} />`,
+      );
+    }
+    function* readCurrent(page: ReplPage, path: string, marker: string): Operation<void> {
+      yield* exchange(page, `<Let as="readPath" value={${JSON.stringify(path)}} />`);
+      const bindings = yield* exchange(page, yield* readTextFile(join(saved, "read.xmd")));
+      expect(bindings.readme).toBe(marker);
+      expect((yield* settledReading(page.repl)).model.entries.at(-1)?.terminal?.output).toContain(
+        marker.trim(),
+      );
+    }
+    yield* ensure(receipt);
+    for (const number of [1, 2]) {
+      yield* scoped(function* () {
+        const origin = join(fixture.root, `controlled-${number}`);
+        yield* runGit(fixture.root, ["init", "-b", "main", origin]);
+        const marker = `REPOSITORY_${number}_1051\n`;
+        yield* writeTextFile(join(origin, "README.md"), marker);
+        yield* runGit(origin, ["add", "README.md"]);
+        yield* runGit(origin, ["commit", "-m", `repository ${number}`]);
+        const base = yield* runGit(origin, ["rev-parse", "HEAD"]);
+        let selections = 0;
+        let denyWrite = false;
+        yield* useCompositionComponents();
+        yield* Repository.around({
+          *select([request], next) {
+            selections += 1;
+            return yield* next(request);
+          },
+        });
+        yield* Permissions.around({
+          files: ([operation], next) =>
+            operation === "write" && denyWrite ? false : next(operation),
+        });
+        const host = yield* useMountedHost({
+          projectCwd: fixture.root,
+          hostFiles: true,
+          entryInstallation: denoReplEntry(
+            { runtime: "source", platform: "unix", execPath: cliCommand([]).command },
+            fixture.managed,
+          ),
+        });
+        let execution = "";
+        let workspace = "";
+        let checkout = "";
+        let address = "";
+        let advanced = "";
+        yield* scoped(function* () {
+          const page = yield* useReplPage({ host });
+          execution = yield* mountedExecution(page.repl);
+          workspace = pairedLocation(host.root, execution).directory;
+          yield* input(page, origin, base);
+          const bound = yield* exchange(page, yield* readTextFile(join(saved, "acquire.xmd")));
+          if (typeof bound.checkout !== "string") {
+            throw new Error("acquisition bound no checkout");
+          }
+          checkout = yield* until(realpath(bound.checkout));
+          const canonicalWorkspace = yield* until(realpath(workspace));
+          address = relative(canonicalWorkspace, checkout);
+          expect(isAbsolute(address)).toBe(false);
+          expect(address.startsWith("..")).toBe(false);
+          expect(address.startsWith("repositories/")).toBe(true);
+          expect(yield* runGit(checkout, ["remote", "get-url", "origin"])).toBe(origin);
+          expect(yield* runGit(checkout, ["rev-parse", "HEAD"])).toBe(base);
+          expect(yield* exists(fixture.managed)).toBe(false);
+          yield* readCurrent(page, `${address}/README.md`, marker);
+          observations.push({
+            row: "W1/W7",
+            number,
+            origin,
+            requestedCreationBase: base,
+            observedHead: base,
+            workspace: canonicalWorkspace,
+            checkout,
+            address,
+            marker,
+          });
+          yield* writeTextFile(join(checkout, "README.md"), `ADVANCED_${number}\n`);
+          yield* runGit(checkout, ["add", "README.md"]);
+          yield* runGit(checkout, ["commit", "-m", "advance"]);
+          advanced = yield* runGit(checkout, ["rev-parse", "HEAD"]);
+          yield* writeTextFile(join(checkout, "README.md"), `CURRENT_${number}\n`);
+          yield* runGit(checkout, ["add", "README.md"]);
+          yield* writeTextFile(join(checkout, "README.md"), `DIRTY_${number}\n`);
+          yield* writeTextFile(join(checkout, "sentinel"), "untracked");
+          const slot = repositorySlot(join(workspace, "repositories"), origin, "project");
+          const beforeReuse = yield* slotBytes(slot);
+          const reused = yield* exchange(page, acquire);
+          expect(reused.checkout).toBe(checkout);
+          expect(yield* slotBytes(slot)).toEqual(beforeReuse);
+          expect(yield* runGit(checkout, ["rev-parse", "HEAD"])).toBe(advanced);
+          yield* readCurrent(page, `${address}/README.md`, `DIRTY_${number}\n`);
+          observations.push({
+            row: "W4",
+            number,
+            requestedCreationBase: base,
+            observedCurrentHead: advanced,
+            preservedSlotBytes: true,
+          });
+          denyWrite = true;
+          yield* exchange(
+            page,
+            `<File path=${JSON.stringify(`${address}/README.md`)}>forbidden</File>`,
+          );
+          expect(yield* readTextFile(join(checkout, "README.md"))).toBe(`DIRTY_${number}\n`);
+          const denied = (yield* settledReading(page.repl)).model.entries.at(-1);
+          expect(JSON.stringify(denied?.terminal)).toMatch(/permission|refus|denied|not allowed/i);
+          denyWrite = false;
+          observations.push({ row: "W6", number, terminal: denied?.terminal });
+          const changedBase = acquire
+            .replace("base={creationBase}", `base=${JSON.stringify(advanced)}`)
+            .replace('as="checkout"', 'as="wrongBase"')
+            .replace("{checkout}", "{wrongBase}");
+          const beforeConflict = yield* slotBytes(slot);
+          yield* exchange(page, changedBase);
+          const conflict = (yield* settledReading(page.repl)).model.entries.at(-1);
+          expect(conflict?.scope.bindings.some((binding) => binding.name === "wrongBase")).toBe(
+            false,
+          );
+          expect(JSON.stringify(conflict?.terminal)).toMatch(
+            /created from a different url or base/i,
+          );
+          expect(yield* slotBytes(slot)).toEqual(beforeConflict);
+          observations.push({
+            row: "W5",
+            number,
+            kind: "different creation base",
+            terminal: conflict?.terminal,
+            preservedSlotBytes: true,
+          });
+          if (number === 1) {
+            function* refused(source: string, binding: string, reason: RegExp): Operation<void> {
+              const before = yield* slotBytes(slot);
+              yield* exchange(page, source);
+              const entry = (yield* settledReading(page.repl)).model.entries.at(-1);
+              expect(entry?.scope.bindings.some((one) => one.name === binding)).toBe(false);
+              expect(JSON.stringify(entry?.terminal)).toMatch(reason);
+              expect(yield* slotBytes(slot)).toEqual(before);
+              observations.push({
+                row: "W5",
+                kind: binding,
+                terminal: entry?.terminal,
+                preservedSlotBytes: true,
+              });
+            }
+            yield* runGit(checkout, ["remote", "set-url", "origin", fixture.origin]);
+            yield* refused(
+              acquire.replaceAll("checkout", "wrongOrigin"),
+              "wrongOrigin",
+              /origin|repository|different/i,
+            );
+            yield* runGit(checkout, ["remote", "set-url", "origin", origin]);
+            const parked = join(fixture.root, "parked-checkout");
+            yield* until(rename(checkout, parked));
+            yield* ensureDir(checkout);
+            yield* writeTextFile(join(checkout, "unrelated"), "unrelated occupied contents");
+            yield* refused(
+              acquire.replaceAll("checkout", "occupied"),
+              "occupied",
+              /checkout|repository|occupied/i,
+            );
+            yield* rm(checkout, { recursive: true });
+            yield* until(rename(parked, checkout));
+            yield* refused(
+              '<Repository name="refused" url="invalid://unsupported" as="invalid" />',
+              "invalid",
+              /locator|unsupported|url|repository/i,
+            );
+          }
+          const external = `<File path=${JSON.stringify(join(origin, "README.md"))} as="externalRead" />`;
+          yield* exchange(page, external);
+          const negative = (yield* settledReading(page.repl)).model.entries.at(-1);
+          expect(negative?.scope.bindings.some((binding) => binding.name === "externalRead")).toBe(
+            false,
+          );
+          expect(JSON.stringify(negative?.terminal)).toMatch(/absolute|refus|outside/i);
+          observations.push({
+            row: "W7",
+            number,
+            kind: "external negative control",
+            terminal: negative?.terminal,
+          });
+          yield* close(page);
+        });
+        const selectedBeforeReopen = selections;
+        yield* writeTextFile(join(checkout, "README.md"), `COLD_${number}\n`);
+        yield* scoped(function* () {
+          const page = yield* useReplPage({
+            host,
+            location: encodeLocation(initialState(execution).route),
+          });
+          yield* readCurrent(page, `${address}/README.md`, `COLD_${number}\n`);
+          expect(selections).toBe(selectedBeforeReopen);
+          expect(yield* runGit(checkout, ["rev-parse", "HEAD"])).toBe(advanced);
+          expect(yield* runGit(checkout, ["remote", "get-url", "origin"])).toBe(origin);
+          observations.push({
+            row: "W2",
+            number,
+            checkout,
+            head: advanced,
+            newSelections: selections - selectedBeforeReopen,
+            marker: `COLD_${number}`,
+          });
+          yield* close(page);
+        });
+        yield* scoped(function* () {
+          const independent = yield* useMountedHost({
+            projectCwd: fixture.root,
+            hostFiles: true,
+            entryInstallation: denoReplEntry(
+              { runtime: "source", platform: "unix", execPath: cliCommand([]).command },
+              fixture.managed,
+            ),
+          });
+          const page = yield* useReplPage({ host: independent });
+          yield* input(page, origin, base);
+          const other = yield* exchange(page, acquire);
+          if (typeof other.checkout !== "string") {
+            throw new Error("second session bound no checkout");
+          }
+          expect(other.checkout).not.toBe(checkout);
+          const otherWorkspace = pairedLocation(
+            independent.root,
+            (yield* settledReading(page.repl)).execution,
+          ).directory;
+          expect(
+            relative(
+              yield* until(realpath(otherWorkspace)),
+              yield* until(realpath(other.checkout)),
+            ).startsWith("repositories/"),
+          ).toBe(true);
+          expect(yield* runGit(other.checkout, ["rev-parse", "HEAD"])).toBe(base);
+          expect(yield* readTextFile(join(other.checkout, "README.md"))).toBe(marker);
+          yield* writeTextFile(join(other.checkout, "README.md"), "SECOND SESSION");
+          expect(yield* readTextFile(join(checkout, "README.md"))).toBe(`COLD_${number}\n`);
+          observations.push({
+            row: "W3",
+            number,
+            workspace: otherWorkspace,
+            checkout: other.checkout,
+            independent: true,
+          });
+          yield* close(page);
+        });
+        yield* receipt();
+      });
+    }
+  });
+});

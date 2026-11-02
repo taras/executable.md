@@ -169,6 +169,48 @@ arguments for continuation, or `null` when there is no more. If a later read's
 cursor refuses because the answer changed, restart the read without the cursor.
 Nothing these reads return authorizes a repository change.
 
+### Acquire a repository for later entries
+
+Read `<Guide.Environment />`, `<REPL.Environment />` and
+`<REPL.Syntax names={["Repository", "File"]} />` first. Replace the example
+locator and creation base below with the selected repository and resolved commit:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Repository name="project" url="/known/repository" base="KNOWN_COMMIT" as="checkout" />
+{checkout}
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+````
+
+Follow the receipt's read instruction and inspect the actual outcome and checkout
+binding. An entry can print a refusal; status alone proves no acquisition.
+Derive a relative checkout path from the returned absolute path and the workspace
+reported by `<REPL.Environment />`. Replace `RELATIVE_CHECKOUT` below with that
+observed address, preserving the rest of this later response:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<File path="RELATIVE_CHECKOUT/README.md" as="readme" />
+{readme}
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+````
+
+Read that entry's output. This new read uses the current checkout and needs no
+new Repository selection, including after reopening the session. An acknowledged
+old read still answers with its historical text. Inspect actual Git origin and
+HEAD when revision identity matters: the requested `base` is the creation base,
+while a compatible checkout may since have advanced. Fresh same-base acquisition
+preserves that current HEAD and local changes. An incompatible repository or
+creation base refuses; do not reset work to force reuse.
+
 ### Test, fix and reuse a session component
 
 When asked to create and test a component, write its definition and a companion
