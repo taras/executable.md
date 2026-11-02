@@ -190,6 +190,7 @@ function requests(
     return Ok(value);
   }
   return {
+    importAsset: (_source, destination) => answer("importAsset", destination),
     bindings: () => answer<Json>("bindings", { names: ["Ada", "Grace"] }),
     entrySyntax: (names) =>
       answer(
@@ -643,6 +644,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Environment",
         "REPL.Submit",
         "REPL.Test",
+        "REPL.ImportAsset",
         "REPL.Syntax",
         // The four bounded reads of one entry's saved evidence, which are what
         // a response reads an entry with now.
@@ -667,7 +669,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         .filter((entry) => entry.effect === "write")
         .map((entry) => entry.name)
         .sort(),
-    ).toEqual(["Elicit", "REPL.EntryInput", "REPL.Submit", "REPL.Test"]);
+    ).toEqual(["Elicit", "REPL.EntryInput", "REPL.ImportAsset", "REPL.Submit", "REPL.Test"]);
     expect(surface.find((entry) => entry.name === "REPL.EntryInput")?.form).toBe("paired");
     expect(surface.find((entry) => entry.name === "REPL.Submit")?.form).toBe("self-closing");
     // Paired, because the question is the content.
@@ -734,6 +736,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Environment",
         "REPL.Submit",
         "REPL.Test",
+        "REPL.ImportAsset",
         "REPL.Syntax",
         "REPL.Entry.Source",
         "REPL.Entry.Prompt",
@@ -2928,3 +2931,37 @@ function retexted(events: readonly DurableEvent[], ordinal: number, text: string
     return { ...event, result: { status: "ok", value: { ...event.result.value, text } } };
   });
 }
+
+describe("ImportAsset captured response admission", () => {
+  it("A1: validates both operands and refuses paired and extra props before work", function* () {
+    for (const source of [
+      '<REPL.ImportAsset destination="inputs/a" />',
+      '<REPL.ImportAsset source="/a" />',
+      '<REPL.ImportAsset source="" destination="inputs/a" />',
+      '<REPL.ImportAsset source="/a" destination="inputs/a" replace={true} />',
+      '<REPL.ImportAsset source="/a" destination="inputs/a">body</REPL.ImportAsset>',
+    ]) {
+      const asked = fresh();
+      expect((yield* reply(source, asked)).ok).toBe(false);
+      expect(asked.requests).toEqual([]);
+    }
+    const asked = fresh();
+    expect(
+      (yield* reply('<REPL.ImportAsset source="/a ü" destination="inputs/a ü" />', asked)).ok,
+    ).toBe(true);
+    expect(asked.requests).toEqual(["importAsset"]);
+    expect(asked.began).toEqual([
+      { component: "REPL.ImportAsset", arguments: { source: "/a ü", destination: "inputs/a ü" } },
+    ]);
+    expect(asked.settled[0]?.observed).toBe("inputs/a ü");
+    const surface = responseSurface(ceilingFor(fresh())).find(
+      (one) => one.name === "REPL.ImportAsset",
+    );
+    expect(surface).toMatchObject({
+      form: "self-closing",
+      effect: "write",
+      props: ["source", "destination"],
+      designated: true,
+    });
+  });
+});

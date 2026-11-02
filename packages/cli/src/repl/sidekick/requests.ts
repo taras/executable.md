@@ -222,9 +222,11 @@ export function sidekickRequests(
   submit: SubmitForReply,
   test?: ReplTesting,
   joined?: () => ReplPrinting | undefined,
+  importAsset?: SidekickRequests["importAsset"],
 ): SidekickRequests {
   return {
     ...(test === undefined ? {} : { test }),
+    importAsset: importAsset ?? refusedImport,
     *bindings(): Operation<Result<Json>> {
       // The root data as it stands: the retained head for every entry that has
       // settled, and the current root of the entry running now on top of it.
@@ -385,4 +387,8 @@ export function finishedRound(root: RootReading, observation: ReplPrinting): Res
       `Read another window with <REPL.Entry.Output entry={${entry.order}} offset={0} limit={${page.value.limit}} />. Keep this entry number for later reads.`,
     ].join("\n\n"),
   );
+}
+
+function* refusedImport(): Operation<Result<string>> {
+  return Err(new Error("This response has no session asset importer."));
 }

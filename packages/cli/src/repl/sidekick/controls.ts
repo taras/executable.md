@@ -127,6 +127,7 @@ export type GuideChapter = (typeof GUIDE_CHAPTERS)[number];
  */
 export interface SidekickRequests {
   readonly test?: ReplTesting;
+  importAsset(source: string, destination: string): Operation<Result<string>>;
   /** The acknowledged published root values, detached. */
   bindings(): Operation<Result<Json>>;
   /** The active entry vocabulary, or the lookup of particular names. */
@@ -276,6 +277,7 @@ export const DESIGNATED: ReadonlySet<string> = new Set([
   "REPL.EntryInput",
   "REPL.Submit",
   "REPL.Test",
+  "REPL.ImportAsset",
   "REPL.EntryOutput",
   ...ENTRY_INSPECTIONS,
   ELICIT_CONTROL,
@@ -710,6 +712,35 @@ export function sidekickMutations(
           // own source back would spend a turn reading what it just wrote.
           () => DRAFT_FILLED,
         );
+      },
+    }),
+    writing("REPL.ImportAsset", "ImportAsset", "self-closing", {
+      kind: "function",
+      name: "REPL.ImportAsset",
+      forms: ["self-closing"],
+      props: {
+        type: "object",
+        properties: {
+          source: { type: "string", minLength: 1 },
+          destination: { type: "string", minLength: 1 },
+        },
+        required: ["source", "destination"],
+        additionalProperties: false,
+      },
+      description:
+        'Import a non-repository asset after approval with `<REPL.ImportAsset source="/known/mock ü.html" destination="inputs/mock ü.html" />`. Reuse the returned relative path in later entries. An occupied destination needs another explicit path and new approval.',
+      *fn(props: Record<string, Json>): Operation<string> {
+        const { source, destination } = props;
+        if (typeof source !== "string" || typeof destination !== "string") {
+          throw new Error("REPL.ImportAsset requires source and destination");
+        }
+        const order = yield* journal.began({
+          component: "REPL.ImportAsset",
+          arguments: { source, destination },
+        });
+        const answer = yield* requests.importAsset(source, destination);
+        yield* journal.settled(order, answer, answer.ok ? answer.value : undefined);
+        return answer.ok ? answer.value : answer.error.message;
       },
     }),
     writing("REPL.Test", "Test", "self-closing", {

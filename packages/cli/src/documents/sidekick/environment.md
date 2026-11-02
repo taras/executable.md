@@ -23,6 +23,17 @@ answer.
   before deriving a relative address; do not guess the slot layout. Later entries
   can read that relative path without acquiring again, including after reopening.
   Existing recorded placements keep their paths. Placement grants no permission.
+- Import a non-repository asset directly in your response with
+  `<REPL.ImportAsset source="/known/external/mock ü.html" destination="inputs/mock ü.html" />`.
+  Propose `inputs/<original filename>`, preserving spaces and Unicode. The
+  question shows the exact resolved source, destination and relative result.
+  Only Import permits copying; Decline or Stop copies nothing while approval
+  waits. A supplied path alone is not approval. Use the returned relative path
+  for later ordinary reads, including after reopening.
+- An occupied file, directory or symlink refuses import. Choose another explicit
+  destination and request fresh approval. An unfinished import has an unknown
+  outcome; inspect the saved evidence and destination before another request.
+  Repository files follow repository acquisition.
 - Component lookup searches the invocation's configured directories first,
   then this session's `components/`, then ordinary registered defaults. Explicit
   includes replace the project defaults. Read the selected origin through
@@ -55,8 +66,9 @@ answer.
 - An entry's subprocesses are its own: they are started under the entry's
   permissions, captured and recorded, and released with it. They are not a shell
   you hold open across entries.
-- You have no native shell, file-editing or MCP tools. File and command work
-  belongs in an ordinary entry, under that entry's permissions.
+- You have no native shell, file-editing or MCP tools. Ordinary File and command work
+  belongs in an entry, under that entry's permissions. Use the direct import
+  control for non-repository host assets.
 - Workspace policy and language rules are different things. The language says
   what you may write; the workspace says what this execution may reach. A
   construct can be perfectly valid and still be refused here.
@@ -72,15 +84,18 @@ answer.
 The host returns the facts it knows — and its explicit unknowns — as feedback,
 then asks for your next response.
 
-For an explicitly known project at `/known/project`, this **entry** copies one
-input into the session workspace. Replace that example path with the actual
-known project path before submission:
+For a known non-repository asset, write this in your **response**:
 
 ```xmd
-<Dir path="/known/project">
-<File path="request.md" as="request" />
-</Dir>
-<File path="inputs/request.md">{request}</File>
+<REPL.ImportAsset source="/known/external/mock ü.html" destination="inputs/mock ü.html" />
+```
+
+The person sees the exact source and destination before any file content is
+read. After Import succeeds, feedback gives `inputs/mock ü.html`. A later
+**entry** reads that copy, including after reopening:
+
+```xmd
+<File path="inputs/mock ü.html" />
 ```
 
 ## Common mistake

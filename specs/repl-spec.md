@@ -147,6 +147,54 @@ Read `<Guide.Environment />` and `<Guide.Entries />` for the component-writing,
 discovery, later submission and output-reading journey. Current
 `<REPL.Environment />` reports the response's actual cwd.
 
+## Importing a host asset
+
+Import a non-repository file directly in a Sidekick response:
+
+```xmd
+<REPL.ImportAsset source="/known/external/mock ü.html" destination="inputs/mock ü.html" />
+```
+
+Both nonempty string props are required. The control accepts only this
+self-closing form and these two props. Propose `inputs/<original filename>`,
+preserving its spelling. Repository inputs follow repository acquisition.
+The root supplies the existing session workspace; response cwd cannot select
+another destination root. Missing workspace or host importer refuses.
+
+The question shows the exact resolved source, absolute destination and returned
+workspace-relative path, then states: `Import copies this file into your session
+workspace.` It offers Import and Decline, with neither selected. An untouched
+or invalid answer leaves the same question pending. Closing hides the form and
+leaves it unanswered. Stop withdraws this question and joins its response while
+an entry's independent question stays waiting.
+
+Before Import, only permitted metadata resolution occurs: no source-content
+read, parent creation, staging allocation or destination-data write. Decline and
+cancellation during approval produce none of those effects. Effective read and
+write restrictions apply before metadata and again after approval; publication
+rechecks write permission. Approval grants no native Agent tool or ordinary
+Files permission.
+
+Import preserves exact source bytes, including binary data, and leaves the
+source unchanged. Absolute or escaping destinations and observed outward parent
+links refuse. A file, directory or symlink occupying the destination, including
+a dangling link or a late collision, survives. Choose a new explicit destination
+and obtain fresh approval; import neither replaces nor chooses an alternate name.
+
+The final file appears only after a complete private byte copy. Successful
+feedback is exactly its relative path, after native completion, cleanup and
+outcome acknowledgement. Temporary work belongs to the response; Stop and Exit
+join native requests before removing incomplete staging. If an issued publication
+completes during cancellation or feedback fails after publication, complete bytes
+may remain. Cleanup preserves them. An uncertain publication, cleanup failure or
+failed outcome append stops the exchange without successful feedback or automatic
+retry. The retained intent stays unfinished.
+
+Later ordinary entries use the relative workspace copy, including after the
+external source changes or disappears and after cold reopen. Passive inspection
+imports nothing and asks nothing. History retains operands and outcomes, never
+asset bytes, and supplies no crash recovery or destination adoption.
+
 ## Testing session components
 
 After ordinary File entries create a component and its companion test, a
