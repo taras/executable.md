@@ -3241,8 +3241,10 @@ transactions](#replay-and-effect-transactions).
 
 #### Managed checkout reuse
 
-An ordinary Repository or Worktree selects a managed checkout under `~/.xmd/repositories`,
-addressed by a digest of its whole identity and described by a closed version 1 sidecar
+An ordinary Repository or Worktree selects a managed checkout under `~/.xmd/repositories`.
+A workspace-marked REPL entry instead selects beneath its existing session workspace,
+as described in [Session workspace placement](#session-workspace-placement). Both use
+the same selector, with slots addressed by a digest of the whole identity and a closed version 1 sidecar
 written by exclusive temporary sibling plus atomic rename only after the checkout is
 complete and verified. The slot is entered under an exclusive non-blocking advisory lock
 held for the whole document execution, so a second process is refused rather than made
@@ -3345,8 +3347,9 @@ worktree. A workflow run has none.
 
 #### Managed bytes
 
-A managed checkout is a Repository or Worktree an ordinary `xmd run` created under
-the host root `~/.xmd/repositories`, addressed by a digest of its whole identity, described by a
+A managed checkout is a Repository or Worktree created under the host root
+`~/.xmd/repositories`, or under the session workspace for a marked REPL entry,
+addressed by a digest of its whole identity, described by a
 closed version 1 sidecar written beside it, and held for one document execution by an
 exclusive non-blocking advisory lock. It survives every execution: nothing deletes,
 resets, cleans, fetches or repairs one.
@@ -6721,8 +6724,12 @@ Completed entries remain projections. Old bytes are never rewritten, and an
 older reader that rejects unknown members refuses a marked history.
 
 The workspace root is passed directly from the entry owner into the CLI-private
-recorder, only for marked entries. The captured project cwd is a separate direct
-input for lazy ambient discovery and ordinary commit identity. Native Git still
+recorder, only for marked entries. Fresh selections in those entries use
+`<workspace>/repositories` as their managed root, including linked Worktrees.
+Unmarked entries keep the configured host root. A nested Dir cannot retarget
+that root. Acknowledged placements retain their recorded paths without moving
+checkouts or validating current HEAD on replay. The captured project cwd is a
+separate direct input for lazy ambient discovery and ordinary commit identity. Native Git still
 requires an operation to name a valid selected checkout; a workspace cwd supplies
 no project fallback. The Sidekick's native provider keeps the captured project
 `agentCwd`, or the caller's explicit dependency, and its existing identity and

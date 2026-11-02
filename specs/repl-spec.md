@@ -124,6 +124,11 @@ components remains unchanged, and a later authorized File write creates its
 parents. Exit preserves the workspace; a second session has a different one.
 Journal layout and legacy publication remain unchanged.
 
+On Deno and compiled hosts, fresh Repository selections in Sidekick-submitted
+entries use `repositories/` beneath this existing workspace. Worktrees follow
+the same managed root. Manual entries and unmarked historical Submit intents
+keep the configured host root; acknowledged placements keep their recorded paths.
+
 The host binds cwd on the actual response, validation and entry owners through
 ordinary Env middleware at min. Nested Dir content uses its selected directory;
 later siblings return to the workspace. Success, failure and cancellation leave
@@ -1740,7 +1745,20 @@ standing in:
 ```
 
 `<Repository name=".." url={..}>` selects a persistent checkout beneath
-`~/.xmd/repositories`, creating it the first time and reusing it afterwards.
+the session workspace's `repositories/` for a Sidekick-submitted entry, or
+`~/.xmd/repositories` for a manual entry, creating it the first time and reusing
+it afterwards. The returned checkout path is absolute on this host. Derive a
+workspace-relative address from that actual path and the observed workspace;
+do not guess the managed slot layout. A later entry can read that relative path
+without another acquisition, including after reopening.
+
+`base` names the requested creation base, not a promise about current HEAD.
+If a compatible owned checkout advances from creation base A to B, a fresh
+same-base selection reuses B and preserves tracked edits, index and untracked
+files. Inspect current HEAD separately when reporting the revision. An occupied
+unowned destination, incompatible origin or different creation base refuses
+without replacing files or resetting work. Placement grants no extra permission.
+
 `<Worktree name=".." branch={..}>` selects a linked checkout of the Repository
 in scope, or — written outside one, in a directory inside a Git checkout — of
 the repository you opened the session in. Written outside one with no checkout
