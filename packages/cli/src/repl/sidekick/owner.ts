@@ -591,6 +591,7 @@ export interface SidekickOwner {
 interface ServingResponse {
   output(): ReplPrinting | undefined;
   readonly test?: ReplTesting;
+  importAsset(source: string, destination: string): Operation<Result<string>>;
   readonly journal: ControlJournal;
   /** Admit the draft for this response, recording a refusal that wrote nothing. */
   submit(): Operation<Result<SubmitReceipt>>;
@@ -661,6 +662,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             : yield* test(path);
         },
         () => servingNow().output(),
+        (source, destination) => servingNow().importAsset(source, destination),
       ),
       {
         *began(occurrence, reserved): Operation<number> {
@@ -2045,13 +2047,34 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
        */
       const refused: { order: number; component: string; reason: string }[] = [];
       let pairs = 0;
+      let importFailure: Error | undefined;
+      const imports = new Set<number>();
       const journal: ControlJournal = {
         *began(occurrence, reserved): Operation<number> {
           pairs += 1;
-          return yield* written.began(occurrence, reserved);
+          let order: number;
+          try {
+            order = yield* written.began(occurrence, reserved);
+          } catch (error) {
+            if (occurrence.component === "REPL.ImportAsset") {
+              importFailure = error instanceof Error ? error : new Error(String(error));
+            }
+            throw error;
+          }
+          if (occurrence.component === "REPL.ImportAsset") {
+            imports.add(order);
+          }
+          return order;
         },
         *settled(order, outcome, observed): Operation<void> {
-          yield* written.settled(order, outcome, observed);
+          try {
+            yield* written.settled(order, outcome, observed);
+          } catch (error) {
+            if (imports.has(order)) {
+              importFailure = error instanceof Error ? error : new Error(String(error));
+            }
+            throw error;
+          }
         },
       };
       /**
@@ -2066,6 +2089,21 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       const responding: ServingResponse = {
         output: observation,
         journal,
+        *importAsset(source, destination): Operation<Result<string>> {
+          if (input.workspace === undefined) {
+            return Err(new Error("This response has no session workspace for asset import."));
+          }
+          try {
+            return yield* ReplHost.operations.importAsset({
+              workspace: input.workspace,
+              source,
+              destination,
+            });
+          } catch (error) {
+            importFailure = error instanceof Error ? error : new Error(String(error));
+            throw error;
+          }
+        },
         ...(input.test === undefined ? {} : { test: input.test }),
         *submit(): Operation<Result<SubmitReceipt>> {
           const taken = pairs;
@@ -2405,6 +2443,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           }),
         ),
       );
+      if (importFailure !== undefined) {
+        throw importFailure;
+      }
       if (submissionFailure !== undefined) {
         throw submissionFailure;
       }

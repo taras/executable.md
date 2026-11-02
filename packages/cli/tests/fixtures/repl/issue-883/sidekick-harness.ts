@@ -114,6 +114,7 @@ export function* useHarness(
      * being admitted, and that interval is inside the entry's execution.
      */
     readonly entryInstallation?: ExecutionInstallation;
+    readonly workspace?: false;
     readonly plugins?: readonly Plugin[];
     readonly state?: (initial: ReplState) => ReplState;
     readonly acknowledge?: () => Operation<void>;
@@ -243,6 +244,7 @@ export function* useHarness(
     // dependencies above: the Sidekick's own provider, with no tools, no MCP
     // servers, strict routing, denied permissions and no prompt
     // customization. Not the entry stack's, which is what the command does.
+    ...(extra.workspace === false ? {} : { workspace }),
     assembly: profile.sidekickAssembly,
     chat: execution.chat as PairedChatStorage,
     // deno-lint-ignore require-yield
