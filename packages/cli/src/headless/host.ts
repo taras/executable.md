@@ -176,7 +176,7 @@ export function* useHeadlessChildren(
                           execution: root.execution,
                           cwd: root.cwd,
                           ...(available === undefined ? {} : { available }),
-                          child: { sessionId, session: root.session, view },
+                          child: { sessionId, session: root.session, direct: root.direct, view },
                         },
                         conversation,
                       ),

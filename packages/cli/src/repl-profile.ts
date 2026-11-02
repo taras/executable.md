@@ -30,7 +30,7 @@ import type { CommandPlugins } from "./plugin-host.ts";
 import { useHeadlessChildren } from "./headless/host.ts";
 import type { HeadlessChildren } from "./headless/host.ts";
 import { runReplProgram } from "./repl/program.ts";
-import type { ReplInputPass } from "./repl/program.ts";
+import type { HeadlessReplRoot, ReplInputPass } from "./repl/program.ts";
 import { ReplEntryHost } from "./repl-entry-installation.ts";
 import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
 import { inspectSyntax, renderSyntaxMarkdown } from "@executablemd/core";
@@ -57,6 +57,7 @@ const REPL_INCLUDES: readonly string[] = Object.freeze(["components", "."]);
  * would read and remove directories under the developer's own home.
  */
 export interface ReplProfileSeams {
+  readonly observeChildRoot?: (root: Parameters<HeadlessReplRoot["ready"]>[0]) => void;
   readonly observeChildInputPass?: (reading: ReplInputPass) => void;
   readonly acp?: AcpxProviderDependencies;
   readonly planWriterRoot?: string;
@@ -233,6 +234,10 @@ export function* assembleReplProfile(
       profile,
       headless: {
         ...headless,
+        *ready(root) {
+          facts.observeChildRoot?.(root);
+          yield* headless.ready(root);
+        },
         ...(facts.observeChildInputPass === undefined
           ? {}
           : { observeInputPass: facts.observeChildInputPass }),

@@ -458,6 +458,8 @@ export interface ReplSession {
     pausing?: PendingPause,
     starting?: StartingCheck,
     workspace?: true,
+    /** Retain the exact handle synchronously at acknowledged admission; perform no I/O. */
+    onAdmitted?: (submission: ReplSubmission) => void,
   ): Operation<Result<ReplSubmission>>;
   /**
    * Stop the entry this key names, and join everything it owned.
@@ -1025,8 +1027,9 @@ function* start(
         pausing?: PendingPause,
         starting?: StartingCheck,
         workspace?: true,
+        onAdmitted?: (submission: ReplSubmission) => void,
       ): Operation<Result<ReplSubmission>> {
-        return submitting(source, pausing, starting, workspace);
+        return submitting(source, pausing, starting, workspace, onAdmitted);
       },
       stopEntry(expectedEntryKey: string): Operation<Result<void>> {
         return stopEntry(expectedEntryKey);
@@ -1356,6 +1359,7 @@ function* start(
       pausing?: PendingPause,
       starting?: StartingCheck,
       workspace?: true,
+      onAdmitted?: (submission: ReplSubmission) => void,
     ): Operation<Result<ReplSubmission>> {
       const before = admissible();
       if (!before.ok) {
@@ -1392,6 +1396,7 @@ function* start(
         entryInitialBindings(after.value),
         pausing,
         workspace,
+        onAdmitted,
       );
       return yield* scoped(function* (): Operation<Result<ReplSubmission>> {
         // Registered before the wait below, so it covers the whole interval in
@@ -1442,6 +1447,7 @@ function* start(
        */
       pausing?: PendingPause,
       workspace?: true,
+      onAdmitted?: (submission: ReplSubmission) => void,
     ): ReplEntryTask {
       const admission = withResolvers<Result<void>>();
       const completion = withResolvers<Result<unknown>>();
@@ -1496,6 +1502,9 @@ function* start(
         if (!admitted) {
           admitted = true;
           admission.resolve(outcome);
+          if (outcome.ok && placed) {
+            onAdmitted?.(submissionOf(started));
+          }
         }
       }
       function settle(outcome: Result<unknown>): void {

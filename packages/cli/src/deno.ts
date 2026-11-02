@@ -8,7 +8,8 @@ import { usePosixSidekickTransport } from "./sidekick-acp/posix.ts";
  * process happened to be started.
  */
 
-import { main } from "effection";
+import { action, createSignal, main, run, spawn, withResolvers } from "effection";
+import { isReplSubmit, runReplSubmit } from "./sidekick-acp/submit.ts";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -68,7 +69,47 @@ const UPGRADE: UpgradeAssembly = {
 // The internal helper mode runs before anything public is parsed. It is not a
 // command: it appears in no help and in no public grammar, and a caller who did
 // not select it gets the ordinary command line unchanged.
-if (isCredentialHelperMode(process.argv.slice(2))) {
+if (isReplSubmit(process.argv.slice(2))) {
+  try {
+    process.exitCode = await run(function* () {
+      const signals = createSignal<void, never>();
+      const incoming = yield* signals;
+      const interrupted = withResolvers<void>();
+      yield* spawn(function* () {
+        yield* incoming.next();
+        interrupted.resolve();
+      });
+      const onInterrupt = () => signals.send();
+      try {
+        process.on("SIGINT", onInterrupt);
+        yield* usePosixSidekickTransport(process.platform);
+        yield* useDenoRepl();
+        return yield* runReplSubmit(
+          process.argv.slice(2),
+          () => readInputStream(process.stdin),
+          interrupted.operation,
+          (record) =>
+            action<void>((resolve, reject) => {
+              process.stdout.write(`${JSON.stringify(record)}\n`, (error) => {
+                if (error) {
+                  reject(error);
+                } else {
+                  resolve();
+                }
+              });
+              return () => {};
+            }),
+          (message) => console.error(message),
+        );
+      } finally {
+        process.off("SIGINT", onInterrupt);
+      }
+    });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Direct submission failed.");
+    process.exitCode = 1;
+  }
+} else if (isCredentialHelperMode(process.argv.slice(2))) {
   await main(() => runCredentialHelper(process.argv.slice(2)));
 } else {
   await main(function* (args) {

@@ -21,6 +21,7 @@ import { usePosixSidekickTransport } from "../../src/sidekick-acp/posix.ts";
 import { useMountedHost, MOUNTED_AGENT } from "./mounted-repl.ts";
 import { makeRegistry, makeStore } from "./fake-acp.ts";
 import { resolveAgentStack } from "../../src/agent-stack.ts";
+import type { ReplProfileFacts } from "../../src/repl-profile.ts";
 import { assembleReplProfile } from "../../src/repl-profile.ts";
 import { NO_PLUGINS } from "../../src/plugin-host.ts";
 import { runReplProgram } from "../../src/repl/program.ts";
@@ -46,6 +47,7 @@ interface ObservedConnection {
 /** Observe host input settlement; a client write alone establishes no ready frame. */
 function* observeChildPasses() {
   const changed = createSignal<void, void>();
+  let activeConnections = 0;
   const connections: ObservedConnection[] = [];
   let heldAck:
     | {
@@ -69,6 +71,11 @@ function* observeChildPasses() {
         *accept() {
           const incoming = yield* listener.accept();
           return (function* () {
+            yield* ensure(() => {
+              activeConnections -= 1;
+              changed.send();
+            });
+            activeConnections += 1;
             const wire = yield* incoming;
             let connection: ObservedConnection | undefined;
             yield* ensure(function* () {
@@ -189,6 +196,12 @@ function* observeChildPasses() {
     ]);
   }
   return {
+    *joinedConnections() {
+      const changes = yield* changed;
+      while (activeConnections > 0) {
+        yield* changes.next();
+      }
+    },
     observe(reading: ReplInputPass): void {
       const connection = connections.findLast(
         (one) => !one.ended && one.execution === reading.execution,
@@ -252,6 +265,7 @@ export function* useHeadlessFixture(
     permission?(request: AcpPermissionRequest): void;
     beforeClose?(): Operation<void>;
   },
+  profileFacts: Pick<ReplProfileFacts, "testingHarness"> = {},
 ) {
   const scope = yield* useScope();
   yield* usePosixSidekickTransport(process.platform, undefined, beforeClose);
@@ -262,6 +276,7 @@ export function* useHeadlessFixture(
     },
   });
   const input = yield* observeChildPasses();
+  const children: Parameters<HeadlessReplRoot["ready"]>[0][] = [];
   const host = yield* useMountedHost({
     hostFiles: true,
     ...(dataRoot === undefined ? {} : { dataRoot }),
@@ -284,8 +299,10 @@ export function* useHeadlessFixture(
   const ready = withResolvers<Parameters<HeadlessReplRoot["ready"]>[0]>();
   const task = yield* spawn(function* () {
     const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+      ...profileFacts,
       sidekickAgent: MOUNTED_AGENT,
       observeChildInputPass: input.observe,
+      observeChildRoot: (root) => children.push(root),
       acp: {
         sessionStore: store,
         agentRegistry: makeRegistry({ [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd` }),
@@ -373,7 +390,7 @@ export function* useHeadlessFixture(
   const reference = z.object({ sessionId: z.string().uuid() }).strict().parse(bindings.value.child);
   const path = yield* childAddressPath(reference.sessionId);
   const descriptor = yield* attachmentDescriptor(path);
-  return { host, root, task, view, reference, path, descriptor, store, input };
+  return { host, root, task, view, reference, path, descriptor, store, input, children };
 }
 
 export function promptChild(text: string): string {

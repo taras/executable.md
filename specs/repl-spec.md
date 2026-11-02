@@ -2117,6 +2117,82 @@ the position itself. Before the root closes, output this process has produced bu
 not recorded appears as an explicit overlay; once the durable close exists, the
 recorded output replaces it.
 
+## Submit one complete program to a live child
+
+Run a program in the exact child whose `sessionId` the owning parent returned:
+
+```sh
+xmd repl submit --attach "$sessionId" - <<'XMD'
+---
+returns:
+  type: object
+  properties: {status: {type: string}}
+  required: [status]
+  additionalProperties: false
+---
+<AssertEquals actual={2 + 2} expected={4} />
+<Return value={{status: "hold"}} />
+XMD
+```
+
+The command reads stdin successfully to EOF before beginning a source transfer.
+The child collects the complete program before reserving its shared entry/test
+slot. It submits exactly once, using the child's captured ordinary entry profile,
+permissions and project working directory. Draft, Message and human takeover
+stay as they are. A busy slot refuses immediately once the source is collected;
+it queues no entry. Complete empty input follows ordinary entry validation.
+There is no total source-size limit. Private source parts fit both the 64-KiB
+UTF-8 text bound and the encoded 1-MiB frame bound. One part waits for collector
+consumption before the next credit; a closing part's text precedes its normal
+stream completion. Failed input, cancellation and EOF before that completion
+admit no prefix.
+
+Stdout contains JSON lines. Every admitted reference has exactly
+`{sessionId, execution, entry}`, where `entry` is its admission-order key such as
+`entry-1`:
+
+- `admitted`: `{kind:"admitted", submission}` precedes progress.
+- `progress`: `{kind:"progress", submission, head, output, waiting}` describes
+  intermediate work. `head` is `live`, `pausing`, `paused` or `settling`.
+  `output:{text,offset,length}` holds the latest at most 4096 Unicode code
+  points of disclosed rendered output, its absolute offset and full observed
+  length. `waiting:{questions,permissions}` counts only that entry's waits.
+  Buffered Output may remain empty while questions or permission requests wait.
+  Slow observations coalesce and cannot block the entry.
+- `finished`: `{kind:"finished", submission, joined:true, outcome, result,
+  error, journal}` follows the exact entry's join, output consumption and owned
+  cleanup. `outcome` is `completed`, `failed` or `interrupted`. A successful
+  result is `{value:Json}`, including `{value:null}`; otherwise it is `null`.
+  A failure supplies disclosed `{name,message}` in `error`; otherwise error is
+  `null`. The separate `journal` fact is `completed`, `failed`, `cancelled`,
+  `unfinished` or `unavailable`.
+- `unavailable`: `{kind:"unavailable", submission, reason}` says complete
+  joined evidence could not be delivered. It carries the known reference, or
+  `null` when admission acknowledgement never arrived. An oversized final result
+  becomes this small record, with its known reference and no truncated result.
+
+The example finishes with `outcome:"completed"`,
+`result:{value:{status:"hold"}}`, `error:null` and `journal:"completed"`.
+The workflow value `hold` does not change the execution outcome. A refusal admits
+nothing, writes its reason to stderr and exits 1. Losing acknowledgement is
+unavailable evidence, never proof of refusal and never permission to resend.
+
+The first Ctrl-C cancels and joins input/startup before admission; its finished
+record has `submission`, `result`, `error` and `journal` all `null`. After
+admission it requests Entry Stop for the retained exact handle, joins that Stop
+and cleanup, and leaves the child available. Repeated signals join the same
+request. Natural completion can win; a late control refuses without reaching a
+successor or replacing the completed result. Actual Stop-publication and cleanup
+failures retain their existing precedence. Connection loss stops observation
+and leaves an admitted entry with its session.
+
+Status is assigned after command cleanup: 0 for joined completion, 1 for refusal
+or a known execution/Stop/cleanup failure, 130 for proved requested interruption,
+and 2 for unavailable final evidence or payload. A known canonical failure keeps
+status 1 if delivery then fails. Progress and journal status never replace the
+joined outcome. Unknown, ended and mismatched child references refuse without
+starting a replacement; prepared Sidekick attachments grant no submission rights.
+
 ## Attaching to the live Sidekick
 
 Explicit recovery fallback in an established child offers a fresh reference to
@@ -2218,7 +2294,8 @@ or appending. Saved entry pages retain the existing 4096-code-point and
 and binds the execution, conversation and view; a newer entry cannot retarget
 it. Reads accept no file path, source, write operation or limit override.
 
-The private versioned framed protocol bounds text at 64 KiB, descriptors at
+The private versioned framed protocol bounds Sidekick message text and each
+direct source part at 64 KiB, descriptors at
 16 KiB and frames at 1 MiB. Each observer has at most 64 pending public updates.
 Malformed or slow observers detach safely; a subsequent exact read/follow
 obtains the owner's current facts. After owner-process loss joined completion
