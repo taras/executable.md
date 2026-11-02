@@ -36,7 +36,12 @@ import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
 import { inspectSyntax, renderSyntaxMarkdown } from "@executablemd/core";
 import { Component, Syntax } from "@executablemd/core/api";
 import { useSyntax } from "@executablemd/core/host";
-import { useTestingComponents } from "@executablemd/testing";
+import {
+  TESTING_REGISTRATIONS,
+  testingDocumentation,
+  useTestingComponents,
+} from "@executablemd/testing";
+import { registerComponents, contributeDocumentation } from "@executablemd/core";
 
 const REPL_INCLUDES: readonly string[] = Object.freeze(["components", "."]);
 
@@ -214,6 +219,8 @@ export function* assembleReplProfile(
   plugins: CommandPlugins,
   facts: ReplProfileFacts = {},
 ): Operation<ReplProfileAssembly> {
+  yield* registerComponents(TESTING_REGISTRATIONS.filter(({ name }) => name.startsWith("Assert")));
+  yield* contributeDocumentation(testingDocumentation);
   const projectCwd = yield* cwd();
   const mounts = facts.mounts;
   const configuredIncludes = Object.freeze(
@@ -357,7 +364,7 @@ export function entryVocabulary(
         yield* useSyntax(() => inspectSyntax(inputs));
         return (
           renderSyntaxMarkdown(yield* Syntax.operations.symbols) +
-          "\nMarkdown test components are documented by name with REPL.Syntax and run through REPL.Test.\n" +
+          "\nAssertions are available in ordinary entries. Markdown test helpers are documented by name with REPL.Syntax and run through REPL.Test.\n" +
           ENTRY_AVAILABILITY
         );
       });

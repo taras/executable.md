@@ -2399,8 +2399,9 @@ differ: a construct that is ordinary in an entry can be unavailable in a reply.
 What a reply may write is the compact surface derived from what is admitted; what
 an entry may write is a read, using core's selection and renderer over the
 ordinary entry's current registry, finalized includes and host declarations.
-It does not enter the broader CLI run profile's testing, Verbose or web
-bootstrap. Each ask reads current session component files; Plugin selection is
+It carries the existing assertion defaults, including Assert, AssertEquals and
+AssertThrows, without entering the broader CLI run profile's testing, Verbose
+or web bootstrap. Each ask reads current session component files; Plugin selection is
 captured once per command, and another configured command describes its own
 selection. Earlier saved discovery stays historical feedback.
 
@@ -2414,6 +2415,26 @@ Availability means resolvable in the described ordinary entry, not authorized fo
 every effect or guaranteed successful. Describing admits and authorizes nothing;
 reference-only registrations and middleware end with the ask. CLI xmd syntax
 and xmd run retain their run-profile assertion support.
+
+Assertions run directly in ordinary entries with their existing forms and prop
+validation. A passing assertion continues:
+
+```md
+<Let as="actual" value={2 + 2} />
+<AssertEquals actual={actual} expected={4} />
+<Output>Check passed.</Output>
+```
+
+An unhandled failing assertion fails only its entry and prevents later ordinary
+effects in that entry. Its diagnostic retains the comparison details, and the
+entry joins its owned cleanup before the session admits the next entry. The same
+session can then execute another entry normally.
+
+Assertion registration activates no testing and installs no TestAgent. A bare
+canonical Test in an ordinary REPL entry still refuses because no testing
+behavior is installed; its body does not execute. This differs from ordinary
+xmd run, whose inactive testing package skips Test bodies. REPL.Test retains its
+explicit isolated testing execution.
 
 The host's facts are read where they are known. The working directory and the
 platform are contextual and read at the ask; the runtime, the build and the
