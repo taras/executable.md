@@ -26,6 +26,14 @@ import type { ReplElicitations, ReplQuestion } from "../src/repl/elicitation.ts"
 
 const BINARY = new Uint8Array([0, 255, 128, 195, 40, 13, 10, 65]);
 
+function nativeGate() {
+  let release = () => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, resolve: () => release() };
+}
+
 function* question(questions: ReplElicitations): Operation<ReplQuestion> {
   const changes = yield* questions.changes;
   while (questions.pending === undefined) {
@@ -311,17 +319,32 @@ describe("mounted asset import", () => {
     it(`A7: ${origin} joins a held actual native copy before staging removal`, function* () {
       const { source } = yield* fixture();
       const entered = withResolvers<void>();
-      const gate = Promise.withResolvers<void>();
+      const gate = nativeGate();
+      const joining = withResolvers<void>();
       const events: string[] = [];
       let temporary: string | undefined;
       yield* useNodeReplAssetImport({
         copyFile: (from, to, mode) => {
           entered.resolve();
-          return gate.promise
+          const transfer = gate.promise
             .then(() => copyFile(from, to, mode))
             .then(() => {
               events.push("copy complete");
             });
+          const adopt = transfer.then.bind(transfer);
+          transfer.then = (fulfilled, rejected) => {
+            const retained = adopt(fulfilled, rejected);
+            const then = retained.then.bind(retained);
+            retained.then = (value, error) => {
+              // The native owner's teardown joins both settlements of its retained request.
+              if (value !== undefined && error !== undefined) {
+                joining.resolve();
+              }
+              return then(value, error);
+            };
+            return retained;
+          };
+          return transfer;
         },
         link,
         mkdir,
@@ -356,6 +379,7 @@ describe("mounted asset import", () => {
       } else {
         yield* page.press("[exit]");
       }
+      yield* joining.operation;
       expect(repl.outcome()).toBeUndefined();
       expect(events).toEqual([]);
       expect(yield* until(readdir(temporary ?? ""))).toBeDefined();
@@ -388,7 +412,7 @@ describe("native import ownership and uncertain completion", () => {
       const { source } = yield* fixture();
       const held = yield* useHarness();
       const entered = withResolvers<void>();
-      const release = Promise.withResolvers<void>();
+      const release = nativeGate();
       let temporary: string | undefined;
       const events: string[] = [];
       yield* useNodeReplAssetImport({
