@@ -1,7 +1,7 @@
 import process from "node:process";
 
 const emit = process.stdin.emit.bind(process.stdin);
-process.stdin.emit = (...args: Parameters<typeof process.stdin.emit>) => {
+process.stdin.emit = (...args: [event: string | symbol, ...values: unknown[]]) => {
   const emitted = emit(...args);
   if (args[0] === "data") {
     process.stderr.write("xmd-submit-input-owned\n");
