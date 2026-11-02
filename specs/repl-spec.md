@@ -85,6 +85,14 @@ ensures ordinary host `/`, and only its own Unit allows children there. Scope
 exit restores `/reference` and its source. On Windows, component-changing document
 spellings refuse before provider work; native SOURCE paths keep native spelling.
 
+`<REPL.Environment />` reports the captured document mount targets and their
+host sources, or `none` when the invocation declares no mounts. Paths are quoted
+so spaces, quotes and line breaks remain unambiguous. Reading these facts
+does not inspect or create the source directories. The Sidekick environment
+guide and the entry's `Dir` documentation describe selecting a mounted target
+with `<Dir>` and reading relative file paths inside it. `REPL.ImportAsset`
+uses host source paths rather than the document mount namespace.
+
 Everything that can be refused is refused in this order, and each step happens
 before anything the next one would touch:
 

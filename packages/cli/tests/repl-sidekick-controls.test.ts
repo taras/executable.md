@@ -2009,10 +2009,48 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     // host that could not tell.
     expect(answer.value).toContain(`- component includes: ${PROFILE.includes.join(", ")}`);
     expect(answer.value).toContain("- active plugins: none");
+    expect(answer.value).toContain("- document directory mounts (target -> host source): none");
     expect(answer.value).toContain("- agent permission requests: deny-all");
     // The rule is in the snapshot, because the snapshot is what comes back as
     // feedback whether or not the chapter was read.
     expect(answer.value).toContain("stop rather than assume a value for it");
+  });
+
+  it("R3: the environment reports the command's document mounts with distinct host sources", function* () {
+    yield* ReplHost.around(
+      {
+        // deno-lint-ignore require-yield
+        *environment(): Operation<readonly ReplHostFact[]> {
+          return [];
+        },
+      },
+      { at: "min" },
+    );
+    const source = '/host/fixtures with spaces/"quoted"\nline';
+    const profile = yield* (yield* assembleReplProfile(
+      { provider: "acpx", defaultAgent: AGENT, adapters: ADAPTERS, permissionMode: "deny-all" },
+      NO_PLUGINS,
+      { mounts: [{ source, target: "/fixtures" }] },
+    )).finalize();
+    const session = yield* opened("mount-environment", new InMemoryStream());
+    const answer = yield* sidekickRequests(
+      {
+        ...rootReads(session, profile),
+        // deno-lint-ignore require-yield
+        *fill(): Operation<Result<void>> {
+          throw new Error("an environment read filled the shared draft");
+        },
+      },
+      noSubmission,
+    ).environment();
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(answer.value).toContain(
+      `- document directory mounts (target -> host source): "/fixtures" -> ${JSON.stringify(source)}`,
+    );
+    expect(answer.value).not.toContain(source);
+    expect(answer.value).toContain("- agent permission requests: deny-all");
   });
 
   it("R3: the Plugins this command installed are reported, by name and in order", function* () {

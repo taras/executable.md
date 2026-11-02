@@ -50,6 +50,16 @@ answer.
   later siblings return to the workspace. To copy project input, enter its
   explicitly known project path, capture the read there, then write the copy
   after leaving Dir. Ask for the project path if you do not know it.
+- `<REPL.Environment />` lists document directory mounts as target-to-host-source
+  pairs, or `none`. Enter a listed target with `<Dir>` in an entry, then read
+  files relative to that directory. For example, with
+  `"/fixtures" -> "/work/fixtures"`, read `sales.json` inside
+  `<Dir path="/fixtures">`. The mapping selects a directory; ordinary permissions
+  and missing-file behavior still apply.
+- `<File>` takes a relative path within the selected directory.
+  `<REPL.ImportAsset source>` instead takes a host filesystem path for a copy
+  into the workspace; it does not interpret document mount targets. A file
+  already reachable through a mount can be read there without importing it.
 - Reopening restores acknowledged results, not file snapshots. A retained read
   answers with its old text; a retained write does not replace an external edit.
   Work performed before its acknowledgement may repeat after interruption.
@@ -96,6 +106,15 @@ read. After Import succeeds, feedback gives `inputs/mock ü.html`. A later
 
 ```xmd
 <File path="inputs/mock ü.html" />
+```
+
+For a listed `/fixtures` mount, an **entry** reads the mounted file directly:
+
+```xmd
+<Dir path="/fixtures">
+<File path="sales.json" as="salesText" />
+<Output>{salesText}</Output>
+</Dir>
 ```
 
 ## Common mistake
