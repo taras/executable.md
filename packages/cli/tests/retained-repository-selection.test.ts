@@ -21,6 +21,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { cliCommand } from "@executablemd/test-support/launch";
 import {
   ensure,
   race,
@@ -1198,7 +1199,7 @@ describe("1051 — repositories in the existing Sidekick workspace", () => {
     yield* ensureDir(saved);
     yield* writeTextFile(join(saved, "acquire.xmd"), acquire);
     yield* writeTextFile(join(saved, "read.xmd"), read);
-    const artifactRoot = Deno.env.get("XMD_1051_ARTIFACTS");
+    const artifactRoot = yield* API.Env.operations.env("XMD_1051_ARTIFACTS");
     if (artifactRoot !== undefined) {
       yield* ensureDir(artifactRoot);
       yield* writeTextFile(join(artifactRoot, "acquire.xmd"), acquire);
@@ -1297,7 +1298,7 @@ describe("1051 — repositories in the existing Sidekick workspace", () => {
           projectCwd: fixture.root,
           hostFiles: true,
           entryInstallation: denoReplEntry(
-            { runtime: "source", platform: "unix", execPath: Deno.execPath() },
+            { runtime: "source", platform: "unix", execPath: cliCommand([]).command },
             fixture.managed,
           ),
         });
@@ -1469,7 +1470,7 @@ describe("1051 — repositories in the existing Sidekick workspace", () => {
             projectCwd: fixture.root,
             hostFiles: true,
             entryInstallation: denoReplEntry(
-              { runtime: "source", platform: "unix", execPath: Deno.execPath() },
+              { runtime: "source", platform: "unix", execPath: cliCommand([]).command },
               fixture.managed,
             ),
           });
