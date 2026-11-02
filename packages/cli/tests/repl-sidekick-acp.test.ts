@@ -76,6 +76,7 @@ import { PAIRED_DIRECTORY, parseEntryRecords } from "../src/repl/sidekick/histor
 import { AGENT_PROMPT } from "@executablemd/core/host";
 import {
   Descriptor,
+  Request,
   MAX_FRAME,
   SidekickTransport,
   referenceText,
@@ -2760,5 +2761,26 @@ describe("Follow: joined mixed-origin queue handoff", () => {
     expect(saved[2]?.origin).toEqual({ kind: "ui" });
     expect(saved[3]?.origin).toMatchObject({ kind: "acp", attachment: attached.attachment });
     expect(new Set(saved.map((record) => record.id)).size).toBe(4);
+  });
+});
+
+describe("direct submission attachment rights", () => {
+  it("E: prepared-only endpoints refuse submit, source and interrupt without effects", function* () {
+    const fixture = yield* world();
+    for (const request of [
+      { method: "submit" },
+      { method: "submit-source", submit: 1, text: "must not execute", done: true },
+      { method: "submit-interrupt", submit: 1 },
+    ]) {
+      let reason = "";
+      try {
+        yield* requestAttachment(fixture.path, Request.parse(request));
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error);
+      }
+      expect(reason).toContain("prepared attachment grants no child submission");
+    }
+    expect(fixture.held.session.model.entries).toHaveLength(0);
+    expect(fixture.held.fake.prompts).toHaveLength(fixture.baselineTurns);
   });
 });

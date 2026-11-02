@@ -17,7 +17,7 @@ import { readTextFile } from "@effectionx/fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createContext, ensure, type Operation, scoped, until } from "effection";
+import { createContext, ensure, Err, type Operation, scoped, suspend, until } from "effection";
 
 import { useHostFiles } from "@executablemd/runtime";
 import { runXmd } from "../src/cli.ts";
@@ -31,6 +31,7 @@ import { readQuestionForm } from "../src/repl/elicitation.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
 import type { ReplSurface } from "../src/repl/route.ts";
 import { entryKey } from "../src/repl/entries.ts";
+import { runReplSubmit } from "../src/sidekick-acp/submit.ts";
 
 const CLI = fileURLToPath(new URL("../", import.meta.url));
 const REPL = join(CLI, "src", "repl");
@@ -452,10 +453,37 @@ describe("REPL documentation: what it says is what the code does", () => {
       // location.
       const tokens = rest
         .replace(/#.*$/, "")
+        .replace(/<<.*$/, "")
         .trim()
         .split(/\s+/)
         .filter((token) => token.length > 0)
-        .map((token) => token.replace(/^'(.*)'$/, "$1"));
+        .map((token) => token.replace(/^['"](.*)['"]$/, "$1"));
+      if (tokens[0] === "submit") {
+        let readInput = false;
+        const diagnostics: string[] = [];
+        const status = yield* runReplSubmit(
+          [
+            "repl",
+            ...tokens.map((token) =>
+              token.replace("$sessionId", "00000000-0000-4000-8000-000000000001"),
+            ),
+          ],
+          function* () {
+            readInput = true;
+            return Err(new Error("The grammar witness supplies no program."));
+          },
+          suspend(),
+          function* () {
+            throw new Error("The grammar witness emitted a submission record.");
+          },
+          (message) => diagnostics.push(message),
+        );
+        expect([rest, readInput, status]).toEqual([rest, true, 1]);
+        expect(diagnostics).toEqual([
+          "xmd repl submit could not read a complete program from standard input",
+        ]);
+        continue;
+      }
       // Which token is the optional location is a question about ownership: a
       // token after a valued option is that option's value. The roster comes
       // from the command itself, so this reader cannot disagree with it about

@@ -1,5 +1,15 @@
-import { createSignal, ensure, race, scoped, spawn, useScope } from "effection";
-import type { Operation } from "effection";
+import {
+  createSignal,
+  ensure,
+  Err,
+  Ok,
+  race,
+  scoped,
+  spawn,
+  useScope,
+  withResolvers,
+} from "effection";
+import type { Operation, Result, Stream, Task } from "effection";
 import type { RootReads } from "../repl/sidekick/requests.ts";
 import {
   readEntryJournal,
@@ -14,13 +24,21 @@ import type {
   SidekickExchange,
 } from "../repl/sidekick/dispatch.ts";
 import { SidekickOrigin } from "../repl/sidekick/dispatch.ts";
-import { Cursor, Envelope, MAILBOX, SidekickTransport } from "./protocol.ts";
-import type { Descriptor, Request, Wire } from "./protocol.ts";
+import {
+  Cursor,
+  Envelope,
+  MAILBOX,
+  MAX_FRAME,
+  SidekickTransport,
+  SubmitRecord,
+} from "./protocol.ts";
+import type { Descriptor, Request, Wire, SubmissionReference } from "./protocol.ts";
 
 import { createChildRequests } from "../headless/requests.ts";
 import type { ChildInput } from "../headless/requests.ts";
 import { serveChildUi } from "../headless/ui.ts";
-import type { ReplSession } from "../repl/session.ts";
+import type { DirectRepl } from "../repl/program.ts";
+import type { ReplSubmission, ReplSession } from "../repl/session.ts";
 import type { ReplLiveScreen } from "../repl/live-screen.ts";
 
 interface AttachmentRoot {
@@ -28,6 +46,7 @@ interface AttachmentRoot {
   readonly child?: {
     readonly sessionId: string;
     readonly session: ReplSession;
+    readonly direct: DirectRepl;
     readonly view: ReplLiveScreen;
   };
   readonly owner: SidekickOwner;
@@ -284,6 +303,324 @@ function* observe(
     }
   });
 }
+function submissionInteraction(
+  child: NonNullable<AttachmentRoot["child"]>,
+  descriptor: Descriptor,
+  wire: Wire,
+  id: number,
+) {
+  type Part = {
+    text: string;
+    done: boolean;
+    textTaken: boolean;
+    credit: ReturnType<typeof withResolvers<void>>;
+  };
+  let part: Part | undefined;
+  let waiting = withResolvers<void>();
+  let inputDone = false;
+  let inputFailure: Error | undefined;
+  let handle: ReplSubmission | undefined;
+  let reference: SubmissionReference | null = null;
+  let startup: Task<void> | undefined;
+  let requested = false;
+  let fixed = false;
+  let stopping: Operation<Result<void>> | undefined;
+  const admitted = withResolvers<void>();
+  let notification = withResolvers<void>();
+  let dirty = true;
+  const ready = withResolvers<Result<ReplSubmission>>();
+  const complete = withResolvers<SubmitRecord>();
+
+  function discard(): void {
+    inputFailure = new Error("The direct source interaction ended before normal completion.");
+    part?.credit.reject(inputFailure);
+    part = undefined;
+    waiting.resolve();
+  }
+  const source: Stream<string, void> = {
+    *[Symbol.iterator]() {
+      return {
+        *next(): Operation<IteratorResult<string, void>> {
+          while (true) {
+            if (inputFailure !== undefined) {
+              throw inputFailure;
+            }
+            if (part !== undefined) {
+              const held = part;
+              if (!held.textTaken && held.text.length > 0) {
+                held.textTaken = true;
+                if (!held.done) {
+                  part = undefined;
+                  held.credit.resolve();
+                }
+                return { done: false, value: held.text };
+              }
+              part = undefined;
+              inputDone = held.done;
+              held.credit.resolve();
+              if (inputDone) {
+                return { done: true, value: undefined };
+              }
+            }
+            if (inputDone) {
+              return { done: true, value: undefined };
+            }
+            waiting = withResolvers<void>();
+            yield* waiting.operation;
+          }
+        },
+      };
+    },
+  };
+  function progress(): SubmitRecord | undefined {
+    if (reference === null) {
+      return undefined;
+    }
+    const session = child.session;
+    if (
+      session.lifecycle.entry !== reference.entry &&
+      session.printing?.entry !== reference.entry
+    ) {
+      return undefined;
+    }
+    const head = session.navigation.head;
+    if (!["live", "pausing", "paused", "settling"].includes(head)) {
+      return undefined;
+    }
+    const reading = session.reading(undefined);
+    const retained = reading.ok
+      ? reading.value.model.entries.find((one) => one.key === reference?.entry)?.terminal?.output
+      : undefined;
+    const printing = session.printing;
+    const text = retained ?? (printing?.entry === reference.entry ? printing.output : "");
+    const points = Array.from(text);
+    const occurrences =
+      session.lifecycle.entry === reference.entry ? session.lifecycle.occurrences : [];
+    return SubmitRecord.parse({
+      kind: "progress",
+      submission: reference,
+      head,
+      output: {
+        text: points.slice(-4096).join(""),
+        offset: Math.max(0, points.length - 4096),
+        length: points.length,
+      },
+      waiting: {
+        questions: occurrences.filter((one) => one.waiting.includes("question")).length,
+        permissions: occurrences.filter((one) => one.waiting.includes("permission")).length,
+      },
+    });
+  }
+  function* settlement(): Operation<SubmitRecord> {
+    const submitted = yield* ready.operation;
+    if (startup !== undefined) {
+      yield* startup.halt();
+    }
+    if (handle === undefined) {
+      if (!requested) {
+        throw submitted.ok
+          ? new Error("Direct admission supplied no exact handle.")
+          : submitted.error;
+      }
+      return {
+        kind: "finished",
+        submission: null,
+        joined: true,
+        outcome: "interrupted",
+        result: null,
+        error: null,
+        journal: null,
+      };
+    }
+    const exact = handle;
+    const joined = yield* exact.join();
+    const output = yield* exact.output();
+    const stopped = stopping === undefined ? undefined : yield* stopping;
+    const reading = child.session.reading(undefined);
+    const terminal = reading.ok
+      ? reading.value.model.entries.find((one) => one.key === exact.entry)?.terminal
+      : undefined;
+    const journal = !reading.ok
+      ? "unavailable"
+      : terminal === undefined
+        ? "unfinished"
+        : terminal.status === "ok"
+          ? "completed"
+          : terminal.status === "err"
+            ? "failed"
+            : "cancelled";
+    const interrupted = requested && stopped?.ok === true && output.ok && journal === "cancelled";
+    // output() retains an actual Stop failure, unlike a stale Stop refusal.
+    const failure =
+      !joined.ok && !interrupted ? joined.error : !output.ok ? output.error : undefined;
+    if (failure !== undefined) {
+      return {
+        kind: "finished",
+        submission: reference,
+        joined: true,
+        outcome: "failed",
+        result: null,
+        error: { name: failure.name, message: failure.message },
+        journal,
+      };
+    }
+    return SubmitRecord.parse({
+      kind: "finished",
+      submission: reference,
+      joined: true,
+      outcome: interrupted ? "interrupted" : "completed",
+      result: joined.ok ? { value: joined.value } : null,
+      error: null,
+      journal,
+    });
+  }
+  return {
+    offer(request: Extract<Request, { method: "submit-source" }>): Operation<void> {
+      if (fixed || requested || inputDone || inputFailure !== undefined || part !== undefined) {
+        throw new Error("This direct submission has no source credit.");
+      }
+      const credit = withResolvers<void>();
+      part = { text: request.text, done: request.done, textTaken: false, credit };
+      waiting.resolve();
+      return credit.operation;
+    },
+    *interrupt(): Operation<void> {
+      if (fixed) {
+        throw new Error("This exact submission has already finished.");
+      }
+      if (!requested) {
+        requested = true;
+        discard();
+        const done = withResolvers<Result<void>>();
+        stopping = done.operation;
+        yield* spawn(function* () {
+          let outcome: Result<void> = Ok(undefined);
+          try {
+            if (startup !== undefined) {
+              yield* startup.halt();
+            }
+            if (handle !== undefined) {
+              outcome = yield* child.session.stopEntry(handle.entry);
+            }
+          } catch (error) {
+            outcome = Err(error instanceof Error ? error : new Error(String(error)));
+          } finally {
+            done.resolve(outcome);
+          }
+        });
+      }
+      if (stopping !== undefined) {
+        yield* stopping;
+      }
+    },
+    *run(): Operation<SubmitRecord> {
+      return yield* scoped(function* () {
+        yield* ensure(discard);
+        for (const stream of [
+          child.session.changes,
+          child.session.outputs,
+          child.session.lifecycleChanges,
+          child.session.expansion.states,
+        ]) {
+          const changes = yield* stream;
+          yield* spawn(function* () {
+            while (!(yield* changes.next()).done) {
+              dirty = true;
+              notification.resolve();
+            }
+          });
+        }
+        startup = yield* spawn(function* () {
+          let result: Result<ReplSubmission> = Err(new Error("Direct startup was withdrawn."));
+          try {
+            result = yield* child.direct.submit(source, (submission) => {
+              handle = submission;
+              reference = {
+                sessionId: child.sessionId,
+                execution: descriptor.execution,
+                entry: submission.entry,
+              };
+              admitted.resolve();
+            });
+          } catch (error) {
+            result = Err(error instanceof Error ? error : new Error(String(error)));
+          } finally {
+            ready.resolve(result);
+          }
+        });
+        yield* spawn(function* () {
+          try {
+            const record = yield* settlement();
+            fixed = true;
+            complete.resolve(record);
+          } catch (error) {
+            fixed = true;
+            complete.reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+        const first = yield* race([
+          (function* () {
+            yield* admitted.operation;
+            return true;
+          })(),
+          (function* () {
+            yield* complete.operation;
+            return false;
+          })(),
+        ]);
+        if (first || reference !== null) {
+          yield* wire.send({
+            id,
+            kind: "update",
+            value: { kind: "admitted", submission: reference },
+          });
+        }
+        let latest: SubmitRecord | undefined;
+        while (!fixed) {
+          if (dirty) {
+            notification = withResolvers<void>();
+            dirty = false;
+            const snapshot = progress();
+            if (snapshot !== undefined && JSON.stringify(snapshot) !== JSON.stringify(latest)) {
+              latest = snapshot;
+              yield* wire.send({ id, kind: "update", value: snapshot });
+            }
+          }
+          if (!dirty) {
+            yield* race([
+              (function* () {
+                yield* complete.operation;
+              })(),
+              notification.operation,
+            ]);
+          }
+        }
+        return yield* complete.operation;
+      });
+    },
+  };
+}
+
+function boundedFinal(id: number, record: SubmitRecord) {
+  const reply = { id, kind: "value", value: record };
+  if (new TextEncoder().encode(JSON.stringify(reply) + "\n").length <= MAX_FRAME) {
+    return reply;
+  }
+  const unavailable: SubmitRecord = {
+    kind: "unavailable",
+    submission: record.submission,
+    reason: "The complete joined result exceeds the attachment frame bound.",
+  };
+  return record.kind === "finished" && record.outcome === "failed"
+    ? {
+        id,
+        kind: "error",
+        error: "The joined failure payload exceeds the attachment frame bound.",
+        facts: unavailable,
+      }
+    : { id, kind: "value", value: unavailable };
+}
+
 export function* useSidekickAttachment(
   path: string,
   root: AttachmentRoot,
@@ -343,6 +680,7 @@ export function* useSidekickAttachment(
             pair(root, descriptor);
             yield* wire.send({ id: hello.id, kind: "value", value: descriptor });
             const pending = new Set<number>();
+            const submissions = new Map<number, ReturnType<typeof submissionInteraction>>();
             while (true) {
               const envelope = Envelope.parse(yield* wire.receive());
               pair(root, descriptor);
@@ -379,9 +717,65 @@ export function* useSidekickAttachment(
                 throw new Error("The attachment request bound was exceeded.");
               }
               pending.add(envelope.id);
+              let transfer: Operation<void> | undefined;
+              let interaction: ReturnType<typeof submissionInteraction> | undefined;
+              let refused: Error | undefined;
+              try {
+                if (envelope.request.method === "submit") {
+                  if (root.child === undefined) {
+                    throw new Error("This prepared attachment grants no child submission.");
+                  }
+                  if (submissions.size >= MAILBOX) {
+                    throw new Error("This connection has reached its direct submission bound.");
+                  }
+                  if (submissions.has(envelope.id)) {
+                    throw new Error(
+                      "This connection already used that exact submission request ID.",
+                    );
+                  }
+                  interaction = submissionInteraction(root.child, descriptor, wire, envelope.id);
+                  submissions.set(envelope.id, interaction);
+                } else if (
+                  envelope.request.method === "submit-source" ||
+                  envelope.request.method === "submit-interrupt"
+                ) {
+                  if (root.child === undefined) {
+                    throw new Error("This prepared attachment grants no child submission.");
+                  }
+                  interaction = submissions.get(envelope.request.submit);
+                  if (interaction === undefined) {
+                    throw new Error("This connection owns no such direct submission.");
+                  }
+                  if (envelope.request.method === "submit-source") {
+                    transfer = interaction.offer(envelope.request);
+                  }
+                }
+              } catch (error) {
+                refused = error instanceof Error ? error : new Error(String(error));
+              }
               yield* spawn(function* () {
                 try {
                   const request = envelope.request;
+                  if (refused !== undefined) {
+                    throw refused;
+                  }
+                  if (request.method === "submit" && interaction !== undefined) {
+                    const final = yield* interaction.run();
+                    yield* wire.send(boundedFinal(envelope.id, final));
+                    return;
+                  }
+                  if (request.method === "submit-source" || request.method === "submit-interrupt") {
+                    if (request.method === "submit-source" && transfer !== undefined) {
+                      yield* transfer;
+                    } else if (interaction !== undefined) {
+                      yield* interaction.interrupt();
+                    }
+                    yield* wire.send({ id: envelope.id, kind: "value", value: null });
+                    return;
+                  }
+                  if (request.method === "submit") {
+                    throw new Error("Direct submission was not established.");
+                  }
                   let value: unknown;
                   if (request.method === "hello" || request.method === "ui") {
                     throw new Error("Attachment handshake already completed.");

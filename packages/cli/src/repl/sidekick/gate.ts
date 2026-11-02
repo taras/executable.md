@@ -52,7 +52,7 @@ export class AdmissionRefused extends Error {
 }
 
 /** Who asked for the next entry slot. */
-export type Submitter = "person" | "sidekick";
+export type Submitter = "person" | "sidekick" | "direct";
 
 /** What the gate knows about the things that can be typed into. */
 export interface Revisions {
@@ -134,7 +134,7 @@ export function submittable(by: Submitter, facts: DraftFacts): Result<void> {
       ),
     );
   }
-  if (facts.draft.length === 0) {
+  if (by !== "direct" && facts.draft.length === 0) {
     // Named rather than implied. This sentence is read by a person looking at
     // the empty draft, for whom either wording is true, *and* by a reply being
     // told why its submission did not happen — for which "nothing to submit"
@@ -265,7 +265,7 @@ export function stillAdmissible(held: Reservation, facts: DraftFacts): Result<vo
       ),
     );
   }
-  if (facts.revisions.draft !== held.revision) {
+  if (held.by !== "direct" && facts.revisions.draft !== held.revision) {
     // The draft moved under a suspended preflight. The reserved source is still
     // exactly what was reserved, and submitting it now would submit something
     // other than what the draft says — while discarding the edit.
@@ -292,7 +292,7 @@ export function cleared(
   /** Only the two things being cleared, so any holder of them may ask. */
   facts: { readonly draft: string; readonly revisions: Revisions },
 ): { readonly draft: string; readonly revisions: Revisions } {
-  const stale = facts.revisions.draft !== held.revision;
+  const stale = held.by === "direct" || facts.revisions.draft !== held.revision;
   return {
     draft: stale ? facts.draft : "",
     revisions: facts.revisions,

@@ -6661,6 +6661,46 @@ identity/materialization describes only the attachment and its message acceptanc
 it does not assert acceptance by the underlying Sidekick provider. Unknown
 feedback keeps its existing refusal and is never resent through attachment.
 
+A direct caller uses `xmd repl submit --attach SESSION_ID -` on that same
+exact child connection. The root's private `direct.submit(Stream<string, void>,
+onAdmitted?)` collects normal stream completion before reserving the existing
+entry/test slot, settles reopening and rechecks live-head, request liveness and
+session readiness at actual start. Its source uses project placement and the
+captured ordinary entry profile. Direct reservations bypass only composer
+emptiness, takeover, revision and clearing rules; neither composer changes.
+
+ReplSession's optional fifth `submit` argument retains the exact task-bound
+submission synchronously once at acknowledged admission. It performs no I/O;
+the interaction publishes admitted before progress outside that callback.
+The session retains execution, join, final output and Entry Stop ownership.
+Cancelling unadmitted startup joins it; disconnect after admission cancels only
+the connection's observations. Exact Stop, output and join settle before one
+final record is fixed. A stale Stop refusal cannot replace natural completion or
+reach a successor. Actual publication and cleanup failures keep canonical
+precedence, separately from the journal's retained terminal.
+
+Private `submit`, `submit-source` and `submit-interrupt` requests use existing
+envelope IDs on the original authenticated connection. Only genuine child
+attachments receive them. The adapter holds at most one unread source part and
+one pending consumption credit, with dispatch free to receive interrupt while
+credit waits. A closing part delivers text before the terminal item, and grants
+its credit only when that item is consumed. Failure and EOF discard partial
+source and join owned request work. Complete program strings have no aggregate
+size or part-count limit; each part satisfies both UTF-8 text and encoded frame
+bounds. Progress keeps one latest snapshot of disclosed output and exact entry
+waits; the existing bounded Wire handles delivery independently of production.
+A final payload too large for one frame becomes unavailable evidence carrying
+the known submission, never truncated JSON or an invented result.
+
+The shared `sidekick-acp/submit.ts` holds command parsing, one correlated reply
+reader, complete supplied stdin acquisition, source splitting, record output and
+status as data. All four runtime entrypoints select submit before `main` and use
+`run` for this command. Each scopes its SIGINT listener, obtains its subscription
+and starts a receiver/latch before input or socket work can block. Before a
+remote interaction, interruption joins local acquisition; afterwards it retains
+the reader and connection through exact Stop settlement. Exit status follows
+`run` cleanup. Other commands retain their existing `main` lifetime.
+
 ### Session workspace placement
 
 A Sidekick response and an entry submitted through its controls start in the
@@ -9424,7 +9464,7 @@ Status is measured against main.
 | testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer [Invariant](#capability-backed-nested-execution); [Interface and evidence](specs/testing-spec.md#nested-executions). | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | nested run-profile Agent and elicitation declarations | Configures one isolated run-profile child with frozen TestAgent scenarios and non-delegating Answers, preserving ordinary component shadowing. [Invariant](#capability-backed-nested-execution); [Interface and evidence](specs/testing-spec.md#nested-executions). | Built on #641; controlled Plan label routing added by #728. |
 | `Config` run deadline / exec default / Fetch default / verbosity | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer, and contextual verbosity — a boolean that is false unless configured, seeded by the command line and overridable for a lexical subtree, bounding nothing and deciding no permission [Invariant](#contextual-run-configuration). | built on this stack |
-| Parent-owned headless XMD child | Canonical REPL entry placement starts one terminal-free root and selected Sidekick conversation; XMD.Session reads/selects its exact reference, one UI attaches/detaches, and Shutdown or parent end joins cleanup. [Ownership and attachment](#local-sidekick-attachments). | Built in the CLI REPL; ordinary providers and prepared attachment rights remain separate. |
+| Parent-owned headless XMD child | Canonical REPL entry placement starts one terminal-free root and selected Sidekick conversation; XMD.Session reads/selects its exact reference, one UI attaches/detaches, direct submit reports progress and exact joined completion, and Shutdown or parent end joins cleanup. [Ownership and attachment](#local-sidekick-attachments). | Built in the CLI REPL; ordinary providers and prepared attachment rights remain separate. |
 | Agent session configuration (`<Session model effort>` / `Agent.options()`) | Applies and verifies exact provider model and effort settings for the final routed session; inspection starts no turn. [Full contract](#native-agent-sessions). | Built; [provider availability and compatibility](#native-agent-sessions). |
 | native session launch (`<Session.Launch>` / `launchAgentSession()`) | Hands one durable session to its provider native UI, retaining construction and build compatibility through interruption. [Full contract](#native-agent-sessions). | Built; [provider availability and compatibility](#native-agent-sessions). |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component [Interface and evidence](specs/executable-mdx-spec.md#618-reading-over-http-fetch). | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
