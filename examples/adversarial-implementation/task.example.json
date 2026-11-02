@@ -10,6 +10,8 @@
     "implementor": "bounded-parser-fix-implementor",
     "architect": "bounded-parser-fix-architect"
   },
+  "providers": {"architect":"codex","planner":"codex","implementor":"codex"},
+  "maxResponseCorrections": 0,
   "maxCorrections": 3,
   "maxApiRepairs": 3,
   "assessment": {

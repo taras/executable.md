@@ -2,6 +2,8 @@
 props:
   type: object
   properties:
+    plannerProvider: {enum: [claude, codex], default: claude}
+    implementationProvider: {enum: [claude, codex], default: claude}
     role: {type: string}
     session: {type: string}
     assignment: {type: object}
@@ -13,7 +15,7 @@ props:
 
 <Let as="assignment" value={props.assignment} />
 <If condition={props.correction !== null}>
-<Dir path={props.assignment.artifactDirectory + "/response-corrections/" + String(props.correction.ordinal).padStart(4,"0")}><File path="called.json"><Json value={{session:props.session,initialize:props.initialize,ordinal:props.correction.ordinal,remaining:props.correction.remaining}} /></File></Dir>
+<Dir path={props.assignment.artifactDirectory + "/response-corrections/" + String(props.correction.ordinal).padStart(4,"0")}><File path="called.json"><Json value={{session:props.session,plannerProvider:props.plannerProvider,implementationProvider:props.implementationProvider,initialize:props.initialize,ordinal:props.correction.ordinal,remaining:props.correction.remaining}} /></File></Dir>
 <Phase.Extract text={props.correction.rejectedText} as="original" />
 <Parse schema={{type:"object"}} as="reply">{original.json}</Parse>
 <Json value={{...reply,summary:props.assignment.request === "uncorrectable-summary" ? reply.summary : "The saved checks passed.",handoff:"Inspect the saved evidence."}} />
@@ -21,7 +23,7 @@ props:
 <Let as="receipt" value={assignment.artifactDirectory + "/focused.json"} />
 <Let as="revision" value={assignment.revision} />
 <Let as="conflict" value={props.role === "implementor" && assignment.request === "first-consumer"} />
-<Dir path={assignment.artifactDirectory}><File path="called.json"><Json value={{session:props.session,role:props.role,revision,changedPaths:assignment.changedPaths,initialize:props.initialize,inputPaths:props.inputs.map(input => input.path),inputs:props.inputs,request:assignment.request,phase:assignment.phase}} /></File></Dir>
+<Dir path={assignment.artifactDirectory}><File path="called.json"><Json value={{session:props.session,role:props.role,plannerProvider:props.plannerProvider,implementationProvider:props.implementationProvider,revision,changedPaths:assignment.changedPaths,initialize:props.initialize,inputPaths:props.inputs.map(input => input.path),inputs:props.inputs,request:assignment.request,phase:assignment.phase}} /></File></Dir>
 <If condition={assignment.phase === "discovery"}>
 <Let as="planPath" value={assignment.artifactDirectory + "/plan.md"} />
 <Dir path={assignment.artifactDirectory}><File path="plan.md">Use the existing format API for the remaining consumer. Remove legacy.fixture, run bash consumer.sh, and return its signed feedback commit.</File></Dir>
@@ -33,7 +35,7 @@ printf '%s' 'Evidence B: mutable original after planning.' > {evidencePath}
 <If condition={mutated.exitCode !== 0}><Fail message={mutated.stderr} /></If>
 </If>
 <Let as="decision" value={assignment.request.includes("unanswered-plan-decision")} />
-<Json value={{schema:"phase-result.v2",phase:assignment.phase,work:assignment.work,outcome:decision ? "needs_decision" : "complete",revision,summary:"The ordinary plan and focused evidence are saved.",handoff:decision ? "ROOT: resolve the newly discovered material choice." : "Implement the selected ordinary plan using the accepted format API; retire legacy.fixture.",handoffInputs:[planPath],artifacts:[planPath],evidence:[],findings:[],assessment:assignment.assessment,discoveryRequests:[],discoveryGaps:[],next:decision ? {phase:"hold",role:null} : assignment.continuation}} />
+<Json value={{schema:"phase-result.v2",phase:assignment.phase,work:assignment.work,outcome:decision ? "needs_decision" : "complete",revision,summary:assignment.request.includes("oversized-summary") ? "x".repeat(1201) : "The ordinary plan and focused evidence are saved.",handoff:decision ? "ROOT: resolve the newly discovered material choice." : "Implement the selected ordinary plan using the accepted format API; retire legacy.fixture.",handoffInputs:[planPath],artifacts:[planPath],evidence:[],findings:[],assessment:assignment.assessment,discoveryRequests:[],discoveryGaps:[],next:decision ? {phase:"hold",role:null} : assignment.continuation}} />
 <Else>
 <If condition={props.role === "implementor"}>
 <If condition={conflict}>

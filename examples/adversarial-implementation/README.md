@@ -18,7 +18,7 @@ change a running role's model or a live workflow's include directory.
 
 Prepare this repository with `deno task setup`. Copy `task.example.json` to a
 local file and replace its source, exact revision, output directory, accepted
-request, selected evidence paths, delivery policy and unused session names. Prepare the selected
+request, selected evidence paths, role providers, correction budgets, delivery policy and unused session names. Prepare the selected
 source through its own repository instructions. Its feedback commits use its
 configured Git signing and verification. Run from that source checkout:
 
@@ -33,6 +33,36 @@ xmd run /absolute/path/to/workflow/examples/adversarial-implementation/run.md \
 complete CLI with `xmd run /absolute/path/to/workflow/examples/adversarial-implementation/run.md --help`.
 The task has no mode, phase, full flag or initialization override. `phase.md`
 and `continue.md` below serve separate assignments and existing records.
+
+## Select role providers and budgets
+
+The launch task requires `providers` for all three original roles and explicit
+`maxCorrections`, `maxApiRepairs` and `maxResponseCorrections`. For ordinary Codex
+work, select:
+
+```json
+{
+  "providers": {"architect":"codex","planner":"codex","implementor":"codex"},
+  "maxCorrections": 3,
+  "maxApiRepairs": 3,
+  "maxResponseCorrections": 0
+}
+```
+
+Planner and Implementor can independently select `claude` instead. The fixed
+profiles below determine model and effort; provider selection never substitutes
+another provider when one refuses. Architect uses `codex`. Missing or invalid
+allocation or budget fields hold before paid work. The resolved Ticket manifest
+retains the selected providers and all three budgets through continuation.
+
+`maxCorrections` bounds source corrections and `maxApiRepairs` bounds
+consumer-driven API repairs, each from zero through ten. `maxResponseCorrections`
+bounds extra response-format calls per completed assignment, from zero through
+three. Zero admits no extra response call. It applies to ordinary planning,
+implementation, selected feedback reviews and foundation replies, including
+repairs by their original owner. It authorizes no transport retry or repetition
+of uncertain productive work. Continuing a Ticket keeps its consumed source
+correction count and recorded allocation; it does not restart a failed attempt.
 
 ## Prepare scope and impact
 
@@ -302,6 +332,7 @@ omitted. A direct REPL invocation uses the same option:
 <Phase.Run phase={request.assignment.phase} role={request.role}
   session={request.session} assignment={request.assignment} attempt={request.attempt}
   initialize={request.initialize ?? false} inputs={Object.values(documents)}
+  plannerProvider={request.plannerProvider ?? "claude"}
   implementationProvider={request.implementationProvider ?? "claude"}
   maxResponseCorrections={0} successor={request.assignment.continuation.phase}
   nextRole={request.assignment.continuation.role} as="phase" />
@@ -335,14 +366,14 @@ phase entry retains the implementation workflow's role and model policy.
 
 | Owner | Work | Model and effort |
 | --- | --- | --- |
-| Planner | Ordinary plan/evidence; on migration, implement the API, validate representative consumers and repair API conflicts | Claude `opus`; ordinary planning uses ReviewPolicy effort: medium, high for a concrete recorded risk; migration foundation design uses high |
-| Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Claude `sonnet`, high |
-| Planner reviewer | Inspect the migration against the accepted outcome and evidence | Same Opus session, medium; high for a concrete recorded risk |
+| Planner | Ordinary plan/evidence; on migration, implement the API, validate representative consumers and repair API conflicts | Selected Codex `gpt-6.1-sol` or Claude `opus`; ordinary planning uses medium, high for a concrete recorded risk; migration foundation design uses high |
+| Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Selected Codex `gpt-6.1-sol`, medium (high for a concrete recorded risk), or Claude `sonnet`, high |
+| Planner reviewer | Inspect the migration against the accepted outcome and evidence | Same selected provider and original Planner session, medium; high for a concrete recorded risk |
 | Architect | Answer a concrete structural question or review structural impact | Codex `gpt-6.1-sol`, medium; high for a concrete recorded risk |
 | Sidekick running Codex | Author and apply issue/PR titles and descriptions; own publication and delivery | Existing coordinating Sidekick |
 
-Aliases select the provider's available Opus and Sonnet models. The two Claude
-roles do not draft or edit issue/PR titles or descriptions. The phase runner
+Aliases select the provider's available Opus and Sonnet models. Coding roles
+do not draft or edit issue/PR titles or descriptions. The phase runner
 refuses editorial assignments; technical handoffs and API documentation remain
 part of the roles' work.
 
@@ -393,7 +424,7 @@ reply and diagnostics. Schema matching never chooses between candidates.
 
 When the only invalid fields are an oversized summary or handoff, foundation
 response correction can shorten those fields in the same Planner session, at
-most three times. Every other field is frozen, including the API, source,
+most `task.maxResponseCorrections` times. Every other field is frozen, including the API, source,
 assessment and evidence. Each correction saves its request, raw reply and
 disposition, and checks that source remains at the same clean commit. The
 productive assignment is not repeated. An ambiguous or substantively invalid
@@ -412,8 +443,8 @@ provider failure, malformed response, unanswered decision or exhausted bound
 holds with saved evidence. It does not trigger an uncertain prompt retry.
 
 `maxApiRepairs` bounds consumer-driven API repairs; `maxCorrections` bounds the
-existing implementation-review corrections. Both default to three and accept
-zero through ten. Repeated redesign is evidence that the split is not paying
+existing implementation-review corrections. Both are explicit launch inputs and
+accept zero through ten. Repeated redesign is evidence that the split is not paying
 for itself: inspect the saved consumer conflicts before extending either bound.
 
 The imported feedback loop retains impact-selected reviews, bounded response

@@ -169,7 +169,7 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
 <Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
 <AssertEquals actual={work.status} expected="hold" />
-<AssertStringIncludes actual={work.reason} expected="Three response-only corrections are exhausted" />
+<AssertStringIncludes actual={work.reason} expected="selected response-only correction budget is exhausted" />
 <Ticket.Text path={fixture.directory + "/foundation-0/response-corrections/3/disposition.json"} as="text" />
 <Parse schema={{type:"object"}} as="disposition">{text}</Parse>
 <AssertEquals actual={disposition.accepted} expected={false} />

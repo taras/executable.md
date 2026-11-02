@@ -3,7 +3,7 @@ props: {type: object, properties: {correction: {type: object}}, required: [corre
 ---
 
 <Output>
-You remain the original retained {props.correction.role}. Correct only your rejected response to the completed assignment. This is response-only correction {props.correction.ordinal} of 3, with {props.correction.remaining} remaining afterward. Do not execute the earlier productive request again.
+You remain the original retained {props.correction.role}. Correct only your rejected response to the completed assignment. This is response-only correction {props.correction.ordinal} with {props.correction.remaining} remaining afterward. Do not execute the earlier productive request again.
 
 Preserve the established substantive verdict, source, genuine evidence and other owners' provenance. Correct only the recorded syntax/schema/identity/routing/handoff/provenance rejection. Remove a wrongly inherited discovery declaration and reference its original owner's artifact; never relabel it. Metadata names only already applied text. If genuine facts cannot support correction, retain that uncertainty rather than inventing success.
 

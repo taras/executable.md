@@ -25,3 +25,71 @@ pwd -P
 <AssertStringIncludes actual={oversized.failure} expected="complete phase prompt exceeds 256000" />
 </Test>
 </TestAgent>
+
+<TestAgent>
+<TestAgent.Scenario agent="codex" session="sol-planner" src="./agents/sol-medium.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"gpt-6.1-sol",efforts:{selected:"high",options:["medium","high"]}}]}} />
+<TestAgent.Scenario agent="codex" session="sol-implementor" src="./agents/sol-medium.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"gpt-6.1-sol",efforts:{selected:"high",options:["medium","high"]}}]}} />
+<TestAgent.Scenario agent="codex" session="sol-foundation" src="./agents/sol-high.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"gpt-6.1-sol",efforts:{selected:"medium",options:["medium","high"]}}]}} />
+<TestAgent.Scenario agent="claude" session="opus-planner" src="./agents/opus-medium.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"opus",efforts:{selected:"high",options:["medium","high"]}}]}} />
+<TestAgent.Scenario agent="claude" session="opus-foundation" src="./agents/opus-high.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"opus",efforts:{selected:"medium",options:["medium","high"]}}]}} />
+<Test name="production role dispatch honors the selected provider and fixed profile" timeout="60s">
+<Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect accepted behavior.",evidence:["accepted.md"]}} />
+<Let as="assignment" value={{phase:"discovery",work:"test",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
+<Phase.Profile role="planner" plannerProvider="codex" assessment={assessment} as="profile" />
+<AssertEquals actual={profile} expected={{provider:"codex",model:"gpt-6.1-sol",effort:"medium"}} />
+<Phase.Role role="planner" plannerProvider="codex" session="sol-planner" assignment={assignment} as="planner" />
+<AssertStringIncludes actual={planner} expected="Sol medium received" />
+<Phase.Role role="planner" plannerProvider="codex" session="sol-planner" assignment={{...assignment,phase:"review"}} as="continued" />
+<AssertStringIncludes actual={continued} expected="Sol medium continued" />
+<Phase.Role role="implementor" implementationProvider="codex" session="sol-implementor" assignment={{...assignment,phase:"implementation"}} as="implementor" />
+<AssertStringIncludes actual={implementor} expected="Sol medium received" />
+<Phase.Role role="planner" plannerProvider="claude" session="opus-planner" assignment={assignment} as="claude" />
+<AssertStringIncludes actual={claude} expected="Opus medium received" />
+<Each in={["codex","claude"]} let="provider">
+<Phase.Profile role="planner" plannerProvider={provider} design={true} assessment={assessment} as="foundation" />
+<AssertEquals actual={foundation.provider} expected={provider} />
+<AssertEquals actual={foundation.effort} expected="high" />
+<Adversarial.PlannerRole assignment={{...assignment,session:provider === "codex" ? "sol-foundation" : "opus-foundation",plannerProvider:provider,initialize:false}} guide="Existing foundation instructions." as="reply" />
+<AssertStringIncludes actual={reply} expected={provider === "codex" ? "Sol high received" : "Opus high received"} />
+<Adversarial.PlannerRole assignment={{...assignment,session:provider === "codex" ? "sol-foundation" : "opus-foundation",plannerProvider:provider,initialize:false}} guide="" correction={{ordinal:1,remaining:0}} as="repaired" />
+<AssertStringIncludes actual={repaired} expected={provider === "codex" ? "Sol high repaired" : "Opus high repaired"} />
+</Each>
+</Test>
+</TestAgent>
+
+<Test name="production response repair uses its original Codex owner and selected allowance" timeout="60s">
+<Each in={[0,1]} let="limit">
+<TempDir>
+<Let as="repository" value={location.stdout.trim()} />
+<Let as="quoted" value={"'" + repository.replaceAll("'","'\"'\"'") + "'"} />
+```bash exec as="head"
+git -C {quoted} rev-parse HEAD
+```
+```bash exec as="temporary"
+pwd -P
+```
+<Let as="attempt" value={temporary.stdout.trim() + "/response"} />
+<Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect accepted behavior.",evidence:["accepted.md"]}} />
+<Let as="assignment" value={{phase:"review",work:"test",repository,revision:head.stdout.trim(),priorRevision:null,request:"Inspect the saved verdict.",assessment,artifacts:[],evidence:[],findings:[],changedPaths:[],continuation:{phase:"ready",role:null}}} />
+<Let as="raw" value={JSON.stringify({schema:"phase-result.v2",phase:"review",work:"test",outcome:"pass",revision:assignment.revision,summary:"x".repeat(1201),handoff:"Inspect the saved verdict.",artifacts:[],evidence:[],findings:[],assessment,next:{phase:"ready",role:null},discoveryRequests:[],discoveryGaps:[]})} />
+<Dir path={attempt}><File path="assignment.json"><Json value={assignment} /></File><File path="raw.txt">{raw}</File></Dir>
+<TestAgent agent="codex">
+<TestAgent.Scenario session="original-sol-reviewer" src="./agents/sol-correction.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"gpt-6.1-sol",efforts:{selected:"high",options:["medium","high"]}}]}} />
+<Ticket.Capture as="execution"><Phase.Correct assignment={assignment} raw={raw} role="planner" session="original-sol-reviewer" attempt={attempt} profile={{kind:"phase",knownDocuments:[]}} plannerProvider="codex" implementationProvider="claude" inputs={[]} maxResponseCorrections={limit} as="accepted" /><Json value={accepted} /></Ticket.Capture>
+</TestAgent>
+<If condition={limit === 1 && execution.status !== "completed"}><Fail message={execution.failure} /></If>
+<AssertEquals actual={execution.status} expected={limit === 0 ? "failed" : "completed"} />
+<Dir path={attempt}><Glob include={["response-corrections/**/request.json"]} as="calls" /></Dir>
+<AssertEquals actual={calls.length} expected={limit} />
+<If condition={limit === 1}>
+<Ticket.Text path={attempt + "/response-corrections/0001/request.json"} as="text" />
+<Parse schema={{type:"object"}} as="packet">{text}</Parse>
+<AssertEquals actual={packet.provider} expected="codex" />
+<AssertEquals actual={packet.session} expected="original-sol-reviewer" />
+<AssertEquals actual={packet.remaining} expected={0} />
+<Parse schema={{type:"object"}} as="accepted">{execution.output}</Parse>
+<AssertEquals actual={accepted.round} expected={1} />
+</If>
+</TempDir>
+</Each>
+</Test>

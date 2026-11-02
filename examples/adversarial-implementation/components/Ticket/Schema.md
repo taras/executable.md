@@ -24,6 +24,8 @@ returns: {type: object}
     "assignment": {
       "type": "object"
     },
+    "maxApiRepairs": {"type":"integer","minimum":0,"maximum":10},
+    "maxResponseCorrections": {"type":"integer","minimum":0,"maximum":3},
     "maxCorrections": {
       "type": "integer",
       "minimum": 0,
@@ -64,6 +66,7 @@ returns: {type: object}
             },
             "provider": {
               "enum": [
+                "codex",
                 "claude"
               ]
             },
@@ -220,6 +223,8 @@ returns: {type: object}
     "directory",
     "assignment",
     "maxCorrections",
+    "maxApiRepairs",
+    "maxResponseCorrections",
     "roles",
     "acceptedInputs"
   ],

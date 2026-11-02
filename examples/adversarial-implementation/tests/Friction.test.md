@@ -197,7 +197,8 @@ git rev-parse HEAD
 </TempDir>
 </Test>
 
-<Test name="G10 continuation advances only the recorded next role and preserves correction standing" timeout="60s">
+<Test name="G10 continuation advances only the recorded next role and preserves correction standing" timeout="90s">
+<Each in={[0,1]} let="limit">
 <TempDir>
 <Fixture.Repository as="fixture" />
 <Dir path={fixture.repository}>
@@ -213,12 +214,12 @@ git rev-parse HEAD
 <Let as="reference" value={fixture.root + "/accepted.md"} />
 <Dir path={fixture.root}><File path="accepted.md">Captured original accepted behavior.</File></Dir>
 <Let as="impact" value={{...assessment,evidence:[reference]}} />
-<Let as="manifest" value={{schema:"ticket-workflow.v2",work:"test",directory:fixture.directory,maxCorrections:3,roles:{architect:{session:"conditional-architect",provider:"codex",initialized:true},planner:{session:"original-planner",provider:"claude",initialized:true},implementor:{session:"original-implementor",provider:"claude",initialized:true}},acceptedInputs:[{path:reference,content:"Captured original accepted behavior."}],deliveredInputs:{"original-planner":[reference],"original-implementor":[reference]},assignment:{phase:"implementation",work:"test",repository:fixture.repository,revision:base.stdout.trim(),priorRevision:null,request:"migrate-consumer",assessment:impact,changedPaths:[],artifacts:[],evidence:[],findings:[]}}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:"test",directory:fixture.directory,maxCorrections:3,maxApiRepairs:2,maxResponseCorrections:limit,roles:{architect:{session:"conditional-architect",provider:"codex",initialized:true},planner:{session:"original-planner",provider:"codex",initialized:true},implementor:{session:"original-implementor",provider:"claude",initialized:true}},acceptedInputs:[{path:reference,content:"Captured original accepted behavior."}],deliveredInputs:{"original-planner":[reference],"original-implementor":[reference]},assignment:{phase:"implementation",work:"test",repository:fixture.repository,revision:base.stdout.trim(),priorRevision:null,request:"migrate-consumer",assessment:impact,changedPaths:[],artifacts:[],evidence:[],findings:[]}}} />
 <Ticket.Start manifest={manifest} as="checkpoint" />
 <Let as="record" value={{manifest,checkpoint:{...checkpoint,round:2},calls:[],documents:{[reference]:manifest.acceptedInputs[0]}}} />
 <Dir path={fixture.directory + "/attempts"}><Let as="attemptsPrepared" value={true} /></Dir>
 <Dir path={fixture.directory + "/calls"}><Let as="callsPrepared" value={true} /></Dir>
-<Let as="pending" value={{...record,deliveredInputs:manifest.deliveredInputs,calls:[{id:"0000",role:"implementor",session:"original-implementor",provider:"claude",initialize:false,status:"accepted",result:"retained-result.json"}],checkpoint:{...record.checkpoint,gate:"planner-review",assignment:{...manifest.assignment,phase:"review"}}}} />
+<Let as="pending" value={{...record,deliveredInputs:manifest.deliveredInputs,calls:[{id:"0000",role:"implementor",session:"original-implementor",provider:"claude",initialize:false,status:"accepted",result:"retained-result.json"}],checkpoint:{...record.checkpoint,gate:"planner-review",assignment:{...manifest.assignment,phase:"review",request:"oversized-summary"}}}} />
 <AssertEquals actual={pending.checkpoint.dispatchable} expected={true} />
 <AssertEquals actual={pending.checkpoint.gate} expected="planner-review" />
 <AssertEquals actual={pending.checkpoint.round} expected={2} />
@@ -226,19 +227,34 @@ git rev-parse HEAD
 <Fixture.Entry entry="continue" value={pending} repository={fixture.repository} steps={1} command={runner} root={root} as="child" />
 <If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
 <Parse schema={{type:"object"}} as="continued">{child.stdout}</Parse>
-<If condition={continued.status !== "feedback_ready"}><Fail message={JSON.stringify(continued)} /></If>
-<AssertEquals actual={continued.status} expected="feedback_ready" />
+<If condition={continued.status !== (limit === 0 ? "hold" : "feedback_ready")}><Fail message={JSON.stringify(continued)} /></If>
+<AssertEquals actual={continued.status} expected={limit === 0 ? "hold" : "feedback_ready"} />
 <AssertEquals actual={continued.calls.slice(0,pending.calls.length)} expected={pending.calls} />
 <AssertEquals actual={continued.calls.length} expected={pending.calls.length + 1} />
 <AssertEquals actual={continued.calls.at(-1).role} expected="planner" />
 <AssertEquals actual={continued.calls.at(-1).session} expected="original-planner" />
-<AssertEquals actual={continued.calls.at(-1).provider} expected="claude" />
+<AssertEquals actual={continued.calls.at(-1).provider} expected="codex" />
 <AssertEquals actual={continued.calls.at(-1).initialize} expected={false} />
 <AssertEquals actual={continued.calls.at(-1).inputs} expected={[]} />
 <AssertEquals actual={continued.deliveredInputs} expected={pending.deliveredInputs} />
 <AssertEquals actual={continued.manifest} expected={pending.manifest} />
 <AssertEquals actual={continued.checkpoint.initialized} expected={pending.checkpoint.initialized} />
 <AssertEquals actual={continued.checkpoint.round} expected={2} />
+<Let as="attempt" value={fixture.directory + "/attempts/0001"} />
+<Dir path={attempt}><Glob include={["response-corrections/**/called.json"]} as="repairs" /></Dir>
+<AssertEquals actual={repairs.length} expected={limit} />
+<If condition={limit === 0}>
+<Ticket.Text path={attempt + "/response-disposition.json"} as="text" />
+<Parse schema={{type:"object"}} as="disposition">{text}</Parse>
+<AssertEquals actual={disposition.consumed} expected={0} />
+<AssertEquals actual={disposition.limit} expected={0} />
+<Else>
+<Ticket.Text path={attempt + "/response-corrections/0001/called.json"} as="text" />
+<Parse schema={{type:"object"}} as="repair">{text}</Parse>
+<AssertEquals actual={repair.plannerProvider} expected="codex" />
+<AssertEquals actual={repair.remaining} expected={0} />
+</Else>
+</If>
 <Each in={Object.keys(pending.documents)} let="path"><AssertEquals actual={continued.documents[path]} expected={pending.documents[path]} /></Each>
 <Dir path={fixture.root}><Glob include={["**/called.json"]} as="callsBefore" /></Dir>
 <Fixture.Entry entry="continue" value={continued} repository={fixture.repository} steps={1} command={runner} root={root} as="again" />
@@ -248,4 +264,47 @@ git rev-parse HEAD
 <Dir path={fixture.root}><Glob include={["**/called.json"]} as="callsAfter" /></Dir>
 <AssertEquals actual={callsAfter} expected={callsBefore} />
 </TempDir>
+</Each>
+</Test>
+
+<Test name="normal launch forwards explicit zero and nonzero response budgets" timeout="90s">
+<Each in={[{limit:0,ready:true},{limit:0,ready:false},{limit:1,ready:true},{limit:1,ready:false}]} let="scenario">
+<Let as="limit" value={scenario.limit} />
+<Let as="ready" value={scenario.ready} />
+<TempDir>
+<Fixture.Repository guides={true} as="fixture" />
+<Dir path={fixture.repository}>
+<File path="api.sh">format() { printf '%s' "$1"; }
+</File>
+```bash exec as="base"
+git add api.sh
+git commit -qm 'existing API'
+git rev-parse HEAD
+```
+</Dir>
+<Let as="evidence" value={fixture.root + "/accepted.md"} />
+<Dir path={fixture.root}><File path="accepted.md">Accepted behavior and focused checks.</File></Dir>
+<Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect the accepted behavior.",evidence:[evidence]}} />
+<Let as="directory" value={fixture.directory + (ready ? "-direct" : "-planned")} />
+<Let as="task" value={{work:"test",repository:fixture.repository,directory,revision:base.stdout.trim(),request:"oversized-summary",inputs:[evidence],sessions:{planner:"original-planner",implementor:"original-implementor",architect:"conditional-architect"},providers:{architect:"codex",planner:"codex",implementor:"codex"},maxCorrections:0,maxApiRepairs:0,maxResponseCorrections:limit,assessment,scope:{decisions:{evidence:[evidence],openQuestions:[]},implementation:{ready,evidence:[evidence]},sharedApi:{needed:false,evidence:[evidence]},migration:null},delivery:{repository:"taras/executable.md",reviewer:{provider:"claude",model:"fixture",effort:null,session:"independent-review"},acceptance:[{id:"behavior",source:evidence,requirement:"Keep accepted behavior."}]}}} />
+<Fixture.Entry entry="run" value={task} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
+<AssertEquals actual={work.status} expected={limit === 0 ? "hold" : "feedback_ready"} />
+<If condition={limit === 0 && !(work.reason ?? work.checkpoint?.hold?.reason)?.includes("response_correction_disabled")}><Fail message={work.reason ?? work.checkpoint?.hold?.reason ?? JSON.stringify(work)} /></If>
+<Let as="attempt" value={directory + (ready ? "/attempts/0000" : "/planning")} />
+<Dir path={attempt}><Glob include={["response-corrections/**/called.json"]} as="repairs" /></Dir>
+<AssertEquals actual={repairs.length} expected={limit} />
+<If condition={limit === 0}>
+<Ticket.Text path={attempt + "/response-disposition.json"} as="text" />
+<Parse schema={{type:"object"}} as="disposition">{text}</Parse>
+<AssertEquals actual={disposition.consumed} expected={0} />
+<AssertEquals actual={disposition.limit} expected={0} />
+<Else>
+<AssertEquals actual={work.manifest.maxResponseCorrections} expected={1} />
+<AssertEquals actual={work.calls.every(call => call.provider === "codex")} expected={true} />
+</Else>
+</If>
+</TempDir>
+</Each>
 </Test>

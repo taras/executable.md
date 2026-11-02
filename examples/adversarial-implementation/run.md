@@ -21,7 +21,7 @@ cat -- {taskPath}
 <If condition={taskRead.exitCode !== 0}><Let as="work" value={{status:"hold",reason:"Read the task text at " + props.task + ". Correct its path or access before launching. " + taskRead.stderr,history:[]}} /><Break /></If>
 <SafeParse schema={schemas.launch} as="parsed">{taskRead.stdout}</SafeParse>
 <If condition={!parsed.ok}><Let as="work" value={{status:"hold",reason:"Correct the launch task at " + props.task + ": " + JSON.stringify(parsed.errors),history:[]}} /><Break /></If>
-<Let as="task" value={{...parsed.value,maxCorrections:parsed.value.maxCorrections ?? 3,maxApiRepairs:parsed.value.maxApiRepairs ?? 3}} />
+<Let as="task" value={{...parsed.value}} />
 <If condition={new Set(Object.values(task.sessions)).size !== 3}><Let as="work" value={{status:"hold",reason:"sessions must name three distinct original role conversations. Correct the conflicting identities before launch.",history:[]}} /><Break /></If>
 <Let as="references" value={[...task.scope.decisions.evidence,...task.scope.implementation.evidence,...task.scope.sharedApi.evidence,...(task.scope.migration?.evidence ?? []),...task.assessment.evidence,...(task.assessment.risk?.evidence ?? [])]} />
 <Let as="unselected" value={references.filter(path => !task.inputs.includes(path))} />
@@ -89,7 +89,7 @@ test -f {referencePath} -a -r {referencePath}
 <Let as="implementorGuide" value={documents[guidePaths[1]]} />
 <If condition={task.scope.decisions.openQuestions.length !== 0}><Let as="work" value={{status:"hold",reason:"Resolve these material questions before launch: " + task.scope.decisions.openQuestions.join("; ") + ". Evidence: " + task.scope.decisions.evidence.join(", ") + ". Record accepted answers under fresh references and prepare the task again.",history:[]}} /><Break /></If>
 <If condition={task.scope.migration !== null}>
-<Adversarial.Run delivery={delivery} task={{work:task.work,repository:task.repository,directory:task.directory,request:task.request + "\n\nAccepted migration commitments: " + JSON.stringify(task.scope.migration),inputs:task.inputs,sessions:task.sessions,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs}} plannerGuide={plannerGuide} implementorGuide={implementorGuide} documents={Object.fromEntries(inputs.map(input => [input.path,input]))} assessment={task.assessment} as="work" />
+<Adversarial.Run delivery={delivery} task={{work:task.work,repository:task.repository,directory:task.directory,request:task.request + "\n\nAccepted migration commitments: " + JSON.stringify(task.scope.migration),inputs:task.inputs,sessions:task.sessions,providers:task.providers,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections}} plannerGuide={plannerGuide} implementorGuide={implementorGuide} documents={Object.fromEntries(inputs.map(input => [input.path,input]))} assessment={task.assessment} as="work" />
 <Else>
 ```bash exec as="reserved"
 mkdir -- {directoryPath}
@@ -101,7 +101,7 @@ mkdir -- {directoryPath}
 <Let as="deliveredInputs" value={{}} />
 <If condition={task.scope.sharedApi.needed || !task.scope.implementation.ready}>
 <Let as="planning" value={{...assignment,phase:"discovery",request:"Prepare the missing ordinary implementation plan and focused evidence for this accepted work: " + task.request + "\nProduce plan/evidence only. Do not edit or commit source or build an API foundation. Necessary API work and consumers belong to one Implementor. Preserve existing product and architecture approval gates; return needs_decision for any unanswered material choice.",recipient:"planner",continuation:{phase:"implementation",role:"implementor"}}} />
-<Ticket.Capture as="execution"><Phase.Run phase="discovery" role="planner" session={task.sessions.planner} initialize={true} inputs={[...inputs,plannerGuide].filter((input,index,all) => all.findIndex(other => other.path === input.path) === index)} assignment={planning} attempt={task.directory + "/planning"} successor="implementation" nextRole="implementor" as="plan" /><Json value={plan} /></Ticket.Capture>
+<Ticket.Capture as="execution"><Phase.Run plannerProvider={task.providers.planner} maxResponseCorrections={task.maxResponseCorrections} phase="discovery" role="planner" session={task.sessions.planner} initialize={true} inputs={[...inputs,plannerGuide].filter((input,index,all) => all.findIndex(other => other.path === input.path) === index)} assignment={planning} attempt={task.directory + "/planning"} successor="implementation" nextRole="implementor" as="plan" /><Json value={plan} /></Ticket.Capture>
 <Dir path={task.directory}><File path="planning-execution.json"><Json value={execution} /></File></Dir>
 <If condition={execution.status !== "completed"}><Let as="work" value={{status:"hold",reason:execution.failure,history:[{owner:"planner",attempt:task.directory + "/planning",status:execution.status}]}} /><Break /></If>
 <Parse schema={{type:"object"}} as="plan">{execution.output}</Parse>
@@ -120,7 +120,7 @@ mkdir -- {directoryPath}
 <Let as="planned" value={true} />
 <Let as="deliveredInputs" value={{[task.sessions.planner]:[...new Set([...task.inputs,plannerGuide.path])]}} />
 </If>
-<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,delivery,deliveredInputs,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:"claude",initialized:planned},implementor:{session:task.sessions.implementor,provider:"claude",initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,delivery,deliveredInputs,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:planned},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
 <Dir path={task.directory}><File path="implementation.json"><Json value={manifest} /></File></Dir>
 <Ticket.Run manifest={task.directory + "/implementation.json"} as="work" />
 </Else>
