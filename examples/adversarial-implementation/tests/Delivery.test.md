@@ -30,7 +30,7 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <Test name="CI selection shares the exact-main rule and follows newer attempts">
 <Let as="revision" value={"a".repeat(40)} />
 <Let as="run" value={{id:1,run_number:4,run_attempt:1,status:"completed",conclusion:"success",head_sha:revision,head_branch:"main",event:"push",name:"CI",html_url:"https://example.invalid/run/1",actor:{login:"test"}}} />
-<Delivery.SelectRuns revision={revision} mainRevision={revision} prPages={[{workflow_runs:[{...run,event:"pull_request"}]}]} mainPages={[{workflow_runs:[run,{...run,id:2,run_number:5,run_attempt:2,status:"in_progress",conclusion:null},{...run,id:3,run_number:99,head_sha:"b".repeat(40)},{...run,id:4,run_number:100,event:"pull_request"},{...run,id:5,run_number:101,name:"Other"}]}]} as="selected" />
+<Delivery.SelectRuns number={7} branch="codex/requested" revision={revision} mainRevision={revision} prPages={[{workflow_runs:[{...run,event:"pull_request",head_branch:"codex/requested",pull_requests:[{number:7,head:{sha:revision,ref:"codex/requested"}}]}]}]} mainPages={[{workflow_runs:[run,{...run,id:2,run_number:5,run_attempt:2,status:"in_progress",conclusion:null},{...run,id:3,run_number:99,head_sha:"b".repeat(40)},{...run,id:4,run_number:100,event:"pull_request"},{...run,id:5,run_number:101,name:"Other"}]}]} as="selected" />
 <AssertEquals actual={selected.main.id} expected={2} />
 <AssertEquals actual={selected.main.status} expected="in_progress" />
 <AssertEquals actual={selected.ci.id} expected={1} />
@@ -47,9 +47,42 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <AssertEquals actual={Object.hasOwn(implementation,"revision")} expected={false} />
 </Test>
 
-<Test name="the complete prompt is bounded before native dispatch">
-<Let as="assignment" value={{phase:"review",work:"test",repository:"/source",revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
-<Ticket.Capture as="prepared"><Phase.Request role="planner" assignment={assignment} inputs={[{path:"large.md",content:"x".repeat(64000)}]} as="request" /></Ticket.Capture>
-<AssertEquals actual={prepared.status} expected="failed" />
-<AssertStringIncludes actual={prepared.failure} expected="complete phase prompt exceeds 64000" />
+<Test name="CI from another PR or an unassociated run cannot replace the requested PR's verdict">
+<Let as="revision" value={"a".repeat(40)} />
+<Let as="branch" value="codex/requested" />
+<Let as="association" value={{number:7,head:{sha:revision,ref:branch}}} />
+<Let as="run" value={{id:1,run_number:4,run_attempt:1,status:"in_progress",conclusion:null,head_sha:revision,head_branch:branch,event:"pull_request",name:"CI",html_url:"https://example.invalid/run/1",actor:{login:"test"},pull_requests:[association]}} />
+<Each in={[
+ {...run,id:2,run_number:10,status:"completed",conclusion:"success",head_branch:"codex/other",pull_requests:[{number:8,head:{sha:revision,ref:"codex/other"}}]},
+ {...run,id:3,run_number:11,status:"completed",conclusion:"success",pull_requests:[{...association,number:8}]},
+ {...run,id:4,run_number:12,status:"completed",conclusion:"success",pull_requests:[]},
+ {...run,id:5,run_number:13,status:"completed",conclusion:"success",pull_requests:undefined},
+ {...run,id:6,run_number:14,status:"completed",conclusion:"success",head_branch:"codex/other"},
+ {...run,id:7,run_number:15,status:"completed",conclusion:"success",head_sha:"b".repeat(40)},
+ {...run,id:8,run_number:16,status:"completed",conclusion:"success",pull_requests:[{...association,head:{sha:"b".repeat(40),ref:branch}}]},
+ {...run,id:9,run_number:17,status:"completed",conclusion:"success",pull_requests:[{...association,head:{sha:revision,ref:"codex/other"}}]}
+]} let="unrelated">
+<Each in={["in_progress","completed"]} let="status">
+<Delivery.SelectRuns number={7} branch={branch} revision={revision} mainRevision={revision} prPages={[{workflow_runs:[{...run,status,conclusion:status === "completed" ? "failure" : null}]},{workflow_runs:[unrelated]}]} mainPages={[]} as="selected" />
+<AssertEquals actual={selected.ci.id} expected={1} />
+<AssertEquals actual={selected.ci.status} expected={status} />
+<AssertEquals actual={selected.ci.conclusion} expected={status === "completed" ? "failure" : null} />
+</Each>
+<Delivery.SelectRuns number={7} branch={branch} revision={revision} mainRevision={revision} prPages={[{workflow_runs:[unrelated]}]} mainPages={[]} as="missing" />
+<AssertEquals actual={missing.ci} expected={null} />
+</Each>
+<Delivery.SelectRuns number={7} branch={branch} revision={revision} mainRevision={revision} prPages={[{workflow_runs:[{...run,id:10,run_number:5},{...run,id:11,run_number:5,run_attempt:2,status:"completed",conclusion:"success"},{...run,id:12,run_attempt:9}]}]} mainPages={[]} as="retried" />
+<AssertEquals actual={retried.ci.id} expected={11} />
+<AssertEquals actual={retried.ci.attempt} expected={2} />
+</Test>
+
+<Test name="mandatory initialization and a full selected evidence packet fit the complete prompt">
+<Each in={["architect","planner","implementor"]} let="role">
+<Let as="assignment" value={{phase:role === "implementor" ? "implementation" : "discovery",work:"test",repository:root,revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
+<Phase.Request role={role} assignment={assignment} initialize={true} inputs={[{path:"accepted.md",content:"x".repeat(64000)}]} as="request" />
+<AssertEquals actual={request.includes("Repository instructions:")} expected={true} />
+<AssertEquals actual={request.includes("Role instructions:")} expected={true} />
+<AssertEquals actual={request.includes("You are the repository " + role)} expected={true} />
+<AssertEquals actual={request.includes("x".repeat(64000))} expected={true} />
+</Each>
 </Test>

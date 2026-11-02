@@ -38,7 +38,7 @@ gh api --paginate --slurp 'repos/{props.repository}/actions/workflows/ci.yml/run
 ```
 <If condition={mainRunsRead.exitCode !== 0}><Fail message="Main CI could not be read. Unavailable evidence is not a pass." /></If>
 <Parse schema={pagesSchema} as="mainPages">{mainRunsRead.stdout}</Parse>
-<Delivery.SelectRuns revision={revision} mainRevision={mainRevision} prPages={prPages} mainPages={mainPages} as="runs" />
+<Delivery.SelectRuns number={props.number} branch={pr.head.ref} revision={revision} mainRevision={mainRevision} prPages={prPages} mainPages={mainPages} as="runs" />
 <Let as="ciGreen" value={false} />
 <If condition={runs.ci !== null}>
 ```bash exec as="jobsRead"

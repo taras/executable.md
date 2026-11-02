@@ -186,7 +186,9 @@ allowance; this entry grants no repair round.
 The PR must name the checkout's exact current commit and branch with base main.
 Readback checks the PR and main heads again after the remote reads, and checks
 the checkout again. CI selection follows the highest run number and attempt for
-the exact PR commit and requires that attempt's actual `green` job to succeed. Main health reuses the repository's authoritative selection
+the requested PR, its exact head commit and head branch, and requires that attempt's
+actual `green` job to succeed. Missing PR association supplies no passing evidence.
+Main health reuses the repository's authoritative selection
 rule for a push to main's exact current head. Pending, cancelled, skipped and
 failed runs cannot pass. The maintainer-applied `ci-main-red-fix` exception keeps
 the repository's CI contract: it substitutes composability for the main lookup
@@ -205,8 +207,10 @@ These rules apply to separate phase requests and Ticket role calls.
 `Phase.Request` renders the complete prompt before entering an Agent, including
 initial repository instructions, role instructions, assignment, selected text and
 response schema. A missing selected component or input fails there; a packet
-above 64000 characters refuses before provider dispatch. Provider configuration
-and client compatibility retain their existing checks before a turn starts.
+above 256000 characters refuses before provider dispatch. The selected evidence
+keeps its separate 64000-character bound; the complete-prompt ceiling also accommodates
+mandatory initialization instructions and the response schema. Nothing is truncated.
+Provider configuration and client compatibility retain their existing checks before a turn starts.
 No paid prompt probes installation or repairs launch metadata.
 
 `Phase.Response` supplies omitted phase and work from the assignment, and the

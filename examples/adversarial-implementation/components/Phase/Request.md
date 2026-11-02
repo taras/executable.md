@@ -14,5 +14,5 @@ returns: {type: string}
 ---
 
 <Let as="request"><If condition={props.correction === null}><Phase.Instructions inputs={props.inputs} role={props.role} assignment={props.assignment} initialize={props.initialize} /><Else><Phase.CorrectionInstructions correction={props.correction} /></Else></If></Let>
-<If condition={request.length > 64000}><Fail message="The complete phase prompt exceeds 64000 characters. Preserve the prepared assignment and select a smaller evidence packet before dispatch." /></If>
+<If condition={request.length > 256000}><Fail message="The complete phase prompt exceeds 256000 characters, including mandatory instructions and selected evidence. Preserve the prepared assignment and reduce the request before dispatch; nothing was truncated or sent." /></If>
 <Return value={request} />
