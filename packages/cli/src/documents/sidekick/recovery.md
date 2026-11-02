@@ -35,9 +35,15 @@ prepare.
   does not undo an earlier success — so correct the failure that happened
   without repeating the work that already did.
 - Start a failed entry at its Journal. `<REPL.Entry.Journal entry={2} />`
-  answers with that entry's complete failure message, how its agent turns ended,
-  and a record for each thing it saved. An entry that printed nothing still has
-  all of that.
+  selects that entry's complete failure, prompt counts and saved records under
+  `value`. If the result exceeds the response bound, select the relevant records
+  or a command channel with `yq` as shown below.
+- Distinguish commands from agent turns and document output. An `exec` record's
+  `.exec.exitCode` is the actual saved command exit; its protocol `status: "ok"`
+  does not mean exit zero. `.exec.stdout` and `.exec.stderr` are independently
+  retained channels, including output hidden by `silent`. An absent member was
+  not retained; an empty string was retained empty. An error, cancellation or
+  missing result supplies no invented exit or channel content.
 - Read the turn the Journal located. A record with a `prompt` number names a
   saved agent turn, and `<REPL.Entry.Prompt entry={2} prompt={9} />` reads it.
   `field="reply"` is what the agent said, `field="request"` is what it was
@@ -73,39 +79,43 @@ prepare.
 
 ## Example
 
+The failed receipt names entry 2. Find its saved commands, including any beyond
+an earlier record page:
+
 ```xmd
-<REPL.Entry.Journal entry={2} />
+<REPL.Entry.Journal entry={2} yq={'[.records[] | select(.type == "exec" and .exec.exitCode == 1)]'} />
 ```
 
-The host answers with that entry's page as feedback, then asks for your next
-response:
+The host returns the selected records as feedback, then asks for your next
+response. A silent command can have empty document output and still answer:
 
 ```json
 {
-  "entry": 2,
-  "status": "failed",
-  "failure": "agent prompt failed with stop reason \"refusal\"",
-  "prompts": { "completed": 8, "failed": 1, "cancelled": 0 },
-  "records": [
+  "value": [
     {
-      "marker": "entry-2:yield:root:18",
-      "type": "agent_prompt",
-      "name": "prompt:<eval>:9:1#0",
-      "status": "failed",
-      "position": { "path": "<eval>", "generatedSource": null, "offset": 632, "line": 9, "column": 1 },
-      "prompt": 9,
-      "agent": "claude"
+      "marker": "entry-2:yield:root:1",
+      "type": "exec",
+      "name": "exec:startup",
+      "status": "ok",
+      "position": null,
+      "prompt": null,
+      "agent": null,
+      "exec": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": "startup refused: pass --profile local\n"
+      }
     }
   ],
-  "offset": 0,
-  "length": 20,
-  "limit": 20,
-  "previous": null,
-  "next": null
+  "next": null,
+  "prev": null,
+  "last": null
 }
 ```
 
-The failed record names prompt 9, so that is the turn to read:
+Use the retained diagnostic to prepare a correction. Reading leaves the failed
+entry failed; submitting the correction is a separate action. For an agent
+record, use its `prompt` number to read the saved turn:
 
 ```xmd
 <REPL.Entry.Prompt entry={2} prompt={9} field="error" />
@@ -113,18 +123,44 @@ The failed record names prompt 9, so that is the turn to read:
 
 ## Reading more than one page
 
-Every page is bounded — 4096 code points of text, or 20 records — and `previous`
-and `next` hold the complete arguments of the read beside it, or `null` where
-there is none. Write them back as they came:
+Journal applies `yq` to the complete permitted retained entry before paging its
+result. You can search all records or all retained channel text in one query.
+Small results keep their exact JSON type. A large object or indivisible array
+item refuses with a narrower-query direction; directly selected strings remain
+fully readable in 4096-code-point pages:
+
+```xmd
+<REPL.Entry.Journal entry={2} yq=".records[1].exec.stderr" as="diagnostic" />
+<Output><Json value={diagnostic} /></Output>
+```
+
+For a continuation, copy the returned `next`, `prev` or `last` string into the
+`yq` prop and keep `entry={2}`. Within the same response, a returned next query
+can be used directly:
+
+```xmd
+<REPL.Entry.Journal entry={2} yq=".records[1].exec.stderr" as="first" />
+<If condition={first.next}>
+  <REPL.Entry.Journal entry={2} yq={first.next} as="second" />
+  <Output><Json value={second} /></Output>
+</If>
+```
+
+These examples require record 1 to be the command you selected; use its array
+index from the complete Journal value. A read of the next page recomputes the
+query over that entry's current retained data. Growth may shift pages. An omitted
+or negative entry resolves at each read, so reuse the receipt's positive entry
+number after another entry has been admitted. Generated windows refuse another
+entry rather than following it. Each response starts with empty bindings; a
+query string received as feedback is data to copy into the next response.
+
+Source, Prompt and Output keep `previous` and `next` argument objects. Text
+windows default to 4096 code points; copy their exact entry, prompt, field,
+offset and limit when continuing:
 
 ```xmd
 <REPL.Entry.Prompt entry={2} prompt={9} field="reply" offset={4096} limit={4096} />
 ```
-
-Those arguments state the entry and the prompt as exact numbers, so the read
-they describe stays the same read after another entry has been admitted. An
-omitted `entry` means the latest entry, and a negative one counts back from it;
-both resolve when the read happens rather than when you write it.
 
 ## Common mistake
 

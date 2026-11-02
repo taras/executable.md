@@ -223,8 +223,7 @@ export interface ReplAgentSession {
  *
  * A row per retained `Yield` and `Close`, the admission and the root close
  * included, in the order the file holds them. It says where a thing is and what
- * became of it; it holds no body, result payload, checkpoint or stack, because
- * what a reader does with it is ask for the evidence it names.
+ * became of it, with only the supported saved exec facts beside its metadata.
  *
  * `status` is the semantic outcome for a saved Prompt and for the root close —
  * an `ok` protocol wrapper never promotes a failed prompt into completed
@@ -240,6 +239,7 @@ export interface ReplRecord {
   /** A saved Prompt's absolute number, which is its retained sequence plus one. */
   readonly prompt: number | undefined;
   readonly agent: string | undefined;
+  readonly exec: Readonly<{ exitCode: number; stdout?: string; stderr?: string }> | undefined;
 }
 
 /** One offered history position, in append order. */
@@ -1174,6 +1174,10 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
   // Journal appends a turn when it finished, and two conversations running
   // beside each other finish in whatever order their providers answered.
   const chronology = [...turns].sort((left, right) => left.sequence - right.sequence);
+  const records = entryRecords(events, markers, chronology, terminal);
+  if (!records.ok) {
+    return records;
+  }
 
   return Ok(
     freeze({
@@ -1181,7 +1185,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
       transcript: Object.freeze(transcript.map((row) => freeze({ ...row }))),
       checkpoints: Object.freeze(checkpoints.map((checkpoint) => freeze({ ...checkpoint }))),
       turns: Object.freeze(chronology),
-      records: entryRecords(events, markers, chronology, terminal),
+      records: records.value,
       terminal: terminal === undefined ? undefined : freeze({ ...terminal }),
     }),
   );
@@ -1202,13 +1206,14 @@ function entryRecords(
   markers: readonly string[],
   turns: readonly ReplAgentTurn[],
   terminal: ReplTerminal | undefined,
-): readonly ReplRecord[] {
+): Result<readonly ReplRecord[]> {
   const saved = new Map(turns.map((turn) => [turn.marker, turn]));
-  return Object.freeze(
-    events.map((event, index) => {
-      const marker = markers[index];
-      if (event.type === "close") {
-        return freeze({
+  const records: ReplRecord[] = [];
+  for (const [index, event] of events.entries()) {
+    const marker = markers[index];
+    if (event.type === "close") {
+      records.push(
+        freeze({
           marker,
           type: "close",
           name: undefined,
@@ -1219,11 +1224,19 @@ function entryRecords(
           position: undefined,
           prompt: undefined,
           agent: undefined,
-        });
-      }
-      const read = readPosition(event);
-      const turn = saved.get(marker);
-      return freeze({
+          exec: undefined,
+        }),
+      );
+      continue;
+    }
+    const exec = readExec(event);
+    if (!exec.ok) {
+      return exec;
+    }
+    const read = readPosition(event);
+    const turn = saved.get(marker);
+    records.push(
+      freeze({
         marker,
         type: event.description.type,
         name: typeof event.description.name === "string" ? event.description.name : undefined,
@@ -1231,7 +1244,35 @@ function entryRecords(
         position: read === MALFORMED || read === undefined ? undefined : freeze({ ...read }),
         prompt: turn === undefined ? undefined : turn.sequence + 1,
         agent: turn?.agent,
-      });
+        exec: exec.value,
+      }),
+    );
+  }
+  return Ok(Object.freeze(records));
+}
+
+function readExec(event: Yield): Result<ReplRecord["exec"]> {
+  if (event.description.type !== "exec" || event.result.status !== "ok") {
+    return Ok(undefined);
+  }
+  const value = event.result.value;
+  if (
+    !isJsonObject(value) ||
+    typeof value.exitCode !== "number" ||
+    !Number.isFinite(value.exitCode) ||
+    !Number.isInteger(value.exitCode) ||
+    (Object.hasOwn(value, "stdout") && typeof value.stdout !== "string") ||
+    (Object.hasOwn(value, "stderr") && typeof value.stderr !== "string")
+  ) {
+    return Err(
+      new ReplProjectionError("a saved exec result has unreadable exit or channel facts."),
+    );
+  }
+  return Ok(
+    freeze({
+      exitCode: value.exitCode,
+      ...(typeof value.stdout === "string" ? { stdout: value.stdout } : {}),
+      ...(typeof value.stderr === "string" ? { stderr: value.stderr } : {}),
     }),
   );
 }

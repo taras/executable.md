@@ -38,7 +38,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Err, Ok, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { parseDurableEvent, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Component, Execution, retainedSource, useTempFileCompiler } from "@executablemd/core";
 import type { FunctionComponentDefinition } from "@executablemd/core";
@@ -52,6 +52,9 @@ import { openReplSession } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import { rootReads, sidekickRequests } from "../src/repl/sidekick/requests.ts";
 import type { RootReading } from "../src/repl/sidekick/requests.ts";
+import { readEntryJournal } from "../src/repl/sidekick/entry-inspection.ts";
+import { selectJson } from "@executablemd/core/host";
+import { z } from "zod";
 import { ReplHost } from "../src/repl/host.ts";
 import type { ReplHostFact } from "../src/repl/host.ts";
 import { assembleReplProfile, entryVocabulary } from "../src/repl-profile.ts";
@@ -78,6 +81,7 @@ import type { ResponseCeiling } from "../src/repl/sidekick/profile.ts";
 import type { OutputRead, OutputReadRequest } from "../src/repl/sidekick/output.ts";
 import type {
   EntryJournalPage,
+  EntryJournalRequest,
   EntryPromptPage,
   EntryPromptRequest,
   EntryReadRequest,
@@ -253,18 +257,18 @@ function requests(
         previous: null,
         next: null,
       }),
-    inspectJournal: (request: EntryReadRequest) =>
+    inspectJournal: (_request: EntryJournalRequest) =>
       answer("inspectJournal", {
-        entry: 1,
-        status: "failed" as const,
-        failure: "the entry failed",
-        prompts: { completed: 0, failed: 1, cancelled: 0 },
-        records: [],
-        offset: request.offset ?? 0,
-        limit: request.limit ?? 20,
-        length: 0,
-        previous: null,
+        value: {
+          entry: 1,
+          status: "failed",
+          failure: "the entry failed",
+          prompts: { completed: 0, failed: 1, cancelled: 0 },
+          records: [],
+        },
         next: null,
+        prev: null,
+        last: null,
       }),
   };
 }
@@ -688,8 +692,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
     // the two that choose a turn and which of its texts to read.
     expect(surface.find((entry) => entry.name === "REPL.Entry.Journal")?.props).toEqual([
       "entry",
-      "offset",
-      "limit",
+      "yq",
     ]);
     expect(surface.find((entry) => entry.name === "REPL.Entry.Prompt")?.props).toEqual([
       "entry",
@@ -2284,6 +2287,7 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
   function cold(model: ReplModel, printing?: ReplPrinting): RootReading {
     return {
       acknowledged: () => Ok(model),
+      inspectJournal: (request) => readEntryJournal(request, { entries: model.entries, printing }),
       printing: () => printing,
       // deno-lint-ignore require-yield
       *bindings(): Operation<Result<Readonly<Record<string, Json>>>> {
@@ -2409,42 +2413,240 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
     });
   });
 
-  it("E2: Journal pages its records in append order, to the final close", function* () {
+  it("E2: Journal queries complete records in append order", function* () {
     const model = projectedOf(yield* savedEvents());
     const reads = readsOver(model);
-    const whole = answered(yield* reads.inspectJournal({ entry: 1, limit: 100 }));
-    expect(whole.length).toBe(20);
-    expect(whole.records).toHaveLength(20);
+    const whole = answered(yield* reads.inspectJournal({ entry: 1, yq: ".records" }));
+    const rows = z.array(z.object({ marker: z.string() })).parse(whole.value);
+    expect(rows).toHaveLength(20);
+    expect(rows.at(-1)?.marker).toBe("close:root");
+    expect(whole.next).toBe(null);
+    expect(JSON.stringify(whole.value)).not.toContain("open_watch");
+    const summary = answered(
+      yield* reads.inspectJournal({ entry: 1, yq: '{"failure": .failure, "prompts": .prompts}' }),
+    );
+    expect(summary.value).toMatchObject({
+      failure: model.entries[0].terminal?.message,
+      prompts: { completed: 8, failed: 1, cancelled: 0 },
+    });
+  });
 
-    const markers: string[] = [];
-    let offset = 0;
-    while (true) {
-      const page = answered(yield* reads.inspectJournal({ entry: 1, offset, limit: 8 }));
-      expect(page.limit).toBe(8);
-      markers.push(...page.records.map((record) => record.marker));
-      if (page.next === null) {
-        // The last page holds the root close, which is the record that says
-        // what the entry settled to.
-        expect(page.records[page.records.length - 1].marker).toBe("close:root");
-        break;
-      }
-      expect(page.next).toEqual({ entry: 1, offset: offset + 8, limit: 8 });
-      offset = page.next.offset;
+  function diagnosticEvent(value: Json, status = "ok"): DurableEvent {
+    const parsed = parseDurableEvent(
+      JSON.stringify({
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "exec", name: "exec:diagnostic" },
+        result:
+          status === "ok"
+            ? { status, value }
+            : status === "cancelled"
+              ? { status }
+              : { status, error: { name: "TimeoutError", message: "timed out" } },
+      }),
+    );
+    if (!parsed.ok) {
+      throw parsed.error;
     }
-    // Append order, with nothing repeated and nothing dropped across the
-    // boundaries.
-    expect(markers).toEqual(whole.records.map((record) => record.marker));
+    return parsed.value;
+  }
 
-    // A record offset counts records, not code points: the whole saved reply
-    // is longer than this window and no window of it ever appears here.
-    expect(JSON.stringify(whole.records)).not.toContain("open_watch");
+  const journalPage = z
+    .object({
+      value: z.json(),
+      next: z.string().nullable(),
+      prev: z.string().nullable(),
+      last: z.string().nullable(),
+    })
+    .strict();
 
-    // The failure is the complete saved message whatever the window holds, and
-    // the counts are the entry's rather than the window's.
-    const narrow = answered(yield* reads.inspectJournal({ entry: 1, limit: 1 }));
-    expect(narrow.records).toHaveLength(1);
-    expect(narrow.failure).toBe(whole.failure);
-    expect(narrow.prompts).toEqual({ completed: 8, failed: 1, cancelled: 0 });
+  it("1006 E2/E3/E6: queries complete saved records and channels before paging, preserving JSON and uncertainty", function* () {
+    const events = (yield* savedEvents()).slice(0, 1);
+    for (let i = 0; i < 24; i++) {
+      events.push(diagnosticEvent({ exitCode: 0, stdout: `earlier ${i}`, stderr: "" }));
+    }
+    const diagnostic = "x".repeat(5000) + "startup requires --profile configured";
+    events.push(diagnosticEvent({ exitCode: 1, stdout: "", stderr: diagnostic }));
+    events.push(diagnosticEvent({ exitCode: 9 }));
+    events.push(diagnosticEvent(null, "err"), diagnosticEvent(null, "cancelled"));
+    const reads = readsOver(projectedOf(events));
+    const query = '[.records[] | select(.type == "exec" and .exec.exitCode == 1)]';
+    const matching = answered(yield* reads.inspectJournal({ entry: 1, yq: query }));
+    expect(matching.value).toMatchObject([
+      { status: "ok", exec: { exitCode: 1, stdout: "", stderr: diagnostic }, position: null },
+    ]);
+    expect(
+      answered(
+        yield* reads.inspectJournal({
+          entry: 1,
+          yq: query + ' | .[0].exec.stderr | contains("--profile configured")',
+        }),
+      ).value,
+    ).toBe(true);
+    for (const [yq, expected] of [
+      ["null", null],
+      ["false", false],
+      ["1", 1],
+      ['"text"', "text"],
+      ["{}", {}],
+      ["[]", []],
+      [".entry", 1],
+    ]) {
+      if (typeof yq !== "string") {
+        throw new Error("query is a string");
+      }
+      const page = answered(yield* reads.inspectJournal({ entry: 1, yq }));
+      expect(journalPage.parse(page)).toEqual({
+        value: expected,
+        next: null,
+        prev: null,
+        last: null,
+      });
+    }
+    const rows = z
+      .array(z.object({ status: z.string(), exec: z.json().nullable() }))
+      .parse(answered(yield* reads.inspectJournal({ entry: 1, yq: ".records[-3:]" })).value);
+    expect(rows).toMatchObject([
+      { status: "ok", exec: { exitCode: 9 } },
+      { status: "err", exec: null },
+      { status: "cancelled", exec: null },
+    ]);
+    expect(rows[0].exec).toEqual({ exitCode: 9 });
+    for (const yq of [
+      "",
+      ".records[]",
+      "select(false)",
+      "[",
+      'load("/private/not-input")',
+      "now",
+    ]) {
+      expect((yield* reads.inspectJournal({ entry: 1, yq })).ok).toBe(false);
+    }
+    expect((yield* reads.inspectJournal({ entry: 99 })).ok).toBe(false);
+  });
+
+  it("1006 E4/E5: follows three Unicode channel pages with ordinary next, prev and last queries", function* () {
+    const events = (yield* savedEvents()).slice(0, 1);
+    const stdout = "A🦊".repeat(7000);
+    const stderr = "警告é".repeat(5000);
+    events.push(diagnosticEvent({ exitCode: 1, stdout, stderr }));
+    const reads = readsOver(projectedOf(events));
+    for (const [field, expected] of [
+      ["stdout", stdout],
+      ["stderr", stderr],
+    ]) {
+      const original = `.records[1].exec.${field}`;
+      let yq: string | null = original;
+      let complete = "";
+      let pages = 0;
+      let previous: EntryJournalPage | undefined;
+      while (yq !== null) {
+        const page: EntryJournalPage = answered(yield* reads.inspectJournal({ entry: 1, yq }));
+        complete += z.string().parse(page.value);
+        pages += 1;
+        if (yq !== original) {
+          const independently = answered(
+            yield* selectJson(
+              yq,
+              JSON.stringify(answered(yield* reads.inspectJournal({ entry: 1 })).value),
+            ),
+          );
+          expect(JSON.parse(independently)).toBe(page.value);
+        }
+        if (page.prev !== null) {
+          expect(answered(yield* reads.inspectJournal({ entry: 1, yq: page.prev })).value).toBe(
+            previous?.value,
+          );
+        }
+        if (page.last !== null) {
+          const last = answered(yield* reads.inspectJournal({ entry: 1, yq: page.last }));
+          expect(last.last).toBe(null);
+          expect(last.next).toBe(null);
+          expect(last.prev).not.toBe(null);
+        }
+        previous = page;
+        yq = page.next;
+      }
+      expect(pages).toBeGreaterThanOrEqual(3);
+      expect(complete).toBe(expected);
+    }
+  });
+
+  it("1006 E4/E7: recomputes growth, guards entry identity and recognizes only exact generated expressions", function* () {
+    const events = (yield* savedEvents()).slice(0, 1);
+    events.push(
+      diagnosticEvent({
+        exitCode: 1,
+        stdout: "A".repeat(4096) + "B".repeat(4096) + "C".repeat(4096),
+        stderr: "",
+      }),
+    );
+    const current = () => projectedOf(events);
+    const root: RootReading = {
+      ...cold(current()),
+      acknowledged: () => Ok(current()),
+      inspectJournal: (request) =>
+        readEntryJournal(request, { entries: current().entries, printing: undefined }),
+    };
+    const reads = sidekickRequests(root, noSubmission);
+    const original =
+      '[.records[] | select(.type == "exec") | .exec.stdout] | join("") # quoted "query"\n';
+    const first = answered(yield* reads.inspectJournal({ entry: -1, yq: original }));
+    const next = z.string().parse(first.next);
+    const second = answered(yield* reads.inspectJournal({ entry: 1, yq: next }));
+    expect(second.value).toBe("B".repeat(4096));
+    expect(second.prev).not.toBe(null);
+    expect(second.next).toBe(second.last);
+    const noncanonical = " " + next;
+    const authoredPage = answered(yield* reads.inspectJournal({ entry: 1, yq: noncanonical }));
+    expect(authoredPage).toEqual({ value: second.value, next: null, prev: null, last: null });
+    events.push(diagnosticEvent({ exitCode: 0, stdout: "D".repeat(4096), stderr: "" }));
+    expect(answered(yield* reads.inspectJournal({ entry: 1, yq: "null" })).value).toBe(null);
+    const grown = answered(yield* reads.inspectJournal({ entry: 1, yq: next }));
+    expect(grown.value).toBe(second.value);
+    expect(
+      answered(yield* reads.inspectJournal({ entry: 1, yq: z.string().parse(grown.last) })).value,
+    ).toBe("D".repeat(4096));
+    const close = parseDurableEvent(
+      JSON.stringify({ type: "close", coroutineId: "root", result: { status: "cancelled" } }),
+    );
+    if (!close.ok) {
+      throw close.error;
+    }
+    events.push(close.value, ...(yield* savedEvents()).slice(0, 1));
+    expect(answered(yield* reads.inspectJournal({ entry: 1, yq: next })).value).toBe(second.value);
+    expect((yield* reads.inspectJournal({ entry: -1, yq: next })).ok).toBe(false);
+  });
+
+  it("1006 E3/E5: oversized containers refuse and direct channels remain pageable", function* () {
+    const events = (yield* savedEvents()).slice(0, 1);
+    events.push(diagnosticEvent({ exitCode: 1, stdout: "x".repeat(1024 * 1024 + 1), stderr: "" }));
+    const reads = readsOver(projectedOf(events));
+    for (const yq of [".", ".records"]) {
+      expect(refused(yield* reads.inspectJournal({ entry: 1, yq }))).toContain(
+        "narrower yq selection",
+      );
+    }
+    const page = answered(yield* reads.inspectJournal({ entry: 1, yq: ".records[1].exec.stdout" }));
+    expect(z.string().parse(page.value)).toHaveLength(4096);
+    expect(page.next).not.toBe(null);
+    expect(
+      answered(yield* reads.inspectJournal({ entry: 1, yq: ".records[1].exec.stderr" })),
+    ).toEqual({ value: "", next: null, prev: null, last: null });
+    const array = answered(
+      yield* reads.inspectJournal({
+        entry: 1,
+        yq: JSON.stringify(Array.from({ length: 45 }, (_, i) => i)),
+      }),
+    );
+    expect(array.value).toHaveLength(20);
+    const middle = answered(
+      yield* reads.inspectJournal({ entry: 1, yq: z.string().parse(array.next) }),
+    );
+    expect(middle.value).toEqual(Array.from({ length: 20 }, (_, i) => i + 20));
+    expect(
+      answered(yield* reads.inspectJournal({ entry: 1, yq: z.string().parse(middle.last) })).value,
+    ).toEqual([40, 41, 42, 43, 44]);
   });
 
   it("E2: defaults, the tail, and every position outside the text", function* () {
@@ -2562,9 +2764,7 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
     expect(refused(yield* reads.inspectPrompt({ entry: 1, field: "notes" }))).toContain(
       '"notes" cannot be read',
     );
-    expect(refused(yield* reads.inspectJournal({ entry: 1, limit: 0 }))).toContain(
-      "positive whole",
-    );
+    expect(refused(yield* reads.inspectJournal({ entry: 1, yq: "" }))).toContain("nonempty");
     expect(refused(yield* reads.inspectSource({ entry: 1, limit: -3 }))).toContain(
       "positive whole",
     );
@@ -2604,7 +2804,7 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
     const asked = fresh();
     const answer = yield* replyThrough(
       [
-        "<REPL.Entry.Journal entry={1} limit={4} />",
+        "<REPL.Entry.Journal entry={1} />",
         "<REPL.Entry.Source entry={1} limit={32} />",
         '<REPL.Entry.Prompt entry={1} prompt={9} field="reply" limit={8} />',
         "<REPL.Entry.Output entry={1} />",
@@ -2627,11 +2827,15 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
 
     // Unfinished rather than running: there is no terminal and no owner.
     expect(observed(asked, 0)).toMatchObject({
-      entry: 1,
-      status: "unfinished",
-      failure: null,
-      prompts: { completed: 8, failed: 1, cancelled: 0 },
-      length: 19,
+      value: {
+        entry: 1,
+        status: "unfinished",
+        failure: null,
+        prompts: { completed: 8, failed: 1, cancelled: 0 },
+      },
+      next: null,
+      prev: null,
+      last: null,
     });
     // The saved evidence it does hold is there to be read.
     expect(observed(asked, 1)).toMatchObject({ status: "unfinished", length: 817 });
