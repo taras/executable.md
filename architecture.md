@@ -6735,6 +6735,43 @@ no project fallback. The Sidekick's native provider keeps the captured project
 `agentCwd`, or the caller's explicit dependency, and its existing identity and
 configuration.
 
+### Approved host asset import
+
+The captured CLI-private `<REPL.ImportAsset source="/known/mock ü.html"
+destination="inputs/mock ü.html" />` control imports one non-repository regular
+file into the existing session workspace. The root passes that directory directly;
+response cwd and props cannot retarget it. Missing workspace or importer refuses.
+The native adapter checks effective read/write restrictions before metadata I/O,
+after approval and before publication. Ordinary Files and repository acquisition
+keep their existing owners.
+
+Preparation resolves metadata and retains one exact source/destination pair.
+Core elicitation presents that pair and the workspace-relative result with exact
+Import/Decline choices and no initial answer. Only validated Import permits content
+access or destination data effects. Closing remains unanswered; Stop withdraws
+and joins this response's question without answering an entry's independent one.
+
+The adapter copies bytes into a private temporary directory beneath the final
+parent, then publishes the complete payload with a no-replace hard link. The link
+names the staged copy, never the external source. Existing files, directories,
+dangling links and late collisions survive. Relative containment and observed
+parent links use the existing stable-host-namespace guarantee. A collision requires
+another explicit destination and fresh approval.
+
+Cleanup is armed before acquisition. Each non-abortable native mutation retains
+its completion and joins it before staging removal. Success follows complete
+publication and successful cleanup. Cancellation during issued publication can
+leave complete bytes, and cleanup preserves them. Cleanup failure or uncertain
+publication stops the exchange; neither becomes ordinary refused-control feedback.
+
+The existing control intent retains both operands before work. Only a joined
+ordinary Result receives an outcome; only success designates the relative path.
+An append failure supplies no success. Unfinished imports remain unknown: passive
+cold inspection reads no source, restarts no question and copies nothing. Later
+ordinary entries read the workspace copy, independently of the external source.
+There is no crash reconciliation, automatic retry, adoption or atomic host-file
+and journal transaction.
+
 ### Response-owned component testing
 
 `repl/sidekick/testing.ts` executes REPL.Test documents in fresh children of the
