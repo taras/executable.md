@@ -15,10 +15,12 @@ Sidekick responses that write an entry, and the REPL entry program they write.
   `<REPL.Syntax names={["Elicit"]} />`. Availability means the component resolves
   in an ordinary entry; each effect still requires permission and can fail.
   Fresh asks read current session components and this command's selected Plugins.
-- Built-in assertions absent from the ordinary entry profile are Markdown-test
-  components. Named lookup explains their test context and `REPL.Test` invocation.
-  Save the test document and request it with `REPL.Test`; submitting assertions as
-  an ordinary entry does not activate testing.
+- Use existing assertions such as `<Assert>`, `<AssertEquals>` and `<AssertThrows>`
+  directly in ordinary entries. A failing assertion fails that entry and stops
+  later ordinary effects. Assertions do not activate testing.
+- Use `Test`, `Testing` and the nested test harness in Markdown test documents
+  requested through `<REPL.Test />`. A bare `<Test>` in an ordinary entry refuses
+  without running its body or activating testing.
 - Quoted props are strings: `as="code"`. Braced props supply data:
   `limit={16384}`, `entry={-2}`, `names={["Elicit"]}`.
 - In a response, braced props accept JSON literals, arrays, objects, object
