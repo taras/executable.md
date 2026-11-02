@@ -3,7 +3,14 @@ import { runCli, shellQuote } from "@executablemd/test-support/launch";
 import { fileURLToPath } from "node:url";
 
 describe("adversarial implementation example", () => {
-  for (const suite of ["Workflow", "Friction", "Implementation", "Delivery", "ProductionRole"]) {
+  for (const suite of [
+    "Workflow",
+    "Friction",
+    "Implementation",
+    "LaunchPolicy",
+    "Delivery",
+    "ProductionRole",
+  ]) {
     it(`runs the ${suite} Markdown journeys without native models`, function* () {
       const workflowCommand = [
         "deno",
