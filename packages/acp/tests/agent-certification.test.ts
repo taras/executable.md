@@ -129,6 +129,8 @@ describe(
         expect(report.capabilities.continuity.outcome).toBe("pass");
         expect(report.capabilities.separation.outcome).toBe("pass");
         expect(report.capabilities.streaming.outcome).toBe("pass");
+        expect(report.capabilities.model.outcome).toBe("not_run");
+        expect(report.capabilities.effort.outcome).toBe("not_run");
         expect((yield* f.methods()).filter((method) => method === "session/prompt").length).toBe(3);
       });
     });
@@ -168,6 +170,8 @@ describe(
           report,
         );
         expect(first.ok).toBe(true);
+        expect(report.capabilities.model.outcome).toBe("pass");
+        expect(report.capabilities.effort.outcome).toBe("pass");
         const next = yield* document(
           f,
           "normal",
@@ -175,6 +179,8 @@ describe(
           report,
         );
         expect(next.ok).toBe(true);
+        expect(report.capabilities.model.outcome).toBe("pass");
+        expect(report.capabilities.effort.outcome).toBe("pass");
         expect(next.output).toBe(marker);
         recordMarker(report, "reconnect", marker, next.output, true);
         expect(report.capabilities.reconnect.outcome).toBe("pass");

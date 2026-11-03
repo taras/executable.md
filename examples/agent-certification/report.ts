@@ -1,3 +1,4 @@
+import type { SessionConfiguration } from "@executablemd/core";
 import { z } from "zod";
 
 export const capability = z.enum([
@@ -197,6 +198,19 @@ export function recordConfigurationFailure(report: Report, error: unknown): void
   }
 }
 
+export function recordConfigurationSuccess(
+  report: Report,
+  configuration: SessionConfiguration | undefined,
+): void {
+  for (const name of ["model", "effort"] satisfies Capability[]) {
+    const row = report.capabilities[name];
+    if (row.selected && configuration?.[name] !== undefined) {
+      row.outcome = "pass";
+      row.reason = "completed";
+    }
+  }
+}
+
 export function recordTurn(
   report: Report,
   observation: { accepted: boolean; completed: boolean; deltas: number },
@@ -283,7 +297,7 @@ export function recordCleanup(
   if (
     cancellation.selected &&
     cancellation.observations.requestedStop &&
-    (failed || !verified || !joined)
+    (failed || ((!verified || !joined) && cancellation.outcome !== "failure"))
   ) {
     cancellation.outcome = failed ? "failure" : "not_run";
     cancellation.reason = failed ? "cleanup-failed" : "cleanup-unverified";

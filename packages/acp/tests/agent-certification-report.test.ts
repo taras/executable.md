@@ -147,7 +147,12 @@ describe("closed agent qualification reports", () => {
       },
     ]) {
       recordCancellation(report, observation);
+      const reason = report.capabilities.cancellation.reason;
+      recordCleanup(report, true, false);
       expect(report.capabilities.cancellation.outcome).toBe("failure");
+      expect(report.capabilities.cancellation.reason).toBe(reason);
+      expect(report.capabilities.cleanup.outcome).toBe("not_run");
+      expect(report.capabilities.cleanup.reason).toBe("cleanup-unverified");
     }
     recordCancellation(report, {
       requestedStop: true,

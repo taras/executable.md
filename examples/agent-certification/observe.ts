@@ -1,8 +1,13 @@
-import { Agent } from "@executablemd/core";
+import { Agent, configurationOf } from "@executablemd/core";
 import type { AgentPromptEvent } from "@executablemd/core";
 import { scoped, Err, Ok } from "effection";
 import type { Result, Operation, Stream } from "effection";
-import { recordCleanup, recordConfigurationFailure, recordTurn } from "./report.ts";
+import {
+  recordCleanup,
+  recordConfigurationFailure,
+  recordConfigurationSuccess,
+  recordTurn,
+} from "./report.ts";
 import type { Report } from "./report.ts";
 
 export function* observeQualification(report: Report): Operation<void> {
@@ -31,6 +36,7 @@ export function* observeQualification(report: Report): Operation<void> {
                   recordTurn(report, { accepted, completed, deltas });
                 } else if (event.value.type === "started") {
                   accepted = true;
+                  recordConfigurationSuccess(report, configurationOf(event.value.session));
                 } else if (event.value.type === "text_delta") {
                   deltas++;
                 } else if (event.value.type === "terminal") {
