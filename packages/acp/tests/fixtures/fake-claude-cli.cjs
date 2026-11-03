@@ -92,7 +92,7 @@ function confirm() {
     uuid: crypto.randomUUID(),
     session_id: confirmation === "mismatch" ? "other-conversation" : SESSION,
   });
-  if (confirmation === "conflicting") {
+  if (confirmation === "conflicting" && process.env.FAKE_CLAUDE_CONFLICT_AT !== "context-request") {
     emit({
       type: "system",
       subtype: "hook_response",
@@ -142,6 +142,29 @@ process.stdin.on("data", (chunk) => {
     // The SDK opens with a control handshake and will not send a turn until it
     // is answered.
     if (message.type === "control_request") {
+      if (
+        confirmation === "conflicting" &&
+        process.env.FAKE_CLAUDE_CONFLICT_AT === "context-request" &&
+        message.request?.subtype === "get_context_usage"
+      ) {
+        log({ event: "conflict-at-context-request" });
+        emit({
+          type: "system",
+          subtype: "hook_response",
+          hook_id: "internal",
+          hook_name: "opaque",
+          hook_event: "SessionStart",
+          stdout: "",
+          stderr: "",
+          output: "",
+          exit_code: 0,
+          outcome: "success",
+          uuid: crypto.randomUUID(),
+          session_id: "other-conversation",
+        });
+        // Only Query failure releases this lookup, so setup cannot outrun the contradiction.
+        continue;
+      }
       emit({
         type: "control_response",
         response: {

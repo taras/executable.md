@@ -33,7 +33,7 @@ const PINNED = {
   },
   claude: {
     upstreamBase: "8710ce1cbccf562cb04b4bcc30e053e960aee05f",
-    patchedCommit: "54df80cbb41f2aa56195fd56b4dc2a88295049af",
+    patchedCommit: "bea799c86d16ed2b1bf1cfe8d7fd6e22e6525b56",
   },
 } as const;
 

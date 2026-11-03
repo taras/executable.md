@@ -524,6 +524,39 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     });
   }
 
+  it("HC Claude refuses conflicting confirmation during optional setup", function* () {
+    let root: string | undefined;
+    yield* ensure(function* () {
+      if (root !== undefined) {
+        yield* rm(root, { recursive: true, force: true });
+      }
+    });
+    root = yield* until(mkdtemp(join(tmpdir(), "xmd startup conflict ")));
+    const adapter = yield* useAdapter("claude", {
+      ...CLAUDE_ENV,
+      CLAUDE_CONFIG_DIR: root,
+      ANTHROPIC_MODEL: "",
+      FAKE_CLAUDE_CONFIRMATION: "conflicting",
+      FAKE_CLAUDE_CONFLICT_AT: "context-request",
+    });
+    yield* initialize(adapter);
+    let failure;
+    try {
+      yield* adapter.request("session/resume", {
+        sessionId: "11111111-1111-4111-8111-111111111111",
+        cwd: root,
+        mcpServers: [],
+      });
+    } catch (error) {
+      failure = String(error);
+    }
+    const log = yield* readTextFile(adapter.log);
+    expect(log).toContain('"event":"conflict-at-context-request"');
+    expect(failure).toContain("Claude SessionStart identity confirmation failed");
+    expect(acceptances(adapter)).toEqual([]);
+    expect(log).not.toContain('"type":"user"');
+  });
+
   it("HC Claude cancellation joins the held startup Query with no late response", function* () {
     let adapter: Adapter | undefined;
     let answered = false;
