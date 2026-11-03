@@ -132,7 +132,10 @@ on success, failure and cancellation alike.
   selected of the Repository in scope.
 - `<Dir path>` recursively creates or adopts `path` before content begins, then
   expands its content there. A relative path is read against the directory
-  already in effect and an absolute path keeps its existing meaning. It selects
+  already in effect and an absolute path keeps its provider-owned meaning. Host
+  absolute selection requires `--allow-absolute` plus effective write permission;
+  it is never rebased. Repository/Worktree paired placement remains separately
+  provider-owned and grants no filesystem permission. Dir selects
   no repository. It is canonical core's (§6.13.2), so a document reaches it
   with a Files provider alone — the other two need the repository vocabulary.
 
@@ -168,8 +171,9 @@ are not document-addressable, and they stay where they are.
 
 The ordinary file-operation paths a document authors are relative and resolved
 by the provider against contextual `Env.cwd`. Directory resolution preserves
-Dir's existing exception: an absolute `path` is used as written, while a
-relative one is resolved against the enclosing cwd. Nothing the provider
+Dir's directory selection: an absolute host `path` is used as written only with
+effective absolute and write permission; a relative operand resolves against
+the enclosing cwd. Workflow absolute paths remain logical Workspace paths. Nothing the provider
 resolves reaches a printed error or the journal: what crosses back is a reason
 from a fixed vocabulary (§6.13), never a resolved path, a symlink target, a
 temporary name, an errno code, or a platform message.
@@ -199,8 +203,12 @@ three, and all three resolve their relative paths against the same contextual
 directory of the evaluator's own.
 
 Whether the scope asking may perform the operation is `Permissions`, a runtime
-Api with two members — `files("read" | "write")` and `fetch(input, init?)` —
-both answering `true` until something says otherwise. A scope that permits less
+Api with two members — `files("read" | "write" | "absolute")` and
+`fetch(input, init?)`. Read, write and fetch default to true; absolute defaults
+to false. Regular runs and REPL invocations install an ancestor-max absolute
+refusal unless `--allow-absolute` selects a min absolute-only allowance. An
+enclosing refusal wins over nested opt-in, and ordinary restrictions precede
+the allowance. A document can narrow but cannot grant its host permission. A scope that permits less
 installs middleware that returns `false` for what it refuses and delegates
 everything else unchanged; delegation is what makes restrictions intersect, so a
 scope nested inside a read-only region cannot permit a write by answering
@@ -208,7 +216,12 @@ scope nested inside a read-only region cannot permit a write by answering
 
 The question is asked by the implementation that performs the operation,
 immediately before its first I/O — the provider for a filesystem operation, the
-network terminal for a request — and nowhere else. Two consequences are part of
+network terminal for a request. A live repository router also refuses an
+absolute directory request before its own target routing, discovery, managed
+ownership, holds or workspace canonicalization, after restoring acknowledged
+results through every existing replay branch. It adds no file-operation record
+for that early refusal; normal enclosing failure recording remains. Permitted
+work still uses the complete composed chain. Two consequences are part of
 the contract. A request is authorized *after* the contextual middleware that may
 transform it, so what is permitted is what would actually be performed. And a
 denied operation performs no I/O of any kind on its target: nothing resolved,
@@ -223,7 +236,9 @@ otherwise would mean probing the filesystem to find out which question to ask.
 `checkFilePath` asks nothing, because it reaches nothing. Acquired resources are
 cleaned up by the operation that acquired them without a fresh request, and a
 completed durable effect restores its recorded outcome without asking current
-policy at all.
+policy at all. An absolute host directory request additionally requires
+`files("absolute")` before resolution. Neither mounts, session placement,
+managed checkouts nor temporary placement grant it.
 
 `Permissions` mediates those semantic operations and nothing by implication. The
 low-level `API.Fs`, subprocesses, Git host operations and every other native
@@ -9400,20 +9415,28 @@ directory asked for that directory, not for whatever it would otherwise have
 run in, so a refused ensure expands no content and binds no working directory.
 
 A relative `path` is read against the directory already in effect, so one
-`<Dir>` inside another nests; an absolute path keeps its existing meaning. It
+`<Dir>` inside another nests. Absolute host selection is denied by default
+before resolution, creation, cwd binding or child content. `xmd run
+--allow-absolute` and `xmd repl --allow-absolute` enable it only within effective
+absolute and write restrictions. The absolute operand keeps its ordinary
+meaning and is never rebased. File, File.Delete and Glob keep their relative
+grammar even with this opt-in. Dir
 selects no repository, which is what lets the self-closing `<Worktree as="…">`
 spelling compose with it: the Repository a later Git element acts on is still
 the enclosing one.
 
 #### REPL workspace mounts
 
-A REPL invoked with `--mount SOURCE:TARGET` interprets an absolute document Dir
+A REPL invoked with `--allow-absolute --mount SOURCE:TARGET` interprets an absolute document Dir
 destination under TARGET as SOURCE plus its document suffix. Its private authored
 and actual directory scopes travel together. Ensure precedes binding and content;
 a refusal installs neither. A new nested `..` under `/reference` mapped from
 `/work/manuals/docs` ensures and enters authored and actual `/`, then restores
 the enclosing pair on success, child failure or cancellation. The written operand
-is preserved separately from the effective absolute request. Ordinary hosts retain
+is preserved separately from the effective absolute request. Mount conversion
+grants no permission: a new mapped absolute ensure, including a converted
+relative operand, needs effective absolute and write permission. A saved covered
+ensure restores its Unit or refusal before current policy. Ordinary hosts retain
 their relative-escape refusal, and workflow paths remain logical Workspace paths.
 
 A mapped ensure gains no external retention. Where existing coverage retains a
@@ -9448,7 +9471,8 @@ Being invalid, it fails the operation it is part of; an authored
 The component is the same one. A workflow run installs a Files provider whose
 paths are the run's own logical ones and whose mutations cross the run's effect
 transaction, so `<Dir>` creates a directory in that workspace rather than the
-caller's, and a completed ensure replays without being performed again. Those
+caller's. Absolute logical Workspace paths need no host absolute opt-in, and a
+completed ensure replays without being performed again. Those
 semantics belong to the provider: `specs/workflow-workspace-spec.md` §§6.3 and
 10.1 state them.
 
@@ -12724,12 +12748,12 @@ platform's.
 | HF21 | Containment before removal | Empty, absolute, lexically escaping, and parent-link-escaping paths are each refused with their own phase and reason and reach no low-level removal — proven against an admitted deletion that does |
 | HF22 | Platform failures | A refused removal is a structured `Err` carrying a reason and nothing else; one that reports the path already gone is the same success absence is |
 | HF23 | Cancellation | A halt before the removal produces no Result, leaves the entry as it was, and leaves nothing behind — deletion acquires nothing |
-| HF24 | Recursive directory ensure | A missing relative target and all missing parents are created before `<Dir>` content begins; the same operation accepts the exact absolute target without rebasing it |
+| HF24 | Recursive directory ensure | A missing relative target and all missing parents are created before `<Dir>` content begins; the same operation accepts an explicitly opted-in absolute target without rebasing it; default or explicit denial precedes target resolution, metadata, creation and content |
 | HF25 | Existing directory | An existing target succeeds without replacement or clearing, and planted contents remain byte-identical after the body |
 | HF26 | Non-directory refusal | A regular file and a supported special entry, at the target and as an intermediate entry, each refuse before content with a sanitized reason and no host path, platform code, raw message or cause |
 | HF27 | Direct persistence | A directory created by `<Dir>` remains after successful content, failed content and cancellation; cwd restoration performs no teardown deletion |
 | HF28 | Repository independence | Ensuring and entering a directory beneath a selected checkout leaves every Repository identity member and provider selection unchanged |
-| HF29 | Each operation asks its own class | Read and search ask `read`; write, delete, directory ensure and temporary acquisition ask `write`; `checkFilePath` asks nothing and still answers. A refusal returns valid sanitized failure data with `permission-denied`, reports an unchanged write target, and performs no `API.Fs` call at all — nothing resolved, classified or traversed. Asserted against the handler directly, so the obligation is the provider's rather than the installing middleware's |
+| HF29 | Each operation asks its own class | Read and search ask `read`; write, delete, directory ensure and temporary acquisition ask `write`; an absolute host directory also asks `absolute` before resolution; `checkFilePath` asks nothing and still answers. A refusal returns valid sanitized failure data with `permission-denied`, reports an unchanged write target, and performs no `API.Fs` call at all — nothing resolved, classified or traversed. Asserted against the handler directly, so the obligation is the provider's rather than the installing middleware's |
 | HF30 | A denied acquisition creates nothing | The configured temporary root holds no minted directory afterwards, which is the one refusal an `API.Fs` census cannot prove |
 | HF31 | Cleanup needs no fresh permission | A temporary acquired before a write restriction is installed is still released when its scope ends, and its root is empty afterwards |
 
@@ -12742,11 +12766,12 @@ convention a host writing one follows and the ordering the guarantee depends on.
 
 | # | Test | Verify |
 |---|------|--------|
-| PM1 | Defaults | Both members permit when nothing is installed |
+| PM1 | Defaults | Read, write and fetch permit; absolute is false when nothing is installed |
 | PM2 | One class, and the actual request | A restriction refuses its own class and leaves the other alone; a Fetch restriction reads the exact input and init the caller passed |
 | PM3 | Ordering | A descendant answering `true` never runs for a class the enclosing restriction refuses, and does run for one it permits — so the ordering rather than the reading is what decides |
 | PM4 | Intersection and the sibling | Two delegated restrictions refuse both classes; leaving the narrower scope restores the enclosing allowance, and leaving both restores the default |
 | PM5 | One Api | A restriction installed through `/api` is read through the root export and answers once |
+| PM6 | Absolute narrowing | A denied host wins over descendant grants or nested opt-in; an allowed host can be narrowed, and leaving the restriction restores the enclosing/sibling allowance |
 
 ### Tier PRM — Authored, generated and direct operations under one restriction
 
@@ -13892,6 +13917,12 @@ against the production Deno adapter, on real run files.
 
 ### Tier WAP — The strict workflow Agent profile
 
+The retained Claude adapter confirms backend identity before a live session
+answers, through its Query's successful SessionStart response. Confirmation alone
+is not acceptance, an asserting save or a workflow mapping. WAP9 and WSL3/9/10
+retain that ordering; native Claude construction stays client-allocated even
+when the adapter returns confirmation metadata.
+
 Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 
 | # | Test | Verify |
@@ -13907,6 +13938,12 @@ Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 | WAP9 | Retention follows acceptance | Nothing is retained until the backend accepts the session's first turn, and the ordered log is ensure, turn start, adapter acceptance, the provider's asserting save, then the host's retention — with the mapping absent at every earlier point |
 
 ### Tier WSL — Retained workflow Agent sessions
+
+The acceptance and promotion rows cover adapters declaring strong first-turn
+acceptance. Standard ACP creation instead retains `acpx.acpSessionId` when no
+native assertion exists, commits the mapping before events and reopens only
+through supported loading. A changed assertion kind refuses. An ACP loading
+target supplies no native handoff or stronger acceptance proof.
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
 
@@ -14811,7 +14848,7 @@ user's own `~/.xmd/repositories`.
 | ORC3 | Ambient primary checkout | From a normal repository, root Switch/Add/Commit select the ambient Repository and the contextual checkout; outside Git, a root Worktree, Git operation or PullRequest refusal names how to run inside one |
 | ORC4 | Ambient linked worktree | Invoked from a linked worktree, Repository identity follows the canonical common directory, Git acts on that worktree's root, and the primary checkout is untouched |
 | ORC5 | Origin is not local admission | A repository with no `origin` creates a Worktree and performs local Git; Push and PullRequest refuse before a credential, session or transport exists |
-| ORC6 | Directory ordering and paths | `<Dir>` recursively creates a missing relative target from the enclosing cwd, accepts an absolute target without rebasing it, and completes the ensure before installing cwd or beginning content |
+| ORC6 | Directory ordering and paths | `<Dir>` recursively creates a missing relative target from the enclosing cwd, accepts an explicitly opted-in absolute target without rebasing it, and completes the ensure before installing cwd or beginning content |
 | ORC6a | Existing directory | `<Dir>` uses an existing directory without replacing or clearing it, and its planted contents remain unchanged after content expands |
 | ORC6b | Non-directory refusal | A file and a supported special entry at the target or along the route each refuse before content; the error carries only the fixed structural vocabulary and no host path or platform detail |
 | ORC6c | Context boundaries | Repository and Worktree bodies observe their checkout; `<Dir>` content observes the ensured directory; the enclosing cwd is restored after success, printed failure and cancellation |
@@ -14861,6 +14898,7 @@ native completion and acknowledgement.
 | ERC12 | One result boundary | Two equal Adds at two positions produce and consume two results; a nested Add is an earlier journal operation than the Commit enclosing it, and the commit holds exactly the tree that child staged; two same-repository callers share one ownership acquisition and serialize their native attempts with distinct results; two spawned branches in two repositories resume in reverse order sharing no cursor or result; equal entry sources in two journals stay independent |
 | ERC13 | Local-Git acknowledgement | A live Commit gated before its append and then cancelled leaves no completion and no later sentinel, and the continuation runs live and reports ordinary `empty-index` rather than adopting the object id that was really written; one acknowledged and then cancelled replays with no native work; a rejected result append preserves the first persistence failure with no success binding, no later work and no compensating Close; an interrupted Add whose descendant holds the inherited pipes is joined before the entry settles; an unclassified performer failure is fatal and unrecorded |
 | ERC14 | Local-Git admission | Portable success and refusal codec rows refuse a wrong, extra or missing member, an unknown version, a mismatched fingerprint or name, an object id of the wrong width, a transition the operation does not make, mismatched operation arguments and a refusal word outside the closed set, and refuse a failed protocol envelope for this type; admission accepts repeated equal names and histories holding only the older record types |
+| ERC15 | Workspace acquisition across entries | A Sidekick Submit acquires a controlled repository beneath its existing session workspace; actual canonical location, admitted origin and initial HEAD agree with the request. A later relative File read and a new read after cold reopen return current text without reacquisition. Another session owns a different checkout. Same creation-base reuse preserves advanced HEAD, tracked/index changes and untracked files; occupied or incompatible destinations and refused acquisitions preserve existing state. Permission denial changes no file. Exact saved acquisition/read source reruns with different repository inputs, and an absolute external File path refuses without a read binding. |
 
 ### Tier EPB — Publication inside a REPL entry (§5.3, §8.1)
 

@@ -59,10 +59,16 @@ only genuine absence falls through, and a selected malformed or unreadable
 component fails. These directories select ordinary components and grant no
 permission; canonical protected components keep their implementations.
 
+`--allow-absolute` is the shared run/REPL boolean switch, default off. It
+enables absolute host Dir selection within effective write and enclosing
+restrictions. A nested opt-in cannot widen an enclosing denial. File,
+File.Delete and Glob operands remain relative. Agent permission switches grant
+none of this permission.
+
 Add an external host directory with a required document destination:
 
 ```sh
-xmd repl --mount /work/manuals:/reference --mount /work/fixtures:/fixtures
+xmd repl --allow-absolute --mount /work/manuals:/reference --mount /work/fixtures:/fixtures
 ```
 
 Both `--mount SOURCE:TARGET` and `--mount=SOURCE:TARGET` repeat. Split at the last
@@ -78,7 +84,9 @@ identity, symlink or case-fold equivalence. Sources may coincide.
 `<Dir path="/reference">` ensures the selected SOURCE before children use it as
 actual cwd. File reads/writes/deletions retain their relative operands; Glob
 retains its patterns and a foreground process its argv. The mapping grants no
-permission, Git operation or native Agent tooling. The command's own cwd and a
+permission, Git operation or native Agent tooling. New mapped absolute ensures,
+including converted relative operands, require the explicit absolute opt-in
+and effective write permission. The command's own cwd and a
 held conversation's cwd never move. Under the unchanged
 `/work/manuals/docs:/reference` pair, a new nested `..` follows authored `/`,
 ensures ordinary host `/`, and only its own Unit allows children there. Scope
@@ -88,7 +96,7 @@ spellings refuse before provider work; native SOURCE paths keep native spelling.
 Everything that can be refused is refused in this order, and each step happens
 before anything the next one would touch:
 
-1. **The line.** A token that is not the location or one of those eight options,
+1. **The line.** A token that is not the location or one of its declared options,
    a switch given a value, a value option given none or an empty one, and a
    second location are each refused here — before a per-user directory is
    formed, a history file is created or the terminal's modes are touched.
@@ -124,6 +132,11 @@ components remains unchanged, and a later authorized File write creates its
 parents. Exit preserves the workspace; a second session has a different one.
 Journal layout and legacy publication remain unchanged.
 
+On Deno and compiled hosts, fresh Repository selections in Sidekick-submitted
+entries use `repositories/` beneath this existing workspace. Worktrees follow
+the same managed root. Manual entries and unmarked historical Submit intents
+keep the configured host root; acknowledged placements keep their recorded paths.
+
 The host binds cwd on the actual response, validation and entry owners through
 ordinary Env middleware at min. Nested Dir content uses its selected directory;
 later siblings return to the workspace. Success, failure and cancellation leave
@@ -131,16 +144,86 @@ caller and sibling scopes at their own cwd. This grants no permission or native
 tool, changes no source bytes and selects no Repository.
 
 The original project cwd remains the basis for ambient repository discovery,
-ordinary commit identity and invocation-relative options. To read project input,
-enter its explicitly known path with Dir, capture the read, then write
-`inputs/request.md` after Dir restores workspace cwd. Native Git likewise needs
+ordinary commit identity and invocation-relative options. For non-repository
+project input, Sidekick requests an approved asset import and reads the returned
+workspace-relative path. Native Git likewise needs
 a valid selected checkout at its authored cwd; it has no hidden project fallback.
 The Sidekick's native conversation keeps project placement, or an explicitly
 supplied agentCwd dependency, and its recorded native identity and configuration.
 
 Read `<Guide.Environment />` and `<Guide.Entries />` for the component-writing,
 discovery, later submission and output-reading journey. Current
-`<REPL.Environment />` reports the response's actual cwd.
+`<REPL.Environment />` reports the response's actual cwd and fresh effective
+file read/write/absolute policy. `current response policy` describes the invoking
+scope. `submitted-entry start policy (session scope; entry content may narrow
+it)` is observed afresh through a joined read in the actual session entry-task
+owner, not copied from CLI flags or response policy. `approved import` separately
+states eligibility under current response read/write plus required individual
+approval, independent of absolute; it establishes neither validation nor approval.
+These XMD-operation observations grant nothing and describe neither native
+tools, component admission nor nested scopes of a running entry. Reading them
+starts no entry, target filesystem work, import prompt or provider/model call;
+a failed read presents no partial policy. The callback ends with its owner.
+
+The guides teach relative paths resolved from the current working directory,
+including inside a scoped Dir. A leading slash does not mean the workspace
+root. Sidekick uses the approved import control for intentional external host
+file inputs instead of reaching them through absolute File, command or Dir
+paths. Absolute host Dir selection requires the invocation's explicit opt-in. A
+leading slash retains its host meaning. Repository/Worktree paired placement
+stays with its provider and grants no absolute permission.
+
+## Importing a host asset
+
+Import a non-repository file directly in a Sidekick response:
+
+```xmd
+<REPL.ImportAsset source="/known/external/mock ü.html" destination="inputs/mock ü.html" />
+```
+
+Both nonempty string props are required. The control accepts only this
+self-closing form and these two props. Propose `inputs/<original filename>`,
+preserving its spelling. Repository inputs follow repository acquisition.
+The root supplies the existing session workspace; response cwd cannot select
+another destination root. Missing workspace or host importer refuses.
+
+The question shows the exact resolved source, absolute destination and returned
+workspace-relative path, then states: `Import copies this file into your session
+workspace.` It offers Import and Decline, with neither selected. An untouched
+or invalid answer leaves the same question pending. Closing hides the form and
+leaves it unanswered. Stop withdraws this question and joins its response while
+an entry's independent question stays waiting.
+
+Before Import, only permitted metadata resolution occurs: no source-content
+read, parent creation, staging allocation or destination-data write. Decline and
+cancellation during approval produce none of those effects. Effective read and
+write restrictions apply before metadata and again after approval; publication
+rechecks write permission. Approval grants no native Agent tool or ordinary
+Files permission. Absolute denial does not prevent this separately approved
+import, and approval never installs an absolute allowance. A destination in a
+managed checkout is derived from the actual session workspace and returned
+checkout path; the copy must reach that exact checkout beneath the workspace.
+An arbitrary host repository outside that root is unsupported.
+
+Import preserves exact source bytes, including binary data, and leaves the
+source unchanged. Absolute or escaping destinations and observed outward parent
+links refuse. A file, directory or symlink occupying the destination, including
+a dangling link or a late collision, survives. Choose a new explicit destination
+and obtain fresh approval; import neither replaces nor chooses an alternate name.
+
+The final file appears only after a complete private byte copy. Successful
+feedback is exactly its relative path, after native completion, cleanup and
+outcome acknowledgement. Temporary work belongs to the response; Stop and Exit
+join native requests before removing incomplete staging. If an issued publication
+completes during cancellation or feedback fails after publication, complete bytes
+may remain. Cleanup preserves them. An uncertain publication, cleanup failure or
+failed outcome append stops the exchange without successful feedback or automatic
+retry. The retained intent stays unfinished.
+
+Later ordinary entries use the relative workspace copy, including after the
+external source changes or disappears and after cold reopen. Passive inspection
+imports nothing and asks nothing. History retains operands and outcomes, never
+asset bytes, and supplies no crash recovery or destination adoption.
 
 ## Testing session components
 
@@ -1673,6 +1756,15 @@ question, come back to the printed location, and the work it already did is not
 done again. The question is offered again, and the write after it happens for
 the first time when you answer.
 
+Every existing restoration branch precedes current policy, canonicalization,
+discovery and holds. A genuinely new absolute directory request checks write
+and absolute before `targetOf`, managed ownership, live selection, holds and
+workspace canonicalization. Early refusal discovers no coverage and appends no
+new file-operation record; normal enclosing failure recording remains. Permitted
+work uses the complete composed chain and the terminal independently checks
+the final transformed request. Retained keys, associations and prefix bytes
+are unchanged.
+
 A completed operation answers from what it produced, and reads nothing. So a
 file somebody else changed in the meantime stays changed, a file somebody
 deleted stays deleted, and a checkout you have since moved or removed does not
@@ -1740,7 +1832,20 @@ standing in:
 ```
 
 `<Repository name=".." url={..}>` selects a persistent checkout beneath
-`~/.xmd/repositories`, creating it the first time and reusing it afterwards.
+the session workspace's `repositories/` for a Sidekick-submitted entry, or
+`~/.xmd/repositories` for a manual entry, creating it the first time and reusing
+it afterwards. The returned checkout path is absolute on this host. Derive a
+workspace-relative address from that actual path and the observed workspace;
+do not guess the managed slot layout. A later entry can read that relative path
+without another acquisition, including after reopening.
+
+`base` names the requested creation base, not a promise about current HEAD.
+If a compatible owned checkout advances from creation base A to B, a fresh
+same-base selection reuses B and preserves tracked edits, index and untracked
+files. Inspect current HEAD separately when reporting the revision. An occupied
+unowned destination, incompatible origin or different creation base refuses
+without replacing files or resetting work. Placement grants no extra permission.
+
 `<Worktree name=".." branch={..}>` selects a linked checkout of the Repository
 in scope, or — written outside one, in a directory inside a Git checkout — of
 the repository you opened the session in. Written outside one with no checkout
@@ -2117,6 +2222,82 @@ the position itself. Before the root closes, output this process has produced bu
 not recorded appears as an explicit overlay; once the durable close exists, the
 recorded output replaces it.
 
+## Submit one complete program to a live child
+
+Run a program in the exact child whose `sessionId` the owning parent returned:
+
+```sh
+xmd repl submit --attach "$sessionId" - <<'XMD'
+---
+returns:
+  type: object
+  properties: {status: {type: string}}
+  required: [status]
+  additionalProperties: false
+---
+<AssertEquals actual={2 + 2} expected={4} />
+<Return value={{status: "hold"}} />
+XMD
+```
+
+The command reads stdin successfully to EOF before beginning a source transfer.
+The child collects the complete program before reserving its shared entry/test
+slot. It submits exactly once, using the child's captured ordinary entry profile,
+permissions and project working directory. Draft, Message and human takeover
+stay as they are. A busy slot refuses immediately once the source is collected;
+it queues no entry. Complete empty input follows ordinary entry validation.
+There is no total source-size limit. Private source parts fit both the 64-KiB
+UTF-8 text bound and the encoded 1-MiB frame bound. One part waits for collector
+consumption before the next credit; a closing part's text precedes its normal
+stream completion. Failed input, cancellation and EOF before that completion
+admit no prefix.
+
+Stdout contains JSON lines. Every admitted reference has exactly
+`{sessionId, execution, entry}`, where `entry` is its admission-order key such as
+`entry-1`:
+
+- `admitted`: `{kind:"admitted", submission}` precedes progress.
+- `progress`: `{kind:"progress", submission, head, output, waiting}` describes
+  intermediate work. `head` is `live`, `pausing`, `paused` or `settling`.
+  `output:{text,offset,length}` holds the latest at most 4096 Unicode code
+  points of disclosed rendered output, its absolute offset and full observed
+  length. `waiting:{questions,permissions}` counts only that entry's waits.
+  Buffered Output may remain empty while questions or permission requests wait.
+  Slow observations coalesce and cannot block the entry.
+- `finished`: `{kind:"finished", submission, joined:true, outcome, result,
+  error, journal}` follows the exact entry's join, output consumption and owned
+  cleanup. `outcome` is `completed`, `failed` or `interrupted`. A successful
+  result is `{value:Json}`, including `{value:null}`; otherwise it is `null`.
+  A failure supplies disclosed `{name,message}` in `error`; otherwise error is
+  `null`. The separate `journal` fact is `completed`, `failed`, `cancelled`,
+  `unfinished` or `unavailable`.
+- `unavailable`: `{kind:"unavailable", submission, reason}` says complete
+  joined evidence could not be delivered. It carries the known reference, or
+  `null` when admission acknowledgement never arrived. An oversized final result
+  becomes this small record, with its known reference and no truncated result.
+
+The example finishes with `outcome:"completed"`,
+`result:{value:{status:"hold"}}`, `error:null` and `journal:"completed"`.
+The workflow value `hold` does not change the execution outcome. A refusal admits
+nothing, writes its reason to stderr and exits 1. Losing acknowledgement is
+unavailable evidence, never proof of refusal and never permission to resend.
+
+The first Ctrl-C cancels and joins input/startup before admission; its finished
+record has `submission`, `result`, `error` and `journal` all `null`. After
+admission it requests Entry Stop for the retained exact handle, joins that Stop
+and cleanup, and leaves the child available. Repeated signals join the same
+request. Natural completion can win; a late control refuses without reaching a
+successor or replacing the completed result. Actual Stop-publication and cleanup
+failures retain their existing precedence. Connection loss stops observation
+and leaves an admitted entry with its session.
+
+Status is assigned after command cleanup: 0 for joined completion, 1 for refusal
+or a known execution/Stop/cleanup failure, 130 for proved requested interruption,
+and 2 for unavailable final evidence or payload. A known canonical failure keeps
+status 1 if delivery then fails. Progress and journal status never replace the
+joined outcome. Unknown, ended and mismatched child references refuse without
+starting a replacement; prepared Sidekick attachments grant no submission rights.
+
 ## Attaching to the live Sidekick
 
 Explicit recovery fallback in an established child offers a fresh reference to
@@ -2206,19 +2387,25 @@ Closed passive reads are:
 ```text
 xmd sidekick read --attach FILE status
 xmd sidekick read --attach FILE message MESSAGE_REF [--follow]
-xmd sidekick read --attach FILE entry ENTRY source|prompt|output|journal [--cursor CURSOR]
+xmd sidekick read --attach FILE entry ENTRY source|prompt|output [--cursor CURSOR]
+xmd sidekick read --attach FILE entry ENTRY journal [--yq EXPRESSION]
 ```
 
 Prompt pages additionally accept `--prompt POSITIVE` and
 `--field request|reply|error`. References come from acknowledged owner status;
 an unassociated saved message remains unknown. Follow takes a race-free snapshot
 and subsequent updates for that exact message, without dispatching, evaluating
-or appending. Saved entry pages retain the existing 4096-code-point and
-20-record defaults. An opaque continuation restates the resolved entry/prompt
+or appending. Source, Prompt and Output pages retain the existing text windows. Their opaque
+continuation restates the resolved entry/prompt
 and binds the execution, conversation and view; a newer entry cannot retarget
-it. Reads accept no file path, source, write operation or limit override.
+it. Journal instead accepts ordinary `--yq` and returns exactly `value`, `next`,
+`prev` and `last`, with the same complete-input query meaning and pagination as
+REPL.Entry.Journal. Reuse navigation as `--yq` with the same positive entry;
+`--cursor` is refused for Journal and `--yq` is refused for other views.
+Reads accept no file path, source, write operation or limit override.
 
-The private versioned framed protocol bounds text at 64 KiB, descriptors at
+The private versioned framed protocol bounds Sidekick message text and each
+direct source part at 64 KiB, descriptors at
 16 KiB and frames at 1 MiB. Each observer has at most 64 pending public updates.
 Malformed or slow observers detach safely; a subsequent exact read/follow
 obtains the owner's current facts. After owner-process loss joined completion
@@ -2397,9 +2584,44 @@ more.
 A reply's own vocabulary and an entry's are described separately, because they
 differ: a construct that is ordinary in an entry can be unavailable in a reply.
 What a reply may write is the compact surface derived from what is admitted; what
-an entry may write is a read, answered from the same construction and renderer
-that answers on the command line, over this command's own includes and plugins.
-Describing a component neither resolves nor admits it.
+an entry may write is a read, using core's selection and renderer over the
+ordinary entry's current registry, finalized includes and host declarations.
+It carries the existing assertion defaults, including Assert, AssertEquals and
+AssertThrows, without entering the broader CLI run profile's testing, Verbose
+or web bootstrap. Each ask reads current session component files; Plugin selection is
+captured once per command, and another configured command describes its own
+selection. Earlier saved discovery stays historical feedback.
+
+Bare REPL.Syntax omits testing-package components absent from the ordinary
+profile and points to Markdown tests. Named lookup can describe those components
+with availability `no`, their package documentation, a complete test example and
+the supported REPL.Test invocation. Ordinary same-named components keep their
+usual precedence. Names absent from both contexts refuse, including a mixed
+request containing an unknown name; no partial documentation is returned.
+Availability means resolvable in the described ordinary entry, not authorized for
+every effect or guaranteed successful. Describing admits and authorizes nothing;
+reference-only registrations and middleware end with the ask. CLI xmd syntax
+and xmd run retain their run-profile assertion support.
+
+Assertions run directly in ordinary entries with their existing forms and prop
+validation. A passing assertion continues:
+
+```md
+<Let as="actual" value={2 + 2} />
+<AssertEquals actual={actual} expected={4} />
+<Output>Check passed.</Output>
+```
+
+An unhandled failing assertion fails only its entry and prevents later ordinary
+effects in that entry. Its diagnostic retains the comparison details, and the
+entry joins its owned cleanup before the session admits the next entry. The same
+session can then execute another entry normally.
+
+Assertion registration activates no testing and installs no TestAgent. A bare
+canonical Test in an ordinary REPL entry still refuses because no testing
+behavior is installed; its body does not execute. This differs from ordinary
+xmd run, whose inactive testing package skips Test bodies. REPL.Test retains its
+explicit isolated testing execution.
 
 The host's facts are read where they are known. The working directory and the
 platform are contextual and read at the ask; the runtime, the build and the
@@ -2699,17 +2921,43 @@ each of them answers with a page rather than with prose:
 <REPL.Entry.Source entry={22} offset={0} limit={4096} />
 <REPL.Entry.Prompt entry={22} prompt={9} field="reply" />
 <REPL.Entry.Output entry={22} />
-<REPL.Entry.Journal entry={22} offset={0} limit={20} />
+<REPL.Entry.Journal entry={22} yq=".records" />
 ```
 
 Source is the exact source that entry was admitted with. Prompt is one saved
-agent turn's text — its reply, the request it was sent, or the complete message
-it failed with. Output is what the entry printed. Journal says where that
-evidence is: the entry's complete saved failure, how its turns ended, and a
-record for each thing it saved, in the order the file holds them. Journal
-locates and Prompt reads, which is why neither carries the other's body — a
-record states a turn's number, its kind, its status and where it was written,
-and never a reply, a request, a result payload, a checkpoint or a stack.
+agent turn's reply, request or complete failure message. Output is what the
+entry printed. Journal queries the complete permitted retained value
+`{entry,status,failure,prompts,records}` before paging the query result. Its
+optional `yq` defaults to `.`. Each record carries `marker`, `type`, nullable
+`name`, `position`, `prompt` and `agent`, its `status`, and `exec`. A supported
+settled exec has `{exitCode,stdout?,stderr?}`; other records have `exec: null`.
+Missing channels are absent members, retained empty channels are empty strings,
+and timeout, cancellation or missing results invent no exit or complete output.
+Protocol `ok`, a nonzero command exit and the enclosing failed entry remain
+separate facts. Journal exposes no arbitrary result payload or provider data.
+
+For example, find a failed command anywhere in the selected entry:
+
+```xmd
+<REPL.Entry.Journal entry={22} yq={'[.records[] | select(.type == "exec" and .exec.exitCode == 1)]'} />
+```
+
+Every successful Journal read has exactly `{value,next,prev,last}`. The value
+may be any JSON type. Small complete results have null navigation. Strings use
+4096-code-point windows; arrays use at most twenty items per page and the
+serialized response bound. Objects and indivisible items that exceed that bound
+refuse clearly and direct a narrower yq selection, such as a record's
+`.exec.stdout` or `.exec.stderr`. No text or record is cut before the query.
+Zero or multiple top-level results, invalid expressions and non-JSON results
+refuse through the existing query engine; null and false are valid answers.
+
+Returned navigation is ordinary yq. Reuse it with the same positive entry
+number. Each request recomputes current retained data; growth can shift pages.
+Generated windows preserve the original query and finite range so later requests
+can offer next, prev and last without retained inspection state. The exact
+formatter shape is recognized through strict JSON and complete formatter equality;
+edited or noncanonical queries keep ordinary evaluator semantics. A generated
+window for another entry refuses. Journal takes no `offset` or `limit` props.
 
 `entry` and `prompt` are nonzero whole numbers. A positive entry number is
 immutable admission order counting from one, and a positive prompt number is a
@@ -2720,21 +2968,21 @@ renumbered into its neighbour. Omitted and `-1` are the latest, and a further
 negative counts back from it. Each selector resolves once, when the read
 happens.
 
-Text windows count Unicode code points and default to 4096 of them; Journal
-counts records and defaults to twenty. Source and Prompt start at the
+Source, Prompt and Output text windows count Unicode code points and default
+to 4096 of them. Source and Prompt start at the
 beginning. Output's omitted offset is the last window, which is what a reader
 of output wants, and an explicit zero is the beginning, which omission cannot
 express. A negative offset counts back from what is available and clamps there,
 and a positive one past the end stays where it was asked for and answers with
 an empty window. A limit is a positive whole number with no maximum of its own,
-and what comes back is bounded by the evidence. Every page carries `previous`
+and what comes back is bounded by the evidence. Each of these three text pages carries `previous`
 and `next`: either null, or the complete arguments of the read beside it, with
 the entry and prompt stated as the numbers they resolved to, an absolute offset,
 the limit that was asked for and the same Prompt field. A continuation followed
 after another entry has been admitted therefore reads the entry it was about.
 
-A page states the entry's status and, for a Prompt read, the turn's own
-separately. An entry is completed, failed, cancelled, running or unfinished; a
+Text pages state the entry's status and, for a Prompt read, the turn's own
+separately. Journal exposes those statuses in its complete query input. An entry is completed, failed, cancelled, running or unfinished; a
 saved turn is completed, failed or cancelled, and a turn that returned
 well-formed text and ended failed is failed. A turn that saved nothing for the
 field being read answers `text: null` with no window either side of it, which

@@ -45,6 +45,7 @@ import {
   race,
   spawn,
   type Subscription,
+  type Stream,
   type Task,
   suspend,
   useScope,
@@ -153,7 +154,7 @@ import {
 } from "./sidekick/admission.ts";
 import type { Admitting, ColdReservation } from "./sidekick/admission.ts";
 import { fillable, stillAdmissible } from "./sidekick/gate.ts";
-import type { DraftFacts, Instruction } from "./sidekick/gate.ts";
+import type { DraftFacts, Instruction, Reservation } from "./sidekick/gate.ts";
 import { rootReads } from "./sidekick/requests.ts";
 import type { RootReading } from "./sidekick/requests.ts";
 import type { SubmitReceipt } from "./sidekick/controls.ts";
@@ -174,7 +175,7 @@ import { projectSidekick, retryable, SAVED_WITHOUT_REPLY } from "./sidekick/mode
 import type { SidekickReading, SidekickSavedTurn } from "./sidekick/model.ts";
 import type { ReplExecution } from "./journal.ts";
 import { lifecycleRefusal, openReplSession } from "./session.ts";
-import type { ReplReading, ReplSession } from "./session.ts";
+import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, routeDrawerRect, skeletonOps } from "./layout.ts";
@@ -225,6 +226,13 @@ export interface ReplInputPass {
   readonly generation: number;
   readonly events: readonly { readonly event: ReplScreenEvent; readonly accepted: boolean }[];
 }
+export interface DirectRepl {
+  submit(
+    source: Stream<string, void>,
+    onAdmitted?: (submission: ReplSubmission) => void,
+  ): Operation<Result<ReplSubmission>>;
+}
+
 export interface HeadlessReplRoot {
   readonly observeInputPass?: (reading: ReplInputPass) => void;
   handoffReference?(
@@ -234,6 +242,7 @@ export interface HeadlessReplRoot {
   readonly view: ReplLiveScreen;
   ready(root: {
     readonly session: ReplSession;
+    readonly direct: DirectRepl;
     readonly owner: SidekickOwner;
     readonly dispatch: SidekickDispatch;
     readonly reads: RootReading;
@@ -1260,8 +1269,97 @@ function* drive(
       workspace,
       changed: () => wakes.send({ kind: "session" }),
     });
+    const direct: DirectRepl = {
+      submit(source, onAdmitted) {
+        return scoped(function* () {
+          const input = yield* source;
+          let text = "";
+          let next = yield* input.next();
+          while (!next.done) {
+            text += next.value;
+            next = yield* input.next();
+          }
+          let held: Reservation | undefined;
+          let didReport = false;
+          yield* ensure(() => {
+            if (held !== undefined) {
+              held.live = false;
+              if (!didReport) {
+                admitting.reported.push({
+                  kind: "refused",
+                  held,
+                  refusal: "Direct submission withdrawn.",
+                  byReadiness: false,
+                });
+                wakes.send({ kind: "session" });
+              }
+            }
+          });
+          if (ending || reopening.blocked !== undefined) {
+            return Err(new Error(reopening.blocked ?? "This root is ending."));
+          }
+          const ready = current.admits();
+          if (!ready.ok) {
+            return ready;
+          }
+          const read = current.reading(undefined);
+          if (!read.ok) {
+            return read;
+          }
+          const ordinal = read.value.model.entries.length;
+          const taken = take(
+            "direct",
+            { ...draftFacts(), draft: text },
+            {
+              entry: entryKey(ordinal + 1),
+              ordinal,
+            },
+            admitting,
+          );
+          if (!taken.ok) {
+            return taken;
+          }
+          held = taken.value;
+          const reservation = held;
+          yield* reopening.settle();
+          const submitted = yield* current.submit(
+            text,
+            undefined,
+            () => {
+              if (
+                ending ||
+                reopening.blocked !== undefined ||
+                admitting.held !== reservation ||
+                admitting.testing
+              ) {
+                return Err(
+                  new Error(reopening.blocked ?? "This direct request can no longer start."),
+                );
+              }
+              return stillAdmissible(reservation, draftFacts());
+            },
+            undefined,
+            onAdmitted,
+          );
+          admitting.reported.push(
+            submitted.ok
+              ? { kind: "admitted", held: reservation, submission: submitted.value }
+              : {
+                  kind: "refused",
+                  held: reservation,
+                  refusal: submitted.error.message,
+                  byReadiness: false,
+                },
+          );
+          didReport = true;
+          wakes.send({ kind: "session" });
+          return submitted;
+        });
+      },
+    };
     if (options.headless !== undefined) {
       yield* options.headless.ready({
+        direct,
         session: current,
         owner: sidekick,
         dispatch,
@@ -1422,6 +1520,9 @@ function* drive(
       for (const report of admitting.reported.splice(0)) {
         if (admitting.held === report.held) {
           admitting.held = undefined;
+        }
+        if (report.held.by === "direct") {
+          continue;
         }
         if (report.kind === "admitted") {
           reading = { model: current.model, navigation: current.navigation };

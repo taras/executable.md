@@ -5,7 +5,7 @@ pwd -P
 ```bash exec as="commandSetting"
 printf '%s' "$XMD_EXAMPLE_COMMAND"
 ```
-<Let as="runner" value={commandSetting.stdout || "deno run --allow-all '" + root.replaceAll("'","'\"'\"'") + "/packages/cli/src/deno.ts' run"} />
+<Let as="runner" value={commandSetting.stdout || "deno run --allow-all '" + root.replaceAll("'","'\"'\"'") + "/packages/cli/src/deno.ts' run --allow-absolute"} />
 <Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect the saved test evidence.",evidence:["intent.md"]}} />
 
 <Test name="the phase entry carries source and selected documents and needs no SHA correction" timeout="60s">

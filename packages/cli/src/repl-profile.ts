@@ -14,7 +14,7 @@ import { agentIdentityComponents } from "@executablemd/core";
 import type { PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { useScope } from "effection";
+import { scoped, useScope } from "effection";
 import { cwd } from "@executablemd/runtime";
 import { resolve, join } from "node:path";
 import type { Operation } from "effection";
@@ -30,10 +30,18 @@ import type { CommandPlugins } from "./plugin-host.ts";
 import { useHeadlessChildren } from "./headless/host.ts";
 import type { HeadlessChildren } from "./headless/host.ts";
 import { runReplProgram } from "./repl/program.ts";
-import type { ReplInputPass } from "./repl/program.ts";
+import type { HeadlessReplRoot, ReplInputPass } from "./repl/program.ts";
 import { ReplEntryHost } from "./repl-entry-installation.ts";
 import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
-import { renderSyntaxDocumentation, renderSyntaxMarkdown, syntaxSymbols } from "./syntax.ts";
+import { inspectSyntax, renderSyntaxMarkdown } from "@executablemd/core";
+import { Component, Syntax } from "@executablemd/core/api";
+import { useSyntax } from "@executablemd/core/host";
+import {
+  TESTING_REGISTRATIONS,
+  testingDocumentation,
+  useTestingComponents,
+} from "@executablemd/testing";
+import { registerComponents, contributeDocumentation } from "@executablemd/core";
 
 const REPL_INCLUDES: readonly string[] = Object.freeze(["components", "."]);
 
@@ -49,6 +57,7 @@ const REPL_INCLUDES: readonly string[] = Object.freeze(["components", "."]);
  * would read and remove directories under the developer's own home.
  */
 export interface ReplProfileSeams {
+  readonly observeChildRoot?: (root: Parameters<HeadlessReplRoot["ready"]>[0]) => void;
   readonly observeChildInputPass?: (reading: ReplInputPass) => void;
   readonly acp?: AcpxProviderDependencies;
   readonly planWriterRoot?: string;
@@ -211,6 +220,8 @@ export function* assembleReplProfile(
   plugins: CommandPlugins,
   facts: ReplProfileFacts = {},
 ): Operation<ReplProfileAssembly> {
+  yield* registerComponents(TESTING_REGISTRATIONS.filter(({ name }) => name.startsWith("Assert")));
+  yield* contributeDocumentation(testingDocumentation);
   const projectCwd = yield* cwd();
   const mounts = facts.mounts;
   const configuredIncludes = Object.freeze(
@@ -223,6 +234,10 @@ export function* assembleReplProfile(
       profile,
       headless: {
         ...headless,
+        *ready(root) {
+          facts.observeChildRoot?.(root);
+          yield* headless.ready(root);
+        },
         ...(facts.observeChildInputPass === undefined
           ? {}
           : { observeInputPass: facts.observeChildInputPass }),
@@ -288,25 +303,26 @@ export function* assembleReplProfile(
         installElicitation: noElicitationOfItsOwn,
       });
 
+      const entryInstallations = Object.freeze([
+        ...installations,
+        children.installation,
+        Object.freeze({
+          components: agentIdentityComponents(),
+          declarations: Object.freeze([plan]),
+        }),
+      ]);
       const profile = Object.freeze({
         children,
         mounts,
         includes,
         projectCwd,
-        vocabulary: entryVocabulary(includes, plugins, children.installation.components),
+        vocabulary: entryVocabulary(includes, entryInstallations),
         // Read off the admitted assembly here, once, while it is in hand. Copied
         // rather than referenced so nothing downstream can reach a Plugin value
         // through the profile, and frozen because a profile is read and never
         // changed.
         plugins: names,
-        installations: Object.freeze([
-          ...installations,
-          children.installation,
-          Object.freeze({
-            components: agentIdentityComponents(),
-            declarations: Object.freeze([plan]),
-          }),
-        ]),
+        installations: entryInstallations,
         generated: ordinaryGeneratedSelection(),
         permissionMode,
         ...(entryInstallation === undefined ? {} : { entryInstallation }),
@@ -329,32 +345,107 @@ export function* assembleReplProfile(
   });
 }
 
-/**
- * Describe one profile's entry vocabulary, through the machinery `xmd syntax` uses.
- *
- * One construction for both questions, and the same one the command line
- * answers from: an operator printing the vocabulary and a reply asking about it
- * are asking about one language, and two renderings that agreed only by hand
- * would be one release away from disagreeing.
- *
- * Exported because a profile assembled for a proof describes the same vocabulary
- * as a profile assembled for a command — the includes and the Plugins differ,
- * and nothing else does.
- */
+/** Describe the finalized entry installations without acquiring their resources. */
 export function entryVocabulary(
   includes: readonly string[],
-  plugins: CommandPlugins,
-  components: import("@executablemd/core/host").ExecutionInstallation["components"] = [],
+  installations: readonly ExecutionInstallation[] = [],
 ): EntryVocabulary {
+  function* ordinary() {
+    return {
+      includes: [...includes],
+      registry: new Map(yield* Component.operations.registry),
+      components: installations.flatMap((one) =>
+        (one.components ?? []).map((item) => ({ ...item })),
+      ),
+      declarations: installations.flatMap((one) =>
+        (one.declarations ?? []).map((item) => ({ ...item })),
+      ),
+    };
+  }
   return Object.freeze({
-    *symbols(): Operation<string> {
-      return renderSyntaxMarkdown(yield* syntaxSymbols(includes, plugins, components));
+    symbols(): Operation<string> {
+      return scoped(function* () {
+        const inputs = yield* ordinary();
+        yield* useSyntax(() => inspectSyntax(inputs));
+        return (
+          renderSyntaxMarkdown(yield* Syntax.operations.symbols) +
+          "\nAssertions are available in ordinary entries. Markdown test helpers are documented by name with REPL.Syntax and run through REPL.Test.\n" +
+          ENTRY_AVAILABILITY
+        );
+      });
     },
     documentation(names: readonly string[]): Operation<string> {
-      return renderSyntaxDocumentation(includes, names, plugins, components);
+      return scoped(function* () {
+        const inputs = yield* ordinary();
+        const runnable = yield* inspectSyntax(inputs);
+        const ordinaryNames = new Set(
+          runnable.categories.flatMap((category) => category.entries.map((entry) => entry.name)),
+        );
+        // Inspect testing separately so reference registrations cannot replace
+        // an ordinary selection or read its moving session files a second time.
+        yield* useTestingComponents();
+        const testing = yield* inspectSyntax({ includes: [] });
+        const readable = {
+          ...runnable,
+          categories: [
+            runnable.categories[0],
+            {
+              ...runnable.categories[1],
+              entries: [
+                ...runnable.categories[1].entries,
+                ...testing.categories[1].entries.filter((entry) => !ordinaryNames.has(entry.name)),
+              ].sort((left, right) => {
+                if (left.name < right.name) {
+                  return -1;
+                }
+                return left.name > right.name ? 1 : 0;
+              }),
+            },
+            runnable.categories[2],
+          ],
+        } satisfies import("@executablemd/core").SyntaxSymbols;
+        yield* useSyntax(function* () {
+          return readable;
+        });
+        yield* Syntax.around({
+          symbols: function* () {
+            return runnable;
+          },
+        });
+        const documentation = yield* Syntax.operations.documentation(names);
+        return (
+          documentation +
+          ENTRY_AVAILABILITY +
+          (names.some((name) => !ordinaryNames.has(name)) ? TEST_CONTEXT : "")
+        );
+      });
     },
   });
 }
+
+const ENTRY_AVAILABILITY =
+  "\nAvailability describes resolution in an ordinary entry, not permission to perform every effect or a guarantee of success.\n";
+
+const TEST_CONTEXT = `
+Components marked unavailable cannot run in an ordinary entry. Use them in a Markdown test
+requested through REPL.Test. Save this complete test as the session-relative
+\`components/assertions.test.md\`:
+
+\`\`\`xmd
+<Test name="assertions">
+  <Assert expr={true} />
+  <AssertEquals actual="yes" expected="yes" />
+</Test>
+\`\`\`
+
+Then write this in a Sidekick response:
+
+\`\`\`xmd
+<REPL.Test path="components/assertions.test.md" />
+\`\`\`
+
+The file runs as a test document; do not submit it as an ordinary entry.
+`;
 
 /**
  * The Plan Component's elicitation installer, which installs nothing.

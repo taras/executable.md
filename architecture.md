@@ -3144,7 +3144,10 @@ so a check that was skipped or answered elsewhere authorizes nothing.
 Creating a directory is one semantic act of its own. `<Dir>` gives
 `ensureDirectory` the enclosing working directory and the path the author
 selected; a relative path is resolved against that directory and an absolute
-path keeps the component's existing meaning and is used as written. The
+path keeps its provider-owned meaning and is never rebased. Host absolute
+selection requires effective `files("absolute")` and write permission before
+resolution, metadata or creation. `xmd run` and `xmd repl` deny it by default;
+`--allow-absolute` opts in within the enclosing restrictions. The
 provider recursively creates a missing target, accepts an existing directory
 without replacing or clearing it, and refuses a final or intermediate
 non-directory with structural failure data that carries no resolved path or
@@ -3185,8 +3188,8 @@ than implied:
   ordinary file operations refuse empty, absolute, and lexically escaping paths
   without touching the filesystem, and refuse an observed outward symlink once
   resolution can see one. Directory ensure is the placement exception above:
-  it accepts the exact absolute target `<Dir>` already accepts and resolves a
-  relative target from the enclosing cwd. It creates directly and enlists in no
+  it accepts an absolute target only with effective absolute and write
+  permission, and resolves a relative target from the enclosing cwd. It creates directly and enlists in no
   transaction, so directories it created persist after the component and the
   document end — including when later content fails or is cancelled — and a
   recursive attempt is never rolled back or removed by teardown. These guarantees
@@ -3241,8 +3244,10 @@ transactions](#replay-and-effect-transactions).
 
 #### Managed checkout reuse
 
-An ordinary Repository or Worktree selects a managed checkout under `~/.xmd/repositories`,
-addressed by a digest of its whole identity and described by a closed version 1 sidecar
+An ordinary Repository or Worktree selects a managed checkout under `~/.xmd/repositories`.
+A workspace-marked REPL entry instead selects beneath its existing session workspace,
+as described in [Session workspace placement](#session-workspace-placement). Both use
+the same selector, with slots addressed by a digest of the whole identity and a closed version 1 sidecar
 written by exclusive temporary sibling plus atomic rename only after the checkout is
 complete and verified. The slot is entered under an exclusive non-blocking advisory lock
 held for the whole document execution, so a second process is refused rather than made
@@ -3345,8 +3350,9 @@ worktree. A workflow run has none.
 
 #### Managed bytes
 
-A managed checkout is a Repository or Worktree an ordinary `xmd run` created under
-the host root `~/.xmd/repositories`, addressed by a digest of its whole identity, described by a
+A managed checkout is a Repository or Worktree created under the host root
+`~/.xmd/repositories`, or under the session workspace for a marked REPL entry,
+addressed by a digest of its whole identity, described by a
 closed version 1 sidecar written beside it, and held for one document execution by an
 exclusive non-blocking advisory lock. It survives every execution: nothing deletes,
 resets, cleans, fetches or repairs one.
@@ -3559,7 +3565,11 @@ translation lives entirely in `@executablemd/acp`, and no ACP or ACPX type cross
 A provider-native session identity is the identity an agent asserts for its own durable
 session state, distinct from the logical XMD session key and from the ACP/ACPX record
 identity. Only an asserted one crosses a handoff; XMD never infers that a string a
-native CLI would accept is one.
+native CLI would accept is one. A workflow may retain the distinctly tagged
+`acpx.acpSessionId` loading target when no native assertion exists. An asserted
+`acpx.agentSessionId` takes precedence; changed kind or value refuses
+reattachment. The ACP target never becomes `Session.agentSessionId` or a native
+CLI handoff identity.
 
 #### Inert placement
 
@@ -3585,24 +3595,42 @@ constructed.
 
 #### Materialization
 
-Session materialization is the transition that makes a placement's chosen route and its
-backend history resumable. The runtime is the integrity-pinned ACPX 0.21.1 source
-closure. Its released child environment and response metadata coexist with the
-local explicit-acceptance barrier: `promptStarted` acknowledges transport only.
-Promotion and ordinary checkpoints share the released session owner's writer;
-the asserting copy is saved before memory adopts it, and finalization joins
-promotion before saving. ACP-first materialization happens only when the backend
-reports that it accepted the session's first turn; client-native materialization is the
-native launch's existing retained construction. Nothing else promotes a placement — not
-a returning ensure, a first output, a terminal result, a checkpoint token, an error code
-or a diagnostic.
+An adapter declaring `acceptance: "first-turn-acceptance"` requires explicit
+backend acceptance before a new ACP session exposes events. Codex and Claude
+declare it. The integrity-pinned ACPX 0.21.1 runtime consumes the versioned
+`executablemd.session-materialization/v1` marker. Its `promptStarted` is only
+transport acknowledgement; text and `end_turn` prove no stronger acceptance.
+Promotion shares the session owner's writer: the asserting copy is saved before
+memory adopts it, and finalization joins promotion before saving. Host mapping
+commits after that save and before events. Missing acceptance never selects the
+standard path. Client-native materialization keeps the native launch's retained
+construction.
+
+A standard adapter uses ordinary ACP creation without this barrier. The provider
+saves its record and the host retains its identity before configuration,
+permission routing and turn execution. Events report streamed text and the
+actual terminal outcome. Native identity exists only when the peer asserted it;
+an ACP session id alone proves neither native identity nor durable recovery.
 
 #### Established sessions
 
-An established session is a placement whose immutable construction route and durable
-provider or native identity both already exist, and which is therefore validated
-eagerly: reattached, compared against its retained history, and refused when either is
-missing or names another conversation.
+A retained standard record is existing. Cold continuation loads or resumes the
+exact stored ACP session, or refuses before another prompt. Missing load/resume
+support refuses even an unused record. The released `-32603` recreation remains
+only for a provably never-prompted record; used and uncertain conversations are
+never replaced. Failed attempts may retain their user request and lifecycle
+facts while preserving earlier messages, identity and configuration.
+
+A held conversation's canonical history independently establishes use: a turn
+with nonempty agent output, status other than failed, a stop reason, or a native
+identity counts as used. Its private issuance requires existing construction. If
+provider storage is gone, setup refuses before creation or sending, preserves the history and
+keeps the conversation usable. A history containing only failed-before-answer
+turns retains its creation retry. An outcome-less turn still refuses opening
+and is never resent.
+
+Established strong sessions retain their construction route, asserted native
+identity and executable checks. Their continuation never silently downgrades.
 
 #### Instruction placement
 
@@ -3698,7 +3726,13 @@ Identity provenance records who chose a provider-native session identity: the pr
 returned it, or the client allocated it before the provider existed. This provenance is
 retained rather than inferred, because after the fact both are just a string in the
 record. A released record written before the distinction existed reads as
-provider-returned, which is the only compatibility inference.
+provider-returned, which is the only compatibility inference. Backend confirmation
+is separate from allocation: Claude's native route remains client-allocated when
+the retained adapter confirms that same conversation on `_meta.agentSessionId`.
+The adapter reads its owned SDK Query before answering session creation or
+reattachment. Only a successful SessionStart lifecycle response confirms the
+identity; a requested UUID or ACP session name does not. This confirmation stays
+private until explicit first-turn acceptance and the asserting provider save.
 
 #### Proving release
 
@@ -3735,6 +3769,21 @@ A provider partition is one complete, independently owned agent-provider state �
 runtime, store, managed sessions, queues, coordinator, teardown — selected by the one
 installed factory at each dispatch. Production is the single-partition case of the same
 path; holding a partition grants work, never permission.
+
+### Shared local-agent qualification
+
+The [local-agent example](examples/agent-certification/README.md) uses ordinary
+Agent/Session/Prompt routing and literal-command registration. Private comparisons
+report basic authentication, streaming and completion separately from acceptance,
+asserted native identity, durability and cleanup. Missing stronger evidence
+leaves demonstrated basic passes intact. Expectations confer no execution,
+identity or certification. Reports finalize after the existing owner joins.
+Native cleanup remains unverified at the production probe/release boundary,
+so cancellation and durable certification remain non-pass. Successfully joined
+stages permit independent subsequent work; pending joins, actual cleanup failure
+and production ownership refusal stop admission. The example introduces no provider, registry or lifecycle
+observation interface. Its [ACP contract](specs/acp-client-spec.md#shared-local-agent-qualification)
+keeps ordinary retention separate from workflow Session-site identity.
 
 ### Agent permissions and generated XMD
 
@@ -3886,20 +3935,21 @@ identity. Cwd and provider placement are never compatibility inputs. What stays
 beside the run on disk is the provider's own session store and one empty working
 directory per session; both are disposable.
 
-The order is placement, then the backend's acceptance of the session's first
-turn, then the provider's canonical, tagged assertion of a durable identity,
-then the mapping commit — and only then is anything that first turn produced
-exposed to the document.
+Strong adapters order placement, explicit first-turn acceptance, asserting
+provider save, tagged native assertion and mapping commit before events.
+Standard adapters order placement, ACP creation and provider save, tagged ACP
+loading-target mapping, configuration and permission routing, then turn and
+events. Native assertion takes precedence when available. Neither path derives
+stronger acceptance from transport acknowledgement or output.
 
 Placement is inert. A `<Session>` says where a session will live and which agent
 it is compatible with; it creates no provider session, contacts no backend and
-writes no row. The session comes into existence when the first subscribed
-`<Prompt>` starts a turn the backend accepts, through the one handle that
-ensured it, and acceptance is reported by the adapter rather than inferred from
-what the turn then produced.
+writes no row. The first subscribed `<Prompt>` constructs it through the handle that ensured
+it. Strong construction additionally waits for the adapter's explicit acceptance
+rather than inferring acceptance from what the turn produced.
 
 Occupancy of a key in the provider's own store is not an assertion: it says
-something is there, not what conversation it is. A record the provider holds for
+something is there, not what conversation it is. A pending strong record the provider holds for
 a first turn nobody accepted is exactly that — occupancy — so it asserts nothing,
 no mapping is committed for it, and the next attempt creates rather than
 resumes.
@@ -4229,7 +4279,10 @@ asked at all.
 
 The workflow profile selects ACP-only capability explicitly: it advertises
 neither native launch nor client-native attachment. It supplies no machine
-session coordinator, construction-route store or executable observer. A workflow
+session coordinator, construction-route store or executable observer. The host
+selects its installed Claude launcher separately and supplies the path only to
+the retained adapter child's transient environment. This selection grants no
+native-session capability and performs no executable-build admission. A workflow
 session belongs to a run; the machine-wide ownership account describes a
 different boundary. Deleting a run removes its mapping row and provider-session
 directory and reports the categories removed.
@@ -5718,8 +5771,13 @@ yield* Permissions.around({
 });
 ```
 
-Two members, `files("read" | "write")` and `fetch(input, init?)`, both answering
-`true` until something says otherwise. A restriction returns `false` to refuse
+Two members, `files("read" | "write" | "absolute")` and `fetch(input, init?)`.
+Read, write and fetch default to true; absolute defaults to false. A run or REPL
+without opt-in installs an ancestor default-max absolute refusal. With
+`--allow-absolute`, a min handler allows only absolute and delegates the other
+questions unchanged. Default-max restrictions run before that allowance; an
+enclosing refusal also wins over a nested invocation's opt-in. Document props
+and Agent permission choices grant no filesystem permission. A restriction returns `false` to refuse
 and otherwise delegates the unchanged arguments, which is what makes
 restrictions intersect: the answer is the whole chain's, so a scope nested
 inside a read-only region cannot permit a write by answering `true`. Returning
@@ -5734,7 +5792,11 @@ filesystem operations and the `API.Fetch` terminal for a request. That is after
 every contextual transformation, so what is permitted is what would actually be
 performed rather than what was first asked for. It mediates those semantic
 operations and nothing by implication — `API.Fs`, subprocesses and Git host
-operations are not covered, and a `true` answer supplies no capability.
+operations are not covered, and a `true` answer supplies no capability. A live
+repository file router additionally checks an absolute directory request's
+write/absolute permission before its own routing effects. It restores every
+acknowledged result first and sends permitted new work through the complete
+composed chain, so the final provider still checks the transformed request.
 
 What a *host* does stays on `./host`. `Markdown({…})`, `sourceDigest` and
 `Structural({…})` construct what is declared to an execution, and
@@ -6658,6 +6720,46 @@ identity/materialization describes only the attachment and its message acceptanc
 it does not assert acceptance by the underlying Sidekick provider. Unknown
 feedback keeps its existing refusal and is never resent through attachment.
 
+A direct caller uses `xmd repl submit --attach SESSION_ID -` on that same
+exact child connection. The root's private `direct.submit(Stream<string, void>,
+onAdmitted?)` collects normal stream completion before reserving the existing
+entry/test slot, settles reopening and rechecks live-head, request liveness and
+session readiness at actual start. Its source uses project placement and the
+captured ordinary entry profile. Direct reservations bypass only composer
+emptiness, takeover, revision and clearing rules; neither composer changes.
+
+ReplSession's optional fifth `submit` argument retains the exact task-bound
+submission synchronously once at acknowledged admission. It performs no I/O;
+the interaction publishes admitted before progress outside that callback.
+The session retains execution, join, final output and Entry Stop ownership.
+Cancelling unadmitted startup joins it; disconnect after admission cancels only
+the connection's observations. Exact Stop, output and join settle before one
+final record is fixed. A stale Stop refusal cannot replace natural completion or
+reach a successor. Actual publication and cleanup failures keep canonical
+precedence, separately from the journal's retained terminal.
+
+Private `submit`, `submit-source` and `submit-interrupt` requests use existing
+envelope IDs on the original authenticated connection. Only genuine child
+attachments receive them. The adapter holds at most one unread source part and
+one pending consumption credit, with dispatch free to receive interrupt while
+credit waits. A closing part delivers text before the terminal item, and grants
+its credit only when that item is consumed. Failure and EOF discard partial
+source and join owned request work. Complete program strings have no aggregate
+size or part-count limit; each part satisfies both UTF-8 text and encoded frame
+bounds. Progress keeps one latest snapshot of disclosed output and exact entry
+waits; the existing bounded Wire handles delivery independently of production.
+A final payload too large for one frame becomes unavailable evidence carrying
+the known submission, never truncated JSON or an invented result.
+
+The shared `sidekick-acp/submit.ts` holds command parsing, one correlated reply
+reader, complete supplied stdin acquisition, source splitting, record output and
+status as data. All four runtime entrypoints select submit before `main` and use
+`run` for this command. Each scopes its SIGINT listener, obtains its subscription
+and starts a receiver/latch before input or socket work can block. Before a
+remote interaction, interruption joins local acquisition; afterwards it retains
+the reader and connection through exact Stop settlement. Exit status follows
+`run` cleanup. Other commands retain their existing `main` lifetime.
+
 ### Session workspace placement
 
 A Sidekick response and an entry submitted through its controls start in the
@@ -6681,12 +6783,61 @@ Completed entries remain projections. Old bytes are never rewritten, and an
 older reader that rejects unknown members refuses a marked history.
 
 The workspace root is passed directly from the entry owner into the CLI-private
-recorder, only for marked entries. The captured project cwd is a separate direct
-input for lazy ambient discovery and ordinary commit identity. Native Git still
+recorder, only for marked entries. Fresh selections in those entries use
+`<workspace>/repositories` as their managed root, including linked Worktrees.
+Unmarked entries keep the configured host root. A nested Dir cannot retarget
+that root. Acknowledged placements retain their recorded paths without moving
+checkouts or validating current HEAD on replay. The captured project cwd is a
+separate direct input for lazy ambient discovery and ordinary commit identity. Native Git still
 requires an operation to name a valid selected checkout; a workspace cwd supplies
 no project fallback. The Sidekick's native provider keeps the captured project
 `agentCwd`, or the caller's explicit dependency, and its existing identity and
-configuration.
+configuration. Provider-owned Repository/Worktree placement grants no absolute
+permission. A later authored `Dir path={checkout}` needs opt-in; a contained
+relative address derived from the actual workspace and returned checkout does not.
+Session placement and TempDir grant no absolute permission either.
+
+### Approved host asset import
+
+The captured CLI-private `<REPL.ImportAsset source="/known/mock ü.html"
+destination="inputs/mock ü.html" />` control imports one non-repository regular
+file into the existing session workspace. The root passes that directory directly;
+response cwd and props cannot retarget it. Missing workspace or importer refuses.
+The native adapter checks effective read/write restrictions before metadata I/O,
+after approval and before publication. Ordinary Files and repository acquisition
+keep their existing owners. This separately approved operation remains eligible
+with ordinary absolute access denied: it requires effective read and write,
+not absolute permission, and approval installs no general absolute allowance.
+A destination in a managed checkout is derived from the actual workspace and
+returned checkout beneath it. An arbitrary host repository outside that root
+is unsupported; the importer never broadens its destination root.
+
+Preparation resolves metadata and retains one exact source/destination pair.
+Core elicitation presents that pair and the workspace-relative result with exact
+Import/Decline choices and no initial answer. Only validated Import permits content
+access or destination data effects. Closing remains unanswered; Stop withdraws
+and joins this response's question without answering an entry's independent one.
+
+The adapter copies bytes into a private temporary directory beneath the final
+parent, then publishes the complete payload with a no-replace hard link. The link
+names the staged copy, never the external source. Existing files, directories,
+dangling links and late collisions survive. Relative containment and observed
+parent links use the existing stable-host-namespace guarantee. A collision requires
+another explicit destination and fresh approval.
+
+Cleanup is armed before acquisition. Each non-abortable native mutation retains
+its completion and joins it before staging removal. Success follows complete
+publication and successful cleanup. Cancellation during issued publication can
+leave complete bytes, and cleanup preserves them. Cleanup failure or uncertain
+publication stops the exchange; neither becomes ordinary refused-control feedback.
+
+The existing control intent retains both operands before work. Only a joined
+ordinary Result receives an outcome; only success designates the relative path.
+An append failure supplies no success. Unfinished imports remain unknown: passive
+cold inspection reads no source, restarts no question and copies nothing. Later
+ordinary entries read the workspace copy, independently of the external source.
+There is no crash reconciliation, automatic retry, adoption or atomic host-file
+and journal transaction.
 
 ### Response-owned component testing
 
@@ -7649,6 +7800,16 @@ the request as it arrived stays the operation's identity. Terminal permission
 applies to live work, after transformations, and a completed result is answered
 before any of it.
 
+After every existing restoration branch, a genuinely new absolute directory
+request checks write and absolute before `targetOf`, managed ownership, live
+selection, holds or workspace canonicalization. A refusal returns ordinary
+`permission-denied` without discovering coverage or adding a file-operation
+record; normal enclosing failure recording remains. Pure mount conversion and
+history validation are permitted before this gate. Permitted work retains the
+ordinary `perform` chain and terminal check after transformations. A saved
+ensure or refusal remains historical under changed policy, while a new mapped
+absolute ensure, including a converted relative operand, needs permission.
+
 A record's name is the digest of the record version, the operation kind and the
 complete request as the document wrote it. Nothing is canonicalized for naming,
 because a path resolved through the filesystem is a fact about the host at that
@@ -8322,32 +8483,53 @@ Send's live access, and later entry settlement cannot recreate it. Fatal
 persistence, Files, disclosure and cleanup outcomes keep their existing
 precedence.
 
-**One entry's saved evidence is read through the projection, and metadata is
-part of it.** A reader of a failed entry needs what it ran, what its turns
-said, what it printed and where each of those sits in the file, and the last of
-those is the only one the model did not already hold: a transcript is a
-presentation and says nothing about the effects it does not draw. So
-`buildEntry` forms one row per retained `Yield` and `Close` of the range it is
-already reading — marker, type, name, status, position, prompt number and
-agent, and no body, result payload, checkpoint or stack — and detaches and
-freezes it with everything else the entry carries. A saved Prompt's row takes
-its semantic outcome, its number and its agent from the turn the same reading
-parsed, matched by the marker it was retained under, and the root close takes
-the outcome that reading already produced; every other row states the protocol
-outcome its record states. Raw `DurableEvent`s still terminate at the model,
-and no new record, index or stored position is written anywhere.
+**One entry's saved evidence is read through the projection.** `buildEntry`
+forms one row per retained `Yield` and `Close` in append order: marker, type,
+name, status, optional source position, prompt number, agent and supported exec
+facts. A saved Prompt's row takes its semantic outcome, number and agent from
+the turn that same reading parsed; the root close takes the parsed entry outcome.
+Other rows retain their protocol status. An exec result with protocol `ok`
+projects its validated integral `exitCode` and independently retained string
+channels. An absent channel stays absent; an empty retained channel stays empty.
+Error, cancellation and missing results supply no invented exit or channels.
+Projection detaches and freezes these facts, refuses malformed supported results,
+and exposes no arbitrary effect payload, provider file, command descriptor or stack.
+Raw `DurableEvent`s still terminate at the model.
 
-The reads over it are a feature-local module of the Sidekick's own
-(`sidekick/entry-inspection.ts`): pure selectors, Unicode and record windows,
-and four page builders over frozen entry facts and the exact live output
-observation their caller supplies. A running entry uses the existing printing
-fact; a cancelled entry may use the owning Send's final joined observation under
-the rule above. The reader owns no task, listener, stream or cache and performs
-no wait or execution. `requests.ts` supplies the acknowledged head and exact
-applicable observation for that read; `controls.ts` retains its ordinary intent
-and outcome pair. This does not add output to the entry's terminal or change the
-entry journal partition. No entry’s provider is reached. Execution ownership and
-the publication and secret boundaries remain unchanged.
+`sidekick/entry-inspection.ts` owns entry selection, Source/Prompt/Output windows
+and the complete Journal value. The root's `inspectJournal` operation takes one
+fresh acknowledged reading for both the response component and passive attachment.
+It builds `{entry,status,failure,prompts,records}`, evaluates ordinary yq over
+that complete permitted value with the existing core evaluator, then pages the
+selected result. Every success is exactly `{value,next,prev,last}`. Small results
+keep their JSON type; selected strings use 4096-code-point windows and arrays use
+at most twenty items within the serialized response bound. Oversized objects or
+indivisible array items refuse with a narrower-query direction. Direct channel
+selection remains fully pageable. Source, Prompt and Output keep their existing
+contracts and exact live-output ownership.
+
+The feature-local `sidekick/journal-query.ts` formats navigation as ordinary yq
+with an always-true literal JSON header, a resolved-positive-entry guard, the
+opaque original expression and a finite slice. It recognizes only that exact
+formatter output: parse the first line's strict JSON tuple, validate it and
+regenerate the whole expression for equality. No arbitrary yq syntax is parsed.
+The selected entry is checked independently, since a collecting expression can
+produce a value after an empty filter. Recognition supplies navigation context,
+not permission. The existing evaluator decides query meaning and failures;
+a successful expression with no usable array/string base is an ordinary fresh
+query. Edited or noncanonical expressions retain ordinary query behavior.
+
+Every page request recomputes against that entry's current complete retained
+facts. Callers reuse the same positive entry number; later admissions cannot
+retarget generated windows, and growth may shift pages. Query text and this
+request's current data supply all navigation context: no issued association,
+cache, snapshot, extra record or second execution owner exists. Both evaluations
+needed for a recognized window use the same captured input. Inspection performs
+no command, provider call, entry admission, resumption or history rewrite.
+`controls.ts` retains the ordinary response-owned intent/outcome and designated
+feedback; the originating and consuming executions keep their disclosure and
+persistence gates. Passive attachments retain exact connection authentication
+and the existing frame bound, without Journal cursor wrapping or success decoration.
 
 The single output read these four replaced is retired from admission rather
 than from history. A response written now cannot name it — the capture seals
@@ -8382,7 +8564,17 @@ defaulted; an empty Plugin selection is reported as `none`, because a command
 that installed none has said something and an omitted line would be
 indistinguishable from a host that could not tell; and a host that describes
 itself not at all refuses the read rather than answering with a partial
-snapshot.
+snapshot. `REPL.Environment` also reads effective XMD file read/write/absolute
+permissions on demand. `current response policy` describes the invoking scope.
+`submitted-entry start policy (session scope; entry content may narrow it)`
+comes from a fresh joined observation in the actual session entry-task owner.
+The CLI-private callback carries detached booleans, no Scope or setter, and
+ends with its owner without falling back to another scope. `approved import`
+reports eligibility under current response read/write plus required per-file
+approval, independent of absolute; eligibility establishes neither validation
+nor approval. These observations grant nothing and describe neither native
+Sidekick tools, component admission nor nested scopes of a running entry. A
+read starts no entry, target filesystem work, prompt or provider/model call.
 
 **The Sidekick is owned by the execution, and one explicit message is the only
 thing that makes it act.** Reopening restores its conversation and its chat
@@ -9402,7 +9594,7 @@ Status is measured against main.
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry [Invariant](#workflow-run-storage); [Interface and evidence](specs/workflow-spec.md#9-retained-run-storage). | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in [Invariant](#one-database-at-a-time-and-a-transaction-a-caller-can-hold). | built on main |
 | REPL workspace mounts | Repeatable explicit SOURCE:TARGET pairs interpret existing Dir scopes through a private authored/actual expansion frame. Actual cwd reaches File, Glob and foreground processes; captured native Agent placement and ordinary/workflow hosts remain separate. Selected reads and originally covered ensures use a closed authored-first association in their entry's ordered engine slots; legacy physical records retain physical matching. [Boundary](#the-document-filesystem-boundary); [retention](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | implemented on the workspace-mount branch |
-| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the captured project ambient checkout, a selected managed checkout, or the marked entry's owned session workspace — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. The shared raw/direct recorder preserves ordinary ancestor-max `Files` composition, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. The local Git and issue work an entry retains have rows of their own beside this one; except for selected mapped reads, work outside every selected checkout and the marked entry's owned workspace stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
+| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the captured project ambient checkout, a selected managed checkout, or the marked entry's owned session workspace — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result before policy or routing. A new absolute directory request refuses denied write/absolute before routing, acquisition or a new file record; permitted live work retains the complete composition and final provider check — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. The shared raw/direct recorder preserves ordinary ancestor-max `Files` composition, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. The local Git and issue work an entry retains have rows of their own beside this one; except for selected mapped reads, work outside every selected checkout and the marked entry's owned workspace stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained selection | one executing REPL entry's own `<Repository>` and `<Worktree>` selections, recorded beside its file work as small routing records: the canonical managed root, the checkout root, the common Git directory, the credential-free repository identity, the display name and the owner checkout, with a root-level `<Worktree>`'s ambient owner recorded as its own answer. The selector is the ordinary managed one, with its own creation, compatible-reuse, conflict and interrupted-adoption policy; what this adds is that a completed selection answers from its record, calling no selector and reaching no clone, `worktree add`, sidecar, credential or lock — so a continuation works in a checkout somebody has since changed or removed, while only new work meets today's filesystem. Parsed facts are held to the call they stand at with pure slot arithmetic against the root the record itself carries, registered in entry-private state and minted as a fresh selection, so a copied or edited Repository value can misname a target and never reach one. One entry at a time *owns* a managed slot, held until teardown and reacquired lazily by the first new operation inside a restored placement; that is a different hold from the shared Git directory's mutation lease, which only a new `<Worktree>` selector and a new mutation take. A selection is acknowledged before its path is bound, and native work that was never acknowledged runs live again under the ordinary partial-creation policy [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained issue work | one executing REPL entry's own `<Issue>` work, retained under the ordinary `issue_effect` records beside its file work and needing no checkout at all: no repository is discovered for it, no managed root is made and no hold is taken. A completed read answers with the snapshot it saw and a completed upsert with the URL it was filed under, neither resolving a provider, reading configuration nor opening a credential. What names it is the entry's own owner — derived by the session from the execution and the entry's admission-order position — with the identity canonical execution minted where it selected this implementation for this invocation; the `runId` and `expansionId` spellings are a compatibility encoding of those two, and a REPL entry installs no synthetic WorkflowRun. Neither member is reachable from a prop, a tracker, a Context, a middleware request or a record field a document can write, and the entry's `<Issue>` is the one shared component with this entry's policy declared over the command's registered default, which a repository component still outranks. One durable boundary encloses the operation and the live attempt inside it composes `IssueOperations` over a transport-facing default of the entry's own, bound in the attempt's own scope under the attempt's own idempotency key and gone before the envelope publishes; canonical form dispatch selects which of the two effects an invocation asks for. An upsert the service accepted and this end never acknowledged retains nothing and presents the same key next time, which is what the provider adopts under; a read has no key and may be made again. The entry's retained issue records are held to its own owner before any of them are replayed [Reference](#what-one-entry-retains-about-the-issue-it-filed). | built on the #181 stack |
 | REPL entry retained local Git | one executing REPL entry's own `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>`, recorded beside its file work and its selections. The performers are the ordinary ones — exactly the pathspecs a document wrote, the ordinary branch rules, the current index and nothing else — installed as ordinary Git dispatch at the implementation slot, so middleware above may answer, refuse, or transform and delegate, and a call answered wholly by a replacement acquires no retention. One durable operation per call and no outer envelope, so a staging child inside a Commit is an earlier journal operation of its own. A completed operation answers from its saved result and runs no `git` at all, writing no tree and reading no identity; a saved commit object id names the commit that was made then and is never re-resolved against today's HEAD. A result is fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products — never a file list, a checkout snapshot or Git output, and a commit message appears as a digest and a byte length rather than a second copy of the text. Routing is private and live-only: the received working directory is canonicalized and the ordinary selector chooses the longest covering checkout among this entry's registrations under the whole authenticated Repository identity, and a saved result's checkout is held to those registrations with parsed facts alone. The invoking person's author and committer are read once per entry, lazily, and only by a genuinely live Commit; a host that cannot say becomes the existing Commit-only refusal. A live operation takes the selected placement's managed slot and then the shared Git directory's mutation lease, keeps both until teardown and takes neither on replay, with this entry's own native attempts serialized per shared Git directory. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add says what `git` reported and promises no rollback; contention, admission and infrastructure failures are fatal and unrecorded. Native completion and acknowledgement are separate: an unacknowledged Commit runs live again and may instead refuse empty-index, and a failed append fences later work with no success binding and no compensating Close. A local result confers no publication evidence, and publication is the row below rather than part of these three [Reference](#the-three-local-git-operations-and-what-a-saved-object-id-means). | built on the #181 stack |
@@ -9417,13 +9609,13 @@ Status is measured against main.
 | testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer [Invariant](#capability-backed-nested-execution); [Interface and evidence](specs/testing-spec.md#nested-executions). | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | nested run-profile Agent and elicitation declarations | Configures one isolated run-profile child with frozen TestAgent scenarios and non-delegating Answers, preserving ordinary component shadowing. [Invariant](#capability-backed-nested-execution); [Interface and evidence](specs/testing-spec.md#nested-executions). | Built on #641; controlled Plan label routing added by #728. |
 | `Config` run deadline / exec default / Fetch default / verbosity | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer, and contextual verbosity — a boolean that is false unless configured, seeded by the command line and overridable for a lexical subtree, bounding nothing and deciding no permission [Invariant](#contextual-run-configuration). | built on this stack |
-| Parent-owned headless XMD child | Canonical REPL entry placement starts one terminal-free root and selected Sidekick conversation; XMD.Session reads/selects its exact reference, one UI attaches/detaches, and Shutdown or parent end joins cleanup. [Ownership and attachment](#local-sidekick-attachments). | Built in the CLI REPL; ordinary providers and prepared attachment rights remain separate. |
+| Parent-owned headless XMD child | Canonical REPL entry placement starts one terminal-free root and selected Sidekick conversation; XMD.Session reads/selects its exact reference, one UI attaches/detaches, direct submit reports progress and exact joined completion, and Shutdown or parent end joins cleanup. [Ownership and attachment](#local-sidekick-attachments). | Built in the CLI REPL; ordinary providers and prepared attachment rights remain separate. |
 | Agent session configuration (`<Session model effort>` / `Agent.options()`) | Applies and verifies exact provider model and effort settings for the final routed session; inspection starts no turn. [Full contract](#native-agent-sessions). | Built; [provider availability and compatibility](#native-agent-sessions). |
 | native session launch (`<Session.Launch>` / `launchAgentSession()`) | Hands one durable session to its provider native UI, retaining construction and build compatibility through interruption. [Full contract](#native-agent-sessions). | Built; [provider availability and compatibility](#native-agent-sessions). |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component [Interface and evidence](specs/executable-mdx-spec.md#618-reading-over-http-fetch). | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data. Its mandatory semantic operations include `ensureDirectory`, which recursively creates or adopts one directory and returns Unit; separately loaded copies compose through the stable Api name [Invariant](#the-document-filesystem-boundary). | built on the #227 stack; directory ensure added by #643 |
 | `<File.Delete path>` | Removes one file or final symlink through Files; absence succeeds and directories refuse. [Filesystem semantics](#the-document-filesystem-boundary), [canonical form dispatch](#capability-backed-invocation-identity) and [generated write admission](#agent-permissions-and-generated-xmd). | built on the #567 stack |
-| host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; its directory ensure accepts Dir's existing absolute target or resolves a relative one against the enclosing cwd, recursively creates or adopts it directly, preserves existing contents, refuses a non-directory before content and never rolls back or deletes created directories; installed by all four CLI entrypoints, so Dir remains operational under Node and Bun [Invariant](#the-document-filesystem-boundary). | built on the #227 stack; directory ensure added by #643 |
+| host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; its directory ensure requires absolute plus write permission for an absolute target, or resolves a relative one against the enclosing cwd, recursively creates or adopts it directly, preserves existing contents, refuses a non-directory before content and never rolls back or deletes created directories; installed by all four CLI entrypoints, so Dir remains operational under Node and Bun [Invariant](#the-document-filesystem-boundary). | built on the #227 stack; directory ensure added by #643 |
 | transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction; directory ensure is one durable `workspace_file` mutation whose recursive creation, resulting root and recorded success commit together, whose documented refusal rolls its savepoint back, and whose replay restores the record without creating again [Invariant](#the-document-filesystem-boundary); [Interface and evidence](specs/workflow-spec.md#10-the-document-filesystem-of-a-run). | built on the #366 stack; directory ensure added by #643 |
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation [Invariant](#replay-safe-live-services); [Interface and evidence](specs/executable-mdx-spec.md#attached-service-api). | built on main |
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry [Invariant](#replay-safe-live-services); [Interface and evidence](specs/executable-mdx-spec.md#43-durable-and-live-binding-environments). | built on main |
@@ -9431,7 +9623,7 @@ Status is measured against main.
 | `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only [Invariant](#the-workflow-lifecycle); [Interface and evidence](specs/workflow-workspace-spec.md#3-workflow-lifecycle). | built on the #366 stack; both acquire #367's executor lock before any lifecycle transition |
 | implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID [Invariant](#workflow-workspace); [Interface and evidence](specs/workflow-workspace-spec.md#5-workspace-structure-and-identity). | document filesystem built on the #366 stack and Repository/Worktree composition on the #293 stack; process capabilities unbuilt (#218) |
 | `<Repository>` / `<Worktree>` composition under a workflow run | names a Git repository and its linked checkouts inside the run-owned Workspace, installs each as contextual working directory, and retains creation identity beside the retained Git bytes [Interface and evidence](specs/workflow-workspace-spec.md#6-repository-and-worktree). | built on the #293 stack, Deno provider only |
-| `<Dir path>` | Creates or adopts its target before content, scopes cwd without changing Repository selection, and restores cwd without deleting created directories. [Invariant](#the-document-filesystem-boundary); [Interface and evidence](specs/executable-mdx-spec.md#6132-entering-a-directory-dir). | Directory-creation contract added by #643; host and workflow Files providers. |
+| `<Dir path>` | Requires host opt-in for absolute selection, creates or adopts its target before content, scopes cwd without changing Repository selection, and restores cwd without deleting created directories. [Invariant](#the-document-filesystem-boundary); [Interface and evidence](specs/executable-mdx-spec.md#6132-entering-a-directory-dir). | Directory-creation contract added by #643; host and workflow Files providers. |
 | transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) under a workflow run | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which retained checkout one runs in, and neither observation admits anything — the observed record is compared with the retained row and the directory with the checkouts that row holds, so a failure of admission, of retained state or of an unrecognized native condition fails the run instead of publishing a result [Invariant](#workspace-local-transactions); [Interface and evidence](specs/workflow-workspace-spec.md#7-git-operations). | built on the #294 stack, Deno provider only |
 | `Git.Push` under a workflow run | Publishes or adopts the selected named branch through authenticated non-force reconciliation. [Authored contract](specs/workflow-workspace-spec.md#74-push) and [effect mechanics](#replay-and-effect-transactions). | built on the #370 stack, Deno provider only |
 | `<PullRequest>` under a workflow run | Upserts the exact published branch and returns stable evidence only after this run proves matching Push history. [Props, results and refusals](specs/workflow-workspace-spec.md#75-pull-request); [positive-integer number and reconciliation](#issue-effects). | built on the #295 stack, Deno provider only |
@@ -9448,7 +9640,7 @@ Status is measured against main.
 | Agent session portability evidence in an XMD artifact | classifies every logical Agent session that contributed a retained Prompt as portable — with ordered provider checkpoint tokens and an opaque Agent session bundle — or as explicitly unavailable, as two content kinds inside the existing version-1 manifest and identity [Invariant](#portable-xmd-artifacts); [Interface and evidence](specs/xmd-artifact-spec.md#25-agent-session-portability-evidence). | specified by `specs/xmd-artifact-spec.md` §2.5; the closed union, both content kinds and the complete post-identity profile verifier are built on the #621 stack, Deno provider only. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry [Invariant](#read-only-lifecycle-inspection); [Interface and evidence](specs/workflow-workspace-spec.md#42-history). | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props [Invariant](#retained-effects-and-history-forks); [Interface and evidence](specs/workflow-workspace-spec.md#11-history-forks). | built on the #368 stack, Deno provider only |
-| workflow Agent session | Uses inert placement and authenticated first-turn mapping under the run-owned no-native-tool profile. [Session mapping](#agent-permissions-and-generated-xmd). | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
+| workflow Agent session | Uses inert placement and capability-specific identity mapping under the run-owned no-native-tool profile. [Session mapping](#agent-permissions-and-generated-xmd). | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
 | generated-XMD admission | Preflights and retains one generated fragment under the exact selected identities and forms. [Admission and continuation](#agent-permissions-and-generated-xmd). | built on the #369 stack, continuation basis amended by #589, and the host's contribution narrowed to `Component.generated` by this stack; core owns the mechanics and no host wrapper remains |
 | `<Evaluate>` | Runs untrusted fragment text or paired-produced text under the host's captured generated selection; whole-fragment admission, local data expressions and ordinary rendered output remain distinct from provider permission. [Admission and captured implementations](#agent-permissions-and-generated-xmd). | built on the #302 stack, extended by #369, and narrowed to a name-and-form selection by this stack |
 | generated mutation proposals | Admits filesystem change proposals through the host's generated selection and ordinary component transactions. [Invariant](#agent-permissions-and-generated-xmd); [Interface and evidence](specs/workflow-workspace-spec.md#mutation-proposal-admission). | Built on #369/#567, with persistent directory creation added by #643; legacy Dir grants refuse, and Git/process/credential/external-write classes remain excluded. |

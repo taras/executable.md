@@ -14,9 +14,38 @@ answer.
   session's workspace, beside its journals. A manually submitted entry starts
   in the invocation's project directory. Read `<REPL.Environment />` for your
   current cwd; do not infer a project path from the workspace path.
+- Resolve relative paths against the current working directory. For example,
+  `inputs/sales.json` names a file beneath that directory. Do not add a leading
+  slash or reinterpret an absolute path as relative to the workspace.
+- Use relative paths for ordinary file and command work. Host absolute Dir
+  selection requires the person to invoke `xmd repl --allow-absolute` and the
+  effective filesystem policy to permit both absolute and write. A mount grants
+  neither: new mapped absolute ensures need that opt-in too. File, File.Delete
+  and Glob operands remain relative even when absolute directory access is allowed.
+  When you intentionally need an external non-repository file, request approval
+  to import it with `<REPL.ImportAsset />`, then use its returned relative path.
+  Import remains available with absolute denied when effective read and write
+  allow it. Its individual approval grants no subsequent absolute access.
 - Write session components under `components/`, copied inputs under `inputs/`,
   and generated files at an appropriate workspace-relative path. These files
   survive reopening; another session has its own directory.
+- On Deno and compiled hosts, a fresh `<Repository>` selection in a submitted
+  entry places its checkout beneath this workspace's `repositories/`. Worktrees
+  follow that root. Read the actual returned checkout path and current workspace
+  before deriving a relative address; do not guess the slot layout. Later entries
+  can read that relative path without acquiring again, including after reopening.
+  Existing recorded placements keep their paths. Placement grants no permission.
+- Import a non-repository asset directly in your response with
+  `<REPL.ImportAsset source="/known/external/mock ü.html" destination="inputs/mock ü.html" />`.
+  Propose `inputs/<original filename>`, preserving spaces and Unicode. The
+  question shows the exact resolved source, destination and relative result.
+  Only Import permits copying; Decline or Stop copies nothing while approval
+  waits. A supplied path alone is not approval. Use the returned relative path
+  for later ordinary reads, including after reopening.
+- An occupied file, directory or symlink refuses import. Choose another explicit
+  destination and request fresh approval. An unfinished import has an unknown
+  outcome; inspect the saved evidence and destination before another request.
+  Repository files follow repository acquisition.
 - Component lookup searches the invocation's configured directories first,
   then this session's `components/`, then ordinary registered defaults. Explicit
   includes replace the project defaults. Read the selected origin through
@@ -29,16 +58,25 @@ answer.
   A directory selects `**/*.test.md` recursively and retains configured-first
   component lookup. Tests have effects and use the command's ordinary permissions.
   Read `<Guide.Entries />` for the create, test, fix and reuse sequence.
-- A nested `<Dir>` selects another known, authorized directory for its content;
-  later siblings return to the workspace. To copy project input, enter its
-  explicitly known project path, capture the read there, then write the copy
-  after leaving Dir. Ask for the project path if you do not know it.
+- To change the working directory for part of a document, use a nested `<Dir>`
+  with a known, authorized relative path. Paths inside it resolve from that
+  directory; later siblings return to the enclosing directory. A context change
+  grants no permission. `<REPL.ImportAsset>` always copies into the session
+  workspace, even when a response changes its working directory.
 - Reopening restores acknowledged results, not file snapshots. A retained read
   answers with its old text; a retained write does not replace an external edit.
   Work performed before its acknowledgement may repeat after interruption.
 - This chapter teaches you how to *interpret* host facts. It states none of
   them, because a fact written into teaching text is a fact that goes stale.
   Ask for the current ones with `<REPL.Environment />`.
+- Read `current response policy` as the effective XMD file read/write/absolute
+  policy for this response. Read `submitted-entry start policy (session scope;
+  entry content may narrow it)` as the policy observed in the owner that starts
+  submitted entries. It does not describe arbitrary nested entry content.
+  `approved import` states eligibility under current response read/write plus
+  separate per-file user approval, independent of absolute; eligibility is not
+  source/destination validation or approval. These facts grant no native tools
+  or component admission.
 - Treat what that read returns as the facts at the moment you asked. It is a
   snapshot retained with your operation, not a cache you can rely on later.
 - What it does not report, you do not know. An absent fact is an explicit
@@ -49,8 +87,9 @@ answer.
 - An entry's subprocesses are its own: they are started under the entry's
   permissions, captured and recorded, and released with it. They are not a shell
   you hold open across entries.
-- You have no native shell, file-editing or MCP tools. File and command work
-  belongs in an ordinary entry, under that entry's permissions.
+- You have no native shell, file-editing or MCP tools. Ordinary File and command work
+  belongs in an entry, under that entry's permissions. Use the direct import
+  control for non-repository host assets.
 - Workspace policy and language rules are different things. The language says
   what you may write; the workspace says what this execution may reach. A
   construct can be perfectly valid and still be refused here.
@@ -66,15 +105,29 @@ answer.
 The host returns the facts it knows — and its explicit unknowns — as feedback,
 then asks for your next response.
 
-For an explicitly known project at `/known/project`, this **entry** copies one
-input into the session workspace. Replace that example path with the actual
-known project path before submission:
+For a known non-repository asset, write this in your **response**:
 
 ```xmd
-<Dir path="/known/project">
-<File path="request.md" as="request" />
+<REPL.ImportAsset source="/known/external/mock ü.html" destination="inputs/mock ü.html" />
+```
+
+The person sees the exact source and destination before any file content is
+read. After Import succeeds, feedback gives `inputs/mock ü.html`. A later
+**entry** reads that copy, including after reopening:
+
+```xmd
+<File path="inputs/mock ü.html" />
+```
+
+The same imported file can be read inside an explicit relative directory
+context. Here `mock ü.html` resolves from `inputs/`; after `Dir` ends, the
+enclosing working directory is restored:
+
+```xmd
+<Dir path="inputs">
+<File path="mock ü.html" as="mock" />
+<Output>{mock}</Output>
 </Dir>
-<File path="inputs/request.md">{request}</File>
 ```
 
 ## Common mistake

@@ -198,6 +198,8 @@ export interface AcpxSessionDetails {
 
 /** What ACPX asserted about a session it established. */
 export interface AcpxSessionIdentity {
+  /** The ACP loading target; this is not a provider-native identity. */
+  readonly acpSessionId?: string;
   readonly agentSessionId?: string;
   readonly acpxRecordId?: string;
 }
@@ -221,10 +223,9 @@ export interface AcpxSessionPolicy {
    *
    * Called where an assertion exists and not before: for a session this
    * provider reattaches to, after the ensure that validated it; for one being
-   * constructed through ACP, after the backend accepted its first turn and the
-   * provider's own record was promoted to assert an identity. A session whose
-   * first turn failed reaches this on no path, because there is nothing to
-   * retain.
+   * constructed through standard ACP, after ordinary ensure; for a strong
+   * adapter, after explicit acceptance promoted the provider record. The ACP
+   * loading target does not establish a native identity.
    *
    * Required, because a host that decides where every session lives is the
    * host that holds what stands there. The integration as a whole is still
@@ -268,6 +269,11 @@ export interface AcpxProviderDependencies {
    * asks for one prepares nothing.
    */
   prepareAgent?: (agentName: string) => Operation<void>;
+  /** Child-only host inputs for the selected command; never session configuration. */
+  agentProcessEnv?: (
+    agentName: string,
+    agentCommand: string,
+  ) => Operation<Record<string, string> | undefined>;
   /**
    * The native adapters this host has proven and is therefore willing to hand
    * a session to. Absent means none: knowing an adapter's command shape is not
@@ -1204,7 +1210,7 @@ function* useAcpxProviderState(
     };
   }
 
-  function* runtimeOptions(): Operation<AcpRuntimeOptions> {
+  function* runtimeOptions(agentName?: string): Operation<AcpRuntimeOptions> {
     const dir = yield* agentCwd();
     const options: AcpRuntimeOptions = {
       cwd: dir,
@@ -1213,6 +1219,15 @@ function* useAcpxProviderState(
       permissionMode: providerOptions.permissionMode,
       nonInteractivePermissions: "deny",
     };
+    if (agentName !== undefined && dependencies?.agentProcessEnv !== undefined) {
+      const environment = yield* dependencies.agentProcessEnv(
+        agentName,
+        resolveAgentCommand(registry, agentName),
+      );
+      if (environment !== undefined) {
+        options.agentProcessEnv = { ...environment };
+      }
+    }
     if (mcpServers !== undefined) {
       options.mcpServers = [...mcpServers];
     }
@@ -1253,8 +1268,8 @@ function* useAcpxProviderState(
    * step: an election that suspends part-way through is an election another
    * operation can act between.
    */
-  function* runtimeBlueprint(build?: BoundBuild): Operation<AcpRuntimeOptions> {
-    const base = yield* runtimeOptions();
+  function* runtimeBlueprint(build?: BoundBuild, agentName?: string): Operation<AcpRuntimeOptions> {
+    const base = yield* runtimeOptions(build === undefined ? agentName : undefined);
     const options: AcpRuntimeOptions = {
       ...base,
       // The acpx callback boundary: `scope.run` returns a Promise-compatible
@@ -1284,11 +1299,17 @@ function* useAcpxProviderState(
    * map no longer names and the next operation builds a second child for the
    * same build. Here the entry is published already reserved.
    */
-  function electRuntime(partition: string | undefined, options: AcpRuntimeOptions): RuntimeEntry {
+  function electRuntime(
+    partition: string | undefined,
+    options: AcpRuntimeOptions | undefined,
+  ): RuntimeEntry {
     const held = partition === undefined ? unbound : runtimes.get(partition);
     if (held) {
       held.active++;
       return held;
+    }
+    if (options === undefined) {
+      throw new Error("the selected ACP runtime was released during preparation");
     }
     const entry: RuntimeEntry = {
       runtime: createRuntime(options),
@@ -1419,10 +1440,6 @@ function* useAcpxProviderState(
     toSession: (handle: AcpRuntimeHandle, entry: RuntimeEntry) => ManagedSession,
   ): Operation<ManagedSession> {
     return scoped(function* (): Operation<ManagedSession> {
-      const partition = build ? partitionOf(build) : undefined;
-      // Every suspension this needs, taken before anything is decided. What
-      // follows must not yield, so nothing it depends on may.
-      const options = yield* runtimeBlueprint(build);
       let claimed: RuntimeEntry | undefined;
       let pending: Promise<AcpRuntimeHandle> | undefined;
       let settled = false;
@@ -1470,6 +1487,16 @@ function* useAcpxProviderState(
         yield* abandonHandle(late, "cancelled before the session was established");
       });
 
+      const partition = build
+        ? partitionOf(build)
+        : dependencies?.agentProcessEnv === undefined
+          ? undefined
+          : `host\u0000${input.agent}\u0000${resolveAgentCommand(registry, input.agent)}`;
+      const held = partition === undefined ? unbound : runtimes.get(partition);
+      const options =
+        build !== undefined || dependencies?.agentProcessEnv === undefined || held === undefined
+          ? yield* runtimeBlueprint(build, input.agent)
+          : undefined;
       // One synchronous step: the map is read, an entry is published already
       // claimed if this is the first work to want one, and the ensure is
       // started. Nothing yields in here, so no sibling runs between the
@@ -1533,7 +1560,7 @@ function* useAcpxProviderState(
     // client-native session is created by a native process, and where ACP does
     // serve one, the establishment itself reports being unable to.
     if (!validatedAgents.has(selected) && !boundSessions(selected)) {
-      const base = yield* runtimeOptions();
+      const base = yield* runtimeOptions(selected);
       const probe = createRuntime({ ...base, probeAgent: selected });
       const report = yield* until(probe.doctor());
       if (!report.ok) {
@@ -1807,7 +1834,7 @@ function* useAcpxProviderState(
       );
     } catch (error) {
       if (attachment === undefined) {
-        throw error;
+        throw sessionResumeFailure(error, prepared.details.sessionKey);
       }
       // An exact resume that the provider could not perform: it has no such
       // history, or it cannot resume by name at all. Either way the
@@ -1838,6 +1865,7 @@ function* useAcpxProviderState(
     }
     if (sessions && intent.deferEstablished !== true) {
       const identity: AcpxSessionIdentity = {
+        ...(handle.backendSessionId === undefined ? {} : { acpSessionId: handle.backendSessionId }),
         ...(handle.agentSessionId === undefined ? {} : { agentSessionId: handle.agentSessionId }),
         ...(handle.acpxRecordId === undefined ? {} : { acpxRecordId: handle.acpxRecordId }),
       };
@@ -2489,6 +2517,9 @@ function* useAcpxProviderState(
     }
     const identity: AcpxSessionIdentity = {
       acpxRecordId: accepted.value.acpxRecordId,
+      ...(entry.handle.backendSessionId === undefined
+        ? {}
+        : { acpSessionId: entry.handle.backendSessionId }),
       ...(accepted.value.agentSessionId === undefined
         ? {}
         : { agentSessionId: accepted.value.agentSessionId }),
@@ -2803,19 +2834,16 @@ function* useAcpxProviderState(
           // constructed is attached to under the identity it already has.
           const construction = yield* constructRoute(agentName, prepared);
           const resumeSessionId = construction?.resumeSessionId;
-          // The pending ACP-first branch, and the only one that defers: an
-          // attachment resumes an identity that already exists, and an
-          // existing session has one of its own. A build alone does not
-          // defer anything — a session the provider names is still constructed
-          // by this ensure, bound to the build that names it.
           const constructing =
             state === "new" && resumeSessionId === undefined && prepared.kind === "details";
           const entry = yield* ensureFromPrepared(agentName, prepared, {
             ...(construction === undefined ? {} : { build: construction.build }),
             ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
             state,
-            materialization: constructing,
-            deferEstablished: constructing,
+            materialization:
+              constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
+            deferEstablished:
+              constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
           });
           // From here this session has been spoken to, whatever the cache
           // later says, so nothing may discard it to install a new layer.
@@ -2915,11 +2943,18 @@ function* useAcpxProviderState(
             });
           }
 
-          if (constructing && prepared.kind === "details") {
-            // Before any of this turn's events are exposed. Until the backend
-            // has accepted it there is no conversation to be reporting on, and
-            // an event published first would be describing one.
+          if (
+            constructing &&
+            adapterFor(agentName)?.acceptance === "first-turn-acceptance" &&
+            prepared.kind === "details"
+          ) {
             yield* materialize(entry, prepared.details, turn);
+          } else {
+            try {
+              yield* until(turn.promptStarted);
+            } catch (error) {
+              throw sessionResumeFailure(error, entry.session.sessionKey);
+            }
           }
 
           const channel = createChannel<AgentPromptEvent, string>();
@@ -3825,6 +3860,9 @@ function* useAcpxProviderState(
       // that does not exist.
       const identity: AcpxSessionIdentity = {
         acpxRecordId: accepted.value.acpxRecordId,
+        ...(entry.handle.backendSessionId === undefined
+          ? {}
+          : { acpSessionId: entry.handle.backendSessionId }),
         agentSessionId: nativeSessionId,
       };
       if (sessions && resolved.kind === "details") {
@@ -4633,4 +4671,25 @@ function* useAcpxProviderState(
     promptStream,
     launch,
   };
+}
+
+function sessionResumeFailure(error: unknown, sessionKey: string): unknown {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    Reflect.get(error, "detailCode") === "SESSION_RESUME_REQUIRED"
+  ) {
+    return new SessionResumeRequiredError(sessionKey, { cause: error });
+  }
+  return error;
+}
+
+export class SessionResumeRequiredError extends Error {
+  constructor(sessionKey: string, options?: ErrorOptions) {
+    super(
+      `Session "${sessionKey}" could not be resumed. Name a different <Session> to start a new conversation.`,
+      options,
+    );
+    this.name = "SessionResumeRequiredError";
+  }
 }

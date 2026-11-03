@@ -46,6 +46,7 @@ import {
   fileWriteSuccess,
   filesFailure,
   hostFilesHandler,
+  Permissions,
 } from "@executablemd/runtime";
 import type { FilePathInput, FilesHandler, FileWriteInput } from "@executablemd/runtime";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
@@ -74,6 +75,8 @@ import {
   REPL_REPOSITORY_SELECTION,
   parseReplLocalRecord,
 } from "../src/repl/repositories/records.ts";
+import { useReplFileRecorder } from "../src/repl/repositories/deno/files.ts";
+import { workspaceMountInstallation } from "../src/repl/workspace-mount-installation.ts";
 import type { ReplLocalValue } from "../src/repl/repositories/records.ts";
 
 interface Fixture {
@@ -333,6 +336,101 @@ function localRecords(events: readonly DurableEvent[]) {
 }
 
 describe("one entry's local file work", () => {
+  it("1075: live absolute refusal precedes routing, ownership, target I/O and a new file record", function* () {
+    const fixture = yield* useFixture();
+    for (const admitted of [false, true]) {
+      yield* scoped(function* () {
+        const calls = { routing: 0, own: 0, selection: 0, hold: 0, target: 0, children: 0 };
+        yield* Permissions.around(
+          { files: ([operation], next) => (operation === "absolute" ? admitted : next(operation)) },
+          admitted ? { at: "min" } : undefined,
+        );
+        yield* API.Env.around(
+          {
+            *cwd() {
+              return fixture.checkout;
+            },
+          },
+          { at: "min" },
+        );
+        const host = hostFilesHandler({
+          observe: () => {
+            calls.target++;
+          },
+        });
+        yield* API.Files.around(
+          {
+            ensureDirectory: ([input]) => host.ensureDirectory(input),
+            *readTextFile([input]) {
+              calls.children++;
+              return yield* host.readTextFile(input);
+            },
+          },
+          { at: "min" },
+        );
+        const files = yield* useReplFileRecorder(
+          {
+            *selection() {
+              calls.selection++;
+              return undefined;
+            },
+            *hold() {
+              calls.hold++;
+            },
+            placements() {
+              calls.routing++;
+              return [
+                {
+                  checkoutRoot: fixture.checkout,
+                  commonDirectory: join(fixture.checkout, ".git"),
+                  *own() {
+                    calls.own++;
+                  },
+                },
+              ];
+            },
+          },
+          fixture.root,
+          [],
+          fixture.checkout,
+        );
+        const stream = new InMemoryStream();
+        const source = `<PrintErrors><Dir path=${JSON.stringify(fixture.checkout)}><File path="seed.md" /></Dir></PrintErrors><PrintErrors><Dir path=${JSON.stringify(join(fixture.root, "missing"))}>made</Dir></PrintErrors>`;
+        const output = String(
+          yield* collect(
+            yield* executeInstalled({ ...inlineSource(source), stream }, [
+              workspaceMountInstallation([], () => files),
+            ]),
+          ),
+        );
+        const events = yield* stream.readAll();
+        if (!admitted) {
+          expect(output).toContain("not allowed to create or enter");
+          expect(calls).toEqual({
+            routing: 0,
+            own: 0,
+            selection: 0,
+            hold: 0,
+            target: 0,
+            children: 0,
+          });
+          expect(recordNames(events)).toEqual([]);
+          expect(recordsOf(events, REPL_REPOSITORY_SELECTION)).toEqual([]);
+          expect(yield* exists(join(fixture.root, "missing"))).toBe(false);
+        } else {
+          expect(output).toContain("seed");
+          expect(calls.routing).toBeGreaterThan(0);
+          expect(calls.own).toBeGreaterThan(0);
+          expect(calls.hold).toBeGreaterThan(0);
+          expect(calls.selection).toBeGreaterThan(0);
+          expect(calls.target).toBeGreaterThan(0);
+          expect(calls.children).toBe(1);
+          expect(recordNames(events)).toHaveLength(3);
+        }
+      });
+    }
+  });
+
   it("975: workspace acknowledgements restore before live I/O and only the suffix runs", function* () {
     const fixture = yield* useFixture();
     const workspace = join(fixture.root, "workspace");
@@ -352,6 +450,10 @@ describe("one entry's local file work", () => {
     const counted = counters();
     const waiting = withResolvers<void>();
     const placement = { cwd: workspace, workspace, projectCwd: fixture.checkout };
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const live = yield* spawn(() =>
       run(fixture, source, stream, counted, {
         ...placement,
@@ -398,6 +500,9 @@ describe("one entry's local file work", () => {
     const again = yield* run(fixture, source, new InMemoryStream(prefix), restored, {
       ...placement,
       *between() {
+        yield* Permissions.around({
+          files: ([operation], next) => (operation === "absolute" ? false : next(operation)),
+        });
         yield* API.Files.around(
           {
             *writeTextFile([input], next) {
@@ -444,6 +549,10 @@ describe("one entry's local file work", () => {
     const workspace = join(fixture.root, "workspace");
     yield* ensureDir(workspace);
     const placement = { cwd: workspace, workspace, projectCwd: fixture.checkout };
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const source = '<File path="kept.md">kept</File>\n<File path="lost.md">lost</File>';
     const first = yield* run(fixture, source, new InMemoryStream(), counters(), placement);
     expect(first.refusal).toBe(undefined);
@@ -1180,6 +1289,10 @@ describe("one entry's local file work", () => {
 
 describe("975 — native Git keeps project selection and requires an authored checkout", () => {
   it("refuses an operation left in workspace cwd without falling back to the project", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const project = yield* useTemporary("xmd-git-project-");
     yield* useCompositionComponents();
     yield* runGit(project, ["init", "-b", "main"]);
@@ -1274,6 +1387,10 @@ describe("975 — workspace recording crosses the process boundary", () => {
 
 describe("marked workspace mount initialization", () => {
   it("seeds the frame from entry cwd while project discovery stays captured", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const calls: unknown[] = [];
     const discoveries: string[] = [];
     yield* API.Env.around(

@@ -1,3 +1,4 @@
+import { Permissions } from "@executablemd/runtime";
 /**
  * What one REPL entry's local Add, Switch and Commit retain, replay and refuse
  * to guess.
@@ -613,6 +614,10 @@ describe("one entry's local Add, Switch and Commit", () => {
   });
 
   it("E2: answers a saved managed prefix with the selected worktree removed", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const fixture = yield* useFixture();
     const live = counters();
     const source = [

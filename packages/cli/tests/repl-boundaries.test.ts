@@ -17,7 +17,7 @@ import { readTextFile } from "@effectionx/fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createContext, ensure, type Operation, scoped, until } from "effection";
+import { createContext, ensure, Err, type Operation, scoped, suspend, until } from "effection";
 
 import { useHostFiles } from "@executablemd/runtime";
 import { runXmd } from "../src/cli.ts";
@@ -31,6 +31,7 @@ import { readQuestionForm } from "../src/repl/elicitation.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
 import type { ReplSurface } from "../src/repl/route.ts";
 import { entryKey } from "../src/repl/entries.ts";
+import { runReplSubmit } from "../src/sidekick-acp/submit.ts";
 
 const CLI = fileURLToPath(new URL("../", import.meta.url));
 const REPL = join(CLI, "src", "repl");
@@ -439,6 +440,17 @@ describe("REPL terminal entrypoints: one corrected stream, four installations", 
   });
 });
 
+function documentedReplOptions(spec: string): string[] {
+  const section = /^## The command line, and the order it is read in\n([\s\S]*?)(?=^## )/m.exec(
+    spec,
+  );
+  if (section === null) {
+    throw new Error("The REPL command-line section is missing");
+  }
+  const named = [...(section[1] ?? "").matchAll(/`(--[a-z-]+)`/g)].map((match) => match[1]);
+  return [...new Set(named)].sort();
+}
+
 describe("REPL documentation: what it says is what the code does", () => {
   it("D1: every command example in the spec is one the parser accepts", function* () {
     const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
@@ -452,10 +464,37 @@ describe("REPL documentation: what it says is what the code does", () => {
       // location.
       const tokens = rest
         .replace(/#.*$/, "")
+        .replace(/<<.*$/, "")
         .trim()
         .split(/\s+/)
         .filter((token) => token.length > 0)
-        .map((token) => token.replace(/^'(.*)'$/, "$1"));
+        .map((token) => token.replace(/^['"](.*)['"]$/, "$1"));
+      if (tokens[0] === "submit") {
+        let readInput = false;
+        const diagnostics: string[] = [];
+        const status = yield* runReplSubmit(
+          [
+            "repl",
+            ...tokens.map((token) =>
+              token.replace("$sessionId", "00000000-0000-4000-8000-000000000001"),
+            ),
+          ],
+          function* () {
+            readInput = true;
+            return Err(new Error("The grammar witness supplies no program."));
+          },
+          suspend(),
+          function* () {
+            throw new Error("The grammar witness emitted a submission record.");
+          },
+          (message) => diagnostics.push(message),
+        );
+        expect([rest, readInput, status]).toEqual([rest, true, 1]);
+        expect(diagnostics).toEqual([
+          "xmd repl submit could not read a complete program from standard input",
+        ]);
+        continue;
+      }
       // Which token is the optional location is a question about ownership: a
       // token after a valued option is that option's value. The roster comes
       // from the command itself, so this reader cannot disagree with it about
@@ -480,12 +519,11 @@ describe("REPL documentation: what it says is what the code does", () => {
     }
   });
 
-  it("D1: the seven options the spec names are the seven the parser accepts", function* () {
+  it("D1: the options the REPL command-line section names are accepted by the parser", function* () {
     const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
-    // Every option the specification names, from its own prose.
-    const named = [...spec.matchAll(/`(--[a-z-]+)`/g)].map((match) => match[1]);
-    expect([...new Set(named)].sort()).toEqual([
+    expect(documentedReplOptions(spec)).toEqual([
       "--agent-provider",
+      "--allow-absolute",
       "--approve-all",
       "--approve-reads",
       "--default-agent",
@@ -496,7 +534,7 @@ describe("REPL documentation: what it says is what the code does", () => {
     ]);
 
     // Each is one the parser accepts, in both spellings a value option has.
-    for (const option of ["--approve-all", "--approve-reads", "--deny-all"]) {
+    for (const option of ["--allow-absolute", "--approve-all", "--approve-reads", "--deny-all"]) {
       expect([option, replGrammarError(["repl", option], undefined)]).toEqual([option, undefined]);
       expect(replGrammarError(["repl", `${option}=yes`], undefined)).toContain("takes no value");
     }
@@ -512,10 +550,32 @@ describe("REPL documentation: what it says is what the code does", () => {
       expect(replGrammarError(["repl", option], undefined)).toContain("requires a value");
     }
 
-    // And there is no eighth: an option the specification does not name is
-    // refused by the name it was written as.
     expect(replGrammarError(["repl", "--json"], undefined)).toContain(
       "unrecognized option for xmd repl: --json",
+    );
+  });
+
+  it("D1: option drift is detected within the documented command boundary", function* () {
+    const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
+    const heading = "## The command line, and the order it is read in";
+    const drifted = spec.replace(heading, `${heading}\n\nAccept \`--json\`.`);
+    expect(documentedReplOptions(drifted)).toContain("--json");
+    expect(documentedReplOptions(drifted)).not.toEqual(documentedReplOptions(spec));
+    expect(replGrammarError(["repl", "--json"], undefined)).toBeDefined();
+
+    const otherCommand = spec.replace(
+      "## Attaching to the live Sidekick",
+      "## Attaching to the live Sidekick\n\nRead with `--unrelated-read-option`.",
+    );
+    expect(otherCommand).not.toBe(spec);
+    expect(documentedReplOptions(otherCommand)).toEqual(documentedReplOptions(spec));
+    for (const option of ["--cursor", "--yq"]) {
+      expect(spec).toContain(`\`${option}\``);
+      expect(documentedReplOptions(spec)).not.toContain(option);
+      expect(replGrammarError(["repl", option], undefined)).toBeDefined();
+    }
+    expect(() => documentedReplOptions(spec.replace(heading, "## Renamed section"))).toThrow(
+      "The REPL command-line section is missing",
     );
   });
 

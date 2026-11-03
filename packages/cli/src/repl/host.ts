@@ -18,7 +18,7 @@
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
-import type { Operation } from "effection";
+import { Err, type Operation, type Result } from "effection";
 
 /** No host installed this operation, so the REPL cannot perform it. */
 export class ReplHostError extends Error {
@@ -44,7 +44,14 @@ export interface ReplHostFact {
   readonly value: string | undefined;
 }
 
+export interface AssetImportRequest {
+  readonly workspace: string;
+  readonly source: string;
+  readonly destination: string;
+}
+
 export interface ReplHostApi {
+  importAsset(request: AssetImportRequest): Operation<Result<string>>;
   /**
    * What this process is standing on, stated rather than detected.
    *
@@ -82,6 +89,9 @@ export interface ReplHostApi {
 }
 
 export const ReplHost: Api<ReplHostApi> = createApi<ReplHostApi>("ReplHost", {
+  *importAsset(_request: AssetImportRequest): Operation<Result<string>> {
+    return Err(new Error("This REPL host has no asset importer."));
+  },
   // deno-lint-ignore require-yield
   *environment(): Operation<readonly ReplHostFact[]> {
     throw new ReplHostError("describing this host");

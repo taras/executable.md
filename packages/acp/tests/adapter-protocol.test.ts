@@ -20,6 +20,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
   all,
+  sleep,
   ensure,
   resource,
   scoped,
@@ -28,9 +29,9 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation } from "effection";
-import { rm } from "@effectionx/fs";
+import { rm, readTextFile } from "@effectionx/fs";
 import { Buffer } from "node:buffer";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -47,6 +48,9 @@ const FAKE_CLAUDE = join(FIXTURES, "fake-claude-cli.cjs");
 interface Adapter {
   /** The adapter process, so a case can say what the resource still observes. */
   readonly child: ChildProcess;
+  readonly log: string;
+  readonly closed: Operation<{ code: number | null; signal: NodeJS.Signals | null }>;
+  readonly replies: Array<Record<string, unknown>>;
   request(method: string, params: unknown): Operation<Record<string, unknown>>;
   /**
    * Every `session/update` notification the adapter sent, in arrival order.
@@ -65,28 +69,56 @@ interface Adapter {
  */
 function useAdapter(provider: string, environment: Record<string, string>): Operation<Adapter> {
   return resource(function* (provide) {
-    const root = yield* until(mkdtemp(join(tmpdir(), "xmd-ea-")));
+    const root = yield* until(mkdtemp(join(tmpdir(), "xmd ea ")));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
 
     const adapters = createEmbeddedAdapters(join(root, "adapters"));
     yield* adapters.materialize(provider);
     const entry = adapters.executablePath(provider);
 
-    const child: ChildProcess = spawn(process.execPath, [entry], {
-      env: { ...process.env, ...environment },
+    let child: ChildProcess | undefined;
+    const closed = withResolvers<{ code: number | null; signal: NodeJS.Signals | null }>();
+    let outcome: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    let onStdout: ((chunk: Buffer) => void) | undefined;
+    const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      outcome = { code, signal };
+      closed.resolve(outcome);
+    };
+    yield* ensure(function* () {
+      if (child !== undefined) {
+        try {
+          if (outcome === undefined) {
+            child.stdin?.end();
+            // Claude disposes pending Queries on EOF; SIGTERM can preempt that shutdown.
+            if (provider !== "claude") {
+              child.kill();
+            }
+          }
+          yield* closed.operation;
+        } finally {
+          if (onStdout !== undefined) {
+            child.stdout?.off("data", onStdout);
+          }
+          child.off("close", onClose);
+        }
+      }
+    });
+    const log = join(root, "cli.log");
+    child = spawn(process.execPath, [entry], {
+      env: { ...process.env, FAKE_CLAUDE_LOG: log, ...environment },
       stdio: ["pipe", "pipe", "pipe"],
       cwd: root,
     });
-    yield* ensure(() => {
-      child.kill();
-    });
+    child.on("close", onClose);
+    const processChild = child;
 
     const pending = new Map<number, (message: Record<string, unknown>) => void>();
     const updates: Array<Record<string, unknown>> = [];
+    const replies: Array<Record<string, unknown>> = [];
     let next = 1;
     let buffer = "";
 
-    const onStdout = (chunk: Buffer): void => {
+    onStdout = (chunk: Buffer): void => {
       buffer += chunk.toString("utf8");
       let index = buffer.indexOf("\n");
       while (index >= 0) {
@@ -103,6 +135,9 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
           continue;
         }
         const id = message["id"];
+        if (typeof id === "number" && message["method"] === undefined) {
+          replies.push(message);
+        }
         if (typeof id === "number" && pending.has(id)) {
           pending.get(id)?.(message);
           pending.delete(id);
@@ -118,29 +153,24 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
         // The adapter asks its client for things too. Answering permissively
         // keeps the turn moving; none of it is what these cases assert on.
         if (typeof id === "number" && typeof message["method"] === "string") {
-          child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, result: {} })}\n`);
+          processChild.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, result: {} })}\n`);
         }
       }
     };
 
-    // Detached before the kill above, because destructors unwind in reverse:
-    // the adapter stops being read before the process it is reading is ended.
-    // Established before the subscription, because `yield* ensure(...)` is
-    // itself a suspension an owner can be halted at.
-    yield* ensure(() => {
-      child.stdout?.off("data", onStdout);
-    });
-
     child.stdout?.on("data", onStdout);
 
     yield* provide({
-      child,
+      child: processChild,
+      log,
+      closed: closed.operation,
+      replies,
       updates,
       *request(method: string, params: unknown): Operation<Record<string, unknown>> {
         const id = next++;
         const answered = withResolvers<Record<string, unknown>>();
         pending.set(id, answered.resolve);
-        child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+        processChild.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
         const message = yield* answered.operation;
         if (message["error"] !== undefined) {
           throw new Error(`${method}: ${JSON.stringify(message["error"])}`);
@@ -432,21 +462,208 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     expect(metaOf(loaded, "agentSessionId")).not.toBe(opened);
   });
 
-  it("EA11: the Claude adapter reports no native session identity", function* () {
+  it("HC EA11: Claude confirms each Query identity before returning it", function* () {
     const adapter = yield* useAdapter("claude", CLAUDE_ENV);
     yield* initialize(adapter);
+    const [one, two] = yield* all([
+      adapter.request("session/new", { cwd: process.cwd(), mcpServers: [] }),
+      adapter.request("session/new", { cwd: process.cwd(), mcpServers: [] }),
+    ]);
+    expect(metaOf(one, "agentSessionId")).toBe(one["sessionId"]);
+    expect(metaOf(two, "agentSessionId")).toBe(two["sessionId"]);
+    expect(metaOf(one, "agentSessionId")).not.toBe(metaOf(two, "agentSessionId"));
+    expect(acceptances(adapter)).toEqual([]);
+  });
+  it("HC Claude confirms exact resume and load without accepting a turn", function* () {
+    const adapter = yield* useAdapter("claude", CLAUDE_ENV);
+    yield* initialize(adapter);
+    for (const method of ["session/resume", "session/load"]) {
+      const sessionId = "11111111-1111-4111-8111-111111111111";
+      const response = yield* adapter.request(method, {
+        sessionId,
+        cwd: process.cwd(),
+        mcpServers: [],
+      });
+      expect(metaOf(response, "agentSessionId")).toBe(sessionId);
+      yield* adapter.request("session/close", { sessionId });
+    }
+    expect(acceptances(adapter)).toEqual([]);
+    const log = yield* readTextFile(adapter.log);
+    expect(log).toContain("resume");
+    expect(log).not.toContain('"type":"user"');
+  });
 
-    const session = yield* adapter.request("session/new", {
+  for (const confirmation of [
+    "absent",
+    "failed",
+    "conflicting",
+    "wrong-event",
+    "mismatch",
+    "stream-error",
+    "missing-history",
+  ]) {
+    it(`HC Claude refuses ${confirmation} confirmation before a user prompt`, function* () {
+      const adapter = yield* useAdapter("claude", {
+        ...CLAUDE_ENV,
+        FAKE_CLAUDE_CONFIRMATION: confirmation,
+      });
+      yield* initialize(adapter);
+      let failure;
+      try {
+        yield* adapter.request("session/resume", {
+          sessionId: "11111111-1111-4111-8111-111111111111",
+          cwd: process.cwd(),
+          mcpServers: [],
+        });
+      } catch (error) {
+        failure = String(error);
+      }
+      expect(failure).toBeDefined();
+      expect(acceptances(adapter)).toEqual([]);
+      expect(yield* readTextFile(adapter.log)).not.toContain('"type":"user"');
+    });
+  }
+
+  it("HC Claude cancellation joins the held startup Query with no late response", function* () {
+    let adapter: Adapter | undefined;
+    let answered = false;
+    yield* scoped(function* () {
+      const live = yield* useAdapter("claude", {
+        ...CLAUDE_ENV,
+        FAKE_CLAUDE_CONFIRMATION: "held",
+      });
+      adapter = live;
+      yield* initialize(live);
+      const opening = yield* effectionSpawn(function* () {
+        yield* openSession(live);
+        answered = true;
+      });
+      let started = false;
+      while (!started) {
+        try {
+          started = (yield* readTextFile(live.log)).includes('"control_request"');
+        } catch {
+          /* The CLI has not created its log yet. */
+        }
+        if (!started) {
+          yield* sleep(10);
+        }
+      }
+      yield* opening.halt();
+      expect(acceptances(live)).toEqual([]);
+    });
+    if (adapter === undefined) {
+      throw new Error("the adapter never started");
+    }
+    expect(yield* adapter.closed).toEqual({ code: 0, signal: null });
+    expect(acceptances(adapter)).toEqual([]);
+    expect(
+      adapter.replies.some((reply) => {
+        const result = reply["result"];
+        return (
+          typeof result === "object" &&
+          result !== null &&
+          typeof Reflect.get(result, "sessionId") === "string"
+        );
+      }),
+    ).toBe(false);
+    expect(answered).toBe(false);
+  });
+
+  it("HC Claude startup disposal joins the backend and its held helper before returning", function* () {
+    const root = yield* until(mkdtemp(join(tmpdir(), "xmd disposal ")));
+    yield* ensure(() => rm(root, { recursive: true, force: true }));
+    const adapters = createEmbeddedAdapters(join(root, "adapters"));
+    yield* adapters.materialize("claude");
+    const done = withResolvers<{ error: string | undefined; stdout: string; stderr: string }>();
+    let observer: ChildProcess | undefined;
+    yield* ensure(function* () {
+      if (observer) {
+        observer.kill();
+        yield* done.operation;
+      }
+    });
+    observer = execFile(
+      "node",
+      [join(FIXTURES, "claude-startup-disposal.mjs"), adapters.executablePath("claude"), root],
+      {
+        env: { ...process.env, CLAUDE_CODE_EXECUTABLE: FAKE_CLAUDE },
+      },
+      (error, stdout, stderr) => done.resolve({ error: error?.message, stdout, stderr }),
+    );
+    const result = yield* done.operation;
+    expect(result.error).toBeUndefined();
+    const observation = JSON.parse(result.stdout);
+    expect(observation.events).toEqual(["dispose-start", "backend-close", "dispose-return"]);
+    expect(observation.closedWhenDisposeReturned).toBe(true);
+    expect(observation.outcome).toEqual({ code: 0, signal: null });
+    expect(observation.helperClosed).toBe(true);
+    expect(observation.result.status).toBe("refused");
+    expect(observation.updates).toEqual([]);
+    expect(observation.userMessages).toBe(0);
+    expect(observation.remainingSessions).toBe(0);
+  });
+
+  it("HC Claude preserves settings and runs only a fixed internal hook with its Node", function* () {
+    const adapter = yield* useAdapter("claude", CLAUDE_ENV);
+    yield* initialize(adapter);
+    yield* adapter.request("session/new", {
       cwd: process.cwd(),
       mcpServers: [],
+      _meta: {
+        claudeCode: {
+          options: {
+            settings: {
+              env: { HC_USER_SETTING: "kept" },
+              hooks: {
+                SessionStart: [
+                  { matcher: "startup", hooks: [{ type: "command", command: "user-owned-hook" }] },
+                ],
+              },
+            },
+          },
+        },
+      },
     });
-
-    // Claude is handed the identity it uses rather than allocating one, so
-    // there is nothing for its adapter to report back. This is the absence the
-    // client-allocated route depends on: were a value to appear here, a client
-    // choosing a route by whether the provider named the session would start
-    // taking the wrong one.
-    expect(typeof session["sessionId"]).toBe("string");
-    expect(metaOf(session, "agentSessionId")).toBeUndefined();
+    const first = JSON.parse((yield* readTextFile(adapter.log)).split("\n")[0]!);
+    const args = first.argv;
+    const settings = JSON.parse(args[args.indexOf("--settings") + 1]);
+    expect(settings.env.HC_USER_SETTING).toBe("kept");
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("user-owned-hook");
+    const internal = settings.hooks.SessionStart[1];
+    expect(internal.matcher).toBe("startup");
+    expect(internal.hooks[0].type).toBe("command");
+    expect(internal.hooks[0].command).toBe(process.execPath);
+    expect(internal.hooks[0].args).toHaveLength(1);
+    expect(internal.hooks[0].args[0]).toContain("xmd ea ");
+    expect(internal.hooks[0].args[0]).toMatch(/session-start\.js$/);
+    const result = yield* scoped(function* () {
+      const done = withResolvers<{ failed: boolean; stdout: string; stderr: string }>();
+      let hook: ChildProcess | undefined;
+      yield* ensure(function* () {
+        if (hook) {
+          hook.kill();
+          yield* done.operation;
+        }
+      });
+      hook = execFile(internal.hooks[0].command, internal.hooks[0].args, (error, stdout, stderr) =>
+        done.resolve({ failed: error !== null, stdout, stderr }),
+      );
+      hook.stdin?.end('{"session_id":"input-is-not-an-assertion"}');
+      return yield* done.operation;
+    });
+    expect(result).toEqual({ failed: false, stdout: "", stderr: "" });
+    let failure;
+    try {
+      yield* adapter.request("session/new", {
+        cwd: process.cwd(),
+        mcpServers: [],
+        _meta: { claudeCode: { options: { settings: { disableAllHooks: true } } } },
+      });
+    } catch (error) {
+      failure = String(error);
+    }
+    expect(failure).toContain("requires hooks");
+    expect(acceptances(adapter)).toEqual([]);
   });
 });

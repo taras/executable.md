@@ -39,7 +39,7 @@ import type { Json } from "@executablemd/core";
 import type { EntryVocabulary } from "../../repl-profile.ts";
 import type { ReplModel } from "../model.ts";
 import type { ReplHostFact } from "../host.ts";
-import type { ReplPrinting, ReplSession } from "../session.ts";
+import type { ReplFilePolicy, ReplPrinting, ReplSession } from "../session.ts";
 import type { GuideChapter, SidekickRequests, SubmitReceipt } from "./controls.ts";
 import { replEnvironment } from "./environment.ts";
 import { readGuideChapter } from "./guide.ts";
@@ -53,6 +53,7 @@ import {
 } from "./entry-inspection.ts";
 import type {
   EntryJournalPage,
+  EntryJournalRequest,
   EntryPromptPage,
   EntryPromptRequest,
   EntryReadRequest,
@@ -78,6 +79,7 @@ export interface RootReading {
    * it rather than one copy taken when the response started.
    */
   acknowledged(): Result<ReplModel>;
+  inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>>;
   /**
    * The entry running in this process and what it has printed, or none.
    *
@@ -101,6 +103,7 @@ export interface RootReading {
    * response that straddle an append or a settlement each see their own moment.
    */
   bindings(): Operation<Result<Readonly<Record<string, Json>>>>;
+  filePolicy(): Operation<Result<ReplFilePolicy>>;
   /** What an entry may write under this command's profile. */
   readonly vocabulary: EntryVocabulary;
   /** The facts this command knows and the host does not. */
@@ -146,6 +149,15 @@ export function rootReads(
   },
 ): RootReads {
   return {
+    *inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>> {
+      const read = session.reading(undefined);
+      return read.ok
+        ? yield* readEntryJournal(request, {
+            entries: read.value.model.entries,
+            printing: session.printing,
+          })
+        : read;
+    },
     acknowledged(): Result<ReplModel> {
       const read = session.reading(undefined);
       return read.ok ? Ok(read.value.model) : read;
@@ -164,6 +176,7 @@ export function rootReads(
       // when the read answers.
       return session.bindings();
     },
+    filePolicy: () => session.filePolicy(),
     vocabulary: profile.vocabulary,
     // What this command knows and the host does not: where a declared name is
     // looked for, which Plugins are active, and how a permission request is
@@ -211,9 +224,11 @@ export function sidekickRequests(
   submit: SubmitForReply,
   test?: ReplTesting,
   joined?: () => ReplPrinting | undefined,
+  importAsset?: SidekickRequests["importAsset"],
 ): SidekickRequests {
   return {
     ...(test === undefined ? {} : { test }),
+    importAsset: importAsset ?? refusedImport,
     *bindings(): Operation<Result<Json>> {
       // The root data as it stands: the retained head for every entry that has
       // settled, and the current root of the entry running now on top of it.
@@ -245,7 +260,7 @@ export function sidekickRequests(
       return readGuideChapter(chapter);
     },
     environment(): Operation<Result<string>> {
-      return replEnvironment(root.session);
+      return replEnvironment(root.session, root.filePolicy);
     },
     fillDraft(source: string): Operation<Result<void>> {
       return root.fill(source);
@@ -276,10 +291,8 @@ export function sidekickRequests(
       const read = inspected(root);
       return read.ok ? readEntryOutputWindow(request, { ...read.value, joined: joined?.() }) : read;
     },
-    // deno-lint-ignore require-yield
-    *inspectJournal(request: EntryReadRequest): Operation<Result<EntryJournalPage>> {
-      const read = inspected(root);
-      return read.ok ? readEntryJournal(request, read.value) : read;
+    inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>> {
+      return root.inspectJournal(request);
     },
   };
 }
@@ -376,4 +389,8 @@ export function finishedRound(root: RootReading, observation: ReplPrinting): Res
       `Read another window with <REPL.Entry.Output entry={${entry.order}} offset={0} limit={${page.value.limit}} />. Keep this entry number for later reads.`,
     ].join("\n\n"),
   );
+}
+
+function* refusedImport(): Operation<Result<string>> {
+  return Err(new Error("This response has no session asset importer."));
 }

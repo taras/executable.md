@@ -42,11 +42,73 @@ export const Cursor = z
     version: z.literal(1),
     execution: identity,
     conversation: identity,
-    view: z.enum(["source", "prompt", "output", "journal"]),
+    view: z.enum(["source", "prompt", "output"]),
     next: continuation,
   })
   .strict();
+export const SubmissionReference = z
+  .object({
+    sessionId: z.string().uuid(),
+    execution: identity,
+    entry: identity,
+  })
+  .strict();
+export type SubmissionReference = z.infer<typeof SubmissionReference>;
+export const SubmitRecord = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("admitted"), submission: SubmissionReference }).strict(),
+  z
+    .object({
+      kind: z.literal("progress"),
+      submission: SubmissionReference,
+      head: z.enum(["live", "pausing", "paused", "settling"]),
+      output: z
+        .object({
+          text: z.string(),
+          offset: z.number().int().nonnegative(),
+          length: z.number().int().nonnegative(),
+        })
+        .strict(),
+      waiting: z
+        .object({
+          questions: z.number().int().nonnegative(),
+          permissions: z.number().int().nonnegative(),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("finished"),
+      submission: SubmissionReference.nullable(),
+      joined: z.literal(true),
+      outcome: z.enum(["completed", "failed", "interrupted"]),
+      result: z.object({ value: z.json() }).strict().nullable(),
+      error: z.object({ name: z.string(), message: z.string() }).strict().nullable(),
+      journal: z.enum(["completed", "failed", "cancelled", "unfinished", "unavailable"]).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("unavailable"),
+      submission: SubmissionReference.nullable(),
+      reason: z.string(),
+    })
+    .strict(),
+]);
+export type SubmitRecord = z.infer<typeof SubmitRecord>;
 export const Request = z.discriminatedUnion("method", [
+  z.object({ method: z.literal("submit") }).strict(),
+  z
+    .object({
+      method: z.literal("submit-source"),
+      submit: z.number().int().nonnegative(),
+      text: z.string().refine((text) => new TextEncoder().encode(text).length <= MAX_TEXT),
+      done: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({ method: z.literal("submit-interrupt"), submit: z.number().int().nonnegative() })
+    .strict(),
   z.object({ method: z.literal("child-offer"), requestId: identity }).strict(),
   z
     .object({
@@ -84,11 +146,19 @@ export const Request = z.discriminatedUnion("method", [
       method: z.literal("entry"),
       entry: z.number().int().positive(),
       view: z.enum(["source", "prompt", "output", "journal"]),
+      yq: z.string().min(1).optional(),
       prompt: z.number().int().positive().optional(),
       field: z.enum(["request", "reply", "error"]).optional(),
       cursor: z.string().max(16384).optional(),
     })
-    .strict(),
+    .strict()
+    .refine((request) =>
+      request.view === "journal"
+        ? request.cursor === undefined &&
+          request.prompt === undefined &&
+          request.field === undefined
+        : request.yq === undefined,
+    ),
 ]);
 export type Request = z.infer<typeof Request>;
 export const Envelope = z.object({ id: z.number().int().nonnegative(), request: Request }).strict();

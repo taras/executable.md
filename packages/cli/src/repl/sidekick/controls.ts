@@ -65,6 +65,7 @@ import type { RetainedPrefix } from "./history.ts";
 import type { OutputRead, OutputReadRequest } from "./output.ts";
 import type {
   EntryJournalPage,
+  EntryJournalRequest,
   EntryPromptPage,
   EntryPromptRequest,
   EntryReadRequest,
@@ -126,6 +127,7 @@ export type GuideChapter = (typeof GUIDE_CHAPTERS)[number];
  */
 export interface SidekickRequests {
   readonly test?: ReplTesting;
+  importAsset(source: string, destination: string): Operation<Result<string>>;
   /** The acknowledged published root values, detached. */
   bindings(): Operation<Result<Json>>;
   /** The active entry vocabulary, or the lookup of particular names. */
@@ -147,7 +149,7 @@ export interface SidekickRequests {
   /** Read one window of what one entry printed, by its admission number. */
   inspectOutput(request: EntryReadRequest): Operation<Result<EntryTextPage>>;
   /** Read where one entry's saved evidence is, and what it failed at. */
-  inspectJournal(request: EntryReadRequest): Operation<Result<EntryJournalPage>>;
+  inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>>;
 }
 
 /**
@@ -275,6 +277,7 @@ export const DESIGNATED: ReadonlySet<string> = new Set([
   "REPL.EntryInput",
   "REPL.Submit",
   "REPL.Test",
+  "REPL.ImportAsset",
   "REPL.EntryOutput",
   ...ENTRY_INSPECTIONS,
   ELICIT_CONTROL,
@@ -653,14 +656,15 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
       name: "REPL.Entry.Journal",
       props: {
         type: "object",
-        properties: { ...ENTRY_SELECTION },
+        properties: { entry: { type: "number" }, yq: { type: "string", minLength: 1 } },
         additionalProperties: false,
       },
       description:
-        "Find where one entry's saved evidence is. `<REPL.Entry.Journal entry={22} />` answers " +
-        "with that entry's complete failure message, how its agent turns ended, and a window of " +
-        "its saved records — each naming what it was and which prompt to read next.",
-      *fn(props: EntryReadRequest): Operation<EntryJournalPage | string> {
+        "Inspect saved commands and locate agent turns in one entry. " +
+        '`<REPL.Entry.Journal entry={22} yq=".records" />` ' +
+        "queries complete retained facts before paging. Read .exec.exitCode, .exec.stdout and " +
+        ".exec.stderr on a command record; reuse next, prev or last as yq with the same positive entry.",
+      *fn(props: EntryJournalRequest): Operation<EntryJournalPage | string> {
         return yield* inspected(
           journal,
           { component: "REPL.Entry.Journal", arguments: { ...props } },
@@ -708,6 +712,35 @@ export function sidekickMutations(
           // own source back would spend a turn reading what it just wrote.
           () => DRAFT_FILLED,
         );
+      },
+    }),
+    writing("REPL.ImportAsset", "ImportAsset", "self-closing", {
+      kind: "function",
+      name: "REPL.ImportAsset",
+      forms: ["self-closing"],
+      props: {
+        type: "object",
+        properties: {
+          source: { type: "string", minLength: 1 },
+          destination: { type: "string", minLength: 1 },
+        },
+        required: ["source", "destination"],
+        additionalProperties: false,
+      },
+      description:
+        'Import a non-repository asset after approval with `<REPL.ImportAsset source="/known/mock ü.html" destination="inputs/mock ü.html" />`. Reuse the returned relative path in later entries. An occupied destination needs another explicit path and new approval.',
+      *fn(props: Record<string, Json>): Operation<string> {
+        const { source, destination } = props;
+        if (typeof source !== "string" || typeof destination !== "string") {
+          throw new Error("REPL.ImportAsset requires source and destination");
+        }
+        const order = yield* journal.began({
+          component: "REPL.ImportAsset",
+          arguments: { source, destination },
+        });
+        const answer = yield* requests.importAsset(source, destination);
+        yield* journal.settled(order, answer, answer.ok ? answer.value : undefined);
+        return answer.ok ? answer.value : answer.error.message;
       },
     }),
     writing("REPL.Test", "Test", "self-closing", {

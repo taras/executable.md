@@ -1199,7 +1199,11 @@ transaction and replay.
 Before installing the cwd or expanding any child, `<Dir>` asks the mandatory
 provider-neutral `API.Files.ensureDirectory` operation to ensure its target. A
 relative path resolves from the enclosing contextual cwd; an absolute path
-keeps its existing absolute meaning. The operation recursively creates a
+names a logical Workspace entry, retaining its existing absolute meaning.
+The host `--allow-absolute` policy does not apply to these logical roots. An
+authored absolute host Dir in run/REPL instead needs opt-in plus effective
+write permission; provider-owned Repository/Worktree paired placement is a
+separate operation and grants none. The operation recursively creates a
 missing directory, succeeds without replacing, clearing or otherwise changing
 an existing directory and its contents, and refuses when the target or an
 intermediate entry is a file or another non-directory. That refusal is fixed
@@ -2428,6 +2432,13 @@ channel for it to cross instead.
 
 ### 8.5 Agent session continuity
 
+Claude's retained adapter confirms its exact SDK Query's backend conversation
+from the successful SessionStart lifecycle response before another prompt.
+This provisional confirmation remains private until backend acceptance and the
+asserting provider save; mapping commit still precedes first-turn disclosure.
+Native allocation provenance remains separate. Completed replay performs none
+of this live work.
+
 The filtered workflow journal and the provider-owned Agent session are separate
 retained assets. The journal preserves observable prompts, responses, tool
 events and outcomes for replay and training. It does not claim to reconstruct
@@ -2463,12 +2474,21 @@ workflow identity.
 
 **First-turn publication follows the mapping commit.** Placement is inert:
 `<Session>` contacts no backend, creates no provider session and writes no row.
-After the first subscribed Prompt's turn is accepted by the backend, the
-provider must make one canonical tagged assertion of its durable identity. The
-run commits that mapping before exposing any first-turn output. Store-key
-occupancy or an unaccepted turn asserts no identity; the next attempt creates
-rather than resumes. [Agent session ownership](../architecture.md#agent-permissions-and-generated-xmd)
+A strong-declared adapter supplies explicit first-turn acceptance and an
+asserting provider save before the mapping commits. Standard ACP creation saves
+its ordinary record and supplies the ACP loading target. Prefer
+`acpx.agentSessionId` when native identity is asserted; otherwise retain
+`acpx.acpSessionId`. Both commit one tagged assertion before first-turn output.
+A pending strong record asserts nothing; the next attempt creates rather than
+resumes. An ACP loading target grants no native handoff or backend-acceptance
+proof. A later assertion of a different kind refuses rather than changing the
+mapping's kind. [Agent session ownership](../architecture.md#agent-permissions-and-generated-xmd)
 owns the acceptance, assertion and publication ordering.
+
+An ordinary mapping can commit before its first prompt. If the process stops in
+that window and loading later returns `-32603` for the still-unused record, ACPX
+may recreate it under a different ACP id. A later attachment refuses that
+differing assertion; it does not rewrite the mapping or infer continuity.
 
 Partial replay attaches lazily. Completed Prompts restore without contacting the
 provider, and full replay never attaches one. Before a later live Prompt, the

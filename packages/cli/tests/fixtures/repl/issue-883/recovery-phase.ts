@@ -1,3 +1,4 @@
+import { Permissions } from "@executablemd/runtime";
 /**
  * One phase of a recovery case, as its own process.
  *
@@ -54,7 +55,7 @@ import {
 import { openReplSession } from "../../../../src/repl/session.ts";
 import type { ReplSession } from "../../../../src/repl/session.ts";
 import { Elicitation, useTempFileCompiler } from "@executablemd/core";
-import { API } from "@executablemd/runtime";
+import { API, cwd } from "@executablemd/runtime";
 import { pairedLocation } from "../../../../src/repl/sidekick/history.ts";
 import { encodeLocation } from "../../../../src/repl/route.ts";
 import { initialState } from "../../../../src/repl/application.ts";
@@ -67,7 +68,12 @@ import type { SidekickAssembly, SidekickOwner } from "../../../../src/repl/sidek
 import type { SubmitReceipt } from "../../../../src/repl/sidekick/controls.ts";
 import type { PairedChatStorage } from "../../../../src/repl/sidekick/repository.ts";
 import { createFakeAcp, makeRegistry } from "../../../support/fake-acp.ts";
-import { createAcpxProvider, createAcpxSessionStore, retainedSession } from "@executablemd/acp";
+import {
+  createAcpxProvider,
+  createAcpxSessionStore,
+  retainedSession,
+  resolveSessionDetails,
+} from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { installAgentComponents } from "@executablemd/core";
 import type { FakeAcp } from "../../../support/fake-acp.ts";
@@ -228,13 +234,11 @@ interface Script {
   /**
    * Start this process with no provider account of earlier sessions.
    *
-   * ACPX's store is cache-like and a host may prune it, so a conversation whose
-   * history has an established identity can meet a provider that has none. The
-   * provider then names the conversation only once the turn has started, which
-   * is the *late* assertion — a different path from one it can report while the
-   * session is being placed.
+   * A used history then refuses new construction before a turn.
    */
   readonly forget?: boolean;
+  /** Supply the existing backend record omitted from the historical chat fixture. */
+  readonly existing?: boolean;
   /**
    * Assemble this process's Sidekick with a system prompt of its own.
    *
@@ -332,6 +336,37 @@ function* useConversing(
       return saving;
     },
   };
+  if (script.existing === true) {
+    const active = [...chat.records]
+      .reverse()
+      .find((record) => record.kind === "conversation" && record.phase === "activated");
+    if (active?.kind !== "conversation") {
+      throw new Error("the historical fixture names no active conversation");
+    }
+    const directory = yield* cwd();
+    const details = yield* resolveSessionDetails(
+      store,
+      `${AGENT}-cmd`,
+      directory,
+      active.conversation,
+    );
+    const runtime = fake.create({
+      cwd: directory,
+      sessionStore: store,
+      agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+      permissionMode: "deny-all",
+    });
+    const handle = yield* until(
+      runtime.ensureSession({
+        sessionKey: details.sessionKey,
+        cwd: details.cwd,
+        agent: AGENT,
+        mode: "persistent",
+      }),
+    );
+    yield* until(writes);
+    yield* until(runtime.close({ handle, reason: "historical fixture seed" }));
+  }
   const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
     acp: {
       createRuntime: fake.create,
@@ -692,6 +727,13 @@ function* phases(): Operation<unknown> {
     };
   }
   if (phase === "workspace-start" || phase === "workspace-continue") {
+    yield* Permissions.around(
+      {
+        files: ([operation], next) =>
+          operation === "absolute" ? phase === "workspace-start" : next(operation),
+      },
+      phase === "workspace-start" ? { at: "min" } : undefined,
+    );
     const mounted = yield* until(import("../../../support/mounted-repl.ts"));
     const { useReplPage } = yield* until(import("../../../support/repl-page.ts"));
     const { settledReading } = yield* until(import("../../../support/mounted-history.ts"));

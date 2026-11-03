@@ -79,7 +79,7 @@ import type { Operation, Result, Stream, Task } from "effection";
 import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
 import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
-import { API } from "@executablemd/runtime";
+import { API, Permissions } from "@executablemd/runtime";
 import { executeInstalled } from "@executablemd/core/host";
 import { useGeneratedFallback } from "../evaluation-profile.ts";
 import type {
@@ -320,6 +320,12 @@ interface OwnedRootRead {
   read(): Operation<Result<Readonly<Record<string, Json>>>>;
 }
 
+export interface ReplFilePolicy {
+  readonly read: boolean;
+  readonly write: boolean;
+  readonly absolute: boolean;
+}
+
 /** One execution as the application reads it. */
 export interface ReplSession {
   /** The opaque identifier this execution's history is named by. */
@@ -428,6 +434,8 @@ export interface ReplSession {
    * earlier position is reading history; this answers what is true now.
    */
   bindings(): Operation<Result<Readonly<Record<string, Json>>>>;
+  /** Observe the session scope that starts entries; content may narrow it. */
+  filePolicy(): Operation<Result<ReplFilePolicy>>;
   /** Wait for the entry running in this process to finish, and answer how. */
   join(): Operation<Result<unknown>>;
   /**
@@ -458,6 +466,8 @@ export interface ReplSession {
     pausing?: PendingPause,
     starting?: StartingCheck,
     workspace?: true,
+    /** Retain the exact handle synchronously at acknowledged admission; perform no I/O. */
+    onAdmitted?: (submission: ReplSubmission) => void,
   ): Operation<Result<ReplSubmission>>;
   /**
    * Stop the entry this key names, and join everything it owned.
@@ -1013,6 +1023,21 @@ function* start(
       bindings(): Operation<Result<Readonly<Record<string, Json>>>> {
         return rootData();
       },
+      *filePolicy(): Operation<Result<ReplFilePolicy>> {
+        try {
+          return Ok(
+            yield* owner.run(function* () {
+              return Object.freeze({
+                read: yield* Permissions.operations.files("read"),
+                write: yield* Permissions.operations.files("write"),
+                absolute: yield* Permissions.operations.files("absolute"),
+              });
+            }),
+          );
+        } catch (error) {
+          return Err(error instanceof Error ? error : new Error(String(error)));
+        }
+      },
       join(): Operation<Result<unknown>> {
         return joining();
       },
@@ -1025,8 +1050,9 @@ function* start(
         pausing?: PendingPause,
         starting?: StartingCheck,
         workspace?: true,
+        onAdmitted?: (submission: ReplSubmission) => void,
       ): Operation<Result<ReplSubmission>> {
-        return submitting(source, pausing, starting, workspace);
+        return submitting(source, pausing, starting, workspace, onAdmitted);
       },
       stopEntry(expectedEntryKey: string): Operation<Result<void>> {
         return stopEntry(expectedEntryKey);
@@ -1356,6 +1382,7 @@ function* start(
       pausing?: PendingPause,
       starting?: StartingCheck,
       workspace?: true,
+      onAdmitted?: (submission: ReplSubmission) => void,
     ): Operation<Result<ReplSubmission>> {
       const before = admissible();
       if (!before.ok) {
@@ -1392,6 +1419,7 @@ function* start(
         entryInitialBindings(after.value),
         pausing,
         workspace,
+        onAdmitted,
       );
       return yield* scoped(function* (): Operation<Result<ReplSubmission>> {
         // Registered before the wait below, so it covers the whole interval in
@@ -1442,6 +1470,7 @@ function* start(
        */
       pausing?: PendingPause,
       workspace?: true,
+      onAdmitted?: (submission: ReplSubmission) => void,
     ): ReplEntryTask {
       const admission = withResolvers<Result<void>>();
       const completion = withResolvers<Result<unknown>>();
@@ -1496,6 +1525,9 @@ function* start(
         if (!admitted) {
           admitted = true;
           admission.resolve(outcome);
+          if (outcome.ok && placed) {
+            onAdmitted?.(submissionOf(started));
+          }
         }
       }
       function settle(outcome: Result<unknown>): void {

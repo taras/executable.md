@@ -555,11 +555,18 @@ export function planWriterDependencies(
 ): AcpxProviderDependencies {
   const assembly = hostAcpDependencies(profile.stack);
   const prepare = assembly.prepareAgent;
+  const environment = assembly.agentProcessEnv;
   return {
     ...assembly,
     ...(prepare === undefined
       ? {}
       : { prepareAgent: (agentName: string) => inScope(host, () => prepare(agentName)) }),
+    ...(environment === undefined
+      ? {}
+      : {
+          agentProcessEnv: (agentName: string, command: string) =>
+            inScope(host, () => environment(agentName, command)),
+        }),
     ...profile.acp,
     // deno-lint-ignore require-yield
     *agentCwd() {

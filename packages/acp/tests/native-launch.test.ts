@@ -238,6 +238,7 @@ interface ProviderOptions {
    * reaching into the provider.
    */
   withSessionRoute?: AcpxProviderDependencies["withSessionRoute"];
+  agentProcessEnv?: AcpxProviderDependencies["agentProcessEnv"];
   /** Blocks the native child until this resolves. */
   hold?: Operation<void>;
   onLaunch?: () => void;
@@ -435,6 +436,7 @@ function* installLaunchStack(
 
   const factory = createAcpxProvider({
     createRuntime: harness.create,
+    ...(options.agentProcessEnv ? { agentProcessEnv: options.agentProcessEnv } : {}),
     sessionStore: options.store ?? makeStore(),
     agentRegistry: makeRegistry({ claude: AGENT_COMMAND, mystery: "mystery-cmd" }),
     advertiseNativeLaunch: options.advertise ?? ["claude"],
@@ -500,6 +502,7 @@ function only<T>(recorded: readonly T[], what: string): T {
  * keeps no construction routes at all.
  */
 const PROVIDER_RETURNED_CLAUDE: NativeAdapter = {
+  acceptance: "first-turn-acceptance",
   launcher: "claude",
   identity: "provider-returned",
   resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
@@ -1121,6 +1124,9 @@ describe("Tier NL — native session launch", () => {
     const claude = nativeAdapterFor("claude");
     expect(claude !== undefined && allocatesIdentity(claude)).toBe(true);
     expect(claude?.identity).toBe("client-allocated");
+    expect(
+      claude !== undefined && bindsBuild(claude) ? claude.binding.adapterCommand : undefined,
+    ).toBeUndefined();
 
     const codex = nativeAdapterFor("codex");
     expect(codex !== undefined && allocatesIdentity(codex)).toBe(false);
@@ -1699,6 +1705,7 @@ describe("Tier CN — client-allocated construction", () => {
   /** The controlled Claude-shaped adapter that names its own sessions. */
   function clientNative(allocate: () => string = () => ALLOCATED): NativeAdapter {
     return {
+      acceptance: "first-turn-acceptance",
       launcher: "claude",
       identity: "client-allocated",
       binding: TEST_BINDING,
@@ -2921,7 +2928,11 @@ describe("Tier CA — client-native attachment", () => {
   }
 
   it("CA1: the route's exact identity crosses as resumeSessionId, with the observed build", function* () {
-    const space = yield* installAttachment(bound());
+    const space = yield* installAttachment(bound(), {
+      agentProcessEnv: function* () {
+        throw new Error("native selection invoked default host lookup");
+      },
+    });
 
     const session = yield* Agent.operations.session();
 
@@ -2935,6 +2946,7 @@ describe("Tier CA — client-native attachment", () => {
     expect(space.observer.observed).toEqual(["claude"]);
     const options = space.harness.createdOptions.at(-1);
     expect(options?.agentProcessEnv).toEqual({ CLAUDE_CODE_EXECUTABLE: OBSERVED_PATH });
+    expect(options?.agentRegistry.resolve("claude")).toBe(AGENT_COMMAND);
     // And nowhere else.
     expect(JSON.stringify(yield* space.routes.read(KEY))).not.toContain(OBSERVED_PATH);
     expect(JSON.stringify(space.trace.records)).not.toContain(OBSERVED_PATH);

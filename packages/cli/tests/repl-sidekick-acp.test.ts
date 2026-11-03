@@ -2,7 +2,9 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { cliCommand, cliShellCommand, shellQuote } from "@executablemd/test-support/launch";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
-import { exec } from "@effectionx/process";
+import { exec, Stdio } from "@effectionx/process";
+import { selectJson } from "@executablemd/core/host";
+import { openReplSession } from "../src/repl/session.ts";
 import { Agent, Component, Execution } from "@executablemd/core";
 import { API } from "@executablemd/runtime";
 import { createHash } from "node:crypto";
@@ -76,6 +78,7 @@ import { PAIRED_DIRECTORY, parseEntryRecords } from "../src/repl/sidekick/histor
 import { AGENT_PROMPT } from "@executablemd/core/host";
 import {
   Descriptor,
+  Request,
   MAX_FRAME,
   SidekickTransport,
   referenceText,
@@ -484,7 +487,7 @@ describe("minimal live Sidekick ACP attachment", () => {
     const views: ("source" | "output" | "journal" | "prompt")[] = ["source", "output", "journal"];
     for (const view of views) {
       const result = yield* requestAttachment(one.path, { method: "entry", entry: 1, view });
-      expect(result).toHaveProperty("entry", 1);
+      expect(result).toHaveProperty(view === "journal" ? "value.entry" : "entry", 1);
     }
     const launch = cliCommand([
       "sidekick",
@@ -504,6 +507,164 @@ describe("minimal live Sidekick ACP attachment", () => {
     expect(actual.stdout).toContain('"joined":true');
     expect(yield* records(one.held.execution)).toEqual(before);
     expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 3);
+  });
+
+  it("1006 E3/E4/E7: passive Journal reads match the component route across cold three-page navigation", function* () {
+    const text = "A🦊".repeat(7000);
+    let launches = 0;
+    const one = yield* world({
+      entryInstallation: {
+        *install() {
+          yield* API.Process.around({
+            *exec() {
+              launches += 1;
+              yield* Stdio.operations.stdout(new TextEncoder().encode(text));
+              yield* Stdio.operations.stderr(new TextEncoder().encode(""));
+              return { exitCode: 1, stdout: undefined, stderr: undefined };
+            },
+          });
+        },
+      },
+    });
+    const submitted = yield* one.held.session.submit(
+      "```bash silent exec\ncontrolled-diagnostic\n```",
+    );
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    expect((yield* submitted.value.join()).ok).toBe(false);
+    const before = yield* readTextFile(one.held.execution.stream.path);
+    const beforeChat = yield* records(one.held.execution);
+    const calls = one.held.fake.prompts.length;
+    const reads = rootReads(one.held.session, one.held.profile);
+    const pageSchema = z
+      .object({
+        value: z.json(),
+        next: z.string().nullable(),
+        prev: z.string().nullable(),
+        last: z.string().nullable(),
+      })
+      .strict();
+    const complete = yield* reads.inspectJournal({ entry: 1 });
+    if (!complete.ok) {
+      throw complete.error;
+    }
+    for (const yq of [
+      '[.records[] | select(.type == "exec")]',
+      ".records[1].exec.stderr",
+      ".records[1].exec",
+      ".records[1].exec.exitCode",
+      "false",
+      "null",
+    ]) {
+      const component = yield* reads.inspectJournal({ entry: 1, yq });
+      if (!component.ok) {
+        throw component.error;
+      }
+      expect(
+        pageSchema.parse(
+          yield* requestAttachment(one.path, { method: "entry", entry: 1, view: "journal", yq }),
+        ),
+      ).toEqual(component.value);
+    }
+    let yq: string | null = ".records[1].exec.stdout";
+    let collected = "";
+    let count = 0;
+    while (yq !== null) {
+      const page: z.infer<typeof pageSchema> = pageSchema.parse(
+        yield* requestAttachment(one.path, { method: "entry", entry: 1, view: "journal", yq }),
+      );
+      const component = yield* reads.inspectJournal({ entry: 1, yq });
+      if (!component.ok) {
+        throw component.error;
+      }
+      expect(page).toEqual(component.value);
+      if (count > 0) {
+        const selected = yield* selectJson(yq, JSON.stringify(complete.value.value));
+        if (!selected.ok) {
+          throw selected.error;
+        }
+        expect(JSON.parse(selected.value)).toBe(page.value);
+      }
+      collected += z.string().parse(page.value);
+      count += 1;
+      if (page.prev !== null) {
+        const previous = pageSchema.parse(
+          yield* requestAttachment(one.path, {
+            method: "entry",
+            entry: 1,
+            view: "journal",
+            yq: page.prev,
+          }),
+        );
+        expect(previous.next).toBe(yq);
+      }
+      if (page.last !== null) {
+        const last = pageSchema.parse(
+          yield* requestAttachment(one.path, {
+            method: "entry",
+            entry: 1,
+            view: "journal",
+            yq: page.last,
+          }),
+        );
+        expect(last.next).toBe(null);
+        expect(last.prev).not.toBe(null);
+      }
+      const reopened = yield* one.held.repository.open(one.held.execution.id);
+      const cold = yield* openReplSession({ execution: reopened });
+      if (!cold.ok) {
+        throw cold.error;
+      }
+      const coldPage = yield* rootReads(cold.value, one.held.profile).inspectJournal({
+        entry: 1,
+        yq,
+      });
+      if (!coldPage.ok) {
+        throw coldPage.error;
+      }
+      expect(coldPage.value).toEqual(page);
+      yq = page.next;
+    }
+    expect(count).toBeGreaterThanOrEqual(3);
+    expect(collected).toBe(text);
+    expect(yield* readTextFile(one.held.execution.stream.path)).toBe(before);
+    const later = yield* one.held.session.submit("later entry");
+    if (!later.ok) {
+      throw later.error;
+    }
+    expect((yield* later.value.join()).ok).toBe(true);
+    expect(
+      yield* reads.inspectJournal({ entry: 1, yq: ".records[1].exec.exitCode" }),
+    ).toMatchObject({ ok: true, value: { value: 1 } });
+    expect(launches).toBe(1);
+    expect(one.held.fake.prompts).toHaveLength(calls);
+    expect(yield* records(one.held.execution)).toEqual(beforeChat);
+    expect((yield* readTextFile(one.held.execution.stream.path)).startsWith(before)).toBe(true);
+    expect(
+      Request.safeParse({ method: "entry", entry: 1, view: "journal", cursor: "old" }).success,
+    ).toBe(false);
+    expect(Request.safeParse({ method: "entry", entry: 1, view: "source", yq: "." }).success).toBe(
+      false,
+    );
+    const cli = cliCommand([
+      "sidekick",
+      "read",
+      "--attach",
+      one.path,
+      "entry",
+      "1",
+      "journal",
+      "--yq",
+      ".records[1].exec.exitCode",
+    ]);
+    const actual = yield* exec(cli.command, {
+      arguments: cli.arguments,
+      cwd: one.held.workspace,
+      env: { HOME: one.home, PATH: process.env.PATH ?? "", DENO_DIR: process.env.DENO_DIR ?? "" },
+    }).join();
+    expect(actual.code).toBe(0);
+    expect(JSON.parse(actual.stdout)).toEqual({ value: 1, next: null, prev: null, last: null });
   });
 
   it("A1/A3: the actual embedded provider keeps serial attachment identity and completing RPC metadata", function* () {
@@ -2760,5 +2921,26 @@ describe("Follow: joined mixed-origin queue handoff", () => {
     expect(saved[2]?.origin).toEqual({ kind: "ui" });
     expect(saved[3]?.origin).toMatchObject({ kind: "acp", attachment: attached.attachment });
     expect(new Set(saved.map((record) => record.id)).size).toBe(4);
+  });
+});
+
+describe("direct submission attachment rights", () => {
+  it("E: prepared-only endpoints refuse submit, source and interrupt without effects", function* () {
+    const fixture = yield* world();
+    for (const request of [
+      { method: "submit" },
+      { method: "submit-source", submit: 1, text: "must not execute", done: true },
+      { method: "submit-interrupt", submit: 1 },
+    ]) {
+      let reason = "";
+      try {
+        yield* requestAttachment(fixture.path, Request.parse(request));
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error);
+      }
+      expect(reason).toContain("prepared attachment grants no child submission");
+    }
+    expect(fixture.held.session.model.entries).toHaveLength(0);
+    expect(fixture.held.fake.prompts).toHaveLength(fixture.baselineTurns);
   });
 });

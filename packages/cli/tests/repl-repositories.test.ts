@@ -25,8 +25,8 @@ import { exists, readTextFile, rm } from "@effectionx/fs";
 import { mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { API, useHostFiles } from "@executablemd/runtime";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import { API, Permissions, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import {
@@ -948,5 +948,125 @@ describe("a root capture a REPL entry commits (#939)", () => {
       entryInitialBindings(projection)["proofCommit"],
     );
     expect(value(outcome?.bindings ?? [], "answer")).toEqual({ decision: "go" });
+  });
+});
+
+import { denoReplEntry } from "../src/deno-repositories.ts";
+import { useNodeReplAssetImport } from "../src/node-repl-asset-import.ts";
+import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import { useNormalizedOutput } from "@executablemd/core";
+import { readGuideChapter } from "../src/repl/sidekick/guide.ts";
+import { spawn } from "effection";
+
+describe("1075 approved import into the actual managed checkout", () => {
+  it("denied direct Dir, approved copy and normalized relative guide use preserve their distinct policies", function* () {
+    const fixture = yield* useFixture();
+    const origin = yield* useOrigin(fixture);
+    const source = join(fixture.root, "mock ü.html");
+    yield* until(writeFile(source, "managed import bytes\n"));
+    yield* useHostFiles();
+    yield* useNormalizedOutput();
+    yield* useNodeReplAssetImport();
+    yield* Permissions.around({
+      files: ([operation], next) => (operation === "absolute" ? false : next(operation)),
+    });
+    const held = yield* useHarness(undefined, {
+      plugins: [replRepositoryPlugin(gitPlugin)],
+      entryHost: denoReplEntry(SUITE_HELPER, managedRoot(fixture)),
+    });
+    const run = function* (source: string) {
+      const admitted = yield* held.session.submit(source, undefined, undefined, true);
+      if (!admitted.ok) {
+        throw admitted.error;
+      }
+      const result = yield* admitted.value.join();
+      const output = yield* admitted.value.output();
+      if (!output.ok) {
+        throw output.error;
+      }
+      return { result, output: output.value.output };
+    };
+    const direct = `<Dir path=${JSON.stringify(dirname(source))}><File path="mock ü.html" /></Dir>`;
+    expect((yield* run(direct)).result.ok).toBe(false);
+    const selection = yield* run(
+      `<Repository name="import-project" url=${JSON.stringify(origin)} base="main" as="importCheckout" />`,
+    );
+    if (!selection.result.ok) {
+      throw selection.result.error;
+    }
+    const data = yield* held.session.bindings();
+    if (!data.ok || typeof data.value.importCheckout !== "string") {
+      throw new Error("no selected checkout was returned");
+    }
+    const checkout = data.value.importCheckout;
+    const workspace = yield* until(realpath(held.workspace));
+    const address = relative(workspace, checkout);
+    expect(isAbsolute(address)).toBe(false);
+    expect(address.startsWith("..")).toBe(false);
+    expect(checkout).not.toBe(join(fixture.root, "repositories"));
+    const destination = join(address, "inputs", "mock ü.html").replaceAll("\\", "/");
+    held.fake.script({
+      reply: `<REPL.ImportAsset source={${JSON.stringify(source)}} destination={${JSON.stringify(destination)}} />`,
+    });
+    held.fake.script({ reply: "<Output>Imported.</Output>" });
+    const sending = yield* spawn(() =>
+      held.owner.message("Copy this asset into the selected checkout"),
+    );
+    const changes = yield* held.owner.questions.changes;
+    while (held.owner.questions.pending === undefined) {
+      yield* changes.next();
+    }
+    expect(held.owner.questions.pending.message).toContain(join(checkout, "inputs", "mock ü.html"));
+    expect(held.owner.questions.pending.submit({ decision: "Import" }).kind).toBe("answered");
+    const sent = yield* sending;
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    expect(yield* readTextFile(join(checkout, "inputs", "mock ü.html"))).toBe(
+      "managed import bytes\n",
+    );
+    expect(yield* readTextFile(source)).toBe("managed import bytes\n");
+    const saved = yield* records(held.execution);
+    const imported = saved.find(
+      (record) => record.kind === "control-outcome" && record.observed === destination,
+    );
+    expect(imported).toBeDefined();
+    const guide = yield* readGuideChapter("Environment");
+    if (!guide.ok) {
+      throw guide.error;
+    }
+    const example =
+      '<Dir path="inputs">\n<File path="mock ü.html" as="mock" />\n<Output>{mock}</Output>\n</Dir>';
+    expect(guide.value).toContain(example);
+    const places: string[] = [];
+    yield* API.Files.around({
+      *readTextFile([input], next) {
+        places.push(input.cwd);
+        return yield* next(input);
+      },
+    });
+    const journey = yield* run(
+      `<Dir path=${JSON.stringify(address.replaceAll("\\", "/"))}>${example}</Dir><File path=${JSON.stringify(destination)} as="restored" />`,
+    );
+    if (!journey.result.ok) {
+      throw journey.result.error;
+    }
+    expect(journey.output.trim()).toBe("managed import bytes");
+    expect(places.map((path) => path.replaceAll("\\", "/"))).toEqual([
+      join(held.workspace, address, "inputs").replaceAll("\\", "/"),
+      held.workspace.replaceAll("\\", "/"),
+    ]);
+    expect((yield* run(direct)).result.ok).toBe(false);
+    expect(yield* Permissions.operations.files("absolute")).toBe(false);
+    console.log(
+      "1075_NORMALIZED_GUIDE=" +
+        JSON.stringify({
+          workspace,
+          checkout,
+          destination,
+          output: journey.output,
+          readDirectories: places,
+        }),
+    );
   });
 });

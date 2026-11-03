@@ -1,3 +1,4 @@
+import { Permissions } from "@executablemd/runtime";
 /**
  * Tier ORC — live remotes under an ordinary `xmd run`.
  *
@@ -739,6 +740,10 @@ describe("checkout admission is the whole repository identity", () => {
   const IDENT = "Tester <tester@example.test> 0 +0000";
 
   it("refuses Git, Push and PullRequest in a same-locator Repository the scope did not select", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const here = yield* useHostCheckout(remote.locator);
@@ -842,6 +847,10 @@ describe("checkout admission is the whole repository identity", () => {
   });
 
   it("reaches the mutation, the publication and the Git host when the identity is the same one", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const here = yield* useHostCheckout(remote.locator);
@@ -895,6 +904,10 @@ describe("checkout admission is the whole repository identity", () => {
   });
 
   it("operates in a Worktree of the Repository in scope, entered by its returned path", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const here = yield* useHostCheckout(remote.locator);

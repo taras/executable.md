@@ -25,6 +25,8 @@ import { join } from "node:path";
 import { ensure, Ok, until } from "effection";
 import type { Operation, Result } from "effection";
 
+import { cwd } from "@executablemd/runtime";
+import type { ReplEntryInstallation } from "../../../../src/repl-entry-installation.ts";
 import { useTempFileCompiler } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 
@@ -32,7 +34,8 @@ import { installReplHost } from "../../../../src/repl-assembly.ts";
 import { resolveAgentStack } from "../../../../src/agent-stack.ts";
 import { assembleReplProfile } from "../../../../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../../../../src/repl-profile.ts";
-import { NO_PLUGINS } from "../../../../src/plugin-host.ts";
+import { installPlugins } from "../../../../src/plugin-host.ts";
+import type { Plugin } from "@executablemd/core/api";
 import { openReplSession } from "../../../../src/repl/session.ts";
 import type { ReplSession } from "../../../../src/repl/session.ts";
 import { admitted, filled, initialState } from "../../../../src/repl/application.ts";
@@ -113,6 +116,9 @@ export function* useHarness(
      * being admitted, and that interval is inside the entry's execution.
      */
     readonly entryInstallation?: ExecutionInstallation;
+    readonly entryHost?: ReplEntryInstallation;
+    readonly workspace?: false;
+    readonly plugins?: readonly Plugin[];
     readonly state?: (initial: ReplState) => ReplState;
     readonly acknowledge?: () => Operation<void>;
     /**
@@ -160,19 +166,23 @@ export function* useHarness(
     throw stack.error;
   }
   const workspace = pairedLocation(join(dataRoot, "repl"), execution.id).directory;
-  const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
-    acp: {
-      createRuntime: fake.create,
-      sessionStore: makeStore(),
-      agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+  const profile = yield* (yield* assembleReplProfile(
+    stack.value,
+    yield* installPlugins(extra.plugins ?? [], { command: "repl", args: [] }),
+    {
+      acp: {
+        createRuntime: fake.create,
+        sessionStore: makeStore(),
+        agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+      },
+      // The scripted agent, named to the profile rather than left to the
+      // environment: the Sidekick assembly is built with it, and a conversation
+      // opened under an agent this registry does not know would fail as an
+      // availability refusal rather than reaching the fake.
+      sidekickAgent: AGENT,
+      planWriterRoot: yield* useTemporary("xmd-sidekick-plan-"),
     },
-    // The scripted agent, named to the profile rather than left to the
-    // environment: the Sidekick assembly is built with it, and a conversation
-    // opened under an agent this registry does not know would fail as an
-    // availability refusal rather than reaching the fake.
-    sidekickAgent: AGENT,
-    planWriterRoot: yield* useTemporary("xmd-sidekick-plan-"),
-  })).finalize(workspace);
+  )).finalize(workspace);
 
   const opened = yield* openReplSession({
     execution,
@@ -182,6 +192,9 @@ export function* useHarness(
         ? profile.installations
         : [...profile.installations, extra.entryInstallation],
     permissionMode: profile.permissionMode,
+    ...(extra.entryHost === undefined
+      ? {}
+      : { entryInstallation: extra.entryHost, workspace, projectCwd: yield* cwd() }),
   });
   if (!opened.ok) {
     throw opened.error;
@@ -237,6 +250,7 @@ export function* useHarness(
     // dependencies above: the Sidekick's own provider, with no tools, no MCP
     // servers, strict routing, denied permissions and no prompt
     // customization. Not the entry stack's, which is what the command does.
+    ...(extra.workspace === false ? {} : { workspace }),
     assembly: profile.sidekickAssembly,
     chat: execution.chat as PairedChatStorage,
     // deno-lint-ignore require-yield
@@ -264,7 +278,13 @@ export function* useHarness(
             );
           },
           admits: () => session.admits(),
-          submit: (source) => session.submit(source),
+          submit: (source) =>
+            session.submit(
+              source,
+              undefined,
+              undefined,
+              extra.entryHost === undefined ? undefined : true,
+            ),
         },
         // Asked rather than snapshotted: `submitForSidekick` reads it when it
         // reserves and again when the entry starts, and `facts` already answers

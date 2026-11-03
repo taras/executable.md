@@ -12,7 +12,15 @@ Sidekick responses that write an entry, and the REPL entry program they write.
 - Your response and the entry you prepare are two different XMD documents. A
   component admitted in an entry is not thereby admitted in your response. List
   the entry vocabulary with `<REPL.Syntax />` and read a named component with
-  `<REPL.Syntax names={["Elicit"]} />`.
+  `<REPL.Syntax names={["Elicit"]} />`. Availability means the component resolves
+  in an ordinary entry; each effect still requires permission and can fail.
+  Fresh asks read current session components and this command's selected Plugins.
+- Use existing assertions such as `<Assert>`, `<AssertEquals>` and `<AssertThrows>`
+  directly in ordinary entries. A failing assertion fails that entry and stops
+  later ordinary effects. Assertions do not activate testing.
+- Use `Test`, `Testing` and the nested test harness in Markdown test documents
+  requested through `<REPL.Test />`. A bare `<Test>` in an ordinary entry refuses
+  without running its body or activating testing.
 - Quoted props are strings: `as="code"`. Braced props supply data:
   `limit={16384}`, `entry={-2}`, `names={["Elicit"]}`.
 - In a response, braced props accept JSON literals, arrays, objects, object
@@ -137,14 +145,15 @@ remain local to their response; the later response does not inherit `code`.
 
 An entry can ask a selected checkout four questions. Read their exact forms
 with `<REPL.Syntax names={["Git.Files", "Git.Changes", "Git.Diff", "Git.File"]} />`
-first. Enter the explicitly known checkout path before asking Git; the workspace
-is not a hidden route back to the project. Replace `/known/project` below with
-the actual known checkout path:
+first. Enter the selected checkout before asking Git; the workspace is not a
+hidden route back to the project. Acquire the repository as shown below when it
+is not already available in the workspace. Replace `RELATIVE_CHECKOUT` below
+with its observed path relative to the current working directory:
 
 ````xmd
 <Let as="code" select="code">
 ```xmd
-<Dir path="/known/project">
+<Dir path="RELATIVE_CHECKOUT">
 <Git.Files prefix="packages/core/" limit={5} as="files" />
 <Json value={files.paths} />
 </Dir>
@@ -160,6 +169,54 @@ Each read requires `as`, renders nothing and binds JSON. A page is bounded —
 arguments for continuation, or `null` when there is no more. If a later read's
 cursor refuses because the answer changed, restart the read without the cursor.
 Nothing these reads return authorizes a repository change.
+
+### Acquire a repository for later entries
+
+Read `<Guide.Environment />`, `<REPL.Environment />` and
+`<REPL.Syntax names={["Repository", "File"]} />` first. Replace the example
+locator and creation base below with the selected repository and resolved commit:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Repository name="project" url="/known/repository" base="KNOWN_COMMIT" as="checkout" />
+{checkout}
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+````
+
+Follow the receipt's read instruction and inspect the actual outcome and checkout
+binding. An entry can print a refusal; status alone proves no acquisition.
+Derive a relative checkout path from the returned absolute path and the workspace
+reported by `<REPL.Environment />`. A later authored absolute Dir needs
+`--allow-absolute` and effective write permission; paired Repository/Worktree
+placement grants no such permission. Use the contained relative address when
+absolute is denied. An approved non-repository asset can target
+`RELATIVE_CHECKOUT/inputs/<filename>` beneath that same session workspace; derive
+that destination from the returned facts. A host repository outside the session
+root is unsupported by import. Replace `RELATIVE_CHECKOUT` below with that
+observed address, preserving the rest of this later response:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<File path="RELATIVE_CHECKOUT/README.md" as="readme" />
+{readme}
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+````
+
+Read that entry's output. This new read uses the current checkout and needs no
+new Repository selection, including after reopening the session. An acknowledged
+old read still answers with its historical text. Inspect actual Git origin and
+HEAD when revision identity matters: the requested `base` is the creation base,
+while a compatible checkout may since have advanced. Fresh same-base acquisition
+preserves that current HEAD and local changes. An incompatible repository or
+creation base refuses; do not reset work to force reuse.
 
 ### Test, fix and reuse a session component
 

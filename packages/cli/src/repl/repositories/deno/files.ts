@@ -49,7 +49,8 @@ import { createMountPolicy } from "../../mount-files.ts";
 import type { Operation, Result } from "effection";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
-import { until } from "effection";
+import { Err, until } from "effection";
+import { filesFailure, Permissions } from "@executablemd/runtime";
 import {
   localRecordName,
   recordedLocalOperation,
@@ -141,6 +142,21 @@ function* routed(
   }
   if (yield* retainedResultAhead(name)) {
     return yield* recordedLocalOperation({ operation, request, perform });
+  }
+
+  if (
+    operation === "dir-ensure" &&
+    isAbsolute(request.path) &&
+    (!(yield* Permissions.operations.files("write")) ||
+      !(yield* Permissions.operations.files("absolute")))
+  ) {
+    return Err(
+      filesFailure({
+        operation: "ensure-directory",
+        phase: "resolution",
+        reason: "permission-denied",
+      }),
+    );
   }
 
   const retain = (coverage: import("../../mount-records.ts").MountCoverage) =>

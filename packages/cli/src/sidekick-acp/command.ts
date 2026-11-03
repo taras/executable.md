@@ -15,7 +15,8 @@ export const SIDEKICK_HELP = [
   "  xmd sidekick acp --attach /absolute/private/attachment.json",
   "  xmd sidekick read --attach /absolute/private/attachment.json status",
   "  xmd sidekick read --attach FILE message MESSAGE_REF [--follow]",
-  "  xmd sidekick read --attach FILE entry ENTRY source|prompt|output|journal [--cursor CURSOR] [--prompt POSITIVE] [--field request|reply|error]",
+  "  xmd sidekick read --attach FILE entry ENTRY source|prompt|output [--cursor CURSOR] [--prompt POSITIVE] [--field request|reply|error]",
+  "  xmd sidekick read --attach FILE entry ENTRY journal [--yq EXPRESSION]",
   "Reads and follow are passive. EOF detaches observation; explicit ACP cancel/close joins only that attachment's exact exchange.",
   "No shared-draft takeover, question answering or provider configuration is granted. This is Sidekick-specific; it is independent of repository ACP.",
 ].join("\n");
@@ -57,11 +58,18 @@ export function* runSidekickCommand(args: readonly string[]): Operation<void> {
       continue;
     }
     if (token.startsWith("--")) {
-      if (!["--attach", "--cursor", "--prompt", "--field"].includes(token) || flags.has(token)) {
+      if (
+        !["--attach", "--cursor", "--prompt", "--field", "--yq"].includes(token) ||
+        flags.has(token)
+      ) {
         throw new Error("Unknown or repeated Sidekick option.");
       }
       const value = args[++at];
-      if (value === undefined || value.length === 0 || value.startsWith("-")) {
+      if (
+        value === undefined ||
+        value.length === 0 ||
+        (token !== "--yq" && value.startsWith("-"))
+      ) {
         throw new Error("Sidekick options require one value.");
       }
       flags.set(token, value);
@@ -93,6 +101,12 @@ export function* runSidekickCommand(args: readonly string[]): Operation<void> {
     );
   } else if (words.length === 3 && words[0] === "entry" && !follow) {
     const view = z.enum(["source", "prompt", "output", "journal"]).parse(words[2]);
+    if (
+      (view === "journal" && flags.has("--cursor")) ||
+      (view !== "journal" && flags.has("--yq"))
+    ) {
+      throw new Error("Journal accepts --yq; --cursor applies to source, prompt and output pages.");
+    }
     if (view !== "prompt" && (flags.has("--prompt") || flags.has("--field"))) {
       throw new Error("Prompt selectors apply only to prompt pages.");
     }
@@ -100,6 +114,7 @@ export function* runSidekickCommand(args: readonly string[]): Operation<void> {
       method: "entry",
       entry: positive.parse(words[1]),
       view,
+      ...(flags.has("--yq") ? { yq: flags.get("--yq") } : {}),
       ...(flags.has("--cursor") ? { cursor: flags.get("--cursor") } : {}),
       ...(flags.has("--prompt") ? { prompt: positive.parse(flags.get("--prompt")) } : {}),
       ...(flags.has("--field")

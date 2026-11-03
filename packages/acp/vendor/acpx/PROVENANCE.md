@@ -39,6 +39,10 @@ closure. The ordinary published dependency supports independent client probes.
 
 ## Materialization patch (#648)
 
+The provider requests this barrier for strong-declared adapter construction.
+Standard ACP sessions use the released ordinary ensure path; absence of the
+private marker alone does not prevent basic streamed interaction.
+
 `ensureSession({ materialization: "first-turn-acceptance" })` persists occupancy:
 `sessionMaterialization` says pending and `agentSessionId` is absent. The
 released session owner privately holds the provisional identity. Pending records
