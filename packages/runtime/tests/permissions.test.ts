@@ -26,7 +26,8 @@ interface Seen {
 }
 
 describe("Tier PM — Permissions", () => {
-  it("PM1: both members permit when nothing is installed", function* () {
+  it("PM1: absolute defaults denied; read, write and fetch permit", function* () {
+    expect(yield* Permissions.operations.files("absolute")).toBe(false);
     expect(yield* Permissions.operations.files("read")).toBe(true);
     expect(yield* Permissions.operations.files("write")).toBe(true);
     expect(
@@ -130,5 +131,40 @@ describe("Tier PM — Permissions", () => {
     expect(yield* Permissions.operations.files("write")).toBe(false);
     expect(yield* configured.operations.files("write")).toBe(false);
     expect(yield* Permissions.operations.files("read")).toBe(true);
+  });
+
+  it("PM6: the absolute host ceiling and nested restrictions only narrow", function* () {
+    yield* scoped(function* () {
+      yield* Permissions.around({
+        files: ([operation], next) => (operation === "absolute" ? false : next(operation)),
+      });
+      yield* scoped(function* () {
+        yield* Permissions.around({ files: () => true });
+        yield* Permissions.around(
+          {
+            files: ([operation], next) => (operation === "absolute" ? true : next(operation)),
+          },
+          { at: "min" },
+        );
+        expect(yield* Permissions.operations.files("absolute")).toBe(false);
+      });
+    });
+    yield* scoped(function* () {
+      yield* Permissions.around(
+        {
+          files: ([operation], next) => (operation === "absolute" ? true : next(operation)),
+        },
+        { at: "min" },
+      );
+      expect(yield* Permissions.operations.files("absolute")).toBe(true);
+      yield* scoped(function* () {
+        yield* Permissions.around({
+          files: ([operation], next) => (operation === "absolute" ? false : next(operation)),
+        });
+        expect(yield* Permissions.operations.files("absolute")).toBe(false);
+      });
+      expect(yield* Permissions.operations.files("absolute")).toBe(true);
+    });
+    expect(yield* Permissions.operations.files("absolute")).toBe(false);
   });
 });

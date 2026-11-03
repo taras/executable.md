@@ -13,8 +13,8 @@ import {
   lstat,
   rm,
 } from "node:fs/promises";
-import { join } from "node:path";
-import { allSettled, ensure, scoped, spawn, until, withResolvers } from "effection";
+import { dirname, join } from "node:path";
+import { allSettled, Ok, ensure, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Permissions } from "@executablemd/runtime/api";
 import { FsApi } from "@effectionx/fs";
@@ -96,10 +96,18 @@ function* fixture(bytes: Uint8Array = BINARY) {
   return { source, bytes };
 }
 
-function* importThroughOwner(bytes: Uint8Array, destination: string) {
+function* importThroughOwner(bytes: Uint8Array, destination: string, deniedAbsolute = false) {
   const source = yield* fixture(bytes);
   const io = yield* instrument();
   const held = yield* useHarness();
+  if (deniedAbsolute) {
+    expect(
+      (yield* hostFilesHandler().ensureDirectory({
+        cwd: held.workspace,
+        path: dirname(source.source),
+      })).ok,
+    ).toBe(false);
+  }
   scripted(held, source.source, destination);
   const sending = yield* spawn(() => held.owner.message("Import this asset"));
   const asking = yield* question(held.owner.questions);
@@ -139,6 +147,34 @@ describe("approved Sidekick asset import", () => {
     yield* scoped(() =>
       importThroughOwner(new Uint8Array([255, 0, 1, 194, 66]), "inputs/changed.bin"),
     );
+  });
+
+  it("1075: ordinary absolute denial survives an approved import and a returned-relative read", function* () {
+    yield* Permissions.around({
+      files: ([operation], next) => (operation === "absolute" ? false : next(operation)),
+    });
+    yield* useHostFiles();
+    yield* useNormalizedOutput();
+    const { held, source } = yield* importThroughOwner(
+      new TextEncoder().encode("copied text"),
+      "inputs/mock ü.html",
+      true,
+    );
+    const direct = yield* hostFilesHandler().ensureDirectory({
+      cwd: held.workspace,
+      path: dirname(source),
+    });
+    expect(direct.ok).toBe(false);
+    const read = yield* hostFilesHandler().readTextFile({
+      cwd: held.workspace,
+      path: "inputs/mock ü.html",
+    });
+    expect(read).toEqual(Ok("copied text"));
+    expect(
+      (yield* hostFilesHandler().ensureDirectory({ cwd: held.workspace, path: dirname(source) }))
+        .ok,
+    ).toBe(false);
+    expect(yield* Permissions.operations.files("absolute")).toBe(false);
   });
 
   it("A4: Decline and pending cancellation perform no content reads or writes", function* () {
@@ -545,7 +581,8 @@ describe("native import ownership and uncertain completion", () => {
 
 import { parseSidekickRecord } from "../src/repl/sidekick/history.ts";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
-import { API } from "@executablemd/runtime";
+import { API, hostFilesHandler, useHostFiles } from "@executablemd/runtime";
+import { useNormalizedOutput } from "@executablemd/core";
 
 describe("asset import acknowledgement and independent owners", () => {
   it("A8: a failed import outcome append supplies no success or passive retry", function* () {

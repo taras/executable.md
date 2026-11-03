@@ -45,7 +45,7 @@ import type { FunctionComponentDefinition } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
 
-import { cwd, platform } from "@executablemd/runtime";
+import { API, cwd, platform, Permissions } from "@executablemd/runtime";
 
 import { DESIGNATED, GUIDE_CHAPTERS } from "../src/repl/sidekick/controls.ts";
 import { openReplSession } from "../src/repl/session.ts";
@@ -2018,6 +2018,87 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     expect(answer.value).toContain("stop rather than assume a value for it");
   });
 
+  it("1075: environment distinguishes fresh response, session-start and import policies without work", function* () {
+    yield* ReplHost.around(
+      {
+        *environment() {
+          return [{ label: "runtime", value: "controlled" }];
+        },
+      },
+      { at: "min" },
+    );
+    let sessionAllows = true;
+    yield* Permissions.around(
+      {
+        files: ([operation], next) => (operation === "absolute" ? sessionAllows : next(operation)),
+      },
+      { at: "min" },
+    );
+    const session = yield* opened("policies", new InMemoryStream());
+    const requested = sidekickRequests(reading(session), noSubmission);
+    const text = function* () {
+      const answer = yield* requested.environment();
+      if (!answer.ok) {
+        throw answer.error;
+      }
+      return answer.value;
+    };
+    const entryLabel = "submitted-entry start policy (session scope; entry content may narrow it)";
+    const before = yield* session.filePolicy();
+    expect(before).toEqual(Ok({ read: true, write: true, absolute: true }));
+    let effects = 0;
+    yield* API.Fs.around({
+      *stat([path], next) {
+        effects++;
+        return yield* next(path);
+      },
+      *readTextFile([path], next) {
+        effects++;
+        return yield* next(path);
+      },
+      *ensureDir([path], next) {
+        effects++;
+        return yield* next(path);
+      },
+    });
+    yield* scoped(function* () {
+      yield* Permissions.around({
+        files: ([operation], next) => (operation === "absolute" ? false : next(operation)),
+      });
+      const denied = yield* text();
+      expect(denied).toContain(
+        "current response policy: read=allowed, write=allowed, absolute=denied",
+      );
+      expect(denied).toContain(entryLabel + ": read=allowed, write=allowed, absolute=allowed");
+      expect(denied).toContain("approved import: eligible");
+      expect(effects).toBe(0);
+      const asked = fresh();
+      const evaluated = yield* replyThrough("<REPL.Environment />", reading(session), asked);
+      expect(evaluated.ok).toBe(true);
+      expect(asked.settled[0]?.observed).toContain("current response policy");
+      effects = 0;
+      yield* scoped(function* () {
+        yield* Permissions.around({
+          files: ([operation], next) => (operation === "read" ? false : next(operation)),
+        });
+        expect(yield* text()).toContain("approved import: not eligible");
+      });
+      expect(yield* text()).toContain("approved import: eligible");
+    });
+    expect(yield* text()).toContain(
+      "current response policy: read=allowed, write=allowed, absolute=allowed",
+    );
+    sessionAllows = false;
+    const changed = yield* text();
+    expect(changed).toContain(entryLabel + ": read=allowed, write=allowed, absolute=denied");
+    expect(changed).toContain(
+      "current response policy: read=allowed, write=allowed, absolute=denied",
+    );
+    expect(effects).toBe(0);
+    expect(session.model.entries).toHaveLength(0);
+    expect(session.elicitation.pending).toBeUndefined();
+  });
+
   it("R3: the Plugins this command installed are reported, by name and in order", function* () {
     // The production path: a real Plugin installation, and the real profile
     // assembler reading the admitted assembly. Nothing restates the selection.
@@ -2295,6 +2376,9 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
       // deno-lint-ignore require-yield
       *bindings(): Operation<Result<Readonly<Record<string, Json>>>> {
         throw new Error("a saved-evidence read asked a running entry for its root");
+      },
+      *filePolicy() {
+        throw new Error("a cold evidence read requested live policy");
       },
       vocabulary: READING_PROFILE.vocabulary,
       session: Object.freeze([]),

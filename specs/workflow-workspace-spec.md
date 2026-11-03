@@ -1199,7 +1199,11 @@ transaction and replay.
 Before installing the cwd or expanding any child, `<Dir>` asks the mandatory
 provider-neutral `API.Files.ensureDirectory` operation to ensure its target. A
 relative path resolves from the enclosing contextual cwd; an absolute path
-keeps its existing absolute meaning. The operation recursively creates a
+names a logical Workspace entry, retaining its existing absolute meaning.
+The host `--allow-absolute` policy does not apply to these logical roots. An
+authored absolute host Dir in run/REPL instead needs opt-in plus effective
+write permission; provider-owned Repository/Worktree paired placement is a
+separate operation and grants none. The operation recursively creates a
 missing directory, succeeds without replacing, clearing or otherwise changing
 an existing directory and its contents, and refuses when the target or an
 intermediate entry is a file or another non-directory. That refusal is fixed

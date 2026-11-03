@@ -1,3 +1,4 @@
+import { Permissions } from "@executablemd/runtime";
 /**
  * Tier ORC — ambient discovery and local Git under an ordinary `xmd run`.
  *
@@ -142,6 +143,10 @@ describe("ORC4 — the ambient linked worktree", () => {
 
 describe("ORC5 — origin is not local admission", () => {
   it("does local work with no origin, and refuses to publish before reaching anything", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const root = yield* useManagedRoot();
     const solo = yield* useOriginlessCheckout();
 
@@ -237,6 +242,10 @@ describe("ORC5 — origin is not local admission", () => {
 
 describe("ORC6 — lexical working directories", () => {
   it("restores the enclosing directory after a Worktree body and a Dir body", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const checkout = yield* useHostCheckout(remote.locator);
@@ -453,6 +462,10 @@ describe("ORC13 — live local Git", () => {
   });
 
   it("leaves every other component usable when no identity resolves", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const remote = yield* useBareRemote(REMOTE);
     const root = yield* useManagedRoot();
     const checkout = yield* useHostCheckout(remote.locator);
@@ -559,6 +572,10 @@ function selectionProbe(seen: (RepositorySelection | undefined)[]): ComponentReg
 describe("ORC6 — Dir makes the directory it names", () => {
   // ORC6: the ordering claim and the two path rules, in one document.
   it("ORC6: creates missing parents, keeps an absolute path, and finishes before content", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const root = yield* useManagedRoot();
     const checkout = (yield* useOriginlessCheckout()).root;
     const elsewhere = yield* useTempDirectory("xmd-orc6-absolute-");
@@ -648,6 +665,10 @@ describe("ORC6 — Dir makes the directory it names", () => {
   // ORC6b: a non-directory refuses before content, at the target and on the way
   // to it, and what the document is told carries no host path or platform code.
   it("ORC6b: a file or a special entry, at the target or on the way, refuses", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const root = yield* useManagedRoot();
     const checkout = (yield* useOriginlessCheckout()).root;
     yield* writeTextFile(join(checkout, "occupied"), "a file");

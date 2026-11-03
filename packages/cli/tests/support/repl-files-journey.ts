@@ -437,7 +437,10 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     yield* until(mkdir(away, { recursive: true }));
     const outside = (args: readonly string[]): string => `cd ${shellQuote(away)} && ${repl(args)}`;
 
-    const first = yield* allocate(outside(["repl", "--deny-all"]), home);
+    const first = yield* allocate(
+      outside(["repl", "--deny-all", ...(through === "worktree" ? ["--allow-absolute"] : [])]),
+      home,
+    );
     yield* showing(first, "[exit]", REACH_MS);
     yield* first.type(managedEntry(through, origin));
     yield* sleep(500);
@@ -495,7 +498,15 @@ export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney
     // A separate new entry, selecting the same placement afresh: its selection
     // is new work, so it reuses the checkout that is there, and its read is new
     // work, so it reads what the file now holds.
-    const third = yield* allocate(outside(["repl", "--deny-all", location]), home);
+    const third = yield* allocate(
+      outside([
+        "repl",
+        "--deny-all",
+        location,
+        ...(through === "worktree" ? ["--allow-absolute"] : []),
+      ]),
+      home,
+    );
     yield* showing(third, "[exit]", REACH_MS);
     yield* third.type(managedLiveRead(through, origin));
     yield* sleep(500);
@@ -774,7 +785,10 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     const open = (args: readonly string[]): string =>
       `cd ${shellQuote(from)} && ${shim.prefix} ${repl(args)}`;
 
-    const first = yield* allocate(open(["repl", "--deny-all"]), home);
+    const first = yield* allocate(
+      open(["repl", "--deny-all", ...(through === "worktree" ? ["--allow-absolute"] : [])]),
+      home,
+    );
     yield* showing(first, "[exit]", REACH_MS);
     yield* first.type(gitEntry(through, origin));
     yield* sleep(500);
@@ -853,7 +867,15 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
 
     // A separate new entry: its Add and its Commit are new work, so they stage
     // and commit what the checkout holds now.
-    const third = yield* allocate(open(["repl", "--deny-all", location]), home);
+    const third = yield* allocate(
+      open([
+        "repl",
+        "--deny-all",
+        location,
+        ...(through === "worktree" ? ["--allow-absolute"] : []),
+      ]),
+      home,
+    );
     yield* showing(third, "[exit]", REACH_MS);
     yield* third.type(gitLiveCommit(through, origin));
     yield* sleep(500);

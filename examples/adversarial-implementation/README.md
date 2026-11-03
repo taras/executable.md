@@ -23,7 +23,7 @@ configured Git signing and verification. Run from that source checkout:
 
 ```bash
 cd /absolute/path/to/prepared-source-worktree
-xmd run /absolute/path/to/workflow/examples/adversarial-implementation/run.md \
+xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-implementation/run.md \
   --props-task /absolute/path/to/task.json \
   --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
 ```
@@ -32,6 +32,10 @@ xmd run /absolute/path/to/workflow/examples/adversarial-implementation/run.md \
 complete CLI with `xmd run /absolute/path/to/workflow/examples/adversarial-implementation/run.md --help`.
 The task has no mode, phase, full flag or initialization override. `phase.md`
 and `continue.md` below serve separate assignments and existing records.
+
+The workflow enters the prepared checkout and artifact directory through absolute
+`Dir` paths. Enable `--allow-absolute` for these runs; the flag retains existing
+read/write restrictions.
 
 ## Prepare scope and impact
 
@@ -178,7 +182,7 @@ files whose contents enter this prompt; artifacts remain references. A retained
 session uses `initialize: false`. Set it to true only for the role's first call.
 
 ```bash
-deno task xmd run examples/adversarial-implementation/phase.md \
+deno task xmd run --allow-absolute examples/adversarial-implementation/phase.md \
   --props-request /absolute/path/to/request.json \
   --include examples/adversarial-implementation/components --raw
 ```
@@ -214,7 +218,7 @@ To advance a saved `Ticket.Run` or `Ticket.Continue` record, pass that complete
 record rather than reconstructing its assignment or artifact paths:
 
 ```bash
-deno task xmd run examples/adversarial-implementation/continue.md \
+deno task xmd run --allow-absolute examples/adversarial-implementation/continue.md \
   --props-record /absolute/path/to/ticket-record.json --props-steps 1 \
   --include examples/adversarial-implementation/components --raw
 ```
@@ -346,10 +350,11 @@ health and required CI as merge gates; review acceptance waives neither.
 ## Test without paid agents
 
 ```bash
-deno task xmd test examples/adversarial-implementation/tests/Workflow.test.md \
-  --include examples/adversarial-implementation/tests/components \
-  --include examples/adversarial-implementation/components
+deno task test packages/cli/tests/adversarial-implementation.test.ts
 ```
+
+The launcher wraps each Markdown suite in `<Testing>` and explicitly enables
+absolute host paths for its temporary checkouts and artifacts.
 
 Only the role boundaries are replaced. These journeys use real signed scratch
 Git repositories, committed shell consumers, focused command failures, the

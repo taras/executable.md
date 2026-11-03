@@ -32,10 +32,11 @@
 
 import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
-import { cwd, platform } from "@executablemd/runtime";
+import { cwd, platform, Permissions } from "@executablemd/runtime";
 
 import { ReplHost } from "../host.ts";
 import type { ReplHostFact } from "../host.ts";
+import type { ReplFilePolicy } from "../session.ts";
 
 /** Why the facts could not be read, which is a refusal and not a snapshot. */
 export class SidekickEnvironmentError extends Error {
@@ -56,16 +57,42 @@ export class SidekickEnvironmentError extends Error {
  * A failure to read any of it refuses. The alternative is a snapshot with a
  * silent hole in it, which is exactly the thing a reply is told it may rely on.
  */
-export function* replEnvironment(session: readonly ReplHostFact[]): Operation<Result<string>> {
+export function* replEnvironment(
+  session: readonly ReplHostFact[],
+  entryPolicy: () => Operation<Result<ReplFilePolicy>>,
+): Operation<Result<string>> {
   let facts: readonly ReplHostFact[];
   try {
     const where = yield* cwd();
     const machine = yield* platform();
+    const response = {
+      read: yield* Permissions.operations.files("read"),
+      write: yield* Permissions.operations.files("write"),
+      absolute: yield* Permissions.operations.files("absolute"),
+    };
+    const entry = yield* entryPolicy();
+    if (!entry.ok) {
+      throw entry.error;
+    }
     facts = [
       { label: "working directory", value: where },
       { label: "platform", value: `${machine.os} ${machine.arch}` },
       ...(yield* ReplHost.operations.environment()),
       ...session,
+      { label: "current response policy", value: describePolicy(response) },
+      {
+        label: "submitted-entry start policy (session scope; entry content may narrow it)",
+        value: describePolicy(entry.value),
+      },
+      {
+        label: "approved import",
+        value: `${response.read && response.write ? "eligible" : "not eligible"} under current response read/write; separate per-file user approval required, independent of absolute. Eligibility does not establish source/destination validation or approval.`,
+      },
+      {
+        label: "filesystem policy scope",
+        value:
+          "XMD operations only; these facts grant no native tools or component admission and do not describe nested scopes of a running entry",
+      },
     ];
   } catch (error) {
     return Err(
@@ -77,6 +104,10 @@ export function* replEnvironment(session: readonly ReplHostFact[]): Operation<Re
     );
   }
   return Ok(describeEnvironment(facts));
+}
+
+function describePolicy(policy: ReplFilePolicy): string {
+  return `read=${policy.read ? "allowed" : "denied"}, write=${policy.write ? "allowed" : "denied"}, absolute=${policy.absolute ? "allowed" : "denied"}`;
 }
 
 /**

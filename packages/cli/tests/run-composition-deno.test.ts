@@ -1,3 +1,4 @@
+import { Permissions } from "@executablemd/runtime";
 /**
  * Tier ORC — what only the runtime that operates repositories can be asked.
  *
@@ -145,6 +146,10 @@ function runOrdinary(
 
 describe("ORC7 — a Session launched in a managed Worktree", () => {
   it("hands the launch that worktree's own root and a session key of its own", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const ambient = yield* useAmbient();
 
     /** Every launch this document routed, as the session details it was given. */
@@ -276,6 +281,10 @@ describe("ORC7 — a Session launched in a managed Worktree", () => {
 
 describe("ORC18 — the journal is diagnostic", () => {
   it("performs the same live work with and without a trace, once each", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const first = yield* useAmbient();
     const second = yield* useAmbient();
     const trace = join(second.root, "..", "diagnostic.jsonl");

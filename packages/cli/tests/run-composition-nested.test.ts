@@ -194,10 +194,11 @@ describe("ORC19 — a nested run profile", () => {
     source: string,
     fixture: Nested,
     expected: "passes" | "fails" = "passes",
+    allowAbsolute = false,
   ): Operation<string> {
     const document = join(fixture.documents, "nested.md");
     yield* writeTextFile(document, source);
-    const run = yield* runCli(["run", document], {
+    const run = yield* runCli(["run", ...(allowAbsolute ? ["--allow-absolute"] : []), document], {
       // The whole point: nothing about where this process stands names a
       // repository, so only what the document says can put a child in one.
       cwd: fixture.outside,
@@ -252,6 +253,8 @@ describe("ORC19 — a nested run profile", () => {
         "",
       ].join("\n"),
       fixture,
+      "passes",
+      true,
     );
     expect(reported).not.toContain("not inside a Git checkout");
 
@@ -327,6 +330,8 @@ describe("ORC19 — a nested run profile", () => {
         "",
       ].join("\n"),
       fixture,
+      "passes",
+      true,
     );
 
     // The first child's publication really happened, so what the sibling

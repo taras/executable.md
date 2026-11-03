@@ -38,7 +38,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
           : ["--mount", `${source}:${target}`, `--mount=${fixtures}:${fixtureTarget}`];
       const line = (flags: readonly string[]) =>
         `cd ${shellQuote(project)} && ${repl(["repl", "--deny-all", ...flags])}`;
-      const first = yield* allocate(line(args(old)), home);
+      const first = yield* allocate(line(["--allow-absolute", ...args(old)]), home);
       yield* showing(first, "Ready for Entry 1", 180_000);
       const source = [
         `<Dir path=${JSON.stringify(target)}>`,
@@ -62,7 +62,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       yield* writeTextFile(join(old, "read.md"), "changed");
       const selected = mode === "unchanged" ? old : mode === "reassigned" ? next : ordinary;
       const flags = mode === "omitted" ? [] : args(selected);
-      const second = yield* allocate(line([location, ...flags]), home);
+      const second = yield* allocate(line([location, "--allow-absolute", ...flags]), home);
       yield* showing(second, "waiting for an answer", 180_000);
       yield* click(second, "[answer]");
       yield* showing(second, "Saved historical.", 30_000);
@@ -76,7 +76,7 @@ export function replMountsJourney(repl: ReplCommand): Operation<void> {
       yield* click(second, "[exit]");
       expect(yield* ended(second)).toBe(0);
       const nextLocation = printedLocation((yield* second.shows()).join("\n"));
-      const third = yield* allocate(line([nextLocation, ...flags]), home);
+      const third = yield* allocate(line([nextLocation, "--allow-absolute", ...flags]), home);
       yield* showing(third, "Ready for Entry 2", 180_000);
       yield* third.type(
         `<Dir path=${JSON.stringify(target)}><File path="read.md" as="fresh" /><File path="fresh.md">{fresh}</File>fresh is {fresh}</Dir>`,

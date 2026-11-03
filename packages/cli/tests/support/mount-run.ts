@@ -1,6 +1,6 @@
 import { Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { API, cwd, fileWriteSuccess, filesFailure } from "@executablemd/runtime";
+import { API, cwd, Permissions, fileWriteSuccess, filesFailure } from "@executablemd/runtime";
 import type { FilePathInput } from "@executablemd/runtime";
 import { collect, Elicitation, inlineSource } from "@executablemd/core";
 import { forEach } from "@effectionx/stream-helpers";
@@ -25,6 +25,7 @@ export function mountedRun(
   calls: MountTrace,
   options: {
     pause?: boolean;
+    allowAbsolute?: boolean;
     ordinaryHost?: boolean;
     onOutput?: (chunk: string) => void;
     entryCwd?: string;
@@ -35,6 +36,12 @@ export function mountedRun(
   } = {},
 ): Operation<string> {
   return scoped(function* () {
+    if (options.allowAbsolute === true) {
+      yield* Permissions.around(
+        { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+        { at: "min" },
+      );
+    }
     yield* API.Env.around(
       {
         *cwd() {

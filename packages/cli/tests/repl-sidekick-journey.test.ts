@@ -3392,6 +3392,10 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
 
 describe("975 — the shipped session component journey", () => {
   it("creates, discovers and invokes a component, then reopens without work", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const project = yield* useTemporary("xmd-workspace-project-");
     const host = yield* useMountedHost({
       projectCwd: project,

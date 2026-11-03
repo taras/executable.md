@@ -25,6 +25,8 @@ import { join } from "node:path";
 import { ensure, Ok, until } from "effection";
 import type { Operation, Result } from "effection";
 
+import { cwd } from "@executablemd/runtime";
+import type { ReplEntryInstallation } from "../../../../src/repl-entry-installation.ts";
 import { useTempFileCompiler } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 
@@ -114,6 +116,7 @@ export function* useHarness(
      * being admitted, and that interval is inside the entry's execution.
      */
     readonly entryInstallation?: ExecutionInstallation;
+    readonly entryHost?: ReplEntryInstallation;
     readonly workspace?: false;
     readonly plugins?: readonly Plugin[];
     readonly state?: (initial: ReplState) => ReplState;
@@ -189,6 +192,9 @@ export function* useHarness(
         ? profile.installations
         : [...profile.installations, extra.entryInstallation],
     permissionMode: profile.permissionMode,
+    ...(extra.entryHost === undefined
+      ? {}
+      : { entryInstallation: extra.entryHost, workspace, projectCwd: yield* cwd() }),
   });
   if (!opened.ok) {
     throw opened.error;
@@ -272,7 +278,13 @@ export function* useHarness(
             );
           },
           admits: () => session.admits(),
-          submit: (source) => session.submit(source),
+          submit: (source) =>
+            session.submit(
+              source,
+              undefined,
+              undefined,
+              extra.entryHost === undefined ? undefined : true,
+            ),
         },
         // Asked rather than snapshotted: `submitForSidekick` reads it when it
         // reserves and again when the entry starts, and `facts` already answers

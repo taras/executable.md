@@ -14,7 +14,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, ensure, sleep, spawn, suspend, until } from "effection";
+import { createContext, ensure, sleep, spawn, suspend, until, scoped } from "effection";
 import type { Operation } from "effection";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -1536,5 +1536,111 @@ describe("REPL composition: a modal stack", () => {
 
     expect(conflicting.message).toContain("neither contains the other");
     expect(tree.mounted()).toEqual(before);
+  });
+});
+
+import { runXmd, replGrammarError } from "../src/cli.ts";
+import { installReplHost } from "../src/repl-assembly.ts";
+import { API, Permissions, useHostFiles } from "@executablemd/runtime";
+import { recordingTerminal, awaited, awaitedFact } from "./support/mounted-repl.ts";
+import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import { writeTextFile } from "@effectionx/fs";
+import { appendFile, writeFile } from "node:fs/promises";
+import { pairedReplRepository } from "../src/repl/sidekick/repository.ts";
+import type { DurableEvent } from "@executablemd/durable-streams";
+import { projectRepl } from "../src/repl/model.ts";
+import { refusedStandardInput } from "./support/standard-input.ts";
+import { refusedPluginModules } from "./support/plugin-modules.ts";
+import { unsupportedWorkflowHost } from "../src/workflow.ts";
+
+describe("1075 invocation to REPL entry", () => {
+  it("the boolean flag reaches actual terminal-submitted work and cannot widen an enclosing refusal", function* () {
+    expect(replGrammarError(["repl", "--allow-absolute"], undefined)).toBeUndefined();
+    expect(replGrammarError(["repl", "--allow-absolute=true"], undefined)).toContain(
+      "takes no value",
+    );
+    for (const choice of ["default", "allowed", "enclosing-denial"]) {
+      yield* scoped(function* () {
+        const root = yield* useTemporary("xmd-absolute-repl-");
+        const external = yield* useTemporary("xmd-absolute-external-");
+        yield* writeTextFile(join(external, "input.txt"), "external REPL bytes");
+        if (choice === "enclosing-denial") {
+          yield* Permissions.around({
+            files: ([operation], next) => (operation === "absolute" ? false : next(operation)),
+          });
+        }
+        let events: readonly DurableEvent[] = [];
+        const recording = recordingTerminal();
+        yield* API.Env.around(
+          {
+            *cwd() {
+              return root;
+            },
+          },
+          { at: "min" },
+        );
+        let status = 0;
+        const exitContext = createContext<(result: { status: number }) => Operation<void>>("exit");
+        yield* exitContext.set(function* (result) {
+          status = result.status;
+        });
+        const running = yield* spawn(() =>
+          runXmd(
+            ["repl", ...(choice === "default" ? [] : ["--allow-absolute"])],
+            function* () {},
+            {
+              provenance: "deno-source",
+              currentVersion: "0.0.0-test",
+              executablePath: "/nonexistent",
+              platform: "darwin",
+              architecture: "arm64",
+            },
+            refusedStandardInput,
+            refusedPluginModules,
+            unsupportedWorkflowHost,
+            undefined,
+            {
+              *install() {
+                yield* useHostFiles();
+                yield* installReplHost({
+                  dataRoot: () => root,
+                  identify: () => "absolute-entry",
+                  createExclusive: (path) => writeFile(path, "", { flag: "wx" }),
+                  appendRecord: (path, record) => appendFile(path, record),
+                });
+                yield* recording.install();
+              },
+            },
+          ),
+        );
+        yield* awaited("initial REPL frame", () => recording.terminal.drawn > 1);
+        recording.terminal.feed(
+          `<Dir path=${JSON.stringify(external)}><File path="input.txt" /></Dir>\r`,
+        );
+        yield* awaitedFact("submitted entry settlement", function* () {
+          const opened = yield* pairedReplRepository(join(root, "xmd", "repl")).open(
+            "absolute-entry",
+          );
+          events = yield* opened.stream.readAll();
+          const model = projectRepl(events);
+          return model.ok && model.value.entries[0]?.terminal !== undefined;
+        });
+        const model = projectRepl(events);
+        if (!model.ok) {
+          throw model.error;
+        }
+        const terminal = model.value.entries[0]?.terminal;
+        if (choice === "allowed") {
+          expect(terminal?.status).toBe("ok");
+          expect(terminal?.output).toContain("external REPL bytes");
+        } else {
+          expect(terminal?.status).toBe("err");
+          expect(JSON.stringify(terminal)).toContain("not allowed to create or enter");
+        }
+        recording.terminal.end();
+        yield* running;
+        expect(status).toBe(0);
+      });
+    }
   });
 });
