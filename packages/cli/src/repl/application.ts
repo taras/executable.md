@@ -111,6 +111,7 @@ import type { ReplHistoryNavigation } from "./navigation.ts";
 import { blankBand, EMPTY_BAND } from "./history-rail.ts";
 import type { ReplPreparedRail } from "./history-rail.ts";
 import { entryReading, NO_READING } from "./source-reading.ts";
+import { inertCommandText } from "./command-output.ts";
 import type { ReplCommandOutput } from "./command-output.ts";
 import type { ReplReading } from "./source-reading.ts";
 import { readingRuns, fitPlain } from "./fitting.ts";
@@ -10978,7 +10979,7 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
       }),
     );
     // The record's own final line break ends its last line rather than adding one.
-    const recorded = entry.terminal?.output ?? "";
+    const recorded = inertCommandText(entry.terminal?.output ?? "");
     const output = recorded.endsWith("\n") ? recorded.slice(0, -1) : recorded;
     if (output !== "") {
       found.push(

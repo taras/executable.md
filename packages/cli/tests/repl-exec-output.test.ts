@@ -17,6 +17,55 @@ import type { ReplPage } from "./support/repl-page.ts";
 import { awaitedFact, mountedReading } from "./support/mounted-repl.ts";
 import { intoComposer, pasteDraft, sidekickIdle } from "./support/screen-journeys.ts";
 
+describe("E3 associated command Output", () => {
+  it("shows captured controls as readable escapes in both entry readings", function* () {
+    const received = "PROBE\x1b[2JTAIL\rEND";
+    const displayed = "PROBE\\x1b[2JTAIL\\x0dEND";
+    yield* API.Process.around({
+      *exec() {
+        yield* Stdio.operations.stdout(new TextEncoder().encode(received));
+        return { exitCode: 0, stdout: undefined, stderr: undefined };
+      },
+    });
+    const page = yield* useReplPage({ size: { columns: 160, rows: 44 } });
+    const program = '```sh exec as="result"\ncontrolled-bound\n```\n{result.stdout}';
+    page.repl.fake.script({
+      reply:
+        '<Let as="code" select="code">\n````xmd\n' +
+        program +
+        "\n````\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />",
+    });
+    page.repl.fake.script({ reply: "<Output>Probe completed.</Output>" });
+    yield* intoComposer(page);
+    yield* page.type("Run the probe");
+    yield* page.key("Enter");
+    const shown = yield* page.until(
+      "the completed associated entry",
+      (one) => one.shows("1 ✓") && sidekickIdle(one) && one.shows("Probe completed."),
+    );
+    const centerColumn = shown.locate("Entries").column;
+    const sidekickColumn = shown.locate("BINDINGS").column;
+    const center = shown.rows.map((row) => row.slice(centerColumn, sidekickColumn)).join("\n");
+    const associated = shown.rows.map((row) => row.slice(sidekickColumn)).join("\n");
+    expect(center).toContain(displayed);
+    expect(associated).toContain(displayed);
+    expect(center).not.toContain("�");
+    expect(associated).not.toContain("�");
+    expect(shown.occurrences(displayed)).toBe(2);
+    const saved = yield* mountedReading(page.repl);
+    const entry = saved.model.entries[0];
+    expect(entry.terminal?.output).toContain(received);
+    expect(entry.bindings.find((one) => one.name === "result")?.value).toEqual({
+      stdout: received,
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(entry.records.flatMap((one) => (one.exec === undefined ? [] : [one.exec]))).toEqual([
+      { stdout: received, stderr: "", exitCode: 0 },
+    ]);
+  });
+});
+
 function* submit(page: ReplPage, source: string, order = 1): Operation<void> {
   yield* pasteDraft(page, source);
   yield* page.press("[send]", { onRow: " DRAFT" });
