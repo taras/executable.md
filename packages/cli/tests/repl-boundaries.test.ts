@@ -523,6 +523,7 @@ describe("REPL documentation: what it says is what the code does", () => {
     const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
     expect(documentedReplOptions(spec)).toEqual([
       "--agent-provider",
+      "--allow-absolute",
       "--approve-all",
       "--approve-reads",
       "--default-agent",
@@ -533,7 +534,7 @@ describe("REPL documentation: what it says is what the code does", () => {
     ]);
 
     // Each is one the parser accepts, in both spellings a value option has.
-    for (const option of ["--approve-all", "--approve-reads", "--deny-all"]) {
+    for (const option of ["--allow-absolute", "--approve-all", "--approve-reads", "--deny-all"]) {
       expect([option, replGrammarError(["repl", option], undefined)]).toEqual([option, undefined]);
       expect(replGrammarError(["repl", `${option}=yes`], undefined)).toContain("takes no value");
     }

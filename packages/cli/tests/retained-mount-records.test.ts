@@ -96,7 +96,7 @@ describe("mount record consistency", () => {
       stream,
       [{ source: "/owned/source", target: "/reference" }],
       trace(),
-      { pause: true, ownedFileCoverage: { root: "/owned" } },
+      { pause: true, allowAbsolute: true, ownedFileCoverage: { root: "/owned" } },
     );
     const changed = yield* stream.readAll();
     for (const event of changed) {
@@ -163,7 +163,7 @@ function* fixture() {
     stream,
     [{ source: "/owned/source", target: "/reference" }],
     trace(),
-    { pause: true, ownedFileCoverage: { root: "/owned" } },
+    { pause: true, allowAbsolute: true, ownedFileCoverage: { root: "/owned" } },
   );
   return yield* stream.readAll();
 }

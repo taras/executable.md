@@ -275,7 +275,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     const open = (args: readonly string[]): string =>
       `cd ${shellQuote(away)} && ${shim.prefix} ${configured(service)} ${repl(args)}`;
 
-    const first = yield* allocate(open(["repl", "--deny-all"]), home);
+    const first = yield* allocate(open(["repl", "--deny-all", "--allow-absolute"]), home);
     yield* showing(first, "[exit]", REACH_MS);
     yield* first.type(entry());
     yield* sleep(500);
