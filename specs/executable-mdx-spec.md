@@ -13892,6 +13892,12 @@ against the production Deno adapter, on real run files.
 
 ### Tier WAP — The strict workflow Agent profile
 
+The retained Claude adapter confirms backend identity before a live session
+answers, through its Query's successful SessionStart response. Confirmation alone
+is not acceptance, an asserting save or a workflow mapping. WAP9 and WSL3/9/10
+retain that ordering; native Claude construction stays client-allocated even
+when the adapter returns confirmation metadata.
+
 Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 
 | # | Test | Verify |
@@ -13907,6 +13913,12 @@ Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 | WAP9 | Retention follows acceptance | Nothing is retained until the backend accepts the session's first turn, and the ordered log is ensure, turn start, adapter acceptance, the provider's asserting save, then the host's retention — with the mapping absent at every earlier point |
 
 ### Tier WSL — Retained workflow Agent sessions
+
+The acceptance and promotion rows cover adapters declaring strong first-turn
+acceptance. Standard ACP creation instead retains `acpx.acpSessionId` when no
+native assertion exists, commits the mapping before events and reopens only
+through supported loading. A changed assertion kind refuses. An ACP loading
+target supplies no native handoff or stronger acceptance proof.
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
 

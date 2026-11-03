@@ -47,30 +47,49 @@ fi
 <SafeParse schema={{type:"object",properties:{message:{const:step.message},ending:{type:"object",properties:{joined:{const:true},outcome:{enum:["completed","failed","cancelled"]}},required:["joined","outcome"]}},required:["message","ending"]}} as="exchange">{lastLine}</SafeParse>
 <Let as="report" value={{entry:step.entry,status:"unavailable",joinedExchange:false,diagnostic:"Follow failed or returned no validated joined receipt. Inspect stderr and reconcile the original call; no work was resent.",resultStatus:"unavailable",result:null}} />
 <If condition={exchange.ok}>
-  <Let as="entryArguments" value={[...step.xmd,"sidekick","read","--attach",step.attachment,"entry",String(step.entry),"journal"]} />
-  <Let as="entryCommand" value={entryArguments.map(value => "'" + value.replaceAll("'","'\"'\"'") + "'").join(" ")} />
+  <Let as="report" value={{...report,joinedExchange:true,diagnostic:"The attachment could not be copied for the selected message."}} />
+  <TempDir as="attachmentDirectory" />
+  <Let as="privateAttachment" value={attachmentDirectory + "/attachment.json"} />
+  <Let as="copyCommand" value={["install","-m","600",step.attachment,privateAttachment].map(value => "'" + value.replaceAll("'","'\"'\"'") + "'").join(" ")} />
+```bash exec as="attachmentCopy"
+exec {copyCommand}
+```
+  <If condition={attachmentCopy.exitCode === 0}>
+    <Let as="descriptorCommand" value={"cat -- '" + privateAttachment.replaceAll("'","'\"'\"'") + "'"} />
+```bash exec as="descriptorRead"
+exec {descriptorCommand}
+```
+    <Let as="report" value={{...report,diagnostic:"The copied attachment did not validate against the selected execution and conversation."}} />
+    <If condition={descriptorRead.exitCode === 0}>
+      <SafeParse schema={{type:"object",properties:{execution:{const:step.message.execution},conversation:{const:step.message.conversation}},required:["execution","conversation"]}} as="attachmentEvidence">{descriptorRead.stdout}</SafeParse>
+      <If condition={attachmentEvidence.ok}>
+        <Let as="entryArguments" value={[...step.xmd,"sidekick","read","--attach",privateAttachment,"entry",String(step.entry),"journal","--yq",'{"entry": .entry, "status": .status, "failure": .failure}']} />
+        <Let as="entryCommand" value={entryArguments.map(value => "'" + value.replaceAll("'","'\"'\"'") + "'").join(" ")} />
 ```bash exec as="entryRead"
 exec {entryCommand}
 ```
-  <Let as="report" value={{...report,joinedExchange:true,diagnostic:entryRead.exitCode === 0 ? "Entry read did not validate against the selected execution, conversation and entry." : entryRead.stderr}} />
-  <If condition={entryRead.exitCode === 0}>
-    <SafeParse schema={{type:"object",properties:{entry:{const:step.entry},execution:{const:step.message.execution},conversation:{const:step.message.conversation},status:{enum:["completed","failed","cancelled","running","unfinished"]},failure:{type:["string","null"]}},required:["entry","execution","conversation","status","failure"]}} as="entryEvidence">{entryRead.stdout}</SafeParse>
-    <If condition={entryEvidence.ok}>
-      <Let as="page" value={entryEvidence.value} />
-      <Let as="report" value={{entry:step.entry,status:page.status,exchangeOutcome:exchange.value.ending.outcome,joinedExchange:true,diagnostic:page.failure,read:{entry:step.entry,view:"output"},resultStatus:"not-requested",result:null}} />
-      <If condition={page.status === "completed" && !!step.resultFile}>
-        <Let as="resultCommand" value={"cat -- '" + step.resultFile.replaceAll("'","'\"'\"'") + "'"} />
+        <Let as="report" value={{...report,diagnostic:entryRead.exitCode === 0 ? "Entry read did not validate a complete result for the selected entry." : entryRead.stderr}} />
+        <If condition={entryRead.exitCode === 0}>
+          <SafeParse schema={{type:"object",properties:{value:{type:"object",properties:{entry:{const:step.entry},status:{enum:["completed","failed","cancelled","running","unfinished"]},failure:{type:["string","null"]}},required:["entry","status","failure"],additionalProperties:false},next:{type:"null"},prev:{type:"null"},last:{type:"null"}},required:["value","next","prev","last"],additionalProperties:false}} as="entryEvidence">{entryRead.stdout}</SafeParse>
+          <If condition={entryEvidence.ok}>
+            <Let as="page" value={entryEvidence.value.value} />
+            <Let as="report" value={{entry:step.entry,status:page.status,exchangeOutcome:exchange.value.ending.outcome,joinedExchange:true,diagnostic:page.failure,read:{entry:step.entry,view:"output"},resultStatus:"not-requested",result:null}} />
+            <If condition={page.status === "completed" && !!step.resultFile}>
+              <Let as="resultCommand" value={"cat -- '" + step.resultFile.replaceAll("'","'\"'\"'") + "'"} />
 ```bash exec as="resultRead"
 exec {resultCommand}
 ```
-        <Let as="report" value={{...report,status:"unavailable",entryStatus:page.status,resultStatus:"unavailable",diagnostic:resultRead.stderr}} />
-        <If condition={resultRead.exitCode === 0}>
-          <SafeParse schema={step.resultSchema ?? {type:"object"}} as="canonical">{resultRead.stdout}</SafeParse>
-          <If condition={canonical.ok}>
-            <Let as="report" value={{...report,status:page.status,resultStatus:"readable",diagnostic:page.failure,result:canonical.value}} />
-          <Else>
-            <Let as="report" value={{...report,resultStatus:"invalid",diagnostic:"The selected canonical result did not validate. Preserve its attempt and reconcile the original work.",validationErrors:canonical.errors}} />
-          </Else>
+              <Let as="report" value={{...report,status:"unavailable",entryStatus:page.status,resultStatus:"unavailable",diagnostic:resultRead.stderr}} />
+              <If condition={resultRead.exitCode === 0}>
+                <SafeParse schema={step.resultSchema ?? {type:"object"}} as="canonical">{resultRead.stdout}</SafeParse>
+                <If condition={canonical.ok}>
+                  <Let as="report" value={{...report,status:page.status,resultStatus:"readable",diagnostic:page.failure,result:canonical.value}} />
+                <Else>
+                  <Let as="report" value={{...report,resultStatus:"invalid",diagnostic:"The selected canonical result did not validate. Preserve its attempt and reconcile the original work.",validationErrors:canonical.errors}} />
+                </Else>
+                </If>
+              </If>
+            </If>
           </If>
         </If>
       </If>

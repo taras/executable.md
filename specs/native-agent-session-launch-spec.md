@@ -7,6 +7,11 @@
 [native session launch story](https://github.com/taras/executable.md/issues/517),
 [future bootstrap prompts](https://github.com/taras/executable.md/issues/514)
 
+Ordinary ACP prompts require the private acceptance barrier only when their
+adapter declares it. Native launch keeps its adapter-specific materialization
+requirements and asserted native identity checks; a standard ACP loading target
+is never a native handoff identity.
+
 ## Purpose
 
 An executable document can prepare a coding-agent session and then place the
@@ -272,6 +277,14 @@ variables. A provider uses its session API or an invocation-private file with
 restrictive permissions and removes any temporary during cleanup.
 
 ## Provider-native identity
+
+The retained Claude adapter confirms the backend conversation on response
+`_meta.agentSessionId` before ACP session creation or reattachment succeeds.
+This confirmation does not change who allocated the native identity: Claude's
+native construction route remains explicitly client-allocated. Metadata presence
+never chooses a construction route. A resumed Query confirms the exact retained
+identity after loading history; it neither replaces the conversation nor rebuilds
+its transcript.
 
 Four identities remain distinct:
 

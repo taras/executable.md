@@ -43,6 +43,20 @@ export interface AgentOptionSelectors {
 export class AcpConfigurationError extends Error {
   override name = "AcpConfigurationError";
   sessionUnusable = false;
+  "executablemd.acp.configuration-failure"?: {
+    reason: "selector-unavailable" | "configuration-mismatch";
+    setting: "model" | "effort";
+  };
+}
+
+function configurationFailure(
+  message: string,
+  reason: "selector-unavailable" | "configuration-mismatch",
+  setting: "model" | "effort",
+): AcpConfigurationError {
+  const error = new AcpConfigurationError(message);
+  error["executablemd.acp.configuration-failure"] = { reason, setting };
+  return error;
 }
 
 function malformed(message: string): AcpConfigurationError {
@@ -349,7 +363,11 @@ export function* applySessionConfiguration(
     try {
       if (request.model !== undefined) {
         if (initial.model === null) {
-          throw new AcpConfigurationError(modelUnavailable(target.agent));
+          throw configurationFailure(
+            modelUnavailable(target.agent),
+            "selector-unavailable",
+            "model",
+          );
         }
         if (!initial.model.set.options.some((entry) => entry.id === request.model)) {
           throw new AcpConfigurationError(
@@ -366,9 +384,11 @@ export function* applySessionConfiguration(
       // model this conversation is now on.
       const refreshed = request.model === undefined ? initial : yield* read(target);
       if (request.model !== undefined && refreshed.model?.set.selected !== request.model) {
-        throw new AcpConfigurationError(
+        throw configurationFailure(
           `this agent did not apply the model "${request.model}" to session ` +
             `"${target.sessionKey}", and reports "${refreshed.model?.set.selected ?? "nothing"}"`,
+          "configuration-mismatch",
+          "model",
         );
       }
 
@@ -379,7 +399,7 @@ export function* applySessionConfiguration(
 
       const model = refreshed.model?.set.selected;
       if (refreshed.effort === null) {
-        throw new AcpConfigurationError(effortUnavailable(model));
+        throw configurationFailure(effortUnavailable(model), "selector-unavailable", "effort");
       }
       if (!refreshed.effort.set.options.some((entry) => entry.id === request.effort)) {
         throw new AcpConfigurationError(
@@ -393,15 +413,19 @@ export function* applySessionConfiguration(
 
       const verified = yield* read(target);
       if (verified.effort?.set.selected !== request.effort) {
-        throw new AcpConfigurationError(
+        throw configurationFailure(
           `this agent did not apply the effort level "${request.effort}" to session ` +
             `"${target.sessionKey}", and reports "${verified.effort?.set.selected ?? "nothing"}"`,
+          "configuration-mismatch",
+          "effort",
         );
       }
       if (request.model !== undefined && verified.model?.set.selected !== request.model) {
-        throw new AcpConfigurationError(
+        throw configurationFailure(
           `this agent stopped reporting the model "${request.model}" for session ` +
             `"${target.sessionKey}" while its effort level was applied`,
+          "configuration-mismatch",
+          "model",
         );
       }
       settled = true;

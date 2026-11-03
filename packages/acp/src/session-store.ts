@@ -26,6 +26,8 @@ export function createAcpxSessionStore(stateDir: string): AcpxSessionStore {
 /** What a store still holds for one session key. */
 export interface AcpxRetainedSession {
   readonly agentCommand: string;
+  /** The retained ACP loading target, never a native handoff identity. */
+  readonly acpSessionId?: string;
   /** The provider-native session identity, when the adapter asserted one. */
   readonly agentSessionId?: string;
 }
@@ -39,7 +41,13 @@ export function* retainedSession(
   if (!record) {
     return undefined;
   }
-  const retained: AcpxRetainedSession = { agentCommand: record.agentCommand };
+  if (record.sessionMaterialization?.state === "pending") {
+    return { agentCommand: record.agentCommand };
+  }
+  const retained: AcpxRetainedSession = {
+    agentCommand: record.agentCommand,
+    acpSessionId: record.acpSessionId,
+  };
   return record.agentSessionId === undefined
     ? retained
     : { ...retained, agentSessionId: record.agentSessionId };

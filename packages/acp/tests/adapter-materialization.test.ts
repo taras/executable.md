@@ -831,3 +831,30 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(yield* exists(adapters.executablePath("codex"))).toBe(true);
   });
 });
+
+describe("HC fresh Claude materialization", () => {
+  it("HC5: the SDK library and required packages survive without platform executables", function* () {
+    const root = yield* useRoot();
+    const adapters = createEmbeddedAdapters(root);
+    yield* adapters.materialize("claude");
+    const names: string[] = [];
+    function* walk(directory: string): Operation<void> {
+      for (const entry of yield* until(readdir(directory, { withFileTypes: true }))) {
+        if (entry.isDirectory()) {
+          yield* walk(join(directory, entry.name));
+        } else if (entry.name === "package.json") {
+          const value = JSON.parse(yield* until(readFile(join(directory, entry.name), "utf8")));
+          if (typeof value.name === "string") {
+            names.push(value.name);
+          }
+        }
+      }
+    }
+    yield* walk(join(root, digestOf("claude"), "node_modules"));
+    expect(names).toContain("@agentclientprotocol/claude-agent-acp");
+    expect(names).toContain("@anthropic-ai/claude-agent-sdk");
+    expect(names).toContain("@agentclientprotocol/sdk");
+    expect(names).toContain("zod");
+    expect(names.filter((name) => name.startsWith("@anthropic-ai/claude-agent-sdk-"))).toEqual([]);
+  });
+});

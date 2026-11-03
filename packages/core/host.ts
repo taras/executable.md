@@ -428,6 +428,8 @@ export type { AnswersState, DeclarationScanner } from "./src/declaration-scan.ts
  */
 export { useSyntax } from "./src/use-syntax.ts";
 
+export { select as selectJson } from "./src/components/query-engine.ts";
+
 export type {
   AuthoredFileOperation,
   DirectoryFrame,

@@ -342,9 +342,14 @@ are ready, without waiting for CI on `main` or the reviewed branch. When Fable
 is unavailable, including exhausted Claude quota, use an independent Codex Astra
 (`gpt-6-astra`) reviewer under the same scope, effort policy and correction
 limits. Reconcile any in-flight call and preserve its findings before fallback.
-Record the review provider/model. The repository's
-[review rules](../../AGENTS.md#feedback-commits) retain main health and required
-CI as merge gates; review acceptance waives neither.
+Select Fable from the host provider's advertised model catalog, using its
+`fable` alias when available. Record the exact provider and resolved model for
+each review. A model name refused before the prompt is a configuration failure:
+preserve the refusal and confirm that no prompt was sent before selecting an
+advertised model. Keep automatic retries disabled.
+
+The repository's [review rules](../../AGENTS.md#feedback-commits) retain main
+health and required CI as merge gates; review acceptance waives neither.
 
 ## Test without paid agents
 

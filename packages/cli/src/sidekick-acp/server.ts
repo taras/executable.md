@@ -12,7 +12,6 @@ import {
 import type { Operation, Result, Stream, Task } from "effection";
 import type { RootReads } from "../repl/sidekick/requests.ts";
 import {
-  readEntryJournal,
   readEntryOutputWindow,
   readEntryPrompt,
   readEntrySource,
@@ -172,11 +171,18 @@ function replay(root: AttachmentRoot, descriptor: Descriptor) {
       : [],
   );
 }
-function entry(
+function* entry(
   root: AttachmentRoot,
   descriptor: Descriptor,
   request: Extract<Request, { method: "entry" }>,
 ) {
+  if (request.view === "journal") {
+    const result = yield* root.reads.inspectJournal({ entry: request.entry, yq: request.yq });
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
+  }
   const head = root.reads.acknowledged();
   if (!head.ok) {
     throw head.error;
@@ -207,9 +213,7 @@ function entry(
       ? readEntrySource(selected, history)
       : request.view === "output"
         ? readEntryOutputWindow(selected, history)
-        : request.view === "journal"
-          ? readEntryJournal(selected, history)
-          : readEntryPrompt(selected, history);
+        : readEntryPrompt(selected, history);
   if (!result.ok) {
     throw result.error;
   }
@@ -807,7 +811,7 @@ export function* useSidekickAttachment(
                   } else if (request.method === "status") {
                     value = status(root, descriptor);
                   } else if (request.method === "entry") {
-                    value = entry(root, descriptor, request);
+                    value = yield* entry(root, descriptor, request);
                   } else if (request.method === "message") {
                     const followed = root.dispatch.follow(request.reference);
                     if (!followed.ok) {

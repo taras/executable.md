@@ -3562,7 +3562,11 @@ translation lives entirely in `@executablemd/acp`, and no ACP or ACPX type cross
 A provider-native session identity is the identity an agent asserts for its own durable
 session state, distinct from the logical XMD session key and from the ACP/ACPX record
 identity. Only an asserted one crosses a handoff; XMD never infers that a string a
-native CLI would accept is one.
+native CLI would accept is one. A workflow may retain the distinctly tagged
+`acpx.acpSessionId` loading target when no native assertion exists. An asserted
+`acpx.agentSessionId` takes precedence; changed kind or value refuses
+reattachment. The ACP target never becomes `Session.agentSessionId` or a native
+CLI handoff identity.
 
 #### Inert placement
 
@@ -3588,24 +3592,42 @@ constructed.
 
 #### Materialization
 
-Session materialization is the transition that makes a placement's chosen route and its
-backend history resumable. The runtime is the integrity-pinned ACPX 0.21.1 source
-closure. Its released child environment and response metadata coexist with the
-local explicit-acceptance barrier: `promptStarted` acknowledges transport only.
-Promotion and ordinary checkpoints share the released session owner's writer;
-the asserting copy is saved before memory adopts it, and finalization joins
-promotion before saving. ACP-first materialization happens only when the backend
-reports that it accepted the session's first turn; client-native materialization is the
-native launch's existing retained construction. Nothing else promotes a placement — not
-a returning ensure, a first output, a terminal result, a checkpoint token, an error code
-or a diagnostic.
+An adapter declaring `acceptance: "first-turn-acceptance"` requires explicit
+backend acceptance before a new ACP session exposes events. Codex and Claude
+declare it. The integrity-pinned ACPX 0.21.1 runtime consumes the versioned
+`executablemd.session-materialization/v1` marker. Its `promptStarted` is only
+transport acknowledgement; text and `end_turn` prove no stronger acceptance.
+Promotion shares the session owner's writer: the asserting copy is saved before
+memory adopts it, and finalization joins promotion before saving. Host mapping
+commits after that save and before events. Missing acceptance never selects the
+standard path. Client-native materialization keeps the native launch's retained
+construction.
+
+A standard adapter uses ordinary ACP creation without this barrier. The provider
+saves its record and the host retains its identity before configuration,
+permission routing and turn execution. Events report streamed text and the
+actual terminal outcome. Native identity exists only when the peer asserted it;
+an ACP session id alone proves neither native identity nor durable recovery.
 
 #### Established sessions
 
-An established session is a placement whose immutable construction route and durable
-provider or native identity both already exist, and which is therefore validated
-eagerly: reattached, compared against its retained history, and refused when either is
-missing or names another conversation.
+A retained standard record is existing. Cold continuation loads or resumes the
+exact stored ACP session, or refuses before another prompt. Missing load/resume
+support refuses even an unused record. The released `-32603` recreation remains
+only for a provably never-prompted record; used and uncertain conversations are
+never replaced. Failed attempts may retain their user request and lifecycle
+facts while preserving earlier messages, identity and configuration.
+
+A held conversation's canonical history independently establishes use: a turn
+with nonempty agent output, status other than failed, a stop reason, or a native
+identity counts as used. Its private issuance requires existing construction. If
+provider storage is gone, setup refuses before creation or sending, preserves the history and
+keeps the conversation usable. A history containing only failed-before-answer
+turns retains its creation retry. An outcome-less turn still refuses opening
+and is never resent.
+
+Established strong sessions retain their construction route, asserted native
+identity and executable checks. Their continuation never silently downgrades.
 
 #### Instruction placement
 
@@ -3701,7 +3723,13 @@ Identity provenance records who chose a provider-native session identity: the pr
 returned it, or the client allocated it before the provider existed. This provenance is
 retained rather than inferred, because after the fact both are just a string in the
 record. A released record written before the distinction existed reads as
-provider-returned, which is the only compatibility inference.
+provider-returned, which is the only compatibility inference. Backend confirmation
+is separate from allocation: Claude's native route remains client-allocated when
+the retained adapter confirms that same conversation on `_meta.agentSessionId`.
+The adapter reads its owned SDK Query before answering session creation or
+reattachment. Only a successful SessionStart lifecycle response confirms the
+identity; a requested UUID or ACP session name does not. This confirmation stays
+private until explicit first-turn acceptance and the asserting provider save.
 
 #### Proving release
 
@@ -3738,6 +3766,21 @@ A provider partition is one complete, independently owned agent-provider state �
 runtime, store, managed sessions, queues, coordinator, teardown — selected by the one
 installed factory at each dispatch. Production is the single-partition case of the same
 path; holding a partition grants work, never permission.
+
+### Shared local-agent qualification
+
+The [local-agent example](examples/agent-certification/README.md) uses ordinary
+Agent/Session/Prompt routing and literal-command registration. Private comparisons
+report basic authentication, streaming and completion separately from acceptance,
+asserted native identity, durability and cleanup. Missing stronger evidence
+leaves demonstrated basic passes intact. Expectations confer no execution,
+identity or certification. Reports finalize after the existing owner joins.
+Native cleanup remains unverified at the production probe/release boundary,
+so cancellation and durable certification remain non-pass. Successfully joined
+stages permit independent subsequent work; pending joins, actual cleanup failure
+and production ownership refusal stop admission. The example introduces no provider, registry or lifecycle
+observation interface. Its [ACP contract](specs/acp-client-spec.md#shared-local-agent-qualification)
+keeps ordinary retention separate from workflow Session-site identity.
 
 ### Agent permissions and generated XMD
 
@@ -3889,20 +3932,21 @@ identity. Cwd and provider placement are never compatibility inputs. What stays
 beside the run on disk is the provider's own session store and one empty working
 directory per session; both are disposable.
 
-The order is placement, then the backend's acceptance of the session's first
-turn, then the provider's canonical, tagged assertion of a durable identity,
-then the mapping commit — and only then is anything that first turn produced
-exposed to the document.
+Strong adapters order placement, explicit first-turn acceptance, asserting
+provider save, tagged native assertion and mapping commit before events.
+Standard adapters order placement, ACP creation and provider save, tagged ACP
+loading-target mapping, configuration and permission routing, then turn and
+events. Native assertion takes precedence when available. Neither path derives
+stronger acceptance from transport acknowledgement or output.
 
 Placement is inert. A `<Session>` says where a session will live and which agent
 it is compatible with; it creates no provider session, contacts no backend and
-writes no row. The session comes into existence when the first subscribed
-`<Prompt>` starts a turn the backend accepts, through the one handle that
-ensured it, and acceptance is reported by the adapter rather than inferred from
-what the turn then produced.
+writes no row. The first subscribed `<Prompt>` constructs it through the handle that ensured
+it. Strong construction additionally waits for the adapter's explicit acceptance
+rather than inferring acceptance from what the turn produced.
 
 Occupancy of a key in the provider's own store is not an assertion: it says
-something is there, not what conversation it is. A record the provider holds for
+something is there, not what conversation it is. A pending strong record the provider holds for
 a first turn nobody accepted is exactly that — occupancy — so it asserts nothing,
 no mapping is committed for it, and the next attempt creates rather than
 resumes.
@@ -4232,7 +4276,10 @@ asked at all.
 
 The workflow profile selects ACP-only capability explicitly: it advertises
 neither native launch nor client-native attachment. It supplies no machine
-session coordinator, construction-route store or executable observer. A workflow
+session coordinator, construction-route store or executable observer. The host
+selects its installed Claude launcher separately and supplies the path only to
+the retained adapter child's transient environment. This selection grants no
+native-session capability and performs no executable-build admission. A workflow
 session belongs to a run; the machine-wide ownership account describes a
 different boundary. Deleting a run removes its mapping row and provider-session
 directory and reports the categories removed.
@@ -8406,32 +8453,53 @@ Send's live access, and later entry settlement cannot recreate it. Fatal
 persistence, Files, disclosure and cleanup outcomes keep their existing
 precedence.
 
-**One entry's saved evidence is read through the projection, and metadata is
-part of it.** A reader of a failed entry needs what it ran, what its turns
-said, what it printed and where each of those sits in the file, and the last of
-those is the only one the model did not already hold: a transcript is a
-presentation and says nothing about the effects it does not draw. So
-`buildEntry` forms one row per retained `Yield` and `Close` of the range it is
-already reading — marker, type, name, status, position, prompt number and
-agent, and no body, result payload, checkpoint or stack — and detaches and
-freezes it with everything else the entry carries. A saved Prompt's row takes
-its semantic outcome, its number and its agent from the turn the same reading
-parsed, matched by the marker it was retained under, and the root close takes
-the outcome that reading already produced; every other row states the protocol
-outcome its record states. Raw `DurableEvent`s still terminate at the model,
-and no new record, index or stored position is written anywhere.
+**One entry's saved evidence is read through the projection.** `buildEntry`
+forms one row per retained `Yield` and `Close` in append order: marker, type,
+name, status, optional source position, prompt number, agent and supported exec
+facts. A saved Prompt's row takes its semantic outcome, number and agent from
+the turn that same reading parsed; the root close takes the parsed entry outcome.
+Other rows retain their protocol status. An exec result with protocol `ok`
+projects its validated integral `exitCode` and independently retained string
+channels. An absent channel stays absent; an empty retained channel stays empty.
+Error, cancellation and missing results supply no invented exit or channels.
+Projection detaches and freezes these facts, refuses malformed supported results,
+and exposes no arbitrary effect payload, provider file, command descriptor or stack.
+Raw `DurableEvent`s still terminate at the model.
 
-The reads over it are a feature-local module of the Sidekick's own
-(`sidekick/entry-inspection.ts`): pure selectors, Unicode and record windows,
-and four page builders over frozen entry facts and the exact live output
-observation their caller supplies. A running entry uses the existing printing
-fact; a cancelled entry may use the owning Send's final joined observation under
-the rule above. The reader owns no task, listener, stream or cache and performs
-no wait or execution. `requests.ts` supplies the acknowledged head and exact
-applicable observation for that read; `controls.ts` retains its ordinary intent
-and outcome pair. This does not add output to the entry's terminal or change the
-entry journal partition. No entry’s provider is reached. Execution ownership and
-the publication and secret boundaries remain unchanged.
+`sidekick/entry-inspection.ts` owns entry selection, Source/Prompt/Output windows
+and the complete Journal value. The root's `inspectJournal` operation takes one
+fresh acknowledged reading for both the response component and passive attachment.
+It builds `{entry,status,failure,prompts,records}`, evaluates ordinary yq over
+that complete permitted value with the existing core evaluator, then pages the
+selected result. Every success is exactly `{value,next,prev,last}`. Small results
+keep their JSON type; selected strings use 4096-code-point windows and arrays use
+at most twenty items within the serialized response bound. Oversized objects or
+indivisible array items refuse with a narrower-query direction. Direct channel
+selection remains fully pageable. Source, Prompt and Output keep their existing
+contracts and exact live-output ownership.
+
+The feature-local `sidekick/journal-query.ts` formats navigation as ordinary yq
+with an always-true literal JSON header, a resolved-positive-entry guard, the
+opaque original expression and a finite slice. It recognizes only that exact
+formatter output: parse the first line's strict JSON tuple, validate it and
+regenerate the whole expression for equality. No arbitrary yq syntax is parsed.
+The selected entry is checked independently, since a collecting expression can
+produce a value after an empty filter. Recognition supplies navigation context,
+not permission. The existing evaluator decides query meaning and failures;
+a successful expression with no usable array/string base is an ordinary fresh
+query. Edited or noncanonical expressions retain ordinary query behavior.
+
+Every page request recomputes against that entry's current complete retained
+facts. Callers reuse the same positive entry number; later admissions cannot
+retarget generated windows, and growth may shift pages. Query text and this
+request's current data supply all navigation context: no issued association,
+cache, snapshot, extra record or second execution owner exists. Both evaluations
+needed for a recognized window use the same captured input. Inspection performs
+no command, provider call, entry admission, resumption or history rewrite.
+`controls.ts` retains the ordinary response-owned intent/outcome and designated
+feedback; the originating and consuming executions keep their disclosure and
+persistence gates. Passive attachments retain exact connection authentication
+and the existing frame bound, without Journal cursor wrapping or success decoration.
 
 The single output read these four replaced is retired from admission rather
 than from history. A response written now cannot name it — the capture seals
@@ -9532,7 +9600,7 @@ Status is measured against main.
 | Agent session portability evidence in an XMD artifact | classifies every logical Agent session that contributed a retained Prompt as portable — with ordered provider checkpoint tokens and an opaque Agent session bundle — or as explicitly unavailable, as two content kinds inside the existing version-1 manifest and identity [Invariant](#portable-xmd-artifacts); [Interface and evidence](specs/xmd-artifact-spec.md#25-agent-session-portability-evidence). | specified by `specs/xmd-artifact-spec.md` §2.5; the closed union, both content kinds and the complete post-identity profile verifier are built on the #621 stack, Deno provider only. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry [Invariant](#read-only-lifecycle-inspection); [Interface and evidence](specs/workflow-workspace-spec.md#42-history). | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props [Invariant](#retained-effects-and-history-forks); [Interface and evidence](specs/workflow-workspace-spec.md#11-history-forks). | built on the #368 stack, Deno provider only |
-| workflow Agent session | Uses inert placement and authenticated first-turn mapping under the run-owned no-native-tool profile. [Session mapping](#agent-permissions-and-generated-xmd). | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
+| workflow Agent session | Uses inert placement and capability-specific identity mapping under the run-owned no-native-tool profile. [Session mapping](#agent-permissions-and-generated-xmd). | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
 | generated-XMD admission | Preflights and retains one generated fragment under the exact selected identities and forms. [Admission and continuation](#agent-permissions-and-generated-xmd). | built on the #369 stack, continuation basis amended by #589, and the host's contribution narrowed to `Component.generated` by this stack; core owns the mechanics and no host wrapper remains |
 | `<Evaluate>` | Runs untrusted fragment text or paired-produced text under the host's captured generated selection; whole-fragment admission, local data expressions and ordinary rendered output remain distinct from provider permission. [Admission and captured implementations](#agent-permissions-and-generated-xmd). | built on the #302 stack, extended by #369, and narrowed to a name-and-form selection by this stack |
 | generated mutation proposals | Admits filesystem change proposals through the host's generated selection and ordinary component transactions. [Invariant](#agent-permissions-and-generated-xmd); [Interface and evidence](specs/workflow-workspace-spec.md#mutation-proposal-admission). | Built on #369/#567, with persistent directory creation added by #643; legacy Dir grants refuse, and Git/process/credential/external-write classes remain excluded. |

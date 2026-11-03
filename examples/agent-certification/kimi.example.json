@@ -1,0 +1,15 @@
+{
+  "command": "kimi acp",
+  "scenarios": [
+    "authentication",
+    "streaming",
+    "completion",
+    "continuity",
+    "separation",
+    "reconnect",
+    "cancellation",
+    "cleanup",
+    "resume"
+  ],
+  "expected": ["authentication", "streaming", "completion", "continuity", "separation"]
+}

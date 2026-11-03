@@ -18,9 +18,10 @@ parent alive and retain the original child, role conversations and counters.
    `--follow` command. Preserve its execution, conversation and message identity;
    do not search for whichever message is latest.
 3. Receive the stream's updates while that single command waits. After its
-   validated joined ending, read the associated entry's journal once and inspect
-   the original canonical phase or Ticket result. Retain the launch association
-   between that message, entry and reserved result path.
+   validated joined ending, use the supervisor below to read the associated
+   entry's Journal once and inspect the original canonical phase or Ticket result.
+   Retain the launch association between that message, entry and reserved result
+   path; a matching entry number alone does not establish that association.
 4. Preserve incomplete or uncertain outcomes. A disconnected owner, missing
    receipt or invalid result calls for reconciliation of the original work,
    never an automatic resend or a new attempt.
@@ -88,12 +89,26 @@ example above formats one value; it is not itself a streaming command.
 [progress.md](progress.md) and its [persistent reader](progress-reader.node.ts).
 Query selects the progress fields. The reader feeds snapshots to that document,
 prints a changed summary on stderr and forwards the original terminal receipt
-once on stdout. It owns no agent or REPL.
+once on stdout. After validating that receipt, the supervisor copies the original
+attachment once into an invocation-private directory with a mode-0600 file. It
+checks that copy's execution and conversation against the acknowledged message,
+then uses the unchanged copy for the one Journal connection. The live handshake
+validates the whole descriptor; copied bytes alone prove no live owner. Replacing
+the original filename after copying cannot retarget that read. The directory is
+removed when the supervisor ends, including failure or cancellation.
+
+The current Journal response is `{value,next,prev,last}`. The supervisor selects
+`{"entry": .entry, "status": .status, "failure": .failure}` with `--yq`, validates those
+facts under `value`, and requires null navigation so a partial failure diagnostic
+cannot stand in for a complete result. The Journal body supplies no execution or
+conversation identity; that association comes from the validated descriptor and
+its successful handshake on the same connection. It owns no agent or REPL.
 
 ```text
 Exact message follow -> one persistent Query renderer -> compact live stderr
                      -> validated joined receipt
-                     -> one entry read + one canonical-result read -> JSON
+                     -> private descriptor copy + live authenticated Journal read
+                     -> completed entry permits one canonical-result read -> JSON
 ```
 
 Save this input under a new private coordination filename. Replace paths and
@@ -132,8 +147,16 @@ The root `step` object uses aggregate `--props`, not `--props-step`. The result
 keeps `status` for the entry and `exchangeOutcome` for its exchange. A readable
 canonical artifact appears unchanged under `result`, with `resultStatus=readable`.
 Without `resultFile`, it reports `not-requested`. A missing or invalid requested
-result reports `unavailable`, preserving `entryStatus` separately. The supervisor
-does not poll, resend work or convert a canonical hold into a passing verdict.
+result reports `unavailable`, preserving `entryStatus` separately.
+
+Copy, tuple-validation, read or connection failure leaves entry evidence
+unavailable and skips the canonical-result read. A previously validated joined
+receipt still reports `joinedExchange=true`; it does not establish entry
+completion. A mismatched tuple is rejected before Journal, while owner loss or
+conversation change fails the live handshake. An oversized selected diagnostic
+may refuse under the Journal bound and remains unavailable evidence. The
+supervisor does not follow pages, poll, resend work or convert a canonical hold
+into a passing verdict.
 
 An enclosing `<Let as="receipt">` can capture a foreground command's stdout
 while stderr forwards live progress. A bound `exec as="receipt"` captures both

@@ -280,6 +280,12 @@ export function createSessionSetupOwner(): SessionSetupOwner {
                 "conversation",
             );
           }
+          if (requested.continuation === "required" && state.kind === "new") {
+            throw new AgentSessionProtocolError(
+              "the provider has no record of the conversation this history continues. " +
+                "Nothing was created or sent. Start a new conversation to continue.",
+            );
+          }
           settled = true;
           if (state.kind === "existing") {
             register(session, state.configure);

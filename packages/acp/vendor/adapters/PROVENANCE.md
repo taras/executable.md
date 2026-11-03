@@ -7,7 +7,7 @@ those instead of the adapter `npx` would resolve.
 | Provider | Package | Version | Contracts |
 | --- | --- | --- | --- |
 | `codex` | `@agentclientprotocol/codex-acp` | 1.6.2 | `_meta.codex.turnId`, `executablemd.session-materialization/v1`, `_meta.agentSessionId` |
-| `claude` | `@agentclientprotocol/claude-agent-acp` | 0.70.0 | `_meta.claudeCode.assistantMessageUuid`, `executablemd.session-materialization/v1` |
+| `claude` | `@agentclientprotocol/claude-agent-acp` | 0.70.0 | `_meta.claudeCode.assistantMessageUuid`, `executablemd.session-materialization/v1`, `_meta.agentSessionId` |
 
 `MANIFEST.json` records, for each: the exact upstream base and patched commit,
 the build command, the tarball's byte length and SHA-256, and its complete file
@@ -64,8 +64,22 @@ different claims, and an adapter could carry either without the other.
 
 Handing a running session to the provider's own CLI needs the identity that CLI
 addresses — for Codex, the App Server thread the adapter created or reopened.
-Codex allocates it, so a client cannot know it without being told; Claude's
-adapter is handed one, so nothing there needs reporting.
+Codex allocates it, so a client cannot know it without being told. Claude's
+adapter requests a name but confirms the conversation the backend actually opens.
+Its snapshot returns `_meta.agentSessionId` on new/load/resume only after its
+owned SDK Query supplies a successful SessionStart lifecycle response with that
+exact `session_id`. One fixed no-op command hook, using the adapter's own Node
+runtime, is composed into settings before startup or resume. Deliberate settings
+and hooks survive; disabled, absent, failed, conflicting or mismatched
+confirmation refuses. One owned reader buffers early unrelated messages and
+retains the explicit acceptance and exact completed-prompt checkpoint handling.
+Fresh confirmation stays provisional until acceptance and the asserting save.
+Native Claude allocation remains client-allocated, independently of metadata.
+
+The Claude source revision recorded in MANIFEST.json extends the retained patch
+at `beba04dc177ba09bcc9fa10b56e9ded7f219513e`; its local source patch and build
+receipt are supplied with the implementation evidence. The pin records source
+identity, not an unperformed independent review.
 
 Codex 1.6.2 returns that thread id only as the top-level ACP `sessionId`, which
 is the ACP session's own name. A client cannot tell from it whether the provider
@@ -80,10 +94,9 @@ reachable at
 <https://github.com/taras/codex-acp/tree/feat/session-native-identity>, recorded
 as `patchedBranch` beside the commit it names.
 
-`identityContract` in `MANIFEST.json` records this third claim on its own, for
+`identityContract` in `MANIFEST.json` records this third contract for both adapters, for
 the same reason `materializationContract` is separate: an adapter could report a
-turn identity, an acceptance, or a native session identity without the others,
-and only `codex` declares this one.
+turn identity, acceptance or backend session identity without the others.
 
 These snapshots are what stands in until both land upstream.
 
@@ -91,12 +104,11 @@ These snapshots are what stands in until both land upstream.
 
 The **adapter** is carried. The **agent** is not: neither snapshot contains the
 `claude` or `codex` binary, and neither would be legitimate to redistribute here.
-Those arrive as ordinary dependencies when the adapter is installed, exactly as
-they would for anybody installing it from the registry.
+Codex installs its provider dependency as before. Claude retains the SDK library
+and uses the host CLI; fresh installs omit the SDK platform executable optionals.
 
-That is why the tarballs are small — 208 KB and 194 KB — while a materialized
-adapter's dependency tree is hundreds of megabytes. The size lives where it
-always did.
+The tarballs contain adapter code and declarations; runtime dependencies are
+installed into each private materialization tree.
 
 Each tarball is the upstream project's own `npm run build && npm pack`. Nothing
 is re-bundled, re-packaged, or built differently from how that project ships it,
@@ -182,3 +194,17 @@ release exists.
 This is separate from #629, which owns the ACPX `checkpointMeta` patch, and from
 #566, which owns the ACPX `agentProcessEnv` patch. Those are patches to a
 runtime this repository imports. These are whole packages it executes.
+
+### Host Claude and fresh installation
+
+The retained Claude adapter uses the host's selected `CLAUDE_CODE_EXECUTABLE`,
+or `claude` resolved through the host execution environment. A missing or
+unlaunchable selection refuses before a model prompt. Only the matching child
+receives the selected path; durable session records and parent environment do
+not. Explicit custom agent commands keep their selection.
+
+Fresh Claude materialization runs npm with `--omit=optional`. The Agent SDK
+library and required adapter dependencies remain, while its eight platform
+Claude executable packages are physically absent. Existing content-addressed
+caches are reused unchanged; the new snapshot has its own digest directory.
+Codex installation policy and snapshot bytes remain unchanged.

@@ -2348,17 +2348,22 @@ Closed passive reads are:
 ```text
 xmd sidekick read --attach FILE status
 xmd sidekick read --attach FILE message MESSAGE_REF [--follow]
-xmd sidekick read --attach FILE entry ENTRY source|prompt|output|journal [--cursor CURSOR]
+xmd sidekick read --attach FILE entry ENTRY source|prompt|output [--cursor CURSOR]
+xmd sidekick read --attach FILE entry ENTRY journal [--yq EXPRESSION]
 ```
 
 Prompt pages additionally accept `--prompt POSITIVE` and
 `--field request|reply|error`. References come from acknowledged owner status;
 an unassociated saved message remains unknown. Follow takes a race-free snapshot
 and subsequent updates for that exact message, without dispatching, evaluating
-or appending. Saved entry pages retain the existing 4096-code-point and
-20-record defaults. An opaque continuation restates the resolved entry/prompt
+or appending. Source, Prompt and Output pages retain the existing text windows. Their opaque
+continuation restates the resolved entry/prompt
 and binds the execution, conversation and view; a newer entry cannot retarget
-it. Reads accept no file path, source, write operation or limit override.
+it. Journal instead accepts ordinary `--yq` and returns exactly `value`, `next`,
+`prev` and `last`, with the same complete-input query meaning and pagination as
+REPL.Entry.Journal. Reuse navigation as `--yq` with the same positive entry;
+`--cursor` is refused for Journal and `--yq` is refused for other views.
+Reads accept no file path, source, write operation or limit override.
 
 The private versioned framed protocol bounds Sidekick message text and each
 direct source part at 64 KiB, descriptors at
@@ -2877,17 +2882,43 @@ each of them answers with a page rather than with prose:
 <REPL.Entry.Source entry={22} offset={0} limit={4096} />
 <REPL.Entry.Prompt entry={22} prompt={9} field="reply" />
 <REPL.Entry.Output entry={22} />
-<REPL.Entry.Journal entry={22} offset={0} limit={20} />
+<REPL.Entry.Journal entry={22} yq=".records" />
 ```
 
 Source is the exact source that entry was admitted with. Prompt is one saved
-agent turn's text — its reply, the request it was sent, or the complete message
-it failed with. Output is what the entry printed. Journal says where that
-evidence is: the entry's complete saved failure, how its turns ended, and a
-record for each thing it saved, in the order the file holds them. Journal
-locates and Prompt reads, which is why neither carries the other's body — a
-record states a turn's number, its kind, its status and where it was written,
-and never a reply, a request, a result payload, a checkpoint or a stack.
+agent turn's reply, request or complete failure message. Output is what the
+entry printed. Journal queries the complete permitted retained value
+`{entry,status,failure,prompts,records}` before paging the query result. Its
+optional `yq` defaults to `.`. Each record carries `marker`, `type`, nullable
+`name`, `position`, `prompt` and `agent`, its `status`, and `exec`. A supported
+settled exec has `{exitCode,stdout?,stderr?}`; other records have `exec: null`.
+Missing channels are absent members, retained empty channels are empty strings,
+and timeout, cancellation or missing results invent no exit or complete output.
+Protocol `ok`, a nonzero command exit and the enclosing failed entry remain
+separate facts. Journal exposes no arbitrary result payload or provider data.
+
+For example, find a failed command anywhere in the selected entry:
+
+```xmd
+<REPL.Entry.Journal entry={22} yq={'[.records[] | select(.type == "exec" and .exec.exitCode == 1)]'} />
+```
+
+Every successful Journal read has exactly `{value,next,prev,last}`. The value
+may be any JSON type. Small complete results have null navigation. Strings use
+4096-code-point windows; arrays use at most twenty items per page and the
+serialized response bound. Objects and indivisible items that exceed that bound
+refuse clearly and direct a narrower yq selection, such as a record's
+`.exec.stdout` or `.exec.stderr`. No text or record is cut before the query.
+Zero or multiple top-level results, invalid expressions and non-JSON results
+refuse through the existing query engine; null and false are valid answers.
+
+Returned navigation is ordinary yq. Reuse it with the same positive entry
+number. Each request recomputes current retained data; growth can shift pages.
+Generated windows preserve the original query and finite range so later requests
+can offer next, prev and last without retained inspection state. The exact
+formatter shape is recognized through strict JSON and complete formatter equality;
+edited or noncanonical queries keep ordinary evaluator semantics. A generated
+window for another entry refuses. Journal takes no `offset` or `limit` props.
 
 `entry` and `prompt` are nonzero whole numbers. A positive entry number is
 immutable admission order counting from one, and a positive prompt number is a
@@ -2898,21 +2929,21 @@ renumbered into its neighbour. Omitted and `-1` are the latest, and a further
 negative counts back from it. Each selector resolves once, when the read
 happens.
 
-Text windows count Unicode code points and default to 4096 of them; Journal
-counts records and defaults to twenty. Source and Prompt start at the
+Source, Prompt and Output text windows count Unicode code points and default
+to 4096 of them. Source and Prompt start at the
 beginning. Output's omitted offset is the last window, which is what a reader
 of output wants, and an explicit zero is the beginning, which omission cannot
 express. A negative offset counts back from what is available and clamps there,
 and a positive one past the end stays where it was asked for and answers with
 an empty window. A limit is a positive whole number with no maximum of its own,
-and what comes back is bounded by the evidence. Every page carries `previous`
+and what comes back is bounded by the evidence. Each of these three text pages carries `previous`
 and `next`: either null, or the complete arguments of the read beside it, with
 the entry and prompt stated as the numbers they resolved to, an absolute offset,
 the limit that was asked for and the same Prompt field. A continuation followed
 after another entry has been admitted therefore reads the entry it was about.
 
-A page states the entry's status and, for a Prompt read, the turn's own
-separately. An entry is completed, failed, cancelled, running or unfinished; a
+Text pages state the entry's status and, for a Prompt read, the turn's own
+separately. Journal exposes those statuses in its complete query input. An entry is completed, failed, cancelled, running or unfinished; a
 saved turn is completed, failed or cancelled, and a turn that returned
 well-formed text and ended failed is failed. A turn that saved nothing for the
 field being read answers `text: null` with no window either side of it, which
