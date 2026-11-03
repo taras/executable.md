@@ -73,7 +73,7 @@ exec {entryCommand}
           <SafeParse schema={{type:"object",properties:{value:{type:"object",properties:{entry:{const:step.entry},status:{enum:["completed","failed","cancelled","running","unfinished"]},failure:{type:["string","null"]}},required:["entry","status","failure"],additionalProperties:false},next:{type:"null"},prev:{type:"null"},last:{type:"null"}},required:["value","next","prev","last"],additionalProperties:false}} as="entryEvidence">{entryRead.stdout}</SafeParse>
           <If condition={entryEvidence.ok}>
             <Let as="page" value={entryEvidence.value.value} />
-            <Let as="report" value={{entry:step.entry,status:page.status,exchangeOutcome:exchange.value.ending.outcome,joinedExchange:true,diagnostic:page.failure,read:{entry:step.entry,view:"output"},resultStatus:"not-requested",result:null}} />
+            <Let as="report" value={{entry:step.entry,status:page.status,exchangeOutcome:exchange.value.ending.outcome,joinedExchange:true,diagnostic:page.failure,read:{entry:step.entry,view:"journal"},resultStatus:"not-requested",result:null}} />
             <If condition={page.status === "completed" && !!step.resultFile}>
               <Let as="resultCommand" value={"cat -- '" + step.resultFile.replaceAll("'","'\"'\"'") + "'"} />
 ```bash exec as="resultRead"

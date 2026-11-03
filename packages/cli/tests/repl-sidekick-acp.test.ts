@@ -3181,6 +3181,7 @@ describe("Passive workflow supervision", () => {
       expect(progress.join("")).not.toContain("The exchange settled.");
       expect(progress.join("").length).toBeLessThan(1500);
       if (outcome === "completed") {
+        expect(result.read).toEqual({ entry: 1, view: "journal" });
         expect(result.resultStatus).toBe("readable");
         expect(result.result).toEqual({ status: "hold", calls: 1 });
       }
