@@ -1,3 +1,6 @@
+import { mkdtemp, chmod, realpath } from "node:fs/promises";
+import { cliBase } from "@executablemd/test-support/launch";
+import { fileURLToPath } from "node:url";
 /**
  * Tier AE — embedded adapters on the run and plan paths
  * (specs/acp-client-spec.md §Command-line configuration, §The `xmd plan`
@@ -16,14 +19,14 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { exists } from "@effectionx/fs";
+import { exists, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { API, exec } from "@executablemd/runtime";
+import { API, exec, useQuietProcessOutput } from "@executablemd/runtime";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
-import { useScope } from "effection";
+import { useScope, scoped, ensure, until } from "effection";
 import type { Operation } from "effection";
 
 import {
@@ -243,6 +246,43 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
     // registry to fall back to.
     for (const agent of EMBEDDED) {
       expect(settled.value.adapters.executablePath(agent)).toContain(DEFAULT_ADAPTER_ROOT);
+    }
+  });
+});
+
+describe("HC host selection across command assemblies", () => {
+  it("HC3/HC4: run, Plan and REPL deliver the host selection to probe and live runtimes", function* () {
+    const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "xmd assemblies ")))));
+    yield* ensure(() => rm(root, { recursive: true, force: true }));
+    const host = join(root, "claude");
+    yield* writeTextFile(host, "#!/bin/sh\nexit 0\n");
+    yield* until(chmod(host, 0o755));
+    const result = yield* scoped(function* () {
+      yield* useQuietProcessOutput();
+      return yield* exec({
+        command: [
+          ...cliBase().slice(0, -1),
+          fileURLToPath(new URL("./fixtures/agent-assemblies.ts", import.meta.url)),
+          root,
+        ],
+        env: { CLAUDE_CODE_EXECUTABLE: host },
+      });
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr);
+    }
+    const rows = JSON.parse(result.stdout);
+    for (const row of rows) {
+      expect(row.inputs).toHaveLength(2);
+      for (const input of row.inputs) {
+        if (["custom", "other"].includes(row.profile)) {
+          expect(input.environment).toBeUndefined();
+        } else {
+          expect(input.environment).toEqual({ CLAUDE_CODE_EXECUTABLE: host });
+          expect(input.command).toContain(root);
+          expect(input.command).not.toContain("npx");
+        }
+      }
     }
   });
 });

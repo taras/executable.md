@@ -15,9 +15,13 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn } from "effection";
+import { scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
-import { readTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
+import { chmod, symlink } from "node:fs/promises";
+import process from "node:process";
+import { exec, useQuietProcessOutput } from "@executablemd/runtime";
+import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +97,9 @@ function attach(
         {
           agent: (attachment) =>
             useWorkflowAgentProfile({
+              agentProcessEnv: function* () {
+                return undefined;
+              },
               root,
               attachment,
               defaultAgent: options.defaultAgent ?? "codex",
@@ -326,5 +333,141 @@ describe("Tier WSA — the workflow profile serves Claude over ACP alone", () =>
       // Compared and continued, never replaced.
       expect(mappingRows(runPath)).toEqual(rows);
     });
+  });
+});
+
+function* hostClaudeWorkflow(
+  mode: "path" | "missing" | "unlaunchable" | "explicit" | "invalid" | "confirmation",
+): Operation<void> {
+  const root = yield* useStorageRoot();
+  const adapters = createEmbeddedAdapters(join(root, "adapters"));
+  yield* adapters.materialize("claude");
+  const modules = join(dirname(dirname(dirname(adapters.executablePath("claude")))), "..");
+  const sdk = join(
+    modules,
+    "@anthropic-ai",
+    `claude-agent-sdk-${process.platform}-${process.arch}`,
+  );
+  yield* ensureDir(sdk);
+  const staleLog = join(root, "stale.log");
+  const stale = join(sdk, "claude");
+  yield* writeTextFile(
+    join(sdk, "package.json"),
+    JSON.stringify({
+      name: `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`,
+      version: "0.3.238",
+    }),
+  );
+  yield* writeTextFile(stale, `#!/bin/sh\necho stale >> "${staleLog}"\nexit 1\n`);
+  yield* until(chmod(stale, 0o755));
+  const bin = join(root, "host bin");
+  yield* ensureDir(bin);
+  const host = join(bin, "claude");
+  const log = join(root, "host.log");
+  const pathLog = join(root, "path-candidate.log");
+  const fixture = fileURLToPath(
+    new URL("../../acp/tests/fixtures/fake-claude-cli.cjs", import.meta.url),
+  );
+  const fake = yield* readTextFile(fixture);
+  const cli = `#!/usr/bin/env node\n${mode === "confirmation" ? 'process.env.FAKE_CLAUDE_CONFIRMATION = "failed";' : ""}\nprocess.env.FAKE_CLAUDE_LOG = ${JSON.stringify(log)};\nif (process.argv.includes("--version")) { console.log("unfamiliar development build"); process.exit(0); }\n${fake.replace(/^#!.*\n/, "")}`;
+  if (mode !== "missing") {
+    yield* writeTextFile(
+      host,
+      mode === "unlaunchable"
+        ? "#!/nonexistent/hc-interpreter\n"
+        : mode === "explicit"
+          ? cli.replace(JSON.stringify(log), JSON.stringify(pathLog))
+          : cli,
+    );
+    yield* until(chmod(host, 0o755));
+  }
+  const explicit = join(root, "selected claude.cjs");
+  yield* writeTextFile(explicit, cli);
+  yield* until(chmod(explicit, 0o755));
+  const node = yield* scoped(function* () {
+    yield* useQuietProcessOutput();
+    return yield* exec({ command: ["node", "-p", "process.execPath"] });
+  });
+  expect(node.exitCode).toBe(0);
+  yield* until(symlink(node.stdout.trim(), join(bin, "node")));
+  const selected = mode === "explicit" ? explicit : mode === "invalid" ? join(root, "absent") : "";
+  const child = yield* scoped(function* () {
+    yield* useQuietProcessOutput();
+    return yield* exec({
+      command: [
+        process.execPath,
+        "run",
+        "--allow-all",
+        "--frozen",
+        fileURLToPath(new URL("./fixtures/host-claude.ts", import.meta.url)),
+        root,
+      ],
+      env: { PATH: bin, CLAUDE_CODE_EXECUTABLE: selected },
+    });
+  });
+  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({ exitCode: 0, stderr: "" });
+  const report = JSON.parse(yield* readTextFile(join(root, "report.json")));
+  expect(yield* exists(staleLog)).toBe(false);
+  expect(yield* exists(pathLog)).toBe(false);
+  expect(process.env.CLAUDE_CODE_EXECUTABLE).not.toBe(host);
+  expect(report.environmentPreserved).toBe(true);
+  if (mode === "confirmation") {
+    expect(report.failure).toBeDefined();
+    expect(report.mappings).toEqual([]);
+    expect(yield* readTextFile(log)).not.toContain('"type":"user"');
+    return;
+  }
+  if (["missing", "invalid", "unlaunchable"].includes(mode)) {
+    expect(report.failure).toContain("CLAUDE_CODE_EXECUTABLE");
+    expect(report.failure).toContain("PATH");
+    expect(report.failure).not.toContain(root);
+    expect(report.mappings).toEqual([]);
+    expect(yield* exists(log)).toBe(false);
+    return;
+  }
+  if (report.failure !== undefined) {
+    console.log(
+      JSON.stringify({
+        report,
+        hostLog: yield* readTextFile(log),
+        staleLaunched: yield* exists(staleLog),
+      }),
+    );
+  }
+  expect(report.failure).toBe(undefined);
+  expect(report.output).toContain("answered");
+  expect(report.mappings).toHaveLength(1);
+  expect(report.mappings[0].assertion_kind).toBe("acpx.agentSessionId");
+  expect(report.checkpoints.ok).toBe(true);
+  expect(report.checkpoints.value).toHaveLength(1);
+  expect(report.checkpoints.value[0].tokenValue).toBe(`uuid:${report.mappings[0].assertion_value}`);
+  const calls = yield* readTextFile(log);
+  expect(calls).toContain('"type":"control_request"');
+  expect(calls).toContain("HC exact user prompt");
+  const durable = JSON.stringify([
+    report.mappings,
+    report.journal,
+    report.records,
+    report.checkpoints,
+  ]);
+  expect(durable).not.toContain("CLAUDE_CODE_EXECUTABLE");
+  expect(durable).not.toContain("session-start.js");
+  expect(durable).not.toContain(host);
+  expect(durable).not.toContain(explicit);
+  expect(report.replayFailure).toBe(undefined);
+  expect(report.replayOutput).toEqual(report.output);
+}
+
+describe("HC host Claude through the production workflow", () => {
+  it("HC1/HC6: the host wins over the SDK and completed replay stays offline", () =>
+    hostClaudeWorkflow("path"));
+  it("HC2: a missing host refuses despite an SDK executable", () => hostClaudeWorkflow("missing"));
+  it("HC2: an unlaunchable host refuses before a prompt", () => hostClaudeWorkflow("unlaunchable"));
+  it("HC3: explicit host selection and an unfamiliar version work", () =>
+    hostClaudeWorkflow("explicit"));
+  it("HC3: an invalid explicit selection never falls back to PATH", () =>
+    hostClaudeWorkflow("invalid"));
+  it("HC HCI2: a failed lifecycle assertion publishes no production mapping or prompt", function* () {
+    yield* hostClaudeWorkflow("confirmation");
   });
 });

@@ -235,9 +235,6 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
     binding: {
       command: "claude",
       version: claudeVersion,
-      // The version #561's gates are proven against. Raising it is a new proof,
-      // not a version bump.
-      adapterCommand: "npx -y @agentclientprotocol/claude-agent-acp@0.70.0",
       // The first thing the Claude ACP adapter consults when deciding which
       // Claude to run. Without it the adapter resolves the build shipped with
       // the Agent SDK it pins, which is not the build that created the session.

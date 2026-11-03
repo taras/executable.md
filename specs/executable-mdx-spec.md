@@ -13892,6 +13892,12 @@ against the production Deno adapter, on real run files.
 
 ### Tier WAP — The strict workflow Agent profile
 
+The retained Claude adapter confirms backend identity before a live session
+answers, through its Query's successful SessionStart response. Confirmation alone
+is not acceptance, an asserting save or a workflow mapping. WAP9 and WSL3/9/10
+retain that ordering; native Claude construction stays client-allocated even
+when the adapter returns confirmation metadata.
+
 Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 
 | # | Test | Verify |

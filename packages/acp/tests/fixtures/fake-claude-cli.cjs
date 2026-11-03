@@ -14,6 +14,7 @@
  */
 const fs = require("node:fs");
 const crypto = require("node:crypto");
+const { spawn } = require("node:child_process");
 
 const LOG = process.env.FAKE_CLAUDE_LOG;
 
@@ -21,7 +22,9 @@ const LOG = process.env.FAKE_CLAUDE_LOG;
 const SESSION =
   process.argv
     .find((argument) => argument.startsWith("--session-id="))
-    ?.slice("--session-id=".length) ?? "fake-session";
+    ?.slice("--session-id=".length) ??
+  process.argv.find((argument) => argument.startsWith("--resume="))?.slice("--resume=".length) ??
+  "fake-session";
 
 /** What a test expects back, built from that session and nothing else. */
 const UUID = `uuid:${SESSION}`;
@@ -37,6 +40,7 @@ function emit(message) {
 }
 
 log({ argv: process.argv.slice(2) });
+process.on("exit", () => log({ event: "exit", pid: process.pid }));
 
 emit({
   type: "system",
@@ -52,6 +56,60 @@ emit({
   output_style: "default",
   uuid: crypto.randomUUID(),
 });
+
+const confirmation = process.env.FAKE_CLAUDE_CONFIRMATION ?? "success";
+if (confirmation === "held" && process.env.FAKE_CLAUDE_HELD_HELPER === "1") {
+  let helper;
+  const onEnd = () => helper.stdin.end();
+  const onHelperClose = (code, signal) => {
+    log({ event: "helper-close", code, signal });
+    helper.off("close", onHelperClose);
+    process.stdin.off("end", onEnd);
+    process.exit(0);
+  };
+  process.stdin.on("end", onEnd);
+  helper = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: "pipe" });
+  helper.on("close", onHelperClose);
+}
+function confirm() {
+  if (confirmation === "absent" || confirmation === "held") {
+    return;
+  }
+  if (confirmation === "stream-error" || confirmation === "missing-history") {
+    process.exit(2);
+  }
+  emit({
+    type: "system",
+    subtype: "hook_response",
+    hook_id: "internal",
+    hook_name: "opaque lifecycle label",
+    hook_event: confirmation === "wrong-event" ? "Stop" : "SessionStart",
+    stdout: "",
+    stderr: "",
+    output: "",
+    exit_code: confirmation === "failed" ? 1 : 0,
+    outcome: confirmation === "failed" ? "error" : "success",
+    uuid: crypto.randomUUID(),
+    session_id: confirmation === "mismatch" ? "other-conversation" : SESSION,
+  });
+  if (confirmation === "conflicting") {
+    emit({
+      type: "system",
+      subtype: "hook_response",
+      hook_id: "internal",
+      hook_name: "opaque",
+      hook_event: "SessionStart",
+      stdout: "",
+      stderr: "",
+      output: "",
+      exit_code: 0,
+      outcome: "success",
+      uuid: crypto.randomUUID(),
+      session_id: "other-conversation",
+    });
+  }
+}
+confirm();
 
 function usage() {
   return {
@@ -108,6 +166,9 @@ process.stdin.on("data", (chunk) => {
           },
         },
       });
+      if (["absent", "wrong-event"].includes(confirmation)) {
+        process.exit(0);
+      }
       continue;
     }
     if (message.type !== "user") {

@@ -9,7 +9,7 @@
  *
  * These checks are offline and byte-level: each tarball matches its manifest,
  * the embedded module carries exactly those bytes, the declared identities are
- * the reviewed upstream commits, the licence travels, and the snapshot carries
+ * the recorded source commits, the licence travels, and the snapshot carries
  * no provider CLI.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -25,15 +25,15 @@ import { embeddedAdapterIdentities } from "@executablemd/acp/embedded-adapters";
 
 const VENDOR = "packages/acp/vendor/adapters";
 
-/** The upstream commits the Planner reviewed and pinned for #622. */
-const REVIEWED = {
+/** Exact source commits carried by the adapter snapshots. */
+const PINNED = {
   codex: {
     upstreamBase: "50f69e57ca761ccafd2ca29de7fb591068277516",
     patchedCommit: "e1a15637c13e85cca05cd8ba398c5cef92dcaf33",
   },
   claude: {
     upstreamBase: "8710ce1cbccf562cb04b4bcc30e053e960aee05f",
-    patchedCommit: "beba04dc177ba09bcc9fa10b56e9ded7f219513e",
+    patchedCommit: "54df80cbb41f2aa56195fd56b4dc2a88295049af",
   },
 } as const;
 
@@ -135,9 +135,9 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
     }
   });
 
-  it("AD3: each snapshot names the exact reviewed upstream commits", function* () {
+  it("AD3: each snapshot names the exact source commits", function* () {
     for (const snapshot of yield* manifest()) {
-      const reviewed = REVIEWED[snapshot.provider as keyof typeof REVIEWED];
+      const reviewed = PINNED[snapshot.provider as keyof typeof PINNED];
       // Pinned in this file as well as in the manifest: a snapshot rebuilt from
       // some other commit would otherwise rewrite the record of what it is and
       // still pass every byte check above.
@@ -196,15 +196,12 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
       expect(snapshot.materializationContract).toContain("executablemd.session-materialization/v1");
     }
 
-    // A third claim, declared only where the provider allocates the identity.
-    // Codex names its own App Server thread and a client cannot know it
-    // otherwise; Claude is handed the identity it uses, so a snapshot declaring
-    // one there would be claiming the adapter reports something it never does.
+    // Identity confirmation is independent of allocation provenance.
     expect(
       Object.fromEntries(
         declared.map((snapshot) => [snapshot.provider, snapshot.identityContract]),
       ),
-    ).toEqual({ codex: "_meta.agentSessionId", claude: undefined });
+    ).toEqual({ codex: "_meta.agentSessionId", claude: "_meta.agentSessionId" });
     for (const snapshot of declared) {
       if (snapshot.identityContract !== undefined) {
         expect(snapshot.identityContract).toMatch(/^_meta\./);

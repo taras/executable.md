@@ -278,6 +278,9 @@ function runFixture(
         {
           agent: (attachment) =>
             useWorkflowAgentProfile({
+              agentProcessEnv: function* () {
+                return undefined;
+              },
               root,
               attachment,
               defaultAgent: options.defaultAgent ?? "codex",
