@@ -50,6 +50,7 @@ function* document(
   documentSource: string,
   report: Report,
   failures: unknown[] = [],
+  journal = new InMemoryStream(),
 ): Operation<{ ok: boolean; output: string }> {
   return yield* scoped(function* () {
     const command = f.command(mode);
@@ -59,6 +60,7 @@ function* document(
         options: { defaultAgent: command, permissionMode: "deny-all" },
         factory: createAcpxProvider({
           sessionStore: createAcpxSessionStore(join(f.dir, "store")),
+          nativeAdapters: mode === "no-acceptance" ? { [command]: { launcher: "fake", identity: "provider-returned", acceptance: "first-turn-acceptance", resume: () => [] } } : {},
           *agentCwd() {
             return f.dir;
           },
@@ -93,7 +95,7 @@ function* document(
     yield* useNormalizedOutput();
     const path = join(f.dir, "document.md");
     yield* writeTextFile(path, documentSource);
-    const execution = yield* executeInstalled({ path, stream: new InMemoryStream() }, [
+    const execution = yield* executeInstalled({ path, stream: journal }, [
       { components: agentIdentityComponents() },
     ]);
     const subscription = yield* execution.output;
@@ -116,7 +118,7 @@ describe(
         const report = reportFor(f.command());
         const result = yield* document(
           f,
-          "normal",
+          "standard",
           `<Session name="a"><Prompt text="seed:${marker}" as="ack" /><Prompt text="recall" /></Session>\nSEPARATION\n<Session name="b"><Prompt text="recall" /></Session>`,
           report,
         );
@@ -235,7 +237,7 @@ describe(
     });
     it("attributes the owned still-active turn to HostExecution.stop without certifying native cleanup", function* () {
       yield* withCertificationFixture(function* (f) {
-        const command = f.command("wait");
+        const command = f.command("standard-wait");
         const report = reportFor(command);
         report.capabilities.cancellation.selected = true;
         yield* scoped(function* () {
@@ -384,3 +386,19 @@ describe(
     });
   },
 );
+
+describe("standard completed replay", { sanitizeOps: false, sanitizeResources: false }, () => {
+it("completed standard output replays without provider requests", function* () {
+  yield* withCertificationFixture(function* (f) {
+    const journal = new InMemoryStream();
+    const source = '<Session name="replay"><Prompt text="seed:retained" /></Session>';
+    const first = yield* document(f, "standard", source, reportFor(f.command("standard")), [], journal);
+    expect(first.ok).toBe(true);
+    const calls = yield* f.calls();
+    const replay = yield* document(f, "standard", source, reportFor(f.command("standard")), [], journal);
+    expect(replay).toEqual(first);
+    expect(yield* f.calls()).toEqual(calls);
+  });
+});
+
+});

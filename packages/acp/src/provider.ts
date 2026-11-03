@@ -198,6 +198,8 @@ export interface AcpxSessionDetails {
 
 /** What ACPX asserted about a session it established. */
 export interface AcpxSessionIdentity {
+  /** The ACP loading target; this is not a provider-native identity. */
+  readonly acpSessionId?: string;
   readonly agentSessionId?: string;
   readonly acpxRecordId?: string;
 }
@@ -1833,7 +1835,7 @@ function* useAcpxProviderState(
       );
     } catch (error) {
       if (attachment === undefined) {
-        throw error;
+        throw sessionResumeFailure(error, prepared.details.sessionKey);
       }
       // An exact resume that the provider could not perform: it has no such
       // history, or it cannot resume by name at all. Either way the
@@ -1864,6 +1866,7 @@ function* useAcpxProviderState(
     }
     if (sessions && intent.deferEstablished !== true) {
       const identity: AcpxSessionIdentity = {
+        ...(handle.backendSessionId === undefined ? {} : { acpSessionId: handle.backendSessionId }),
         ...(handle.agentSessionId === undefined ? {} : { agentSessionId: handle.agentSessionId }),
         ...(handle.acpxRecordId === undefined ? {} : { acpxRecordId: handle.acpxRecordId }),
       };
@@ -2515,6 +2518,7 @@ function* useAcpxProviderState(
     }
     const identity: AcpxSessionIdentity = {
       acpxRecordId: accepted.value.acpxRecordId,
+      ...(entry.handle.backendSessionId === undefined ? {} : { acpSessionId: entry.handle.backendSessionId }),
       ...(accepted.value.agentSessionId === undefined
         ? {}
         : { agentSessionId: accepted.value.agentSessionId }),
@@ -2840,8 +2844,8 @@ function* useAcpxProviderState(
             ...(construction === undefined ? {} : { build: construction.build }),
             ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
             state,
-            materialization: constructing,
-            deferEstablished: constructing,
+            materialization: constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
+            deferEstablished: constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
           });
           // From here this session has been spoken to, whatever the cache
           // later says, so nothing may discard it to install a new layer.
@@ -2941,11 +2945,17 @@ function* useAcpxProviderState(
             });
           }
 
-          if (constructing && prepared.kind === "details") {
+          if (constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance" && prepared.kind === "details") {
             // Before any of this turn's events are exposed. Until the backend
             // has accepted it there is no conversation to be reporting on, and
             // an event published first would be describing one.
             yield* materialize(entry, prepared.details, turn);
+          } else {
+            try {
+              yield* until(turn.promptStarted);
+            } catch (error) {
+              throw sessionResumeFailure(error, entry.session.sessionKey);
+            }
           }
 
           const channel = createChannel<AgentPromptEvent, string>();
@@ -3851,6 +3861,7 @@ function* useAcpxProviderState(
       // that does not exist.
       const identity: AcpxSessionIdentity = {
         acpxRecordId: accepted.value.acpxRecordId,
+      ...(entry.handle.backendSessionId === undefined ? {} : { acpSessionId: entry.handle.backendSessionId }),
         agentSessionId: nativeSessionId,
       };
       if (sessions && resolved.kind === "details") {
@@ -4659,4 +4670,18 @@ function* useAcpxProviderState(
     promptStream,
     launch,
   };
+}
+
+function sessionResumeFailure(error: unknown, sessionKey: string): unknown {
+  if (typeof error === "object" && error !== null && Reflect.get(error, "detailCode") === "SESSION_RESUME_REQUIRED") {
+    return new SessionResumeRequiredError(sessionKey, { cause: error });
+  }
+  return error;
+}
+
+export class SessionResumeRequiredError extends Error {
+  constructor(sessionKey: string, options?: ErrorOptions) {
+    super(`Session "${sessionKey}" could not be resumed. Name a different <Session> to start a new conversation.`, options);
+    this.name = "SessionResumeRequiredError";
+  }
 }

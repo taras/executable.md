@@ -291,11 +291,13 @@ interface Live {
 
 /** The native conversation identity one turn saw the provider name. */
 interface Observed {
+  used?: boolean;
   native?: string;
 }
 
 /** What a history already holds about the conversation it belongs to. */
 interface Retained {
+  readonly used: boolean;
   /** The durable names of its turns, in the order the history holds them. */
   readonly turns: readonly string[];
   /**
@@ -721,6 +723,7 @@ function* held(
   // What the history already established, carried forward so a turn in this
   // process is held to it as firmly as one after a reopening is.
   let established = retained.native;
+  let used = retained.used;
   // The actual method on this execution's own handle, waited for before the
   // conversation is announced: a handle that reported itself ready and then
   // refused to evaluate would be ready for two of the three things it offers.
@@ -750,11 +753,13 @@ function* held(
       job,
       order,
       admitting(active),
+      used,
     );
     // Established by the first turn the provider reported one for, and never
     // replaced afterwards: a turn naming a different one was refused before it
     // could record anything.
     established ??= observed.native;
+    used ||= observed.used === true;
     order += 1;
   }
   // Nothing closes this queue, and an element that returned would let the root
@@ -964,6 +969,7 @@ function deliver(
   job: PromptJob,
   order: number,
   admit: AdmitProviderConfiguration,
+  used: boolean,
 ): Operation<void> {
   // Scoped, so the turn cannot outlive the call that asked for it however this
   // returns: a turn still running would hold its durable operation open, and
@@ -978,7 +984,7 @@ function deliver(
       job.joined.resolve();
     });
     const turn = yield* spawn(() =>
-      conversationTurn(provider, request, identity, established, observed, job, order, admit),
+      conversationTurn(provider, request, identity, established, observed, job, order, admit, used),
     );
     const outcome = yield* race([
       (function* (): Operation<"finished"> {
@@ -1038,6 +1044,7 @@ function conversationTurn(
   job: PromptJob,
   order: number,
   admit: AdmitProviderConfiguration,
+  used: boolean,
 ): Operation<void> {
   return (function* (): Operation<void> {
     try {
@@ -1051,7 +1058,7 @@ function conversationTurn(
         // reaches it only through the setup the coordinator delivers. A
         // handler holding the request can neither read it nor put one on a
         // request of its own.
-        const issuance = openSessionRequest(identity, request.id, admit);
+        const issuance = openSessionRequest(identity, request.id, admit, used);
         issuance.configure(job.configuration);
         let session: Session;
         let settled: Session | undefined;
@@ -1114,6 +1121,7 @@ function conversationTurn(
         // which is the ordinary first-turn case. Read from the record, because
         // that is the account the journal keeps and the one a later opening
         // reconciles against.
+        observed.used = record.status !== "failed" || record.stopReason !== undefined || record.agentSessionId !== undefined;
         if (record.agentSessionId !== undefined) {
           if (established !== undefined && record.agentSessionId !== established) {
             job.answer.resolve(
@@ -1276,6 +1284,7 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
   const asserted = new Set<string>();
   let highest = 0;
   let configuration: DurableJson | undefined;
+  let used = false;
   for (const event of events) {
     if (event.type !== "yield") {
       continue;
@@ -1317,6 +1326,9 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
     // record naming none was a turn the provider reported no identity for,
     // which establishes nothing either way.
     const record = parsePromptRecord(event.result.value);
+    if (record !== undefined) {
+      used ||= record.status !== "failed" || record.stopReason !== undefined || record.agentSessionId !== undefined;
+    }
     if (record?.agentSessionId !== undefined) {
       asserted.add(record.agentSessionId);
     }
@@ -1337,6 +1349,7 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
   return Ok(
     Object.freeze({
       turns: Object.freeze(turns),
+      used,
       next: highest + 1,
       native,
       ...(configuration === undefined ? {} : { configuration }),

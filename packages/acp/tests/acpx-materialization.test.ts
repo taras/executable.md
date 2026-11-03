@@ -31,6 +31,7 @@ import { chmod } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentPromptEvent } from "@executablemd/core";
 import { Agent } from "@executablemd/core";
 import { createAcpRuntime } from "../src/acpx-runtime.ts";
 import { useAcpxProvider } from "../src/provider.ts";
@@ -106,7 +107,7 @@ function handle(request) {
   if (request.method === "session/new") {
     created += 1;
     sessionId = "tm-" + process.pid + "-" + created;
-    reply(request.id, { sessionId, _meta: { agentSessionId: "agent-" + sessionId } });
+    reply(request.id, { sessionId, ...(process.env.XMD_TM_NO_ID ? {} : { _meta: { agentSessionId: "agent-" + sessionId } }) });
     return;
   }
   if (request.method === "session/prompt") {
@@ -533,6 +534,7 @@ describe(
           { defaultAgent: "fake", permissionMode: "deny-all" },
           {
             sessionStore: world.store,
+            nativeAdapters: { fake: { launcher: "fake", identity: "provider-returned", acceptance: "first-turn-acceptance", resume: () => [] } },
             agentRegistry: world.registry,
             advertiseNativeLaunch: [],
             advertiseClientNativeAttachment: [],
@@ -604,3 +606,54 @@ describe(
     });
   },
 );
+
+describe("standard ACP and declared acceptance", { sanitizeOps: false, sanitizeResources: false }, () => {
+  for (const agent of ["fake", "strong", "codex"]) {
+    it(`first-turn guarantees follow the ${agent} adapter declaration`, function* () {
+      const world = yield* useWorld();
+      let mappings = 0;
+      const provider = yield* useAcpxProvider({ defaultAgent: agent, permissionMode: "deny-all" }, {
+        sessionStore: world.store,
+        agentRegistry: { ...world.registry, list: () => [agent] },
+        advertiseNativeLaunch: [], advertiseClientNativeAttachment: [],
+        nativeAdapters: { strong: { launcher: "strong", identity: "provider-returned", acceptance: "first-turn-acceptance", resume: () => [] } },
+        *agentCwd() { return world.dir; },
+        createRuntime(options) { return createAcpRuntime({ ...options, agentProcessEnv: { XMD_TM_SCRIPT: '["text"]', XMD_TM_NO_ID: "1" } }); },
+        sessions: {
+          *requestSession() { return { sessionKey: "guarantees", cwd: world.dir, state: "new" }; },
+          *recordSessionIdentity(_details, identity) {
+            const record = yield* until(world.store.load("guarantees"));
+            expect(record?.acpSessionId).toBe(identity.acpSessionId);
+            expect(identity.agentSessionId).toBe(undefined);
+            expect(record?.sessionMaterialization).toBe(undefined);
+            mappings++;
+          },
+        },
+      });
+      yield* Agent.around({ *agent([name]) { return yield* provider.agent(name); } });
+      const session = yield* provider.session("review");
+      const events: AgentPromptEvent[] = [];
+      const [outcome] = yield* allSettled([(function* () {
+        const replies = yield* provider.promptStream("hello", { agent, session });
+        let next = yield* replies.next();
+        while (!next.done) {
+          expect(mappings).toBe(1);
+          events.push(next.value);
+          next = yield* replies.next();
+        }
+        expect(next.value).toBe("the answer");
+      })()]);
+      if (agent === "fake") {
+        expect(outcome.ok).toBe(true);
+        expect(events.map(event => event.type)).toEqual(["started", "text_delta", "terminal"]);
+        expect(events.at(-1)).toMatchObject({ status: "completed", stopReason: "end_turn" });
+        expect(session.agentSessionId).toBe(undefined);
+      } else {
+        expect(outcome.ok).toBe(false);
+        expect(events).toEqual([]);
+        expect(mappings).toBe(0);
+        expect(yield* pending(world, "guarantees")).toBe(true);
+      }
+    });
+  }
+});
