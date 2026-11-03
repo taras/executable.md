@@ -460,6 +460,16 @@ The private context used by `<Session>` only selects the enclosing lexical use
 for nested components. It is not admission and carries no second configuration
 value.
 
+Configuration refusals may carry the optional namespaced observational data
+`error["executablemd.acp.configuration-failure"]`: exactly `{ reason, setting }`,
+where `reason` is `selector-unavailable` or `configuration-mismatch`, and
+`setting` is `model` or `effort`. The configuration owner supplies initial
+selector absence separately from readback mismatch. This data grants no
+configuration completion, permission or identity. Restoration failure retains
+its existing unusable wrapper and takes failure precedence. Consumers parse the
+closed payload at the eager Session or cold Prompt subscription boundary,
+without matching diagnostic text or serializing the error.
+
 ### Option discovery
 
 `Agent.options()` reports what one agent advertises, in provider order:
@@ -1523,3 +1533,14 @@ safe partial facts and fail the RPC. Text, previews and the embedded runtime's
 timeout fallback `end_turn` without completing-RPC metadata establish no joined
 exchange result. A consumer can read/follow the known owner reference without
 another prompt; it cannot infer or resend missing acceptance.
+
+## Shared local-agent qualification
+
+[`examples/agent-certification/`](../examples/agent-certification/README.md)
+uses the ordinary literal-command ACPX path for local configurations and ordinary
+orchestration. Its eleven separate capability outcomes require measured evidence;
+expectations and availability establish no passing capability. The native
+availability probe's release is unverified cleanup, so qualification stops native
+admission before subsequent work and reports incomplete evidence. Existing owners
+still join teardown. Cancellation attribution alone establishes no cleanup pass,
+and the report grants neither durable identity nor a broader permission.

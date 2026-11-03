@@ -3739,6 +3739,18 @@ runtime, store, managed sessions, queues, coordinator, teardown — selected by 
 installed factory at each dispatch. Production is the single-partition case of the same
 path; holding a partition grants work, never permission.
 
+### Shared local-agent qualification
+
+The [local-agent example](examples/agent-certification/README.md) uses ordinary
+Agent/Session/Prompt routing and literal-command registration. Private comparisons
+produce categorical capability evidence; expectations confer no execution,
+identity or certification. Reports finalize after the existing owner joins.
+Native cleanup remains unverified at the production probe/release boundary,
+which stops further native admission and prevents a cancellation or durable
+certification pass. The example introduces no provider, registry or lifecycle
+observation interface. Its [ACP contract](specs/acp-client-spec.md#shared-local-agent-qualification)
+keeps ordinary retention separate from workflow Session-site identity.
+
 ### Agent permissions and generated XMD
 
 A workflow Agent receives no Workspace, checkout, materialized root, host path
