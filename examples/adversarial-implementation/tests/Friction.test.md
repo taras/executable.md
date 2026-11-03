@@ -369,3 +369,89 @@ git rev-parse HEAD
 <AssertEquals actual={continued.calls.every(call => call.sourceValue.clean && call.sourceValue.head === manifest.assignment.revision)} expected={true} />
 </TempDir>
 </Test>
+
+<Test name="accepted plan survives distinct implementation handoffs and retained correction" timeout="90s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Dir path={fixture.repository}>
+<File path="api.sh">format() { printf '%s' "$1"; }
+</File>
+```bash exec as="base"
+git add api.sh
+git commit -qm 'existing API'
+git rev-parse HEAD
+```
+<If condition={base.exitCode !== 0}><Fail message={base.stderr} /></If>
+</Dir>
+<Let as="reference" value={fixture.root + "/accepted.md"} />
+<Dir path={fixture.root}><File path="accepted.md">Accepted plan retention contract.</File></Dir>
+<Let as="impact" value={{...assessment,architecture:true,evidence:[reference]}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:"handoff",directory:fixture.directory,maxCorrections:3,maxApiRepairs:3,maxResponseCorrections:0,roles:{architect:{session:"original-architect",provider:"codex",initialized:false},planner:{session:"original-planner",provider:"codex",initialized:false},implementor:{session:"original-implementor",provider:"codex",initialized:false}},acceptedInputs:[{path:reference,content:"Accepted plan retention contract."}],assignment:{phase:"discovery",work:"handoff",repository:fixture.repository,revision:base.stdout.trim(),priorRevision:null,request:"handoff-retention",assessment:impact,changedPaths:[],artifacts:[],evidence:[],findings:[],recipient:"planner",continuation:{phase:"implementation",role:"implementor"}}}} />
+<Fixture.Entry entry="planning-case" value={manifest} repository={fixture.repository} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="planned">{child.stdout}</Parse>
+<AssertEquals actual={planned.calls[0].status} expected="accepted" />
+<Let as="planPath" value={planned.calls[0].resultValue.handoffInputs[0]} />
+<Let as="plan" value={planned.documents[planPath]} />
+<AssertEquals actual={plan.content} expected="Use the existing format API for the remaining consumer. Remove legacy.fixture, run bash consumer.sh, and return its signed feedback commit." />
+<Fixture.Entry entry="continue" value={planned} repository={fixture.repository} steps={3} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="correcting">{child.stdout}</Parse>
+<AssertEquals actual={correcting.calls.slice(0,1)} expected={planned.calls} />
+<If condition={correcting.calls.length !== 4 || correcting.calls.some(call => call.resultValue === undefined)}><Fail message={JSON.stringify(correcting)} /></If>
+<AssertEquals actual={correcting.calls.map(call => [call.role,call.resultValue?.outcome])} expected={[["planner","complete"],["implementor","complete"],["architect","pass"],["planner","changes_required"]]} />
+<Let as="implementationPath" value={correcting.calls[1].resultValue.handoffInputs[0]} />
+<Let as="implementation" value={correcting.documents[implementationPath]} />
+<AssertEquals actual={implementation.content} expected="Initial implementation evidence: bash consumer.sh passed." />
+<AssertEquals actual={correcting.calls[1].resultValue.handoffInputs} expected={[implementationPath]} />
+<AssertEquals actual={implementationPath === planPath} expected={false} />
+<Each in={correcting.calls.slice(2)} let="review">
+<Ticket.Text path={review.attempt + "/called.json"} as="text" />
+<Parse schema={{type:"object"}} as="invoked">{text}</Parse>
+<AssertEquals actual={invoked.inputs} expected={review.inputs} />
+<AssertEquals actual={invoked.inputs.filter(input => input.path === planPath)} expected={[plan]} />
+<AssertEquals actual={invoked.inputs.filter(input => input.path === implementationPath)} expected={[implementation]} />
+</Each>
+<AssertEquals actual={{status:correcting.status,gate:correcting.gate,round:correcting.round,dispatchable:correcting.dispatchable,hold:correcting.hold}} expected={{status:"paused",gate:"implementation",round:3,dispatchable:true,hold:null}} />
+<Let as="correctionPath" value={correcting.calls[3].resultValue.handoffInputs[0]} />
+<AssertEquals actual={correcting.assignment.handoffInputs} expected={[correctionPath]} />
+<Let as="quotedPlan" value={"'" + planPath.replaceAll("'","'\"'\"'") + "'"} />
+```bash exec as="mutated"
+printf '%s' 'Mutable plan file changed after capture.' > {quotedPlan}
+```
+<If condition={mutated.exitCode !== 0}><Fail message={mutated.stderr} /></If>
+<Fixture.Entry entry="continue" value={correcting} repository={fixture.repository} steps={1} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="corrected">{child.stdout}</Parse>
+<AssertEquals actual={corrected.calls.slice(0,4)} expected={correcting.calls} />
+<Let as="correctedPath" value={corrected.calls[4].resultValue.handoffInputs[0]} />
+<AssertEquals actual={corrected.calls[4].resultValue.handoffInputs} expected={[correctedPath,correctionPath]} />
+<AssertEquals actual={corrected.documents[correctedPath].content} expected="Corrected implementation evidence: bash consumer.sh passed." />
+<AssertEquals actual={corrected.feedbackInputs} expected={[planPath,implementationPath,correctionPath,correctedPath]} />
+<Fixture.Entry entry="continue" value={corrected} repository={fixture.repository} steps={2} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="finished">{child.stdout}</Parse>
+<AssertEquals actual={finished.calls.slice(0,5)} expected={corrected.calls} />
+<AssertEquals actual={finished.status} expected="feedback_ready" />
+<AssertEquals actual={finished.round} expected={3} />
+<AssertEquals actual={finished.manifest} expected={manifest} />
+<AssertEquals actual={finished.calls.map(call => call.initialize)} expected={[true,true,true,false,false,false,false]} />
+<AssertEquals actual={finished.calls.map(call => call.session)} expected={["original-planner","original-implementor","original-architect","original-planner","original-implementor","original-architect","original-planner"]} />
+<AssertEquals actual={finished.reviews} expected={{architect:finished.revision,planner:finished.revision}} />
+<AssertEquals actual={finished.documents[planPath]} expected={plan} />
+<Each in={["architect","planner"]} let="role">
+<Let as="received" value={finished.calls.filter(call => call.role === role).flatMap(call => call.inputs)} />
+<AssertEquals actual={received.filter(input => input.path === planPath)} expected={[plan]} />
+<AssertEquals actual={received.filter(input => input.path === implementationPath)} expected={[implementation]} />
+<AssertEquals actual={received.filter(input => input.path === correctedPath)} expected={[finished.documents[correctedPath]]} />
+</Each>
+<Each in={finished.calls.slice(5)} let="review">
+<Ticket.Text path={review.attempt + "/called.json"} as="text" />
+<Parse schema={{type:"object"}} as="invoked">{text}</Parse>
+<AssertEquals actual={invoked.inputs} expected={review.inputs} />
+<AssertEquals actual={review.assignment.handoffInputs.includes(planPath)} expected={true} />
+<AssertEquals actual={new Set(review.assignment.handoffInputs).size} expected={review.assignment.handoffInputs.length} />
+<AssertEquals actual={invoked.inputs.filter(input => input.path === planPath)} expected={[]} />
+</Each>
+</TempDir>
+</Test>
