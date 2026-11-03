@@ -29,7 +29,11 @@ import { resolveAgentStack } from "../src/agent-stack.ts";
 import { createFakeAcp, makeRegistry, makeStore, tripwireAcp } from "./support/fake-acp.ts";
 import type { FakeAcp } from "./support/fake-acp.ts";
 import { ADAPTERS, AGENT } from "./support/plan-harness.ts";
-import { parseDurableEvent } from "@executablemd/durable-streams";
+import {
+  MalformedDurableEventError,
+  parseDurableEvent,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { z } from "zod";
 import {
@@ -1703,9 +1707,50 @@ function holds(asked: readonly string[]): Holds {
   };
 }
 
+describe("Live journey journal observation", () => {
+  it("observes an appended prompt only after its terminating newline", function* () {
+    const hostRoot = yield* useTempDirectory("xmd-live-journal-");
+    const directory = join(hostRoot, "xmd", "repl");
+    yield* ensureDir(directory);
+    const path = join(directory, "entry.jsonl");
+    const events: DurableEvent[] = [1, 2, 3].map((turn) => ({
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "agent_prompt", name: `turn:${turn}` },
+      result: { status: "ok", value: null },
+    }));
+    const lines = events.map(serializeDurableEvent);
+    yield* writeTextFile(path, lines[0]);
+    const next = lines[1];
+    const split = Math.floor(next.length / 2);
+    yield* untilResolved(appendFile(path, next.slice(0, split)));
+    expect(yield* journal(hostRoot)).toEqual(events.slice(0, 1));
+    yield* untilResolved(appendFile(path, next.slice(split, -1)));
+    expect(yield* journal(hostRoot)).toEqual(events.slice(0, 1));
+    yield* untilResolved(appendFile(path, `\n${lines[2]}`));
+    const retained = yield* journal(hostRoot);
+    expect(retained).toEqual(events);
+    expect(recorded(retained).filter((kind) => kind === "agent_prompt")).toHaveLength(3);
+  });
+
+  it("rejects a malformed terminated record even with an incomplete tail", function* () {
+    const hostRoot = yield* useTempDirectory("xmd-live-journal-malformed-");
+    const directory = join(hostRoot, "xmd", "repl");
+    yield* ensureDir(directory);
+    yield* writeTextFile(join(directory, "entry.jsonl"), '{"type":\n{"type":');
+    expect(
+      yield* failing(function* () {
+        yield* journal(hostRoot);
+      }),
+    ).toBeInstanceOf(MalformedDurableEventError);
+  });
+});
+
 function* journal(hostRoot: string): Operation<DurableEvent[]> {
   const text = yield* entryHistory(hostRoot);
+  // Live observations can race an append; its final newline commits the record.
   return text
+    .slice(0, text.lastIndexOf("\n") + 1)
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => {
