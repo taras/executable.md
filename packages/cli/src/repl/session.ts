@@ -79,7 +79,7 @@ import type { Operation, Result, Stream, Task } from "effection";
 import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
 import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
-import { API } from "@executablemd/runtime";
+import { API, Permissions } from "@executablemd/runtime";
 import { executeInstalled } from "@executablemd/core/host";
 import { useGeneratedFallback } from "../evaluation-profile.ts";
 import type {
@@ -320,6 +320,12 @@ interface OwnedRootRead {
   read(): Operation<Result<Readonly<Record<string, Json>>>>;
 }
 
+export interface ReplFilePolicy {
+  readonly read: boolean;
+  readonly write: boolean;
+  readonly absolute: boolean;
+}
+
 /** One execution as the application reads it. */
 export interface ReplSession {
   /** The opaque identifier this execution's history is named by. */
@@ -428,6 +434,8 @@ export interface ReplSession {
    * earlier position is reading history; this answers what is true now.
    */
   bindings(): Operation<Result<Readonly<Record<string, Json>>>>;
+  /** Observe the session scope that starts entries; content may narrow it. */
+  filePolicy(): Operation<Result<ReplFilePolicy>>;
   /** Wait for the entry running in this process to finish, and answer how. */
   join(): Operation<Result<unknown>>;
   /**
@@ -1014,6 +1022,21 @@ function* start(
       outputs,
       bindings(): Operation<Result<Readonly<Record<string, Json>>>> {
         return rootData();
+      },
+      *filePolicy(): Operation<Result<ReplFilePolicy>> {
+        try {
+          return Ok(
+            yield* owner.run(function* () {
+              return Object.freeze({
+                read: yield* Permissions.operations.files("read"),
+                write: yield* Permissions.operations.files("write"),
+                absolute: yield* Permissions.operations.files("absolute"),
+              });
+            }),
+          );
+        } catch (error) {
+          return Err(error instanceof Error ? error : new Error(String(error)));
+        }
       },
       join(): Operation<Result<unknown>> {
         return joining();

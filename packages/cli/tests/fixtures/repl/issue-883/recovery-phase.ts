@@ -1,3 +1,4 @@
+import { Permissions } from "@executablemd/runtime";
 /**
  * One phase of a recovery case, as its own process.
  *
@@ -726,6 +727,13 @@ function* phases(): Operation<unknown> {
     };
   }
   if (phase === "workspace-start" || phase === "workspace-continue") {
+    yield* Permissions.around(
+      {
+        files: ([operation], next) =>
+          operation === "absolute" ? phase === "workspace-start" : next(operation),
+      },
+      phase === "workspace-start" ? { at: "min" } : undefined,
+    );
     const mounted = yield* until(import("../../../support/mounted-repl.ts"));
     const { useReplPage } = yield* until(import("../../../support/repl-page.ts"));
     const { settledReading } = yield* until(import("../../../support/mounted-history.ts"));

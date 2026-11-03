@@ -88,7 +88,7 @@ import type {
   RootDocumentSource,
 } from "@executablemd/core";
 import { useAcpxProvider } from "@executablemd/acp";
-import { command as hostCommand, cwd } from "@executablemd/runtime";
+import { command as hostCommand, cwd, Permissions } from "@executablemd/runtime";
 import { runReplProgram } from "./repl/program.ts";
 import { decodeLocation } from "./repl/route.ts";
 import { renderAgentOptions, renderAgentOptionsJson, scanAgentArgs } from "./agent-options.ts";
@@ -250,7 +250,20 @@ const agentFields = {
   },
 };
 
+const absoluteField = {
+  description: "allow absolute host Dir paths within existing filesystem restrictions",
+  ...field(z.boolean(), field.default(false)),
+};
+
+function useAbsolutePermission(allowed: boolean): Operation<void> {
+  return Permissions.around(
+    { files: ([operation], next) => (operation === "absolute" ? allowed : next(operation)) },
+    allowed ? { at: "min" } : undefined,
+  );
+}
+
 const executionFields = {
+  allowAbsolute: absoluteField,
   include: {
     description: "component search directory",
     ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
@@ -326,6 +339,7 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  * their entries is not the same choice as who their entries talk to.
  */
 const replConfig = object({
+  allowAbsolute: absoluteField,
   attach: {
     description: "attach one interactive UI to this exact live XMD child",
     ...field(z.string().optional()),
@@ -637,8 +651,10 @@ const REPL_HELP = [
   "  Close/Stop. At narrow sizes the surface bar offers Sessions, Entries and",
   "  Sidekick; only the selected outlet is mounted.",
   "",
-  "  --mount SOURCE:TARGET adds an external directory at a required document path.",
-  "  Repeat it: --mount /work/manuals:/reference --mount /work/fixtures:/fixtures.",
+  "  --allow-absolute permits absolute host Dir paths, subject to write and enclosing restrictions.",
+  "  It is off by default. File, File.Delete and Glob operands remain relative.",
+  "  --mount SOURCE:TARGET maps a directory; it grants no filesystem permission.",
+  "  Example: xmd repl --allow-absolute --mount /work/manuals:/reference.",
   "  --include <directory> and --include=<directory> select component directories.",
   "  Repeat them in search order; explicit values replace the default list [components, .].",
   "  Relative directories resolve from the invocation working directory.",
@@ -715,8 +731,13 @@ export const REPL_VALUES: readonly string[] = [
   "--attach",
 ];
 
-/** The three REPL switches, which carry none. */
-const REPL_SWITCHES: readonly string[] = ["--approve-all", "--approve-reads", "--deny-all"];
+/** The REPL switches, which carry no value. */
+const REPL_SWITCHES: readonly string[] = [
+  "--approve-all",
+  "--approve-reads",
+  "--deny-all",
+  "--allow-absolute",
+];
 
 export function replGrammarError(
   args: readonly string[],
@@ -2908,6 +2929,7 @@ function* dispatch(
       }
       announceSecretDetection(config.secretDetection);
       const result = yield* scoped(function* (): Operation<Result<void>> {
+        yield* useAbsolutePermission(config.allowAbsolute);
         // `<Elicit>` reaches a person through the browser form, and `xmd run`
         // is the command a person is sitting in front of. Composed here, in the
         // scope this profile assembles around its own document, because that is
@@ -3082,6 +3104,7 @@ function* dispatch(
       if (replHost.select !== undefined) {
         yield* replHost.select();
       }
+      yield* useAbsolutePermission(command.config.allowAbsolute);
       // The Sidekick's own agent selection travels with it, as the name this
       // line carried and nothing more: the profile settles the fallback, and
       // whether anybody answers to that name is the first explicit message's

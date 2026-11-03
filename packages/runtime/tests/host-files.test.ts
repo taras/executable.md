@@ -1198,6 +1198,12 @@ describe("host Files — making a directory exist", () => {
     // inheriting it. A relative path spelled to reach the same place is refused
     // just below, which is what makes the two rules distinguishable.
     const elsewhere = join(fixture.outside, "made", "here");
+    yield* Permissions.around(
+      {
+        files: ([operation], next) => (operation === "absolute" ? true : next(operation)),
+      },
+      { at: "min" },
+    );
     const absolute = yield* files.ensureDirectory({ cwd: fixture.workspace, path: elsewhere });
     expect(absolute.ok).toBe(true);
     expect(yield* exists(elsewhere)).toBe(true);
@@ -1393,6 +1399,62 @@ describe("host Files — permission", () => {
       },
     });
   }
+
+  it("HF absolute: default and explicit denial reach no target; opt-in intersects read/write", function* () {
+    const fixture = yield* useFixture();
+    const files = handler();
+    yield* writeTextFile(join(fixture.outside, "source.txt"), "outside");
+    const touched: string[] = [];
+    yield* census(touched);
+    for (const path of [fixture.outside, join(fixture.outside, "missing")]) {
+      const refused = yield* files.ensureDirectory({ cwd: fixture.workspace, path });
+      expect(parseFilesFailure(failed(refused))?.reason).toBe("permission-denied");
+    }
+    expect(touched).toEqual([]);
+    yield* scoped(function* () {
+      yield* useHostFiles();
+      yield* API.Files.around({
+        *ensureDirectory([input], next) {
+          return yield* next({ ...input, path: fixture.outside });
+        },
+      });
+      const transformed = yield* Files.operations.ensureDirectory({
+        cwd: fixture.workspace,
+        path: "relative",
+      });
+      expect(parseFilesFailure(failed(transformed))?.reason).toBe("permission-denied");
+      expect(touched).toEqual([]);
+    });
+    yield* Permissions.around(
+      {
+        files: ([operation], next) => (operation === "absolute" ? true : next(operation)),
+      },
+      { at: "min" },
+    );
+    yield* scoped(function* () {
+      yield* Permissions.around({
+        files: ([operation], next) => (operation === "write" ? false : next(operation)),
+      });
+      expect(
+        (yield* files.ensureDirectory({ cwd: fixture.workspace, path: fixture.outside })).ok,
+      ).toBe(false);
+      expect(touched).toEqual([]);
+    });
+    expect(
+      (yield* files.ensureDirectory({ cwd: fixture.workspace, path: fixture.outside })).ok,
+    ).toBe(true);
+    expect(touched.length).toBeGreaterThan(0);
+    touched.length = 0;
+    yield* scoped(function* () {
+      yield* Permissions.around({
+        files: ([operation], next) => (operation === "read" ? false : next(operation)),
+      });
+      expect((yield* files.readTextFile({ cwd: fixture.outside, path: "source.txt" })).ok).toBe(
+        false,
+      );
+      expect(touched).toEqual([]);
+    });
+  });
 
   it("HF29: each operation asks its own class, and a refusal reaches no filesystem", function* () {
     const fixture = yield* useFixture();

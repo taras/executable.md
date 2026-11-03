@@ -39,7 +39,7 @@ import type { Json } from "@executablemd/core";
 import type { EntryVocabulary } from "../../repl-profile.ts";
 import type { ReplModel } from "../model.ts";
 import type { ReplHostFact } from "../host.ts";
-import type { ReplPrinting, ReplSession } from "../session.ts";
+import type { ReplFilePolicy, ReplPrinting, ReplSession } from "../session.ts";
 import type { GuideChapter, SidekickRequests, SubmitReceipt } from "./controls.ts";
 import { replEnvironment } from "./environment.ts";
 import { readGuideChapter } from "./guide.ts";
@@ -103,6 +103,7 @@ export interface RootReading {
    * response that straddle an append or a settlement each see their own moment.
    */
   bindings(): Operation<Result<Readonly<Record<string, Json>>>>;
+  filePolicy(): Operation<Result<ReplFilePolicy>>;
   /** What an entry may write under this command's profile. */
   readonly vocabulary: EntryVocabulary;
   /** The facts this command knows and the host does not. */
@@ -175,6 +176,7 @@ export function rootReads(
       // when the read answers.
       return session.bindings();
     },
+    filePolicy: () => session.filePolicy(),
     vocabulary: profile.vocabulary,
     // What this command knows and the host does not: where a declared name is
     // looked for, which Plugins are active, and how a permission request is
@@ -258,7 +260,7 @@ export function sidekickRequests(
       return readGuideChapter(chapter);
     },
     environment(): Operation<Result<string>> {
-      return replEnvironment(root.session);
+      return replEnvironment(root.session, root.filePolicy);
     },
     fillDraft(source: string): Operation<Result<void>> {
       return root.fill(source);

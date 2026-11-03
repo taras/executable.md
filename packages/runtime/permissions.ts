@@ -2,9 +2,8 @@
  * Permissions Api — whether the scope asking is allowed the operation it is
  * about to perform.
  *
- * Two members, one for the document filesystem and one for HTTP, and both
- * answer `true` until something says otherwise. A host that permits everything
- * installs nothing; a scope that permits less installs middleware:
+ * Read, write and HTTP permit by default; absolute host directory selection
+ * defaults to false. A scope that permits less installs middleware:
  *
  * ```typescript
  * yield* Permissions.around({
@@ -15,7 +14,8 @@
  * ## Where the answer is asked
  *
  * At the implementation that performs the operation, immediately before its
- * first I/O, and nowhere else. The provider is what knows which class of
+ * first I/O. A live routing owner also refuses before its own discovery or
+ * acquisition, after restoring acknowledged results. The provider knows which class of
  * operation it is about to carry out, so it is what asks — a check placed at a
  * caller would be a check some other caller reaches the same filesystem
  * without. One consequence worth stating: a request is authorized *after* the
@@ -75,23 +75,26 @@ export interface PermissionsApi {
    * not by what the filesystem turns out to hold: ensuring a directory that
    * already exists and deleting a path that names nothing are both `write`,
    * because a scope that may not change the filesystem may not ask to.
+   * `absolute` is an additional condition on host directory selection, not a
+   * grant for absolute File/Delete/Glob operands or approved asset imports.
    */
-  files(operation: "read" | "write"): boolean;
+  files(operation: "read" | "write" | "absolute"): boolean;
 }
 
 /**
  * The permission Api.
  *
- * Both defaults permit. An uninstalled Permissions is the ordinary case — most
- * runs are a person asking their own tools to touch their own files — and the
- * boundary that matters is already the provider's: an absent `API.Files`
+ * Absolute host directory selection needs an explicit host allowance at `min`.
+ * Without opt-in the host refuses at default `max`, so a descendant cannot
+ * widen it. Ordinary restrictions precede that allowance and only narrow.
+ * Read, write and fetch retain their permitting defaults. An absent `API.Files`
  * provider reaches no filesystem at all, whatever this answers.
  */
 export const Permissions: Api<PermissionsApi> = createApi<PermissionsApi>(
   "executablemd.runtime.permissions",
   {
     fetch: () => true,
-    files: () => true,
+    files: (operation) => operation !== "absolute",
   },
 );
 

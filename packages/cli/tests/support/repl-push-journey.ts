@@ -112,7 +112,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
     const open = (args: readonly string[]): string =>
       `cd ${shellQuote(away)} && ${shim.prefix} ${repl(args)}`;
 
-    const first = yield* allocate(open(["repl", "--deny-all"]), home);
+    const first = yield* allocate(open(["repl", "--deny-all", "--allow-absolute"]), home);
     yield* showing(first, "[exit]", REACH_MS);
     yield* first.type(entry(origin, "notes.md"));
     yield* sleep(500);
@@ -182,7 +182,7 @@ export function replPushJourney(repl: ReplCommand): Operation<void> {
 
     // A separate new entry: its publication is new work, so it resolves today's
     // branch and advances the destination to what the checkout holds now.
-    const third = yield* allocate(open(["repl", "--deny-all", location]), home);
+    const third = yield* allocate(open(["repl", "--deny-all", "--allow-absolute", location]), home);
     yield* showing(third, "[exit]", REACH_MS);
     yield* third.type(republishing(origin));
     yield* sleep(500);

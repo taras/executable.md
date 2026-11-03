@@ -9,7 +9,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure } from "effection";
-import { ensureDir, rm } from "@effectionx/fs";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -76,5 +76,20 @@ describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources:
     }).join();
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("The review of **packages/core** passed.");
+  });
+  it("1075: real run denies absolute Dir by default and enables its relative File with opt-in", function* () {
+    const directory = path.join(os.tmpdir(), `xmd-absolute-cli-${randomUUID()}`);
+    yield* ensureDir(directory);
+    yield* ensure(() => rm(directory, { recursive: true, force: true }));
+    yield* writeTextFile(path.join(directory, "input.txt"), "actual external bytes");
+    const source = `<Dir path=${JSON.stringify(directory)}><File path="input.txt" /></Dir>`;
+    const denied = yield* runCli(["run", "--eval", source], { inheritEnv: true }).join();
+    expect(denied.code).toBe(1);
+    expect(denied.stderr).toContain("not allowed to create or enter");
+    const allowed = yield* runCli(["run", "--allow-absolute", "--eval", source], {
+      inheritEnv: true,
+    }).join();
+    expect(allowed.code).toBe(0);
+    expect(allowed.stdout).toContain("actual external bytes");
   });
 });

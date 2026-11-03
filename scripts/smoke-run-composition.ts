@@ -87,7 +87,7 @@ function binary(
   streams: "piped" | "null" = "piped",
 ): Deno.Command {
   return new Deno.Command(BINARY, {
-    args: ["run", document, "--raw"],
+    args: ["run", document, "--allow-absolute", "--raw"],
     cwd,
     env,
     clearEnv: true,

@@ -59,10 +59,16 @@ only genuine absence falls through, and a selected malformed or unreadable
 component fails. These directories select ordinary components and grant no
 permission; canonical protected components keep their implementations.
 
+`--allow-absolute` is the shared run/REPL boolean switch, default off. It
+enables absolute host Dir selection within effective write and enclosing
+restrictions. A nested opt-in cannot widen an enclosing denial. File,
+File.Delete and Glob operands remain relative. Agent permission switches grant
+none of this permission.
+
 Add an external host directory with a required document destination:
 
 ```sh
-xmd repl --mount /work/manuals:/reference --mount /work/fixtures:/fixtures
+xmd repl --allow-absolute --mount /work/manuals:/reference --mount /work/fixtures:/fixtures
 ```
 
 Both `--mount SOURCE:TARGET` and `--mount=SOURCE:TARGET` repeat. Split at the last
@@ -78,7 +84,9 @@ identity, symlink or case-fold equivalence. Sources may coincide.
 `<Dir path="/reference">` ensures the selected SOURCE before children use it as
 actual cwd. File reads/writes/deletions retain their relative operands; Glob
 retains its patterns and a foreground process its argv. The mapping grants no
-permission, Git operation or native Agent tooling. The command's own cwd and a
+permission, Git operation or native Agent tooling. New mapped absolute ensures,
+including converted relative operands, require the explicit absolute opt-in
+and effective write permission. The command's own cwd and a
 held conversation's cwd never move. Under the unchanged
 `/work/manuals/docs:/reference` pair, a new nested `..` follows authored `/`,
 ensures ordinary host `/`, and only its own Unit allows children there. Scope
@@ -88,7 +96,7 @@ spellings refuse before provider work; native SOURCE paths keep native spelling.
 Everything that can be refused is refused in this order, and each step happens
 before anything the next one would touch:
 
-1. **The line.** A token that is not the location or one of those eight options,
+1. **The line.** A token that is not the location or one of its declared options,
    a switch given a value, a value option given none or an empty one, and a
    second location are each refused here — before a per-user directory is
    formed, a history file is created or the terminal's modes are touched.
@@ -136,16 +144,34 @@ caller and sibling scopes at their own cwd. This grants no permission or native
 tool, changes no source bytes and selects no Repository.
 
 The original project cwd remains the basis for ambient repository discovery,
-ordinary commit identity and invocation-relative options. To read project input,
-enter its explicitly known path with Dir, capture the read, then write
-`inputs/request.md` after Dir restores workspace cwd. Native Git likewise needs
+ordinary commit identity and invocation-relative options. For non-repository
+project input, Sidekick requests an approved asset import and reads the returned
+workspace-relative path. Native Git likewise needs
 a valid selected checkout at its authored cwd; it has no hidden project fallback.
 The Sidekick's native conversation keeps project placement, or an explicitly
 supplied agentCwd dependency, and its recorded native identity and configuration.
 
 Read `<Guide.Environment />` and `<Guide.Entries />` for the component-writing,
 discovery, later submission and output-reading journey. Current
-`<REPL.Environment />` reports the response's actual cwd.
+`<REPL.Environment />` reports the response's actual cwd and fresh effective
+file read/write/absolute policy. `current response policy` describes the invoking
+scope. `submitted-entry start policy (session scope; entry content may narrow
+it)` is observed afresh through a joined read in the actual session entry-task
+owner, not copied from CLI flags or response policy. `approved import` separately
+states eligibility under current response read/write plus required individual
+approval, independent of absolute; it establishes neither validation nor approval.
+These XMD-operation observations grant nothing and describe neither native
+tools, component admission nor nested scopes of a running entry. Reading them
+starts no entry, target filesystem work, import prompt or provider/model call;
+a failed read presents no partial policy. The callback ends with its owner.
+
+The guides teach relative paths resolved from the current working directory,
+including inside a scoped Dir. A leading slash does not mean the workspace
+root. Sidekick uses the approved import control for intentional external host
+file inputs instead of reaching them through absolute File, command or Dir
+paths. Absolute host Dir selection requires the invocation's explicit opt-in. A
+leading slash retains its host meaning. Repository/Worktree paired placement
+stays with its provider and grants no absolute permission.
 
 ## Importing a host asset
 
@@ -173,7 +199,11 @@ read, parent creation, staging allocation or destination-data write. Decline and
 cancellation during approval produce none of those effects. Effective read and
 write restrictions apply before metadata and again after approval; publication
 rechecks write permission. Approval grants no native Agent tool or ordinary
-Files permission.
+Files permission. Absolute denial does not prevent this separately approved
+import, and approval never installs an absolute allowance. A destination in a
+managed checkout is derived from the actual session workspace and returned
+checkout path; the copy must reach that exact checkout beneath the workspace.
+An arbitrary host repository outside that root is unsupported.
 
 Import preserves exact source bytes, including binary data, and leaves the
 source unchanged. Absolute or escaping destinations and observed outward parent
@@ -1725,6 +1755,15 @@ What that buys is the one thing experimentation needs: leave an entry at a
 question, come back to the printed location, and the work it already did is not
 done again. The question is offered again, and the write after it happens for
 the first time when you answer.
+
+Every existing restoration branch precedes current policy, canonicalization,
+discovery and holds. A genuinely new absolute directory request checks write
+and absolute before `targetOf`, managed ownership, live selection, holds and
+workspace canonicalization. Early refusal discovers no coverage and appends no
+new file-operation record; normal enclosing failure recording remains. Permitted
+work uses the complete composed chain and the terminal independently checks
+the final transformed request. Retained keys, associations and prefix bytes
+are unchanged.
 
 A completed operation answers from what it produced, and reads nothing. So a
 file somebody else changed in the meantime stays changed, a file somebody

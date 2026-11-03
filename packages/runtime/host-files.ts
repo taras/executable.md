@@ -11,10 +11,12 @@
  *
  * ## What containment means here
  *
- * Access is confined to the contextual directory, judged against the filesystem
+ * File access is confined to the contextual directory, judged against the filesystem
  * as this adapter observes it. An empty path, an absolute path, and a lexical
  * `..` escape are refused without touching the filesystem at all; a symlink
- * leading out is refused once resolution can see it.
+ * leading out is refused once resolution can see it. Directory selection accepts
+ * an absolute target only with effective absolute and write permission, checked
+ * before resolution. Relative directory operands still resolve from cwd.
  *
  * That is sound **while the host pathname namespace is stable**, and every
  * guarantee here is stated on that basis. It is not a sandbox. Another process
@@ -634,6 +636,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
    * vocabulary — so both refusals arrive as `not-directory` and neither carries
    * a host path or a platform message.
    *
+   * Absolute effective operands require absolute permission as well as write;
+   * neither mount mapping nor cwd placement grants it. File/Delete/Glob keep
+   * their relative grammar.
+   *
    * Creation is direct and persists. There is no rollback and no teardown
    * removal: a later failure of the content that runs inside this directory
    * says nothing about whether the directory should exist.
@@ -644,6 +650,9 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     }
 
     if (!(yield* Permissions.operations.files("write"))) {
+      return nonWriteFailure("ensure-directory", "resolution", "permission-denied");
+    }
+    if (isAbsolute(input.path) && !(yield* Permissions.operations.files("absolute"))) {
       return nonWriteFailure("ensure-directory", "resolution", "permission-denied");
     }
 
