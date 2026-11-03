@@ -3752,8 +3752,9 @@ Agent/Session/Prompt routing and literal-command registration. Private compariso
 produce categorical capability evidence; expectations confer no execution,
 identity or certification. Reports finalize after the existing owner joins.
 Native cleanup remains unverified at the production probe/release boundary,
-which stops further native admission and prevents a cancellation or durable
-certification pass. The example introduces no provider, registry or lifecycle
+so cancellation and durable certification remain non-pass. Successfully joined
+stages permit independent subsequent work; pending joins, actual cleanup failure
+and production ownership refusal stop admission. The example introduces no provider, registry or lifecycle
 observation interface. Its [ACP contract](specs/acp-client-spec.md#shared-local-agent-qualification)
 keeps ordinary retention separate from workflow Session-site identity.
 

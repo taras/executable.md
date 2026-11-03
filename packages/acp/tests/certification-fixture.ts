@@ -48,11 +48,11 @@ function answer(request) {
     reply(id,{configOptions:options()});
   } else if (method === "session/prompt") {
     const text=params.prompt.map(block=>block.text ?? "").join("");
-    const seed=text.startsWith("seed:") ? text.slice(5) : undefined;
+    const seed=text.startsWith("seed:") ? text.slice(5) : /Remember this private marker for this conversation: ([^.]+)\\./.exec(text)?.[1];
     if (seed !== undefined) { marker=seed; }
     const respond = () => {
       if (mode !== "no-acceptance") { update({sessionUpdate:"session_info_update",_meta:{"executablemd.session-materialization/v1":{state:"accepted"}}}); }
-      if (mode === "wait") { activePrompt=id; return; }
+      if (mode === "wait" || text.includes("Wait for cancellation.")) { activePrompt=id; return; }
       const value=seed !== undefined ? "READY" : mode === "lost" ? "WRONG" : marker ?? "UNKNOWN";
       update({sessionUpdate:"agent_message_chunk",content:{type:"text",text:value}});
       reply(id,{stopReason:"end_turn"});
@@ -72,7 +72,7 @@ process.stdin.on("data",chunk=>{
     const line=buffer.slice(0,index);buffer=buffer.slice(index+1);
     if(!line.trim()){continue;}
     const request=JSON.parse(line);
-    fs.appendFile(path.join(process.cwd(),"methods.jsonl"),JSON.stringify({method:request.method})+"\\n",error=>{if(error){throw error;}answer(request);});
+    fs.appendFile(path.join(process.cwd(),"methods.jsonl"),JSON.stringify({method:request.method,sessionId:request.params?.sessionId,kind:request.method === "session/prompt" ? (request.params.prompt.map(block=>block.text ?? "").join("").includes("Wait for cancellation.") ? "cancel" : /seed:|Remember this private marker/.test(request.params.prompt.map(block=>block.text ?? "").join("")) ? "seed" : "recall") : undefined})+"\\n",error=>{if(error){throw error;}answer(request);});
   }
 });
 `;
@@ -82,6 +82,7 @@ export interface CertificationFixture {
   home: string;
   command: (mode?: string) => string;
   methods: () => Operation<string[]>;
+  calls: () => Operation<{ method: string; sessionId?: string; kind?: string }[]>;
 }
 export function* withCertificationFixture<T>(
   body: (fixture: CertificationFixture) => Operation<T>,
@@ -98,6 +99,22 @@ export function* withCertificationFixture<T>(
       dir,
       home,
       command: (mode = "normal") => "node " + JSON.stringify(agent) + " " + mode,
+      *calls() {
+        const text = yield* readTextFile(join(dir, "methods.jsonl"));
+        return text
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) =>
+            z
+              .object({
+                method: z.string(),
+                sessionId: z.string().optional(),
+                kind: z.string().optional(),
+              })
+              .parse(JSON.parse(line)),
+          );
+      },
       *methods() {
         let text = "";
         try {

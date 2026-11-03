@@ -16,19 +16,32 @@ registry to change them.
 
 Selecting a scenario authorizes its model turns and cancellation of the suite's
 own test turn. Live execution is opt-in and may cost money. Use a fresh private
-working directory and unique local Session names. The maximum is six Prompts,
+working directory. The runner generates unique local A/B/C Session names. The maximum is six Prompts,
 one attempt each: seed A, recall A, independent B, reconnect A, cancel C, then
 recall A from another OS invocation. Turns have 60 seconds; the cancellation
 request targets the still-active C turn after five seconds. Teardown observation
 has 30 seconds and the outer work deadline has 600 seconds. Expiry ends admission;
 the actual owner still joins. No uncertain turn is retried.
 
-The existing production availability probe releases a native child before it
-returns. XMD cannot verify exact native closing from that settlement. This
-example therefore stops admission at that preliminary boundary, before Prompt 1.
-Reconnect, cancellation and later invocation work remain not run. Selecting those
-scenarios does not bypass the stop. No capability passes from configuration,
-availability, process exit or retained display metadata.
+The runner computes setup dependencies before provider work. Continuity,
+separation, reconnect and resume require one accepted A seed. Only selected
+continuity adds A's second turn; separation adds independent B. Cancellation
+needs no marker scenario. Selecting reconnect or resume authorizes their seed
+setup, even when the setup capability rows are unselected.
+
+The checked-in initial document keeps one provider and A Session alive for the
+seed and recall, then tests B. Reconnect opens a new same-process invocation.
+Cancellation owns a separate document; its five-second interval begins at actual
+accepted start and structured cancellation joins that document. Resume uses one
+separate CLI invocation and ordinary retained A history. Its private comparison
+file is neither provider history nor continuation authority.
+
+Ordinary production validation, including its cached availability probe, remains
+in force. After successful owner settlement independent stages can proceed even
+though exact native closing is unverified. Pending joins, actual teardown failure
+or production ownership refusal stop admission. A marker failure preserves earlier
+basic/settings evidence and permits independent cancellation. No capability passes
+from configuration, availability, process exit or matching display names.
 
 From the private working directory, use absolute paths for the checked-in document,
 component directory, local configuration and report:
@@ -81,7 +94,18 @@ The existing backend first-turn acceptance barrier remains mandatory; an
 unpatched adapter can be refused even after producing output.
 
 Kimi's selected live scope uses `kimi acp`, provider-default model and effort,
-and no retries. The retained workflow runs it only after review and exact
-fingerprints. Gemini was absent on PATH in prepared observations; its sample command is a placeholder for the installed adapter's documented command and is
+and no retries. A later useful live run requires changed-source review, exact fingerprints and
+a fresh explicit selected-scenario grant. The earlier zero-Prompt attempt is
+retained invocation evidence only; it establishes no capability battery. Gemini was absent on PATH in prepared observations; its sample command is a placeholder for the installed adapter's documented command and is
 configuration syntax, not availability or certification evidence. This delivery
 authorizes zero Gemini live calls and installs no agent.
+
+The terminal matrix always lists all eleven capabilities with selected/expected flags,
+outcomes and fixed reasons, plus observed Prompt/cancellation counts and overall
+flags. Failure preserves earlier independent rows and a meaningful nonzero status.
+Private markers, replies, Session identities and child fragments remain local.
+
+Prompt counts describe turns observed through the production stream. A refusal
+before stream disclosure can leave native submissions unobserved; these counts
+are not billing evidence. Resume follows its own CLI work deadline and the parent
+waits for actual process settlement even if outer work is cancelled.

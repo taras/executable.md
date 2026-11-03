@@ -4,6 +4,7 @@ import { ensure, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Stream } from "effection";
 import { writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
+import { settleStage } from "../../../examples/agent-certification/stage-runner.ts";
 import { randomUUID } from "node:crypto";
 import {
   Agent,
@@ -24,10 +25,7 @@ import {
   configurationFailure,
 } from "../../../examples/agent-certification/report.ts";
 import type { Report } from "../../../examples/agent-certification/report.ts";
-import {
-  observeQualification,
-  joinQualification,
-} from "../../../examples/agent-certification/observe.ts";
+import { observeQualification } from "../../../examples/agent-certification/observe.ts";
 
 function reportFor(command: string): Report {
   return initialReport({
@@ -341,37 +339,47 @@ describe(
       const entered = withResolvers<void>();
       const release = withResolvers<void>();
       let finalized = false;
+      let laterAdmissions = 0;
+      const admission = { open: true };
       yield* ensure(() => {
         release.resolve();
       });
       const task = yield* spawn(function* () {
-        yield* joinQualification(report, function* () {
+        yield* settleStage(report, admission, function* () {
           yield* ensure(function* () {
             entered.resolve();
             yield* release.operation;
           });
         });
         finalized = true;
+        if (admission.open) {
+          laterAdmissions++;
+        }
       });
       yield* entered.operation;
       expect(finalized).toBe(false);
+      expect(laterAdmissions).toBe(0);
       expect(report.capabilities.cleanup.observations.ownerJoined).toBe(false);
       release.resolve();
       yield* task;
       expect(finalized).toBe(true);
+      expect(laterAdmissions).toBe(1);
       expect(report.capabilities.cleanup.reason).toBe("cleanup-unverified");
       const original = new Error("private-cleanup-failure");
-      let observed: unknown;
-      try {
-        yield* joinQualification(report, function* () {
-          yield* ensure(() => {
-            throw original;
-          });
+      const failed = yield* settleStage(report, admission, function* () {
+        yield* ensure(() => {
+          throw original;
         });
-      } catch (error) {
-        observed = error;
+      });
+      expect(failed.ok).toBe(false);
+      if (!failed.ok) {
+        expect(failed.error).toBe(original);
       }
-      expect(observed).toBe(original);
+      if (admission.open) {
+        laterAdmissions++;
+      }
+      expect(admission.open).toBe(false);
+      expect(laterAdmissions).toBe(1);
       expect(report.capabilities.cleanup.outcome).toBe("failure");
     });
   },

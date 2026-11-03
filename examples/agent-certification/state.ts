@@ -1,12 +1,20 @@
 import { createContext } from "effection";
-import type { Configuration, Report } from "./report.ts";
-
-export interface QualificationState {
-  configuration: Configuration;
-  report: Report;
-  marker: string;
-  failure?: Error;
-}
+import { z } from "zod";
+import { configurationSchema, reportSchema } from "./report.ts";
+export const privateStateSchema = z.strictObject({
+  configuration: configurationSchema,
+  report: reportSchema,
+  marker: z.string(),
+  names: z.strictObject({ a: z.string(), b: z.string(), c: z.string() }),
+  identity: z.string().optional(),
+  seedAccepted: z.boolean(),
+  turn: z.strictObject({
+    accepted: z.boolean(),
+    completed: z.boolean(),
+    identity: z.string().optional(),
+  }),
+});
+export type QualificationState = z.infer<typeof privateStateSchema> & { failure?: Error };
 export const Qualification = createContext<QualificationState>(
   "executablemd.agent-certification/observations",
 );
