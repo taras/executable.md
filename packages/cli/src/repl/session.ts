@@ -80,6 +80,8 @@ import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablem
 import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
 import { API, Permissions } from "@executablemd/runtime";
+import { Stdio } from "@effectionx/process";
+import type { ReplCommandChunk, ReplCommandOutput } from "./command-output.ts";
 import { executeInstalled } from "@executablemd/core/host";
 import { useGeneratedFallback } from "../evaluation-profile.ts";
 import type {
@@ -391,6 +393,7 @@ export interface ReplSession {
    * {@link ReplPrinting} for why the overlay is not this.
    */
   readonly printing: ReplPrinting | undefined;
+  readonly commandOutput: readonly ReplCommandOutput[];
   /**
    * What this process is doing element by element, for the entry that is open.
    *
@@ -791,6 +794,7 @@ function* start(
 
     /** Text the entry that is running has printed, which no record holds yet. */
     let output = "";
+    const commandOutput = new Map<string, ReplCommandChunk[]>();
     /** Whether an entry's execution is still running in this process. */
     let live = false;
     /**
@@ -1013,6 +1017,16 @@ function* start(
         // reached an outcome is no longer printing, and what it printed is in
         // the record that outcome carries.
         return live && running !== undefined ? { entry: running.key, output } : undefined;
+      },
+      get commandOutput() {
+        return Object.freeze(
+          [...commandOutput].map(([entry, chunks]) =>
+            Object.freeze({
+              entry,
+              chunks: Object.freeze([...chunks]),
+            }),
+          ),
+        );
       },
       get lifecycle() {
         return lifecycle.reading();
@@ -1780,6 +1794,42 @@ function* start(
       workspace?: true,
     ): Operation<Result<unknown>> {
       try {
+        const chunks: ReplCommandChunk[] = [];
+        const stdout = new TextDecoder();
+        const stderr = new TextDecoder();
+        function append(channel: ReplCommandChunk["channel"], text: string): void {
+          if (text.length === 0) {
+            return;
+          }
+          const last = chunks[chunks.length - 1];
+          const chunk = Object.freeze({
+            channel,
+            text: last?.channel === channel ? last.text + text : text,
+          });
+          if (last?.channel === channel) {
+            chunks[chunks.length - 1] = chunk;
+          } else {
+            chunks.push(chunk);
+          }
+          commandOutput.set(key, chunks);
+          outputs.send(output);
+        }
+        // Registered before entry resources so their cleanup can still emit.
+        yield* ensure(() => {
+          append("stdout", stdout.decode());
+          append("stderr", stderr.decode());
+        });
+        yield* Stdio.around(
+          {
+            *stdout([bytes]) {
+              append("stdout", stdout.decode(bytes, { stream: true }));
+            },
+            *stderr([bytes]) {
+              append("stderr", stderr.decode(bytes, { stream: true }));
+            },
+          },
+          { at: "min" },
+        );
         const directory = workspace === true ? options.workspace : options.projectCwd;
         if (directory !== undefined) {
           yield* API.Env.around(

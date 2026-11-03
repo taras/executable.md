@@ -1598,6 +1598,21 @@ closed `err` is a failure whatever it rendered. Nothing is attributed to an
 `<Elicit>` or a `<File>`, reconstructed by concatenating block results, or
 invented as a receipt for a bound value that emitted nothing.
 
+Ordinary `exec` stdout and stderr stream into the producing entry's reading as
+`Command stdout` and `Command stderr`, between Output and Source. The channel
+labels follow received order. Long lines wrap in the same scrollable reading;
+blank lines and partial lines remain readable. This presentation is separate
+from rendered document Output: forwarding adds nothing to the root result.
+Bound commands display only what the document explicitly renders, a `<Let as>`
+capture still hides stdout, and `silent exec` displays neither channel.
+
+Command text is inert before measurement and drawing. LF separates rows; other
+C0 controls, DEL and C1 controls appear as ASCII `\xNN` escapes. Cursor motion,
+clearing, OSC and terminal mode sequences therefore remain readable text. The
+same conversion applies to rendered Output, including explicit interpolation of
+captured diagnostics and saved output. It changes display copies only; captured
+values, retained channel strings and source bytes remain intact.
+
 Source is the exact text the entry admitted. Beside each row is a rail saying
 which region the row is in, and against the pane's right inner edge is the
 reading of the element that owns it — glyph and word together, so the reading
@@ -1677,6 +1692,13 @@ records any other XMD run writes. There is no manifest, no cache, no materialize
 model, no checkpoint file and no record type of the REPL's own. The file and the
 location are the whole of the state, which is what makes reconstruction from them
 possible at all.
+
+Forwarded command presentation belongs to this process and the entry that
+produced it. It remains available after that entry joins, but a frozen history
+position shows no process-local command presentation. Cold viewing reads the
+existing entry-owned exec records, including stdout, stderr and exit status;
+it starts no command and reconstructs no visible output from hidden or bound
+records. No additional output log is retained.
 
 The location carries route state only: which surface, which entry and scopes,
 which drawers, which history position, the draft for the next entry, which
@@ -2412,6 +2434,14 @@ obtains the owner's current facts. After owner-process loss joined completion
 is unavailable, rather than reconstructed from a saved preview or text.
 
 ## Who owns what
+
+Only the REPL terminal renderer writes presentation bytes while the interface
+owns the terminal. Each entry installs its downstream process display handlers
+before acquiring execution resources and keeps them through joined teardown.
+Cleanup output belongs to that entry even after root Close, while another
+history position is selected, or while Sidekick is active. Arrival wakes the
+screen without moving selection, focus, Follow or either editable draft.
+Ordinary `xmd run` retains its existing foreground forwarding.
 
 When feedback has no exact completed canonical input, `[review recovery]` shows
 the original request, saved failure, established entries and unfinished controls.

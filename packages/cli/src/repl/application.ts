@@ -111,6 +111,8 @@ import type { ReplHistoryNavigation } from "./navigation.ts";
 import { blankBand, EMPTY_BAND } from "./history-rail.ts";
 import type { ReplPreparedRail } from "./history-rail.ts";
 import { entryReading, NO_READING } from "./source-reading.ts";
+import { inertCommandText } from "./command-output.ts";
+import type { ReplCommandOutput } from "./command-output.ts";
 import type { ReplReading } from "./source-reading.ts";
 import { readingRuns, fitPlain } from "./fitting.ts";
 import type { ReplPlainFitStore } from "./fitting.ts";
@@ -185,6 +187,7 @@ export type { ReplAction };
 
 /** What this process holds that the Journal does not. */
 export interface ReplLive {
+  readonly commandOutput?: readonly ReplCommandOutput[];
   /** Output no recorded outcome has replaced yet. */
   readonly output: string;
   /** The question waiting right now, or none. */
@@ -6147,6 +6150,7 @@ export function readingOf(view: ReplView): ReplReading {
     entry,
     lifecycle: view.live.lifecycle,
     live: livesHere(view.model, view.selection) ? view.live.output : "",
+    commandOutput: view.live.commandOutput?.find((one) => one.entry === entry.key)?.chunks ?? [],
     inspected: view.state.route.at !== undefined,
   });
 }
@@ -10975,7 +10979,7 @@ function workComposed(staging: ReplChatStaging, key: string): readonly ReplChatC
       }),
     );
     // The record's own final line break ends its last line rather than adding one.
-    const recorded = entry.terminal?.output ?? "";
+    const recorded = inertCommandText(entry.terminal?.output ?? "");
     const output = recorded.endsWith("\n") ? recorded.slice(0, -1) : recorded;
     if (output !== "") {
       found.push(

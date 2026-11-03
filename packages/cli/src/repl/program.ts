@@ -2451,6 +2451,7 @@ function liveOf(
 ): ReplLive {
   return {
     output: session.overlay.output,
+    commandOutput: session.commandOutput,
     question: session.overlay.question,
     expansion: session.expansion.state,
     pausable: session.controller !== undefined,

@@ -48,6 +48,8 @@ import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts
 import { tokenRuns } from "./description.ts";
 import type { ReplTokenRun } from "./description.ts";
 import { sourceRuns } from "./presentation-text.ts";
+import { inertCommandText } from "./command-output.ts";
+import type { ReplCommandChunk } from "./command-output.ts";
 
 /** What this terminal draws for each phase, glyph and word together. */
 const BADGES: Readonly<
@@ -117,6 +119,7 @@ export interface ReplReadingSection {
 /** One entry's whole reading: what it produced, then what produced it. */
 export interface ReplReading {
   readonly output: ReplReadingSection;
+  readonly commands?: readonly ReplReadingSection[];
   readonly source: ReplReadingSection;
 }
 
@@ -146,6 +149,10 @@ export function readingLines(reading: ReplReading): readonly ReplReadingLine[] {
   return Object.freeze([
     caption("output", reading.output),
     ...reading.output.lines,
+    ...(reading.commands ?? []).flatMap((section, index) => [
+      caption(`command:${index}`, section),
+      ...section.lines,
+    ]),
     caption("source", reading.source),
     ...reading.source.lines,
   ]);
@@ -165,6 +172,7 @@ function caption(key: string, section: ReplReadingSection): ReplReadingLine {
 
 /** What a reading is being built for. */
 export interface ReplReadingRequest {
+  readonly commandOutput?: readonly ReplCommandChunk[];
   readonly entry: ReplEntry;
   /** This session's observations, or an empty reading for a retained prefix. */
   readonly lifecycle: ReplLifecycleReading;
@@ -184,6 +192,19 @@ export interface ReplReadingRequest {
 export function entryReading(request: ReplReadingRequest): ReplReading {
   return Object.freeze({
     output: outputSection(request),
+    commands: Object.freeze(
+      (request.commandOutput ?? []).map((chunk, index) =>
+        Object.freeze({
+          caption: `Command ${chunk.channel}`,
+          captionStyle: styleOf("pane-heading", { inspected: request.inspected }),
+          lines: plain(
+            chunk.text,
+            `command:${index}`,
+            styleOf("output", { inspected: request.inspected }),
+          ),
+        }),
+      ),
+    ),
     source: sourceSection(request),
   });
 }
@@ -257,17 +278,19 @@ function outputSection(request: ReplReadingRequest): ReplReadingSection {
 /** Text as lines nothing has been observed in. */
 function plain(text: string, prefix: string, style: ReplRowStyle): readonly ReplReadingLine[] {
   return Object.freeze(
-    text.split("\n").map((one, index) =>
-      Object.freeze({
-        key: `${prefix}:${index}`,
-        text: one,
-        runs: tokenRuns([{ text: one, token: style.role }]),
-        rail: "rail-pending" as const,
-        depth: 0,
-        badge: undefined,
-        style,
-      }),
-    ),
+    inertCommandText(text)
+      .split("\n")
+      .map((one, index) =>
+        Object.freeze({
+          key: `${prefix}:${index}`,
+          text: one,
+          runs: tokenRuns([{ text: one, token: style.role }]),
+          rail: "rail-pending" as const,
+          depth: 0,
+          badge: undefined,
+          style,
+        }),
+      ),
   );
 }
 
