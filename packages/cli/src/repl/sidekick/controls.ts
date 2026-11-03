@@ -65,6 +65,7 @@ import type { RetainedPrefix } from "./history.ts";
 import type { OutputRead, OutputReadRequest } from "./output.ts";
 import type {
   EntryJournalPage,
+  EntryJournalRequest,
   EntryPromptPage,
   EntryPromptRequest,
   EntryReadRequest,
@@ -148,7 +149,7 @@ export interface SidekickRequests {
   /** Read one window of what one entry printed, by its admission number. */
   inspectOutput(request: EntryReadRequest): Operation<Result<EntryTextPage>>;
   /** Read where one entry's saved evidence is, and what it failed at. */
-  inspectJournal(request: EntryReadRequest): Operation<Result<EntryJournalPage>>;
+  inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>>;
 }
 
 /**
@@ -655,14 +656,15 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
       name: "REPL.Entry.Journal",
       props: {
         type: "object",
-        properties: { ...ENTRY_SELECTION },
+        properties: { entry: { type: "number" }, yq: { type: "string", minLength: 1 } },
         additionalProperties: false,
       },
       description:
-        "Find where one entry's saved evidence is. `<REPL.Entry.Journal entry={22} />` answers " +
-        "with that entry's complete failure message, how its agent turns ended, and a window of " +
-        "its saved records — each naming what it was and which prompt to read next.",
-      *fn(props: EntryReadRequest): Operation<EntryJournalPage | string> {
+        "Inspect saved commands and locate agent turns in one entry. " +
+        '`<REPL.Entry.Journal entry={22} yq=".records" />` ' +
+        "queries complete retained facts before paging. Read .exec.exitCode, .exec.stdout and " +
+        ".exec.stderr on a command record; reuse next, prev or last as yq with the same positive entry.",
+      *fn(props: EntryJournalRequest): Operation<EntryJournalPage | string> {
         return yield* inspected(
           journal,
           { component: "REPL.Entry.Journal", arguments: { ...props } },

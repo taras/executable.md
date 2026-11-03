@@ -1,14 +1,12 @@
 /**
- * Four bounded reads of one entry's saved evidence: its source, one turn's
- * text, its output and its record metadata.
+ * Read one entry's saved source, turn text, output and supported record facts.
  *
  * A failed entry still has to explain itself. What it ran is its admitted
  * source; what it asked and what came back are its saved turns; what it printed
  * is its retained output; and where each of those is in the file is its records.
- * Journal locates evidence and Prompt reads the selected turn, which is why
- * neither of them carries the other's body.
+ * Journal queries saved exec results and locates saved turns for Prompt reads.
  *
- * Everything here is pure. It is handed the frozen entries one acknowledged
+ * The selectors and windows are pure; Journal delegates ordinary yq evaluation. It is handed the frozen entries one acknowledged
  * reading already projected and the one printing fact this process owns, and it
  * answers with plain JSON pages. There is no filesystem, no provider, no entry
  * task, and no way for a read to start, resume or wait for work.
@@ -30,7 +28,7 @@
  * ## Windows count what a person reads
  *
  * Text offsets and limits count Unicode code points, so a window never ends
- * halfway through a character; Journal's count records. Source and Prompt start
+ * halfway through a character. Source and Prompt start
  * at the beginning, and Output's omitted offset is the tail — the same
  * normalization an output read has always had, because it is the same question.
  *
@@ -44,7 +42,9 @@
  */
 
 import { Err, Ok } from "effection";
-import type { Result } from "effection";
+import type { Operation, Result } from "effection";
+import type { Json } from "@executablemd/core";
+import { queryJournal } from "./journal-query.ts";
 
 import type { ReplAgentTurn, ReplEntry, ReplPosition, ReplRecord } from "../model.ts";
 
@@ -58,9 +58,6 @@ export class EntryInspectionError extends Error {
 
 /** The default text window, when a read states no limit. */
 export const DEFAULT_TEXT_LIMIT = 4096;
-
-/** The default record window, when a Journal read states no limit. */
-export const DEFAULT_RECORD_LIMIT = 20;
 
 /** What one entry is doing, as every one of these reads reports it. */
 export type EntryStatus = "completed" | "failed" | "cancelled" | "running" | "unfinished";
@@ -149,6 +146,11 @@ type PageRecord = {
   readonly position: PagePosition | null;
   readonly prompt: number | null;
   readonly agent: string | null;
+  readonly exec: {
+    readonly exitCode: number;
+    readonly stdout?: string;
+    readonly stderr?: string;
+  } | null;
 };
 
 /** How one entry's saved turns ended, counted over the whole entry. */
@@ -158,22 +160,20 @@ type PromptCounts = {
   readonly cancelled: number;
 };
 
-/** One window of an entry's record metadata, with what it failed at. */
+/** One selected JSON value and ordinary yq navigation. */
 export type EntryJournalPage = {
-  readonly entry: number;
-  readonly status: EntryStatus;
-  /** The complete saved failure message, independent of the record window. */
-  readonly failure: string | null;
-  readonly prompts: PromptCounts;
-  readonly records: PageRecord[];
-  readonly offset: number;
-  readonly length: number;
-  readonly limit: number;
-  readonly previous: TextContinuation | null;
-  readonly next: TextContinuation | null;
+  readonly value: Json;
+  readonly next: string | null;
+  readonly prev: string | null;
+  readonly last: string | null;
 };
 
-/** What a Source, Output or Journal read asked for. */
+export interface EntryJournalRequest {
+  readonly entry?: number;
+  readonly yq?: string;
+}
+
+/** What a Source or Output read asked for. */
 export interface EntryReadRequest {
   readonly entry?: number;
   readonly offset?: number;
@@ -319,48 +319,23 @@ export function readEntryPrompt(
   );
 }
 
-/**
- * Where one entry's evidence is, and what it failed at.
- *
- * The failure is the complete saved message whatever the record window holds,
- * because a record limit bounds records and a reader who asked for twenty of
- * them did not ask to be told half of why the entry stopped. The counts cover
- * every saved turn of the entry for the same reason.
- */
-export function readEntryJournal(
-  request: EntryReadRequest,
+/** Query the complete permitted facts of one selected entry before paging. */
+export function* readEntryJournal(
+  request: EntryJournalRequest,
   history: InspectedHistory,
-): Result<EntryJournalPage> {
-  const limit = resolveLimit(request.limit, DEFAULT_RECORD_LIMIT);
-  if (!limit.ok) {
-    return limit;
-  }
+): Operation<Result<EntryJournalPage>> {
   const found = resolveEntry(request.entry, history.entries);
   if (!found.ok) {
     return found;
   }
   const entry = found.value;
-  const records = entry.records;
-  const offset = resolveOffset(request.offset, limit.value, records.length, { tail: false });
-  const end = offset + limit.value;
-  return Ok(
-    Object.freeze({
-      entry: entry.order,
-      status: statusOf(entry, history.printing),
-      failure: entry.terminal?.message ?? null,
-      prompts: countPrompts(entry.turns),
-      records: records.slice(offset, end).map(pageRecord),
-      offset,
-      length: records.length,
-      limit: limit.value,
-      previous: textContinuation(
-        offset > 0 ? Math.max(0, offset - limit.value) : undefined,
-        entry.order,
-        limit.value,
-      ),
-      next: textContinuation(end < records.length ? end : undefined, entry.order, limit.value),
-    }),
-  );
+  return yield* queryJournal(request.yq ?? ".", {
+    entry: entry.order,
+    status: statusOf(entry, history.printing),
+    failure: entry.terminal?.message ?? null,
+    prompts: countPrompts(entry.turns),
+    records: entry.records.map(pageRecord),
+  });
 }
 
 /** One text page over an entry, with its continuations pinned to that entry. */
@@ -635,6 +610,7 @@ function pageRecord(record: ReplRecord): PageRecord {
     position: pagePosition(record.position),
     prompt: record.prompt ?? null,
     agent: record.agent ?? null,
+    exec: record.exec ?? null,
   });
 }
 

@@ -20,6 +20,7 @@ import { SidekickOwnerError } from "../src/repl/sidekick/owner.ts";
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { scoped } from "effection";
+import { z } from "zod";
 import { ensureDir, writeTextFile, readTextFile, rm, exists } from "@effectionx/fs";
 import { API, cwd, useHostFiles, Permissions } from "@executablemd/runtime";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
@@ -44,7 +45,13 @@ import {
 import type { Operation, Result } from "effection";
 
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { Component, DocumentOutput, Elicitation, Execution } from "@executablemd/core";
+import {
+  Component,
+  DocumentOutput,
+  Elicitation,
+  Execution,
+  useNormalizedOutput,
+} from "@executablemd/core";
 import { openReplSession } from "../src/repl/session.ts";
 import { Markdown, sourceDigest, previewGeneratedXmdRoot } from "@executablemd/core/host";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
@@ -52,6 +59,7 @@ import type { SidekickReading } from "../src/repl/sidekick/model.ts";
 import { sidekickChatLines } from "../src/repl/application.ts";
 import { sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
 import { rootReads } from "../src/repl/sidekick/requests.ts";
+import { ReplHost } from "../src/repl/host.ts";
 import { useSidekickOwner } from "../src/repl/sidekick/owner.ts";
 import type { SidekickOwner, SidekickTurn } from "../src/repl/sidekick/owner.ts";
 import type { PairedChatStorage } from "../src/repl/sidekick/repository.ts";
@@ -3028,6 +3036,100 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
     return parsed as Record<string, unknown>;
   }
 
+  it("1006 E1/E7: the failed receipt leads to saved command diagnostics and a targeted unsubmitted correction", function* () {
+    let launches = 0;
+    const held = yield* useHarness(undefined, {
+      entryInstallation: {
+        *install() {
+          yield* useNormalizedOutput();
+          yield* API.Process.around({
+            *exec([options], next) {
+              launches += 1;
+              return yield* next(options);
+            },
+          });
+        },
+      },
+    });
+    const source =
+      "```bash silent exec\nprintf '%s\\n' 'startup refused: pass --profile local' >&2\nsleep 0.05\nexit 1\n```";
+    const correction = "```bash exec\nstartup --profile local\n```";
+    const fill = (program: string) =>
+      '<Let as="code" select="code">\n````xmd\n' +
+      program +
+      "\n````\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n";
+    held.fake.script({ reply: fill(source) + "<REPL.Submit />" });
+    held.fake.script({ reply: "<Guide.Recovery />" });
+    held.fake.script({
+      reply: `<REPL.Entry.Journal entry={1} yq={'[.records[] | select(.type == "exec")]'} />`,
+    });
+    held.fake.script({ reply: fill(correction) });
+    held.fake.script({ reply: "<Output>Prepared a correction using --profile local.</Output>" });
+    const result = yield* held.owner.message(
+      "Try the startup command, then inspect any failure before preparing a correction.",
+    );
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(held.fake.prompts[1]).toContain(
+      "Inspect its saved evidence with <REPL.Entry.Journal entry={1} />.",
+    );
+    expect(held.fake.prompts[2]).toContain(".exec.exitCode");
+    const evidence = z
+      .object({
+        value: z.array(
+          z
+            .object({
+              type: z.literal("exec"),
+              status: z.literal("ok"),
+              exec: z.object({ exitCode: z.literal(1), stdout: z.literal(""), stderr: z.string() }),
+              position: z.unknown(),
+            })
+            .passthrough(),
+        ),
+      })
+      .parse(JSON.parse(held.fake.prompts[3] ?? "null"));
+    expect(evidence.value).toHaveLength(1);
+    expect(evidence.value[0].exec.stderr).toBe("startup refused: pass --profile local\n");
+    expect(evidence.value[0].position).toMatchObject({ line: 1, column: 1 });
+    expect(held.state().draft).toBe(correction);
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(held.session.model.entries[0].terminal).toMatchObject({ status: "err", output: "" });
+    expect(launches).toBe(1);
+    const beforeEntries = yield* readTextFile(entryFile(held));
+    const beforeTurns = held.fake.prompts.length;
+    let writes = 0;
+    yield* ReplHost.around({
+      *appendRecord() {
+        writes += 1;
+        throw new Error("passive inspection wrote history");
+      },
+    });
+    const reopened = yield* held.repository.open(held.execution.id);
+    const opened = yield* openReplSession({
+      execution: reopened,
+      includes: held.profile.includes,
+      installations: held.profile.installations,
+    });
+    if (!opened.ok) {
+      throw opened.error;
+    }
+    const reads = rootReads(opened.value, held.profile);
+    const cold = yield* reads.inspectJournal({
+      entry: 1,
+      yq: '[.records[] | select(.type == "exec")]',
+    });
+    if (!cold.ok) {
+      throw cold.error;
+    }
+    expect(cold.value.value).toEqual(evidence.value);
+    expect(yield* readTextFile(entryFile(held))).toBe(beforeEntries);
+    expect(held.fake.prompts).toHaveLength(beforeTurns);
+    expect(launches).toBe(1);
+    expect(writes).toBe(0);
+    expect(opened.value.model.entries[0].terminal?.status).toBe("err");
+  });
+
   it("E1: Journal locates the failed turn, and Prompt reads what it said", function* () {
     const held = yield* useHarness();
     yield* savedFailure(held);
@@ -3066,7 +3168,17 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
 
     // The Journal page: the complete saved failure, how the entry's turns
     // ended, and the record that says which prompt to read.
-    const located = page(held.fake.prompts[base + 1] ?? "");
+    const located = z
+      .object({
+        value: z.object({
+          entry: z.number(),
+          status: z.string(),
+          failure: z.string(),
+          prompts: z.unknown(),
+          records: z.array(z.unknown()),
+        }),
+      })
+      .parse(page(held.fake.prompts[base + 1] ?? "")).value;
     expect(located).toMatchObject({
       entry: 1,
       status: "failed",
@@ -3157,8 +3269,10 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
     expect(held.fake.prompts[base + 1]).toBe(held.fake.prompts[base + 3]);
     expect(held.fake.prompts[base + 1]).toBe(held.fake.prompts[base + 5]);
     expect(page(held.fake.prompts[base + 5] ?? "")).toMatchObject({
-      entry: 1,
-      status: "failed",
+      value: { entry: 1, status: "failed" },
+      next: null,
+      prev: null,
+      last: null,
     });
 
     // The captured page reached the chat because the reply wrote an Output for
@@ -3270,8 +3384,7 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
 
     // And the calls it made from it answered.
     expect(page(held.fake.prompts[base + 2] ?? "")).toMatchObject({
-      entry: 1,
-      status: "failed",
+      value: { entry: 1, status: "failed" },
     });
     expect(held.fake.prompts[base + 3] ?? "").toContain('stop reason \\"refusal\\"');
   });

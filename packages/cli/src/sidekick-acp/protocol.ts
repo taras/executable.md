@@ -42,7 +42,7 @@ export const Cursor = z
     version: z.literal(1),
     execution: identity,
     conversation: identity,
-    view: z.enum(["source", "prompt", "output", "journal"]),
+    view: z.enum(["source", "prompt", "output"]),
     next: continuation,
   })
   .strict();
@@ -146,11 +146,19 @@ export const Request = z.discriminatedUnion("method", [
       method: z.literal("entry"),
       entry: z.number().int().positive(),
       view: z.enum(["source", "prompt", "output", "journal"]),
+      yq: z.string().min(1).optional(),
       prompt: z.number().int().positive().optional(),
       field: z.enum(["request", "reply", "error"]).optional(),
       cursor: z.string().max(16384).optional(),
     })
-    .strict(),
+    .strict()
+    .refine((request) =>
+      request.view === "journal"
+        ? request.cursor === undefined &&
+          request.prompt === undefined &&
+          request.field === undefined
+        : request.yq === undefined,
+    ),
 ]);
 export type Request = z.infer<typeof Request>;
 export const Envelope = z.object({ id: z.number().int().nonnegative(), request: Request }).strict();
