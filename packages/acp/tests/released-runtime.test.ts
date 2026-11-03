@@ -256,7 +256,14 @@ describe(
           options: { defaultAgent: "scribe", permissionMode: "deny-all" },
           factory: createAcpxProvider({
             sessionStore: current.store,
-            nativeAdapters: { scribe: { launcher: "scribe", identity: "provider-returned", acceptance: "first-turn-acceptance", resume: () => [] } },
+            nativeAdapters: {
+              scribe: {
+                launcher: "scribe",
+                identity: "provider-returned",
+                acceptance: "first-turn-acceptance",
+                resume: () => [],
+              },
+            },
             agentRegistry: current.registry,
             advertiseNativeLaunch: [],
             advertiseClientNativeAttachment: [],
@@ -823,78 +830,163 @@ describe("released response recovery", () => {
   }
 });
 
-describe("standard retained-session refusal", { sanitizeOps: false, sanitizeResources: false }, () => {
-  for (const failure of ["fail-load", "no-load", "unused-no-load"]) {
-    it(`${failure} preserves conversation facts without replacement`, function* () {
-      const current = yield* world(true);
-      yield* writeTextFile(current.agent, AGENT_SOURCE
-        .replace(', _meta: {agentSessionId: "native-" + sessionId}', '')
-        .replace('if (text !== "no-accept") update({sessionUpdate: "session_info_update", _meta: {"executablemd.session-materialization/v1": {state: "accepted"}}});', ''));
-      const seed = createAcpRuntime({ cwd: current.dir, sessionStore: current.store, agentRegistry: current.registry, permissionMode: "deny-all" });
-      yield* ensure(() => until(seed.shutdown()));
-      const sessionKey = "standard-" + randomUUID();
-      const handle = yield* until(seed.ensureSession({ sessionKey, agent: "scribe", mode: "persistent" }));
-      if (failure !== "unused-no-load") {
-        expect((yield* drainedResult(seed.startTurn({ handle, text: "seed", mode: "prompt", requestId: "seed" }))).status).toBe("completed");
-      }
-      yield* until(seed.shutdown());
-      const before = yield* until(current.store.load(sessionKey));
-      if (before === undefined) { throw new Error("missing seeded record"); }
-      const baseline = yield* readTextFile(join(current.dir, "methods.jsonl"));
-      const flag = join(current.dir, failure === "unused-no-load" ? "no-load" : failure);
-      yield* writeTextFile(flag, "enabled");
-      const run = function* (text: string) {
-        return yield* scoped(function* () {
-          yield* installAgentComponents({ defaultAgent: "scribe", rootProvider: {
-            options: { defaultAgent: "scribe", permissionMode: "deny-all" },
-            factory: createAcpxProvider({ sessionStore: current.store, agentRegistry: current.registry, advertiseNativeLaunch: [], advertiseClientNativeAttachment: [],
-              *agentCwd() { return current.dir; },
-              sessions: {
-                *requestSession() { return { sessionKey, cwd: current.dir, state: "existing" }; },
-                *recordSessionIdentity() {},
-              },
-            }),
-          }});
-          const started: unknown[] = [];
-          yield* Agent.around({ *prompt(args, next) {
-            const source = yield* next(...args);
-            return { *[Symbol.iterator]() {
-              const subscription = yield* source;
-              return { *next() { const event = yield* subscription.next(); if (!event.done && event.value.type === "started") { started.push(event.value); } return event; } };
-            } };
-          }});
-          const doc = join(current.dir, "refusal.md");
-          yield* writeTextFile(doc, `<Agent name="scribe"><Session name="review"><Prompt text="${text}" /></Session></Agent>`);
-          yield* useNormalizedOutput();
-          const journal = new InMemoryStream();
-          const execution = yield* executeInstalled({ path: doc, stream: journal }, [{ components: agentIdentityComponents() }]);
-          const output = yield* execution.output;
-          while (!(yield* output.next()).done) {}
-          return { result: yield* execution, history: journal.snapshot(), started };
+describe(
+  "standard retained-session refusal",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const failure of ["fail-load", "no-load", "unused-no-load"]) {
+      it(`${failure} preserves conversation facts without replacement`, function* () {
+        const current = yield* world(true);
+        yield* writeTextFile(
+          current.agent,
+          AGENT_SOURCE.replace(', _meta: {agentSessionId: "native-" + sessionId}', "").replace(
+            'if (text !== "no-accept") update({sessionUpdate: "session_info_update", _meta: {"executablemd.session-materialization/v1": {state: "accepted"}}});',
+            "",
+          ),
+        );
+        const seed = createAcpRuntime({
+          cwd: current.dir,
+          sessionStore: current.store,
+          agentRegistry: current.registry,
+          permissionMode: "deny-all",
         });
-      };
-      const refused = yield* run("must not send");
-      expect(refused.result.ok).toBe(false);
-      expect(refused.started).toEqual([]);
-      const recorded = refused.history.find(event => event.type === "yield" && event.description.type === "agent_prompt");
-      expect(recorded).toMatchObject({ result: { status: "ok", value: { status: "failed", text: "", error: { message: expect.stringContaining("Name a different <Session>") } } } });
-      const delta = (yield* readTextFile(join(current.dir, "methods.jsonl"))).slice(baseline.length);
-      const methods = delta.trim().split("\n").filter(Boolean).map(line => methodReport.parse(JSON.parse(line)).method);
-      expect(methods).toEqual(failure === "fail-load" ? ["session/load"] : []);
-      const after = yield* until(current.store.load(sessionKey));
-      if (after === undefined) { throw new Error("record disappeared"); }
-      for (const field of ["acpSessionId", "agentSessionId", "agentCommand", "cwd", "createdAt", "sessionMaterialization", "acpx"] satisfies (keyof AcpSessionRecord)[]) {
-        expect(after[field]).toEqual(before[field]);
-      }
-      expect(after.sessionMaterialization).toBe(undefined);
-      expect(after.agentSessionId).toBe(undefined);
-      expect(after.messages.slice(0, before.messages.length)).toEqual(before.messages);
-      expect(after.messages.slice(before.messages.length)).toEqual([expect.objectContaining({ User: expect.objectContaining({ content: [{ Text: "must not send" }] }) })]);
-      yield* rm(flag);
-      const recoveredBaseline = yield* readTextFile(join(current.dir, "methods.jsonl"));
-      expect((yield* run("only the new prompt")).result.ok).toBe(true);
-      const recoveredMethods = (yield* readTextFile(join(current.dir, "methods.jsonl"))).slice(recoveredBaseline.length).trim().split("\n").filter(Boolean).map(line => methodReport.parse(JSON.parse(line)).method);
-      expect(recoveredMethods).toEqual(["session/load", "session/prompt"]);
-    });
-  }
-});
+        yield* ensure(() => until(seed.shutdown()));
+        const sessionKey = "standard-" + randomUUID();
+        const handle = yield* until(
+          seed.ensureSession({ sessionKey, agent: "scribe", mode: "persistent" }),
+        );
+        if (failure !== "unused-no-load") {
+          expect(
+            (yield* drainedResult(
+              seed.startTurn({ handle, text: "seed", mode: "prompt", requestId: "seed" }),
+            )).status,
+          ).toBe("completed");
+        }
+        yield* until(seed.shutdown());
+        const before = yield* until(current.store.load(sessionKey));
+        if (before === undefined) {
+          throw new Error("missing seeded record");
+        }
+        const baseline = yield* readTextFile(join(current.dir, "methods.jsonl"));
+        const flag = join(current.dir, failure === "unused-no-load" ? "no-load" : failure);
+        yield* writeTextFile(flag, "enabled");
+        const run = function* (text: string) {
+          return yield* scoped(function* () {
+            yield* installAgentComponents({
+              defaultAgent: "scribe",
+              rootProvider: {
+                options: { defaultAgent: "scribe", permissionMode: "deny-all" },
+                factory: createAcpxProvider({
+                  sessionStore: current.store,
+                  agentRegistry: current.registry,
+                  advertiseNativeLaunch: [],
+                  advertiseClientNativeAttachment: [],
+                  *agentCwd() {
+                    return current.dir;
+                  },
+                  sessions: {
+                    *requestSession() {
+                      return { sessionKey, cwd: current.dir, state: "existing" };
+                    },
+                    *recordSessionIdentity() {},
+                  },
+                }),
+              },
+            });
+            const started: unknown[] = [];
+            yield* Agent.around({
+              *prompt(args, next) {
+                const source = yield* next(...args);
+                return {
+                  *[Symbol.iterator]() {
+                    const subscription = yield* source;
+                    return {
+                      *next() {
+                        const event = yield* subscription.next();
+                        if (!event.done && event.value.type === "started") {
+                          started.push(event.value);
+                        }
+                        return event;
+                      },
+                    };
+                  },
+                };
+              },
+            });
+            const doc = join(current.dir, "refusal.md");
+            yield* writeTextFile(
+              doc,
+              `<Agent name="scribe"><Session name="review"><Prompt text="${text}" /></Session></Agent>`,
+            );
+            yield* useNormalizedOutput();
+            const journal = new InMemoryStream();
+            const execution = yield* executeInstalled({ path: doc, stream: journal }, [
+              { components: agentIdentityComponents() },
+            ]);
+            const output = yield* execution.output;
+            while (!(yield* output.next()).done) {}
+            return { result: yield* execution, history: journal.snapshot(), started };
+          });
+        };
+        const refused = yield* run("must not send");
+        expect(refused.result.ok).toBe(false);
+        expect(refused.started).toEqual([]);
+        const recorded = refused.history.find(
+          (event) => event.type === "yield" && event.description.type === "agent_prompt",
+        );
+        expect(recorded).toMatchObject({
+          result: {
+            status: "ok",
+            value: {
+              status: "failed",
+              text: "",
+              error: { message: expect.stringContaining("Name a different <Session>") },
+            },
+          },
+        });
+        const delta = (yield* readTextFile(join(current.dir, "methods.jsonl"))).slice(
+          baseline.length,
+        );
+        const methods = delta
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => methodReport.parse(JSON.parse(line)).method);
+        expect(methods).toEqual(failure === "fail-load" ? ["session/load"] : []);
+        const after = yield* until(current.store.load(sessionKey));
+        if (after === undefined) {
+          throw new Error("record disappeared");
+        }
+        for (const field of [
+          "acpSessionId",
+          "agentSessionId",
+          "agentCommand",
+          "cwd",
+          "createdAt",
+          "sessionMaterialization",
+          "acpx",
+        ] satisfies (keyof AcpSessionRecord)[]) {
+          expect(after[field]).toEqual(before[field]);
+        }
+        expect(after.sessionMaterialization).toBe(undefined);
+        expect(after.agentSessionId).toBe(undefined);
+        expect(after.messages.slice(0, before.messages.length)).toEqual(before.messages);
+        expect(after.messages.slice(before.messages.length)).toEqual([
+          expect.objectContaining({
+            User: expect.objectContaining({ content: [{ Text: "must not send" }] }),
+          }),
+        ]);
+        yield* rm(flag);
+        const recoveredBaseline = yield* readTextFile(join(current.dir, "methods.jsonl"));
+        expect((yield* run("only the new prompt")).result.ok).toBe(true);
+        const recoveredMethods = (yield* readTextFile(join(current.dir, "methods.jsonl")))
+          .slice(recoveredBaseline.length)
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => methodReport.parse(JSON.parse(line)).method);
+        expect(recoveredMethods).toEqual(["session/load", "session/prompt"]);
+      });
+    }
+  },
+);

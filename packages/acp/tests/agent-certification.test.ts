@@ -31,6 +31,8 @@ function reportFor(command: string): Report {
   return initialReport({
     command,
     scenarios: [
+      "acceptance",
+      "identity",
       "authentication",
       "streaming",
       "completion",
@@ -53,14 +55,28 @@ function* document(
   journal = new InMemoryStream(),
 ): Operation<{ ok: boolean; output: string }> {
   return yield* scoped(function* () {
-    const command = f.command(mode);
+    const command = mode === "strong" ? "codex" : f.command(mode);
     yield* installAgentComponents({
       defaultAgent: command,
       rootProvider: {
         options: { defaultAgent: command, permissionMode: "deny-all" },
         factory: createAcpxProvider({
           sessionStore: createAcpxSessionStore(join(f.dir, "store")),
-          nativeAdapters: mode === "no-acceptance" ? { [command]: { launcher: "fake", identity: "provider-returned", acceptance: "first-turn-acceptance", resume: () => [] } } : {},
+          advertiseNativeLaunch: [],
+          advertiseClientNativeAttachment: [],
+          agentRegistry:
+            mode === "strong" ? { list: () => ["codex"], resolve: () => f.command() } : undefined,
+          nativeAdapters:
+            mode === "no-acceptance" || mode === "strong"
+              ? {
+                  [command]: {
+                    launcher: "fake",
+                    identity: "provider-returned",
+                    acceptance: "first-turn-acceptance",
+                    resume: () => [],
+                  },
+                }
+              : {},
           *agentCwd() {
             return f.dir;
           },
@@ -129,6 +145,11 @@ describe(
         expect(report.capabilities.continuity.outcome).toBe("pass");
         expect(report.capabilities.separation.outcome).toBe("pass");
         expect(report.capabilities.streaming.outcome).toBe("pass");
+        expect(report.capabilities.acceptance).toMatchObject({
+          outcome: "unsupported",
+          reason: "acceptance-unavailable",
+        });
+        expect(report.capabilities.identity.outcome).toBe("unsupported");
         expect(report.capabilities.model.outcome).toBe("not_run");
         expect(report.capabilities.effort.outcome).toBe("not_run");
         expect((yield* f.methods()).filter((method) => method === "session/prompt").length).toBe(3);
@@ -388,17 +409,48 @@ describe(
 );
 
 describe("standard completed replay", { sanitizeOps: false, sanitizeResources: false }, () => {
-it("completed standard output replays without provider requests", function* () {
-  yield* withCertificationFixture(function* (f) {
-    const journal = new InMemoryStream();
-    const source = '<Session name="replay"><Prompt text="seed:retained" /></Session>';
-    const first = yield* document(f, "standard", source, reportFor(f.command("standard")), [], journal);
-    expect(first.ok).toBe(true);
-    const calls = yield* f.calls();
-    const replay = yield* document(f, "standard", source, reportFor(f.command("standard")), [], journal);
-    expect(replay).toEqual(first);
-    expect(yield* f.calls()).toEqual(calls);
+  it("completed standard output replays without provider requests", function* () {
+    yield* withCertificationFixture(function* (f) {
+      const journal = new InMemoryStream();
+      const source = '<Session name="replay"><Prompt text="seed:retained" /></Session>';
+      const first = yield* document(
+        f,
+        "standard",
+        source,
+        reportFor(f.command("standard")),
+        [],
+        journal,
+      );
+      expect(first.ok).toBe(true);
+      const calls = yield* f.calls();
+      const replay = yield* document(
+        f,
+        "standard",
+        source,
+        reportFor(f.command("standard")),
+        [],
+        journal,
+      );
+      expect(replay).toEqual(first);
+      expect(yield* f.calls()).toEqual(calls);
+    });
   });
 });
 
+describe("strong qualification evidence", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("reports declared acceptance and asserted identity independently", function* () {
+    yield* withCertificationFixture(function* (f) {
+      const report = reportFor("codex");
+      expect(
+        (yield* document(
+          f,
+          "strong",
+          '<Session name="strong"><Prompt text="seed:private" /></Session>',
+          report,
+        )).ok,
+      ).toBe(true);
+      expect(report.capabilities.acceptance.outcome).toBe("pass");
+      expect(report.capabilities.identity.outcome).toBe("pass");
+    });
+  });
 });

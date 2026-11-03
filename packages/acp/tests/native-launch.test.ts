@@ -502,6 +502,7 @@ function only<T>(recorded: readonly T[], what: string): T {
  * keeps no construction routes at all.
  */
 const PROVIDER_RETURNED_CLAUDE: NativeAdapter = {
+  acceptance: "first-turn-acceptance",
   launcher: "claude",
   identity: "provider-returned",
   resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
@@ -1704,6 +1705,7 @@ describe("Tier CN — client-allocated construction", () => {
   /** The controlled Claude-shaped adapter that names its own sessions. */
   function clientNative(allocate: () => string = () => ALLOCATED): NativeAdapter {
     return {
+      acceptance: "first-turn-acceptance",
       launcher: "claude",
       identity: "client-allocated",
       binding: TEST_BINDING,

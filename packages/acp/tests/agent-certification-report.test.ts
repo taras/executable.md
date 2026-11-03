@@ -10,11 +10,14 @@ import {
   recordMarker,
   recordCancellation,
   recordCleanup,
+  recordSessionEvidence,
 } from "../../../examples/agent-certification/report.ts";
 
 const config = configurationSchema.parse({
   command: "private-command",
   scenarios: [
+    "acceptance",
+    "identity",
     "authentication",
     "streaming",
     "completion",
@@ -30,6 +33,21 @@ const config = configurationSchema.parse({
   expected: ["completion"],
 });
 describe("closed agent qualification reports", () => {
+  it("keeps standard basic passes separate from stronger evidence", function* () {
+    const report = initialReport(config);
+    recordTurn(report, { accepted: true, completed: true, deltas: 1 });
+    recordSessionEvidence(report, false, false);
+    const parsed = reportSchema.parse(report);
+    expect(parsed.capabilities.authentication.outcome).toBe("pass");
+    expect(parsed.capabilities.streaming.outcome).toBe("pass");
+    expect(parsed.capabilities.completion.outcome).toBe("pass");
+    expect(parsed.capabilities.acceptance.reason).toBe("acceptance-unavailable");
+    expect(parsed.capabilities.identity.outcome).toBe("unsupported");
+    expect(finalizeReport(parsed).durableSessionCertified).toBe(false);
+    recordSessionEvidence(report, false, true);
+    expect(report.capabilities.identity.outcome).toBe("pass");
+    expect(report.capabilities.acceptance.outcome).toBe("unsupported");
+  });
   it("rejects unknown/missing report fields, version and private payloads", function* () {
     const report = initialReport(config);
     expect(reportSchema.safeParse({ ...report, version: 1 }).success).toBe(false);

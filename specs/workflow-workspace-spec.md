@@ -2470,11 +2470,15 @@ workflow identity.
 
 **First-turn publication follows the mapping commit.** Placement is inert:
 `<Session>` contacts no backend, creates no provider session and writes no row.
-After the first subscribed Prompt's turn is accepted by the backend, the
-provider must make one canonical tagged assertion of its durable identity. The
-run commits that mapping before exposing any first-turn output. Store-key
-occupancy or an unaccepted turn asserts no identity; the next attempt creates
-rather than resumes. [Agent session ownership](../architecture.md#agent-permissions-and-generated-xmd)
+A strong-declared adapter supplies explicit first-turn acceptance and an
+asserting provider save before the mapping commits. Standard ACP creation saves
+its ordinary record and supplies the ACP loading target. Prefer
+`acpx.agentSessionId` when native identity is asserted; otherwise retain
+`acpx.acpSessionId`. Both commit one tagged assertion before first-turn output.
+A pending strong record asserts nothing; the next attempt creates rather than
+resumes. An ACP loading target grants no native handoff or backend-acceptance
+proof. A later assertion of a different kind refuses rather than changing the
+mapping's kind. [Agent session ownership](../architecture.md#agent-permissions-and-generated-xmd)
 owns the acceptance, assertion and publication ordering.
 
 Partial replay attaches lazily. Completed Prompts restore without contacting the

@@ -228,8 +228,8 @@ export interface WorkflowAgentProfileOptions {
  *
  * An assertion, not occupancy: ACPX holding a record under a key says something
  * is there, and this says what conversation it is. A record with no
- * provider-native identity asserts nothing — which is the state a reattachment
- * must refuse rather than adopt.
+ * native assertion may instead supply a distinctly tagged ACP loading target.
+ * A pending strong record supplies neither.
  */
 function assertionsFor(store: AcpxSessionStore) {
   return function* (providerSessionKey: string): Operation<ProviderAssertion[]> {
@@ -237,7 +237,9 @@ function assertionsFor(store: AcpxSessionStore) {
     if (held?.agentSessionId !== undefined) {
       return [{ kind: ACPX_ASSERTION, value: held.agentSessionId }];
     }
-    return held?.acpSessionId === undefined ? [] : [{ kind: ACPX_LOADING_ASSERTION, value: held.acpSessionId }];
+    return held?.acpSessionId === undefined
+      ? []
+      : [{ kind: ACPX_LOADING_ASSERTION, value: held.acpSessionId }];
   };
 }
 
@@ -369,14 +371,18 @@ function sessionPolicy(
       if (identity === undefined) {
         return;
       }
-      if (providerIdentity.agentSessionId === undefined && providerIdentity.acpSessionId === undefined) {
+      if (
+        providerIdentity.agentSessionId === undefined &&
+        providerIdentity.acpSessionId === undefined
+      ) {
         throw new WorkflowAgentSessionError(
           "the provider created an Agent session without asserting a durable identity, so " +
             "this run cannot record which conversation it is having.",
         );
       }
       const asserted: ProviderAssertion = {
-        kind: providerIdentity.agentSessionId === undefined ? ACPX_LOADING_ASSERTION : ACPX_ASSERTION,
+        kind:
+          providerIdentity.agentSessionId === undefined ? ACPX_LOADING_ASSERTION : ACPX_ASSERTION,
         value: providerIdentity.agentSessionId ?? providerIdentity.acpSessionId ?? "",
       };
       const sessionKey = agentSessionKey(identity);

@@ -11,6 +11,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const mode = process.argv[2];
+const storage = process.argv[3] ?? process.cwd();
 let sessionId;
 let marker;
 let activePrompt;
@@ -23,7 +24,7 @@ const options = () => [
 const send = value => process.stdout.write(JSON.stringify(value)+"\\n");
 const reply = (id,result) => send({jsonrpc:"2.0",id,result});
 const update = value => send({jsonrpc:"2.0",method:"session/update",params:{sessionId,update:value}});
-const file = () => path.join(process.cwd(),mode === "shared" ? "fixture-shared.json" : "fixture-"+sessionId+".json");
+const file = () => path.join(storage,mode === "shared" ? "fixture-shared.json" : "fixture-"+sessionId+".json");
 function answer(request) {
   const {method,id,params} = request;
   if (method === "session/cancel") {
@@ -72,7 +73,7 @@ process.stdin.on("data",chunk=>{
     const line=buffer.slice(0,index);buffer=buffer.slice(index+1);
     if(!line.trim()){continue;}
     const request=JSON.parse(line);
-    fs.appendFile(path.join(process.cwd(),"methods.jsonl"),JSON.stringify({method:request.method,sessionId:request.params?.sessionId,kind:request.method === "session/prompt" ? (request.params.prompt.map(block=>block.text ?? "").join("").includes("Wait for cancellation.") ? "cancel" : /seed:|Remember this private marker/.test(request.params.prompt.map(block=>block.text ?? "").join("")) ? "seed" : "recall") : undefined})+"\\n",error=>{if(error){throw error;}answer(request);});
+    fs.appendFile(path.join(storage,"methods.jsonl"),JSON.stringify({method:request.method,sessionId:request.params?.sessionId,kind:request.method === "session/prompt" ? (request.params.prompt.map(block=>block.text ?? "").join("").includes("Wait for cancellation.") ? "cancel" : /seed:|Remember this private marker/.test(request.params.prompt.map(block=>block.text ?? "").join("")) ? "seed" : "recall") : undefined})+"\\n",error=>{if(error){throw error;}answer(request);});
   }
 });
 `;
@@ -98,7 +99,8 @@ export function* withCertificationFixture<T>(
     return yield* body({
       dir,
       home,
-      command: (mode = "normal") => "node " + JSON.stringify(agent) + " " + mode,
+      command: (mode = "normal") =>
+        "node " + JSON.stringify(agent) + " " + mode + " " + JSON.stringify(dir),
       *calls() {
         const text = yield* readTextFile(join(dir, "methods.jsonl"));
         return text

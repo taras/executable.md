@@ -1121,7 +1121,10 @@ function conversationTurn(
         // which is the ordinary first-turn case. Read from the record, because
         // that is the account the journal keeps and the one a later opening
         // reconciles against.
-        observed.used = record.status !== "failed" || record.stopReason !== undefined || record.agentSessionId !== undefined;
+        observed.used =
+          record.status !== "failed" ||
+          record.stopReason !== undefined ||
+          record.agentSessionId !== undefined;
         if (record.agentSessionId !== undefined) {
           if (established !== undefined && record.agentSessionId !== established) {
             job.answer.resolve(
@@ -1327,7 +1330,10 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
     // which establishes nothing either way.
     const record = parsePromptRecord(event.result.value);
     if (record !== undefined) {
-      used ||= record.status !== "failed" || record.stopReason !== undefined || record.agentSessionId !== undefined;
+      used ||=
+        record.status !== "failed" ||
+        record.stopReason !== undefined ||
+        record.agentSessionId !== undefined;
     }
     if (record?.agentSessionId !== undefined) {
       asserted.add(record.agentSessionId);

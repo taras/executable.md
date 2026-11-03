@@ -667,6 +667,14 @@ turn rather than having those settings recorded. `options()` sends no model
 prompt and journals nothing, and is called on explicit interaction rather than
 to restore a pane.
 
+A used history requires an existing provider record on its next explicit turn.
+Use means a retained turn has non-failed status, a stop reason, or an asserted
+native identity. If setup would create, it refuses before `session/new`, names a
+new conversation as the remedy, preserves retained turns and output, and leaves
+the conversation usable. Failed-before-answer history may still create.
+A turn naming no native identity establishes none; it does not permit replacing
+a conversation the history already used.
+
 **The native conversation an established history names.** A completed turn
 retains the exact conversation the provider said it ran in, so the retained
 records are what establish a chat's native identity; there is no mapping record
@@ -1001,10 +1009,13 @@ changes their names. Provider and resolved agent command are compatibility
 attributes; changing either refuses reattachment. ACPX's arrangement key does
 not replace this logical identity.
 
-Placement is inert. The backend must accept the first turn and provide exactly
-one canonical tagged assertion before the mapping commits; the first turn's
-output is disclosed only after that commit. A stored ACPX key or an unaccepted
-first turn proves no identity. The
+Placement is inert. A strong-declared adapter supplies explicit first-turn
+acceptance and an asserting provider save before the mapping commits. A standard
+adapter supplies the ACP creation/loading target after ordinary ensure. Both
+commit exactly one tagged assertion before first-turn disclosure. Prefer
+`acpx.agentSessionId` when native identity is asserted, otherwise retain
+`acpx.acpSessionId` solely as an ACP loading target. A pending strong record
+asserts nothing. An ACP id grants no native handoff or backend-acceptance claim. The
 [workflow Agent ownership contract](../architecture.md#agent-permissions-and-generated-xmd)
 owns the opaque invocation claim, mapping transaction and interruption ordering.
 
@@ -1325,9 +1336,11 @@ none.
   life, so a second `<Session>` naming the same session is answered with it and
   a `<Prompt>` given it is acting on the thing that was pinned.
 
-- **Creation.** A new ACP-first session is constructed by the first
-  subscribed `<Prompt>`, and only the backend's acceptance of that turn makes it
-  a conversation. The provider ensures with
+- **Creation.** The first subscribed `<Prompt>` constructs a new ACP session.
+  An adapter declaring `acceptance: "first-turn-acceptance"` uses the stronger
+  barrier below; Codex and Claude declare it through the existing native adapter
+  table. Literal commands and undeclared adapters use ordinary ensure instead.
+  Strong construction ensures with
   `materialization: "first-turn-acceptance"`, which makes ACPX persist a
   provisional record: the key is occupied and the serialized `agentSessionId` is
   absent, so the record is occupancy rather than an assertion.
@@ -1373,6 +1386,22 @@ none.
   established: acceptance, not successful terminal text, is the boundary.
   `packages/acp/vendor/acpx/PROVENANCE.md` records the vendored patch this rests
   on and what removes it.
+  Standard construction saves the ordinary ACP record, then calls the host
+  identity callback with optional `acpSessionId` and asserted `agentSessionId`.
+  The ACP id is a loading target, never `Session.agentSessionId`. Configuration
+  and permission routing precede execution, and started/deltas/terminal reflect
+  the actual turn without private acceptance. A standard peer may independently
+  assert native identity. A strong adapter that omits its marker never downgrades.
+
+  Reopening loads/resumes the exact stored ACP id. No load/resume capability
+  refuses even an unused record. Failed loading never replaces a used or
+  uncertain record; the released `-32603` fallback remains only for a provably
+  never-prompted record. Supported resume-required errors become
+  `SessionResumeRequiredError`, naming the Session and a different `<Session>`
+  as the remedy, before `started`. Prior messages, identity and configuration
+  stand; a refused user attempt and lifecycle changes may be retained locally.
+  A later successful reopen sends only the new request.
+
 - **Prompts.** `prompt()` returns a cold stream; each subscription is one turn
   owned by the subscriber. Events are normalized to one `started`, `text_delta`
   for output-stream deltas only (thought/status/tool/usage stay private), and one
@@ -1449,7 +1478,8 @@ none.
   its key and directory, and is where a retained session this host cannot
   continue is refused. `sessions.recordSessionIdentity()` is called where an assertion
   exists and not before: after the ensure that validated a reattachment, and
-  after the backend accepted a constructed session's first turn. Every one of
+  after ordinary ensure for standard construction, and after explicit acceptance
+  for strong construction. Every one of
   them defaults to the `xmd run` behavior above.
 - **A session host is both of its methods.** `sessions` stays optional and its
   absence stays the ordinary walk, with no host database and nothing to record.
@@ -1574,9 +1604,17 @@ another prompt; it cannot infer or resend missing acceptance.
 
 [`examples/agent-certification/`](../examples/agent-certification/README.md)
 uses the ordinary literal-command ACPX path for local configurations and ordinary
-orchestration. Its eleven separate capability outcomes require measured evidence;
+orchestration. Its thirteen separate capability outcomes require measured evidence;
 expectations and availability establish no passing capability. The ordinary production availability probe remains in force. Successfully joined
 stages permit independent later stages while exact native cleanup remains
 unverified. Pending joins, actual teardown failure and production ownership
 refusal stop admission. Existing owners still join teardown. Cancellation attribution alone establishes no cleanup pass,
 and the report grants neither durable identity nor a broader permission.
+
+Qualification reports basic authentication, streaming and completion independently
+of `acceptance` and `identity`. A started seed from a strong-declared adapter
+proves gated acceptance; a standard seed reports unsupported/acceptance-unavailable.
+Identity requires the started Session's actual native assertion, independently
+of strength. Durable certification additionally requires both stronger rows.
+Missing evidence does not erase an independently measured basic pass. Local join
+and cancellation alone still prove no remote backend termination.

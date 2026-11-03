@@ -41,7 +41,10 @@ export function* retainedSession(
   if (!record) {
     return undefined;
   }
-  const retained: AcpxRetainedSession = { agentCommand: record.agentCommand, acpSessionId: record.acpSessionId };
+  const retained: AcpxRetainedSession = {
+    agentCommand: record.agentCommand,
+    acpSessionId: record.acpSessionId,
+  };
   return record.agentSessionId === undefined
     ? retained
     : { ...retained, agentSessionId: record.agentSessionId };

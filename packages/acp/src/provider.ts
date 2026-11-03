@@ -223,10 +223,9 @@ export interface AcpxSessionPolicy {
    *
    * Called where an assertion exists and not before: for a session this
    * provider reattaches to, after the ensure that validated it; for one being
-   * constructed through ACP, after the backend accepted its first turn and the
-   * provider's own record was promoted to assert an identity. A session whose
-   * first turn failed reaches this on no path, because there is nothing to
-   * retain.
+   * constructed through standard ACP, after ordinary ensure; for a strong
+   * adapter, after explicit acceptance promoted the provider record. The ACP
+   * loading target does not establish a native identity.
    *
    * Required, because a host that decides where every session lives is the
    * host that holds what stands there. The integration as a whole is still
@@ -2518,7 +2517,9 @@ function* useAcpxProviderState(
     }
     const identity: AcpxSessionIdentity = {
       acpxRecordId: accepted.value.acpxRecordId,
-      ...(entry.handle.backendSessionId === undefined ? {} : { acpSessionId: entry.handle.backendSessionId }),
+      ...(entry.handle.backendSessionId === undefined
+        ? {}
+        : { acpSessionId: entry.handle.backendSessionId }),
       ...(accepted.value.agentSessionId === undefined
         ? {}
         : { agentSessionId: accepted.value.agentSessionId }),
@@ -2833,19 +2834,16 @@ function* useAcpxProviderState(
           // constructed is attached to under the identity it already has.
           const construction = yield* constructRoute(agentName, prepared);
           const resumeSessionId = construction?.resumeSessionId;
-          // The pending ACP-first branch, and the only one that defers: an
-          // attachment resumes an identity that already exists, and an
-          // existing session has one of its own. A build alone does not
-          // defer anything — a session the provider names is still constructed
-          // by this ensure, bound to the build that names it.
           const constructing =
             state === "new" && resumeSessionId === undefined && prepared.kind === "details";
           const entry = yield* ensureFromPrepared(agentName, prepared, {
             ...(construction === undefined ? {} : { build: construction.build }),
             ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
             state,
-            materialization: constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
-            deferEstablished: constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
+            materialization:
+              constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
+            deferEstablished:
+              constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
           });
           // From here this session has been spoken to, whatever the cache
           // later says, so nothing may discard it to install a new layer.
@@ -2945,10 +2943,11 @@ function* useAcpxProviderState(
             });
           }
 
-          if (constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance" && prepared.kind === "details") {
-            // Before any of this turn's events are exposed. Until the backend
-            // has accepted it there is no conversation to be reporting on, and
-            // an event published first would be describing one.
+          if (
+            constructing &&
+            adapterFor(agentName)?.acceptance === "first-turn-acceptance" &&
+            prepared.kind === "details"
+          ) {
             yield* materialize(entry, prepared.details, turn);
           } else {
             try {
@@ -3861,7 +3860,9 @@ function* useAcpxProviderState(
       // that does not exist.
       const identity: AcpxSessionIdentity = {
         acpxRecordId: accepted.value.acpxRecordId,
-      ...(entry.handle.backendSessionId === undefined ? {} : { acpSessionId: entry.handle.backendSessionId }),
+        ...(entry.handle.backendSessionId === undefined
+          ? {}
+          : { acpSessionId: entry.handle.backendSessionId }),
         agentSessionId: nativeSessionId,
       };
       if (sessions && resolved.kind === "details") {
@@ -4673,7 +4674,11 @@ function* useAcpxProviderState(
 }
 
 function sessionResumeFailure(error: unknown, sessionKey: string): unknown {
-  if (typeof error === "object" && error !== null && Reflect.get(error, "detailCode") === "SESSION_RESUME_REQUIRED") {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    Reflect.get(error, "detailCode") === "SESSION_RESUME_REQUIRED"
+  ) {
     return new SessionResumeRequiredError(sessionKey, { cause: error });
   }
   return error;
@@ -4681,7 +4686,10 @@ function sessionResumeFailure(error: unknown, sessionKey: string): unknown {
 
 export class SessionResumeRequiredError extends Error {
   constructor(sessionKey: string, options?: ErrorOptions) {
-    super(`Session "${sessionKey}" could not be resumed. Name a different <Session> to start a new conversation.`, options);
+    super(
+      `Session "${sessionKey}" could not be resumed. Name a different <Session> to start a new conversation.`,
+      options,
+    );
     this.name = "SessionResumeRequiredError";
   }
 }
