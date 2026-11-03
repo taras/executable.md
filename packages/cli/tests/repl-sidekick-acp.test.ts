@@ -2,7 +2,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { cliCommand, cliShellCommand, shellQuote } from "@executablemd/test-support/launch";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
-import { exec, Stdio } from "@effectionx/process";
+import { exec, ProcessApi, Stdio } from "@effectionx/process";
 import { selectJson } from "@executablemd/core/host";
 import { openReplSession } from "../src/repl/session.ts";
 import { Agent, Component, Execution } from "@executablemd/core";
@@ -80,6 +80,7 @@ import {
   Descriptor,
   Request,
   Envelope,
+  Reply,
   MAX_FRAME,
   SidekickTransport,
   referenceText,
@@ -243,10 +244,47 @@ function* deadline(what: string, milliseconds = 5000): Operation<never> {
   throw new Error(what);
 }
 
+function waitBootstrap(phases: { event: string; at: number }[] = []) {
+  let pending: { ready: () => void; beforeFollow?: () => Operation<void> } | undefined;
+  return {
+    arm(beforeFollow?: () => Operation<void>) {
+      const ready = withResolvers<void>();
+      pending = {
+        ready() {
+          phases.push({ event: "hello-reply-forwarded", at: Date.now() });
+          ready.resolve();
+        },
+        beforeFollow,
+      };
+      return ready.operation;
+    },
+    take() {
+      const selected = pending;
+      pending = undefined;
+      return selected;
+    },
+  };
+}
+
+function* waitForSubscription(
+  bootstrap: Operation<void>,
+  following: Operation<void>,
+  waiting: Operation<unknown>,
+  failure: string,
+): Operation<void> {
+  const ended = function* () {
+    yield* waiting;
+    throw new Error("The wait document returned before subscribing");
+  };
+  yield* race([bootstrap, ended(), deadline("The wait document did not bootstrap", 15000)]);
+  yield* race([following, ended(), deadline(failure)]);
+}
+
 function* countWaitRequests(
   methods: string[],
   following: () => void,
   disconnected?: () => void,
+  bootstrap?: ReturnType<typeof waitBootstrap>,
 ): Operation<void> {
   const transport = yield* SidekickTransport.expect();
   yield* SidekickTransport.set({
@@ -259,6 +297,12 @@ function* countWaitRequests(
           const incoming = yield* published.accept();
           return (function* () {
             let passive = false;
+            let hello:
+              | {
+                  id: number;
+                  ready: NonNullable<ReturnType<ReturnType<typeof waitBootstrap>["take"]>>;
+                }
+              | undefined;
             yield* ensure(() => {
               if (passive) {
                 disconnected?.();
@@ -268,7 +312,19 @@ function* countWaitRequests(
             return {
               *receive() {
                 const value = yield* wire.receive();
-                const request = Envelope.parse(value).request;
+                const envelope = Envelope.parse(value);
+                const request = envelope.request;
+                if (request.method === "hello") {
+                  const ready = bootstrap?.take();
+                  if (ready !== undefined) {
+                    hello = { id: envelope.id, ready };
+                  }
+                }
+                if (request.method === "message" && request.follow && hello !== undefined) {
+                  if (hello.ready.beforeFollow !== undefined) {
+                    yield* hello.ready.beforeFollow();
+                  }
+                }
                 methods.push(request.method);
                 if (request.method === "message" && request.follow) {
                   passive = true;
@@ -276,8 +332,15 @@ function* countWaitRequests(
                 }
                 return value;
               },
-              send(frame: unknown) {
-                return wire.send(frame);
+              *send(frame: unknown) {
+                yield* wire.send(frame);
+                const reply = Reply.parse(frame);
+                if (hello !== undefined && reply.id === hello.id && reply.kind === "value") {
+                  const descriptor = Descriptor.parse(reply.value);
+                  if (JSON.stringify(descriptor) === JSON.stringify(published.descriptor)) {
+                    hello.ready.ready();
+                  }
+                }
               },
               close() {
                 wire.close();
@@ -3075,6 +3138,8 @@ function* controlledSupervision(outcome: string) {
   const releaseCleanup = withResolvers<void>();
   const following = withResolvers<void>();
   const methods: string[] = [];
+  const phases: { event: string; at: number }[] = [];
+  const bootstrap = waitBootstrap(phases);
   const resultDirectory = yield* useTemporary("xmd-supervision-result-");
   const resultFile = join(resultDirectory, "result.json");
   let cleaned = false;
@@ -3100,10 +3165,21 @@ function* controlledSupervision(outcome: string) {
         },
       },
     },
-    () => countWaitRequests(methods, () => following.resolve()),
+    () =>
+      countWaitRequests(
+        methods,
+        () => {
+          phases.push({ event: "follow-received", at: Date.now() });
+          following.resolve();
+        },
+        undefined,
+        bootstrap,
+      ),
   );
   return {
     one,
+    bootstrap,
+    phases,
     entered,
     releaseBody,
     cleaning,
@@ -3137,121 +3213,235 @@ function withControlledSupervision(
 }
 
 describe("Passive workflow supervision", () => {
-  for (const outcome of ["completed", "failed"]) {
-    it(`waits without polling for a ${outcome} entry and joined cleanup`, function* () {
-      yield* withControlledSupervision(outcome, function* (controlled) {
-        const {
-          one,
-          entered,
-          releaseBody,
-          cleaning,
-          releaseCleanup,
-          following,
-          methods,
-          resultFile,
-        } = controlled;
-        const progressed = withResolvers<void>();
-        const progress: string[] = [];
+  for (const { outcome, delayed } of [
+    { outcome: "completed", delayed: false },
+    { outcome: "failed", delayed: false },
+    { outcome: "completed", delayed: true },
+  ]) {
+    it(
+      delayed
+        ? "preserves the completed-entry journey after delayed bootstrap"
+        : `waits without polling for a ${outcome} entry and joined cleanup`,
+      function* () {
+        yield* withControlledSupervision(outcome, function* (controlled) {
+          const {
+            one,
+            bootstrap,
+            phases,
+            entered,
+            releaseBody,
+            cleaning,
+            releaseCleanup,
+            following,
+            methods,
+            resultFile,
+          } = controlled;
+          const progressed = withResolvers<void>();
+          const progress: string[] = [];
+          const attached = attachResult.parse(
+            yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+          );
+          const source =
+            outcome === "completed"
+              ? "<Output>The controlled step result.</Output>"
+              : '<Fail message="controlled step failure" />';
+          one.held.fake.script({ reply: fills(source) + "\n<REPL.Submit />" });
+          one.held.fake.script({ reply: "<Output>The exchange settled.</Output>" });
+          const producer = yield* spawn(() =>
+            requestAttachment(one.path, {
+              method: "prompt",
+              attachment: attached.attachment,
+              text: "Execute one controlled step.",
+            }),
+          );
+          yield* race([
+            entered.operation,
+            producer,
+            deadline("The original controlled entry did not start"),
+          ]);
+          const reference = one.dispatch.current?.snapshot.message;
+          if (reference === undefined) {
+            throw new Error("The step has no acknowledged message");
+          }
+          const mark = methods.length;
+          let returned = false;
+          const bootstrapped = bootstrap.arm();
+          const waiting = yield* spawn(function* () {
+            if (delayed) {
+              yield* ProcessApi.around({
+                *exec([command, options], next) {
+                  phases.push({ event: "acquisition-held", at: Date.now() });
+                  yield* sleep(5100);
+                  phases.push({ event: "native-start", at: Date.now() });
+                  return yield* next(command, options);
+                },
+              });
+            }
+            const result = yield* waitDocument(one, 1, reference, {
+              resultFile,
+              resultSchema: {
+                type: "object",
+                properties: { status: { const: "hold" }, calls: { const: 1 } },
+                required: ["status", "calls"],
+                additionalProperties: false,
+              },
+              progress(text) {
+                progress.push(text);
+                if (progress.join("").includes("[entry 1] evaluating")) {
+                  progressed.resolve();
+                }
+              },
+            });
+            returned = true;
+            return result;
+          });
+          yield* waitForSubscription(
+            bootstrapped,
+            following.operation,
+            waiting,
+            "The wait document did not subscribe",
+          );
+          yield* race([
+            progressed.operation,
+            waiting,
+            deadline("Progress did not arrive before completion"),
+          ]);
+          expect(returned).toBe(false);
+          expect(phases.map(({ event }) => event)).toEqual(
+            delayed
+              ? ["acquisition-held", "native-start", "hello-reply-forwarded", "follow-received"]
+              : ["hello-reply-forwarded", "follow-received"],
+          );
+          releaseBody.resolve();
+          yield* cleaning.operation;
+          expect(returned).toBe(false);
+          expect(controlled.cleaned).toBe(false);
+          releaseCleanup.resolve();
+          const result = yield* race([
+            waiting,
+            deadline("The document did not receive completion"),
+          ]);
+          yield* producer;
+          expect(controlled.cleaned).toBe(true);
+          expect(result.status).toBe(outcome);
+          expect(result.joinedExchange).toBe(true);
+          expect(result.exchangeOutcome).toBe("completed");
+          expect(progress.join("")).toContain("exchange completed");
+          expect(progress.join("")).not.toContain("The exchange settled.");
+          expect(progress.join("").length).toBeLessThan(1500);
+          if (outcome === "completed") {
+            expect(result.read).toEqual({ entry: 1, view: "journal" });
+            expect(result.resultStatus).toBe("readable");
+            expect(result.result).toEqual({ status: "hold", calls: 1 });
+          }
+          if (outcome === "failed") {
+            expect(result.diagnostic).toContain("controlled step failure");
+          }
+          expect(methods.slice(mark)).toEqual(["hello", "message", "hello", "entry"]);
+          expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+          const lateMark = methods.length;
+          const late = yield* waitDocument(one, 1, reference);
+          expect(late.status).toBe(outcome);
+          expect(methods.slice(lateMark)).toEqual(["hello", "message", "hello", "entry"]);
+          expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+          console.log(
+            JSON.stringify({
+              kind: "wait-document-result",
+              outcome,
+              delayed,
+              phases,
+              cleaned: controlled.cleaned,
+              requests: methods.slice(mark),
+              statusPolls: 0,
+              observerRoleCalls: 0,
+              alreadyCompletedRead: late.status,
+            }),
+          );
+        });
+      },
+    );
+  }
+
+  it("fails the subscription bound after authenticated bootstrap without a delivered follow", function* () {
+    const ready = withResolvers<ControlledSupervision>();
+    const releaseFollow = withResolvers<void>();
+    let held = false;
+    let failure: unknown;
+    let methodsAtFailure: string[] = [];
+    let subscriptionElapsed = 0;
+    try {
+      yield* withControlledSupervision("completed", function* (controlled) {
+        ready.resolve(controlled);
+        const { one, bootstrap, phases, following, methods } = controlled;
         const attached = attachResult.parse(
           yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
         );
-        const source =
-          outcome === "completed"
-            ? "<Output>The controlled step result.</Output>"
-            : '<Fail message="controlled step failure" />';
-        one.held.fake.script({ reply: fills(source) + "\n<REPL.Submit />" });
-        one.held.fake.script({ reply: "<Output>The exchange settled.</Output>" });
+        one.held.fake.script({
+          reply: fills("<Output>The held entry.</Output>") + "\n<REPL.Submit />",
+        });
         const producer = yield* spawn(() =>
           requestAttachment(one.path, {
             method: "prompt",
             attachment: attached.attachment,
-            text: "Execute one controlled step.",
+            text: "Hold the entry while follow delivery is blocked.",
           }),
         );
         yield* race([
-          entered.operation,
+          controlled.entered.operation,
           producer,
-          deadline("The original controlled entry did not start"),
+          deadline("The controlled entry did not start"),
         ]);
-        const reference = one.dispatch.current?.snapshot.message;
-        if (reference === undefined) {
-          throw new Error("The step has no acknowledged message");
-        }
         const mark = methods.length;
-        let returned = false;
-        const waiting = yield* spawn(function* () {
-          const result = yield* waitDocument(one, 1, reference, {
-            resultFile,
-            resultSchema: {
-              type: "object",
-              properties: { status: { const: "hold" }, calls: { const: 1 } },
-              required: ["status", "calls"],
-              additionalProperties: false,
-            },
-            progress(text) {
-              progress.push(text);
-              if (progress.join("").includes("[entry 1] evaluating")) {
-                progressed.resolve();
-              }
-            },
-          });
-          returned = true;
-          return result;
+        const bootstrapped = bootstrap.arm(function* () {
+          held = true;
+          yield* releaseFollow.operation;
         });
-        yield* race([
-          following.operation,
-          waiting,
-          deadline("The wait document did not subscribe"),
-        ]);
-        yield* race([
-          progressed.operation,
-          waiting,
-          deadline("Progress did not arrive before completion"),
-        ]);
-        expect(returned).toBe(false);
-        releaseBody.resolve();
-        yield* cleaning.operation;
-        expect(returned).toBe(false);
-        expect(controlled.cleaned).toBe(false);
-        releaseCleanup.resolve();
-        const result = yield* race([waiting, deadline("The document did not receive completion")]);
-        yield* producer;
-        expect(controlled.cleaned).toBe(true);
-        expect(result.status).toBe(outcome);
-        expect(result.joinedExchange).toBe(true);
-        expect(result.exchangeOutcome).toBe("completed");
-        expect(progress.join("")).toContain("exchange completed");
-        expect(progress.join("")).not.toContain("The exchange settled.");
-        expect(progress.join("").length).toBeLessThan(1500);
-        if (outcome === "completed") {
-          expect(result.read).toEqual({ entry: 1, view: "journal" });
-          expect(result.resultStatus).toBe("readable");
-          expect(result.result).toEqual({ status: "hold", calls: 1 });
+        const waiting = yield* spawn(() => waitDocument(one, 1));
+        try {
+          yield* waitForSubscription(
+            bootstrapped,
+            following.operation,
+            waiting,
+            "The wait document did not subscribe",
+          );
+        } catch (error) {
+          methodsAtFailure = methods.slice(mark);
+          const hello = phases.find(({ event }) => event === "hello-reply-forwarded");
+          if (hello !== undefined) {
+            subscriptionElapsed = Date.now() - hello.at;
+          }
+          phases.push({ event: "subscription-failed", at: Date.now() });
+          throw error;
+        } finally {
+          releaseFollow.resolve();
         }
-        if (outcome === "failed") {
-          expect(result.diagnostic).toContain("controlled step failure");
-        }
-        expect(methods.slice(mark)).toEqual(["hello", "message", "hello", "entry"]);
-        expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
-        const lateMark = methods.length;
-        const late = yield* waitDocument(one, 1, reference);
-        expect(late.status).toBe(outcome);
-        expect(methods.slice(lateMark)).toEqual(["hello", "message", "hello", "entry"]);
-        expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
-        console.log(
-          JSON.stringify({
-            kind: "wait-document-result",
-            outcome,
-            cleaned: controlled.cleaned,
-            requests: methods.slice(mark),
-            statusPolls: 0,
-            observerRoleCalls: 0,
-            alreadyCompletedRead: late.status,
-          }),
-        );
       });
-    });
-  }
+    } catch (error) {
+      failure = error;
+    }
+    const controlled = yield* ready.operation;
+    expect(failure).toBeInstanceOf(Error);
+    if (failure instanceof Error) {
+      expect(failure.message).toBe("The wait document did not subscribe");
+    }
+    expect(held).toBe(true);
+    expect(methodsAtFailure).toEqual(["hello"]);
+    expect(controlled.phases.slice(0, 2).map(({ event }) => event)).toEqual([
+      "hello-reply-forwarded",
+      "subscription-failed",
+    ]);
+    expect(subscriptionElapsed).toBeGreaterThanOrEqual(5000);
+    expect(subscriptionElapsed).toBeLessThan(15000);
+    expect(controlled.cleaned).toBe(true);
+    console.log(
+      JSON.stringify({
+        kind: "subscription-bound-result",
+        subscriptionElapsed,
+        cleaned: controlled.cleaned,
+        phases: controlled.phases,
+      }),
+    );
+  });
 
   it("exposes an early supervisor failure after joining held entry cleanup", function* () {
     const ready = withResolvers<ControlledSupervision>();
@@ -3426,8 +3616,11 @@ describe("Passive workflow supervision", () => {
     const ready = withResolvers<World>();
     const following = withResolvers<void>();
     const methods: string[] = [];
+    const bootstrap = waitBootstrap();
     const owner = yield* spawn(function* () {
-      const one = yield* world({}, () => countWaitRequests(methods, () => following.resolve()));
+      const one = yield* world({}, () =>
+        countWaitRequests(methods, () => following.resolve(), undefined, bootstrap),
+      );
       const attached = attachResult.parse(
         yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
       );
@@ -3444,12 +3637,14 @@ describe("Passive workflow supervision", () => {
       yield* suspend();
     });
     const one = yield* ready.operation;
+    const bootstrapped = bootstrap.arm();
     const waiting = yield* spawn(() => waitDocument(one, 1));
-    yield* race([
+    yield* waitForSubscription(
+      bootstrapped,
       following.operation,
       waiting,
-      deadline("The owner-loss reader did not subscribe"),
-    ]);
+      "The owner-loss reader did not subscribe",
+    );
     yield* owner.halt();
     const result = yield* race([waiting, deadline("Owner loss did not settle the wait document")]);
     expect(result.status).toBe("unavailable");
@@ -3461,11 +3656,13 @@ describe("Passive workflow supervision", () => {
     const following = withResolvers<void>();
     const disconnected = withResolvers<void>();
     const methods: string[] = [];
+    const bootstrap = waitBootstrap();
     const one = yield* world({}, () =>
       countWaitRequests(
         methods,
         () => following.resolve(),
         () => disconnected.resolve(),
+        bootstrap,
       ),
     );
     const attached = attachResult.parse(
@@ -3481,8 +3678,14 @@ describe("Passive workflow supervision", () => {
     );
     yield* one.held.fake.holdingTurns(1);
     const mark = methods.length;
+    const bootstrapped = bootstrap.arm();
     const supervisor = yield* spawn(() => waitDocument(one, 1));
-    yield* race([following.operation, supervisor, deadline("Supervisor did not subscribe")]);
+    yield* waitForSubscription(
+      bootstrapped,
+      following.operation,
+      supervisor,
+      "Supervisor did not subscribe",
+    );
     yield* supervisor.halt();
     yield* race([disconnected.operation, deadline("Supervisor pipeline did not disconnect")]);
     expect(one.held.owner.busy).toBe(true);
