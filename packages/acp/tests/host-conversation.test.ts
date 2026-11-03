@@ -27,13 +27,17 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { Ok, scoped } from "effection";
+import { Ok, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { Agent, Component, installAgentComponents } from "@executablemd/core";
 import type { FunctionComponentDefinition, Json, Session } from "@executablemd/core";
 import { useAgentConversation } from "@executablemd/core/host";
 import type { AgentConversation, ExecutionInstallation } from "@executablemd/core/host";
 
+import { createAcpxSessionStore } from "../src/session-store.ts";
+import { withCertificationFixture } from "./certification-fixture.ts";
+import { rm } from "@effectionx/fs";
+import { join } from "node:path";
 import { createAcpxProvider } from "../src/provider.ts";
 import type { AcpxSessionIdentity, AcpxSessionPolicy } from "../src/provider.ts";
 import type { AgentSessionRequest } from "@executablemd/core/api";
@@ -105,7 +109,13 @@ function host(options: HostOptions = {}): Host {
   const sessions: AcpxSessionPolicy = {
     // deno-lint-ignore require-yield
     *requestSession() {
-      return { sessionKey: CHAT_SESSION_KEY, cwd: SESSION_DIR, state: "new" };
+      const record = yield* until(store.load(CHAT_SESSION_KEY));
+      return {
+        sessionKey: CHAT_SESSION_KEY,
+        cwd: SESSION_DIR,
+        state:
+          record === undefined || record.sessionMaterialization !== undefined ? "new" : "existing",
+      };
     },
     // deno-lint-ignore require-yield
     *recordSessionIdentity(_details, identity) {
@@ -133,6 +143,14 @@ function host(options: HostOptions = {}): Host {
             factory: createAcpxProvider({
               createRuntime: harness.create,
               sessionStore: store,
+              nativeAdapters: {
+                scribe: {
+                  launcher: "scribe",
+                  identity: "provider-returned",
+                  acceptance: "first-turn-acceptance",
+                  resume: () => [],
+                },
+              },
               agentRegistry: makeRegistry(options.agents ?? { scribe: "scribe-cmd" }),
               // deno-lint-ignore require-yield
               agentCwd: function* () {
@@ -316,7 +334,11 @@ describe("Tier HC — a host conversation across the provider's own commit windo
     expect(answer(continued)).toBe("hello world");
     // Reconciled to that same assertion and committed, with nothing created in
     // its place — and the interrupted turn was not sent a second time.
-    expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE, NATIVE]);
+    expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([
+      NATIVE,
+      NATIVE,
+      NATIVE,
+    ]);
     expect([...target.store.records.keys()]).toEqual([CHAT_SESSION_KEY]);
     expect(asked(target)).toEqual(["first", "again"]);
     const retained = turns(yield* stream.readAll());
@@ -403,9 +425,8 @@ describe("Tier HC — a host conversation across the provider's own commit windo
     // — and the established conversation is still the one the history names.
     expect(asked(target)).toEqual(["first"]);
     const interrupted = turns(yield* stream.readAll());
-    expect(interrupted.map((turn) => turn.name)).toEqual(["turn:1", "turn:2"]);
+    expect(interrupted.map((turn) => turn.name)).toEqual(["turn:1"]);
     expect(interrupted[0]!.record.agentSessionId).toBe(NATIVE);
-    expect(interrupted[1]!.record.status).toBe("failed");
 
     const continued = yield* withConversation(stream, target.installation, function* (chat) {
       return yield* chat.prompt("third");
@@ -415,8 +436,8 @@ describe("Tier HC — a host conversation across the provider's own commit windo
     expect(asked(target)).toEqual(["first", "third"]);
     expect([...target.store.records.keys()]).toEqual([CHAT_SESSION_KEY]);
     const reconciled = turns(yield* stream.readAll());
-    expect(reconciled.map((turn) => turn.name)).toEqual(["turn:1", "turn:2", "turn:3"]);
-    expect(reconciled[2]!.record.agentSessionId).toBe(NATIVE);
+    expect(reconciled.map((turn) => turn.name)).toEqual(["turn:1", "turn:2"]);
+    expect(reconciled[1]!.record.agentSessionId).toBe(NATIVE);
   });
 
   /**
@@ -444,20 +465,15 @@ describe("Tier HC — a host conversation across the provider's own commit windo
       return yield* chat.prompt("second");
     });
 
-    expect(answer(diverged)).toContain("established identity stands");
-    // Recorded as what it was — a turn that ran somewhere else — so the host
-    // reconciles it rather than the next turn inheriting whichever identity
-    // was read last.
+    expect(answer(diverged)).toContain("different native conversation");
+    expect(asked(target)).toEqual(["first"]);
     const retained = turns(yield* stream.readAll());
+    expect(retained).toHaveLength(1);
     expect(retained[0]!.record.agentSessionId).toBe(NATIVE);
-    expect(retained[1]!.record.agentSessionId).toBe("agent-session:somewhere-else");
-
-    const reopened = yield* withConversation(stream, target.installation, function* () {
-      return "reached";
+    const reopened = yield* withConversation(stream, target.installation, function* (chat) {
+      return yield* chat.options();
     });
-
-    expect(reopened.ok).toBe(false);
-    expect(!reopened.ok && reopened.error.message).toContain("more than one native conversation");
+    expect(reopened.ok).toBe(true);
   });
 });
 
@@ -498,7 +514,15 @@ describe("Tier HC — what this provider declared it was building under", () => 
     const sessions: AcpxSessionPolicy = {
       // deno-lint-ignore require-yield
       *requestSession() {
-        return { sessionKey: CHAT_SESSION_KEY, cwd: SESSION_DIR, state: "new" };
+        const record = yield* until(store.load(CHAT_SESSION_KEY));
+        return {
+          sessionKey: CHAT_SESSION_KEY,
+          cwd: SESSION_DIR,
+          state:
+            record === undefined || record.sessionMaterialization !== undefined
+              ? "new"
+              : "existing",
+        };
       },
       // deno-lint-ignore require-yield
       *recordSessionIdentity() {},
@@ -513,6 +537,14 @@ describe("Tier HC — what this provider declared it was building under", () => 
             factory: createAcpxProvider({
               createRuntime: harness.create,
               sessionStore: store,
+              nativeAdapters: {
+                scribe: {
+                  launcher: "scribe",
+                  identity: "provider-returned",
+                  acceptance: "first-turn-acceptance",
+                  resume: () => [],
+                },
+              },
               agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
               // deno-lint-ignore require-yield
               agentCwd: function* () {
@@ -772,3 +804,101 @@ describe("Tier DP — a saved conversation reaches its provider directly", () =>
     expect(configurations(yield* stream.readAll())).toBe(1);
   });
 });
+
+describe(
+  "standard held conversation persistence",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    for (const missing of [false, true]) {
+      it(`reopening with ${missing ? "missing" : "intact"} provider storage never replaces history`, function* () {
+        yield* withCertificationFixture(function* (f) {
+          const history = new InMemoryStream();
+          const store = createAcpxSessionStore(join(f.dir, "store"));
+          const key = "held-standard";
+          const command = f.command("standard");
+          const installation: ExecutionInstallation = {
+            *install() {
+              yield* installAgentComponents({
+                defaultAgent: command,
+                rootProvider: {
+                  options: { defaultAgent: command, permissionMode: "deny-all" },
+                  factory: createAcpxProvider({
+                    sessionStore: store,
+                    advertiseNativeLaunch: [],
+                    advertiseClientNativeAttachment: [],
+                    mcpServers: [],
+                    newSessionOptions: { allowedTools: [] },
+                    permissions: "strict",
+                    *agentCwd() {
+                      return f.dir;
+                    },
+                    sessions: {
+                      *requestSession() {
+                        return {
+                          sessionKey: key,
+                          cwd: f.dir,
+                          state: (yield* until(store.load(key))) === undefined ? "new" : "existing",
+                        };
+                      },
+                      *recordSessionIdentity() {},
+                    },
+                  }),
+                },
+              });
+            },
+          };
+          expect(
+            answer(
+              yield* withConversation(
+                history,
+                installation,
+                (chat) => chat.prompt("seed:remembered"),
+                command,
+              ),
+            ),
+          ).toBe("READY");
+          const retained = history.snapshot();
+          const record = yield* until(store.load(key));
+          if (record === undefined) {
+            throw new Error("missing seeded record");
+          }
+          expect(record.agentSessionId).toBe(undefined);
+          if (missing) {
+            yield* rm(join(f.dir, "store", "sessions", key + ".json"));
+          }
+          const before = yield* f.calls();
+          const next = yield* withConversation(
+            history,
+            installation,
+            function* (chat) {
+              expect(yield* f.calls()).toEqual(before);
+              const reply = yield* chat.prompt("recall");
+              if (missing) {
+                expect(reply.ok).toBe(false);
+                if (!reply.ok) {
+                  expect(reply.error.message).toContain("Start a new conversation");
+                }
+                expect(history.snapshot()).toEqual(retained);
+              } else {
+                expect(reply).toEqual(Ok("remembered"));
+              }
+              return reply;
+            },
+            command,
+          );
+          expect(next.ok).toBe(true);
+          const delta = (yield* f.calls())
+            .slice(before.length)
+            .filter((call) =>
+              ["session/new", "session/load", "session/prompt"].includes(call.method),
+            );
+          expect(delta.map((call) => call.method)).toEqual(
+            missing ? [] : ["session/load", "session/prompt"],
+          );
+          expect(delta.every((call) => call.sessionId === record.acpSessionId)).toBe(true);
+          expect(turns(history.snapshot()).length).toBe(missing ? 1 : 2);
+        });
+      });
+    }
+  },
+);

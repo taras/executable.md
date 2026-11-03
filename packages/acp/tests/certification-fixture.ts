@@ -11,6 +11,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const mode = process.argv[2];
+const storage = process.argv[3] ?? process.cwd();
 let sessionId;
 let marker;
 let activePrompt;
@@ -23,7 +24,7 @@ const options = () => [
 const send = value => process.stdout.write(JSON.stringify(value)+"\\n");
 const reply = (id,result) => send({jsonrpc:"2.0",id,result});
 const update = value => send({jsonrpc:"2.0",method:"session/update",params:{sessionId,update:value}});
-const file = () => path.join(process.cwd(),mode === "shared" ? "fixture-shared.json" : "fixture-"+sessionId+".json");
+const file = () => path.join(storage,mode === "shared" ? "fixture-shared.json" : "fixture-"+sessionId+".json");
 function answer(request) {
   const {method,id,params} = request;
   if (method === "session/cancel") {
@@ -34,13 +35,13 @@ function answer(request) {
   if (method === "initialize") { reply(id,{protocolVersion:1,agentCapabilities:{loadSession:true},authMethods:[]}); }
   else if (method === "session/new") {
     sessionId=crypto.randomUUID();marker=undefined;
-    reply(id,{sessionId,configOptions:options(),_meta:{agentSessionId:sessionId}});
+    reply(id,{sessionId,configOptions:options(),...(mode === "standard" || mode === "standard-wait" ? {} : {_meta:{agentSessionId:sessionId}})});
   } else if (method === "session/load") {
     sessionId=params.sessionId;
     fs.readFile(file(),"utf8",(error,text) => {
       if (error) { send({jsonrpc:"2.0",id,error:{code:-32603,message:"missing controlled history"}});return; }
       marker=JSON.parse(text).marker;
-      reply(id,{sessionId,configOptions:options(),_meta:{agentSessionId:sessionId}});
+      reply(id,{sessionId,configOptions:options(),...(mode === "standard" || mode === "standard-wait" ? {} : {_meta:{agentSessionId:sessionId}})});
     });
   } else if (method === "session/set_config_option") {
     if (params.configId === "model" && mode !== "mismatch-model") { model=params.value; }
@@ -51,8 +52,12 @@ function answer(request) {
     const seed=text.startsWith("seed:") ? text.slice(5) : /Remember this private marker for this conversation: ([^.]+)\\./.exec(text)?.[1];
     if (seed !== undefined) { marker=seed; }
     const respond = () => {
-      if (mode !== "no-acceptance") { update({sessionUpdate:"session_info_update",_meta:{"executablemd.session-materialization/v1":{state:"accepted"}}}); }
-      if (mode === "wait" || text.includes("Wait for cancellation.")) { activePrompt=id; return; }
+      if (mode !== "no-acceptance" && mode !== "standard" && mode !== "standard-wait") { update({sessionUpdate:"session_info_update",_meta:{"executablemd.session-materialization/v1":{state:"accepted"}}}); }
+      if (mode === "wait" || mode === "standard-wait" || text.includes("Wait for cancellation.")) {
+        activePrompt=id;
+        if (mode === "standard-wait") { update({sessionUpdate:"agent_message_chunk",content:{type:"text",text:"WAITING"}}); }
+        return;
+      }
       const value=seed !== undefined ? "READY" : mode === "lost" ? "WRONG" : marker ?? "UNKNOWN";
       update({sessionUpdate:"agent_message_chunk",content:{type:"text",text:value}});
       reply(id,{stopReason:"end_turn"});
@@ -72,7 +77,7 @@ process.stdin.on("data",chunk=>{
     const line=buffer.slice(0,index);buffer=buffer.slice(index+1);
     if(!line.trim()){continue;}
     const request=JSON.parse(line);
-    fs.appendFile(path.join(process.cwd(),"methods.jsonl"),JSON.stringify({method:request.method,sessionId:request.params?.sessionId,kind:request.method === "session/prompt" ? (request.params.prompt.map(block=>block.text ?? "").join("").includes("Wait for cancellation.") ? "cancel" : /seed:|Remember this private marker/.test(request.params.prompt.map(block=>block.text ?? "").join("")) ? "seed" : "recall") : undefined})+"\\n",error=>{if(error){throw error;}answer(request);});
+    fs.appendFile(path.join(storage,"methods.jsonl"),JSON.stringify({method:request.method,sessionId:request.params?.sessionId,kind:request.method === "session/prompt" ? (request.params.prompt.map(block=>block.text ?? "").join("").includes("Wait for cancellation.") ? "cancel" : /seed:|Remember this private marker/.test(request.params.prompt.map(block=>block.text ?? "").join("")) ? "seed" : "recall") : undefined})+"\\n",error=>{if(error){throw error;}answer(request);});
   }
 });
 `;
@@ -98,7 +103,8 @@ export function* withCertificationFixture<T>(
     return yield* body({
       dir,
       home,
-      command: (mode = "normal") => "node " + JSON.stringify(agent) + " " + mode,
+      command: (mode = "normal") =>
+        "node " + JSON.stringify(agent) + " " + mode + " " + JSON.stringify(dir),
       *calls() {
         const text = yield* readTextFile(join(dir, "methods.jsonl"));
         return text

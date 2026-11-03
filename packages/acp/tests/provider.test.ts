@@ -62,12 +62,22 @@ const CWD = "/work";
  * is the authority the provider asks, so a suite states a configuration there
  * rather than putting one on a value the provider would read.
  */
-function* installProvider(harness: FakeRuntimeHarness): Operation<CoordinatorLog> {
+function* installProvider(harness: FakeRuntimeHarness, strong = false): Operation<CoordinatorLog> {
   yield* useFlatWorld(CWD);
   const coordinator = stubCoordinator();
   const factory = createAcpxProvider({
     createRuntime: harness.create,
     sessionStore: makeStore(),
+    nativeAdapters: strong
+      ? {
+          scribe: {
+            launcher: "scribe",
+            identity: "provider-returned",
+            acceptance: "first-turn-acceptance",
+            resume: () => [],
+          },
+        }
+      : {},
     agentRegistry: makeRegistry({ scribe: "scribe-cmd", other: "other-cmd" }),
   });
   yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, coordinator);
@@ -956,7 +966,7 @@ describe("Tier SM — session requests and creation", () => {
   it("SM2: the same value comes back, and a copy of it is refused", function* () {
     const harness = createFakeRuntime();
     yield* scoped(function* () {
-      yield* installProvider(harness);
+      yield* installProvider(harness, true);
       const session = yield* Agent.operations.session();
 
       // The exact value, so a document that pinned it around a body is holding
@@ -980,7 +990,7 @@ describe("Tier SM — session requests and creation", () => {
   it("SM3: the first prompt ensures and starts a turn through one handle", function* () {
     const harness = createFakeRuntime();
     yield* scoped(function* () {
-      yield* installProvider(harness);
+      yield* installProvider(harness, true);
       const session = yield* Agent.operations.session();
 
       yield* collectPrompt("go", { session });
@@ -1151,7 +1161,7 @@ describe("Tier SM — session requests and creation", () => {
     const harness = createFakeRuntime();
     let escaped: Session | undefined;
     yield* scoped(function* () {
-      yield* installProvider(harness);
+      yield* installProvider(harness, true);
       escaped = yield* Agent.operations.session();
     });
 
@@ -1444,6 +1454,14 @@ function* installStrictProvider(
   const factory = createAcpxProvider({
     createRuntime: harness.create,
     sessionStore: store,
+    nativeAdapters: {
+      scribe: {
+        launcher: "scribe",
+        identity: "provider-returned",
+        acceptance: "first-turn-acceptance",
+        resume: () => [],
+      },
+    },
     agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
     // deno-lint-ignore require-yield
     agentCwd: function* () {
@@ -1536,6 +1554,7 @@ describe("Tier WAP — strict workflow Agent profile", () => {
         {
           agentSessionId: `agent-session:${WORKFLOW_SESSION_KEY}`,
           acpxRecordId: `record:${WORKFLOW_SESSION_KEY}`,
+          acpSessionId: `backend:${WORKFLOW_SESSION_KEY}`,
         },
       ]);
 

@@ -24,7 +24,7 @@ has 30 seconds and the outer work deadline has 600 seconds. Expiry ends admissio
 the actual owner still joins. No uncertain turn is retried.
 
 The runner computes setup dependencies before provider work. Continuity,
-separation, reconnect and resume require one accepted A seed. Only selected
+separation, reconnect and resume require one completed A seed. Only selected
 continuity adds A's second turn; separation adds independent B. Cancellation
 needs no marker scenario. Selecting reconnect or resume authorizes their seed
 setup, even when the setup capability rows are unselected.
@@ -32,7 +32,7 @@ setup, even when the setup capability rows are unselected.
 The checked-in initial document keeps one provider and A Session alive for the
 seed and recall, then tests B. Reconnect opens a new same-process invocation.
 Cancellation owns a separate document; its five-second interval begins at actual
-accepted start and structured cancellation joins that document. Resume uses one
+transport-confirmed start and structured cancellation joins that document. Resume uses one
 separate CLI invocation and ordinary retained A history. Its private comparison
 file is neither provider history nor continuation authority.
 
@@ -55,7 +55,7 @@ Ordinary CI exercises controlled agents without credentials or model calls.
 
 ## Read the report
 
-The current JSON format is closed and unversioned. Each of eleven capability rows
+The current JSON format is closed and unversioned. Each of thirteen capability rows
 records selected and expected flags, an outcome, a fixed reason and bounded facts.
 `pass`, `failure`, `unsupported` and `not_run` are distinct. An absent selector is
 unsupported; a selection the target Session does not apply is a failure. Omitted
@@ -64,7 +64,12 @@ model/effort settings supply no explicit-selection evidence.
 `complete=false` includes missing provenance and selected evidence blocked by
 prerequisites. A measured unsupported capability is a non-pass. Overall success
 requires complete evidence and all selected/expected capabilities passing.
-Durable certification additionally requires continuity, separation, reconnect,
+Acceptance and native identity are separate rows: a standard command can pass
+basic authentication, streaming and completion while acceptance is
+`unsupported/acceptance-unavailable` and identity is unsupported. An actual native
+assertion can pass identity independently. Only a strong-declared adapter's gated
+started event proves acceptance; marker-like output from a literal command does
+not. Durable certification additionally requires acceptance, identity, continuity, separation, reconnect,
 separate-invocation resume and verified cleanup. Native cleanup remains
 `not_run/cleanup-unverified` after a successful owner join; actual observed cleanup
 failure is failure. Correct stop attribution alone cannot pass cancellation.
@@ -90,8 +95,10 @@ xmd run /checkout/examples/agent-certification/orchestrate.md --include /checkou
 
 This is a separate explicitly requested model call, outside the qualification
 suite. Ordinary name/cwd retention is not workflow Session-site identity.
-The existing backend first-turn acceptance barrier remains mandatory; an
-unpatched adapter can be refused even after producing output.
+A literal command uses standard ACP without the private acceptance barrier.
+Sequential prompts share the live Session; later reopening loads the exact ACP
+identity if supported and refuses otherwise. Interrupted requests are never
+automatically resent. Strong-declared adapters retain their acceptance barrier.
 
 Kimi's selected live scope uses `kimi acp`, provider-default model and effort,
 and no retries. A later useful live run requires changed-source review, exact fingerprints and
@@ -100,7 +107,7 @@ retained invocation evidence only; it establishes no capability battery. Gemini 
 configuration syntax, not availability or certification evidence. This delivery
 authorizes zero Gemini live calls and installs no agent.
 
-The terminal matrix always lists all eleven capabilities with selected/expected flags,
+The terminal matrix always lists all thirteen capabilities with selected/expected flags,
 outcomes and fixed reasons, plus observed Prompt/cancellation counts and overall
 flags. Failure preserves earlier independent rows and a meaningful nonzero status.
 Private markers, replies, Session identities and child fragments remain local.

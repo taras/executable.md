@@ -25,6 +25,8 @@ describe(
               model: "selected",
               effort: "high",
               scenarios: [
+                "acceptance",
+                "identity",
                 "authentication",
                 "streaming",
                 "separation",
@@ -139,7 +141,7 @@ describe(
       }
     });
 
-    for (const mode of ["no-acceptance", "lost"]) {
+    for (const mode of ["standard", "lost"]) {
       it(`runs the actual document with ${mode} without fabricating capability evidence`, function* () {
         yield* withCertificationFixture(function* (f) {
           const config = join(f.dir, "negative.json");
@@ -149,6 +151,8 @@ describe(
             JSON.stringify({
               command: f.command(mode),
               scenarios: [
+                "acceptance",
+                "identity",
                 "authentication",
                 "streaming",
                 "completion",
@@ -177,17 +181,22 @@ describe(
             ],
             { cwd: f.dir, env: { HOME: f.home }, timeout: 120_000 },
           ).join();
-          expect(result.code).toBe(1);
+          expect(result.code).toBe(mode === "standard" ? 0 : 1);
           const report = reportSchema.parse(JSON.parse(yield* readTextFile(target)));
           expect(report.selectedCapabilitiesPassed).toBe(false);
           expect(report.durableSessionCertified).toBe(false);
           const calls = yield* f.calls();
           const turns = calls.filter((call) => call.method === "session/prompt");
-          if (mode === "no-acceptance") {
-            expect(turns.length).toBe(1);
-            expect(calls.filter((call) => call.method === "session/load").length).toBe(0);
-            expect(report.capabilities.authentication.outcome).not.toBe("pass");
-            expect(report.capabilities.resume.outcome).toBe("not_run");
+          if (mode === "standard") {
+            expect(turns.length).toBe(4);
+            expect(report.capabilities.authentication.outcome).toBe("pass");
+            expect(report.capabilities.streaming.outcome).toBe("pass");
+            expect(report.capabilities.completion.outcome).toBe("pass");
+            expect(report.capabilities.acceptance).toMatchObject({
+              outcome: "unsupported",
+              reason: "acceptance-unavailable",
+            });
+            expect(report.capabilities.identity.outcome).toBe("unsupported");
           } else {
             expect(turns.map((turn) => turn.kind)).toEqual([
               "seed",
@@ -203,7 +212,7 @@ describe(
             expect(calls.filter((call) => call.method === "session/cancel").length).toBe(1);
           }
           for (const [name] of Object.entries(report.capabilities)) {
-            expect(result.stderr).toContain(`${name} |`);
+            expect(mode === "standard" ? result.stdout : result.stderr).toContain(`${name} |`);
           }
           expect(result.stderr).not.toContain(f.dir);
         });

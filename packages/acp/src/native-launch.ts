@@ -139,6 +139,8 @@ export interface MaterializationContract {
 }
 
 interface AdapterCommands {
+  /** Require the adapter's explicit first-turn acceptance before exposing a new session. */
+  acceptance?: "first-turn-acceptance";
   /** Stable adapter identity — `claude`, `codex`. Never an executable path. */
   launcher: string;
   /** Who chooses this adapter's native session identity. */
@@ -227,6 +229,7 @@ export function bindsBuild(adapter: NativeAdapter): adapter is BuildBoundAdapter
 const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
   claude: {
     launcher: "claude",
+    acceptance: "first-turn-acceptance",
     // XMD names the session before Claude exists, so the native process is
     // told which conversation to make rather than reporting one afterwards.
     identity: "client-allocated",
@@ -251,6 +254,7 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
   },
   codex: {
     launcher: "codex",
+    acceptance: "first-turn-acceptance",
     // Codex creates the conversation through ACP and reports what it is called.
     // XMD supplies nothing here and accepts only that assertion.
     identity: "provider-returned",
