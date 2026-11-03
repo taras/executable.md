@@ -110,6 +110,7 @@ interface Traffic {
 }
 
 interface StubOptions {
+  readonly freshSession?: boolean;
   /** How the provider answers one turn. Default: completes, echoing the text. */
   readonly respond?: (content: string) => {
     status?: "completed" | "failed" | "cancelled";
@@ -278,14 +279,19 @@ function stub(traffic: Traffic, options: StubOptions = {}): ExecutionInstallatio
               // Established, so what this turn asks is applied and read back —
               // the only thing that makes a configuration a fact about the turn
               // rather than a hope.
-              const settled = yield* setup.finish(session, {
-                kind: "existing",
-                // deno-lint-ignore require-yield
-                *configure(asked: SessionConfiguration): Operation<SessionConfiguration> {
-                  traffic.applied.push(asked);
-                  return options.verify ? options.verify(asked) : asked;
-                },
-              });
+              const settled = yield* setup.finish(
+                session,
+                options.freshSession
+                  ? { kind: "new" }
+                  : {
+                      kind: "existing",
+                      // deno-lint-ignore require-yield
+                      *configure(asked: SessionConfiguration): Operation<SessionConfiguration> {
+                        traffic.applied.push(asked);
+                        return options.verify ? options.verify(asked) : asked;
+                      },
+                    },
+              );
               traffic.settledSessions.push(settled);
               return options.answersWith === "substituted"
                 ? { sessionKey: `stub:substituted`, cwd: "/stub" }
@@ -2683,5 +2689,77 @@ describe("Tier DP — a conversation calls its own provider", () => {
     const events = yield* stream.readAll();
     expect(sequence(events)).toEqual([]);
     expect(terminated(events)).toBe(false);
+  });
+});
+
+describe("used held conversation continuation", () => {
+  for (const firstStatus of ["completed", "failed"] satisfies ("completed" | "failed")[]) {
+    it(`a ${firstStatus} history decides whether new setup is admitted`, function* () {
+      const history = new InMemoryStream();
+      const first = fresh();
+      yield* withConversation(
+        history,
+        stub(first, {
+          respond: () => ({
+            status: firstStatus,
+            deltas: firstStatus === "failed" ? [] : ["answer"],
+          }),
+        }),
+        function* (conversation) {
+          yield* conversation.prompt("first");
+        },
+      );
+      const retained = history.snapshot();
+      const second = fresh();
+      const opened = yield* withConversation(
+        history,
+        stub(second, { freshSession: true }),
+        function* (conversation) {
+          const reply = yield* conversation.prompt("second");
+          expect(reply.ok).toBe(firstStatus === "failed");
+          if (!reply.ok) {
+            expect(reply.error.message).toContain("Start a new conversation");
+            expect(history.snapshot()).toEqual(retained);
+          }
+          expect((yield* conversation.options()).ok).toBe(true);
+        },
+      );
+      expect(opened.ok).toBe(true);
+      expect(second.prompts.length).toBe(firstStatus === "failed" ? 1 : 0);
+    });
+  }
+  it("retained partial output refuses replacement after a failed turn", function* () {
+    const history = new InMemoryStream();
+    const first = fresh();
+    yield* withConversation(
+      history,
+      stub(first, { respond: () => ({ status: "failed", deltas: ["partial answer"] }) }),
+      function* (conversation) {
+        expect((yield* conversation.prompt("first")).ok).toBe(false);
+      },
+    );
+    const retained = history.snapshot();
+    const failed = record(retained, "turn:1");
+    expect(failed.status).toBe("failed");
+    expect(failed.text).toBe("partial answer");
+    expect(failed.stopReason).toBe(undefined);
+    expect(failed.agentSessionId).toBe(undefined);
+    const second = fresh();
+    const opened = yield* withConversation(
+      history,
+      stub(second, { freshSession: true }),
+      function* (conversation) {
+        const reply = yield* conversation.prompt("second");
+        expect(reply.ok).toBe(false);
+        if (!reply.ok) {
+          expect(reply.error.message).toContain("Start a new conversation");
+        }
+        expect(history.snapshot()).toEqual(retained);
+        expect((yield* conversation.options()).ok).toBe(true);
+      },
+    );
+    expect(opened.ok).toBe(true);
+    expect(second.prompts).toEqual([]);
+    expect(history.snapshot()).toEqual(retained);
   });
 });

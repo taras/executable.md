@@ -862,35 +862,42 @@ describe(
       // One ACPX store and one Plan writer root shared by two invocations is the
       // only way to observe whether a named session is continued or placed a
       // second time — and whether continuing one ever runs what it produced.
-      yield* usePlanWriterRoot(function* (planWriterRoot) {
-        const store = makeStore();
-        const materializations: (string | undefined)[] = [];
+      for (const acceptance of [undefined, "first-turn-acceptance"] satisfies (
+        | undefined
+        | "first-turn-acceptance"
+      )[]) {
+        yield* usePlanWriterRoot(function* (planWriterRoot) {
+          const store = makeStore();
+          const materializations: (string | undefined)[] = [];
 
-        for (const invocation of [1, 2]) {
-          yield* useWorkingDirectory(function* (dir) {
-            const harness = createPlanHarness({ planWriterRoot, store });
-            harness.fake.script({ reply: EFFECT_AND_FAILURE });
-            harness.script({ decision: "Approve" });
+          for (const invocation of [1, 2]) {
+            yield* useWorkingDirectory(function* (dir) {
+              const harness = createPlanHarness({ planWriterRoot, store, acceptance });
+              harness.fake.script({ reply: EFFECT_AND_FAILURE });
+              harness.script({ decision: "Approve" });
 
-            const { value, chunks } = yield* delivered(harness, () =>
-              runPlan(planning(dir, undefined, "release-notes"), harness.deps),
-            );
+              const { value, chunks } = yield* delivered(harness, () =>
+                runPlan(planning(dir, undefined, "release-notes"), harness.deps),
+              );
 
-            expect(`${invocation}: ${value}`).toBe(`${invocation}: 0`);
-            expect(chunks.join("")).toBe(EFFECT_AND_FAILURE);
-            materializations.push(harness.fake.ensured[0]?.materialization);
-            // Neither invocation ran the program it produced: the file that
-            // program writes is nowhere, and the failure it ends in never
-            // happened. The retained Plan artifact is not an execution record.
-            expect(`${invocation}: ${(yield* until(readdir(dir))).join()}`).toBe(`${invocation}: `);
-          });
-        }
+              expect(`${invocation}: ${value}`).toBe(`${invocation}: 0`);
+              expect(chunks.join("")).toBe(EFFECT_AND_FAILURE);
+              materializations.push(harness.fake.ensured[0]?.materialization);
+              // Neither invocation ran the program it produced: the file that
+              // program writes is nowhere, and the failure it ends in never
+              // happened. The retained Plan artifact is not an execution record.
+              expect(`${invocation}: ${(yield* until(readdir(dir))).join()}`).toBe(
+                `${invocation}: `,
+              );
+            });
+          }
 
-        // The second invocation continued the record the first established
-        // rather than placing a second one.
-        expect([...store.records.keys()]).toHaveLength(1);
-        expect(materializations).toEqual(["first-turn-acceptance", undefined]);
-      });
+          // The second invocation continued the record the first established
+          // rather than placing a second one.
+          expect([...store.records.keys()]).toHaveLength(1);
+          expect(materializations).toEqual([acceptance, undefined]);
+        });
+      }
 
       // Structurally, too: this command has no execution capability to reach.
       // A branch left unselected would still be a branch, and these are the

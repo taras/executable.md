@@ -1,3 +1,4 @@
+import { nativeAdapterFor } from "@executablemd/acp";
 import { Agent, Component, configurationOf, sessionOf } from "@executablemd/core";
 import type { AgentPromptEvent } from "@executablemd/core";
 import { scoped, Err, Ok, useScope, spawn, sleep } from "effection";
@@ -7,6 +8,7 @@ import {
   recordConfigurationFailure,
   recordConfigurationSuccess,
   recordTurn,
+  recordSessionEvidence,
 } from "./report.ts";
 import type { Report } from "./report.ts";
 
@@ -39,6 +41,12 @@ export function* observeQualification(
                   recordTurn(report, { accepted, completed, deltas }, !accepted);
                 } else if (event.value.type === "started") {
                   accepted = true;
+                  recordSessionEvidence(
+                    report,
+                    nativeAdapterFor(event.value.agent)?.acceptance === "first-turn-acceptance",
+                    (sessionOf(event.value.session) ?? event.value.session).agentSessionId !==
+                      undefined,
+                  );
                   report.counts.prompts++;
                   recordConfigurationSuccess(report, configurationOf(event.value.session));
                 } else if (event.value.type === "text_delta") {

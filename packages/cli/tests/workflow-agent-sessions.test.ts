@@ -15,17 +15,25 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, until } from "effection";
+import { scoped, spawn, until, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
+import { readdir, ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { chmod, symlink } from "node:fs/promises";
 import process from "node:process";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
+import { createAcpRuntime, createAcpxSessionStore } from "@executablemd/acp";
+import { withCertificationFixture } from "../../acp/tests/certification-fixture.ts";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentIdentityComponents, collect, retainedSource } from "@executablemd/core";
+import {
+  registerComponents,
+  agentIdentityComponents,
+  collect,
+  retainedSource,
+} from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -63,6 +71,7 @@ function attach(
     readonly createRuntime: WorkflowAgentProfileOptions["createRuntime"];
     readonly sessionStore: WorkflowAgentProfileOptions["sessionStore"];
     readonly defaultAgent?: string;
+    readonly installation?: ExecutionInstallation;
   },
 ): Operation<Attempt> {
   return scoped(function* () {
@@ -90,7 +99,10 @@ function attach(
               },
               // `<Session>` names durable work after its own invocation, so the
               // host declares it to the execution rather than registering it.
-              [{ components: agentIdentityComponents() }],
+              [
+                { components: agentIdentityComponents() },
+                ...(options.installation === undefined ? [] : [options.installation]),
+              ],
             ),
           );
         }),
@@ -470,4 +482,90 @@ describe("HC host Claude through the production workflow", () => {
   it("HC HCI2: a failed lifecycle assertion publishes no production mapping or prompt", function* () {
     yield* hostClaudeWorkflow("confirmation");
   });
+});
+
+describe("workflow ACP loading identity", { sanitizeOps: false, sanitizeResources: false }, () => {
+  for (const differentKind of [false, true]) {
+    it(`retains the ACP identity and ${differentKind ? "refuses a changed kind" : "loads it on restart"}`, function* () {
+      yield* withCertificationFixture(function* (f) {
+        const root = yield* useStorageRoot();
+        yield* withStorage(root, function* () {
+          const database = yield* createRun();
+          const store = createAcpxSessionStore(join(f.dir, "store"));
+          const gate = withResolvers<void>();
+          const source =
+            '<Session name="standard"><Prompt text="seed:workflow-marker" /><Gate /><Prompt text="recall" /></Session>';
+          let held = true;
+          const installation: ExecutionInstallation = {
+            *install() {
+              yield* registerComponents([
+                {
+                  name: "Gate",
+                  origin: "test://continuation-gate",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  *fn() {
+                    if (held) {
+                      gate.resolve();
+                      yield* suspend();
+                    }
+                    return "";
+                  },
+                },
+              ]);
+            },
+          };
+          const options = {
+            createRuntime: createAcpRuntime,
+            sessionStore: store,
+            defaultAgent: f.command("standard"),
+            installation,
+          };
+          const first = yield* spawn(() => attach(root, database, source, options));
+          yield* gate.operation;
+          yield* first.halt();
+          const rows = mappingRows(workflowRunPath(root, database.record.runId));
+          expect(rows).toHaveLength(1);
+          expect(rows[0]?.kind).toBe("acpx.acpSessionId");
+          const calls = yield* f.calls();
+          const created = calls.find((call) => call.method === "session/prompt");
+          expect(rows[0]?.value).toBe(created?.sessionId);
+          const files = yield* readdir(join(f.dir, "store", "sessions"));
+          const key = files.find((file) => file.endsWith(".json"))?.slice(0, -5);
+          if (key === undefined) {
+            throw new Error("missing standard record");
+          }
+          const record = yield* until(store.load(decodeURIComponent(key)));
+          if (record === undefined) {
+            throw new Error("missing retained conversation");
+          }
+          expect(record.agentSessionId).toBe(undefined);
+          if (differentKind) {
+            record.agentSessionId = "asserted-native";
+            yield* until(store.save(record));
+          }
+          held = false;
+          const second = yield* attach(root, database, source, options);
+          if (differentKind) {
+            expect(second.failure).toBeDefined();
+            expect(
+              (yield* f.calls())
+                .slice(calls.length)
+                .filter((call) => call.method.startsWith("session/")),
+            ).toEqual([]);
+          } else {
+            expect(second.failure).toBe(undefined);
+            const delta = (yield* f.calls())
+              .slice(calls.length)
+              .filter((call) =>
+                ["session/new", "session/load", "session/prompt"].includes(call.method),
+              );
+            expect(delta.map((call) => call.method)).toEqual(["session/load", "session/prompt"]);
+            expect(delta.every((call) => call.sessionId === rows[0]?.value)).toBe(true);
+            expect(JSON.stringify(second.output)).toContain("workflow-marker");
+          }
+          expect(mappingRows(workflowRunPath(root, database.record.runId))).toEqual(rows);
+        });
+      });
+    });
+  }
 });

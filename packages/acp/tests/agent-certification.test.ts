@@ -15,7 +15,7 @@ import {
 import type { AgentPromptEvent } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { createAcpxProvider, createAcpxSessionStore } from "../mod.ts";
+import { createAcpRuntime, createAcpxProvider, createAcpxSessionStore } from "../mod.ts";
 import { withCertificationFixture } from "./certification-fixture.ts";
 import type { CertificationFixture } from "./certification-fixture.ts";
 import {
@@ -31,6 +31,8 @@ function reportFor(command: string): Report {
   return initialReport({
     command,
     scenarios: [
+      "acceptance",
+      "identity",
       "authentication",
       "streaming",
       "completion",
@@ -50,15 +52,31 @@ function* document(
   documentSource: string,
   report: Report,
   failures: unknown[] = [],
+  journal = new InMemoryStream(),
 ): Operation<{ ok: boolean; output: string }> {
   return yield* scoped(function* () {
-    const command = f.command(mode);
+    const command = mode === "strong" ? "codex" : f.command(mode);
     yield* installAgentComponents({
       defaultAgent: command,
       rootProvider: {
         options: { defaultAgent: command, permissionMode: "deny-all" },
         factory: createAcpxProvider({
           sessionStore: createAcpxSessionStore(join(f.dir, "store")),
+          advertiseNativeLaunch: [],
+          advertiseClientNativeAttachment: [],
+          agentRegistry:
+            mode === "strong" ? { list: () => ["codex"], resolve: () => f.command() } : undefined,
+          nativeAdapters:
+            mode === "no-acceptance" || mode === "strong"
+              ? {
+                  [command]: {
+                    launcher: "fake",
+                    identity: "provider-returned",
+                    acceptance: "first-turn-acceptance",
+                    resume: () => [],
+                  },
+                }
+              : {},
           *agentCwd() {
             return f.dir;
           },
@@ -93,7 +111,7 @@ function* document(
     yield* useNormalizedOutput();
     const path = join(f.dir, "document.md");
     yield* writeTextFile(path, documentSource);
-    const execution = yield* executeInstalled({ path, stream: new InMemoryStream() }, [
+    const execution = yield* executeInstalled({ path, stream: journal }, [
       { components: agentIdentityComponents() },
     ]);
     const subscription = yield* execution.output;
@@ -116,7 +134,7 @@ describe(
         const report = reportFor(f.command());
         const result = yield* document(
           f,
-          "normal",
+          "standard",
           `<Session name="a"><Prompt text="seed:${marker}" as="ack" /><Prompt text="recall" /></Session>\nSEPARATION\n<Session name="b"><Prompt text="recall" /></Session>`,
           report,
         );
@@ -127,6 +145,11 @@ describe(
         expect(report.capabilities.continuity.outcome).toBe("pass");
         expect(report.capabilities.separation.outcome).toBe("pass");
         expect(report.capabilities.streaming.outcome).toBe("pass");
+        expect(report.capabilities.acceptance).toMatchObject({
+          outcome: "unsupported",
+          reason: "acceptance-unavailable",
+        });
+        expect(report.capabilities.identity.outcome).toBe("unsupported");
         expect(report.capabilities.model.outcome).toBe("not_run");
         expect(report.capabilities.effort.outcome).toBe("not_run");
         expect((yield* f.methods()).filter((method) => method === "session/prompt").length).toBe(3);
@@ -235,9 +258,10 @@ describe(
     });
     it("attributes the owned still-active turn to HostExecution.stop without certifying native cleanup", function* () {
       yield* withCertificationFixture(function* (f) {
-        const command = f.command("wait");
+        const command = f.command("standard-wait");
         const report = reportFor(command);
         report.capabilities.cancellation.selected = true;
+        let closed = 0;
         yield* scoped(function* () {
           yield* installAgentComponents({
             defaultAgent: command,
@@ -245,6 +269,15 @@ describe(
               options: { defaultAgent: command, permissionMode: "deny-all" },
               factory: createAcpxProvider({
                 sessionStore: createAcpxSessionStore(join(f.dir, "store")),
+                createRuntime(options) {
+                  const runtime = createAcpRuntime(options);
+                  const close = runtime.close.bind(runtime);
+                  runtime.close = (input) =>
+                    close(input).then(() => {
+                      closed++;
+                    });
+                  return runtime;
+                },
                 *agentCwd() {
                   return f.dir;
                 },
@@ -252,6 +285,7 @@ describe(
             },
           });
           const started = withResolvers<void>();
+          const waiting = withResolvers<void>();
           let terminal = false;
           yield* Agent.around({
             *prompt(args, next) {
@@ -264,6 +298,13 @@ describe(
                       const event = yield* subscription.next();
                       if (!event.done && event.value.type === "started") {
                         started.resolve();
+                      }
+                      if (
+                        !event.done &&
+                        event.value.type === "text_delta" &&
+                        event.value.text === "WAITING"
+                      ) {
+                        waiting.resolve();
                       }
                       if (!event.done && event.value.type === "terminal") {
                         terminal = true;
@@ -290,12 +331,15 @@ describe(
             while (!(yield* subscription.next()).done) {}
           });
           yield* started.operation;
+          // Transport submission can precede the peer installing its cancellable request.
+          yield* waiting.operation;
           const activeAtStop = !terminal;
           const stop = yield* execution.stop();
           const completion = yield* execution;
           yield* draining;
           expect(stop.ok).toBe(true);
           expect(completion.ok).toBe(false);
+          expect(closed).toBe(1);
           const events = journal.snapshot();
           const interrupted = events.some(
             (event) => event.type === "close" && event.result.status === "cancelled",
@@ -384,3 +428,50 @@ describe(
     });
   },
 );
+
+describe("standard completed replay", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("completed standard output replays without provider requests", function* () {
+    yield* withCertificationFixture(function* (f) {
+      const journal = new InMemoryStream();
+      const source = '<Session name="replay"><Prompt text="seed:retained" /></Session>';
+      const first = yield* document(
+        f,
+        "standard",
+        source,
+        reportFor(f.command("standard")),
+        [],
+        journal,
+      );
+      expect(first.ok).toBe(true);
+      const calls = yield* f.calls();
+      const replay = yield* document(
+        f,
+        "standard",
+        source,
+        reportFor(f.command("standard")),
+        [],
+        journal,
+      );
+      expect(replay).toEqual(first);
+      expect(yield* f.calls()).toEqual(calls);
+    });
+  });
+});
+
+describe("strong qualification evidence", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("reports declared acceptance and asserted identity independently", function* () {
+    yield* withCertificationFixture(function* (f) {
+      const report = reportFor("codex");
+      expect(
+        (yield* document(
+          f,
+          "strong",
+          '<Session name="strong"><Prompt text="seed:private" /></Session>',
+          report,
+        )).ok,
+      ).toBe(true);
+      expect(report.capabilities.acceptance.outcome).toBe("pass");
+      expect(report.capabilities.identity.outcome).toBe("pass");
+    });
+  });
+});
