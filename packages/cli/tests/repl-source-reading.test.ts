@@ -705,7 +705,7 @@ describe("the reading one entry is shown as", () => {
         inspected: false,
       });
       // One reading, two captioned sections, and the result is the first.
-      expect(Object.keys(reading)).toEqual(["output", "source"]);
+      expect(Object.keys(reading)).toEqual(["output", "commands", "source"]);
       expect(reading.output.caption).toBe("Output");
       expect(reading.source.caption).toBe("Source");
     });
