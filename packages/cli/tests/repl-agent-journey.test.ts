@@ -1674,6 +1674,7 @@ function holds(asked: readonly string[]): Holds {
           return {
             ...turn,
             materialized: hold.start.opened.then(() => turn.materialized),
+            promptStarted: hold.start.opened.then(() => turn.promptStarted),
             events: {
               [Symbol.asyncIterator]() {
                 const events = inner[Symbol.asyncIterator]();

@@ -53,7 +53,11 @@ function answer(request) {
     if (seed !== undefined) { marker=seed; }
     const respond = () => {
       if (mode !== "no-acceptance" && mode !== "standard" && mode !== "standard-wait") { update({sessionUpdate:"session_info_update",_meta:{"executablemd.session-materialization/v1":{state:"accepted"}}}); }
-      if (mode === "wait" || mode === "standard-wait" || text.includes("Wait for cancellation.")) { activePrompt=id; return; }
+      if (mode === "wait" || mode === "standard-wait" || text.includes("Wait for cancellation.")) {
+        activePrompt=id;
+        if (mode === "standard-wait") { update({sessionUpdate:"agent_message_chunk",content:{type:"text",text:"WAITING"}}); }
+        return;
+      }
       const value=seed !== undefined ? "READY" : mode === "lost" ? "WRONG" : marker ?? "UNKNOWN";
       update({sessionUpdate:"agent_message_chunk",content:{type:"text",text:value}});
       reply(id,{stopReason:"end_turn"});

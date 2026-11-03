@@ -1054,72 +1054,52 @@ describe("Tier R2 — cases 2, 5 and 6: a conversation across real process bound
     yield* root.discard();
   });
 
-  it("R2n: a provider naming another conversation replaces nothing, runs nothing, and is not guessed about", function* () {
+  it("R2n: a provider naming another conversation replaces nothing and runs nothing", function* () {
     const root = yield* createRepositoryRoot();
+    yield* ensure(() => root.discard());
     yield* runPhase("chat-open", root, "chat");
-
     yield* runPhase(
       "chat-say",
       root,
       "chat",
       script({ replies: ["<Output>One.</Output>\n"], identity: "native-one", say: "first" }),
     );
-
-    // A later process whose provider resolves a different native conversation,
-    // and whose own account of the earlier one has been pruned — so it names
-    // the conversation only once the turn has started, which is where a *late*
-    // assertion is caught.
     const elsewhere = yield* runPhase(
+      "chat-say",
+      root,
+      "chat",
+      script({ replies: [READS], identity: "native-two", say: "second" }),
+    );
+    expect(String(elsewhere.failure)).toContain("different native conversation");
+    expect(elsewhere.operations).toEqual([]);
+    expect(elsewhere.prompts).toBe(0);
+    expect(elsewhere.conversations).toEqual([
+      expect.objectContaining({ attempted: [1], completed: [1] }),
+    ]);
+    expect(elsewhere.turns).toEqual([expect.objectContaining({ name: "turn:1" })]);
+    expect(elsewhere.conversations).toHaveLength(1);
+  });
+
+  it("R2n control: missing provider storage refuses before a replacement turn", function* () {
+    const root = yield* createRepositoryRoot();
+    yield* ensure(() => root.discard());
+    yield* runPhase("chat-open", root, "chat");
+    yield* runPhase(
+      "chat-say",
+      root,
+      "chat",
+      script({ replies: ["<Output>One.</Output>\n"], identity: "native-one", say: "first" }),
+    );
+    const missing = yield* runPhase(
       "chat-say",
       root,
       "chat",
       script({ replies: [READS], identity: "native-two", forget: true, say: "second" }),
     );
-    // The established identity stands: this turn's outcome is refused rather
-    // than adopted, and the reply is not published as this conversation's.
-    expect(String(elsewhere.failure)).toContain("different native conversation");
-    expect(String(elsewhere.failure)).toContain("established identity stands");
-    // And nothing it asked for ran. The reply named a read, and a response
-    // whose turn was disowned is evaluated not at all, so no control ran.
-    expect(elsewhere.operations).toEqual([]);
-    // The person's message is retained and has no answer beside it. That is the
-    // honest projection rather than an omission: the turn completed somewhere
-    // else, so publishing what it said as this conversation's reply would show
-    // somebody words from a conversation they have never been in.
-    // No reply beside it — which is the claim — and since #883 PR 2 the turn
-    // that completed somewhere else is still readable as the turn it was: an
-    // inert saved account with no body, never that conversation's words.
-    const held = elsewhere.chat as { kind: string }[];
-    expect(held.map((item) => item.kind)).toEqual(["person", "reply", "person", "saved"]);
-    expect(held[3]).toMatchObject({
-      kind: "saved",
-      turn: 2,
-      // Its own inert status, which is the whole of what it says: no body, no
-      // reply and nothing borrowed from the conversation that really ran it.
-      text: "Turn saved; no evaluated reply recorded.",
-    });
-    // The turn itself is retained as having happened, because it did.
-    expect(elsewhere.conversations).toEqual([
-      expect.objectContaining({ attempted: [1, 2], completed: [1, 2] }),
-    ]);
-    // It replaced nothing either: one conversation, the one that was already
-    // active, and no fresh conversation started beside it.
-    expect(elsewhere.conversations).toHaveLength(1);
-
-    // And now the history names two native conversations, so a further process
-    // refuses to continue it at all rather than choosing one. Which it is
-    // cannot be established from its own records, and picking would attach the
-    // next turn to whichever was read last.
-    const after = yield* runPhase(
-      "chat-say",
-      root,
-      "chat",
-      script({ replies: ["<Output>Three.</Output>\n"], identity: "native-one", say: "third" }),
-    );
-    expect(after.sent).toBe(false);
-    expect(String(after.failure)).toContain("more than one native conversation");
-
-    yield* root.discard();
+    expect(String(missing.failure)).toContain("provider has no record");
+    expect(missing.prompts).toBe(0);
+    expect(missing.operations).toEqual([]);
+    expect(missing.turns).toEqual([expect.objectContaining({ name: "turn:1" })]);
   });
 
   it("R2o: a settled effect and an interrupted question both survive, and a continuation authors a fresh response", function* () {
@@ -2585,6 +2565,7 @@ describe("Tier IN5 — a chat saved by the build before this one", () => {
       JSON.stringify({
         replies: ["<Output>Carrying on.</Output>\n"],
         identity: NATIVE,
+        existing: true,
         say: "one more thing",
       }),
     );

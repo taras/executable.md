@@ -15,7 +15,7 @@ import {
 import type { AgentPromptEvent } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { createAcpxProvider, createAcpxSessionStore } from "../mod.ts";
+import { createAcpRuntime, createAcpxProvider, createAcpxSessionStore } from "../mod.ts";
 import { withCertificationFixture } from "./certification-fixture.ts";
 import type { CertificationFixture } from "./certification-fixture.ts";
 import {
@@ -261,6 +261,7 @@ describe(
         const command = f.command("standard-wait");
         const report = reportFor(command);
         report.capabilities.cancellation.selected = true;
+        let closed = 0;
         yield* scoped(function* () {
           yield* installAgentComponents({
             defaultAgent: command,
@@ -268,6 +269,15 @@ describe(
               options: { defaultAgent: command, permissionMode: "deny-all" },
               factory: createAcpxProvider({
                 sessionStore: createAcpxSessionStore(join(f.dir, "store")),
+                createRuntime(options) {
+                  const runtime = createAcpRuntime(options);
+                  const close = runtime.close.bind(runtime);
+                  runtime.close = (input) =>
+                    close(input).then(() => {
+                      closed++;
+                    });
+                  return runtime;
+                },
                 *agentCwd() {
                   return f.dir;
                 },
@@ -275,6 +285,7 @@ describe(
             },
           });
           const started = withResolvers<void>();
+          const waiting = withResolvers<void>();
           let terminal = false;
           yield* Agent.around({
             *prompt(args, next) {
@@ -287,6 +298,13 @@ describe(
                       const event = yield* subscription.next();
                       if (!event.done && event.value.type === "started") {
                         started.resolve();
+                      }
+                      if (
+                        !event.done &&
+                        event.value.type === "text_delta" &&
+                        event.value.text === "WAITING"
+                      ) {
+                        waiting.resolve();
                       }
                       if (!event.done && event.value.type === "terminal") {
                         terminal = true;
@@ -313,12 +331,15 @@ describe(
             while (!(yield* subscription.next()).done) {}
           });
           yield* started.operation;
+          // Transport submission can precede the peer installing its cancellable request.
+          yield* waiting.operation;
           const activeAtStop = !terminal;
           const stop = yield* execution.stop();
           const completion = yield* execution;
           yield* draining;
           expect(stop.ok).toBe(true);
           expect(completion.ok).toBe(false);
+          expect(closed).toBe(1);
           const events = journal.snapshot();
           const interrupted = events.some(
             (event) => event.type === "close" && event.result.status === "cancelled",
