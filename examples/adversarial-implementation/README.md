@@ -234,6 +234,14 @@ the input file.
 External reviewer models and publication use their existing workflows. The
 phase entry retains the implementation workflow's role and model policy.
 
+## Supervise a live REPL phase
+
+Keep the original ACP call pending, or reconnect passively with the existing
+exact-message `--follow` command. [Supervision](supervision.md) explains progress
+rendering with `<Query>`, completion evidence and safe detachment. Follow waits
+for an exchange; the selected entry and canonical phase or Ticket result still
+determine the work's outcome.
+
 ## Responsibilities and models
 
 | Owner | Work | Model and effort |
