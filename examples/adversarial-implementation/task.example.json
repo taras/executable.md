@@ -10,6 +10,8 @@
     "implementor": "bounded-parser-fix-implementor",
     "architect": "bounded-parser-fix-architect"
   },
+  "providers": {"architect":"codex","planner":"codex","implementor":"codex"},
+  "maxResponseCorrections": 0,
   "maxCorrections": 3,
   "maxApiRepairs": 3,
   "assessment": {
@@ -34,5 +36,21 @@
       "evidence": ["/absolute/work/accepted-scope-and-checks.md"]
     },
     "migration": null
+  },
+  "delivery": {
+    "repository": "taras/executable.md",
+    "reviewer": {
+      "provider": "claude",
+      "model": "claude-fable-5-1[1m]",
+      "effort": null,
+      "session": "bounded-parser-fix-independent-review"
+    },
+    "acceptance": [
+      {
+        "id": "parser-behavior",
+        "source": "/absolute/work/accepted-scope-and-checks.md",
+        "requirement": "Preserve the accepted parser behavior and demonstrate the focused regression."
+      }
+    ]
   }
 }

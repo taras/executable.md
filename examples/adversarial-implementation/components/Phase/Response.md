@@ -13,7 +13,8 @@ returns: {type: object}
 <Let as="normalizations" value={[]} />
 <SafeParse schema={{type:"object"}} as="candidate">{extracted.json}</SafeParse>
 <If condition={candidate.ok}>
-<Phase.Revisions repository={assignment.repository} value={candidate.value} as="canonical" />
+<Phase.Metadata assignment={assignment} value={candidate.value} as="preparedReply" />
+<Phase.Revisions repository={assignment.repository} value={preparedReply} as="canonical" />
 <If condition={!canonical.ok}><Return value={canonical} /><Break /></If>
 <Json value={canonical.value} as="canonicalJson" />
 <Let as="extracted" value={{...extracted,json:canonicalJson}} />

@@ -4,7 +4,14 @@ import { fileURLToPath } from "node:url";
 import { readTextFile } from "@effectionx/fs";
 
 describe("adversarial implementation example", () => {
-  for (const suite of ["Workflow", "Friction", "Implementation"]) {
+  for (const suite of [
+    "Workflow",
+    "Friction",
+    "Implementation",
+    "LaunchPolicy",
+    "Delivery",
+    "ProductionRole",
+  ]) {
     it(`runs the ${suite} Markdown journeys without native models`, function* () {
       const workflowCommand = [
         "deno",
@@ -22,12 +29,18 @@ describe("adversarial implementation example", () => {
       );
       yield* runCli(
         [
-          "run",
-          "--allow-absolute",
-          "--eval",
-          `<Testing>\n${source}\n</Testing>`,
+          ...(suite === "ProductionRole"
+            ? [
+                "test",
+                `examples/adversarial-implementation/tests/${suite}.test.md`,
+                "--plugin",
+                "./packages/cli/tests/fixtures/workflow-test-permissions.mjs",
+              ]
+            : ["run", "--allow-absolute", "--eval", `<Testing>\n${source}\n</Testing>`]),
           "--include",
-          "examples/adversarial-implementation/tests/components",
+          suite === "ProductionRole"
+            ? "examples/adversarial-implementation/components"
+            : "examples/adversarial-implementation/tests/components",
           "--include",
           "examples/adversarial-implementation/components",
         ],

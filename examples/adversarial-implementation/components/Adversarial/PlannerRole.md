@@ -11,10 +11,10 @@ props:
 ---
 
 <Adversarial.Schema as="schemas" />
-<Phase.Profile role="planner" design={true} assessment={props.assignment.assessment} as="profile" />
-<Output><Agent name="claude"><Session name={props.assignment.session} model={profile.model} effort={profile.effort}><Prompt throwOnError={true}>
+<Phase.Profile role="planner" design={true} plannerProvider={props.assignment.plannerProvider} assessment={props.assignment.assessment} as="profile" />
+<Output><Agent name={profile.provider}><Session name={props.assignment.session} model={profile.model} effort={profile.effort}><Prompt throwOnError={true}>
 <If condition={props.correction !== null}>
-You remain the original Planner. This is response-only correction {props.correction.ordinal} of three. Shorten only the rejected summary or handoff to its stated bound. Every other result value is frozen by the supplied schema, including the API, outcome, source revision, artifacts, assessment and command evidence.
+You remain the original Planner. This is response-only correction {props.correction.ordinal} with {props.correction.remaining} remaining. Shorten only the rejected summary or handoff to its stated bound. Every other result value is frozen by the supplied schema, including the API, outcome, source revision, artifacts, assessment and command evidence.
 
 Perform no implementation, command execution, test, signing, publication or other productive work. Do not repeat the earlier assignment. Return only the corrected JSON result. If the existing facts cannot satisfy the schema, preserve that uncertainty; do not invent evidence.
 
@@ -29,6 +29,8 @@ Repository instructions:
 Role instructions:
 {props.guide}
 </If>
+Use the provider, model and effort explicitly selected by this workflow; historical role-guide defaults do not replace that allocation.
+
 Continue in the same Planner conversation. Use the supplied inputs and prior API evidence; investigate a specific missing fact instead of repeating discovery. A repair preserves the original accepted outcome and completed migration work.
 
 Do not draft, create or edit PR or issue titles or descriptions. The Sidekick running Codex authors and applies that metadata. Return technical artifacts and evidence; API usage documentation remains your responsibility.

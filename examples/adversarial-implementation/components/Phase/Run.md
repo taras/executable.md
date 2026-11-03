@@ -41,6 +41,7 @@ props:
     initialize:
       type: boolean
       default: false
+    plannerProvider: {enum: [claude, codex], default: claude}
     implementationProvider:
       enum: [claude, codex]
       default: claude
@@ -126,10 +127,10 @@ mkdir -- {quotedAttempt}
 </If>
 <Dir path={attempt}><File path="assignment.json"><Json value={assignment} /></File></Dir>
 <Phase.Event attempt={attempt} stage="started" assignment={assignment} role={props.role} as="started" />
-<Phase.Role inputs={props.inputs} role={props.role} session={props.session} assignment={assignment} initialize={props.initialize} implementationProvider={props.implementationProvider} as="raw" />
+<Phase.Role inputs={props.inputs} role={props.role} session={props.session} assignment={assignment} initialize={props.initialize} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} as="raw" />
 <Dir path={attempt}><File path="raw.txt">{raw}</File></Dir>
 <Phase.Event attempt={attempt} stage="reply-saved" assignment={assignment} role={props.role} as="replied" />
-<Phase.Correct assignment={assignment} raw={raw} role={props.role} session={props.session} attempt={attempt} implementationProvider={props.implementationProvider} inputs={props.inputs} profile={props.responseProfile} maxResponseCorrections={props.maxResponseCorrections} as="accepted" />
+<Phase.Correct assignment={assignment} raw={raw} role={props.role} session={props.session} attempt={attempt} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} inputs={props.inputs} profile={props.responseProfile} maxResponseCorrections={props.maxResponseCorrections} as="accepted" />
 <Let as="result" value={accepted.result} />
 <Dir path={attempt}><File path="result.json"><Json value={result} /></File></Dir>
 <Let as="rawQuoted" value={"'" + accepted.rawPath.replaceAll("'","'\"'\"'") + "'"} />

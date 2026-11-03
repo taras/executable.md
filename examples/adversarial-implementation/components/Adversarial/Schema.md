@@ -4,6 +4,7 @@ returns: {type: object}
 ---
 
 <Phase.Schema as="phases" />
+<Delivery.Schema as="delivery" />
 <ReviewPolicy.Schema as="assessment" />
 <Let as="text" value={{type:"string",minLength:1}} />
 <Let as="texts" value={{type:"array",items:text}} />
@@ -72,6 +73,8 @@ returns: {type: object}
       ],
       "additionalProperties": false
     },
+    providers:{type:"object",properties:{architect:{const:"codex"},planner:{enum:["claude","codex"]},implementor:{enum:["claude","codex"]}},required:["architect","planner","implementor"],additionalProperties:false},
+    maxResponseCorrections:{type:"integer",minimum:0,maximum:3},
     "maxCorrections": {
       "type": "integer",
       "minimum": 0,
@@ -83,6 +86,7 @@ returns: {type: object}
       "maximum": 10
     },
     assessment,
+    delivery:delivery.policy,
     "scope": {
       "type": "object",
       "properties": {
@@ -222,8 +226,13 @@ returns: {type: object}
     "request",
     "inputs",
     "sessions",
+    "providers",
+    "maxCorrections",
+    "maxApiRepairs",
+    "maxResponseCorrections",
     "assessment",
-    "scope"
+    "scope",
+    "delivery"
   ],
   "additionalProperties": false
 },
@@ -233,9 +242,11 @@ returns: {type: object}
     repository:{type:"string",pattern:"^/"},directory:{type:"string",pattern:"^/"},request:text,
     inputs:{...texts,uniqueItems:true,default:[]},
     sessions:{type:"object",properties:{planner:text,implementor:text,architect:text},required:["planner","implementor","architect"],additionalProperties:false},
-    maxCorrections:{type:"integer",minimum:0,maximum:10,default:3},
-    maxApiRepairs:{type:"integer",minimum:0,maximum:10,default:3}
-  },required:["work","repository","directory","request","sessions"],additionalProperties:false},
+    providers:{type:"object",properties:{architect:{const:"codex"},planner:{enum:["claude","codex"]},implementor:{enum:["claude","codex"]}},required:["architect","planner","implementor"],additionalProperties:false},
+    maxResponseCorrections:{type:"integer",minimum:0,maximum:3},
+    maxCorrections:{type:"integer",minimum:0,maximum:10},
+    maxApiRepairs:{type:"integer",minimum:0,maximum:10}
+  },required:["work","repository","directory","request","sessions","providers","maxCorrections","maxApiRepairs","maxResponseCorrections"],additionalProperties:false},
   foundation:{type:"object",properties:{
     outcome:{enum:["complete","needs_architect","needs_decision","blocked"]},
     revision:{type:"string",pattern:"^[0-9a-f]{40}$"},
