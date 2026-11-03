@@ -292,7 +292,7 @@ git rev-parse HEAD
 <Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
 <AssertEquals actual={work.status} expected={limit === 0 ? "hold" : "feedback_ready"} />
 <If condition={limit === 0 && !(work.reason ?? work.checkpoint?.hold?.reason)?.includes("response_correction_disabled")}><Fail message={work.reason ?? work.checkpoint?.hold?.reason ?? JSON.stringify(work)} /></If>
-<Let as="attempt" value={directory + (ready ? "/attempts/0000" : "/planning")} />
+<Let as="attempt" value={directory + "/attempts/0000"} />
 <Dir path={attempt}><Glob include={["response-corrections/**/called.json"]} as="repairs" /></Dir>
 <AssertEquals actual={repairs.length} expected={limit} />
 <If condition={limit === 0}>
@@ -307,4 +307,65 @@ git rev-parse HEAD
 </If>
 </TempDir>
 </Each>
+</Test>
+
+<Test name="A3 initial planning boundaries continue original owners and pause repeated discovery" timeout="90s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Dir path={fixture.repository}>
+```bash exec as="base"
+git rev-parse HEAD
+```
+</Dir>
+<Let as="reference" value={fixture.root + "/accepted.md"} />
+<Dir path={fixture.root}><File path="accepted.md">Accepted immutable scope.</File></Dir>
+<Let as="impact" value={{...assessment,architecture:true,evidence:[reference]}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:"test",directory:fixture.directory,maxCorrections:3,maxApiRepairs:3,maxResponseCorrections:0,roles:{architect:{session:"original-architect",provider:"codex",initialized:false},planner:{session:"original-planner",provider:"codex",initialized:false},implementor:{session:"original-implementor",provider:"codex",initialized:false}},acceptedInputs:[{path:reference,content:"Accepted immutable scope."}],assignment:{phase:"discovery",work:"test",repository:fixture.repository,revision:base.stdout.trim(),priorRevision:null,request:"#1084:again",assessment:impact,changedPaths:[],artifacts:[],evidence:[],findings:[],recipient:"planner",continuation:{phase:"implementation",role:"implementor"}}}} />
+<Fixture.Entry entry="planning-case" value={manifest} repository={fixture.repository} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="planner">{child.stdout}</Parse>
+<If condition={!planner.checkpoint.dispatchable}><Fail message={JSON.stringify(planner)} /></If>
+<AssertEquals actual={planner.checkpoint.gate} expected="architect-discovery" />
+<AssertEquals actual={planner.checkpoint.reviews} expected={{}} />
+<AssertEquals actual={planner.checkpoint.feedback} expected={[]} />
+<Dir path={fixture.root}><File path="accepted.md">Mutable original changed after delivery.</File></Dir>
+<Fixture.Entry entry="continue" value={planner} repository={fixture.repository} steps={1} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="architect">{child.stdout}</Parse>
+<If condition={!architect.dispatchable}><Fail message={JSON.stringify(architect)} /></If>
+<AssertEquals actual={architect.calls.slice(0,1)} expected={planner.calls} />
+<AssertEquals actual={architect.gate} expected="planning" />
+<AssertEquals actual={architect.calls[1].session} expected="original-architect" />
+<AssertEquals actual={architect.calls[1].initialize} expected={true} />
+<AssertEquals actual={architect.calls[1].inputs.find(input => input.path === reference).content} expected="Accepted immutable scope." />
+<Fixture.Entry entry="continue" value={architect} repository={fixture.repository} steps={1} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="returned">{child.stdout}</Parse>
+<If condition={!returned.dispatchable}><Fail message={JSON.stringify(returned)} /></If>
+<AssertEquals actual={returned.calls.slice(0,2)} expected={architect.calls} />
+<AssertEquals actual={returned.calls[2].session} expected="original-planner" />
+<AssertEquals actual={returned.calls[2].initialize} expected={false} />
+<AssertEquals actual={returned.calls[2].inputs.map(input => input.path)} expected={architect.calls[1].resultValue.handoffInputs.filter(path => !architect.deliveredInputs["original-planner"].includes(path))} />
+<AssertEquals actual={returned.assignment.contract} expected={architect.calls[1].resultValue.contract} />
+<AssertEquals actual={returned.status} expected="paused" />
+<AssertEquals actual={returned.hold} expected={null} />
+<AssertEquals actual={returned.gate} expected="architect-discovery" />
+<AssertEquals actual={returned.nextAction.entry} expected="continue.md" />
+<Ticket.Continue record={returned} as="automatic" />
+<AssertEquals actual={automatic.calls} expected={returned.calls} />
+<Fixture.Entry entry="continue" value={automatic} repository={fixture.repository} steps={1} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="continued">{child.stdout}</Parse>
+<AssertEquals actual={continued.calls.slice(0,3)} expected={returned.calls} />
+<AssertEquals actual={continued.calls.length} expected={4} />
+<AssertEquals actual={continued.calls[3].session} expected="original-architect" />
+<AssertEquals actual={continued.calls[3].initialize} expected={false} />
+<AssertEquals actual={continued.calls[3].inputs.map(input => input.path)} expected={returned.calls[2].resultValue.handoffInputs.filter(path => !returned.deliveredInputs["original-architect"].includes(path))} />
+<AssertEquals actual={continued.manifest} expected={manifest} />
+<AssertEquals actual={continued.round} expected={2} />
+<AssertEquals actual={continued.checkpoint.reviews} expected={{}} />
+<AssertEquals actual={continued.checkpoint.feedback} expected={[]} />
+<AssertEquals actual={continued.deliveredInputs["original-planner"]} expected={returned.deliveredInputs["original-planner"]} />
+<AssertEquals actual={continued.calls.every(call => call.sourceValue.clean && call.sourceValue.head === manifest.assignment.revision)} expected={true} />
+</TempDir>
 </Test>

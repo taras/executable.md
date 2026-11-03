@@ -1,6 +1,6 @@
 ---
 description: >-
-  Continue an accepted implementation through its selected original reviewers. Use <Ticket.Run
+  Carry ordinary planning or accepted implementation through its original roles. Use <Ticket.Run
   manifest="/private/tmp/ticket-manifest.json" as="ticket" />. Reopen the same unfinished
   REPL entry to resume; failures and unanswered decisions hold the ticket.
 props:

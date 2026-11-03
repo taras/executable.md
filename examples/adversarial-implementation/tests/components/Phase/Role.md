@@ -23,7 +23,7 @@ props:
 <Let as="receipt" value={assignment.artifactDirectory + "/focused.json"} />
 <Let as="revision" value={assignment.revision} />
 <Let as="conflict" value={props.role === "implementor" && assignment.request === "first-consumer"} />
-<Dir path={assignment.artifactDirectory}><File path="called.json"><Json value={{session:props.session,role:props.role,plannerProvider:props.plannerProvider,implementationProvider:props.implementationProvider,revision,changedPaths:assignment.changedPaths,initialize:props.initialize,inputPaths:props.inputs.map(input => input.path),inputs:props.inputs,request:assignment.request,phase:assignment.phase}} /></File></Dir>
+<Dir path={assignment.artifactDirectory}><File path="called.json"><Json value={{session:props.session,role:props.role,plannerProvider:props.plannerProvider,implementationProvider:props.implementationProvider,revision,changedPaths:assignment.changedPaths,initialize:props.initialize,inputPaths:props.inputs.map(input => input.path),inputs:props.inputs,request:assignment.request,phase:assignment.phase,contract:assignment.contract}} /></File></Dir>
 <If condition={assignment.phase === "discovery"}>
 <Let as="planPath" value={assignment.artifactDirectory + "/plan.md"} />
 <Dir path={assignment.artifactDirectory}><File path="plan.md">Use the existing format API for the remaining consumer. Remove legacy.fixture, run bash consumer.sh, and return its signed feedback commit.</File></Dir>
@@ -34,8 +34,26 @@ printf '%s' 'Evidence B: mutable original after planning.' > {evidencePath}
 ```
 <If condition={mutated.exitCode !== 0}><Fail message={mutated.stderr} /></If>
 </If>
-<Let as="decision" value={assignment.request.includes("unanswered-plan-decision")} />
-<Json value={{schema:"phase-result.v2",phase:assignment.phase,work:assignment.work,outcome:decision ? "needs_decision" : "complete",revision,summary:assignment.request.includes("oversized-summary") ? "x".repeat(1201) : "The ordinary plan and focused evidence are saved.",handoff:decision ? "ROOT: resolve the newly discovered material choice." : "Implement the selected ordinary plan using the accepted format API; retire legacy.fixture.",handoffInputs:[planPath],artifacts:[planPath],evidence:[],findings:[],assessment:assignment.assessment,discoveryRequests:[],discoveryGaps:[],next:decision ? {phase:"hold",role:null} : assignment.continuation}} />
+<Let as="ordinary" value={assignment.request.includes("#1084:")} />
+<Let as="scenario" value={ordinary ? assignment.request.split("#1084:")[1].split(/\s/)[0] : ""} />
+<If condition={ordinary && scenario.startsWith("source-")}>
+<File path="legacy.fixture">Changed during read-only discovery.</File>
+</If>
+<If condition={ordinary && ["provider-failure","source-absent"].includes(scenario)}><Fail message="The provider stopped without a canonical reply; reconcile the original execution." /></If>
+<Let as="decision" value={assignment.request.includes("unanswered-plan-decision") || ["decision","source-decision"].includes(scenario)} />
+<Let as="blocked" value={scenario === "blocked"} />
+<Let as="discovery" value={ordinary && props.role === "planner" && (props.initialize || scenario === "again") && scenario !== "source-complete"} />
+<Let as="outcome" value={decision ? "needs_decision" : blocked ? "blocked" : discovery ? "needs_discovery" : "complete"} />
+<If condition={scenario === "revision"}>
+```bash exec as="otherRevision"
+git rev-parse HEAD^
+```
+<Let as="revision" value={otherRevision.stdout.trim()} />
+</If>
+<Let as="request" value={{key:"ordinary-contract",role:scenario === "wrong-request" ? "architect" : props.role,question:"Which existing owner retains initial planning?",neededFor:"Prepare the ordinary plan.",evidenceNeeded:"The accepted Ticket boundary.",origin:assignment.artifactDirectory}} />
+<Let as="gap" value={{request:{...request,role:scenario === "wrong-gap" ? "architect" : props.role},searched:[planPath],status:"resolved",evidence:[planPath],toolCalls:null,elapsedMs:null}} />
+<Let as="contract" value={{work:assignment.work,sourceRevision:revision,scope:"Retain original sessions and exact source.",sections:[]}} />
+<Json value={{schema:"phase-result.v2",phase:assignment.phase,work:assignment.work,outcome,revision,summary:assignment.request.includes("oversized-summary") ? "x".repeat(1201) : "The ordinary plan and focused evidence are saved.",handoff:decision ? "ROOT: resolve the newly discovered material choice." : ordinary ? "#1084:" + scenario + " Implement the selected plan using the accepted format API; retire legacy.fixture." : "Implement the selected ordinary plan using the accepted format API; retire legacy.fixture.",handoffInputs:[...new Set([planPath,...(ordinary ? assignment.handoffInputs ?? [] : [])])],artifacts:[planPath],evidence:[],findings:[],assessment:assignment.assessment,discoveryRequests:discovery ? [request] : [],discoveryGaps:discovery ? [gap] : [],...(props.role === "architect" ? {contract} : {}),...(blocked ? {blocker:{kind:"permission",reason:"Source permission is unavailable.",unblockCondition:"Restore the existing source permission.",evidence:[planPath]}} : {}),next:decision || blocked ? {phase:"hold",role:null} : discovery ? {phase:"discovery",role:"architect"} : assignment.continuation}} />
 <Else>
 <If condition={props.role === "implementor"}>
 <If condition={conflict}>
@@ -74,7 +92,7 @@ git rev-parse HEAD
 </If>
 <Dir path={assignment.artifactDirectory}><File path="focused.json"><Json value={{revision,...check}} /></File></Dir>
 <Let as="outcome" value={conflict ? "needs_discovery" : props.role === "implementor" ? "complete" : props.role === "architect" && assignment.request.endsWith("structural-rejected") ? "changes_required" : "pass"} />
-<Json value={{schema:"phase-result.v2",...(assignment.request === "omitted-metadata" ? {} : {phase:assignment.phase,work:assignment.work,revision}),outcome,summary:["oversized-summary","uncorrectable-summary"].includes(assignment.request) ? "x".repeat(1201) : "The fake role ran the assigned consumer.",handoff:conflict ? "Planner: add and validate resize for the remaining consumer." : "Original owner: inspect the completed consumer migration.",artifacts:[receipt],evidence:[{revision:assignment.request === "short-revision" ? revision.slice(0,8) : revision,command:conflict ? "resize narrow" : "inspect the assigned commit",outcome:conflict ? "failed" : "passed",artifact:receipt}],findings:[],assessment:assignment.assessment,discoveryRequests:[],discoveryGaps:[],...(assignment.request === "omitted-metadata" ? {} : {next:conflict ? {phase:"discovery",role:"planner"} : outcome === "changes_required" ? {phase:"implementation",role:"implementor"} : assignment.continuation}),...(conflict ? {apiConflict:{expected:"The API can resize a remaining consumer.",observed:"resize is unavailable.",reproducer:"Source api.sh and run resize narrow.",artifact:receipt}} : {})}} />
+<Json value={{schema:"phase-result.v2",...(assignment.request === "omitted-metadata" ? {} : {phase:assignment.phase,work:assignment.work,revision}),outcome,summary:["oversized-summary","uncorrectable-summary"].includes(assignment.request) ? "x".repeat(1201) : "The fake role ran the assigned consumer.",handoff:conflict ? "Planner: add and validate resize for the remaining consumer." : "Original owner: inspect the completed consumer migration.",artifacts:[receipt],evidence:[{revision:assignment.request === "short-revision" ? revision.slice(0,8) : revision,command:conflict ? "resize narrow" : "inspect the assigned commit",outcome:conflict ? "failed" : "passed",artifact:receipt}],findings:[],assessment:assignment.assessment,...(assignment.request.includes("#1084:") ? {handoffInputs:assignment.handoffInputs ?? []} : {}),discoveryRequests:[],discoveryGaps:[],...(assignment.request === "omitted-metadata" ? {} : {next:conflict ? {phase:"discovery",role:"planner"} : outcome === "changes_required" ? {phase:"implementation",role:"implementor"} : assignment.continuation}),...(conflict ? {apiConflict:{expected:"The API can resize a remaining consumer.",observed:"resize is unavailable.",reproducer:"Source api.sh and run resize narrow.",artifact:receipt}} : {})}} />
 </Else>
 </If>
 </Else>

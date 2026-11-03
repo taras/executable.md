@@ -1,6 +1,6 @@
 ---
 description: >-
-  Validate an accepted implementation manifest and prepare its first checkpoint.
+  Validate an ordinary planning or accepted implementation manifest and prepare its first checkpoint.
   Use <Ticket.Start manifest={manifest} as="checkpoint" />.
 props:
   type: object
@@ -11,7 +11,7 @@ props:
 returns: {type: object}
 ---
 
-The ticket begins with its accepted implementation and retains three distinct
+The ticket begins with ordinary planning or accepted implementation and retains three distinct
 original sessions. Provider selection and initialization standing come from the
 manifest; a result cannot replace them.
 
@@ -29,11 +29,12 @@ manifest; a result cannot replace them.
 </If>
 <Phase.Schema as="phases" />
 <Parse schema={phases.assignment} as="assignment"><Json value={manifest.assignment} /></Parse>
-<If condition={assignment.phase !== "implementation" || assignment.work !== manifest.work}>
-<Fail message="Start with this ticket's accepted implementation assignment." />
+<Let as="planning" value={assignment.phase === "discovery" && assignment.recipient === "planner" && assignment.continuation?.phase === "implementation" && assignment.continuation?.role === "implementor"} />
+<If condition={assignment.work !== manifest.work || !(planning || assignment.phase === "implementation" && (assignment.recipient === undefined || assignment.recipient === null || assignment.recipient === "implementor"))}>
+<Fail message="Start with this ticket's ordinary Planner assignment or accepted implementation assignment." />
 </If>
 <If condition={new Set(Object.values(manifest.roles).map(role => role.session)).size !== 3}>
 <Fail message="The three original roles require distinct sessions." />
 </If>
 <ReviewPolicy assessment={assignment.assessment} kind="feature" as="reviewPolicy" />
-<Return value={{reviewPolicy,work:manifest.work,status:"running",dispatchable:true,round:0,gate:"implementation",revision:assignment.revision,assignment,reviews:{},feedback:[],initialized:Object.fromEntries(Object.entries(manifest.roles).map(([name,role]) => [name,role.initialized])),hold:null}} />
+<Return value={{reviewPolicy,work:manifest.work,status:"running",dispatchable:true,round:0,gate:planning ? "planning" : "implementation",revision:assignment.revision,assignment,reviews:{},feedback:[],initialized:Object.fromEntries(Object.entries(manifest.roles).map(([name,role]) => [name,role.initialized])),hold:null}} />
