@@ -336,9 +336,9 @@ function* useConversing(
     },
   };
   if (script.existing === true) {
-    const active = chat.records.findLast(
-      (record) => record.kind === "conversation" && record.phase === "activated",
-    );
+    const active = [...chat.records]
+      .reverse()
+      .find((record) => record.kind === "conversation" && record.phase === "activated");
     if (active?.kind !== "conversation") {
       throw new Error("the historical fixture names no active conversation");
     }
