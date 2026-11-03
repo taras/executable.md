@@ -109,3 +109,9 @@ Prompt counts describe turns observed through the production stream. A refusal
 before stream disclosure can leave native submissions unobserved; these counts
 are not billing evidence. Resume follows its own CLI work deadline and the parent
 waits for actual process settlement even if outer work is cancelled.
+
+The 30-second teardown observation begins when an element's own work exits,
+before its resources close. Expiry permanently ends later admission even if
+cleanup subsequently succeeds; the runner still waits for the real join. The
+same observation runs inside the resume child. Demonstrated invocation teardown
+failure remains failure/cleanup-failed after later successful joins.

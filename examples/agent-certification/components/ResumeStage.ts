@@ -2,7 +2,7 @@ import { content } from "@executablemd/core";
 import type { Json, PropsSchema } from "@executablemd/core";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { Qualification, privateStateSchema } from "../state.ts";
-import { observeQualification, joinQualification } from "../observe.ts";
+import { observeQualification, joinQualification, observeTeardown } from "../observe.ts";
 export const props: PropsSchema = {
   type: "object",
   properties: { input: { type: "string" }, output: { type: "string" } },
@@ -12,6 +12,10 @@ export const props: PropsSchema = {
 export default function* ResumeStage(input: Record<string, Json>) {
   const state = privateStateSchema.parse(JSON.parse(yield* readTextFile(String(input.input))));
   yield* Qualification.set(state);
+  state.teardownExpired ??= false;
+  const finishObservations = yield* observeTeardown(state.report, () => {
+    state.teardownExpired = true;
+  });
   yield* observeQualification(state.report, (event) => {
     if (event.type === "started") {
       state.turn.accepted = true;
@@ -26,6 +30,7 @@ export default function* ResumeStage(input: Record<string, Json>) {
   } catch (error) {
     failure = error;
   }
+  yield* finishObservations();
   yield* writeTextFile(String(input.output), JSON.stringify(state));
   if (failure !== undefined) {
     throw new Error("Resume scenario failed");

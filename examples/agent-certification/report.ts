@@ -294,6 +294,7 @@ export function recordCleanup(
   failed = false,
 ): void {
   const row = report.capabilities.cleanup;
+  failed ||= row.outcome === "failure" && row.reason === "cleanup-failed";
   row.observations.ownerJoined = joined;
   row.observations.nativeCleanupVerified = verified;
   const cancellation = report.capabilities.cancellation;

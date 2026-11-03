@@ -1,7 +1,7 @@
-import { Agent, configurationOf, sessionOf } from "@executablemd/core";
+import { Agent, Component, configurationOf, sessionOf } from "@executablemd/core";
 import type { AgentPromptEvent } from "@executablemd/core";
-import { scoped, Err, Ok } from "effection";
-import type { Result, Operation, Stream } from "effection";
+import { scoped, Err, Ok, useScope, spawn, sleep } from "effection";
+import type { Result, Operation, Stream, Task } from "effection";
 import {
   recordCleanup,
   recordConfigurationFailure,
@@ -70,6 +70,65 @@ export function* observeQualification(
   });
 }
 
+function hasInvocationTeardownFailure(error: unknown, seen = new Set<unknown>()): boolean {
+  if (typeof error !== "object" || error === null || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+  if (Reflect.get(error, "name") === "InvocationTeardownError") {
+    return true;
+  }
+  const cause = Reflect.get(error, "cause");
+  const members = Reflect.get(error, "errors");
+  return (
+    hasInvocationTeardownFailure(cause, seen) ||
+    (Array.isArray(members) && members.some((member) => hasInvocationTeardownFailure(member, seen)))
+  );
+}
+
+export function* observeTeardown(
+  report: Report,
+  expired: () => void,
+): Operation<() => Operation<void>> {
+  const owner = yield* useScope();
+  const observations: Task<void>[] = [];
+  yield* Component.around({
+    *expand([request], next) {
+      observations.push(
+        yield* owner.spawn(function* () {
+          const subscription = yield* request.phases;
+          let phase = yield* subscription.next();
+          while (!phase.done) {
+            if (phase.value.phase === "exit") {
+              yield* spawn(function* () {
+                yield* sleep(30_000);
+                expired();
+              });
+            } else if (phase.value.phase === "complete") {
+              if (
+                !phase.value.result.ok &&
+                hasInvocationTeardownFailure(phase.value.result.error)
+              ) {
+                recordCleanup(report, false, false, true);
+              }
+              return;
+            } else if (phase.value.phase === "cancelled") {
+              return;
+            }
+            phase = yield* subscription.next();
+          }
+        }),
+      );
+      return yield* next(request);
+    },
+  });
+  return function* () {
+    for (const observation of observations) {
+      yield* observation;
+    }
+  };
+}
+
 export function* joinQualification<T>(report: Report, work: () => Operation<T>): Operation<T> {
   let result: Result<T> | undefined;
   try {
@@ -77,6 +136,9 @@ export function* joinQualification<T>(report: Report, work: () => Operation<T>):
       try {
         result = Ok(yield* work());
       } catch (error) {
+        if (hasInvocationTeardownFailure(error)) {
+          recordCleanup(report, false, false, true);
+        }
         result = Err(error instanceof Error ? error : new Error(String(error)));
       }
     });

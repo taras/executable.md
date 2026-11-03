@@ -9,7 +9,7 @@ import { Stdio } from "@effectionx/process";
 import type { ProcessOutcome } from "@executablemd/runtime";
 import { command, exec, useQuietProcessOutput } from "@executablemd/runtime";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
-import { observeQualification, joinQualification } from "./observe.ts";
+import { observeQualification, joinQualification, observeTeardown } from "./observe.ts";
 import { privateStateSchema } from "./state.ts";
 import type { QualificationState } from "./state.ts";
 import { recordCancellation, recordCleanup, reportSchema } from "./report.ts";
@@ -94,8 +94,14 @@ function* runDocument(
   stage: "initial" | "reconnect" | "cancel",
   flags: ReturnType<typeof schedule>,
   directory: string,
+  admission: Admission,
 ): Operation<boolean> {
   return yield* scoped(function* () {
+    state.teardownExpired ??= false;
+    const finishObservations = yield* observeTeardown(state.report, () => {
+      state.teardownExpired = true;
+      admission.open = false;
+    });
     const journal = new InMemoryStream();
     const started = withResolvers<void>();
     const ended = withResolvers<void>();
@@ -104,7 +110,14 @@ function* runDocument(
     let terminal = false;
     let execution: HostExecution | undefined;
     let stopSucceeded = false;
+    let stopFailure: Error | undefined;
     yield* Agent.around({
+      *prompt(args, next) {
+        if (state.teardownExpired) {
+          throw new Error("Qualification teardown observation expired");
+        }
+        return yield* next(...args);
+      },
       *agent(args, next) {
         try {
           return yield* next(...args);
@@ -136,40 +149,47 @@ function* runDocument(
         active = false;
       }
     });
-    const owner = yield* spawn(function* () {
+    const owner = yield* spawn(function* (): Operation<Result<boolean>> {
       try {
-        return yield* race(
-          [
-            function* () {
-              execution = yield* executeInstalled(
-                {
-                  path: fileURLToPath(new URL(`stages/${stage}.md`, import.meta.url)),
-                  stream: journal,
-                  includes: [fileURLToPath(new URL("components", import.meta.url))],
-                  props: { configuration: state.configuration, names: state.names, ...flags },
-                },
-                [{ components: agentIdentityComponents() }],
-              );
-              const output = yield* execution.output;
-              let next = yield* output.next();
-              while (!next.done) {
-                next = yield* output.next();
-              }
-              const result = yield* execution;
-              if (!result.ok) {
-                yield* writeTextFile(
-                  `${directory}/${stage}-failure.txt`,
-                  result.error.stack ?? result.error.message,
+        return Ok(
+          yield* race(
+            [
+              function* () {
+                execution = yield* executeInstalled(
+                  {
+                    path: fileURLToPath(new URL(`stages/${stage}.md`, import.meta.url)),
+                    stream: journal,
+                    includes: [fileURLToPath(new URL("components", import.meta.url))],
+                    props: { configuration: state.configuration, names: state.names, ...flags },
+                  },
+                  [{ components: agentIdentityComponents() }],
                 );
-              }
-              return result.ok;
-            },
-            function* (): Operation<boolean> {
-              yield* sleep(60_000);
-              throw new Error("Scenario deadline");
-            },
-          ].map((operation) => operation()),
+                const output = yield* execution.output;
+                let next = yield* output.next();
+                while (!next.done) {
+                  next = yield* output.next();
+                }
+                const result = yield* execution;
+                if (!result.ok) {
+                  yield* writeTextFile(
+                    `${directory}/${stage}-failure.txt`,
+                    result.error.stack ?? result.error.message,
+                  );
+                }
+                if (!result.ok) {
+                  throw result.error;
+                }
+                return true;
+              },
+              function* (): Operation<boolean> {
+                yield* sleep(60_000);
+                throw new Error("Scenario deadline");
+              },
+            ].map((operation) => operation()),
+          ),
         );
+      } catch (error) {
+        return Err(error);
       } finally {
         ended.resolve();
       }
@@ -202,10 +222,15 @@ function* runDocument(
         );
         if (elapsed && active && !terminal && execution !== undefined) {
           requested = true;
-          stopSucceeded = (yield* execution.stop()).ok;
+          const stopped = yield* execution.stop();
+          stopSucceeded = stopped.ok;
+          if (!stopped.ok) {
+            stopFailure = stopped.error;
+          }
           yield* owner;
         }
       }
+      yield* finishObservations();
       const cancelled = journal
         .snapshot()
         .some((event) => event.type === "close" && event.result.status === "cancelled");
@@ -218,10 +243,18 @@ function* runDocument(
         nativeCleanupVerified: false,
       });
       if (requested) {
+        if (stopFailure !== undefined) {
+          throw stopFailure;
+        }
         return stopSucceeded && cancelled;
       }
     }
-    return yield* owner;
+    const outcome = yield* owner;
+    yield* finishObservations();
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
   });
 }
 
@@ -311,12 +344,19 @@ export function* runSequence(state: QualificationState, directory: string): Oper
         yield* writeTextFile(`${directory}/resume-stderr.txt`, child.stderr ?? "");
         const fragment = privateStateSchema.parse(JSON.parse(yield* readTextFile(output)));
         Object.assign(state.report, fragment.report);
+        if (fragment.teardownExpired) {
+          state.teardownExpired = true;
+          admission.open = false;
+        }
+        if (fragment.report.capabilities.cleanup.reason === "cleanup-failed") {
+          admission.open = false;
+        }
         if (child.exitCode !== 0) {
           return false;
         }
         return true;
       }
-      return yield* runDocument(state, stage, flags, directory);
+      return yield* runDocument(state, stage, flags, directory, admission);
     });
     if (!result.ok || !result.value) {
       if (!result.ok) {

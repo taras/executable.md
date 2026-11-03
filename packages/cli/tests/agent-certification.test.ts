@@ -247,3 +247,114 @@ describe(
     });
   },
 );
+
+describe("nested qualification teardown", { sanitizeOps: false, sanitizeResources: false }, () => {
+  for (const stage of ["initial", "resume"]) {
+    for (const fault of stage === "initial"
+      ? ["throw", "delay", "body-delay"]
+      : ["throw", "delay"]) {
+      it(`${stage} ${fault} preserves nested cleanup evidence and admission`, function* () {
+        yield* withCertificationFixture(function* (f) {
+          const faultSource = `
+import {AgentProviders,content} from "@executablemd/core";
+import {ensure,sleep} from "effection";
+import {writeTextFile} from "@effectionx/fs";
+export function* install() {
+ let admitted=false;
+ yield* AgentProviders.around({*install(args,next) {
+   const call=args[0];
+   if(call.intent === "install" && call.name === "acpx" && !admitted) {
+     admitted=true;
+     ${fault === "body-delay" ? "yield* sleep(31_000);" : ""}
+     yield* ensure(function* () {
+       ${fault === "delay" ? "yield* sleep(31_000);" : ""}
+       yield* writeTextFile(${JSON.stringify(join(f.dir, "joined.txt"))},"joined");
+       ${fault === "throw" ? 'throw new Error("controlled nested provider teardown");' : ""}
+     });
+   }
+   return yield* next(...args);
+ }});
+}
+export default function* CleanupFault(){yield* install();return yield* content();}
+`;
+          yield* writeTextFile(join(f.dir, "CleanupFault.ts"), faultSource);
+          const resume = yield* readTextFile(join(example, "stages/resume.md"));
+          const end = resume.indexOf("\n---\n") + 5;
+          yield* writeTextFile(
+            join(f.dir, "child.md"),
+            resume.slice(0, end) + "<CleanupFault>\n" + resume.slice(end) + "\n</CleanupFault>",
+          );
+          yield* writeTextFile(
+            join(f.dir, "Probe.ts"),
+            `
+import {Qualification} from ${JSON.stringify(join(example, "state.ts"))};
+import {initialReport} from ${JSON.stringify(join(example, "report.ts"))};
+import {runSequence} from ${JSON.stringify(join(example, "stage-runner.ts"))};
+import {writeTextFile,readTextFile} from "@effectionx/fs";
+import {API} from "@executablemd/runtime";
+import {randomUUID} from "node:crypto";
+import {install} from "./CleanupFault.ts";
+export const props={type:"object",properties:{command:{type:"string"},report:{type:"string"}},required:["command","report"]};
+export default function* Probe(input) {
+ const configuration={command:input.command,scenarios:["authentication","completion","cleanup","resume"],expected:[]};
+ const id=randomUUID();
+ const state={configuration,report:initialReport(configuration),marker:randomUUID(),names:{a:"a-"+id,b:"b-"+id,c:"c-"+id},seedAccepted:false,turn:{accepted:false,completed:false}};
+ yield* Qualification.set(state);
+ ${stage === "initial" ? "yield* install();" : `yield* API.Env.around({*command(args,next){const argv=yield* next(...args);const index=argv.findIndex(value=>value.endsWith("/stages/resume.md"));if(index>=0){argv[index]=${JSON.stringify(join(f.dir, "child.md"))};argv.push("--include",${JSON.stringify(f.dir)});}return argv;}});`}
+ yield* runSequence(state,${JSON.stringify(f.dir)});
+ yield* writeTextFile(input.report,JSON.stringify({report:state.report,expired:Reflect.get(state,"teardownExpired") === true}));
+ return "";
+}
+`,
+          );
+          yield* writeTextFile(
+            join(f.dir, "outer.md"),
+            `---
+props:
+  command: { type: string }
+  report: { type: string }
+---
+<Probe command={props.command} report={props.report} />`,
+          );
+          const target = join(f.dir, "snapshot.json");
+          const result = yield* runCli(
+            [
+              "run",
+              join(f.dir, "outer.md"),
+              "--include",
+              f.dir,
+              "--props-command",
+              f.command(),
+              "--props-report",
+              target,
+              "--deny-all",
+              "--raw",
+            ],
+            { cwd: f.dir, env: { HOME: f.home }, timeout: 150_000 },
+          ).join();
+          expect([result.code, result.stderr]).toEqual([0, ""]);
+          expect(yield* readTextFile(join(f.dir, "joined.txt"))).toBe("joined");
+          const snapshot = JSON.parse(yield* readTextFile(target));
+          if (fault === "throw") {
+            expect(snapshot.report.capabilities.cleanup.outcome).toBe("failure");
+            expect(snapshot.report.capabilities.cleanup.reason).toBe("cleanup-failed");
+          } else if (fault === "delay") {
+            expect(snapshot.expired).toBe(true);
+            if (stage === "initial") {
+              expect(
+                (yield* f.methods()).filter((method) => method === "session/prompt").length,
+              ).toBe(1);
+              expect(snapshot.report.capabilities.resume.outcome).toBe("not_run");
+            }
+          } else {
+            expect(snapshot.expired).toBe(false);
+            expect(snapshot.report.capabilities.resume.outcome).toBe("pass");
+            expect(
+              (yield* f.methods()).filter((method) => method === "session/prompt").length,
+            ).toBe(2);
+          }
+        });
+      });
+    }
+  }
+});
