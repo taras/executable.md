@@ -668,9 +668,9 @@ prompt and journals nothing, and is called on explicit interaction rather than
 to restore a pane.
 
 A used history requires an existing provider record on its next explicit turn.
-Use means a retained turn has non-failed status, a stop reason, or an asserted
-native identity. If setup would create, it refuses before `session/new`, names a
-new conversation as the remedy, preserves retained turns and output, and leaves
+Use means a retained turn has nonempty agent output, non-failed status, a stop
+reason, or an asserted native identity. If setup would create, it refuses before
+`session/new`, names a new conversation as the remedy, preserves retained turns and output, and leaves
 the conversation usable. Failed-before-answer history may still create.
 A turn naming no native identity establishes none; it does not permit replacing
 a conversation the history already used.

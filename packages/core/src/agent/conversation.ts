@@ -1122,6 +1122,7 @@ function conversationTurn(
         // that is the account the journal keeps and the one a later opening
         // reconciles against.
         observed.used =
+          record.text !== "" ||
           record.status !== "failed" ||
           record.stopReason !== undefined ||
           record.agentSessionId !== undefined;
@@ -1331,6 +1332,7 @@ function* openable(request: AgentConversationRequest): Operation<Result<Retained
     const record = parsePromptRecord(event.result.value);
     if (record !== undefined) {
       used ||=
+        record.text !== "" ||
         record.status !== "failed" ||
         record.stopReason !== undefined ||
         record.agentSessionId !== undefined;

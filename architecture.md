@@ -3619,9 +3619,9 @@ never replaced. Failed attempts may retain their user request and lifecycle
 facts while preserving earlier messages, identity and configuration.
 
 A held conversation's canonical history independently establishes use: a turn
-with status other than failed, a stop reason, or a native identity counts as
-used. Its private issuance requires existing construction. If provider storage
-is gone, setup refuses before creation or sending, preserves the history and
+with nonempty agent output, status other than failed, a stop reason, or a native
+identity counts as used. Its private issuance requires existing construction. If
+provider storage is gone, setup refuses before creation or sending, preserves the history and
 keeps the conversation usable. A history containing only failed-before-answer
 turns retains its creation retry. An outcome-less turn still refuses opening
 and is never resent.

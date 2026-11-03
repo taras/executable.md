@@ -371,10 +371,8 @@ function sessionPolicy(
       if (identity === undefined) {
         return;
       }
-      if (
-        providerIdentity.agentSessionId === undefined &&
-        providerIdentity.acpSessionId === undefined
-      ) {
+      const value = providerIdentity.agentSessionId ?? providerIdentity.acpSessionId;
+      if (value === undefined) {
         throw new WorkflowAgentSessionError(
           "the provider created an Agent session without asserting a durable identity, so " +
             "this run cannot record which conversation it is having.",
@@ -383,7 +381,7 @@ function sessionPolicy(
       const asserted: ProviderAssertion = {
         kind:
           providerIdentity.agentSessionId === undefined ? ACPX_LOADING_ASSERTION : ACPX_ASSERTION,
-        value: providerIdentity.agentSessionId ?? providerIdentity.acpSessionId ?? "",
+        value,
       };
       const sessionKey = agentSessionKey(identity);
 

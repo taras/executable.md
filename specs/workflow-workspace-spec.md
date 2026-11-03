@@ -2481,6 +2481,11 @@ proof. A later assertion of a different kind refuses rather than changing the
 mapping's kind. [Agent session ownership](../architecture.md#agent-permissions-and-generated-xmd)
 owns the acceptance, assertion and publication ordering.
 
+An ordinary mapping can commit before its first prompt. If the process stops in
+that window and loading later returns `-32603` for the still-unused record, ACPX
+may recreate it under a different ACP id. A later attachment refuses that
+differing assertion; it does not rewrite the mapping or infer continuity.
+
 Partial replay attaches lazily. Completed Prompts restore without contacting the
 provider, and full replay never attaches one. Before a later live Prompt, the
 host resolves the same identity under a new empty working directory:
