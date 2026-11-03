@@ -71,13 +71,16 @@ owned SDK Query supplies a successful SessionStart lifecycle response with that
 exact `session_id`. One fixed no-op command hook, using the adapter's own Node
 runtime, is composed into settings before startup or resume. Deliberate settings
 and hooks survive; disabled, absent, failed, conflicting or mismatched
-confirmation refuses. One owned reader buffers early unrelated messages and
+confirmation refuses. The reader records identity refusal before closing its SDK
+iterator, whose cleanup can release pending setup lookups. Session publication
+rechecks reader failure and disposal after optional SDK setup, before registering
+or answering success. One owned reader buffers early unrelated messages and
 retains the explicit acceptance and exact completed-prompt checkpoint handling.
 Fresh confirmation stays provisional until acceptance and the asserting save.
 Native Claude allocation remains client-allocated, independently of metadata.
 
 The Claude source revision recorded in MANIFEST.json extends the retained patch
-at `beba04dc177ba09bcc9fa10b56e9ded7f219513e`; its local source patch and build
+at `54df80cbb41f2aa56195fd56b4dc2a88295049af`; its local source patch and build
 receipt are supplied with the implementation evidence. The pin records source
 identity, not an unperformed independent review.
 
