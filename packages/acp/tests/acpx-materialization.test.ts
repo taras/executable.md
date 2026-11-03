@@ -35,6 +35,7 @@ import type { AgentPromptEvent } from "@executablemd/core";
 import { Agent } from "@executablemd/core";
 import { createAcpRuntime } from "../src/acpx-runtime.ts";
 import { useAcpxProvider } from "../src/provider.ts";
+import { retainedSession } from "../src/session-store.ts";
 import type {
   AcpAgentRegistry,
   AcpRuntime,
@@ -684,11 +685,13 @@ describe(
           expect(events.map((event) => event.type)).toEqual(["started", "text_delta", "terminal"]);
           expect(events.at(-1)).toMatchObject({ status: "completed", stopReason: "end_turn" });
           expect(session.agentSessionId).toBe(undefined);
+          expect((yield* retainedSession(world.store, "guarantees"))?.acpSessionId).toBeDefined();
         } else {
           expect(outcome.ok).toBe(false);
           expect(events).toEqual([]);
           expect(mappings).toBe(0);
           expect(yield* pending(world, "guarantees")).toBe(true);
+          expect((yield* retainedSession(world.store, "guarantees"))?.acpSessionId).toBe(undefined);
         }
       });
     }

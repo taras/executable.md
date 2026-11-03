@@ -41,6 +41,9 @@ export function* retainedSession(
   if (!record) {
     return undefined;
   }
+  if (record.sessionMaterialization?.state === "pending") {
+    return { agentCommand: record.agentCommand };
+  }
   const retained: AcpxRetainedSession = {
     agentCommand: record.agentCommand,
     acpSessionId: record.acpSessionId,

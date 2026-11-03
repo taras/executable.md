@@ -107,7 +107,7 @@ retained invocation evidence only; it establishes no capability battery. Gemini 
 configuration syntax, not availability or certification evidence. This delivery
 authorizes zero Gemini live calls and installs no agent.
 
-The terminal matrix always lists all eleven capabilities with selected/expected flags,
+The terminal matrix always lists all thirteen capabilities with selected/expected flags,
 outcomes and fixed reasons, plus observed Prompt/cancellation counts and overall
 flags. Failure preserves earlier independent rows and a meaningful nonzero status.
 Private markers, replies, Session identities and child fragments remain local.
