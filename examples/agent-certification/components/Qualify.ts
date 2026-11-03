@@ -64,6 +64,7 @@ export default function* Qualify(input: Record<string, Json>) {
     marker: randomUUID(),
     names: { a: `a-${id}`, b: `b-${id}`, c: `c-${id}` },
     seedAccepted: false,
+    teardownExpired: false,
     turn: { accepted: false, completed: false },
   };
   yield* Qualification.set(state);

@@ -8,6 +8,7 @@ export const privateStateSchema = z.strictObject({
   names: z.strictObject({ a: z.string(), b: z.string(), c: z.string() }),
   identity: z.string().optional(),
   seedAccepted: z.boolean(),
+  teardownExpired: z.boolean().optional(),
   turn: z.strictObject({
     accepted: z.boolean(),
     completed: z.boolean(),
