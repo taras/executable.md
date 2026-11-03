@@ -3068,146 +3068,250 @@ describe("direct submission attachment rights", () => {
   });
 });
 
+function* controlledSupervision(outcome: string) {
+  const entered = withResolvers<void>();
+  const releaseBody = withResolvers<void>();
+  const cleaning = withResolvers<void>();
+  const releaseCleanup = withResolvers<void>();
+  const following = withResolvers<void>();
+  const methods: string[] = [];
+  const resultDirectory = yield* useTemporary("xmd-supervision-result-");
+  const resultFile = join(resultDirectory, "result.json");
+  let cleaned = false;
+  const one = yield* world(
+    {
+      entryInstallation: {
+        *install() {
+          yield* Execution.around({
+            *document([request], next) {
+              yield* ensure(function* () {
+                cleaning.resolve();
+                yield* releaseCleanup.operation;
+                if (outcome === "completed") {
+                  yield* writeTextFile(resultFile, JSON.stringify({ status: "hold", calls: 1 }));
+                }
+                cleaned = true;
+              });
+              entered.resolve();
+              yield* releaseBody.operation;
+              yield* next(request);
+            },
+          });
+        },
+      },
+    },
+    () => countWaitRequests(methods, () => following.resolve()),
+  );
+  return {
+    one,
+    entered,
+    releaseBody,
+    cleaning,
+    releaseCleanup,
+    following,
+    methods,
+    resultFile,
+    get cleaned() {
+      return cleaned;
+    },
+  };
+}
+
+type ControlledSupervision =
+  ReturnType<typeof controlledSupervision> extends Operation<infer T> ? T : never;
+
+function withControlledSupervision(
+  outcome: string,
+  body: (controlled: ControlledSupervision) => Operation<void>,
+) {
+  return scoped(function* () {
+    const controlled = yield* controlledSupervision(outcome);
+    try {
+      yield* body(controlled);
+    } finally {
+      // These barriers must open before scope teardown joins the producer and entry.
+      controlled.releaseBody.resolve();
+      controlled.releaseCleanup.resolve();
+    }
+  });
+}
+
 describe("Passive workflow supervision", () => {
   for (const outcome of ["completed", "failed"]) {
     it(`waits without polling for a ${outcome} entry and joined cleanup`, function* () {
-      const entered = withResolvers<void>();
-      const releaseBody = withResolvers<void>();
-      const cleaning = withResolvers<void>();
-      const releaseCleanup = withResolvers<void>();
-      const following = withResolvers<void>();
-      const progressed = withResolvers<void>();
-      const progress: string[] = [];
-      const methods: string[] = [];
-      const resultDirectory = yield* useTemporary("xmd-supervision-result-");
-      const resultFile = join(resultDirectory, "result.json");
-      let cleaned = false;
-      yield* ensure(() => {
-        releaseBody.resolve();
-        releaseCleanup.resolve();
-      });
-      const one = yield* world(
-        {
-          entryInstallation: {
-            *install() {
-              yield* Execution.around({
-                *document([request], next) {
-                  yield* ensure(function* () {
-                    cleaning.resolve();
-                    yield* releaseCleanup.operation;
-                    if (outcome === "completed") {
-                      yield* writeTextFile(
-                        resultFile,
-                        JSON.stringify({ status: "hold", calls: 1 }),
-                      );
-                    }
-                    cleaned = true;
-                  });
-                  entered.resolve();
-                  yield* releaseBody.operation;
-                  yield* next(request);
-                },
-              });
-            },
-          },
-        },
-        () => countWaitRequests(methods, () => following.resolve()),
-      );
-      const attached = attachResult.parse(
-        yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
-      );
-      const source =
-        outcome === "completed"
-          ? "<Output>The controlled step result.</Output>"
-          : '<Fail message="controlled step failure" />';
-      one.held.fake.script({ reply: fills(source) + "\n<REPL.Submit />" });
-      one.held.fake.script({ reply: "<Output>The exchange settled.</Output>" });
-      const producer = yield* spawn(() =>
-        requestAttachment(one.path, {
-          method: "prompt",
-          attachment: attached.attachment,
-          text: "Execute one controlled step.",
-        }),
-      );
-      yield* race([
-        entered.operation,
-        producer,
-        deadline("The original controlled entry did not start"),
-      ]);
-      const reference = one.dispatch.current?.snapshot.message;
-      if (reference === undefined) {
-        throw new Error("The step has no acknowledged message");
-      }
-      const mark = methods.length;
-      let returned = false;
-      const waiting = yield* spawn(function* () {
-        const result = yield* waitDocument(one, 1, reference, {
+      yield* withControlledSupervision(outcome, function* (controlled) {
+        const {
+          one,
+          entered,
+          releaseBody,
+          cleaning,
+          releaseCleanup,
+          following,
+          methods,
           resultFile,
-          resultSchema: {
-            type: "object",
-            properties: { status: { const: "hold" }, calls: { const: 1 } },
-            required: ["status", "calls"],
-            additionalProperties: false,
-          },
-          progress(text) {
-            progress.push(text);
-            if (progress.join("").includes("[entry 1] evaluating")) {
-              progressed.resolve();
-            }
-          },
+        } = controlled;
+        const progressed = withResolvers<void>();
+        const progress: string[] = [];
+        const attached = attachResult.parse(
+          yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+        );
+        const source =
+          outcome === "completed"
+            ? "<Output>The controlled step result.</Output>"
+            : '<Fail message="controlled step failure" />';
+        one.held.fake.script({ reply: fills(source) + "\n<REPL.Submit />" });
+        one.held.fake.script({ reply: "<Output>The exchange settled.</Output>" });
+        const producer = yield* spawn(() =>
+          requestAttachment(one.path, {
+            method: "prompt",
+            attachment: attached.attachment,
+            text: "Execute one controlled step.",
+          }),
+        );
+        yield* race([
+          entered.operation,
+          producer,
+          deadline("The original controlled entry did not start"),
+        ]);
+        const reference = one.dispatch.current?.snapshot.message;
+        if (reference === undefined) {
+          throw new Error("The step has no acknowledged message");
+        }
+        const mark = methods.length;
+        let returned = false;
+        const waiting = yield* spawn(function* () {
+          const result = yield* waitDocument(one, 1, reference, {
+            resultFile,
+            resultSchema: {
+              type: "object",
+              properties: { status: { const: "hold" }, calls: { const: 1 } },
+              required: ["status", "calls"],
+              additionalProperties: false,
+            },
+            progress(text) {
+              progress.push(text);
+              if (progress.join("").includes("[entry 1] evaluating")) {
+                progressed.resolve();
+              }
+            },
+          });
+          returned = true;
+          return result;
         });
-        returned = true;
-        return result;
+        yield* race([
+          following.operation,
+          waiting,
+          deadline("The wait document did not subscribe"),
+        ]);
+        yield* race([
+          progressed.operation,
+          waiting,
+          deadline("Progress did not arrive before completion"),
+        ]);
+        expect(returned).toBe(false);
+        releaseBody.resolve();
+        yield* cleaning.operation;
+        expect(returned).toBe(false);
+        expect(controlled.cleaned).toBe(false);
+        releaseCleanup.resolve();
+        const result = yield* race([waiting, deadline("The document did not receive completion")]);
+        yield* producer;
+        expect(controlled.cleaned).toBe(true);
+        expect(result.status).toBe(outcome);
+        expect(result.joinedExchange).toBe(true);
+        expect(result.exchangeOutcome).toBe("completed");
+        expect(progress.join("")).toContain("exchange completed");
+        expect(progress.join("")).not.toContain("The exchange settled.");
+        expect(progress.join("").length).toBeLessThan(1500);
+        if (outcome === "completed") {
+          expect(result.read).toEqual({ entry: 1, view: "journal" });
+          expect(result.resultStatus).toBe("readable");
+          expect(result.result).toEqual({ status: "hold", calls: 1 });
+        }
+        if (outcome === "failed") {
+          expect(result.diagnostic).toContain("controlled step failure");
+        }
+        expect(methods.slice(mark)).toEqual(["hello", "message", "hello", "entry"]);
+        expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+        const lateMark = methods.length;
+        const late = yield* waitDocument(one, 1, reference);
+        expect(late.status).toBe(outcome);
+        expect(methods.slice(lateMark)).toEqual(["hello", "message", "hello", "entry"]);
+        expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+        console.log(
+          JSON.stringify({
+            kind: "wait-document-result",
+            outcome,
+            cleaned: controlled.cleaned,
+            requests: methods.slice(mark),
+            statusPolls: 0,
+            observerRoleCalls: 0,
+            alreadyCompletedRead: late.status,
+          }),
+        );
       });
-      yield* race([following.operation, waiting, deadline("The wait document did not subscribe")]);
-      yield* race([
-        progressed.operation,
-        waiting,
-        deadline("Progress did not arrive before completion"),
-      ]);
-      expect(returned).toBe(false);
-      releaseBody.resolve();
-      yield* cleaning.operation;
-      expect(returned).toBe(false);
-      expect(cleaned).toBe(false);
-      releaseCleanup.resolve();
-      const result = yield* race([waiting, deadline("The document did not receive completion")]);
-      yield* producer;
-      expect(cleaned).toBe(true);
-      expect(result.status).toBe(outcome);
-      expect(result.joinedExchange).toBe(true);
-      expect(result.exchangeOutcome).toBe("completed");
-      expect(progress.join("")).toContain("exchange completed");
-      expect(progress.join("")).not.toContain("The exchange settled.");
-      expect(progress.join("").length).toBeLessThan(1500);
-      if (outcome === "completed") {
-        expect(result.read).toEqual({ entry: 1, view: "journal" });
-        expect(result.resultStatus).toBe("readable");
-        expect(result.result).toEqual({ status: "hold", calls: 1 });
-      }
-      if (outcome === "failed") {
-        expect(result.diagnostic).toContain("controlled step failure");
-      }
-      expect(methods.slice(mark)).toEqual(["hello", "message", "hello", "entry"]);
-      expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
-      const lateMark = methods.length;
-      const late = yield* waitDocument(one, 1, reference);
-      expect(late.status).toBe(outcome);
-      expect(methods.slice(lateMark)).toEqual(["hello", "message", "hello", "entry"]);
-      expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
-      console.log(
-        JSON.stringify({
-          kind: "wait-document-result",
-          outcome,
-          cleaned,
-          requests: methods.slice(mark),
-          statusPolls: 0,
-          observerRoleCalls: 0,
-          alreadyCompletedRead: late.status,
-        }),
-      );
     });
   }
+
+  it("exposes an early supervisor failure after joining held entry cleanup", function* () {
+    const ready = withResolvers<ControlledSupervision>();
+    const joined = withResolvers<unknown>();
+    let initiating: unknown;
+    const owner = yield* spawn(function* () {
+      try {
+        yield* withControlledSupervision("completed", function* (controlled) {
+          ready.resolve(controlled);
+          const { one } = controlled;
+          const attached = attachResult.parse(
+            yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+          );
+          one.held.fake.script({
+            reply: fills("<Output>The held entry.</Output>") + "\n<REPL.Submit />",
+          });
+          yield* spawn(() =>
+            requestAttachment(one.path, {
+              method: "prompt",
+              attachment: attached.attachment,
+              text: "Hold the entry through supervisor failure.",
+            }),
+          );
+          yield* controlled.entered.operation;
+          try {
+            yield* waitDocument(one, 1, undefined, {
+              document: join(one.home, "missing-supervisor.md"),
+            });
+          } catch (error) {
+            initiating = error;
+            throw error;
+          }
+        });
+      } catch (error) {
+        joined.resolve(error);
+      }
+    });
+    const controlled = yield* ready.operation;
+    const settled = yield* race([
+      (function* () {
+        yield* joined.operation;
+        return true;
+      })(),
+      (function* () {
+        yield* sleep(5000);
+        return false;
+      })(),
+    ]);
+    // Release from outside the owner so a broken ordering reports an assertion instead of hanging.
+    controlled.releaseBody.resolve();
+    controlled.releaseCleanup.resolve();
+    yield* owner;
+    expect(settled).toBe(true);
+    expect(yield* joined.operation).toBe(initiating);
+    expect(initiating).toBeInstanceOf(Error);
+    if (initiating instanceof Error) {
+      expect(initiating.message).toContain("missing-supervisor.md");
+    }
+    expect(controlled.cleaned).toBe(true);
+  });
 
   it("detaching a passive follow leaves the held producer running", function* () {
     const following = withResolvers<void>();
