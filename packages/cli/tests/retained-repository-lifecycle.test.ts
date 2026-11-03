@@ -1,3 +1,4 @@
+import { Permissions } from "@executablemd/runtime";
 /**
  * Who holds a checkout while an entry works in it, and when they let go.
  *
@@ -891,6 +892,10 @@ describe("an entry's hold on the checkout it is working in", () => {
   });
 
   it("E4: refuses an absolute Dir in a restored placement another owner holds", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const fixture = yield* useFixture();
     const managed = join(fixture.root, "repositories");
     const origin = yield* useOrigin(fixture.root, "absolute-dir-origin");

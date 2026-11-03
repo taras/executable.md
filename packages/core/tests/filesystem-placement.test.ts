@@ -1,3 +1,4 @@
+import { Permissions } from "@executablemd/runtime";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { admitDocumentHostPath, authoredOperation } from "../src/filesystem-placement.ts";
@@ -328,6 +329,10 @@ import { useNormalizedOutput } from "../src/output/normalize.ts";
 describe("993 nested canonical directory projection", () => {
   for (const reusable of [false, true]) {
     it(`W2: selects REPORT inside the canonical frame and reads ROOT after its Dir closes (${reusable})`, function* () {
+      yield* Permissions.around(
+        { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+        { at: "min" },
+      );
       const directory = yield* useTempDirectory("nested-canonical-");
       yield* ensureDir(`${directory}/reports`);
       yield* writeTextFile(`${directory}/result.txt`, "ROOT");

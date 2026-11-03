@@ -25,6 +25,7 @@ import { useTempDirectory } from "./lib/temp-directory.ts";
 import process from "node:process";
 import {
   Files,
+  Permissions,
   parseFileWriteFailure,
   parseFileWriteSuccess,
   parseFilesFailure,
@@ -213,7 +214,17 @@ await main(function* () {
       (yield* readTextFile(join(workspace, "made", "deep", "kept.txt"))) === "still here",
   );
   check(
-    "an absolute directory is created where it names",
+    "an absolute directory refuses without opt-in",
+    reasonOf(
+      yield* Files.operations.ensureDirectory({ cwd: workspace, path: join(outside, "absolute") }),
+    ) === "permission-denied",
+  );
+  yield* Permissions.around(
+    { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+    { at: "min" },
+  );
+  check(
+    "an opted-in absolute directory is created where it names",
     (yield* Files.operations.ensureDirectory({ cwd: workspace, path: join(outside, "absolute") }))
       .ok && (yield* until(lstat(join(outside, "absolute")))).isDirectory(),
   );

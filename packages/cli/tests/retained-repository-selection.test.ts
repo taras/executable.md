@@ -465,6 +465,10 @@ function answered(count: { asked: number } = { asked: 0 }): Operation<void> {
 
 describe("one entry's managed Repository and Worktree selections", () => {
   it("E2: replays acknowledged placements and results with no selector work", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const fixture = yield* useFixture();
     const live = counters();
     // One document, run twice. The first run is left at the question, so the
@@ -533,6 +537,10 @@ describe("one entry's managed Repository and Worktree selections", () => {
   });
 
   it("E2: retains an absolute captured-path Dir, and replays it over a removed checkout", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const fixture = yield* useFixture();
     const live = counters();
     // The supported spelling this row is about: a self-closing Repository binds
@@ -916,6 +924,10 @@ describe("one entry's managed Repository and Worktree selections", () => {
   });
 
   it("E3: selects a root Worktree of the repository the entry was opened in", function* () {
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
     const fixture = yield* useFixture();
     const live = counters();
     const source = [

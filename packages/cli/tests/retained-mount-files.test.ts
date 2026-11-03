@@ -1,3 +1,4 @@
+import { registerComponents } from "../../core/src/components/registration.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -9,6 +10,62 @@ import type { FilePathInput } from "@executablemd/runtime";
 
 const question = '<Elicit schema={{ type: "object" }} as="answer">Continue?</Elicit>';
 describe("retained mount files", () => {
+  it("1075: replays mapped ensure/read before changed policy and refuses a new converted relative ensure without a file record", function* () {
+    const observed: unknown[] = [];
+    yield* registerComponents([
+      {
+        name: "ObserveSaved",
+        origin: "test://mount-policy",
+        props: { type: "object", properties: { value: { type: "string" } }, required: ["value"] },
+        *fn(props) {
+          observed.push(props.value);
+          return "";
+        },
+      },
+    ]);
+    const stream = new InMemoryStream();
+    const source = `<Dir path="/reference">\n<File path="saved.md" as="saved" />\n${question}\n<ObserveSaved value={saved} />\n<PrintErrors><Dir path="sub"><File path="never.md" /></Dir></PrintErrors>\n</Dir>`;
+    yield* mountedRun(source, stream, [{ source: "/owned/old", target: "/reference" }], trace(), {
+      allowAbsolute: true,
+      pause: true,
+      ownedFileCoverage: { root: "/owned" },
+      onRead: () => "historical",
+    });
+    const prefix = yield* stream.readAll();
+    const calls = trace();
+    let policyReads = 0;
+    const output = yield* mountedRun(
+      source,
+      stream,
+      [{ source: "/owned/new", target: "/reference" }],
+      calls,
+      {
+        ownedFileCoverage: { root: "/owned" },
+        *before() {
+          yield* Permissions.around({
+            files: ([operation], next) => {
+              if (operation === "absolute") {
+                policyReads++;
+                return false;
+              }
+              return next(operation);
+            },
+          });
+        },
+      },
+    );
+    expect(observed).toEqual(["historical"]);
+    expect(output).toContain("not allowed to create or enter");
+    expect(policyReads).toBe(1);
+    expect(calls.ensures).toEqual([]);
+    expect(calls.reads).toEqual([]);
+    const events = yield* stream.readAll();
+    expect(events.slice(0, prefix.length)).toEqual(prefix);
+    expect(
+      events.filter((event) => event.type === "yield" && event.description.type === MOUNT_FILE),
+    ).toHaveLength(2);
+  });
+
   it("keeps nested lexical read refusals ordinary and retains only applicable physical results", function* () {
     const source =
       '<Dir path="/reference"><Dir path="sub"><File path="../outside.md" />AFTER</Dir></Dir>';
@@ -37,6 +94,7 @@ describe("retained mount files", () => {
         trace(),
         {
           ...refusal,
+          allowAbsolute: true,
           ownedFileCoverage: coverageRoot === undefined ? undefined : { root: coverageRoot },
         },
       );
@@ -81,6 +139,7 @@ describe("retained mount files", () => {
           calls,
           {
             ...refusal,
+            allowAbsolute: true,
             ownedFileCoverage: coverageRoot === undefined ? undefined : { root: coverageRoot },
           },
         );
@@ -125,6 +184,7 @@ describe("retained mount files", () => {
     const first = trace();
     yield* mountedRun(source, stream, [{ source: "/owned/old", target: "/reference" }], first, {
       pause: true,
+      allowAbsolute: true,
       ownedFileCoverage: { root: "/owned" },
     });
     const second = trace();
@@ -133,7 +193,7 @@ describe("retained mount files", () => {
       stream,
       [{ source: "/missing/new", target: "/reference" }],
       second,
-      { ownedFileCoverage: { root: "/owned" } },
+      { allowAbsolute: true, ownedFileCoverage: { root: "/owned" } },
     );
     expect(second.ensures).toEqual([]);
     expect(second.reads).toEqual([{ cwd: "/missing/new", path: "next.md" }]);
@@ -158,7 +218,7 @@ describe("retained mount files", () => {
   });
 });
 
-import { API, filesFailure } from "@executablemd/runtime";
+import { API, Permissions, filesFailure } from "@executablemd/runtime";
 import { Err, Ok, scoped, spawn, suspend, withResolvers, ensure } from "effection";
 import { DurablePersistenceError } from "@executablemd/durable-streams";
 describe("additional focused boundary 1", () => {
@@ -178,7 +238,7 @@ describe("additional focused boundary 1", () => {
         stream,
         [{ source: "/owned/source", target: "/reference" }],
         calls,
-        { ownedFileCoverage: { root: "/owned" } },
+        { allowAbsolute: true, ownedFileCoverage: { root: "/owned" } },
       );
     } catch (error) {
       failure = error;
@@ -283,6 +343,7 @@ describe("additional focused boundary 4", () => {
         [{ source: "/owned/source", target: "/reference" }],
         calls,
         {
+          allowAbsolute: true,
           ownedFileCoverage: { root: "/owned" },
           *before() {
             yield* Component.around({
@@ -317,7 +378,7 @@ describe("additional focused boundary 4", () => {
       stream,
       [{ source: "/owned/new", target: "/reference" }],
       resumed,
-      { ownedFileCoverage: { root: "/owned" } },
+      { allowAbsolute: true, ownedFileCoverage: { root: "/owned" } },
     );
     expect(resumed.ensures).toEqual([]);
     expect(resumed.reads).toEqual([{ cwd: "/owned/new", path: "next.md" }]);
@@ -328,14 +389,25 @@ describe("additional focused boundary 5", () => {
     const source = `<PrintErrors><Dir path="/reference"><File path="never" /></Dir></PrintErrors>${question}`;
     const stream = new InMemoryStream();
     yield* mountedRun(source, stream, [{ source: "/owned/old", target: "/reference" }], trace(), {
+      allowAbsolute: true,
       ownedFileCoverage: { root: "/owned" },
       pause: true,
       refuseEnsure: true,
     });
     const calls = trace();
+    let asked = 0;
     yield* mountedRun(source, stream, [{ source: "/owned/new", target: "/reference" }], calls, {
       ownedFileCoverage: { root: "/owned" },
+      *before() {
+        yield* Permissions.around({
+          files: () => {
+            asked++;
+            return false;
+          },
+        });
+      },
     });
+    expect(asked).toBe(0);
     expect(calls.ensures).toEqual([]);
     expect(calls.reads).toEqual([]);
   });
@@ -369,7 +441,7 @@ describe("additional focused boundary 6", () => {
         stream,
         [{ source: "/owned/source", target: "/reference" }],
         calls,
-        { ownedFileCoverage: { root: "/owned" } },
+        { allowAbsolute: true, ownedFileCoverage: { root: "/owned" } },
       ),
     );
     yield* entered.operation;
@@ -397,6 +469,7 @@ describe("additional focused boundary 7", () => {
         [{ source: "/owned/source", target: "/reference" }],
         calls,
         {
+          allowAbsolute: true,
           ownedFileCoverage: { root: "/owned" },
           *before() {
             yield* API.Files.around({
@@ -523,6 +596,7 @@ describe("symlinked SOURCE association", () => {
       trace(),
       {
         pause: true,
+        allowAbsolute: true,
         ownedFileCoverage: { root: alias },
         onRead: () => "historical",
       },
@@ -551,6 +625,7 @@ describe("symlinked SOURCE association", () => {
       [{ source: join(root, "missing-new"), target: "/reference" }],
       resumed,
       {
+        allowAbsolute: true,
         ownedFileCoverage: { root: alias },
         onRead: () => "current",
       },

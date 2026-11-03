@@ -17,10 +17,15 @@ answer.
 - Resolve relative paths against the current working directory. For example,
   `inputs/sales.json` names a file beneath that directory. Do not add a leading
   slash or reinterpret an absolute path as relative to the workspace.
-- Use relative paths for ordinary file and command work. Do not use absolute
-  host paths in File, commands or Dir to reach files outside the workspace.
+- Use relative paths for ordinary file and command work. Host absolute Dir
+  selection requires the person to invoke `xmd repl --allow-absolute` and the
+  effective filesystem policy to permit both absolute and write. A mount grants
+  neither: new mapped absolute ensures need that opt-in too. File, File.Delete
+  and Glob operands remain relative even when absolute directory access is allowed.
   When you intentionally need an external non-repository file, request approval
   to import it with `<REPL.ImportAsset />`, then use its returned relative path.
+  Import remains available with absolute denied when effective read and write
+  allow it. Its individual approval grants no subsequent absolute access.
 - Write session components under `components/`, copied inputs under `inputs/`,
   and generated files at an appropriate workspace-relative path. These files
   survive reopening; another session has its own directory.
@@ -64,6 +69,14 @@ answer.
 - This chapter teaches you how to *interpret* host facts. It states none of
   them, because a fact written into teaching text is a fact that goes stale.
   Ask for the current ones with `<REPL.Environment />`.
+- Read `current response policy` as the effective XMD file read/write/absolute
+  policy for this response. Read `submitted-entry start policy (session scope;
+  entry content may narrow it)` as the policy observed in the owner that starts
+  submitted entries. It does not describe arbitrary nested entry content.
+  `approved import` states eligibility under current response read/write plus
+  separate per-file user approval, independent of absolute; eligibility is not
+  source/destination validation or approval. These facts grant no native tools
+  or component admission.
 - Treat what that read returns as the facts at the moment you asked. It is a
   snapshot retained with your operation, not a cache you can rely on later.
 - What it does not report, you do not know. An absent fact is an explicit

@@ -316,6 +316,61 @@ function useLoopback(): Operation<Loopback> {
   });
 }
 
+describe("absolute directory permission", () => {
+  it("authored Dir refuses without content, then opts in and restores the enclosing cwd", function* () {
+    const fixture = yield* useFixture();
+    yield* useHost(fixture);
+    const source = `<Dir path=${JSON.stringify(fixture.workspace)}><File path="source.txt" /></Dir>`;
+    const denied = yield* executeInstalled(
+      { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+      [],
+    );
+    let failure = "";
+    try {
+      yield* collect(denied);
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    expect(failure).toContain("not allowed to create or enter");
+    yield* Permissions.around(
+      { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
+      { at: "min" },
+    );
+    const allowed = yield* executeInstalled(
+      { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+      [],
+    );
+    expect(String(yield* collect(allowed))).toContain(SOURCE.trim());
+    yield* registerComponents([
+      {
+        name: "RelativeOnly",
+        origin: "test://absolute",
+        props: { type: "object", additionalProperties: false },
+        *fn() {
+          yield* Permissions.around({
+            files: ([operation], next) => (operation === "absolute" ? false : next(operation)),
+          });
+          return yield* content();
+        },
+      },
+    ]);
+    const narrowed = yield* executeInstalled(
+      {
+        ...retainedSource(
+          ROOT_PATH,
+          `<PrintErrors><RelativeOnly>${source}</RelativeOnly></PrintErrors>${source}`,
+        ),
+        stream: new InMemoryStream(),
+      },
+      [],
+    );
+    const output = String(yield* collect(narrowed));
+    expect(output).toContain("not allowed to create or enter");
+    expect(output).toContain(SOURCE.trim());
+    expect(yield* cwd()).toBe(fixture.workspace);
+  });
+});
+
 describe("Tier PRM — authored, generated and direct operations under one restriction", () => {
   it("PRM1: every class of read is answered inside the region", function* () {
     const fixture = yield* useFixture();

@@ -190,7 +190,13 @@ locator and creation base below with the selected repository and resolved commit
 Follow the receipt's read instruction and inspect the actual outcome and checkout
 binding. An entry can print a refusal; status alone proves no acquisition.
 Derive a relative checkout path from the returned absolute path and the workspace
-reported by `<REPL.Environment />`. Replace `RELATIVE_CHECKOUT` below with that
+reported by `<REPL.Environment />`. A later authored absolute Dir needs
+`--allow-absolute` and effective write permission; paired Repository/Worktree
+placement grants no such permission. Use the contained relative address when
+absolute is denied. An approved non-repository asset can target
+`RELATIVE_CHECKOUT/inputs/<filename>` beneath that same session workspace; derive
+that destination from the returned facts. A host repository outside the session
+root is unsupported by import. Replace `RELATIVE_CHECKOUT` below with that
 observed address, preserving the rest of this later response:
 
 ````xmd

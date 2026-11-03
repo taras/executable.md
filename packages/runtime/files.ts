@@ -34,7 +34,10 @@
  * which path or pattern is actually used. So the implementation that performs
  * the operation authorizes the operation it is really about to perform —
  * including a replacement provider, for which this is part of the contract
- * rather than something inherited.
+ * rather than something inherited. A live routing owner also refuses before
+ * its own discovery or acquisition, after acknowledged replay has restored.
+ * It still delegates permitted live work through the complete composition;
+ * the final provider checks the transformed request independently.
  *
  * A refusal is an ordinary failure, reported like any other: `permission-denied`
  * in the phase the provider stopped at, with no I/O performed and no change to
@@ -275,7 +278,9 @@ export interface FilesHandler {
    * Recursively creates the target and any missing parent. An existing
    * directory is already the answer, so it succeeds without replacing it,
    * clearing it or touching what is in it; a file or another non-directory, at
-   * the target or anywhere on the way to it, is a refusal.
+   * the target or anywhere on the way to it, is a refusal. Host absolute
+   * requests additionally require `Permissions.files("absolute")` and write
+   * permission before resolution. Logical paths retain their provider meaning.
    *
    * Mandatory like the rest, and Unit for the same reason `deleteFile` is: a
    * document that asked for a directory to exist has been answered by its
