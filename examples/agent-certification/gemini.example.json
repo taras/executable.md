@@ -1,0 +1,5 @@
+{
+  "command": "gemini-acp-command-configured-locally",
+  "scenarios": ["authentication", "streaming", "completion", "cleanup"],
+  "expected": ["authentication", "completion"]
+}
