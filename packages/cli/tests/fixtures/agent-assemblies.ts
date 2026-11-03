@@ -4,9 +4,11 @@ import { main, scoped, useScope } from "effection";
 import { useHostFiles } from "@executablemd/runtime";
 import { collect, retainedSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
+import type { AcpRuntimeOptions } from "@executablemd/acp";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { join } from "node:path";
 import process from "node:process";
+import type { AgentStack } from "../../src/agent-stack.ts";
 import { hostAcpDependencies, installAgentProviderStack } from "../../src/agent-stack.ts";
 import { planWriterDependencies } from "../../src/plan-writer-profile.ts";
 import { assembleReplProfile } from "../../src/repl-profile.ts";
@@ -17,13 +19,19 @@ main(function* () {
   yield* useHostFiles();
   const embedded = createEmbeddedAdapters(join(root, "adapters"));
   const adapters = { ...embedded, *materialize() {} };
-  const stack = {
+  const stack: AgentStack = {
     provider: "acpx",
     defaultAgent: "claude",
     permissionMode: "deny-all",
     adapters,
-  } satisfies Parameters<typeof hostAcpDependencies>[0];
-  const results = [];
+  };
+  const results: {
+    profile: string;
+    inputs: {
+      environment: AcpRuntimeOptions["agentProcessEnv"];
+      command: ReturnType<AcpRuntimeOptions["agentRegistry"]["resolve"]>;
+    }[];
+  }[] = [];
   for (const profile of ["run", "plan", "repl", "custom", "other"]) {
     const fake = createFakeAcp();
     fake.script({ reply: "assembled" });
