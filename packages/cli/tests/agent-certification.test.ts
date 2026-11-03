@@ -255,10 +255,11 @@ describe("nested qualification teardown", { sanitizeOps: false, sanitizeResource
       : ["throw", "delay"]) {
       it(`${stage} ${fault} preserves nested cleanup evidence and admission`, function* () {
         yield* withCertificationFixture(function* (f) {
+          yield* writeTextFile(join(f.dir, "package.json"), JSON.stringify({ type: "module" }));
           const faultSource = `
 import {AgentProviders,content} from "@executablemd/core";
-import {ensure,sleep} from "effection";
-import {writeTextFile} from "@effectionx/fs";
+import {ensure,sleep} from ${JSON.stringify(import.meta.resolve("effection"))};
+import {writeTextFile} from ${JSON.stringify(import.meta.resolve("@effectionx/fs"))};
 export function* install() {
  let admitted=false;
  yield* AgentProviders.around({*install(args,next) {
@@ -290,7 +291,7 @@ export default function* CleanupFault(){yield* install();return yield* content()
 import {Qualification} from ${JSON.stringify(join(example, "state.ts"))};
 import {initialReport} from ${JSON.stringify(join(example, "report.ts"))};
 import {runSequence} from ${JSON.stringify(join(example, "stage-runner.ts"))};
-import {writeTextFile,readTextFile} from "@effectionx/fs";
+import {writeTextFile,readTextFile} from ${JSON.stringify(import.meta.resolve("@effectionx/fs"))};
 import {API} from "@executablemd/runtime";
 import {randomUUID} from "node:crypto";
 import {install} from "./CleanupFault.ts";
