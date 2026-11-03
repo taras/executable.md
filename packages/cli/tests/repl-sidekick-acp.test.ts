@@ -79,6 +79,7 @@ import { AGENT_PROMPT } from "@executablemd/core/host";
 import {
   Descriptor,
   Request,
+  Envelope,
   MAX_FRAME,
   SidekickTransport,
   referenceText,
@@ -109,8 +110,11 @@ function fills(source: string): string {
     "<REPL.EntryInput>{code}</REPL.EntryInput>",
   ].join("\n");
 }
-function* world(options: Parameters<typeof useHarness>[1] = {}) {
+function* world(options: Parameters<typeof useHarness>[1] = {}, install?: () => Operation<void>) {
   yield* usePosixSidekickTransport(process.platform);
+  if (install !== undefined) {
+    yield* install();
+  }
   const home = yield* until(realpath(yield* useTemporary("xmd-sidekick-client-")));
   yield* until(chmod(home, 0o700));
   const held = yield* useHarness(undefined, options);
@@ -234,9 +238,128 @@ function sdk(
     }
   });
 }
-function* deadline(what: string): Operation<never> {
-  yield* sleep(5000);
+function* deadline(what: string, milliseconds = 5000): Operation<never> {
+  yield* sleep(milliseconds);
   throw new Error(what);
+}
+
+function* countWaitRequests(
+  methods: string[],
+  following: () => void,
+  disconnected?: () => void,
+): Operation<void> {
+  const transport = yield* SidekickTransport.expect();
+  yield* SidekickTransport.set({
+    ...transport,
+    *publish(path, descriptor) {
+      const published = yield* transport.publish(path, descriptor);
+      return {
+        descriptor: published.descriptor,
+        *accept() {
+          const incoming = yield* published.accept();
+          return (function* () {
+            let passive = false;
+            yield* ensure(() => {
+              if (passive) {
+                disconnected?.();
+              }
+            });
+            const wire = yield* incoming;
+            return {
+              *receive() {
+                const value = yield* wire.receive();
+                const request = Envelope.parse(value).request;
+                methods.push(request.method);
+                if (request.method === "message" && request.follow) {
+                  passive = true;
+                  following();
+                }
+                return value;
+              },
+              send(frame: unknown) {
+                return wire.send(frame);
+              },
+              close() {
+                wire.close();
+              },
+            };
+          })();
+        },
+      };
+    },
+  });
+}
+
+function waitDocument(
+  one: World,
+  entry: number,
+  reference?: z.infer<typeof message>,
+  options: {
+    document?: string;
+    xmd?: string[];
+    progress?: (text: string) => void;
+    resultFile?: string;
+    resultSchema?: Record<string, unknown>;
+  } = {},
+) {
+  return scoped(function* () {
+    const selected = reference ?? one.dispatch.current?.snapshot.message;
+    if (selected === undefined) {
+      throw new Error("No exact message for the selected step");
+    }
+    const cli = cliCommand([]);
+    const directory = yield* useTemporary("xmd-wait-document-");
+    const input = join(directory, "wait-input.json");
+    yield* writeTextFile(
+      input,
+      JSON.stringify({
+        xmd: options.xmd ?? [cli.command, ...cli.arguments],
+        progress: [
+          cli.command,
+          ...cli.arguments.slice(0, -1),
+          join(ROOT, "examples/adversarial-implementation/progress-reader.node.ts"),
+          join(ROOT, "examples/adversarial-implementation/progress.md"),
+        ],
+        attachment: one.path,
+        message: selected,
+        entry,
+        ...(options.resultFile === undefined ? {} : { resultFile: options.resultFile }),
+        ...(options.resultSchema === undefined ? {} : { resultSchema: options.resultSchema }),
+      }),
+    );
+    const launch = cliCommand([
+      "run",
+      options.document ?? join(ROOT, "examples/adversarial-implementation/supervise.md"),
+      "--props",
+      JSON.stringify({ step: JSON.parse(yield* readTextFile(input)) }),
+      "--raw",
+    ]);
+    const decoder = new TextDecoder();
+    yield* Stdio.around({
+      *stderr([bytes], next) {
+        options.progress?.(decoder.decode(bytes, { stream: true }));
+        yield* next(bytes);
+      },
+    });
+    const result = yield* exec(launch.command, {
+      arguments: launch.arguments,
+      cwd: directory,
+    }).join();
+    yield* writeTextFile(join(directory, "wait-stdout.json"), result.stdout);
+    if (result.code !== 0) {
+      throw new Error(result.stderr + result.stdout);
+    }
+    return z
+      .object({
+        entry: z.number(),
+        status: z.string(),
+        joinedExchange: z.boolean(),
+        exchangeOutcome: z.string().optional(),
+        diagnostic: z.string().nullable(),
+      })
+      .passthrough()
+      .parse(JSON.parse(result.stdout));
+  });
 }
 /**
  * Put a file somebody else owns where this one is, and be sure it is somebody
@@ -2942,5 +3065,565 @@ describe("direct submission attachment rights", () => {
     }
     expect(fixture.held.session.model.entries).toHaveLength(0);
     expect(fixture.held.fake.prompts).toHaveLength(fixture.baselineTurns);
+  });
+});
+
+describe("Passive workflow supervision", () => {
+  for (const outcome of ["completed", "failed"]) {
+    it(`waits without polling for a ${outcome} entry and joined cleanup`, function* () {
+      const entered = withResolvers<void>();
+      const releaseBody = withResolvers<void>();
+      const cleaning = withResolvers<void>();
+      const releaseCleanup = withResolvers<void>();
+      const following = withResolvers<void>();
+      const progressed = withResolvers<void>();
+      const progress: string[] = [];
+      const methods: string[] = [];
+      const resultDirectory = yield* useTemporary("xmd-supervision-result-");
+      const resultFile = join(resultDirectory, "result.json");
+      let cleaned = false;
+      yield* ensure(() => {
+        releaseBody.resolve();
+        releaseCleanup.resolve();
+      });
+      const one = yield* world(
+        {
+          entryInstallation: {
+            *install() {
+              yield* Execution.around({
+                *document([request], next) {
+                  yield* ensure(function* () {
+                    cleaning.resolve();
+                    yield* releaseCleanup.operation;
+                    if (outcome === "completed") {
+                      yield* writeTextFile(
+                        resultFile,
+                        JSON.stringify({ status: "hold", calls: 1 }),
+                      );
+                    }
+                    cleaned = true;
+                  });
+                  entered.resolve();
+                  yield* releaseBody.operation;
+                  yield* next(request);
+                },
+              });
+            },
+          },
+        },
+        () => countWaitRequests(methods, () => following.resolve()),
+      );
+      const attached = attachResult.parse(
+        yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+      );
+      const source =
+        outcome === "completed"
+          ? "<Output>The controlled step result.</Output>"
+          : '<Fail message="controlled step failure" />';
+      one.held.fake.script({ reply: fills(source) + "\n<REPL.Submit />" });
+      one.held.fake.script({ reply: "<Output>The exchange settled.</Output>" });
+      const producer = yield* spawn(() =>
+        requestAttachment(one.path, {
+          method: "prompt",
+          attachment: attached.attachment,
+          text: "Execute one controlled step.",
+        }),
+      );
+      yield* race([
+        entered.operation,
+        producer,
+        deadline("The original controlled entry did not start"),
+      ]);
+      const reference = one.dispatch.current?.snapshot.message;
+      if (reference === undefined) {
+        throw new Error("The step has no acknowledged message");
+      }
+      const mark = methods.length;
+      let returned = false;
+      const waiting = yield* spawn(function* () {
+        const result = yield* waitDocument(one, 1, reference, {
+          resultFile,
+          resultSchema: {
+            type: "object",
+            properties: { status: { const: "hold" }, calls: { const: 1 } },
+            required: ["status", "calls"],
+            additionalProperties: false,
+          },
+          progress(text) {
+            progress.push(text);
+            if (progress.join("").includes("[entry 1] evaluating")) {
+              progressed.resolve();
+            }
+          },
+        });
+        returned = true;
+        return result;
+      });
+      yield* race([following.operation, waiting, deadline("The wait document did not subscribe")]);
+      yield* race([
+        progressed.operation,
+        waiting,
+        deadline("Progress did not arrive before completion"),
+      ]);
+      expect(returned).toBe(false);
+      releaseBody.resolve();
+      yield* cleaning.operation;
+      expect(returned).toBe(false);
+      expect(cleaned).toBe(false);
+      releaseCleanup.resolve();
+      const result = yield* race([waiting, deadline("The document did not receive completion")]);
+      yield* producer;
+      expect(cleaned).toBe(true);
+      expect(result.status).toBe(outcome);
+      expect(result.joinedExchange).toBe(true);
+      expect(result.exchangeOutcome).toBe("completed");
+      expect(progress.join("")).toContain("exchange completed");
+      expect(progress.join("")).not.toContain("The exchange settled.");
+      expect(progress.join("").length).toBeLessThan(1500);
+      if (outcome === "completed") {
+        expect(result.read).toEqual({ entry: 1, view: "journal" });
+        expect(result.resultStatus).toBe("readable");
+        expect(result.result).toEqual({ status: "hold", calls: 1 });
+      }
+      if (outcome === "failed") {
+        expect(result.diagnostic).toContain("controlled step failure");
+      }
+      expect(methods.slice(mark)).toEqual(["hello", "message", "hello", "entry"]);
+      expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+      const lateMark = methods.length;
+      const late = yield* waitDocument(one, 1, reference);
+      expect(late.status).toBe(outcome);
+      expect(methods.slice(lateMark)).toEqual(["hello", "message", "hello", "entry"]);
+      expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+      console.log(
+        JSON.stringify({
+          kind: "wait-document-result",
+          outcome,
+          cleaned,
+          requests: methods.slice(mark),
+          statusPolls: 0,
+          observerRoleCalls: 0,
+          alreadyCompletedRead: late.status,
+        }),
+      );
+    });
+  }
+
+  it("detaching a passive follow leaves the held producer running", function* () {
+    const following = withResolvers<void>();
+    const methods: string[] = [];
+    const one = yield* world({}, () => countWaitRequests(methods, () => following.resolve()));
+    const attached = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    one.held.fake.script({ reply: "<Output>Held step released.</Output>", held: true });
+    const producer = yield* spawn(() =>
+      requestAttachment(one.path, {
+        method: "prompt",
+        attachment: attached.attachment,
+        text: "Hold this exact producer.",
+      }),
+    );
+    yield* one.held.fake.holdingTurns(1);
+    const reference = one.dispatch.current?.snapshot.message;
+    if (reference === undefined) {
+      throw new Error("No exact held message");
+    }
+    const mark = methods.length;
+    const passive = yield* spawn(() =>
+      requestAttachment(one.path, {
+        method: "message",
+        reference,
+        follow: true,
+      }),
+    );
+    yield* race([following.operation, passive, deadline("The passive reader did not subscribe")]);
+    yield* passive.halt();
+    expect(one.held.owner.busy).toBe(true);
+    expect(one.held.fake.cancels).toBe(0);
+    one.held.fake.releaseTurn();
+    expect(exchangeSchema.parse(yield* producer).ending?.outcome).toBe("completed");
+    expect(methods.slice(mark)).toEqual(["hello", "message"]);
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 1);
+    console.log(JSON.stringify({ kind: "wait-detach-result", cancelledProducer: false }));
+  });
+
+  for (const outcome of ["running", "cancelled"]) {
+    it(`keeps an independent ${outcome} entry separate from a completed exchange`, function* () {
+      const entered = withResolvers<void>();
+      const methods: string[] = [];
+      const one = yield* world(
+        {
+          entryInstallation: {
+            *install() {
+              yield* Component.around({
+                *expand([request], next) {
+                  if (request.expansion.name === "Elicit") {
+                    entered.resolve();
+                  }
+                  yield* next(request);
+                },
+              });
+            },
+          },
+        },
+        () => countWaitRequests(methods, () => {}),
+      );
+      const attached = attachResult.parse(
+        yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+      );
+      one.held.fake.script({ reply: "<Output>A separate completed exchange.</Output>" });
+      const settled = exchangeSchema.parse(
+        yield* requestAttachment(one.path, {
+          method: "prompt",
+          attachment: attached.attachment,
+          text: "Do not submit an entry.",
+        }),
+      );
+      const reference = settled.message;
+      const admitted = yield* one.held.session.submit(
+        '<Elicit schema={{type:"object",properties:{ok:{type:"string"}},required:["ok"],additionalProperties:false}} as="answer">Independent entry.</Elicit>',
+      );
+      if (!admitted.ok || reference === null) {
+        throw new Error("Missing independent entry or selected message");
+      }
+      yield* race([entered.operation, deadline("Independent entry did not start")]);
+      if (outcome === "cancelled") {
+        const stopped = yield* one.held.session.stopEntry(admitted.value.entry);
+        expect(stopped.ok).toBe(true);
+      }
+      const mark = methods.length;
+      const result = yield* race([
+        waitDocument(one, 1, reference),
+        deadline("Independent entry read did not settle", 15000),
+      ]);
+      expect(result.status).toBe(outcome);
+      expect(result.exchangeOutcome).toBe("completed");
+      expect(methods.slice(mark)).toEqual(["hello", "message", "hello", "entry"]);
+      expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 1);
+      console.log(
+        JSON.stringify({
+          kind: "wait-independent-entry-result",
+          status: result.status,
+          exchangeOutcome: result.exchangeOutcome,
+          waitedForIndependentEntry: false,
+          statusPolls: 0,
+          observerRoleCalls: 0,
+        }),
+      );
+      if (outcome === "running") {
+        yield* one.held.session.stopEntry(admitted.value.entry);
+      }
+      yield* admitted.value.join();
+    });
+  }
+
+  it("owner loss produces unavailable rather than a fabricated completed step", function* () {
+    const ready = withResolvers<World>();
+    const following = withResolvers<void>();
+    const methods: string[] = [];
+    const owner = yield* spawn(function* () {
+      const one = yield* world({}, () => countWaitRequests(methods, () => following.resolve()));
+      const attached = attachResult.parse(
+        yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+      );
+      one.held.fake.script({ reply: "<Output>Never completed.</Output>", held: true });
+      yield* spawn(() =>
+        requestAttachment(one.path, {
+          method: "prompt",
+          attachment: attached.attachment,
+          text: "Hold until the owner ends.",
+        }),
+      );
+      yield* one.held.fake.holdingTurns(1);
+      ready.resolve(one);
+      yield* suspend();
+    });
+    const one = yield* ready.operation;
+    const waiting = yield* spawn(() => waitDocument(one, 1));
+    yield* race([
+      following.operation,
+      waiting,
+      deadline("The owner-loss reader did not subscribe"),
+    ]);
+    yield* owner.halt();
+    const result = yield* race([waiting, deadline("Owner loss did not settle the wait document")]);
+    expect(result.status).toBe("unavailable");
+    expect(result.joinedExchange).toBe(false);
+    console.log(JSON.stringify({ kind: "wait-owner-loss-result", status: result.status }));
+  });
+
+  it("halting the supervision document detaches its pipeline without cancelling production", function* () {
+    const following = withResolvers<void>();
+    const disconnected = withResolvers<void>();
+    const methods: string[] = [];
+    const one = yield* world({}, () =>
+      countWaitRequests(
+        methods,
+        () => following.resolve(),
+        () => disconnected.resolve(),
+      ),
+    );
+    const attached = attachResult.parse(
+      yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+    );
+    one.held.fake.script({ reply: "<Output>Original work continued.</Output>", held: true });
+    const producer = yield* spawn(() =>
+      requestAttachment(one.path, {
+        method: "prompt",
+        attachment: attached.attachment,
+        text: "Hold original work.",
+      }),
+    );
+    yield* one.held.fake.holdingTurns(1);
+    const mark = methods.length;
+    const supervisor = yield* spawn(() => waitDocument(one, 1));
+    yield* race([following.operation, supervisor, deadline("Supervisor did not subscribe")]);
+    yield* supervisor.halt();
+    yield* race([disconnected.operation, deadline("Supervisor pipeline did not disconnect")]);
+    expect(one.held.owner.busy).toBe(true);
+    expect(one.held.fake.cancels).toBe(0);
+    expect(methods.slice(mark)).toEqual(["hello", "message"]);
+    one.held.fake.releaseTurn();
+    expect(exchangeSchema.parse(yield* producer).ending?.outcome).toBe("completed");
+    expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 1);
+    console.log(
+      JSON.stringify({ kind: "supervision-pipeline-detached", producerCancelled: false }),
+    );
+  });
+
+  for (const content of [null, "not json", '{"status":"unrelated"}']) {
+    it(`a ${content === null ? "missing" : content === "not json" ? "malformed" : "schema-invalid"} canonical result stays unavailable without resending`, function* () {
+      const methods: string[] = [];
+      const one = yield* world({}, () => countWaitRequests(methods, () => {}));
+      const attached = attachResult.parse(
+        yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+      );
+      one.held.fake.script({
+        reply: fills("<Output>Finished the actual entry.</Output>") + "\n<REPL.Submit />",
+      });
+      one.held.fake.script({ reply: "<Output>The exchange settled.</Output>" });
+      const settled = exchangeSchema.parse(
+        yield* requestAttachment(one.path, {
+          method: "prompt",
+          attachment: attached.attachment,
+          text: "Run the actual entry once.",
+        }),
+      );
+      if (settled.message === null) {
+        throw new Error("No original message reference");
+      }
+      const directory = yield* useTemporary("xmd-supervision-invalid-result-");
+      const resultFile = join(directory, "canonical result's.json");
+      const mark = methods.length;
+      if (content !== null) {
+        yield* writeTextFile(resultFile, content);
+      }
+      const report = yield* waitDocument(one, 1, settled.message, {
+        resultFile,
+        resultSchema: {
+          type: "object",
+          properties: { status: { const: "hold" } },
+          required: ["status"],
+          additionalProperties: false,
+        },
+      });
+      expect(report.status).toBe("unavailable");
+      expect(report.entryStatus).toBe("completed");
+      expect(report.joinedExchange).toBe(true);
+      expect(report.result).toBe(null);
+      expect(report.resultStatus).toBe(content === null ? "unavailable" : "invalid");
+      expect(methods.slice(mark)).toEqual(["hello", "message", "hello", "entry"]);
+      expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 2);
+      console.log(
+        JSON.stringify({
+          kind: "supervision-result-controls",
+          controls: 1,
+          observerRoleCalls: 0,
+          statusPolls: 0,
+        }),
+      );
+    });
+  }
+
+  for (const replaceAt of ["after-follow", "before-journal"]) {
+    it(`binds Journal to the copied descriptor when replacement occurs ${replaceAt}`, function* () {
+      const methods: string[] = [];
+      const one = yield* world({}, () => countWaitRequests(methods, () => {}));
+      const attached = attachResult.parse(
+        yield* requestAttachment(one.path, { method: "attach", cwd: one.descriptor.cwd }),
+      );
+      one.held.fake.script({
+        reply: fills("<Output>Original entry.</Output>") + "\n<REPL.Submit />",
+      });
+      one.held.fake.script({ reply: "<Output>Original exchange settled.</Output>" });
+      const settled = exchangeSchema.parse(
+        yield* requestAttachment(one.path, {
+          method: "prompt",
+          attachment: attached.attachment,
+          text: "Run the original entry once.",
+        }),
+      );
+      if (settled.message === null) {
+        throw new Error("No original message reference");
+      }
+      const otherMethods: string[] = [];
+      const other = yield* resource<World>(function* (provide) {
+        yield* provide(yield* world({}, () => countWaitRequests(otherMethods, () => {})));
+      });
+      const replacementEntry = yield* other.held.session.submit(
+        '<Fail message="Replacement entry failure" />',
+      );
+      if (!replacementEntry.ok) {
+        throw replacementEntry.error;
+      }
+      expect((yield* replacementEntry.value.join()).ok).toBe(false);
+      expect(other.descriptor.execution).not.toBe(one.descriptor.execution);
+      expect(other.descriptor.conversation).not.toBe(one.descriptor.conversation);
+      const directory = yield* useTemporary("xmd-supervision-association-");
+      const resultFile = join(directory, "original-result.json");
+      if (replaceAt === "after-follow") {
+        expect((yield* exec("mkfifo", { arguments: [resultFile] }).join()).code).toBe(0);
+      } else {
+        yield* writeTextFile(resultFile, JSON.stringify({ status: "hold", owner: "original" }));
+      }
+      const wrapper = join(directory, "replace-attachment.sh");
+      const receipt = join(directory, "replacement.txt");
+      const argumentsFile = join(directory, "journal-arguments.txt");
+      const replace = `install -m 600 ${shellQuote(other.path)} ${shellQuote(one.path)}`;
+      yield* writeTextFile(
+        wrapper,
+        [
+          'case " $* " in',
+          replaceAt === "after-follow"
+            ? '  *" message "*" --follow ")'
+            : '  *" entry 1 journal --yq "*)',
+          ...(replaceAt === "after-follow" ? ['    "$@"', "    outcome=$?"] : []),
+          ...(replaceAt === "before-journal"
+            ? [`    printf '%s\\n' "$@" > ${shellQuote(argumentsFile)}`]
+            : []),
+          `    ${replace}`,
+          `    printf replaced > ${shellQuote(receipt)}`,
+          ...(replaceAt === "after-follow" ? ['    exit "$outcome"'] : []),
+          "    ;;",
+          "esac",
+          'exec "$@"',
+        ].join("\n"),
+      );
+      const cli = cliCommand([]);
+      const mark = methods.length;
+      const otherMark = otherMethods.length;
+      const turns = one.held.fake.prompts.length;
+      const otherTurns = other.held.fake.prompts.length;
+      const report = yield* race([
+        waitDocument(one, 1, settled.message, {
+          xmd: ["bash", wrapper, cli.command, ...cli.arguments],
+          resultFile,
+        }),
+        deadline("Descriptor association did not settle without reading the canonical FIFO", 15000),
+      ]);
+      expect(yield* readTextFile(receipt)).toBe("replaced");
+      expect(report.joinedExchange).toBe(true);
+      expect(otherMethods.slice(otherMark)).toEqual([]);
+      if (replaceAt === "after-follow") {
+        expect(report.status).toBe("unavailable");
+        expect(report.resultStatus).toBe("unavailable");
+        expect(report.result).toBe(null);
+        expect(report.diagnostic).toContain("copied attachment did not validate");
+        expect(methods.slice(mark)).toEqual(["hello", "message"]);
+      } else {
+        expect(report.status).toBe("completed");
+        expect(report.resultStatus).toBe("readable");
+        expect(report.result).toEqual({ status: "hold", owner: "original" });
+        expect(methods.slice(mark)).toEqual(["hello", "message", "hello", "entry"]);
+        const journalArguments = (yield* readTextFile(argumentsFile)).trim().split("\n");
+        const attachIndex = journalArguments.indexOf("--attach");
+        const privateCopy = journalArguments[attachIndex + 1];
+        expect(attachIndex).toBeGreaterThanOrEqual(0);
+        expect(privateCopy).not.toBe(one.path);
+        expect(privateCopy).not.toBe(other.path);
+        expect(journalArguments.slice(-2)).toEqual([
+          "--yq",
+          '{"entry": .entry, "status": .status, "failure": .failure}',
+        ]);
+        expect(
+          yield* until(
+            lstat(dirname(privateCopy)).then(
+              () => false,
+              () => true,
+            ),
+          ),
+        ).toBe(true);
+      }
+      expect(one.held.fake.prompts).toHaveLength(turns);
+      expect(other.held.fake.prompts).toHaveLength(otherTurns);
+      console.log(
+        JSON.stringify({ kind: "supervision-descriptor-association", replaceAt, report }),
+      );
+    });
+  }
+
+  it("uses Query for a burst of preview updates without flooding progress", function* () {
+    const directory = yield* useTemporary("xmd-supervision-query-burst-");
+    const burstReference = {
+      execution: "burst-execution",
+      conversation: "burst-conversation",
+      id: "burst-message",
+    };
+    const snapshot = {
+      message: burstReference,
+      activity: { phase: "generating", response: "response:1" },
+      ending: null,
+      outputs: [],
+      inputs: [],
+    };
+    const terminal = {
+      ...snapshot,
+      activity: null,
+      ending: { joined: true, outcome: "completed", error: null },
+    };
+    const input = join(directory, "updates.jsonl");
+    yield* writeTextFile(
+      input,
+      [
+        ...Array.from({ length: 200 }, (_, index) =>
+          JSON.stringify({ ...snapshot, preview: { text: "x".repeat(10000) + index } }),
+        ),
+        JSON.stringify(terminal),
+        JSON.stringify(terminal),
+      ].join("\n") + "\n",
+    );
+    const launch = cliCommand([]);
+    const command =
+      [
+        launch.command,
+        ...launch.arguments.slice(0, -1),
+        join(ROOT, "examples/adversarial-implementation/progress-reader.node.ts"),
+        join(ROOT, "examples/adversarial-implementation/progress.md"),
+        "1",
+      ]
+        .map(shellQuote)
+        .join(" ") +
+      " < " +
+      shellQuote(input);
+    const started = performance.now();
+    const result = yield* exec("bash", { arguments: ["-c", command], cwd: directory }).join();
+    const elapsedMs = Math.round(performance.now() - started);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(terminal);
+    const progressLines = result.stderr.split("\n").filter((line) => line.startsWith("[entry "));
+    expect(progressLines).toHaveLength(2);
+    expect(result.stderr).not.toContain("xxxx");
+    expect(progressLines.join("\n").length).toBeLessThan(400);
+    console.log(
+      JSON.stringify({
+        kind: "supervision-query-burst",
+        snapshots: 202,
+        progressLines: 2,
+        terminalRecords: 1,
+        formatterProcesses: 1,
+        elapsedMs,
+      }),
+    );
   });
 });
