@@ -26,7 +26,7 @@
 
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { readdir, readFile, rename as renamePath, rm as rmPath, writeFile } from "node:fs/promises";
-import { exec, useQuietProcessOutput } from "@executablemd/runtime";
+import { exec, hostClaudeExecutable, useQuietProcessOutput } from "@executablemd/runtime";
 import { createAgentRegistry } from "./acpx-runtime.ts";
 import type { AcpAgentRegistry } from "./acpx-runtime.ts";
 import type { AcpxProviderDependencies } from "./provider.ts";
@@ -243,8 +243,8 @@ function* contentDigest(directory: string): Operation<string> {
  *
  * A `file:` dependency rather than an unpacked tree, so the adapter's own
  * runtime dependencies are resolved the way they are for anybody installing it
- * from the registry. Provider CLIs are among those dependencies and are not
- * carried here: this repository vendors the adapter, never the agent.
+ * from the registry. Claude uses the host CLI; its SDK library remains installed
+ * while platform executable optional dependencies are omitted.
  */
 function* install(
   directory: string,
@@ -273,7 +273,15 @@ function* install(
   const installed = yield* scoped(function* () {
     yield* useQuietProcessOutput();
     return yield* exec({
-      command: ["npm", "install", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"],
+      command: [
+        "npm",
+        "install",
+        "--omit=dev",
+        ...(snapshot.provider === "claude" ? ["--omit=optional"] : []),
+        "--no-audit",
+        "--no-fund",
+        "--loglevel=error",
+      ],
       cwd: directory,
     });
   });
@@ -702,9 +710,19 @@ export function carriesEmbeddedAdapter(adapters: EmbeddedAdapters, agentName: st
  */
 export function embeddedAdapterDependencies(
   adapters: EmbeddedAdapters,
-): Pick<AcpxProviderDependencies, "agentRegistry" | "prepareAgent"> {
+): Pick<AcpxProviderDependencies, "agentRegistry" | "prepareAgent" | "agentProcessEnv"> {
   return {
     agentRegistry: overlaidAdapterRegistry(adapters),
+    *agentProcessEnv(agentName, agentCommand) {
+      if (
+        agentName !== "claude" ||
+        !carriesEmbeddedAdapter(adapters, agentName) ||
+        agentCommand !== adapters.command(agentName)
+      ) {
+        return undefined;
+      }
+      return { CLAUDE_CODE_EXECUTABLE: yield* hostClaudeExecutable() };
+    },
     *prepareAgent(agentName: string): Operation<void> {
       if (!carriesEmbeddedAdapter(adapters, agentName)) {
         return;

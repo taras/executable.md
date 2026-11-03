@@ -3701,7 +3701,13 @@ Identity provenance records who chose a provider-native session identity: the pr
 returned it, or the client allocated it before the provider existed. This provenance is
 retained rather than inferred, because after the fact both are just a string in the
 record. A released record written before the distinction existed reads as
-provider-returned, which is the only compatibility inference.
+provider-returned, which is the only compatibility inference. Backend confirmation
+is separate from allocation: Claude's native route remains client-allocated when
+the retained adapter confirms that same conversation on `_meta.agentSessionId`.
+The adapter reads its owned SDK Query before answering session creation or
+reattachment. Only a successful SessionStart lifecycle response confirms the
+identity; a requested UUID or ACP session name does not. This confirmation stays
+private until explicit first-turn acceptance and the asserting provider save.
 
 #### Proving release
 
@@ -4232,7 +4238,10 @@ asked at all.
 
 The workflow profile selects ACP-only capability explicitly: it advertises
 neither native launch nor client-native attachment. It supplies no machine
-session coordinator, construction-route store or executable observer. A workflow
+session coordinator, construction-route store or executable observer. The host
+selects its installed Claude launcher separately and supplies the path only to
+the retained adapter child's transient environment. This selection grants no
+native-session capability and performs no executable-build admission. A workflow
 session belongs to a run; the machine-wide ownership account describes a
 different boundary. Deleting a run removes its mapping row and provider-session
 directory and reports the categories removed.

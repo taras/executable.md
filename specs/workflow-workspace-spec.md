@@ -2428,6 +2428,13 @@ channel for it to cross instead.
 
 ### 8.5 Agent session continuity
 
+Claude's retained adapter confirms its exact SDK Query's backend conversation
+from the successful SessionStart lifecycle response before another prompt.
+This provisional confirmation remains private until backend acceptance and the
+asserting provider save; mapping commit still precedes first-turn disclosure.
+Native allocation provenance remains separate. Completed replay performs none
+of this live work.
+
 The filtered workflow journal and the provider-owned Agent session are separate
 retained assets. The journal preserves observable prompts, responses, tool
 events and outcomes for replay and training. It does not claim to reconstruct

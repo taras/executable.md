@@ -211,6 +211,7 @@ export interface WorkflowAgentProfileOptions {
    * process on first use.
    */
   readonly createRuntime?: AcpxProviderDependencies["createRuntime"];
+  readonly agentProcessEnv?: AcpxProviderDependencies["agentProcessEnv"];
   /**
    * The embedded adapters this profile runs.
    *
@@ -430,6 +431,7 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
     // always did.
     ...embeddedAdapterDependencies(adapters),
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
+    ...(options.agentProcessEnv === undefined ? {} : { agentProcessEnv: options.agentProcessEnv }),
     // ACP-only, stated rather than inherited. A workflow session belongs to a
     // run, not to this machine: it is named by a row in the run's own database,
     // arranged in the run's own sidecar, and continued by reattaching that row.

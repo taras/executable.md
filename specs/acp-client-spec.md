@@ -923,6 +923,12 @@ Every permission request therefore receives a concrete decision.
 
 ### The workflow Agent profile
 
+The retained Claude adapter uses the host-installed CLI through the transient
+child-environment seam. The profile still supplies no machine-session executable
+observer, coordinator or route store. Its SessionStart confirmation names the
+backend conversation but publishes no mapping until the accepted first turn is
+saved by the provider.
+
 `xmd workflow` installs a stricter profile than `xmd run`, and installs it only
 while a live or partial run is attached. A completed replay restores its Prompt
 records without contacting a provider at all, so it starts nothing.
@@ -1161,6 +1167,10 @@ refuses that agent.
 
 ### The `xmd plan` Plan writer profile
 
+Host Claude selection and adapter preparation run in the command's owning scope
+before the Plan writer's restricted work. Run and REPL assemblies use the same
+host selection; native attachment keeps the host's retained adapter registry.
+
 `xmd plan` resolves that configuration once, for the one document it executes:
 the plan command document that writes the Plan. It starts no program, so there
 is no second consumer and no permission mode to settle — `--approve-all`,
@@ -1247,6 +1257,14 @@ the failed operation does not render, no prompt failure is aggregated, and the
 run exits non-zero. A turn that fails for any other reason remains an ordinary
 prompt failure.
 
+For the retained embedded Claude adapter, live availability selects the host
+`CLAUDE_CODE_EXECUTABLE` when nonempty, otherwise `claude` on the host PATH.
+Relative selections resolve against the host execution directory. Missing or
+unlaunchable selections refuse with host-install/selection recovery before a
+model prompt; the SDK executable is never a fallback. Version output is
+observation rather than an admission condition. Custom agent commands retain
+their own selection, and completed replay performs no selection or launch.
+
 ## ACPX provider
 
 `@executablemd/acp` implements the `rootProvider` seam over the ACPX 0.21.1
@@ -1307,6 +1325,16 @@ none.
   first accepted turn — at once for a record that already asserts, and on the
   adapter's explicit signal for one that does not.
 
+  The retained Claude adapter confirms its Query's backend `session_id` from a
+  successful early `system/hook_response` for SessionStart, enabled by a fixed
+  internal no-op command hook installed in settings before startup. It preserves
+  user settings and hooks, selects the startup/resume matcher, and keeps one
+  owned stream reader with unrelated messages buffered for normal handling.
+  Its new/load/resume response carries `_meta.agentSessionId`; absent, failed,
+  conflicting or mismatched confirmation refuses. Exact resume loads the retained
+  history before another user prompt. Confirmation alone never promotes the
+  provisional record or changes native allocation provenance.
+
   The signal is one exact versioned key,
   `executablemd.session-materialization/v1`, carried as `{"state": "accepted"}`
   in the update metadata of a standard ACP `session_info_update`. It is control
@@ -1365,7 +1393,10 @@ none.
   Promise-returning leaves are consumed with `until`; the provider's only
   Promise-producing adapter is the `onPermissionRequest` callback, and the bridge
   itself is operation-based.
-- **Runtime partitions.** Ordinary ACP-first work uses one unbound runtime. A
+- **Runtime partitions.** ACP-first work with a host child-environment selector
+  uses one runtime per selected agent and resolved command. Its selected environment stays
+  fixed until its handles and in-flight reservations are released. ACP-first
+  work without that selector uses one unbound runtime. A
   bound attachment uses one runtime per `(resolved agent command, executable
   build binding)`, created with the observed path in `agentProcessEnv` and torn
   down when its last handle closes. Acquiring a runtime to ensure through claims
@@ -1394,7 +1425,12 @@ none.
   `advertiseClientNativeAttachment` are two separate lists, and a profile whose
   session capabilities differ from ordinary `xmd run` states both explicitly
   rather than inheriting the package's defaults by omission;
-  `executableObserver` says how this host observes the build behind an
+  `agentProcessEnv` lazily selects transient child inputs for the resolved
+  agent command on the availability probe and live runtime. The embedded Claude
+  default applies only to its retained command; another provider or deliberate
+  custom command receives no default Claude overlay. A native-bound operation's
+  observed executable takes precedence. The inputs never enter durable session
+  records or global process environment. `executableObserver` says how this host observes the build behind an
   executable; `agentCwd` answers with the directory an Agent runs in when the
   contextual one is not a directory an agent process could stand in; `mcpServers` and `newSessionOptions` are passed to runtime creation and to
   `ensureSession()` exactly as given; `permissions: "strict"` selects the

@@ -268,6 +268,11 @@ export interface AcpxProviderDependencies {
    * asks for one prepares nothing.
    */
   prepareAgent?: (agentName: string) => Operation<void>;
+  /** Child-only host inputs for the selected command; never session configuration. */
+  agentProcessEnv?: (
+    agentName: string,
+    agentCommand: string,
+  ) => Operation<Record<string, string> | undefined>;
   /**
    * The native adapters this host has proven and is therefore willing to hand
    * a session to. Absent means none: knowing an adapter's command shape is not
@@ -1204,7 +1209,7 @@ function* useAcpxProviderState(
     };
   }
 
-  function* runtimeOptions(): Operation<AcpRuntimeOptions> {
+  function* runtimeOptions(agentName?: string): Operation<AcpRuntimeOptions> {
     const dir = yield* agentCwd();
     const options: AcpRuntimeOptions = {
       cwd: dir,
@@ -1213,6 +1218,15 @@ function* useAcpxProviderState(
       permissionMode: providerOptions.permissionMode,
       nonInteractivePermissions: "deny",
     };
+    if (agentName !== undefined && dependencies?.agentProcessEnv !== undefined) {
+      const environment = yield* dependencies.agentProcessEnv(
+        agentName,
+        resolveAgentCommand(registry, agentName),
+      );
+      if (environment !== undefined) {
+        options.agentProcessEnv = { ...environment };
+      }
+    }
     if (mcpServers !== undefined) {
       options.mcpServers = [...mcpServers];
     }
@@ -1253,8 +1267,8 @@ function* useAcpxProviderState(
    * step: an election that suspends part-way through is an election another
    * operation can act between.
    */
-  function* runtimeBlueprint(build?: BoundBuild): Operation<AcpRuntimeOptions> {
-    const base = yield* runtimeOptions();
+  function* runtimeBlueprint(build?: BoundBuild, agentName?: string): Operation<AcpRuntimeOptions> {
+    const base = yield* runtimeOptions(build === undefined ? agentName : undefined);
     const options: AcpRuntimeOptions = {
       ...base,
       // The acpx callback boundary: `scope.run` returns a Promise-compatible
@@ -1284,11 +1298,17 @@ function* useAcpxProviderState(
    * map no longer names and the next operation builds a second child for the
    * same build. Here the entry is published already reserved.
    */
-  function electRuntime(partition: string | undefined, options: AcpRuntimeOptions): RuntimeEntry {
+  function electRuntime(
+    partition: string | undefined,
+    options: AcpRuntimeOptions | undefined,
+  ): RuntimeEntry {
     const held = partition === undefined ? unbound : runtimes.get(partition);
     if (held) {
       held.active++;
       return held;
+    }
+    if (options === undefined) {
+      throw new Error("the selected ACP runtime was released during preparation");
     }
     const entry: RuntimeEntry = {
       runtime: createRuntime(options),
@@ -1419,10 +1439,6 @@ function* useAcpxProviderState(
     toSession: (handle: AcpRuntimeHandle, entry: RuntimeEntry) => ManagedSession,
   ): Operation<ManagedSession> {
     return scoped(function* (): Operation<ManagedSession> {
-      const partition = build ? partitionOf(build) : undefined;
-      // Every suspension this needs, taken before anything is decided. What
-      // follows must not yield, so nothing it depends on may.
-      const options = yield* runtimeBlueprint(build);
       let claimed: RuntimeEntry | undefined;
       let pending: Promise<AcpRuntimeHandle> | undefined;
       let settled = false;
@@ -1470,6 +1486,16 @@ function* useAcpxProviderState(
         yield* abandonHandle(late, "cancelled before the session was established");
       });
 
+      const partition = build
+        ? partitionOf(build)
+        : dependencies?.agentProcessEnv === undefined
+          ? undefined
+          : `host\u0000${input.agent}\u0000${resolveAgentCommand(registry, input.agent)}`;
+      const held = partition === undefined ? unbound : runtimes.get(partition);
+      const options =
+        build !== undefined || dependencies?.agentProcessEnv === undefined || held === undefined
+          ? yield* runtimeBlueprint(build, input.agent)
+          : undefined;
       // One synchronous step: the map is read, an entry is published already
       // claimed if this is the first work to want one, and the ensure is
       // started. Nothing yields in here, so no sibling runs between the
@@ -1533,7 +1559,7 @@ function* useAcpxProviderState(
     // client-native session is created by a native process, and where ACP does
     // serve one, the establishment itself reports being unable to.
     if (!validatedAgents.has(selected) && !boundSessions(selected)) {
-      const base = yield* runtimeOptions();
+      const base = yield* runtimeOptions(selected);
       const probe = createRuntime({ ...base, probeAgent: selected });
       const report = yield* until(probe.doctor());
       if (!report.ok) {
