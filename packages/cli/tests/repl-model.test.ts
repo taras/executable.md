@@ -1648,3 +1648,80 @@ describe("REPL source ownership by import coordinate (#976)", () => {
     ).toContain("more than once");
   });
 });
+
+describe("Saved exec diagnostic projection (#1006)", () => {
+  it("E6: retains only detached supported exit and independent channel facts", function* () {
+    const value = {
+      exitCode: 1,
+      stdout: "",
+      stderr: "startup refused: choose a configured profile",
+      privatePayload: "not projected",
+    };
+    const events = [...entryAdmitted(), yielded({ type: "exec", name: "exec:startup" }, value)];
+    const model = projected(events);
+    const record = model.entries[0].records.at(-1);
+    expect(record?.status).toBe("ok");
+    expect(record?.exec).toEqual({ exitCode: 1, stdout: "", stderr: value.stderr });
+    expect(record?.position).toBe(undefined);
+    expect(Object.isFrozen(record?.exec)).toBe(true);
+    value.stderr = "changed after projection";
+    expect(record?.exec?.stderr).toBe("startup refused: choose a configured profile");
+    const exitOnly = projected([
+      ...entryAdmitted(),
+      yielded({ type: "exec", name: "exec:transient" }, { exitCode: 7 }),
+    ]);
+    expect(exitOnly.entries[0].records.at(-1)?.exec).toEqual({ exitCode: 7 });
+    const invalid: Json[] = [
+      { exitCode: 1.5 },
+      { exitCode: "1" },
+      { exitCode: 1, stdout: null },
+      { exitCode: 1, stderr: 2 },
+      {},
+    ];
+    for (const value of invalid) {
+      expect(
+        refusal([...entryAdmitted(), yielded({ type: "exec", name: "exec:invalid" }, value)]),
+      ).toContain("unreadable exit or channel");
+    }
+    yield* useTempFileCompiler();
+  });
+
+  it("E6: timeout, cancellation and an unrecorded command invent no result", function* () {
+    const events = [...entryAdmitted()];
+    for (const result of [
+      {
+        status: "err",
+        error: { name: "TimeoutError", message: "timed out", stack: "private stack" },
+      },
+      { status: "cancelled" },
+    ]) {
+      const parsed = parseDurableEvent(
+        JSON.stringify({
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "exec", name: "exec:unfinished" },
+          result,
+        }),
+      );
+      if (!parsed.ok) {
+        throw parsed.error;
+      }
+      events.push(parsed.value);
+    }
+    const model = projected(events);
+    expect(
+      model.entries[0].records.map((one) => ({
+        type: one.type,
+        status: one.status,
+        exec: one.exec,
+      })),
+    ).toEqual([
+      { type: "import_component", status: "ok", exec: undefined },
+      { type: "exec", status: "err", exec: undefined },
+      { type: "exec", status: "cancelled", exec: undefined },
+    ]);
+    expect(projected(entryAdmitted()).entries[0].records).toHaveLength(1);
+    expect(model.entries[0].terminal).toBe(undefined);
+    yield* useTempFileCompiler();
+  });
+});

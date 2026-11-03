@@ -3701,7 +3701,13 @@ Identity provenance records who chose a provider-native session identity: the pr
 returned it, or the client allocated it before the provider existed. This provenance is
 retained rather than inferred, because after the fact both are just a string in the
 record. A released record written before the distinction existed reads as
-provider-returned, which is the only compatibility inference.
+provider-returned, which is the only compatibility inference. Backend confirmation
+is separate from allocation: Claude's native route remains client-allocated when
+the retained adapter confirms that same conversation on `_meta.agentSessionId`.
+The adapter reads its owned SDK Query before answering session creation or
+reattachment. Only a successful SessionStart lifecycle response confirms the
+identity; a requested UUID or ACP session name does not. This confirmation stays
+private until explicit first-turn acceptance and the asserting provider save.
 
 #### Proving release
 
@@ -4232,7 +4238,10 @@ asked at all.
 
 The workflow profile selects ACP-only capability explicitly: it advertises
 neither native launch nor client-native attachment. It supplies no machine
-session coordinator, construction-route store or executable observer. A workflow
+session coordinator, construction-route store or executable observer. The host
+selects its installed Claude launcher separately and supplies the path only to
+the retained adapter child's transient environment. This selection grants no
+native-session capability and performs no executable-build admission. A workflow
 session belongs to a run; the machine-wide ownership account describes a
 different boundary. Deleting a run removes its mapping row and provider-session
 directory and reports the categories removed.
@@ -8406,32 +8415,53 @@ Send's live access, and later entry settlement cannot recreate it. Fatal
 persistence, Files, disclosure and cleanup outcomes keep their existing
 precedence.
 
-**One entry's saved evidence is read through the projection, and metadata is
-part of it.** A reader of a failed entry needs what it ran, what its turns
-said, what it printed and where each of those sits in the file, and the last of
-those is the only one the model did not already hold: a transcript is a
-presentation and says nothing about the effects it does not draw. So
-`buildEntry` forms one row per retained `Yield` and `Close` of the range it is
-already reading — marker, type, name, status, position, prompt number and
-agent, and no body, result payload, checkpoint or stack — and detaches and
-freezes it with everything else the entry carries. A saved Prompt's row takes
-its semantic outcome, its number and its agent from the turn the same reading
-parsed, matched by the marker it was retained under, and the root close takes
-the outcome that reading already produced; every other row states the protocol
-outcome its record states. Raw `DurableEvent`s still terminate at the model,
-and no new record, index or stored position is written anywhere.
+**One entry's saved evidence is read through the projection.** `buildEntry`
+forms one row per retained `Yield` and `Close` in append order: marker, type,
+name, status, optional source position, prompt number, agent and supported exec
+facts. A saved Prompt's row takes its semantic outcome, number and agent from
+the turn that same reading parsed; the root close takes the parsed entry outcome.
+Other rows retain their protocol status. An exec result with protocol `ok`
+projects its validated integral `exitCode` and independently retained string
+channels. An absent channel stays absent; an empty retained channel stays empty.
+Error, cancellation and missing results supply no invented exit or channels.
+Projection detaches and freezes these facts, refuses malformed supported results,
+and exposes no arbitrary effect payload, provider file, command descriptor or stack.
+Raw `DurableEvent`s still terminate at the model.
 
-The reads over it are a feature-local module of the Sidekick's own
-(`sidekick/entry-inspection.ts`): pure selectors, Unicode and record windows,
-and four page builders over frozen entry facts and the exact live output
-observation their caller supplies. A running entry uses the existing printing
-fact; a cancelled entry may use the owning Send's final joined observation under
-the rule above. The reader owns no task, listener, stream or cache and performs
-no wait or execution. `requests.ts` supplies the acknowledged head and exact
-applicable observation for that read; `controls.ts` retains its ordinary intent
-and outcome pair. This does not add output to the entry's terminal or change the
-entry journal partition. No entry’s provider is reached. Execution ownership and
-the publication and secret boundaries remain unchanged.
+`sidekick/entry-inspection.ts` owns entry selection, Source/Prompt/Output windows
+and the complete Journal value. The root's `inspectJournal` operation takes one
+fresh acknowledged reading for both the response component and passive attachment.
+It builds `{entry,status,failure,prompts,records}`, evaluates ordinary yq over
+that complete permitted value with the existing core evaluator, then pages the
+selected result. Every success is exactly `{value,next,prev,last}`. Small results
+keep their JSON type; selected strings use 4096-code-point windows and arrays use
+at most twenty items within the serialized response bound. Oversized objects or
+indivisible array items refuse with a narrower-query direction. Direct channel
+selection remains fully pageable. Source, Prompt and Output keep their existing
+contracts and exact live-output ownership.
+
+The feature-local `sidekick/journal-query.ts` formats navigation as ordinary yq
+with an always-true literal JSON header, a resolved-positive-entry guard, the
+opaque original expression and a finite slice. It recognizes only that exact
+formatter output: parse the first line's strict JSON tuple, validate it and
+regenerate the whole expression for equality. No arbitrary yq syntax is parsed.
+The selected entry is checked independently, since a collecting expression can
+produce a value after an empty filter. Recognition supplies navigation context,
+not permission. The existing evaluator decides query meaning and failures;
+a successful expression with no usable array/string base is an ordinary fresh
+query. Edited or noncanonical expressions retain ordinary query behavior.
+
+Every page request recomputes against that entry's current complete retained
+facts. Callers reuse the same positive entry number; later admissions cannot
+retarget generated windows, and growth may shift pages. Query text and this
+request's current data supply all navigation context: no issued association,
+cache, snapshot, extra record or second execution owner exists. Both evaluations
+needed for a recognized window use the same captured input. Inspection performs
+no command, provider call, entry admission, resumption or history rewrite.
+`controls.ts` retains the ordinary response-owned intent/outcome and designated
+feedback; the originating and consuming executions keep their disclosure and
+persistence gates. Passive attachments retain exact connection authentication
+and the existing frame bound, without Journal cursor wrapping or success decoration.
 
 The single output read these four replaced is retired from admission rather
 than from history. A response written now cannot name it — the capture seals

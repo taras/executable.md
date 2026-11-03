@@ -53,6 +53,7 @@ import {
 } from "./entry-inspection.ts";
 import type {
   EntryJournalPage,
+  EntryJournalRequest,
   EntryPromptPage,
   EntryPromptRequest,
   EntryReadRequest,
@@ -78,6 +79,7 @@ export interface RootReading {
    * it rather than one copy taken when the response started.
    */
   acknowledged(): Result<ReplModel>;
+  inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>>;
   /**
    * The entry running in this process and what it has printed, or none.
    *
@@ -146,6 +148,15 @@ export function rootReads(
   },
 ): RootReads {
   return {
+    *inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>> {
+      const read = session.reading(undefined);
+      return read.ok
+        ? yield* readEntryJournal(request, {
+            entries: read.value.model.entries,
+            printing: session.printing,
+          })
+        : read;
+    },
     acknowledged(): Result<ReplModel> {
       const read = session.reading(undefined);
       return read.ok ? Ok(read.value.model) : read;
@@ -278,10 +289,8 @@ export function sidekickRequests(
       const read = inspected(root);
       return read.ok ? readEntryOutputWindow(request, { ...read.value, joined: joined?.() }) : read;
     },
-    // deno-lint-ignore require-yield
-    *inspectJournal(request: EntryReadRequest): Operation<Result<EntryJournalPage>> {
-      const read = inspected(root);
-      return read.ok ? readEntryJournal(request, read.value) : read;
+    inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>> {
+      return root.inspectJournal(request);
     },
   };
 }

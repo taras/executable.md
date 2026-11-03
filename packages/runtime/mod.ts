@@ -190,3 +190,5 @@ export {
   createDenoExecutableObserver,
   hasDenoExecutableObserver,
 } from "./deno-executable-observer.ts";
+
+export { hostClaudeExecutable } from "./node-claude-executable.ts";

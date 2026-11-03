@@ -273,6 +273,14 @@ restrictive permissions and removes any temporary during cleanup.
 
 ## Provider-native identity
 
+The retained Claude adapter confirms the backend conversation on response
+`_meta.agentSessionId` before ACP session creation or reattachment succeeds.
+This confirmation does not change who allocated the native identity: Claude's
+native construction route remains explicitly client-allocated. Metadata presence
+never chooses a construction route. A resumed Query confirms the exact retained
+identity after loading history; it neither replaces the conversation nor rebuilds
+its transcript.
+
 Four identities remain distinct:
 
 ```text

@@ -17,7 +17,7 @@ import { until } from "effection";
 import type { Operation } from "effection";
 import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { resolveExecutablePath } from "./node-executable-path.ts";
 import { ExecutableObservationError } from "./executable-observer.ts";
 import type { ExecutableObserver, ObservedExecutable } from "./executable-observer.ts";
 
@@ -104,39 +104,12 @@ export function createDenoExecutableObserver(overrides?: {
   }
   const host: ObserverHost = found;
 
-  function* resolveCommand(command: string): Operation<string> {
-    if (command.length === 0) {
-      throw new ExecutableObservationError("no executable was named", { refusal: "not-found" });
-    }
-    const base = overrides?.cwd ?? host.cwd();
-    if (command.includes("/") || command.includes("\\") || isAbsolute(command)) {
-      return resolve(base, command);
-    }
-    const search = overrides?.path ?? host.env.toObject().PATH ?? "";
-    for (const entry of search.split(delimiter)) {
-      if (entry.length === 0) {
-        continue;
-      }
-      const candidate = join(entry, command);
-      const found = yield* until(
-        stat(candidate).then(
-          () => true,
-          () => false,
-        ),
-      );
-      if (found) {
-        return candidate;
-      }
-    }
-    throw new ExecutableObservationError(
-      `no executable named ${command} was found on the search path`,
-      { refusal: "not-found" },
-    );
-  }
-
   return {
     *observe(command, options): Operation<ObservedExecutable> {
-      const resolved = yield* resolveCommand(command);
+      const resolved = yield* resolveExecutablePath(command, {
+        cwd: overrides?.cwd ?? host.cwd(),
+        path: overrides?.path ?? host.env.toObject().PATH ?? "",
+      });
 
       // Canonicalized before stat, hash and version: a symlinked launcher shim
       // and the build it points at are one file, so the same build reached two
