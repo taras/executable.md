@@ -49,6 +49,8 @@ interface Adapter {
   /** The adapter process, so a case can say what the resource still observes. */
   readonly child: ChildProcess;
   readonly log: string;
+  readonly closed: Operation<{ code: number | null; signal: NodeJS.Signals | null }>;
+  readonly replies: Array<Record<string, unknown>>;
   request(method: string, params: unknown): Operation<Record<string, unknown>>;
   /**
    * Every `session/update` notification the adapter sent, in arrival order.
@@ -75,15 +77,28 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
     const entry = adapters.executablePath(provider);
 
     let child: ChildProcess | undefined;
-    const closed = withResolvers<void>();
-    const onClose = (): void => closed.resolve();
+    const closed = withResolvers<{ code: number | null; signal: NodeJS.Signals | null }>();
+    let outcome: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    let onStdout: ((chunk: Buffer) => void) | undefined;
+    const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      outcome = { code, signal };
+      closed.resolve(outcome);
+    };
     yield* ensure(function* () {
       if (child !== undefined) {
         try {
-          child.stdin?.end();
-          child.kill();
+          if (outcome === undefined) {
+            child.stdin?.end();
+            // Claude disposes pending Queries on EOF; SIGTERM can preempt that shutdown.
+            if (provider !== "claude") {
+              child.kill();
+            }
+          }
           yield* closed.operation;
         } finally {
+          if (onStdout !== undefined) {
+            child.stdout?.off("data", onStdout);
+          }
           child.off("close", onClose);
         }
       }
@@ -99,10 +114,11 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
 
     const pending = new Map<number, (message: Record<string, unknown>) => void>();
     const updates: Array<Record<string, unknown>> = [];
+    const replies: Array<Record<string, unknown>> = [];
     let next = 1;
     let buffer = "";
 
-    const onStdout = (chunk: Buffer): void => {
+    onStdout = (chunk: Buffer): void => {
       buffer += chunk.toString("utf8");
       let index = buffer.indexOf("\n");
       while (index >= 0) {
@@ -119,6 +135,9 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
           continue;
         }
         const id = message["id"];
+        if (typeof id === "number" && message["method"] === undefined) {
+          replies.push(message);
+        }
         if (typeof id === "number" && pending.has(id)) {
           pending.get(id)?.(message);
           pending.delete(id);
@@ -139,19 +158,13 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
       }
     };
 
-    // Detached before the kill above, because destructors unwind in reverse:
-    // the adapter stops being read before the process it is reading is ended.
-    // Established before the subscription, because `yield* ensure(...)` is
-    // itself a suspension an owner can be halted at.
-    yield* ensure(() => {
-      processChild.stdout?.off("data", onStdout);
-    });
-
-    processChild.stdout?.on("data", onStdout);
+    child.stdout?.on("data", onStdout);
 
     yield* provide({
       child: processChild,
       log,
+      closed: closed.operation,
+      replies,
       updates,
       *request(method: string, params: unknown): Operation<Record<string, unknown>> {
         const id = next++;
@@ -512,23 +525,23 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
   }
 
   it("HC Claude cancellation joins the held startup Query with no late response", function* () {
-    let child: ChildProcess | undefined;
+    let adapter: Adapter | undefined;
     let answered = false;
     yield* scoped(function* () {
-      const adapter = yield* useAdapter("claude", {
+      const live = yield* useAdapter("claude", {
         ...CLAUDE_ENV,
         FAKE_CLAUDE_CONFIRMATION: "held",
       });
-      child = adapter.child;
-      yield* initialize(adapter);
+      adapter = live;
+      yield* initialize(live);
       const opening = yield* effectionSpawn(function* () {
-        yield* openSession(adapter);
+        yield* openSession(live);
         answered = true;
       });
       let started = false;
       while (!started) {
         try {
-          started = (yield* readTextFile(adapter.log)).includes('"control_request"');
+          started = (yield* readTextFile(live.log)).includes('"control_request"');
         } catch {
           /* The CLI has not created its log yet. */
         }
@@ -537,10 +550,58 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
         }
       }
       yield* opening.halt();
-      expect(acceptances(adapter)).toEqual([]);
+      expect(acceptances(live)).toEqual([]);
     });
-    expect(child?.exitCode).toBe(0);
+    if (adapter === undefined) {
+      throw new Error("the adapter never started");
+    }
+    expect(yield* adapter.closed).toEqual({ code: 0, signal: null });
+    expect(acceptances(adapter)).toEqual([]);
+    expect(
+      adapter.replies.some((reply) => {
+        const result = reply["result"];
+        return (
+          typeof result === "object" &&
+          result !== null &&
+          typeof Reflect.get(result, "sessionId") === "string"
+        );
+      }),
+    ).toBe(false);
     expect(answered).toBe(false);
+  });
+
+  it("HC Claude startup disposal joins the backend and its held helper before returning", function* () {
+    const root = yield* until(mkdtemp(join(tmpdir(), "xmd disposal ")));
+    yield* ensure(() => rm(root, { recursive: true, force: true }));
+    const adapters = createEmbeddedAdapters(join(root, "adapters"));
+    yield* adapters.materialize("claude");
+    const done = withResolvers<{ error: string | undefined; stdout: string; stderr: string }>();
+    let observer: ChildProcess | undefined;
+    yield* ensure(function* () {
+      if (observer) {
+        observer.kill();
+        yield* done.operation;
+      }
+    });
+    observer = execFile(
+      "node",
+      [join(FIXTURES, "claude-startup-disposal.mjs"), adapters.executablePath("claude"), root],
+      {
+        env: { ...process.env, CLAUDE_CODE_EXECUTABLE: FAKE_CLAUDE },
+      },
+      (error, stdout, stderr) => done.resolve({ error: error?.message, stdout, stderr }),
+    );
+    const result = yield* done.operation;
+    expect(result.error).toBeUndefined();
+    const observation = JSON.parse(result.stdout);
+    expect(observation.events).toEqual(["dispose-start", "backend-close", "dispose-return"]);
+    expect(observation.closedWhenDisposeReturned).toBe(true);
+    expect(observation.outcome).toEqual({ code: 0, signal: null });
+    expect(observation.helperClosed).toBe(true);
+    expect(observation.result.status).toBe("refused");
+    expect(observation.updates).toEqual([]);
+    expect(observation.userMessages).toBe(0);
+    expect(observation.remainingSessions).toBe(0);
   });
 
   it("HC Claude preserves settings and runs only a fixed internal hook with its Node", function* () {

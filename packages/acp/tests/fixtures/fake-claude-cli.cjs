@@ -14,6 +14,7 @@
  */
 const fs = require("node:fs");
 const crypto = require("node:crypto");
+const { spawn } = require("node:child_process");
 
 const LOG = process.env.FAKE_CLAUDE_LOG;
 
@@ -57,6 +58,19 @@ emit({
 });
 
 const confirmation = process.env.FAKE_CLAUDE_CONFIRMATION ?? "success";
+if (confirmation === "held" && process.env.FAKE_CLAUDE_HELD_HELPER === "1") {
+  let helper;
+  const onEnd = () => helper.stdin.end();
+  const onHelperClose = (code, signal) => {
+    log({ event: "helper-close", code, signal });
+    helper.off("close", onHelperClose);
+    process.stdin.off("end", onEnd);
+    process.exit(0);
+  };
+  process.stdin.on("end", onEnd);
+  helper = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: "pipe" });
+  helper.on("close", onHelperClose);
+}
 function confirm() {
   if (confirmation === "absent" || confirmation === "held") {
     return;
