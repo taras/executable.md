@@ -51,6 +51,7 @@ props:
     initialize:
       type: boolean
       default: false
+    plannerProvider: {enum: [claude, codex], default: claude}
     implementationProvider:
       enum: [claude, codex]
       default: claude
@@ -61,9 +62,10 @@ props:
   additionalProperties: false
 ---
 
-<Phase.Profile role={props.role} assessment={props.assignment.assessment} implementationProvider={props.implementationProvider} as="profile" />
+<Phase.Profile role={props.role} assessment={props.assignment.assessment} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} as="profile" />
 <If condition={props.correction !== null && (props.initialize || props.correction.role !== props.role || props.correction.session !== props.session || props.correction.revision !== props.assignment.revision || props.correction.phase !== props.assignment.phase || props.correction.work !== props.assignment.work || props.correction.provider !== profile.provider)}>
 <Fail message="Response correction must select the same initialized original owner, source and routing." />
 </If>
 <ReviewPolicy assessment={props.assignment.assessment} kind={props.assignment.reviewKind ?? "feature"} as="policy" />
-<Output><If condition={profile.provider === "claude"}><Agent name="claude"><Session name={props.session} model={profile.model} effort={profile.effort}><Prompt throwOnError={true}><If condition={props.correction === null}><Phase.Instructions inputs={props.inputs} role={props.role} assignment={props.assignment} initialize={props.initialize} /><Else><Phase.CorrectionInstructions correction={props.correction} /></Else></If></Prompt></Session></Agent><Else><Agent name="codex"><Session name={props.session} model={profile.model} effort={profile.effort}><Prompt throwOnError={true}><If condition={props.correction === null}><Phase.Instructions inputs={props.inputs} role={props.role} assignment={props.assignment} initialize={props.initialize} /><Else><Phase.CorrectionInstructions correction={props.correction} /></Else></If></Prompt></Session></Agent></Else></If></Output>
+<Phase.Request role={props.role} assignment={props.assignment} inputs={props.inputs} initialize={props.initialize} correction={props.correction} as="request" />
+<Output><If condition={profile.provider === "claude"}><Agent name="claude"><Session name={props.session} model={profile.model} effort={profile.effort}><Prompt throwOnError={true}>{request}</Prompt></Session></Agent><Else><Agent name="codex"><Session name={props.session} model={profile.model} effort={profile.effort}><Prompt throwOnError={true}>{request}</Prompt></Session></Agent></Else></If></Output>

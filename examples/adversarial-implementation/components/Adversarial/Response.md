@@ -27,7 +27,7 @@ returns: {type: object}
 <If condition={!established.ok}><Fail message="No unambiguous substantive foundation result is established. Preserve raw.txt and response-rejection-0000.json; no productive prompt is repeated." /></If>
 <Let as="frozen" value={{...schemas.foundation,properties:Object.fromEntries(Object.entries(schemas.foundation.properties).map(([key,schema]) => [key,(key === "summary" || key === "handoff") && established.value[key].length > schema.maxLength ? schema : {const:established.value[key]}]))}} />
 <Loop max={3}>
-<If condition={checked.ok}><Break /></If>
+<If condition={checked.ok || round >= props.assignment.maxResponseCorrections}><Break /></If>
 <Let as="round" value={round + 1} />
 <Let as="directory" value={props.assignment.attempt + "/response-corrections/" + round} />
 <Dir path={props.assignment.attempt + "/response-corrections"}><Let as="parentPrepared" value={true} /></Dir>
@@ -36,7 +36,7 @@ returns: {type: object}
 mkdir -- {quoted}
 ```
 <If condition={reserved.exitCode !== 0}><Fail message="Preserve the occupied response correction; do not repeat its prompt." /></If>
-<Let as="packet" value={{ordinal:round,remaining:3-round,raw:rawPath,rejection:checked.errors,established:established.value,resultSchema:frozen}} />
+<Let as="packet" value={{ordinal:round,remaining:props.assignment.maxResponseCorrections-round,raw:rawPath,rejection:checked.errors,established:established.value,resultSchema:frozen}} />
 <If condition={JSON.stringify(packet).length > 64000}><Fail message="The response correction packet exceeds its input bound; preserve it without dispatch." /></If>
 <Dir path={directory}><File path="request.json"><Json value={packet} /></File></Dir>
 <Ticket.Checkout repository={props.assignment.repository} as="before" />
@@ -64,6 +64,9 @@ git status --porcelain=v1 --untracked-files=all
 <If condition={extracted.ok}><SafeParse schema={frozen} as="checked">{extracted.json}</SafeParse></If>
 <Dir path={directory}><File path="disposition.json"><Json value={{round,accepted:checked.ok,raw:rawPath,errors:checked.ok ? [] : checked.errors}} /></File></Dir>
 </Loop>
-<If condition={!checked.ok}><Fail message="Three response-only corrections are exhausted. Preserve their receipts; no productive prompt is repeated." /></If>
+<If condition={!checked.ok}>
+<Dir path={props.assignment.attempt}><File path="response-disposition.json"><Json value={{status:"failed_without_result",dispatchable:false,consumed:round,limit:props.assignment.maxResponseCorrections}} /></File></Dir>
+<Fail message="The selected response-only correction budget is exhausted. Preserve its receipts; no productive prompt is repeated." />
+</If>
 </If>
 <Return value={{result:checked.value,round,rawPath}} />

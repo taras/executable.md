@@ -7,6 +7,7 @@ props:
     plannerGuide: {type: object}
     implementorGuide: {type: object}
     documents: {type: object}
+    delivery: {type: object}
     assessment: {type: object}
   required: [task, plannerGuide, implementorGuide]
   additionalProperties: false
@@ -23,6 +24,7 @@ returns: {type: object}
 mkdir -- {quoted}
 ```
 <If condition={reserved.exitCode !== 0}><Fail message="The work directory must be fresh. Resume its original XMD execution instead of starting another writer." /></If>
+<If condition={props.delivery !== undefined}><Dir path={task.directory + "/delivery"}><File path="requirements.json"><Json value={props.delivery} /></File></Dir></If>
 <If condition={props.documents === undefined}>
 <Ticket.Documents repository={task.repository} paths={task.inputs} documents={{}} as="documents" />
 <Else><Let as="documents" value={props.documents} /></Else>
@@ -41,7 +43,7 @@ mkdir -- {quoted}
 <Loop max={(task.maxApiRepairs + 1) * 2}>
 <Ticket.Checkout repository={task.repository} as="checkout" />
 <Let as="attempt" value={task.directory + "/foundation-" + history.length} />
-<Let as="assignment" value={{work:task.work,repository:task.repository,revision:checkout.head,attempt,session:task.sessions.planner,initialize:!initialized.planner,request:task.request,inputs:inputs.filter(input => !(deliveredInputs[task.sessions.planner] ?? []).includes(input.path)),api,conflict,contract,assessment}} />
+<Let as="assignment" value={{work:task.work,repository:task.repository,revision:checkout.head,attempt,session:task.sessions.planner,plannerProvider:task.providers.planner,maxResponseCorrections:task.maxResponseCorrections,initialize:!initialized.planner,request:task.request,inputs:inputs.filter(input => !(deliveredInputs[task.sessions.planner] ?? []).includes(input.path)),api,conflict,contract,assessment}} />
 <Ticket.Capture as="execution"><Adversarial.Foundation assignment={assignment} guide={props.plannerGuide.content} as="foundation" /><Json value={foundation} /></Ticket.Capture>
 <Dir path={task.directory}><File path={"foundation-" + history.length + "-execution.json"}><Json value={execution} /></File></Dir>
 <Let as="history" value={[...history,{owner:"planner",attempt,status:execution.status}]} />
@@ -50,7 +52,7 @@ mkdir -- {quoted}
 <If condition={execution.status !== "completed"}><Let as="finished" value={true} /><Return value={{status:"hold",reason:execution.failure,history}} /><Break /></If>
 <Parse schema={{type:"object"}} as="foundation">{execution.output}</Parse>
 <If condition={foundation.result.outcome === "needs_architect"}>
-<Phase.Run phase="discovery" role="architect" session={task.sessions.architect} initialize={!initialized.architect} assignment={{phase:"discovery",work:task.work,repository:task.repository,revision:checkout.head,request:foundation.result.handoff,assessment:foundation.result.assessment,artifacts:foundation.result.artifacts,evidence:foundation.result.evidence,findings:[],changedPaths:[],contract}} attempt={task.directory + "/architecture-" + history.length} successor="discovery" nextRole="planner" as="architecture" />
+<Phase.Run maxResponseCorrections={task.maxResponseCorrections} phase="discovery" role="architect" session={task.sessions.architect} initialize={!initialized.architect} assignment={{phase:"discovery",work:task.work,repository:task.repository,revision:checkout.head,request:foundation.result.handoff,assessment:foundation.result.assessment,artifacts:foundation.result.artifacts,evidence:foundation.result.evidence,findings:[],changedPaths:[],contract}} attempt={task.directory + "/architecture-" + history.length} successor="discovery" nextRole="planner" as="architecture" />
 <If condition={architecture.outcome !== "complete"}><Let as="finished" value={true} /><Return value={{status:"hold",reason:architecture.handoff,history}} /><Break /></If>
 <Let as="contract" value={architecture.contract} />
 <Let as="conflict" value={{question:foundation.result.handoff,answer:architecture.handoff,artifacts:architecture.artifacts}} />
@@ -66,7 +68,7 @@ mkdir -- {quoted}
 <Let as="acceptedInputs" value={[...inputs,{path:apiPath,content:apiText},{path:api.guide,content:usage}]} />
 <If condition={assessment.architecture}>
 <Ticket.ChangedPaths repository={task.repository} base={assignment.revision} head={api.revision} as="foundationChanges" />
-<Phase.Run phase="review" role="architect" session={task.sessions.architect} initialize={!initialized.architect} inputs={acceptedInputs} assignment={{phase:"review",work:task.work,repository:task.repository,revision:api.revision,priorRevision:assignment.revision,request:"Review the committed API foundation's structural impact before consumer migration. Inspect its validated examples and changed paths against the accepted outcome: " + task.request,assessment,contract,artifacts:[foundation.path,apiPath],evidence:foundation.validated.checks,findings:[],changedPaths:foundationChanges.paths}} attempt={task.directory + "/foundation-review-" + history.length} successor="ready" as="foundationReview" />
+<Phase.Run maxResponseCorrections={task.maxResponseCorrections} phase="review" role="architect" session={task.sessions.architect} initialize={!initialized.architect} inputs={acceptedInputs} assignment={{phase:"review",work:task.work,repository:task.repository,revision:api.revision,priorRevision:assignment.revision,request:"Review the committed API foundation's structural impact before consumer migration. Inspect its validated examples and changed paths against the accepted outcome: " + task.request,assessment,contract,artifacts:[foundation.path,apiPath],evidence:foundation.validated.checks,findings:[],changedPaths:foundationChanges.paths}} attempt={task.directory + "/foundation-review-" + history.length} successor="ready" as="foundationReview" />
 <Let as="initialized" value={{...initialized,architect:true}} />
 <Dir path={task.directory}><File path={"foundation-review-" + history.length + "-result.json"}><Json value={foundationReview} /></File></Dir>
 <Ticket.Checkout repository={task.repository} as="reviewedFoundation" />
@@ -74,7 +76,7 @@ mkdir -- {quoted}
 </If>
 <Let as="currentReferences" value={[...acceptedInputs.map(input => input.path),props.plannerGuide.path,props.implementorGuide.path]} />
 <Let as="deliveredInputs" value={Object.fromEntries(Object.entries(deliveredInputs).map(([session,paths]) => [session,paths.filter(path => currentReferences.includes(path))]))} />
-<Let as="migration" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory + "/migration-" + round,api,maxCorrections:task.maxCorrections,deliveredInputs,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:initialized.architect},planner:{session:task.sessions.planner,provider:"claude",initialized:true},implementor:{session:task.sessions.implementor,provider:"claude",initialized:initialized.implementor}},acceptedInputs,roleInputs:{planner:[props.plannerGuide],implementor:[props.implementorGuide]},assignment:{phase:"implementation",work:task.work,repository:task.repository,revision:foundation.validated.revision,priorRevision:assignment.revision,request:api.migration.request,assessment,contract,artifacts:[foundation.path,apiPath],evidence:foundation.validated.checks,findings:[],changedPaths:[]}}} />
+<Let as="migration" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory + "/migration-" + round,api,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,deliveredInputs,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:initialized.architect},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:true},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,initialized:initialized.implementor}},acceptedInputs,roleInputs:{planner:[props.plannerGuide],implementor:[props.implementorGuide]},assignment:{phase:"implementation",work:task.work,repository:task.repository,revision:foundation.validated.revision,priorRevision:assignment.revision,request:api.migration.request,assessment,contract,artifacts:[foundation.path,apiPath],evidence:foundation.validated.checks,findings:[],changedPaths:[]}}} />
 <Let as="manifest" value={attempt + "/migration.json"} />
 <Dir path={attempt}><File path="migration.json"><Json value={migration} /></File></Dir>
 <Ticket.Run manifest={manifest} as="ticket" />
