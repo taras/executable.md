@@ -2,7 +2,7 @@
  * The ACP runtime this package executes.
  *
  * The released 0.21.1 source closure retains the explicit backend-acceptance
- * barrier required by session creation. Its transport acknowledgement does not
+ * barrier used by strong-declared session creation. Its transport acknowledgement does not
  * establish a durable conversation. See `../vendor/acpx/PROVENANCE.md`.
  */
 // @ts-types="../vendor/acpx/generated/runtime.d.ts"

@@ -416,7 +416,11 @@ describe(
         const survived: boolean[] = [];
         for (const _invocation of [0, 1]) {
           yield* useWorkingDirectory(function* (dir) {
-            const harness = createPlanHarness({ planWriterRoot, store });
+            const harness = createPlanHarness({
+              planWriterRoot,
+              store,
+              acceptance: "first-turn-acceptance",
+            });
             harness.fake.script({ reply: VALID });
             harness.script({ decision: "Approve" });
 

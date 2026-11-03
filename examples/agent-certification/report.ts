@@ -2,6 +2,8 @@ import type { SessionConfiguration } from "@executablemd/core";
 import { z } from "zod";
 
 export const capability = z.enum([
+  "acceptance",
+  "identity",
   "authentication",
   "streaming",
   "completion",
@@ -33,6 +35,7 @@ const reason = z.enum([
   "agent-unavailable",
   "authentication-refused",
   "acceptance-unavailable",
+  "identity-unavailable",
   "selector-unavailable",
   "configuration-mismatch",
   "marker-mismatch",
@@ -92,6 +95,8 @@ export const reportSchema = z.strictObject({
   }),
   exitState: z.enum(["settled", "failed", "interrupted"]),
   capabilities: z.strictObject({
+    acceptance: rowSchema,
+    identity: rowSchema,
     authentication: rowSchema,
     streaming: rowSchema,
     completion: rowSchema,
@@ -143,6 +148,8 @@ export function initialReport(config: Configuration): Report {
     counts: { prompts: 0, cancellationRequests: 0 },
     exitState: "settled",
     capabilities: {
+      acceptance: initialRow(config, "acceptance"),
+      identity: initialRow(config, "identity"),
       authentication: initialRow(config, "authentication"),
       streaming: initialRow(config, "streaming"),
       completion: initialRow(config, "completion"),
@@ -331,6 +338,8 @@ export function finalizeReport(input: Report): Report {
   report.durableSessionCertified =
     report.selectedCapabilitiesPassed &&
     [
+      report.capabilities.acceptance,
+      report.capabilities.identity,
       report.capabilities.continuity,
       report.capabilities.separation,
       report.capabilities.reconnect,
@@ -338,4 +347,21 @@ export function finalizeReport(input: Report): Report {
       report.capabilities.cleanup,
     ].every((row) => row.outcome === "pass");
   return reportSchema.parse(report);
+}
+
+export function recordSessionEvidence(report: Report, strong: boolean, native: boolean): void {
+  for (const [name, passed, unavailable] of [
+    ["acceptance", strong, "acceptance-unavailable"],
+    ["identity", native, "identity-unavailable"],
+  ] satisfies [
+    "acceptance" | "identity",
+    boolean,
+    "acceptance-unavailable" | "identity-unavailable",
+  ][]) {
+    const row = report.capabilities[name];
+    if (row.selected && row.outcome !== "pass") {
+      row.outcome = passed ? "pass" : "unsupported";
+      row.reason = passed ? "completed" : unavailable;
+    }
+  }
 }

@@ -7,6 +7,11 @@
 [native session launch story](https://github.com/taras/executable.md/issues/517),
 [future bootstrap prompts](https://github.com/taras/executable.md/issues/514)
 
+Ordinary ACP prompts require the private acceptance barrier only when their
+adapter declares it. Native launch keeps its adapter-specific materialization
+requirements and asserted native identity checks; a standard ACP loading target
+is never a native handoff identity.
+
 ## Purpose
 
 An executable document can prepare a coding-agent session and then place the

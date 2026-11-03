@@ -66,6 +66,8 @@ function schedule(state: QualificationState) {
   const selected = (name: keyof Report["capabilities"]) => state.report.capabilities[name].selected;
   const seed =
     [
+      "acceptance",
+      "identity",
       "authentication",
       "streaming",
       "completion",

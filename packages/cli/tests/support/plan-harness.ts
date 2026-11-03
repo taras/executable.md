@@ -116,6 +116,8 @@ export function createPlanHarness(options: {
    * session is continued or created a second time.
    */
   store?: FakeStore;
+  /** Declare the fixture's stronger creation guarantee; omission uses standard ACP. */
+  acceptance?: "first-turn-acceptance";
   /** What this case's host states about its own stderr. Absent is a pipe. */
   terminal?: boolean;
   /**
@@ -184,6 +186,18 @@ export function createPlanHarness(options: {
         createRuntime: fake.create,
         sessionStore: options.store ?? makeStore(),
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+        ...(options.acceptance === undefined
+          ? {}
+          : {
+              nativeAdapters: {
+                [AGENT]: {
+                  launcher: AGENT,
+                  identity: "provider-returned",
+                  acceptance: options.acceptance,
+                  resume: () => [],
+                },
+              },
+            }),
       },
       *installSyntax(includes) {
         // The harness's own lazy source, bound through the helper production

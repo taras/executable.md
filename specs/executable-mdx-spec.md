@@ -13939,6 +13939,12 @@ Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 
 ### Tier WSL — Retained workflow Agent sessions
 
+The acceptance and promotion rows cover adapters declaring strong first-turn
+acceptance. Standard ACP creation instead retains `acpx.acpSessionId` when no
+native assertion exists, commits the mapping before events and reopens only
+through supported loading. A changed assertion kind refuses. An ACP loading
+target supplies no native handoff or stronger acceptance proof.
+
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
 
 | # | Test | Verify |

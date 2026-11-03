@@ -74,6 +74,7 @@ export interface SessionRequestData {
    * request can neither read it nor attach one.
    */
   readonly admit?: AdmitProviderConfiguration;
+  readonly continuation?: "required";
   /**
    * Whether the element that opened this request is still resolving it.
    *
@@ -114,6 +115,7 @@ interface Issuance {
    * look-alike.
    */
   readonly admit?: AdmitProviderConfiguration;
+  readonly continuation?: "required";
   /**
    * What the caller asked this conversation to run under.
    *
@@ -250,10 +252,12 @@ export function openSessionRequest(
   sessionIdentity: string | undefined,
   name: string | undefined,
   admit?: AdmitProviderConfiguration,
+  used = false,
 ): SessionRequestIssuance {
   const issuance: Issuance = {
     ...(sessionIdentity === undefined ? {} : { sessionIdentity }),
     ...(admit === undefined ? {} : { admit }),
+    ...(used ? { continuation: "required" } : {}),
     settled: false,
     live: true,
     accepted: false,
@@ -360,6 +364,7 @@ export function consumeSessionRequest(routed: unknown): SessionRequestData {
       : { sessionIdentity: issuance.sessionIdentity }),
     ...(issuance.configuration === undefined ? {} : { configuration: issuance.configuration }),
     ...(issuance.admit === undefined ? {} : { admit: issuance.admit }),
+    ...(issuance.continuation === undefined ? {} : { continuation: issuance.continuation }),
     live: () => issuance.live,
     finished: (session: Session) => {
       issuance.completed = session;
