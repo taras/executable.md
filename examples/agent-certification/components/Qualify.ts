@@ -7,7 +7,6 @@ import { resolve } from "node:path";
 import { configurationSchema, initialReport, finalizeReport } from "../report.ts";
 import { Qualification } from "../state.ts";
 import type { QualificationState } from "../state.ts";
-import { observeQualification, joinQualification } from "../observe.ts";
 
 export const props: PropsSchema = {
   type: "object",
@@ -36,7 +35,14 @@ export default function* Qualify(input: Record<string, Json>) {
     "../observe.ts",
     "../state.ts",
     "Qualify.ts",
-    "Availability.ts",
+    "RunSequence.ts",
+    "ResumeStage.ts",
+    "ResumeProps.ts",
+    "../stage-runner.ts",
+    "../stages/initial.md",
+    "../stages/reconnect.md",
+    "../stages/cancel.md",
+    "../stages/resume.md",
     "LoadConfiguration.ts",
     "Marker.ts",
     "CheckMarker.ts",
@@ -51,25 +57,46 @@ export default function* Qualify(input: Record<string, Json>) {
   report.platform.os =
     host.os === "darwin" || host.os === "linux" || host.os === "win32" ? host.os : "unknown";
   report.platform.arch = host.arch === "arm64" || host.arch === "x64" ? host.arch : "unknown";
-  const state: QualificationState = { configuration, report, marker: randomUUID() };
+  const id = randomUUID();
+  const state: QualificationState = {
+    configuration,
+    report,
+    marker: randomUUID(),
+    names: { a: `a-${id}`, b: `b-${id}`, c: `c-${id}` },
+    seedAccepted: false,
+    turn: { accepted: false, completed: false },
+  };
   yield* Qualification.set(state);
-  yield* observeQualification(report);
+
   let failure: unknown;
   try {
-    yield* joinQualification(report, () => content());
+    yield* content();
   } catch (error) {
     failure = error;
   }
-  const final = finalizeReport(report);
+  if (
+    failure !== undefined ||
+    state.failure !== undefined ||
+    Object.values(state.report.capabilities).some(
+      (row) => row.selected && row.outcome === "failure",
+    )
+  ) {
+    state.report.exitState = "failed";
+  }
+  const final = finalizeReport(state.report);
   yield* writeTextFile(
     resolve(yield* cwd(), String(input.report)),
     JSON.stringify(final, null, 2) + "\n",
   );
-  if (failure !== undefined) {
-    throw failure;
+  const rows = Object.entries(final.capabilities).map(
+    ([name, row]) =>
+      `${name} | selected=${row.selected} expected=${row.expected} | ${row.outcome} | ${row.reason}`,
+  );
+  const matrix =
+    rows.join("\n") +
+    `\nPrompts=${final.counts.prompts} cancellations=${final.counts.cancellationRequests} complete=${final.complete} selectedPass=${final.selectedCapabilitiesPassed} durable=${final.durableSessionCertified}`;
+  if (final.exitState === "failed") {
+    throw new Error(matrix);
   }
-  if (state.failure !== undefined) {
-    throw state.failure;
-  }
-  return "The capability report was written. Evidence is incomplete: native cleanup remains unverified. No durable-session certification was granted.";
+  return matrix;
 }

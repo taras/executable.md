@@ -214,8 +214,11 @@ export function recordConfigurationSuccess(
 export function recordTurn(
   report: Report,
   observation: { accepted: boolean; completed: boolean; deltas: number },
+  count = true,
 ): void {
-  report.counts.prompts++;
+  if (count) {
+    report.counts.prompts++;
+  }
   for (const name of ["authentication", "streaming", "completion"] satisfies Capability[]) {
     const row = report.capabilities[name];
     if (!row.selected || row.outcome === "pass") {

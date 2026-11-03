@@ -1,4 +1,4 @@
-import { Agent, configurationOf } from "@executablemd/core";
+import { Agent, configurationOf, sessionOf } from "@executablemd/core";
 import type { AgentPromptEvent } from "@executablemd/core";
 import { scoped, Err, Ok } from "effection";
 import type { Result, Operation, Stream } from "effection";
@@ -10,7 +10,10 @@ import {
 } from "./report.ts";
 import type { Report } from "./report.ts";
 
-export function* observeQualification(report: Report): Operation<void> {
+export function* observeQualification(
+  report: Report,
+  observe?: (event: AgentPromptEvent) => void,
+): Operation<void> {
   yield* Agent.around({
     *session(args, next) {
       try {
@@ -33,14 +36,25 @@ export function* observeQualification(report: Report): Operation<void> {
               *next() {
                 const event = yield* subscription.next();
                 if (event.done) {
-                  recordTurn(report, { accepted, completed, deltas });
+                  recordTurn(report, { accepted, completed, deltas }, !accepted);
                 } else if (event.value.type === "started") {
                   accepted = true;
+                  report.counts.prompts++;
                   recordConfigurationSuccess(report, configurationOf(event.value.session));
                 } else if (event.value.type === "text_delta") {
                   deltas++;
                 } else if (event.value.type === "terminal") {
                   completed = event.value.status === "completed";
+                }
+                if (!event.done) {
+                  observe?.(
+                    event.value.type === "started"
+                      ? {
+                          ...event.value,
+                          session: sessionOf(event.value.session) ?? event.value.session,
+                        }
+                      : event.value,
+                  );
                 }
                 return event;
               },

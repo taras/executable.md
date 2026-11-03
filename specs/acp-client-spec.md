@@ -1539,8 +1539,8 @@ another prompt; it cannot infer or resend missing acceptance.
 [`examples/agent-certification/`](../examples/agent-certification/README.md)
 uses the ordinary literal-command ACPX path for local configurations and ordinary
 orchestration. Its eleven separate capability outcomes require measured evidence;
-expectations and availability establish no passing capability. The native
-availability probe's release is unverified cleanup, so qualification stops native
-admission before subsequent work and reports incomplete evidence. Existing owners
-still join teardown. Cancellation attribution alone establishes no cleanup pass,
+expectations and availability establish no passing capability. The ordinary production availability probe remains in force. Successfully joined
+stages permit independent later stages while exact native cleanup remains
+unverified. Pending joins, actual teardown failure and production ownership
+refusal stop admission. Existing owners still join teardown. Cancellation attribution alone establishes no cleanup pass,
 and the report grants neither durable identity nor a broader permission.
