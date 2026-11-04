@@ -77,7 +77,7 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation, Result, Stream, Task } from "effection";
-import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
+import { Component, INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
 import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
 import { API, Permissions } from "@executablemd/runtime";
@@ -88,6 +88,7 @@ import { useGeneratedFallback } from "../evaluation-profile.ts";
 import type {
   ExecutionDeclaration,
   ExecutionInstallation,
+  HostExecution,
   IdentityComponent,
 } from "@executablemd/core/host";
 import {
@@ -226,6 +227,18 @@ export interface ReplOverlay {
   /** Text typed and not yet admitted as an entry. */
   readonly draft: string | undefined;
 }
+
+/** This session's joined observation, separate from an entry's retained terminal. */
+export type ReplEntryExecution = {
+  readonly joined: boolean | null;
+  readonly outcome: "completed" | "failed" | "interrupted" | null;
+  readonly error: { readonly name: string; readonly message: string } | null;
+};
+
+const WITHHELD_EXECUTION_ERROR = Object.freeze({
+  name: "Error",
+  message: "Execution error details were withheld because disclosure checks could not complete.",
+});
 
 /**
  * What expansion is doing, for a view that only needs to say so.
@@ -394,6 +407,8 @@ export interface ReplSession {
    * {@link ReplPrinting} for why the overlay is not this.
    */
   readonly printing: ReplPrinting | undefined;
+  /** Detached observations of admitted entries, retained only by this session. */
+  readonly executions: Readonly<Record<string, ReplEntryExecution>>;
   readonly commandOutput: readonly ReplCommandOutput[];
   /**
    * What this process is doing element by element, for the entry that is open.
@@ -827,6 +842,10 @@ function* start(
     let admitting = true;
     /** How the last entry to finish finished. */
     let finished: Result<unknown> | undefined;
+    const executions = new Map<string, ReplEntryExecution>();
+    yield* ensure(() => {
+      executions.clear();
+    });
     /**
      * Every retained position, taken at the whole file rather than at the
      * selected prefix. Rebuilt with the model, so a wake that moves one moves
@@ -1018,6 +1037,9 @@ function* start(
         // reached an outcome is no longer printing, and what it printed is in
         // the record that outcome carries.
         return live && running !== undefined ? { entry: running.key, output } : undefined;
+      },
+      get executions() {
+        return Object.freeze(Object.fromEntries(executions));
       },
       get commandOutput() {
         return Object.freeze(
@@ -1534,6 +1556,7 @@ function* start(
        * reading to find.
        */
       let placed = false;
+      let disclosed: ReplEntryExecution["error"] = null;
       /** Whether this entry put the session into a stop it must undo. */
       let armed = false;
       function admit(outcome: Result<void>): void {
@@ -1693,6 +1716,9 @@ function* start(
           (text) => {
             finalOutput = Ok(Object.freeze({ entry: key, output: text }));
           },
+          (details) => {
+            disclosed = details;
+          },
           workspace,
         );
         if (!outcome.ok && !finalOutput.ok) {
@@ -1721,10 +1747,48 @@ function* start(
         },
         place: () => {
           placed = true;
+          executions.set(key, Object.freeze({ joined: false, outcome: null, error: null }));
         },
         placed: () => placed,
       };
       running = started;
+      owner.run(function* () {
+        const outcome = yield* started.finished;
+        let interrupted = false;
+        let failure = outcome.ok ? undefined : outcome.error;
+        try {
+          yield* started.task.halt();
+          const stopped = started.stopped === undefined ? undefined : yield* started.stopped;
+          const output = started.output();
+          const entry = projectRepl(retained);
+          const cancelled =
+            entry.ok &&
+            entry.value.entries.find((one) => one.key === key)?.terminal?.status === "cancelled";
+          interrupted = stopped?.ok === true && output.ok && cancelled;
+          failure =
+            !outcome.ok && !interrupted ? outcome.error : !output.ok ? output.error : undefined;
+        } catch (error) {
+          failure = error instanceof Error ? error : new Error(String(error));
+        }
+        if (placed) {
+          executions.set(
+            key,
+            Object.freeze({
+              joined: true,
+              outcome:
+                failure === undefined ? (interrupted ? "interrupted" : "completed") : "failed",
+              error:
+                failure === undefined
+                  ? null
+                  : !outcome.ok && failure === outcome.error && disclosed !== null
+                    ? disclosed
+                    : WITHHELD_EXECUTION_ERROR,
+            }),
+          );
+          changes.send(model);
+        }
+        disclosed = null;
+      });
       return started;
     }
 
@@ -1792,8 +1856,51 @@ function* start(
        */
       supplyStop: (stop: ReplEntryStop) => void,
       observedOutput: (text: string) => void,
+      observedFailure: (details: ReplEntryExecution["error"]) => void,
       workspace?: true,
     ): Operation<Result<unknown>> {
+      let hostExecution: HostExecution | undefined;
+      let caughtFailure: Error | undefined;
+      let cleared: ReplEntryExecution["error"] = null;
+      function selected(outcome: Result<unknown>): Result<unknown> {
+        observedFailure(!outcome.ok && outcome.error === caughtFailure ? cleared : null);
+        return outcome;
+      }
+      const disclosure: ExecutionInstallation = {
+        *install() {
+          yield* Component.around({
+            *expand([request], next) {
+              try {
+                yield* next(request);
+              } catch (error) {
+                caughtFailure = error instanceof Error ? error : undefined;
+                cleared = null;
+                if (caughtFailure !== undefined && hostExecution !== undefined) {
+                  try {
+                    const safe = yield* hostExecution.disclose({
+                      name: caughtFailure.name,
+                      message: caughtFailure.message,
+                    });
+                    if (
+                      safe.ok &&
+                      typeof safe.value.name === "string" &&
+                      typeof safe.value.message === "string"
+                    ) {
+                      cleared = Object.freeze({
+                        name: safe.value.name,
+                        message: safe.value.message,
+                      });
+                    }
+                  } catch {
+                    // Clearance never replaces the execution's original failure.
+                  }
+                }
+                throw error;
+              }
+            },
+          });
+        },
+      };
       try {
         const privacy = yield* useSecretInputs();
         const chunks: ReplCommandChunk[] = [];
@@ -1899,13 +2006,14 @@ function* start(
           // Installed into this exact execution, and nowhere else: the live
           // observer and the permission policy are this session's, not the
           // process's, and the attachment carries the entry whose turns they are.
-          [privacy, ...installations, lifecycle.installation, installation, ...owned],
+          [privacy, ...installations, lifecycle.installation, installation, ...owned, disclosure],
           { initialBindings },
         );
         // This entry's own stop, by value, as soon as there is an execution to
         // stop. The handle is this exact run's: it closes over that run's
         // runner task and its root writer, so nothing here has to name an
         // execution, look one up or hold a stream to reach it.
+        hostExecution = started;
         supplyStop(() => started.stop());
         // This entry's owned read, published for as long as this entry is the
         // one running and withdrawn with it. Registered after the execution
@@ -1945,15 +2053,15 @@ function* start(
           } else {
             open();
           }
-          return joined;
+          return selected(joined);
         }
         observedOutput(yield* consumed);
         if (!outcome.ok && isReconstructionFailure(outcome.error)) {
           refuse(outcome.error);
-          return outcome;
+          return selected(outcome);
         }
         open();
-        return outcome;
+        return selected(outcome);
       } catch (error) {
         const raised = error instanceof Error ? error : new Error(String(error));
         if (isReconstructionFailure(raised)) {
@@ -1961,7 +2069,11 @@ function* start(
         } else {
           open();
         }
-        return Err(raised);
+        return selected(Err(raised));
+      } finally {
+        hostExecution = undefined;
+        caughtFailure = undefined;
+        cleared = null;
       }
     }
 

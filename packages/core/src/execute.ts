@@ -43,7 +43,11 @@ import { DocumentProtocolError, issueDocument } from "./document-request.ts";
 import { claimBoundExec } from "./bound-exec.ts";
 import type { DocumentSettlement, IssuedDocument } from "./document-request.ts";
 import type { DocumentRequest, DurablePreparation } from "./document-request.ts";
-import { parseComputedBindings, useComputedBindings } from "./computed-bindings.ts";
+import {
+  CANNOT_DISCLOSE,
+  parseComputedBindings,
+  useComputedBindings,
+} from "./computed-bindings.ts";
 import type { ComputedBindings } from "./computed-bindings.ts";
 import type { CompletionFailure, ExecutionRequest } from "./execution-request.ts";
 import { createContext } from "effection";
@@ -2554,8 +2558,8 @@ export interface DocumentExecution extends Operation<Result<Json>> {
 /**
  * The same execution, as the trusted host that assembled it holds it.
  *
- * Everything a `DocumentExecution` is, and one thing more: this execution will
- * evaluate a generated root. That is a method rather than a module export
+ * Everything a `DocumentExecution` is, plus owned disclosure, bindings and
+ * generated-root evaluation. That is a method rather than a module export
  * because of what evaluating one requires — the documentation this execution
  * captured before its root import, the guarded route its canonical
  * `<Syntax />` is entered through, and the runtime services its own document
@@ -2606,6 +2610,17 @@ export interface HostExecution extends DocumentExecution {
    * the data nor the matched text.
    */
   bindings(): Operation<Result<JsonObject>>;
+  /**
+   * Return a detached safe copy through this execution's contextual disclosure.
+   *
+   * Dispatch Execution.disclose middleware, then clear its successful candidate
+   * through this execution's captured protected-input projection and scanner.
+   * Before policy readiness, after settlement or disposal, or if any step cannot
+   * clear the data, return a data-free Err. Cancellation remains cancellation.
+   * This read executes and records nothing, grants no permission and changes no
+   * execution outcome. Retaining the handle does not extend the owner's lifetime.
+   */
+  disclose(data: JsonObject): Operation<Result<JsonObject>>;
   /**
    * End this execution explicitly, and wait for all of it.
    *
@@ -3707,14 +3722,26 @@ export interface ExecutionInstallation {
 /**
  * Execution Api — a policy surface around document execution.
  *
- * No handler is given the execution, and whatever a handler returns is
- * ignored: only canonical execution completes a document. What a handler *is*
+ * No handler is given the execution. Canonical execution decisions ignore
+ * handler return values: only canonical execution completes a document.
+ * Disclosure instead composes a candidate Result before mandatory clearance. What a handler *is*
  * given differs by member — `init` nothing, `execute` an `ExecutionRequest`,
  * `document` a `DocumentRequest` — and each one below says what it may decide
  * with what it was handed. Any of them may install contextual behavior the
  * document will inherit, refuse by throwing, and delegate.
  */
 export interface ExecutionApi {
+  /**
+   * Compose the data proposed for a selected host execution's disclosure.
+   *
+   * A layer may replace the JSON object or Result, transform it, refuse, or
+   * delegate. The selected host handle dispatches this contextual operation;
+   * after its entire chain returns, that handle applies its own captured
+   * protected-input projection and scanner to the successful candidate.
+   * A middleware result alone is not evidence of completed disclosure.
+   * Calling the public descriptor without a selected host defaults to refusal.
+   */
+  disclose(data: JsonObject): Operation<Result<JsonObject>>;
   /**
    * Establish the live dependencies this execution runs on.
    *
@@ -3762,6 +3789,9 @@ export interface ExecutionApi {
  * handed to it. Canonical core dispatches through a private instance instead.
  */
 export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution", {
+  *disclose(_data: JsonObject): Operation<Result<JsonObject>> {
+    return Err(new Error(CANNOT_DISCLOSE));
+  },
   // No-op rather than a refusal, unlike the two below. Initialization is not a
   // protocol a caller can complete on core's behalf — there is nothing to
   // settle and nothing to record — so an execution with no host middleware
@@ -4699,7 +4729,13 @@ export function* executeInstalled(
     undefined,
     initialization,
   );
+  const disclosure = createApi<Pick<ExecutionApi, "disclose">>("Execution", {
+    *disclose(data): Operation<Result<JsonObject>> {
+      return Ok(data);
+    },
+  });
   const { execution } = invoked;
+  const clearDisclosure = invoked.computed.disclose;
   // Assembled here, at the trusted boundary, and nowhere else. The document
   // handle this delegates to is the authoritative one: the consumer's own
   // `ensure` is registered in the consumer's scope exactly as before, so
@@ -4711,6 +4747,9 @@ export function* executeInstalled(
     },
     evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
     bindings: invoked.computed.read,
+    disclose(data) {
+      return clearDisclosure(data, disclosure.operations.disclose);
+    },
     stop: invoked.stop,
   };
 }

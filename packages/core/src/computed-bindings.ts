@@ -76,6 +76,8 @@ export interface ComputedBindings {
   computed(): JsonObject | undefined;
   /** What a host reads: eligible data, or why it cannot be disclosed. */
   read(): Operation<Result<JsonObject>>;
+  /** Clear a contextual candidate through this owner while its policy is live. */
+  disclose(data: JsonObject, compose: BindingsDisclosure): Operation<Result<JsonObject>>;
 }
 
 /**
@@ -86,6 +88,8 @@ export interface ComputedBindings {
  * happened to hold would report data no later run can start from.
  */
 /** What a read answers before this execution has established its own policy. */
+export const CANNOT_DISCLOSE = "This execution cannot disclose the supplied data.";
+
 export const NO_DISCLOSURE_POLICY =
   "this execution has not established its disclosure policy yet, so it discloses nothing.";
 
@@ -130,9 +134,29 @@ export function useComputedBindings(inputs?: InputValues): Operation<ComputedBin
         // whichever way the run ends.
         root = undefined;
         disclose = undefined;
+        inputs = undefined;
       },
       computed(): JsonObject | undefined {
         return root === undefined ? undefined : eligibleRootBindings(root, inputs);
+      },
+      *disclose(data, compose): Operation<Result<JsonObject>> {
+        if (disclose === undefined || ended) {
+          return Err(new Error(CANNOT_DISCLOSE));
+        }
+        try {
+          const candidate = yield* compose(detached(data));
+          const policy = disclose;
+          if (!candidate.ok || policy === undefined || ended) {
+            return Err(new Error(CANNOT_DISCLOSE));
+          }
+          const cleared = yield* policy(detached(candidate.value));
+          if (!cleared.ok || disclose !== policy || ended) {
+            return Err(new Error(CANNOT_DISCLOSE));
+          }
+          return Ok(detached(cleared.value));
+        } catch {
+          return Err(new Error(CANNOT_DISCLOSE));
+        }
       },
       *read(): Operation<Result<JsonObject>> {
         const settled = accepted;
@@ -164,6 +188,7 @@ export function useComputedBindings(inputs?: InputValues): Operation<ComputedBin
       // and no live environment left to read instead.
       root = undefined;
       disclose = undefined;
+      inputs = undefined;
       ended = true;
     }
   });

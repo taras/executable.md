@@ -35,8 +35,8 @@ prepare.
   does not undo an earlier success — so correct the failure that happened
   without repeating the work that already did.
 - Start a failed entry at its Journal. `<REPL.Entry.Journal entry={2} />`
-  selects that entry's complete failure, prompt counts and saved records under
-  `value`. If the result exceeds the response bound, select the relevant records
+  selects that entry's retained failure, prompt counts, saved records and host
+  execution observation under `value`. If the result exceeds the response bound, select the relevant records
   or a command channel with `yq` as shown below.
 - Distinguish commands from agent turns and document output. An `exec` record's
   `.exec.exitCode` is the actual saved command exit; its protocol `status: "ok"`
@@ -67,15 +67,49 @@ prepare.
   empty string is a turn that recorded emptiness.
 - `status: "running"` is the entry this process is executing now. `unfinished`
   is an entry whose outcome was never recorded, which is what an interrupted
-  run leaves behind. Neither is a failure, and a read waits for neither.
+  run leaves behind. Neither status establishes the execution outcome; read
+  `execution` for host knowledge. A read waits for neither.
 - Reading performs nothing. No read opens an entry, resumes one, runs its
   source or asks an agent anything, so an entry you inspect is left exactly as
   it was.
 - When the host cannot establish what happened, it refuses rather than guessing,
   and says so. That refusal is the answer — do not retry the same request hoping
   for a different reading of the same records.
-- Reopening by itself starts nothing. Nothing is submitted and no turn is taken
-  until the person asks for something.
+- Passive Sidekick conversation reconstruction sends no turn. Opening an
+  unfinished entry execution is different: it can run unrecorded work after
+  restoring the saved prefix. Do not use reopen or resend as a diagnostic.
+
+## A joined failure with unfinished history
+
+Read both facts for the exact positive entry number:
+
+```xmd
+<REPL.Entry.Source entry={2} />
+<REPL.Entry.Journal entry={2} yq="{status, failure, execution}" />
+```
+
+A later connection to the same live root can report `status: "unfinished"`,
+`failure: null` and `execution: {joined: true, outcome: "failed", error: ...}`.
+The error describes the actual joined failure under that entry's disclosure
+policy. The Journal has no terminal Close; the host observation does not add one.
+Error details may be withheld even when the original submitter received them.
+The fixed withholding message is "Execution error details were withheld because
+disclosure checks could not complete." It is not the original failure.
+
+For example, source entering checkout B through Dir still uses the session's
+selected repository A. A repository-context refusal does not select B. Read the
+Source and disclosed error, preserve the completed effects and explain that
+Entry Stop refuses because no task remains and the unfinished segment permits
+no successor. Do not blindly resend or reopen the same source. This diagnostic
+provides no in-place recovery action for that refusal.
+
+`execution.joined: false` means work or cleanup is still live. Inspect without
+stopping it; Sidekick `busy: false` does not prove the entry ended. After exact
+join, outcome is `completed`, `failed` or `interrupted`. A retained successful
+terminal can stand beside failed execution when cleanup failed. With no host
+observation, including passive cold reading, all three execution members are
+null. Preserve that uncertainty. An ended attachment refuses and starts no
+replacement; a cold reader cannot recover the lost host verdict.
 
 ## Example
 
@@ -123,7 +157,7 @@ record, use its `prompt` number to read the saved turn:
 
 ## Reading more than one page
 
-Journal applies `yq` to the complete permitted retained entry before paging its
+Journal applies `yq` to the complete permitted entry value before paging its
 result. You can search all records or all retained channel text in one query.
 Small results keep their exact JSON type. A large object or indivisible array
 item refuses with a narrower-query direction; directly selected strings remain

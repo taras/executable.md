@@ -1,12 +1,13 @@
 import { registerComponents } from "../src/components/registration.ts";
 import { capture } from "../src/component-api.ts";
-import type { Json } from "../src/types.ts";
+import type { Json, JsonObject } from "../src/types.ts";
 import { Stdio } from "@effectionx/process";
 import { DocumentOutput } from "../src/api.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
+import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
@@ -15,6 +16,10 @@ import { projectElicitationAnswer } from "../src/secrets/input-schema.ts";
 import { attachInputOwner, createInputOwner } from "../src/secrets/inputs.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import { execute } from "../src/execute.ts";
+import { Execution } from "../api.ts";
+import { useHeldHost } from "./support/held-host.ts";
+import { useComputedBindings } from "../src/computed-bindings.ts";
+import { useSecretScannerFactory } from "../src/secrets/policy.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 
@@ -399,7 +404,6 @@ import { exec } from "@effectionx/process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { until } from "effection";
-import type { Operation } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { executeInstalled } from "../host.ts";
 import type { SecretInputOwner } from "../host.ts";
@@ -812,5 +816,120 @@ describe("serialized failure projection", () => {
         !Object.hasOwn(event.result.error, "name"),
     ).toBe(true);
     expect(JSON.stringify(stream.snapshot()).includes(entered)).toBe(false);
+  });
+});
+
+const DISCLOSURE_REFUSAL = "This execution cannot disclose the supplied data.";
+function expectDisclosureRefusal(result: Result<JsonObject>): void {
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.error.message).toBe(DISCLOSURE_REFUSAL);
+    expect(result.error.cause).toBeUndefined();
+  }
+}
+
+describe("owned execution disclosure", () => {
+  it("refuses before policy readiness without invoking contextual work", function* () {
+    const owner = yield* useComputedBindings();
+    let calls = 0;
+    expectDisclosureRefusal(
+      yield* owner.disclose({ message: "not ready" }, function* (data) {
+        calls += 1;
+        return Ok(data);
+      }),
+    );
+    expect(calls).toBe(0);
+    expectDisclosureRefusal(yield* Execution.operations.disclose({ message: "no selected owner" }));
+  });
+
+  it("projects protected inputs with scanning disabled and returns detached copies only while live", function* () {
+    yield* Elicitation.around({
+      *elicit() {
+        return { code: "249731", public: "useful" };
+      },
+    });
+    yield* Execution.around({
+      *execute([request], next) {
+        yield* next(request.withOptions({ ...request.options, secretDetection: false }));
+      },
+    });
+    yield* useSecretScannerFactory(() => {
+      throw new Error("Disabled scanning constructs no scanner.");
+    });
+    const ended = yield* scoped(function* () {
+      const held = yield* useHeldHost({
+        root: {
+          path: "host/protected-disclosure.md",
+          source: `<Elicit as="answer" schema={${JSON.stringify(schema)}}>Code.</Elicit><Held />`,
+        },
+      });
+      const data = { message: "Support 249731", nested: { label: "public" } };
+      const safe = yield* held.execution.disclose(data);
+      expect(safe).toEqual(Ok({ message: "Support [redacted]", nested: { label: "public" } }));
+      if (safe.ok) {
+        safe.value.message = "edited by reader";
+      }
+      expect(data.message).toBe("Support 249731");
+      expect(yield* held.execution.disclose(data)).toEqual(
+        Ok({ message: "Support [redacted]", nested: { label: "public" } }),
+      );
+      yield* scoped(function* () {
+        yield* Execution.around({
+          *disclose() {
+            return Err(new Error("249731"));
+          },
+        });
+        expectDisclosureRefusal(yield* held.execution.disclose(data));
+      });
+      held.release();
+      expect((yield* held.watched).ok).toBe(true);
+      expectDisclosureRefusal(yield* held.execution.disclose(data));
+      return held.execution;
+    });
+    expectDisclosureRefusal(yield* ended.disclose({ message: "after disposal" }));
+  });
+
+  it("refuses a scan spanning revocation and joins cancellation without changing the execution", function* () {
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+    yield* useSecretScannerFactory(() => ({
+      *scan(content) {
+        if (content.includes("held-disclosure")) {
+          entered.resolve();
+          yield* release.operation;
+        }
+        return [];
+      },
+    }));
+    const held = yield* useHeldHost();
+    const disclosure = yield* spawn(() => held.execution.disclose({ message: "held-disclosure" }));
+    yield* entered.operation;
+    held.release();
+    expect((yield* held.watched).ok).toBe(true);
+    release.resolve();
+    expectDisclosureRefusal(yield* disclosure);
+
+    const live = yield* useHeldHost();
+    const waiting = withResolvers<void>();
+    let unwound = false;
+    yield* scoped(function* () {
+      yield* Execution.around({
+        *disclose(): Operation<Result<JsonObject>> {
+          try {
+            waiting.resolve();
+            yield* suspend();
+            return Ok({});
+          } finally {
+            unwound = true;
+          }
+        },
+      });
+      const call = yield* spawn(() => live.execution.disclose({ message: "cancel this read" }));
+      yield* waiting.operation;
+      yield* call.halt();
+      expect(unwound).toBe(true);
+    });
+    live.release();
+    expect((yield* live.watched).ok).toBe(true);
   });
 });

@@ -8541,7 +8541,7 @@ Raw `DurableEvent`s still terminate at the model.
 `sidekick/entry-inspection.ts` owns entry selection, Source/Prompt/Output windows
 and the complete Journal value. The root's `inspectJournal` operation takes one
 fresh acknowledged reading for both the response component and passive attachment.
-It builds `{entry,status,failure,prompts,records}`, evaluates ordinary yq over
+It builds `{entry,status,failure,prompts,records,execution}`, evaluates ordinary yq over
 that complete permitted value with the existing core evaluator, then pages the
 selected result. Every success is exactly `{value,next,prev,last}`. Small results
 keep their JSON type; selected strings use 4096-code-point windows and arrays use
@@ -8549,6 +8549,32 @@ at most twenty items within the serialized response bound. Oversized objects or
 indivisible array items refuse with a narrower-query direction. Direct channel
 selection remains fully pageable. Source, Prompt and Output keep their existing
 contracts and exact live-output ownership.
+
+Journal keeps retained `status` and `failure` separate from `execution`, this
+session's observation of the selected admitted entry. Its `joined` is false
+until that exact task and all owned cleanup join, true afterwards, and null
+without a host observation. Only a joined observation supplies `outcome`
+(`completed`, `failed` or `interrupted`); only a failed one supplies detached
+`error` name/message. A body result or retained Close does not prove join.
+Stop and cleanup failures keep the existing execution failure precedence, so a
+retained success can stand beside a failed execution observation.
+
+The session retains only detached permitted observations by entry until its own
+teardown. Error details are cleared through the original entry's owned
+`HostExecution.disclose` while its captured complete policy is live. This invokes
+`Execution.disclose` contextual middleware, including replacement Results and
+post-delegation transforms, before the original private owner applies protected-input
+projection and scanning to the final candidate. Context selects per-call
+composition, never the input owner, scanner or readiness. The public descriptor
+without a selected host defaults to refusal. A revoked owner discloses nothing,
+including after a suspended read, and retains no live policy to serve later reads. Unavailable or failed clearance uses exactly
+`{name:"Error",message:"Execution error details were withheld because disclosure checks could not complete."}`.
+No stack, cause, scanner or execution capability enters this value. A later
+response policy clears no earlier error. Both Journal consumers read the same
+observation; disconnecting a reader loses none of it, while losing the root
+loses it all. Cold reading reports unknown even for a completed retained entry.
+No observation appends a terminal or changes repository admission. The Journal
+remains the only durable truth.
 
 The feature-local `sidekick/journal-query.ts` formats navigation as ordinary yq
 with an always-true literal JSON header, a resolved-positive-entry guard, the
@@ -8562,7 +8588,7 @@ a successful expression with no usable array/string base is an ordinary fresh
 query. Edited or noncanonical expressions retain ordinary query behavior.
 
 Every page request recomputes against that entry's current complete retained
-facts. Callers reuse the same positive entry number; later admissions cannot
+facts and host observation. Callers reuse the same positive entry number; later admissions cannot
 retarget generated windows, and growth may shift pages. Query text and this
 request's current data supply all navigation context: no issued association,
 cache, snapshot, extra record or second execution owner exists. Both evaluations

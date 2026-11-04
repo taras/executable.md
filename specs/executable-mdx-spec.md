@@ -11018,9 +11018,10 @@ a host resolves a selector to one exact target before anything runs.
 `DocumentExecution` is an `Operation<Result<Json>>`: `yield* execution`
 completes with `Ok(value)` on success and `Err(error)` on document,
 infrastructure, or middleware failure. `executeInstalled()` answers with
-`HostExecution`, which is that handle plus `evaluateGeneratedXmdRoot()`; the
-ordinary `execute()` handle carries no evaluator at runtime, including through
-its prototype, so the boundary is the object rather than the annotation.
+`HostExecution`, which adds owned `bindings()`, `disclose(data)` and
+`evaluateGeneratedXmdRoot()` operations. The ordinary `execute()` handle carries
+none of those instance operations at runtime, including through its prototype,
+so the boundary is the object rather than the annotation.
 Evaluating a root neither completes nor replaces the main document: its
 rendering comes back from the method and reaches neither the output stream nor
 the completion value, and the method works only while that execution is live —
@@ -11042,6 +11043,25 @@ chunk for buffered `<Output>` roots — §5.4); it carries body text for both
 kinds of root, and for a value root it is observability rather than a second
 return value. Late and repeated subscribers receive the full sequence, and the
 stream closes with the full (or partial) output as its close value.
+
+`HostExecution.disclose(data: JsonObject)` returns `Operation<Result<JsonObject>>`.
+The selected handle invokes `Execution.disclose` through the existing contextual
+Api. Trusted middleware may replace arguments, return a replacement Result without
+delegating, transform a delegated Result, or refuse. After the entire chain
+returns, the handle validates its successful candidate and applies its original
+execution's captured protected-input projection followed by its scanner. Scanner
+disablement preserves protected-input projection. The returned object is detached;
+a contextual Result alone does not establish clearance.
+
+The public `Execution` descriptor defaults to refusal without a selected host.
+The owned method refuses before policy readiness, after settlement or disposal,
+and if parsing, middleware or clearance fails. Refusal is a data-free
+`Err(new Error("This execution cannot disclose the supplied data."))` and never
+echoes the input. Readiness and revocation are checked before dispatch and after
+suspending work; a read spanning closure cannot succeed. Cancellation remains
+cancellation. Disclosure grants no permission, starts no document work, appends
+no record and changes no canonical execution outcome. Keeping a handle extends
+neither its owner nor its policy lifetime.
 
 Execution runs in its own scope. Before the durable workflow starts,
 `execute` installs the document's scope-local runtime providers —
