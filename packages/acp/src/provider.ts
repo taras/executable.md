@@ -204,6 +204,22 @@ export interface AcpxSessionIdentity {
   readonly acpxRecordId?: string;
 }
 
+function publishSessionIdentity(session: Session, identity: AcpxSessionIdentity): void {
+  const pair =
+    identity.agentSessionId !== undefined
+      ? { kind: "acpx.agentSessionId", value: identity.agentSessionId }
+      : identity.acpSessionId !== undefined
+        ? { kind: "acpx.acpSessionId", value: identity.acpSessionId }
+        : undefined;
+  if (pair !== undefined) {
+    Object.defineProperty(session, "identity", {
+      enumerable: true,
+      configurable: true,
+      value: Object.freeze(pair),
+    });
+  }
+}
+
 /**
  * Where sessions live, when the host owns that decision.
  *
@@ -1880,6 +1896,12 @@ function* useAcpxProviderState(
         throw error;
       }
     }
+    if (intent.deferEstablished !== true) {
+      publishSessionIdentity(managedEntry.session, {
+        agentSessionId: handle.agentSessionId,
+        acpSessionId: handle.backendSessionId,
+      });
+    }
     managed.set(prepared.sessionKey, managedEntry);
     return managedEntry;
   }
@@ -2543,6 +2565,7 @@ function* useAcpxProviderState(
     if (accepted.value.agentSessionId !== undefined) {
       entry.session.agentSessionId = accepted.value.agentSessionId;
     }
+    publishSessionIdentity(entry.session, identity);
     entry.state = "existing";
   }
 
@@ -3442,6 +3465,9 @@ function* useAcpxProviderState(
       if (handle.agentSessionId !== undefined) {
         session.agentSessionId = handle.agentSessionId;
       }
+      if (plan === undefined) {
+        publishSessionIdentity(session, { agentSessionId: handle.agentSessionId });
+      }
       // Established by construction when nothing is owed: this adapter's
       // provider returns the identity, so the session exists the moment the
       // ensure answers. A launch that owes a turn holds pending details instead,
@@ -3877,6 +3903,7 @@ function* useAcpxProviderState(
         }
       }
       entry.session.agentSessionId = nativeSessionId;
+      publishSessionIdentity(entry.session, identity);
       entry.state = "existing";
 
       yield* notifyTerminal(

@@ -57,7 +57,7 @@ callers supply instructions and receive a result, while public Agent middleware
 routes an opaque request and cannot manufacture that result.
 
 - `Agent` is a resolvable agent name (a string). `Session` is
-  `{ sessionKey; cwd; agentSessionId? }`. `PromptOptions` is
+  `{ sessionKey; cwd; agentSessionId?; readonly identity? }`. `PromptOptions` is
   `{ agent?; session?: string | Session; timeout? }`.
 - `AgentSessionUse` is an opaque nominal subtype of `Session`: one Core-issued
   configured use of a conversation, carrying the exact provider Session that
@@ -160,6 +160,60 @@ routes an opaque request and cannot manufacture that result.
   surfaces only when it is subscribed. `requestPermission` has a working base
   that **denies**: it selects `reject_once`, then `reject_always`, and otherwise
   returns `{ outcome: "cancelled" }`.
+
+### Confirmed Session information
+
+Read `Session.identity` to record which conversation performed work without
+opening provider-private storage. Core exports `SessionIdentity` beside `Session`
+from `@executablemd/core/api` and its root type surface:
+
+```ts
+interface SessionIdentity {
+  readonly kind: string;
+  readonly value: string;
+}
+```
+
+The optional readonly property is absent until the provider confirms an
+association. ACPX reports `acpx.agentSessionId` for an asserted native identity,
+otherwise `acpx.acpSessionId` for the confirmed ACP loading target. Values keep
+the provider's exact opaque spelling. Native assertion takes precedence when
+both exist; `agentSessionId` remains native-only. Other providers may omit the
+property and Core defines no closed kind catalog.
+
+Each read observes the latest confirmation for that exact Session. Its returned
+pair is frozen: `const saved = session.identity` keeps that reading even if the
+Session later confirms another association. Compare both kind and value within
+the relevant Session/provider association; the strings promise no global
+uniqueness. A configured Session forwards both public observations live through
+own enumerable accessors. JSON omits undefined observations and serializes a
+present pair as `{kind,value}`; a spread or saved JSON is data, with no right to
+execute the Session. Private configuration and provider ownership stay private.
+
+For example, install `installAgentComponents` with the ACP provider factory and
+execute `<Agent name="scribe"><Session name="review" model="selected"
+effort="xhigh"><Prompt text="hello" /></Session></Agent>` with
+`agentIdentityComponents()`. Ordinary `Agent.around` middleware can retain the
+resolved Session before the first Prompt. At that Prompt's actual `started`
+event, the same configured use exposes confirmation and verified settings,
+including when the installing Core is a separate loaded copy:
+
+```ts
+const saved = session.identity;
+// After an explicit supported continuation:
+const current = continuedSession.identity;
+if (saved !== undefined &&
+    (current === undefined || current.kind !== saved.kind || current.value !== saved.value)) {
+  throw new Error("conversation identity changed");
+}
+```
+
+These are synchronous data reads. They create no conversation and perform no
+ensure, load, storage read, configuration, journal append, prompt or model call.
+Existing eager Session resolution retains its documented effects. Transport
+close preserves the last confirmed pair without retaining executable resources;
+reading it does not revive the provider. Exact-object admission, continuation
+validation and host mapping remain with their current owners.
 
 ### The provider-factory seam
 
@@ -408,6 +462,10 @@ operation-local request issuance with no durable component identity, routes
 that request, and closes it in `finally`. The result is an
 `AgentSessionUse` only when the final route finished a configured request;
 middleware may instead select an unconfigured route.
+
+Public identity and the native-only projection stay live on an already issued
+use. A first `started` event keeps that final routed configured use rather than
+substituting its raw provider Session to expose confirmation.
 
 The settings then travel inside that frozen use when a prompt or launch names
 the conversation. Only Core and the installed provider can read them — a spread,
@@ -914,6 +972,11 @@ interrupted launch resumes the provider session it already prepared rather than
 creating a replacement; the shape is specified in
 specs/native-agent-session-launch-spec.md.
 
+Prompt records keep the existing native-only `agentSessionId` from the Session
+that actually started, including its first configured turn. Passive tagged
+information adds no PromptRecord member, persistence format or interpretation of
+historical records.
+
 A completed replay contacts no provider, so it neither reads nor applies any
 configuration. A successful prepared launch reapplies its one canonical
 configuration to the exact retained Session before it continues; an
@@ -1060,7 +1123,14 @@ adapter supplies the ACP creation/loading target after ordinary ensure. Both
 commit exactly one tagged assertion before first-turn disclosure. Prefer
 `acpx.agentSessionId` when native identity is asserted, otherwise retain
 `acpx.acpSessionId` solely as an ACP loading target. A pending strong record
-asserts nothing. An ACP id grants no native handoff or backend-acceptance claim. The
+asserts nothing. Public identity is published only after the existing provider
+save and required host retention succeed, before `started`. A retention refusal
+publishes no new association, preserves previous confirmation and leaves the
+provider assertion available to existing reconciliation. Failure or interruption
+after confirmation preserves it; an unconfirmed strong attempt stays absent.
+Standard ensure can confirm loading identity even when its subsequent Prompt
+fails. Neither outcome causes automatic resend. An ACP id grants no native
+handoff or backend-acceptance claim. The
 [workflow Agent ownership contract](../architecture.md#agent-permissions-and-generated-xmd)
 owns the opaque invocation claim, mapping transaction and interruption ordering.
 

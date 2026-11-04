@@ -3572,6 +3572,14 @@ session, and `xmd agent options` renders them as text or version-1 JSON.
 Session configuration was delivered on 2026-09-21 in `c77a4b882fb528663137cb04552cec90a569d18a` (#828/#829); ACP
 translation lives entirely in `@executablemd/acp`, and no ACP or ACPX type crosses into core.
 
+Configured uses expose the provider Session's `identity` and native-only
+`agentSessionId` as live enumerable observations. Freezing the carrier preserves
+private configuration and exact-object admission without taking a snapshot of
+first-turn confirmation. The real `started` event retains the final routed use,
+so its public observations and verified configuration remain readable across
+loaded Core copies. JSON and spreads retain a fixed data reading and grant no
+operational authority.
+
 #### Provider identity
 
 A provider-native session identity is the identity an agent asserts for its own durable
@@ -3582,6 +3590,15 @@ native CLI would accept is one. A workflow may retain the distinctly tagged
 `acpx.agentSessionId` takes precedence; changed kind or value refuses
 reattachment. The ACP target never becomes `Session.agentSessionId` or a native
 CLI handoff identity.
+
+`Session.identity` is optional readonly `{ kind, value }` data published by its
+provider after successful confirmation and required host retention. ACPX prefers
+`acpx.agentSessionId` over `acpx.acpSessionId`. Each returned pair is frozen;
+saving it preserves that reading while a later property read observes the latest
+confirmation. Reads perform no provider, storage, journal or model work and
+expose no configuration or execution capability. Third-party providers may omit
+this member. Provider confirmation changes update their own projection through
+the same confirmation owner.
 
 #### Inert placement
 
@@ -3616,7 +3633,8 @@ Promotion shares the session owner's writer: the asserting copy is saved before
 memory adopts it, and finalization joins promotion before saving. Host mapping
 commits after that save and before events. Missing acceptance never selects the
 standard path. Client-native materialization keeps the native launch's retained
-construction.
+construction. Public identity remains absent until the save and required host
+retention succeed; a retention refusal publishes no new association.
 
 A standard adapter uses ordinary ACP creation without this barrier. The provider
 saves its record and the host retains its identity before configuration,
@@ -3640,6 +3658,11 @@ provider storage is gone, setup refuses before creation or sending, preserves th
 keeps the conversation usable. A history containing only failed-before-answer
 turns retains its creation retry. An outcome-less turn still refuses opening
 and is never resent.
+
+Transport release preserves the Session's last confirmed pair without retaining
+a runtime or handle to answer reads. Failed and interrupted turns preserve any
+prior confirmation; an unconfirmed strong attempt stays absent. Passive data
+neither reattaches nor resends work.
 
 Established strong sessions retain their construction route, asserted native
 identity and executable checks. Their continuation never silently downgrades.

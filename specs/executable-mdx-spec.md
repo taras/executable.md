@@ -12986,6 +12986,7 @@ leaves the child alive, and parent termination performs owned shutdown.
 | AF34 | Only `<Session>` admits them | `model` and `effort` on `<Agent>`, `<Prompt>` or `<Session.Launch>` fail prop validation before anything runs |
 | AF37-AF45 | Middleware routes whole Sessions | An ordinary handler may route the raw Session a use names, remove the Session, substitute another authentic use or send the prompt to a different conversation. The provider follows the final route: an authentic use applies its own configuration; a raw Session, name or absence performs no configuration work; and a copied or foreign configured claim refuses before provider work. Reading and delegating the original use is unchanged. Prompt records retain only the verified configuration of the final route that actually started. Session middleware receives no standalone configuration, and the exact provider Session is configured only through coordination delivered directly to the provider factory |
 | AF46-AF52 | Session setup registration is operation-owned | `with({ name })` preserves one request issuance; another live request substitutes its own configuration and optional durable identity; a raw string or directly returned raw Session selects the unconfigured route. A programmatic configured string uses one non-durable operation-local issuance. One provider-installation closure owns exact Session registration, duplicate detection, completion and configured-use lookup; it refuses a different apply operation, registration or lookup after teardown, sibling/run state, same-name Context substitution, and values from another loaded Core copy, then drops every registration after provider finalizers. The established apply operation's canonical verified return is sealed into the use; a new session performs no configuration work |
+| SI1-SI2, SI5 | Confirmed public Session observations | A fresh ordinary Session has no identity. The public configured use retained before its first Prompt and that Prompt's actual started event expose the confirmed frozen kind/value pair live, across separate Core copies, while preserving verified configuration and the native-only Prompt record. Reads, JSON and spread snapshots perform no provider work and confer no execution rights; foreign configured use still refuses |
 
 
 ### Tier CR — Component registration and resolution
@@ -13960,6 +13961,13 @@ acceptance. Standard ACP creation instead retains `acpx.acpSessionId` when no
 native assertion exists, commits the mapping before events and reopens only
 through supported loading. A changed assertion kind refuses. An ACP loading
 target supplies no native handoff or stronger acceptance proof.
+
+SI3-SI4 retain public confirmation through transport close and failed or
+interrupted turns. Strong first attempts without acceptance expose no pair or
+started event. Publication follows the asserting save and required host mapping;
+a refused mapping admits no new public association. Explicit supported loading
+continues the exact pair or refuses without replacement; metadata changes none
+of those decisions.
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
 

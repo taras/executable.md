@@ -26,10 +26,26 @@ import type { AgentLaunchRequest } from "./launch-request.ts";
 /** The public agent value — an agent name resolvable by the provider. */
 export type Agent = string;
 
+/** A provider's confirmed identifier for the conversation a Session describes. */
+export interface SessionIdentity {
+  /** The provider's namespaced identity kind. */
+  readonly kind: string;
+  /** The exact opaque identifier confirmed for that kind. */
+  readonly value: string;
+}
+
 export interface Session {
   sessionKey: string;
   cwd: string;
   agentSessionId?: string;
+  /**
+   * The confirmed conversation identity, when available.
+   *
+   * Each read observes the latest confirmation for this Session. The returned
+   * frozen pair keeps that reading. Reading creates no conversation and
+   * grants no right to act on one.
+   */
+  readonly identity?: SessionIdentity;
 }
 
 /**
