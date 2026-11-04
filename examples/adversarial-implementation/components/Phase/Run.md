@@ -82,7 +82,7 @@ returns:
 <Fail message="PR and issue metadata belong to the Sidekick running Codex. Do not dispatch an editorial assignment to a workflow role." />
 </If>
 <Phase.Schema as="schemas" />
-<If condition={(props.assignment.handoffInputs?.length ?? 0) > 12}><Fail message={"handoffInputs has " + props.assignment.handoffInputs.length + " references, exceeding 12: " + props.assignment.handoffInputs.join(", ") + ". Select concise evidence before dispatch. No provider prompt began."} /></If>
+<If condition={Array.isArray(props.assignment.handoffInputs) && props.assignment.handoffInputs.length > 12}><Fail message={"handoffInputs has " + props.assignment.handoffInputs.length + " references, exceeding 12: " + props.assignment.handoffInputs.join(", ") + ". Select concise evidence before dispatch. No provider prompt began."} /></If>
 <Parse schema={schemas.assignment} as="parsed"><Json value={props.assignment} /></Parse>
 <ReviewPolicy assessment={parsed.assessment} kind={parsed.reviewKind ?? "feature"} as="policy" />
 <SafeParse schema={schemas.result} as="schemaPrepared"><Json value={{}} /></SafeParse>
