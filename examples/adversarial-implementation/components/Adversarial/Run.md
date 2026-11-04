@@ -50,7 +50,7 @@ mkdir -- {quoted}
 <Ticket.Prepare record={preparationRecord} call={call} as="prepared" />
 <If condition={prepared.status !== "ready"}><Let as="finished" value={true} /><Return value={{status:"hold",deliveredInputs,initialized,reason:prepared.reason,preparation:prepared.receipt,history}} /><Break /></If>
 <Let as="assignment" value={{...prepared.call.assignment,inputs:prepared.inputs.filter(input => input.path !== props.plannerGuide.path)}} />
-<Ticket.Capture as="execution"><Adversarial.Foundation assignment={assignment} guide={props.plannerGuide.content} as="foundation" /><Json value={foundation} /></Ticket.Capture>
+<Ticket.Capture as="execution"><Adversarial.Foundation assignment={assignment} guide={props.plannerGuide.content} selectedInputs={prepared.inputs} as="foundation" /><Json value={foundation} /></Ticket.Capture>
 <Dir path={task.directory}><File path={"foundation-" + history.length + "-execution.json"}><Json value={execution} /></File></Dir>
 <Ticket.Delivery execution={task.directory+"/foundation-"+history.length+"-execution.json"} record={preparationRecord} call={call} proposal={prepared} as="delivery" />
 <Let as="history" value={[...history,{owner:"planner",attempt,status:execution.status}]} />

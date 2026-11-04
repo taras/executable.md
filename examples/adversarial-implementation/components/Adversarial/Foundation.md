@@ -1,11 +1,12 @@
 ---
-description: 'Save a Planner attempt and validate its API before handing over. Use <Adversarial.Foundation assignment={assignment} guide={guide} as="foundation" />.'
+description: 'Save a Planner attempt and validate its API before handing over. Use <Adversarial.Foundation assignment={assignment} guide={guide} selectedInputs={prepared.inputs} as="foundation" />.'
 props:
   type: object
   properties:
     assignment: {type: object}
     guide: {type: string}
-  required: [assignment, guide]
+    selectedInputs: {type: array, items: {type: object}}
+  required: [assignment, guide, selectedInputs]
   additionalProperties: false
 returns: {type: object}
 ---
@@ -24,7 +25,7 @@ mkdir -- {quoted}
 </Dir>
 <Dir path={assignment.attempt}><File path="raw.txt">{raw}</File></Dir>
 <Phase.Profile role="planner" design={true} plannerProvider={assignment.plannerProvider} assessment={assignment.assessment} as="profile" />
-<Ticket.Fingerprint inputs={[...(assignment.inputs ?? []),...(assignment.initialize ? [{path:assignment.guidePath ?? "planner guide (inline)",content:props.guide}] : [])]} as="sentInputs" />
+<Ticket.Fingerprint inputs={props.selectedInputs} as="sentInputs" />
 <Dir path={assignment.attempt}><File path="delivery.json"><Json value={{schema:"role-input-delivery.v1",role:"planner",session:assignment.session,provider:profile.provider,profile,initialize:assignment.initialize,inputs:sentInputs,raw:assignment.attempt + "/raw.txt"}} /></File></Dir>
 <Dir path={assignment.attempt}><File path="call.json"><Json value={{role:"planner",session:assignment.session,provider:profile.provider,assignment,design:true,delivery:assignment.attempt+"/delivery.json",record:assignment.attempt}} /></File></Dir>
 <Dir path={assignment.attempt}><File path="preparation-owner.json"><Json value={{role:"planner",session:assignment.session,provider:profile.provider,assignment:{assessment:assignment.assessment},design:true,delivery:assignment.attempt+"/delivery.json",record:assignment.attempt}} /></File></Dir>
