@@ -1,4 +1,9 @@
-import { compileReturnsSchema, ReturnValidationError, normalizeIssues } from "../validate.ts";
+import {
+  compileReturnsSchema,
+  ReturnValidationError,
+  normalizeIssues,
+  validateReturnValue,
+} from "../validate.ts";
 import type { ReturnsSchema } from "../types.ts";
 import { createContext, Err, Ok, ensure } from "effection";
 import type { Operation, Result } from "effection";
@@ -193,7 +198,7 @@ export function* createInputOwner(
       known.add(value);
       candidates = [...known]
         .filter((entered) => entered.length > 0)
-        .toSorted((left, right) => right.length - left.length);
+        .sort((left, right) => right.length - left.length);
       return leaf;
     },
     record: (value) => attempt(() => encode(value)),
@@ -360,4 +365,16 @@ export function inspectInputOwner(owner: SecretInputOwner): InputValues {
     throw new Error("Invalid protected-input owner.");
   }
   return inspect(false);
+}
+
+export function* validateLiveReturnValue(
+  name: string,
+  value: unknown,
+  schema: ReturnsSchema,
+): Operation<unknown> {
+  const inputs = yield* inputValues();
+  if (inputs?.contains(value)) {
+    return yield* inputs.validate(value, name, schema);
+  }
+  return yield* validateReturnValue(name, value, schema);
 }

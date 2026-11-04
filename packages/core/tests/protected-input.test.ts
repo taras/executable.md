@@ -784,3 +784,33 @@ describe("the private process result boundary", () => {
     expect(safe).toBe(true);
   });
 });
+
+import { useSecretDetection } from "../src/secrets/policy.ts";
+
+describe("serialized failure projection", () => {
+  it("projects the actual journal representation when optional error fields are undefined", function* () {
+    const inputs = yield* attachInputOwner(yield* createInputOwner());
+    const entered = String(Math.floor(100000 + Math.random() * 900000));
+    inputs.protect({ coroutine: "root", index: 0, field: "code" }, entered);
+    const stream = new InMemoryStream();
+    const detection = yield* useSecretDetection(undefined, stream, inputs);
+    yield* detection.journal.append({
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "failure-probe", name: "failure-probe" },
+      result: { status: "err", error: { message: entered, name: undefined, stack: undefined } },
+    });
+    const event = stream.snapshot()[0];
+    expect(
+      event.type === "yield" &&
+        event.result.status === "err" &&
+        event.result.error.message === "[redacted]",
+    ).toBe(true);
+    expect(
+      event.result.status === "err" &&
+        !Object.hasOwn(event.result.error, "stack") &&
+        !Object.hasOwn(event.result.error, "name"),
+    ).toBe(true);
+    expect(JSON.stringify(stream.snapshot()).includes(entered)).toBe(false);
+  });
+});

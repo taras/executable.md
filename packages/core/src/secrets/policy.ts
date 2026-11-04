@@ -253,7 +253,12 @@ export function* clearsLiveOutput(content: string): Operation<boolean> {
   }
 }
 
-function projectInputEvent(event: DurableEvent, inputs: InputValues): DurableEvent {
+function projectInputEvent(received: DurableEvent, inputs: InputValues): DurableEvent {
+  const serialized = parseDurableEvent(serializeDurableEvent(received));
+  if (!serialized.ok) {
+    throw serialized.error;
+  }
+  const event = serialized.value;
   const project = (value: unknown) => {
     const safe = inputs.display(value);
     if (!safe.ok) {

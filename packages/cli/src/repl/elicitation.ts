@@ -59,7 +59,7 @@ export interface ReplFieldConstraint {
 
 /** One field the form presents, in the order the schema declared it. */
 export interface ReplFormField extends ReplFieldConstraint {
-  readonly secret: boolean;
+  readonly secret?: boolean;
   /** The schema's own label for it, when it wrote one. */
   readonly title: string | undefined;
   readonly description: string | undefined;
@@ -421,7 +421,7 @@ export function readQuestionForm(schema: Json): ReplQuestionForm {
         choices: choicesOf(field, path),
         minLength: minLengthOf(field, path),
         required: required.includes(name),
-        secret: field.writeOnly === true,
+        ...(field.writeOnly === true ? { secret: true } : {}),
       }),
     );
   }
