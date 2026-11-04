@@ -1,10 +1,23 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { cliCommand, cliRuntime } from "@executablemd/test-support/launch";
 import { expect } from "@executablemd/test-support/expect";
-import { Err, Ok, ensure, race, scoped, sleep, spawn, suspend, withResolvers } from "effection";
+import {
+  Err,
+  Ok,
+  ensure,
+  race,
+  scoped,
+  sleep,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
-import { exec } from "@effectionx/process";
+import { exec, Stdio } from "@effectionx/process";
+import { realpath } from "node:fs/promises";
+import { stripVTControlCharacters } from "node:util";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { z } from "zod";
@@ -51,11 +64,11 @@ function value<T>(result: Result<T>): T {
   }
   return result.value;
 }
-function deadline<T>(operation: Operation<T>): Operation<T> {
+function deadline<T>(operation: Operation<T>, milliseconds = 15000): Operation<T> {
   return race([
     operation,
     (function* (): Operation<never> {
-      yield* sleep(15000);
+      yield* sleep(milliseconds);
       throw new Error("The controlled unfinished-entry boundary did not settle.");
     })(),
   ]);
@@ -96,7 +109,7 @@ const QUESTION =
 type Root = Parameters<HeadlessReplRoot["ready"]>[0];
 
 function* fixture() {
-  const directory = yield* useTemporary("xmd-unfinished-entry-");
+  const directory = yield* until(realpath(yield* useTemporary("xmd-unfinished-entry-")));
   const A = `${directory}/A`;
   const B = `${directory}/B`;
   for (const repository of [A, B]) {
@@ -323,6 +336,33 @@ function control(root: Root, source: string) {
   });
 }
 
+function* repositorySubdirectoryControl() {
+  const f = yield* fixture();
+  expect(f.directory).toBe(yield* until(realpath(f.directory)));
+  const source = `<Dir path=${JSON.stringify(`${f.A}/sub`)}>${checkout(`${f.A}/sub`)}</Dir>`;
+  const call = yield* submit(f, source);
+  value(yield* deadline(call.submission.join()));
+  expect(yield* deadline(call.task)).toBe(0);
+  const observation = yield* deadline(settled(f, 1));
+  expect(observation).toEqual({ joined: true, outcome: "completed", error: null });
+  expect(page.parse(yield* journal(f, 1)).value).toMatchObject({
+    status: "completed",
+    failure: null,
+  });
+  expect(f.host.fake.prompts).toHaveLength(0);
+  expect(yield* repositories(f.A, f.B)).toEqual(f.baseline);
+  console.log(
+    JSON.stringify({
+      witness: "E3 canonical A/sub",
+      directory: f.directory,
+      source,
+      observation,
+      prompts: 0,
+    }),
+  );
+  yield* f.task.halt();
+}
+
 function* repositoryOwnerWitness() {
   const f = yield* fixture();
   let writes = 0;
@@ -407,32 +447,75 @@ function* repositoryOwnerWitness() {
   expect(refused).toBe(true);
 }
 
-describe("joined entry repository-owner witness", () => {
-  it("E1/E2/E5: a later connection explains a fatal checkout refusal without replay or a fabricated Close", function* () {
+const REPOSITORY_SUITE = "joined entry repository-owner witness";
+const REPOSITORY_TEST =
+  "E1/E2/E5: a later connection explains a fatal checkout refusal without replay or a fabricated Close";
+
+function* delegatedRepositoryWitness() {
+  const stdout = new TextDecoder();
+  const stderr = new TextDecoder();
+  let output = "";
+  let errors = "";
+  const began = Date.now();
+  try {
+    const result = yield* deadline(
+      scoped(function* () {
+        yield* Stdio.around({
+          *stdout([bytes]) {
+            output += stdout.decode(bytes, { stream: true });
+          },
+          *stderr([bytes]) {
+            errors += stderr.decode(bytes, { stream: true });
+          },
+        });
+        return yield* exec("deno", {
+          arguments: [
+            "test",
+            "--allow-all",
+            "--frozen",
+            "--node-modules-dir=manual",
+            `--filter=${REPOSITORY_SUITE}`,
+            fileURLToPath(import.meta.url),
+          ],
+          cwd: fileURLToPath(new URL("../../../", import.meta.url)),
+        }).expect();
+      }),
+      240000,
+    );
+    expect(result.code).toBe(0);
+    expect(result.signal).toBeFalsy();
+    const lines = stripVTControlCharacters(output).replace(/\r\n?/g, "\n").trimEnd().split("\n");
+    expect(lines.filter((line) => /^running 1 test from .+$/.test(line))).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith(`${REPOSITORY_SUITE} ... ok `))).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith(`  ${REPOSITORY_TEST} ... ok `))).toHaveLength(1);
+    expect(lines.at(-1)).toMatch(
+      /^ok \| 1 passed \(1 step\) \| 0 failed(?: \| \d+ filtered out)? \([^\n)]+\)$/,
+    );
+    console.log(
+      JSON.stringify({
+        witness: "joined Deno child",
+        elapsedMs: Date.now() - began,
+        code: result.code,
+        summary: lines.at(-1),
+      }),
+    );
+  } finally {
+    output += stdout.decode();
+    errors += stderr.decode();
+    console.log(`REPOSITORY_CHILD_STDOUT_BEGIN\n${output}\nREPOSITORY_CHILD_STDOUT_END`);
+    console.error(`REPOSITORY_CHILD_STDERR_BEGIN\n${errors}\nREPOSITORY_CHILD_STDERR_END`);
+  }
+}
+
+describe(REPOSITORY_SUITE, () => {
+  it(REPOSITORY_TEST, function* () {
     if (cliRuntime() === "deno") {
-      yield* repositoryOwnerWitness();
+      // E3's real subdirectory control and the fatal witness own separate roots.
+      yield* scoped(repositorySubdirectoryControl);
+      console.log("E3 repository fixture teardown joined.");
+      yield* scoped(repositoryOwnerWitness);
     } else {
-      yield* deadline(
-        scoped(function* () {
-          const result = yield* exec("deno", {
-            arguments: [
-              "test",
-              "--allow-all",
-              "--frozen",
-              "--filter=joined entry repository-owner witness",
-              fileURLToPath(import.meta.url),
-            ],
-            cwd: fileURLToPath(new URL("../../../", import.meta.url)),
-          }).join();
-          expect(result.code).toBe(0);
-          expect(result.signal).toBeFalsy();
-          expect(result.stdout).toContain("joined entry repository-owner witness");
-          expect(result.stdout).toContain(
-            "E1/E2/E5: a later connection explains a fatal checkout refusal",
-          );
-          expect(result.stdout).toMatch(/ok \| 1 passed \(1 step\) \| 0 failed/);
-        }),
-      );
+      yield* delegatedRepositoryWitness();
     }
   });
 });
@@ -458,13 +541,20 @@ describe("joined entry diagnostics", () => {
     const f = yield* fixture();
     const sources = [
       checkout(f.A),
-      `<Dir path=${JSON.stringify(`${f.A}/sub`)}>${checkout(`${f.A}/sub`)}</Dir>`,
+      "A completed native entry.",
       `${checkout(f.A)}<If condition={checked.head !== "0000000000000000000000000000000000000000"}><Fail message="deliberate revision mismatch" /></If>`,
     ];
     for (const [index, source] of sources.entries()) {
       const call = yield* submit(f, source);
       yield* deadline(call.task);
       const observed = yield* deadline(settled(f, index + 1));
+      if (observed.outcome !== (index === 2 ? "failed" : "completed")) {
+        console.error("Unexpected native entry outcome", {
+          index,
+          observed,
+          joined: yield* call.submission.join(),
+        });
+      }
       expect(observed.outcome).toBe(index === 2 ? "failed" : "completed");
       if (index === 2) {
         expect(page.parse(yield* journal(f, 3)).value).toMatchObject({

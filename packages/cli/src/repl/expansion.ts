@@ -129,12 +129,13 @@ export const COMPONENT_BOUNDARIES: BoundaryPartition = {
  * dispatches it through a private instance — so holding it would delay building
  * the run rather than stopping its expansion, and would not reliably be reached
  * at all. `init` is earlier still: it establishes the run's live dependencies
- * before there is any expansion to step.
+ * before there is any expansion to step. `disclose` clears a diagnostic
+ * candidate and advances no expansion walk.
  */
 export const EXECUTION_BOUNDARIES: BoundaryPartition = {
   walks: ["document"],
   gates: [],
-  unheld: ["execute", "init"],
+  unheld: ["execute", "init", "disclose"],
 };
 
 /**
