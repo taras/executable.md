@@ -336,8 +336,8 @@ function* countWaitRequests(
                 yield* wire.send(frame);
                 const reply = Reply.parse(frame);
                 if (hello !== undefined && reply.id === hello.id && reply.kind === "value") {
-                  const descriptor = Descriptor.parse(reply.value);
-                  if (JSON.stringify(descriptor) === JSON.stringify(published.descriptor)) {
+                  const acceptedDescriptor = Descriptor.parse(reply.value);
+                  if (JSON.stringify(acceptedDescriptor) === JSON.stringify(published.descriptor)) {
                     hello.ready.ready();
                   }
                 }
