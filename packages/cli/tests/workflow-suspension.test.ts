@@ -1,3 +1,6 @@
+import { Stdio } from "@effectionx/process";
+import { useProtectedInputObserver } from "../../core/tests/support/protected-input.ts";
+import { protectedInputPlugin, protectedInputChild } from "./support/protected-input.ts";
 /**
  * Tier WFS — what a suspended run leaves, and what a resume finds.
  *
@@ -1661,5 +1664,88 @@ the retained note
     const reported = resumed.written.err.join("\n");
     expect(reported).not.toContain(DIR_ENSURE);
     expect(reported).not.toContain("/components/dir/placement");
+  });
+});
+
+describe("marked workflow input in the foreground CLI assembly", () => {
+  it("asks live on start and partial resume while unmarked delivery suspends and commits once", function* () {
+    yield* Stdio.around({ *stdout() {}, *stderr() {} }, { at: "min" });
+    const store = yield* useRunStore();
+    const observer = yield* useProtectedInputObserver();
+    const provider = join(store, "provider.ts");
+    const child = join(store, "child.cjs");
+    yield* writeTextFile(provider, protectedInputPlugin(observer.url, true));
+    yield* writeTextFile(child, protectedInputChild(observer.url));
+    const source = [
+      '<Elicit schema={{type:"object",properties:{code:{type:"string",writeOnly:true},public:{type:"string"}},required:["code","public"],additionalProperties:false}} as="otp">Enter code.</Elicit>',
+      "```ts eval",
+      "const alias = otp.code;",
+      "```",
+      "```bash exec",
+      `npm_config_otp={alias} node '${child}'`,
+      "```",
+      '<Elicit schema={{type:"object",properties:{proceed:{type:"boolean"}},required:["proceed"],additionalProperties:false}} as="checkpoint">Continue?</Elicit>',
+      "```bash exec",
+      `npm_config_otp={alias} node '${child}' # second`,
+      "```",
+      "<Json value={otp} />",
+    ].join("\n\n");
+    const fixture = yield* useCheckpointFixture(source);
+    const options = { cwd: fixture.repository, env: { XMD_WORKFLOW_RUNS: store } };
+    const started = yield* runCli(
+      ["workflow", "start", "workflow.md", "--id=protected-run", "--plugin", provider],
+      options,
+    ).join();
+    if (started.code !== 2) {
+      throw new Error(
+        observer.contains(started.stderr) ? "Unsafe workflow failure withheld." : started.stderr,
+      );
+    }
+    expect(started.code).toBe(2);
+    expect(observer.answers).toBe(1);
+    expect(observer.commands).toBe(1);
+    const suspension = started.stderr
+      .split("\n")
+      .find((line) => line.startsWith("workflow suspension: "))
+      ?.slice("workflow suspension: ".length)
+      .trim();
+    if (suspension === undefined) {
+      throw new Error("The public question did not suspend.");
+    }
+    const path = workflowRunPath(store, "protected-run");
+    expect(journalled(path, "elicit")).toBe(1);
+    expect(journalled(path, SUSPENSION_REQUEST)).toBe(1);
+    const delivered = yield* runCli(
+      ["workflow", "answer", "protected-run", suspension, '{"proceed":true}'],
+      options,
+    ).join();
+    expect(delivered.code).toBe(0);
+    const resumed = yield* runCli(
+      ["workflow", "resume", "protected-run", "--plugin", provider],
+      options,
+    ).join();
+    if (resumed.code !== 0) {
+      throw new Error(
+        observer.contains(resumed.stderr) ? "Unsafe workflow failure withheld." : resumed.stderr,
+      );
+    }
+    expect(resumed.code).toBe(0);
+    expect(observer.answers).toBe(2);
+    expect(observer.commands).toBe(2);
+    expect(observer.exact).toBe(true);
+    expect(journalled(path, "exec")).toBe(2);
+    expect(journalled(path, "suspension_answer")).toBe(1);
+    expect(
+      observer.contains(started.stdout + started.stderr + resumed.stdout + resumed.stderr),
+    ).toBe(false);
+    const effects = orderedEffects(path);
+    const completed = yield* runCli(
+      ["workflow", "resume", "protected-run", "--plugin", provider],
+      options,
+    ).join();
+    expect(completed.code).toBe(0);
+    expect(observer.answers).toBe(2);
+    expect(observer.commands).toBe(2);
+    expect(orderedEffects(path)).toEqual(effects);
   });
 });

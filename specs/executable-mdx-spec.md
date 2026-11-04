@@ -1711,6 +1711,8 @@ Each run compiles and imports the current transformed source.
 
 ### 4.3 Durable and live binding environments
 
+Protected Elicit leaves remain in the ordinary live execution binding tree used by eval, captures and direct exec interpolation. They do not move into the ephemeral overlay. Aliases, objects and arrays preserve the leaf identity. Durable/public views of those same bindings are safe JSON, rather than usable credentials.
+
 ```typescript
 // src/types.ts
 export interface EvalEnv {
@@ -1941,6 +1943,8 @@ processor. Instead:
    invocation's eval scope is destroyed, when the invocation completes
 
 ### 4.5 Eval journal entries
+
+An export tree containing protected fields uses a designated reference codec. References identify the Elicit coroutine position and field, independently of answer bytes. Ordinary user JSON is encoded as data and cannot impersonate a reference. Partial replay restores references from freshly reached inputs without evaluating the body. Unrelated nonserializable exports retain their existing omission behavior; unmarked records keep their ordinary shape.
 
 #### What is journaled
 
@@ -7434,6 +7438,8 @@ merging nothing back — before the fragment performs its first effect.
 
 ### 6.6 Eval binding interpolation
 
+A protected leaf interpolated directly into built-in exec remains a private program segment with its canonical block language until the process terminal. Public block context and descriptions contain fixed replacements. Prose uses a safe view. Unsupported string conversions, ordinary JSON props and custom modifier chains refuse before dependent commands or recipients run. Earlier acknowledged effects remain completed after a later conversion failure. Ordinary interpolation and escaping retain their behavior.
+
 Bare `{name}` references (no namespace prefix) resolve against
 `env.values` — the eval binding environment populated by preceding
 `eval` blocks within the same component. This applies to both
@@ -8587,6 +8593,8 @@ coercion, so a document that means JSON says so.
 
 #### Rendering a value: `<Json>`
 
+A captured operand containing protected leaves renders their fixed `[redacted]` view and preserves public siblings. Ordinary operands retain the native serialization semantics below.
+
 ```md
 <Let as="schema" value={{ type: "object", required: ["bump"] }} />
 
@@ -9699,6 +9707,10 @@ shares.
 
 ### 6.16 Asking without choosing how: `<Elicit>`
 
+Mark a top-level string property with `writeOnly: true` to bind a protected live field. Nested, conditional and referenced secret declarations are outside this bounded surface and refuse before interaction. False or absent markers preserve ordinary behavior. Pass a field directly through `{answer.code}` in built-in exec, or render its safe view with `<Json value={answer} />`. JavaScript string operations and primitive/JSON conversions refuse actionably. Public sibling fields remain useful.
+
+Marked records contain receipts and field identities. Reached partial continuation asks for missing secret fields, shows recorded public fields as context, and validates the merged original answer. An omitted optional field remains absent. Original schema/message fingerprints still refuse changed questions. Completed roots ask nothing, and completed effects are not repeated. Workflow marked questions use this canonical receipt and a foreground live responder; unmarked workflow questions retain their suspension/delivery path.
+
 `<WebForm>` is a browser form by construction. `<Elicit>` asks the same kind of
 question without saying where the asking happens:
 
@@ -9796,6 +9808,8 @@ itself.
 `Elicit.test.md` is the authoring contract in Markdown.
 
 #### 6.16.1 The Elicitation Api
+
+For marked input the provider still receives only message/schema and returns raw unknown input for Core validation. It masks the marked fields and omits sensitive operands from validation diagnostics and submission observations. No installed responder produces an immediate live-input-required refusal. A capable connected ACP form responder remains valid over pipes; an incapable presenter refuses and withdraws its correlated marked wait. Unmarked cancellation keeps its existing behavior.
 
 The CLI's embedded headless-child ACP callback uses this same contextual provider
 in the original Prompt subscriber scope. It supplies the actual message and full
@@ -10805,6 +10819,8 @@ A nested `<Execution host="run">` child constructs a provider of its own, so its
 identity, its locks and its evidence do not reach its parent or a sibling.
 
 #### Secret detection
+
+Explicit Elicit protection is mandatory and precedes heuristic scanning at publication boundaries. The scanner retains its existing decisions for other content, including when an unmarked value resembles a credential. Scanner opt-out never reveals marked input.
 
 Every execution refuses to persist a durable event that carries a credential.
 `execute` selects its journal before the durable run starts, so the root

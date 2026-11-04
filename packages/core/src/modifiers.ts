@@ -1,3 +1,4 @@
+import type { InputCommand } from "./secrets/inputs.ts";
 /**
  * Modifier system — middleware chain for code block execution (spec §3.3).
  *
@@ -85,6 +86,7 @@ export interface BoundExecChain {
   exec: ModifierFactory;
   /** The built-in `timeout` middleware. */
   timeout: ModifierFactory;
+  silent?: ModifierFactory;
   /**
    * Run the built-in exec terminal against a context, as a bound command.
    *
@@ -92,7 +94,7 @@ export interface BoundExecChain {
    * command runs against the context canonical core retained rather than one
    * public `codeBlock` middleware could answer with.
    */
-  terminal(context: CodeBlockContext): CodeBlockWorkflow;
+  terminal(context: CodeBlockContext, bound?: boolean, input?: InputCommand): CodeBlockWorkflow;
 }
 
 /**
@@ -211,8 +213,23 @@ export function composeBoundExecChain(
   context: CodeBlockContext,
   registry: ModifierRegistry,
   bound: BoundExecChain,
+  input?: InputCommand,
+  binding = true,
 ): () => CodeBlockWorkflow {
-  const refusal = refuseUnauthorizedBinding(authored, registry, bound);
+  const protectedOnly = input !== undefined && !binding;
+  const last = authored.at(-1);
+  const protectedRefusal =
+    last === undefined ||
+    registry.get(last.name) !== bound.exec ||
+    authored.slice(0, -1).some((modifier) => {
+      const factory = registry.get(modifier.name);
+      return factory === undefined || (factory !== bound.timeout && factory !== bound.silent);
+    });
+  const refusal = protectedOnly
+    ? protectedRefusal
+      ? "Protected input supports only built-in exec, silent and timeout modifiers."
+      : undefined
+    : refuseUnauthorizedBinding(authored, registry, bound);
   if (refusal !== undefined) {
     // deno-lint-ignore require-yield
     return function* () {
@@ -220,11 +237,17 @@ export function composeBoundExecChain(
     };
   }
 
-  const terminal: () => CodeBlockWorkflow = () => bound.terminal(context);
+  const terminal: () => CodeBlockWorkflow = () => bound.terminal(context, binding, input);
   // The built-in identities, not the registry's answers: the check above says
   // the names still resolve to these, and composing from them is what makes
   // that true rather than merely tested.
-  const wrapping = authored.slice(0, -1).map((modifier) => bound.timeout(modifier.params));
+  const wrapping = authored
+    .slice(0, -1)
+    .map((modifier) =>
+      protectedOnly && registry.get(modifier.name) === bound.silent && bound.silent !== undefined
+        ? bound.silent(modifier.params)
+        : bound.timeout(modifier.params),
+    );
   const composed = combine(wrapping);
 
   return function* () {

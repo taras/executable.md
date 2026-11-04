@@ -2477,3 +2477,28 @@ describe("F3 — one committed frame, in the one order this product allows", () 
     expect(renderer.last()).toBeUndefined();
   });
 });
+
+describe("protected form rendering", () => {
+  it("draws a fixed mask while retaining the live input only in the form owner", function* () {
+    const asked = yield* askingFor({
+      type: "object",
+      properties: { code: { type: "string", writeOnly: true } },
+      required: ["code"],
+      additionalProperties: false,
+    });
+    const live = asking(asked.question);
+    const value = String(Math.floor(100000 + Math.random() * 900000));
+    const typed = yield* drive(opened(live), live, [{ kind: "type", field: "code", text: value }]);
+    const described = yield* seen(typed.state, live);
+    const shown = rowsOf(described)
+      .map((row) => row.label)
+      .join("\n");
+    expect(shown.includes(value)).toBe(false);
+    expect(shown.includes("********")).toBe(true);
+    const submitted = asked.question.submit(typed.state.form.values);
+    expect(
+      JSON.stringify(submitted) ===
+        JSON.stringify({ kind: "answered", answer: { code: "[redacted]" } }),
+    ).toBe(true);
+  });
+});

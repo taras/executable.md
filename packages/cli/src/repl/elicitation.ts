@@ -1,3 +1,4 @@
+import { projectElicitationAnswer } from "@executablemd/core/host";
 /**
  * How this REPL asks the person sitting in front of it.
  *
@@ -58,6 +59,7 @@ export interface ReplFieldConstraint {
 
 /** One field the form presents, in the order the schema declared it. */
 export interface ReplFormField extends ReplFieldConstraint {
+  readonly secret: boolean;
   /** The schema's own label for it, when it wrote one. */
   readonly title: string | undefined;
   readonly description: string | undefined;
@@ -107,6 +109,7 @@ export interface ReplQuestion {
    * comes back with the issues to show, so the question a person is looking at
    * is still the question they are answering.
    */
+  refuse?(error: ElicitationProviderError): void;
   submit(values: Readonly<Record<string, string>>): ReplFormOutcome;
 }
 
@@ -133,7 +136,7 @@ const ROOT_KEYWORDS = new Set([
 ]);
 
 /** The keywords one string field may carry. */
-const FIELD_KEYWORDS = new Set(["type", "enum", "minLength", "title", "description"]);
+const FIELD_KEYWORDS = new Set(["type", "enum", "minLength", "title", "description", "writeOnly"]);
 
 /** The keywords the `if` object may carry. */
 const CONDITION_KEYWORDS = new Set(["type", "properties", "required", "additionalProperties"]);
@@ -418,6 +421,7 @@ export function readQuestionForm(schema: Json): ReplQuestionForm {
         choices: choicesOf(field, path),
         minLength: minLengthOf(field, path),
         required: required.includes(name),
+        secret: field.writeOnly === true,
       }),
     );
   }
@@ -468,7 +472,7 @@ export function* useReplElicitation(
         // stops existing — however it stops: answered, halted or failed above.
         const release = yield* waits?.hold("question") ?? noWait();
         try {
-          return yield* action<Json>(function (resolve) {
+          return yield* action<Json>(function (resolve, reject) {
             let settled = false;
             const question: ReplQuestion = {
               get schema() {
@@ -479,6 +483,12 @@ export function* useReplElicitation(
               },
               message: request.message,
               form,
+              refuse(error) {
+                if (!settled) {
+                  settled = true;
+                  reject(error);
+                }
+              },
               submit(values: Readonly<Record<string, string>>): ReplFormOutcome {
                 if (settled) {
                   return { kind: "invalid", issues: [] };
@@ -494,17 +504,38 @@ export function* useReplElicitation(
                 }
                 const issues = validateParsed(prepared.validate, assembled);
                 if (issues.length > 0) {
-                  return { kind: "invalid", issues: Object.freeze([...issues]) };
+                  return {
+                    kind: "invalid",
+                    issues: Object.freeze(
+                      issues.map((issue) => ({
+                        ...issue,
+                        params: {},
+                        message:
+                          prepared.secretFields.length > 0
+                            ? "does not satisfy this field"
+                            : issue.message,
+                      })),
+                    ),
+                  };
+                }
+                const projected = projectElicitationAnswer(prepared.schema, assembled);
+                if (!projected.ok) {
+                  settled = true;
+                  reject(projected.error);
+                  return { kind: "invalid", issues: [] };
                 }
                 settled = true;
                 resolve(assembled);
-                return { kind: "answered", answer: Object.freeze({ ...assembled }) };
+                return { kind: "answered", answer: projected.value };
               },
             };
             publish(question);
             // Whatever ends this — an answer, a halt, a failure upstream — the
             // request stops being pending exactly when it stops existing.
-            return () => publish(undefined);
+            return () => {
+              settled = true;
+              publish(undefined);
+            };
           });
         } finally {
           release();

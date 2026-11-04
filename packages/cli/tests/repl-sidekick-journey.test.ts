@@ -4709,3 +4709,34 @@ describe("993 mounted nested Output journeys", () => {
     });
   }
 });
+
+describe("protected Sidekick question feedback", () => {
+  it("records the safe provider result and carries only its safe view into the next Prompt", function* () {
+    const held = yield* useHarness();
+    held.fake.script({
+      reply:
+        '<Elicit schema={{type:"object",properties:{code:{type:"string",writeOnly:true},public:{type:"string"}},required:["code","public"],additionalProperties:false}} as="answer">Enter a code.</Elicit>',
+    });
+    held.fake.script({ reply: "<Output>Safe answer received.</Output>" });
+    const running = yield* spawn(() => held.owner.message("Ask for the controlled input."));
+    yield* awaitedFact("the Sidekick question", function* () {
+      return held.owner.questions.pending !== undefined;
+    });
+    const question = held.owner.questions.pending;
+    if (question === undefined) {
+      throw new Error("No pending Sidekick question.");
+    }
+    const value = String(Math.floor(100000 + Math.random() * 900000));
+    const submitted = question.submit({ code: value, public: "useful" });
+    expect(
+      JSON.stringify(submitted) ===
+        JSON.stringify({ kind: "answered", answer: { code: "[redacted]", public: "useful" } }),
+    ).toBe(true);
+    const result = yield* running;
+    expect(result.ok).toBe(true);
+    const saved = yield* records(held.execution);
+    expect(JSON.stringify(saved).includes(value)).toBe(false);
+    expect(held.fake.prompts.some((prompt) => prompt.includes(value))).toBe(false);
+    expect(held.fake.prompts.some((prompt) => prompt.includes("useful"))).toBe(true);
+  });
+});

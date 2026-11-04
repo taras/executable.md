@@ -1066,3 +1066,87 @@ describe("headless live UI", () => {
     yield* held.task.halt();
   });
 });
+
+describe("protected input through capable ACP pipes", () => {
+  it("preserves the marker in the embedded callback and returns only a safe child result", function* () {
+    let marked = false;
+    const held = yield* useHeadlessFixture((input) => {
+      const original = input.onElicitation;
+      if (original === undefined) {
+        throw new Error("No embedded elicitation callback.");
+      }
+      return {
+        ...input,
+        onElicitation(request, context) {
+          marked = JSON.stringify(request._meta?.["executablemd.xmd-question/v1"]).includes(
+            '"writeOnly":true',
+          );
+          return original(request, context);
+        },
+      };
+    });
+    held.host.fake.script({
+      reply:
+        '<Elicit schema={{type:"object",properties:{code:{type:"string",writeOnly:true}},required:["code"],additionalProperties:false}} as="answer">Enter protected input.</Elicit>',
+    });
+    held.host.fake.script({ reply: "<Output>Protected question completed.</Output>" });
+    const changes = yield* held.root.session.elicitation.changes;
+    const asking = yield* held.root.session.submit(promptChild("Ask for protected input."));
+    if (!asking.ok) {
+      throw asking.error;
+    }
+    let question = held.root.session.elicitation.pending;
+    while (question === undefined) {
+      question = (yield* changes.next()).value;
+    }
+    expect(marked).toBe(true);
+    expect(question.form.fields[0].secret).toBe(true);
+    const value = String(Math.floor(100000 + Math.random() * 900000));
+    const submitted = question.submit({ code: value });
+    expect(JSON.stringify(submitted).includes(value)).toBe(false);
+    const joined = yield* asking.value.join();
+    expect(joined.ok).toBe(true);
+    expect(JSON.stringify(joined).includes(value)).toBe(false);
+  });
+});
+
+describe("marked ACP absence", () => {
+  it("withdraws a marked question through the current no-form branch without opening a parent form", function* () {
+    let callbacks = 0;
+    const held = yield* useHeadlessFixture(
+      (input) => {
+        const original = input.onElicitation;
+        return {
+          ...input,
+          onElicitation(request, context) {
+            callbacks++;
+            if (original === undefined) {
+              throw new Error("No callback.");
+            }
+            return original(request, context);
+          },
+        };
+      },
+      undefined,
+      undefined,
+      { formCapable: false },
+    );
+    held.host.fake.script({
+      reply:
+        '<Elicit schema={{type:"object",properties:{code:{type:"string",writeOnly:true}},required:["code"],additionalProperties:false}} as="answer">Enter protected input.</Elicit>',
+    });
+    held.host.fake.script({ reply: "<Output>Live input refusal acknowledged.</Output>" });
+    const started = yield* held.root.session.submit(promptChild("Ask for protected input."));
+    if (!started.ok) {
+      throw started.error;
+    }
+    const joined = yield* started.value.join();
+    expect(joined.ok).toBe(true);
+    expect(callbacks).toBe(0);
+    expect(held.root.session.elicitation.asked).toBe(0);
+    expect(held.root.session.elicitation.pending).toBeUndefined();
+    expect(
+      held.host.fake.prompts.some((prompt) => prompt.includes("live form-capable responder")),
+    ).toBe(true);
+  });
+});

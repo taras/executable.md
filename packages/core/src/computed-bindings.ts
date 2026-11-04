@@ -1,3 +1,4 @@
+import type { InputValues } from "./secrets/inputs.ts";
 /**
  * The root data one execution computed, handed back to the host that owns it
  * (spec §4.5, `specs/repl-spec.md`).
@@ -108,7 +109,7 @@ export const NO_ACCEPTED_RESULT =
  * nothing special still reads through a policy, so there is one path and not
  * two.
  */
-export function useComputedBindings(): Operation<ComputedBindings> {
+export function useComputedBindings(inputs?: InputValues): Operation<ComputedBindings> {
   return resource(function* (provide) {
     let disclose: BindingsDisclosure | undefined;
     let root: EvalEnv | undefined;
@@ -131,7 +132,7 @@ export function useComputedBindings(): Operation<ComputedBindings> {
         disclose = undefined;
       },
       computed(): JsonObject | undefined {
-        return root === undefined ? undefined : eligibleRootBindings(root);
+        return root === undefined ? undefined : eligibleRootBindings(root, inputs);
       },
       *read(): Operation<Result<JsonObject>> {
         const settled = accepted;
@@ -150,7 +151,7 @@ export function useComputedBindings(): Operation<ComputedBindings> {
           // starts does not look like a read after it was halted.
           return ended ? Err(new Error(NO_ACCEPTED_RESULT)) : Ok({});
         }
-        const disclosed = yield* policy(eligibleRootBindings(live));
+        const disclosed = yield* policy(eligibleRootBindings(live, inputs));
         return disclosed.ok ? Ok(detached(disclosed.value)) : disclosed;
       },
     };
@@ -196,7 +197,7 @@ function detached(data: JsonObject): JsonObject {
  * what a reader holds is its own graph and a later mutation of the operand
  * changes nothing it already handed over.
  */
-export function eligibleRootBindings(root: EvalEnv): JsonObject {
+export function eligibleRootBindings(root: EvalEnv, inputs?: InputValues): JsonObject {
   const eligible: JsonObject = {};
   for (const name of Object.keys(root.values)) {
     if (name === ROOT_PROPS_BINDING) {
@@ -206,7 +207,13 @@ export function eligibleRootBindings(root: EvalEnv): JsonObject {
     if (!binding.ok || binding.value !== name) {
       continue;
     }
-    const copied = attemptJson(root.values[name]);
+    const projection = inputs?.display(root.values[name]);
+    const copied =
+      projection === undefined
+        ? attemptJson(root.values[name])
+        : projection.ok
+          ? projection.value
+          : undefined;
     if (copied === undefined) {
       continue;
     }

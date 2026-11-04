@@ -1,3 +1,6 @@
+import { parseDurableEvent } from "@executablemd/durable-streams";
+import type { InputValues } from "./inputs.ts";
+import { parseJsonObject } from "../json.ts";
 /**
  * The execution's secret-detection policy.
  *
@@ -263,10 +266,39 @@ export function* clearsLiveOutput(content: string): Operation<boolean> {
 export function* useSecretDetection(
   requested: boolean | undefined,
   stream: DurableStream,
+  inputs?: InputValues,
 ): Operation<SecretDetection> {
+  const original = stream;
+  if (inputs !== undefined) {
+    stream = preserveJournalProvenance(original, {
+      readAll: () => original.readAll(),
+      *append(event) {
+        const projected = inputs.display(JSON.parse(serializeDurableEvent(event)));
+        if (!projected.ok) {
+          throw projected.error;
+        }
+        const parsed = parseDurableEvent(JSON.stringify(projected.value));
+        if (!parsed.ok) {
+          throw parsed.error;
+        }
+        yield* original.append(parsed.value);
+      },
+    });
+  }
+  const projectedDisclosure = (disclose: SecretDisclosure): SecretDisclosure =>
+    function* (data) {
+      if (inputs === undefined) {
+        return yield* disclose(data);
+      }
+      const safe = inputs.display(data);
+      if (!safe.ok) {
+        return safe;
+      }
+      return yield* disclose(parseJsonObject(safe.value));
+    };
   if (requested === false) {
     yield* CurrentDetection.set(new DisabledDetection());
-    return { journal: stream, disclose: discloseFreely };
+    return { journal: stream, disclose: projectedDisclosure(discloseFreely) };
   }
 
   const create = (yield* CurrentScannerFactory.get()) ?? createSecretScanner;
@@ -274,7 +306,7 @@ export function* useSecretDetection(
   yield* CurrentDetection.set(new EnabledDetection(scanner));
   return {
     journal: guardWithSecretDetection(stream, scanner),
-    disclose: discloseThrough(scanner),
+    disclose: projectedDisclosure(discloseThrough(scanner)),
   };
 }
 

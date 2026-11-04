@@ -1148,6 +1148,8 @@ process opening the same URL opens each reading at its start.
 
 ## The form language a question is drawn in
 
+A top-level string field marked writeOnly is presented as a password. Its entered text is absent from validation diagnostics and submit observations. The live resolver still supplies the original answer to Core. A correlated marked question with no capable ACP presenter is refused and withdrawn; closing or cancelling an unmarked presentation retains its existing pending behavior.
+
 The child ACP path delivers the actual message and complete normalized schema.
 Standard requestedSchema preserves original field names and unconditional rules;
 visible text explains conditional requirements. Namespaced optional metadata
@@ -1573,6 +1575,8 @@ written and something was recorded — never that anything is running now.
 
 ## One entry, read as output and then source
 
+Marked input is projected before command bytes enter the entry’s output buffer or undergo control escaping. The producing entry owns that privacy operation through provider cleanup after root Close and through Stop/join, preserving channel routing, selection and drafts.
+
 The transcript pane holds one entry's reading: what it produced, and then the
 source that produced it. A narrow frame has no transcript pane; its one routed
 Entries outlet holds the catalog and the reading of the entry the catalog has
@@ -1682,6 +1686,8 @@ recovers on resize. It is never a clip: shortening somebody's source would be
 this screen editing the content it exists to show.
 
 ## What is retained, and what is not
+
+Protected input has no retained plaintext representation. Public bindings, command facts and feedback contain safe views or field receipts. Cold inspection remains passive and starts no provider or command. The feature adds no second retained output log.
 
 Include directories configure the current command. They add no location member,
 manifest or profile record; pass them again when reopening if new work needs
@@ -2434,6 +2440,8 @@ obtains the owner's current facts. After owner-process loss joined completion
 is unavailable, rather than reconstructed from a saved preview or text.
 
 ## Who owns what
+
+The host acquires one protected-input installation before each producing entry’s providers. It keeps that owner until those providers join, safely seals each independent output channel, and then disposes live input and pending text. Output received after disposal refuses instead of falling back to raw forwarding.
 
 Only the REPL terminal renderer writes presentation bytes while the interface
 owns the terminal. Each entry installs its downstream process display handlers
