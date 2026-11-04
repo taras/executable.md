@@ -26,6 +26,7 @@ export function standardQuestion(
       condition?.requires.some((one) => one.name === field.name) === true ? rule : "";
     properties[field.name] = {
       type: "string",
+      ...(field.secret ? { writeOnly: true } : {}),
       ...(field.title === undefined ? {} : { title: field.title }),
       ...([field.description, conditional].filter(Boolean).length === 0
         ? {}
@@ -202,7 +203,11 @@ export function* useChildPresentations(
                       cancellationSignal: controller.signal,
                     }),
                   )
-                : { action: "cancel" };
+                : readQuestionForm(original.kind === "question" ? original.schema : {}).fields.some(
+                      (field) => field.secret,
+                    )
+                  ? { action: "refuse", reason: "live-input-required" }
+                  : { action: "cancel" };
             } else if (original.kind === "permission") {
               answer = yield* until(
                 client.request(
@@ -234,7 +239,10 @@ export function* useChildPresentations(
             yield* notify(
               result,
               question !== undefined && !formCapable
-                ? "This ACP client does not advertise form elicitation. The original child question remains pending; use a capable ACP client or xmd repl --attach with the saved sessionId."
+                ? original.kind === "question" &&
+                  readQuestionForm(original.schema).fields.some((field) => field.secret)
+                  ? "Protected input requires a live form-capable responder. The question was refused and withdrawn."
+                  : "This ACP client does not advertise form elicitation. The original child question remains pending; use a capable ACP client or xmd repl --attach with the saved sessionId."
                 : undefined,
             );
             if (!(result.event === "response" && result.outcome === "invalid")) {

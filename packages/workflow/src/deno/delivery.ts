@@ -262,6 +262,13 @@ function* judgeAnswer(
   let issues;
   try {
     const prepared = yield* prepareElicitation(waiting.request.responseSchema, "workflow answer");
+    if (prepared.secretFields.length > 0) {
+      return Err(
+        new WorkflowAnswerDeliveryError(
+          "Marked secret input requires foreground resume with a live elicitation responder; workflow answer does not store it.",
+        ),
+      );
+    }
     issues = validateParsed(prepared.validate, value);
   } catch (error) {
     return Err(

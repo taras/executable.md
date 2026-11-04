@@ -1,3 +1,4 @@
+import { ElicitationProviderError } from "@executablemd/core";
 import { z } from "zod";
 import type { XmdResponse } from "@executablemd/acp";
 import type { ReplSession } from "../repl/session.ts";
@@ -120,6 +121,18 @@ export function createChildRequests(
             return { ...correlation, event: "response", outcome: "stale" };
           }
           if (input.kind === "question" && question !== undefined) {
+            const refusal = z
+              .object({ action: z.literal("refuse"), reason: z.literal("live-input-required") })
+              .strict()
+              .safeParse(value);
+            if (refusal.success && question.form.fields.some((field) => field.secret)) {
+              question.refuse?.(
+                new ElicitationProviderError(
+                  "Protected input requires a live form-capable responder; attach a capable client and resume in the foreground.",
+                ),
+              );
+              return { ...correlation, event: "response", outcome: "not-submitted" };
+            }
             const response = z
               .discriminatedUnion("action", [
                 z

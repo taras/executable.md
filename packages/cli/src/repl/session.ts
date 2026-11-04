@@ -1,3 +1,4 @@
+import { useSecretInputs } from "@executablemd/core/host";
 import { workspaceMountInstallation } from "./workspace-mount-installation.ts";
 import type { WorkspaceMountTable } from "../workspace-mounts.ts";
 /**
@@ -1794,6 +1795,7 @@ function* start(
       workspace?: true,
     ): Operation<Result<unknown>> {
       try {
+        const privacy = yield* useSecretInputs();
         const chunks: ReplCommandChunk[] = [];
         const stdout = new TextDecoder();
         const stderr = new TextDecoder();
@@ -1897,7 +1899,7 @@ function* start(
           // Installed into this exact execution, and nowhere else: the live
           // observer and the permission policy are this session's, not the
           // process's, and the attachment carries the entry whose turns they are.
-          [...installations, lifecycle.installation, installation, ...owned],
+          [privacy, ...installations, lifecycle.installation, installation, ...owned],
           { initialBindings },
         );
         // This entry's own stop, by value, as soon as there is an execution to

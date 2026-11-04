@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
-import { useTempFileCompiler } from "@executablemd/core";
+import { useTempFileCompiler, Elicitation } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { openReplSession } from "../src/repl/session.ts";
 import { useMountedHost } from "./support/mounted-repl.ts";
@@ -295,6 +295,8 @@ describe("REPL command routing, containment and history E2–E5", () => {
       let cleaning = false;
       let working = false;
       let installs = 0;
+      let secret = "";
+      let retained = "";
       const encoder = new TextEncoder();
       const opened = yield* openReplSession({
         execution: { id: "cleanup-output", stream: new InMemoryStream() },
@@ -303,16 +305,30 @@ describe("REPL command routing, containment and history E2–E5", () => {
             *install() {
               installs += 1;
               const first = installs === 1;
+              yield* Elicitation.around({
+                *elicit() {
+                  secret = String(Math.floor(100000 + Math.random() * 900000));
+                  return { code: secret };
+                },
+              });
               if (first) {
                 yield* ensure(function* () {
-                  yield* Stdio.operations.stderr(encoder.encode("cleanup-diagnostic\n"));
+                  yield* Stdio.operations.stderr(
+                    encoder.encode("cleanup-diagnostic " + retained.slice(0, 3)),
+                  );
                   cleaning = true;
                   yield* release.operation;
-                  yield* Stdio.operations.stderr(encoder.encode("cleanup-joined\n"));
+                  yield* Stdio.operations.stderr(
+                    encoder.encode(retained.slice(3) + "\ncleanup-joined\n"),
+                  );
                 });
               }
               yield* API.Process.around({
-                *exec() {
+                *exec([options]) {
+                  if (first) {
+                    retained = options.command[2].trim().slice("controlled-cleanup ".length);
+                    expect(retained === secret).toBe(true);
+                  }
                   yield* Stdio.operations.stdout(
                     encoder.encode(first ? "producer-output\n" : "successor-output\n"),
                   );
@@ -334,7 +350,17 @@ describe("REPL command routing, containment and history E2–E5", () => {
       yield* ensure(() => {
         release.resolve();
       });
-      const admitted = yield* session.submit("```sh exec\ncontrolled-cleanup\n```");
+      const admitted = yield* session.submit(
+        [
+          "```ts eval",
+          'const schema = {type:"object",properties:{code:{type:"string",writeOnly:true}},required:["code"],additionalProperties:false};',
+          "```",
+          '<Elicit schema={schema} as="answer">Code</Elicit>',
+          "```sh exec",
+          "controlled-cleanup {answer.code}",
+          "```",
+        ].join("\n\n"),
+      );
       expect(admitted.ok).toBe(true);
       yield* awaitedFact("the process starting", function* () {
         return working;
@@ -347,18 +373,22 @@ describe("REPL command routing, containment and history E2–E5", () => {
       expect(during[0].entry).toBe("entry-1");
       expect(during[0].chunks).toEqual([
         { channel: "stdout", text: "producer-output\n" },
-        { channel: "stderr", text: "cleanup-diagnostic\n" },
+        { channel: "stderr", text: "cleanup-diagnostic " },
       ]);
+      expect(JSON.stringify(session.commandOutput).includes(secret)).toBe(false);
       expect(session.live).toBe(true);
       const refused = yield* session.submit("must not start");
       expect(refused.ok).toBe(false);
       expect(session.model.entries).toHaveLength(1);
       release.resolve();
       const outcome = yield* finished;
+      expect(JSON.stringify(session.commandOutput).includes(secret)).toBe(false);
       expect(outcome.ok).toBe(cancel);
       expect(session.model.entries[0].terminal?.status).toBe(cancel ? "cancelled" : "err");
-      expect(session.commandOutput[0].chunks[1].text).toBe("cleanup-diagnostic\ncleanup-joined\n");
-      expect(during[0].chunks[1].text).toBe("cleanup-diagnostic\n");
+      expect(session.commandOutput[0].chunks[1].text).toBe(
+        "cleanup-diagnostic [redacted]\ncleanup-joined\n",
+      );
+      expect(during[0].chunks[1].text).toBe("cleanup-diagnostic ");
       expect(Object.isFrozen(during[0].chunks)).toBe(true);
       expect((yield* session.submit("```sh exec\nsuccessor\n```")).ok).toBe(true);
       expect((yield* session.join()).ok).toBe(true);
@@ -367,7 +397,7 @@ describe("REPL command routing, containment and history E2–E5", () => {
           "entry-1",
           [
             { channel: "stdout", text: "producer-output\n" },
-            { channel: "stderr", text: "cleanup-diagnostic\ncleanup-joined\n" },
+            { channel: "stderr", text: "cleanup-diagnostic [redacted]\ncleanup-joined\n" },
           ],
         ],
         ["entry-2", [{ channel: "stdout", text: "successor-output\n" }]],
@@ -460,6 +490,15 @@ describe("REPL command routing, containment and history E2–E5", () => {
 
   it("E5: cold inspection retains exact per-entry diagnostics without starting commands", function* () {
     let starts = 0;
+    let asks = 0;
+    let secret = "";
+    yield* Elicitation.around({
+      *elicit() {
+        asks++;
+        secret = String(Math.floor(100000 + Math.random() * 900000));
+        return { code: secret };
+      },
+    });
     yield* API.Process.around({
       *exec([options], next) {
         starts += 1;
@@ -471,12 +510,13 @@ describe("REPL command routing, containment and history E2–E5", () => {
       const page = yield* useReplPage({ host, size: { columns: 160, rows: 44 } });
       yield* submit(
         page,
-        "```sh exec\nprintf 'first-%s\\n' output\nprintf 'first-%s\\n' diagnostic >&2\n```",
+        '<Elicit schema={{type:"object",properties:{code:{type:"string",writeOnly:true}},required:["code"],additionalProperties:false}} as="answer">Code</Elicit>\n\n' +
+          "```sh exec\nprintf 'first-%s\\n' output\nprintf 'first-%s\\n' diagnostic >&2\n# {answer.code}\n```",
       );
       yield* page.until("the first retained entry", (one) => one.shows("1 ✓"));
       yield* submit(
         page,
-        "```sh silent exec\nprintf 'hidden-%s\\n' output\n```\n```sh exec as=\"result\"\nprintf 'bound-%s\\n' output\nprintf 'bound-%s\\n' diagnostic >&2\nexit 7\n```",
+        "```ts eval\nconst priorSafe = String(answer.code);\n```\n<Json value={priorSafe} />\n```sh silent exec\nprintf 'hidden-%s\\n' output\n```\n```sh exec as=\"result\"\nprintf 'bound-%s\\n' output\nprintf 'bound-%s\\n' diagnostic >&2\nexit 7\n```",
         2,
       );
       yield* page.until("the second retained entry", (one) => one.shows("2 ✓"));
@@ -485,6 +525,8 @@ describe("REPL command routing, containment and history E2–E5", () => {
       return { ...saved, events: yield* opened.stream.readAll() };
     });
     expect(starts).toBe(3);
+    expect(asks).toBe(1);
+    expect(JSON.stringify(before.events).includes(secret)).toBe(false);
     const at = before.model.entries[0].checkpoints.at(-1)?.marker;
     if (at === undefined) {
       throw new Error("the first entry retained no completed position");
@@ -515,6 +557,8 @@ describe("REPL command routing, containment and history E2–E5", () => {
       const opened = yield* host.repository.open(before.execution);
       expect(yield* opened.stream.readAll()).toEqual(before.events);
       expect(starts).toBe(3);
+      expect(asks).toBe(1);
+      expect(JSON.stringify(after.model).includes(secret)).toBe(false);
       expect(host.fake.prompts).toEqual([]);
     });
   });

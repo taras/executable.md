@@ -7598,7 +7598,11 @@ function formContent(
       focused !== "footer:exit" &&
       !focused.startsWith("footer:top:"));
   for (const one of form.fields) {
-    const value = held.values[one.name] ?? "";
+    const value = one.secret
+      ? (held.values[one.name] ?? "").length > 0
+        ? "********"
+        : ""
+      : (held.values[one.name] ?? "");
     const marked = requiredNow(form, held.values, one) ? "*" : " ";
     const label = one.title ?? one.name;
     // What the field is called and what is in it, on one row and told apart: a

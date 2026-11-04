@@ -1,3 +1,4 @@
+import { projectElicitationAnswer } from "@executablemd/core/host";
 /**
  * The Sidekick's own questions, and how one reaches the response that asked it.
  *
@@ -62,7 +63,6 @@ import { ensure, Ok, scoped } from "effection";
 import type { Operation } from "effection";
 import { Elicitation, ElicitationProviderError } from "@executablemd/core";
 import type { ElicitationRequest } from "@executablemd/core";
-import type { Json } from "@executablemd/durable-streams";
 
 import { useReplElicitation } from "../elicitation.ts";
 import type { ReplElicitations } from "../elicitation.ts";
@@ -137,7 +137,12 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
       // Deliberately not in a `finally`. A halted question resolved nothing, so
       // writing an outcome for it would manufacture one — an interruption is
       // the absence of a completed operation rather than a receipt saying so.
-      yield* journal.settled(order, Ok(answer), answer as Json);
+      const projected = projectElicitationAnswer(request.schema, answer);
+      if (!projected.ok) {
+        yield* journal.settled(order, projected);
+        throw projected.error;
+      }
+      yield* journal.settled(order, Ok(projected.value), projected.value);
       return answer;
     },
   });

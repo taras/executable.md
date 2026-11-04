@@ -1,3 +1,4 @@
+import { inputValues } from "./secrets/inputs.ts";
 import { Ajv } from "ajv";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import { createContext } from "effection";
@@ -314,4 +315,16 @@ function preciseInstancePath(issue: NormalizedIssue): string {
 
 function escapePointerToken(token: string): string {
   return token.replace(/~/g, "~0").replace(/\//g, "~1");
+}
+
+export function* validateLiveReturnValue(
+  name: string,
+  value: unknown,
+  schema: ReturnsSchema,
+): Operation<unknown> {
+  const inputs = yield* inputValues();
+  if (inputs?.contains(value)) {
+    return yield* inputs.validate(value, name, schema);
+  }
+  return yield* validateReturnValue(name, value, schema);
 }

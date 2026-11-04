@@ -73,6 +73,8 @@ contracts keep their separately stated requirements.
 
 ### Security model
 
+Explicitly marked Elicit fields have mandatory protection alongside heuristic secret scanning. Live bindings carry protected leaves; journals and public reads carry safe views or field receipts. Disabling the scanner does not disable this protection. The intentional plaintext recipients remain the live input provider and Core’s built-in process terminal.
+
 Installed plugins, providers, middleware and TypeScript components are trusted
 application code. XMD does not contain malicious behavior from these extensions.
 Their code runs with whatever access the surrounding runtime permits; selecting
@@ -206,6 +208,8 @@ Determinism is two properties:
 
 ### State ownership
 
+A protected-input owner belongs to one producing execution. A host whose providers outlive Core acquires its installation before those providers, keeps it through their joined teardown, and disposes it afterwards. Root Close does not end that host lifetime. Each output channel holds its own undecided suffix and never flushes it unscreened.
+
 The parent REPL also owns each established headless XMD child. Registration follows
 readiness of the child's root, exact selected Sidekick conversation and private
 endpoint. Before registration, creator cancellation joins startup; afterwards,
@@ -269,6 +273,8 @@ mint, or one whose name, checkout path or identity was edited after it did, is
 refused before Git or a service is touched.
 
 ### State across loaded copies
+
+Protected-input installations carry owned operations across loaded copies. Canonical execution captures its selected owner before public installation and document work. Journal projection and root disclosure close over that owner; replacing contextual scanner policy cannot replace enforcement. Live plaintext and reference resolution stay with that owner, rather than in a shared registry.
 
 The binary bundles its own package code while components and integrations may
 load another copy of the same package. Those loaded copies must be able to
@@ -468,6 +474,8 @@ reading it is total — every way journal-controlled data can refuse to be read 
 the same refusal, carrying nothing the record supplied.
 
 ### The ordinary component prop boundary
+
+A protected field refuses native JSON conversion through an ordinary prop before the component body runs. Json remains the JSON domain. Existing captures and Let value preserve protected leaves by reference; Json renders their safe view through its capture. Other operands retain the native JSON round trip.
 
 An ordinary component's props are JSON, and one resolver decides that for both
 Markdown and function components — before validation, and before anything
@@ -1099,6 +1107,8 @@ another Agent turn.
   coerced.
 
 ### Foreground commands
+
+Protected command interpolation retains an immutable private pair of canonical language and program segments. Public block content, command arguments and the preview use a safe view before truncation. Only the uncompleted built-in exec callback resolves leaves and calls the existing buildCommand and Process APIs. Unsupported modifier chains refuse before invocation. Separate channel filters project received bytes before forwarding, capture or retention, and host output stays protected through joined cleanup. Existing routing, result ownership and the pump-tail limitation still apply.
 
 An executable block is a foreground child process. Its output reaches the reader
 as the child produces it, before it exits, and each byte is displayed once: what
@@ -2491,6 +2501,8 @@ beside the record rather than inside it: compatibility needs the bytes, while
 the journal and the document receive only the fingerprint.
 
 ### Replay and effect transactions
+
+A marked Elicit records public fields and occurrence/field references instead of its entered strings. Eval retains those references separately from live export trees. Reached partial continuation obtains fresh missing fields, validates the merged original answer, and restores eval references without evaluating the body. The original question fingerprint still rejects changed questions. Completed effects and completed roots perform no new interaction or process work.
 
 Replay rehydrates the Effection tree. A completed durable effect restores its
 recorded result without executing again. Ephemeral operations run again only to
@@ -6928,6 +6940,8 @@ that record only from values durably retained before the new entry's admission,
 so replay derives the identical record from the identical bytes.
 
 #### Execution computes the root data its result hands back
+
+Protected root data is projected before JSON eligibility and disclosure. Public bindings and root results contain fixed replacements, never usable input references. Safe retained data remains readable after the producing owner releases its live state; a later entry receives that safe data only.
 
 An `eval` block's exports are journaled because evaluating one is a durable
 effect. A root `<Let>` and an ordinary component capture are not, and nothing

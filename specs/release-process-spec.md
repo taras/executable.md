@@ -351,12 +351,9 @@ stays where it is.
    `components/BootstrapNpmPackage.md`, which is also runnable directly. Naming no
    package reserves nothing, so the target composes into a whole-README run
    without reaching the registry.
-   Run it **without `--journal` and without `--verbose`**. The document elicits
-   a one-time code and interpolates it into the publish and trust commands; a
-   journal file records both the answer itself and those commands, and
-   `--verbose` reports the same records to stderr. Rendered output carries only
-   what a command printed, so neither flag is needed and both would persist the
-   code.
+   The OTP field is marked `writeOnly: true`. The process receives the entered
+   code; journals, verbose diagnostics and rendered output carry safe views.
+   The wrapping TempDir still refuses partial continuation.
 3. Create the package on jsr.io under the `@executablemd` scope and link it to
    this repository, **before** the first tagged release that includes it.
    `deno publish` fails for a package that does not exist on JSR, and the JSR
