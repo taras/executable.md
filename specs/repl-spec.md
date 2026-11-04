@@ -2959,12 +2959,28 @@ agent turn's reply, request or complete failure message. Output is what the
 entry printed. Journal queries the complete permitted retained value
 `{entry,status,failure,prompts,records}` before paging the query result. Its
 optional `yq` defaults to `.`. Each record carries `marker`, `type`, nullable
-`name`, `position`, `prompt` and `agent`, its `status`, and `exec`. A supported
+`name`, `position`, `prompt` and `agent`, its `status`, `exec` and required nullable `promptError`. A supported
 settled exec has `{exitCode,stdout?,stderr?}`; other records have `exec: null`.
 Missing channels are absent members, retained empty channels are empty strings,
 and timeout, cancellation or missing results invent no exit or complete output.
 Protocol `ok`, a nonzero command exit and the enclosing failed entry remain
 separate facts. Journal exposes no arbitrary result payload or provider data.
+
+`promptError` contains exactly the selected saved Prompt error: required
+`message`, optional `name` and `cause` strings, and optional `diagnostic` in
+Core's saved-failure schema. Its turn is joined by marker within the selected
+entry, independently of record position.
+
+| Saved record | `promptError` |
+| --- | --- |
+| Non-Prompt record, including a failed command or root Close | `null` |
+| Completed Prompt | `null` |
+| Failed or cancelled Prompt with a saved error | The selected saved error object |
+| Message-only failed Prompt | `{message: "Internal error"}`, with name/cause only if saved |
+| Failed or cancelled Prompt without a saved error | `null` |
+
+Empty messages and details stay empty; optional absent fields stay absent.
+The entry-level `failure` string and numeric `prompt` keep their own meanings.
 
 For example, find a failed command anywhere in the selected entry:
 
@@ -2972,12 +2988,29 @@ For example, find a failed command anywhere in the selected entry:
 <REPL.Entry.Journal entry={22} yq={'[.records[] | select(.type == "exec" and .exec.exitCode == 1)]'} />
 ```
 
+Find failed Prompts anywhere in the entry, then inspect one returned Prompt
+number without relying on record position:
+
+```xmd
+<REPL.Entry.Journal entry={22} yq={'[.records[] | select(.prompt != null and .status == "failed")]'} as="failures" />
+<Output><Json value={failures} /></Output>
+<REPL.Entry.Journal entry={22} yq={'.records[] | select(.prompt == 9) | .promptError'} as="failure" />
+<Output><Json value={failure} /></Output>
+```
+
+The existing attachment CLI returns the same page for that selection:
+
+```sh
+xmd sidekick read --attach /absolute/private/attachment.json entry 22 journal --yq '.records[] | select(.prompt == 9) | .promptError'
+```
+
 Every successful Journal read has exactly `{value,next,prev,last}`. The value
 may be any JSON type. Small complete results have null navigation. Strings use
 4096-code-point windows; arrays use at most twenty items per page and the
 serialized response bound. Objects and indivisible items that exceed that bound
 refuse clearly and direct a narrower yq selection, such as a record's
-`.exec.stdout` or `.exec.stderr`. No text or record is cut before the query.
+`.exec.stdout`, `.exec.stderr` or `.promptError.diagnostic.acp.details`. No text
+or record is cut before the query.
 Zero or multiple top-level results, invalid expressions and non-JSON results
 refuse through the existing query engine; null and false are valid answers.
 
@@ -3010,17 +3043,6 @@ and `next`: either null, or the complete arguments of the read beside it, with
 the entry and prompt stated as the numbers they resolved to, an absolute offset,
 the limit that was asked for and the same Prompt field. A continuation followed
 after another entry has been admitted therefore reads the entry it was about.
-
-Every `field="error"` page also carries `diagnostic`: the complete retained
-structured Prompt diagnostic, or `null` when none was saved. It stays the same
-on every text window and is copied and frozen with the turn's other saved facts.
-The readable `text`, Unicode offsets and navigation keep their existing meaning.
-Reply and request pages carry no diagnostic member; Journal query input is unchanged.
-
-```xmd
-<REPL.Entry.Prompt entry={1} prompt={1} field="error" as="failure" />
-<Output><Json value={failure} /></Output>
-```
 
 Text pages state the entry's status and, for a Prompt read, the turn's own
 separately. Journal exposes those statuses in its complete query input. An entry is completed, failed, cancelled, running or unfinished; a

@@ -856,10 +856,11 @@ The current reader validates a present diagnostic completely and refuses malform
 or unknown members. An absent diagnostic preserves message/name/cause-only records
 without a migration or rewrite. Reconstructed thrown and aggregated Prompt failures
 keep the selected diagnostic under `executablemd.agent.prompt-diagnostic`.
-The existing REPL error read exposes the retained object after cold reopen:
+The existing REPL Journal query exposes the saved error as `promptError` after
+cold reopen. Select a returned numeric Prompt locator within its entry:
 
 ```xmd
-<REPL.Entry.Prompt entry={1} prompt={1} field="error" as="failure" />
+<REPL.Entry.Journal entry={1} yq={'.records[] | select(.prompt == 1) | .promptError'} as="failure" />
 <Output><Json value={failure} /></Output>
 ```
 

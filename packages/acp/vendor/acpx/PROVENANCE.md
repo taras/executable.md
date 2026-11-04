@@ -128,7 +128,8 @@ The uniquely named `XMD prompt diagnostic:` seam bounds this correction in Tier 
 Pristine upstream, exact pins, materialization and strict-resume patches stay
 unchanged. The shared/queue result projection is unchanged. Real adapter-child
 failures pass through this runtime into production Prompt publication and cold
-REPL error reads; no runtime log is needed for retained selected facts.
+REPL Journal queries of `promptError`; no runtime log is needed for retained
+selected facts.
 
 Other arbitrary adapter data remains unavailable through this selected result.
 This correction establishes no cause for the historical `Internal error` incident,

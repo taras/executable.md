@@ -208,7 +208,7 @@ export interface ReplAgentTurn {
    * transcript is a reader's view of their own entry.
    */
   readonly failure: string | undefined;
-  readonly diagnostic?: NonNullable<PromptRecord["error"]>["diagnostic"];
+  readonly error: PromptRecord["error"];
   readonly configuration: ReplAgentConfiguration | undefined;
   readonly permissions: readonly ReplAgentPermission[];
 }
@@ -1323,14 +1323,21 @@ function agentTurn(
     stopReason: record.stopReason,
     text: record.text,
     failure: record.error?.message,
-    diagnostic:
-      record.error?.diagnostic === undefined
+    error:
+      record.error === undefined
         ? undefined
         : freeze({
-            ...record.error.diagnostic,
-            ...(record.error.diagnostic.acp === undefined
+            ...record.error,
+            ...(record.error.diagnostic === undefined
               ? {}
-              : { acp: freeze({ ...record.error.diagnostic.acp }) }),
+              : {
+                  diagnostic: freeze({
+                    ...record.error.diagnostic,
+                    ...(record.error.diagnostic.acp === undefined
+                      ? {}
+                      : { acp: freeze({ ...record.error.diagnostic.acp }) }),
+                  }),
+                }),
           }),
     configuration:
       record.configuration === undefined

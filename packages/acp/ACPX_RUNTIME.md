@@ -37,8 +37,8 @@ spelling and leaving existing string commands unchanged.
 **Failure details:** the local in-process result projection preserves the
 normalizer's origin and selected numeric ACP code/message/`data.details` under
 the `XMD prompt diagnostic:` seam. It carries no arbitrary protocol data. Core
-screens the optional diagnostic before saving it; the REPL's existing Prompt
-error page reads those facts without a runtime log or another agent call.
+screens the optional diagnostic before saving it; the REPL's existing Journal
+query reads those facts under `promptError` without a runtime log or another agent call.
 Classification and retryable hints never authorize resend or establish acceptance.
 
 **Maintenance:** keep the runtime and its declarations on the same exact
