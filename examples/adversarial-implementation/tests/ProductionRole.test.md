@@ -1,10 +1,11 @@
 ```bash exec as="location"
 pwd -P
 ```
+<TempDir as="identityDirectory" />
 <TestAgent>
 <TestAgent.Scenario session="independent-proof" src="./agents/independent-review.md" models={{selected:"fixture",options:[{id:"fixture"}]}} />
 <Test name="the production review role returns the actual configured prompt reply" timeout="60s">
-<Delivery.Role delivery={{repository:location.stdout.trim(),policy:{reviewer:{provider:"test",model:"fixture",effort:null,session:"independent-proof"},acceptance:[{id:"behavior",source:"accepted.md",requirement:"Keep the accepted behavior."}]},inputs:[{path:"accepted.md",content:"The original accepted behavior."}]}} revision={"a".repeat(40)} as="reply" />
+<Delivery.Role delivery={{directory:identityDirectory + "/delivery",repository:location.stdout.trim(),policy:{reviewer:{provider:"test",model:"fixture",effort:null,session:"independent-proof"},acceptance:[{id:"behavior",source:"accepted.md",requirement:"Keep the accepted behavior."}]},inputs:[{path:"accepted.md",content:"The original accepted behavior."}]}} revision={"a".repeat(40)} as="reply" />
 <Delivery.Schema as="schemas" />
 <Parse schema={schemas.review} as="review">{reply}</Parse>
 <AssertEquals actual={review.revision} expected={"a".repeat(40)} />
@@ -17,7 +18,7 @@ pwd -P
 <TestAgent.Scenario session="initialized-implementor" src="./agents/initialized-role.md" models={{selected:"sonnet",options:[{id:"sonnet",efforts:{selected:"high",options:["high"]}}]}} />
 <Test name="the production role dispatches mandatory initialization but refuses an oversized request before prompting" timeout="60s">
 <Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect the agreed behavior.",evidence:["accepted.md"]}} />
-<Let as="assignment" value={{phase:"implementation",work:"test",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
+<Let as="assignment" value={{identityDirectory,phase:"implementation",work:"test",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
 <Phase.Role role="implementor" session="initialized-implementor" assignment={assignment} initialize={true} as="reply" />
 <AssertStringIncludes actual={reply} expected="initialization received" />
 <Ticket.Capture as="oversized"><Phase.Role role="implementor" session="initialized-implementor" assignment={{...assignment,request:"x".repeat(256000)}} initialize={true} as="unexpected" /></Ticket.Capture>
@@ -34,7 +35,7 @@ pwd -P
 <TestAgent.Scenario agent="claude" session="opus-foundation" src="./agents/opus-high.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"opus",efforts:{selected:"medium",options:["medium","high"]}}]}} />
 <Test name="production role dispatch honors the selected provider and fixed profile" timeout="60s">
 <Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect accepted behavior.",evidence:["accepted.md"]}} />
-<Let as="assignment" value={{phase:"discovery",work:"test",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
+<Let as="assignment" value={{identityDirectory,phase:"discovery",work:"test",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
 <Phase.Profile role="planner" plannerProvider="codex" assessment={assessment} as="profile" />
 <AssertEquals actual={profile} expected={{provider:"codex",model:"gpt-6.1-sol",effort:"medium"}} />
 <Phase.Role role="planner" plannerProvider="codex" session="sol-planner" assignment={assignment} as="planner" />
@@ -70,11 +71,12 @@ pwd -P
 ```
 <Let as="attempt" value={temporary.stdout.trim() + "/response"} />
 <Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Inspect accepted behavior.",evidence:["accepted.md"]}} />
-<Let as="assignment" value={{phase:"review",work:"test",repository,revision:head.stdout.trim(),priorRevision:null,request:"Inspect the saved verdict.",assessment,artifacts:[],evidence:[],findings:[],changedPaths:[],continuation:{phase:"ready",role:null}}} />
+<Let as="assignment" value={{identityDirectory:temporary.stdout.trim() + "/sessions",phase:"review",work:"test",repository,revision:head.stdout.trim(),priorRevision:null,request:"Inspect the saved verdict.",assessment,artifacts:[],evidence:[],findings:[],changedPaths:[],continuation:{phase:"ready",role:null}}} />
 <Let as="raw" value={JSON.stringify({schema:"phase-result.v2",phase:"review",work:"test",outcome:"pass",revision:assignment.revision,summary:"x".repeat(1201),handoff:"Inspect the saved verdict.",artifacts:[],evidence:[],findings:[],assessment,next:{phase:"ready",role:null},discoveryRequests:[],discoveryGaps:[]})} />
 <Dir path={attempt}><File path="assignment.json"><Json value={assignment} /></File><File path="raw.txt">{raw}</File></Dir>
 <TestAgent agent="codex">
 <TestAgent.Scenario session="original-sol-reviewer" src="./agents/sol-correction.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"gpt-6.1-sol",efforts:{selected:"high",options:["medium","high"]}}]}} />
+<Agent name="codex"><Session name="original-sol-reviewer" model="gpt-6.1-sol" effort="medium"><Phase.Session directory={assignment.identityDirectory} name="original-sol-reviewer" /></Session></Agent>
 <Ticket.Capture as="execution"><Phase.Correct assignment={assignment} raw={raw} role="planner" session="original-sol-reviewer" attempt={attempt} profile={{kind:"phase",knownDocuments:[]}} plannerProvider="codex" implementationProvider="claude" inputs={[]} maxResponseCorrections={limit} as="accepted" /><Json value={accepted} /></Ticket.Capture>
 </TestAgent>
 <If condition={limit === 1 && execution.status !== "completed"}><Fail message={execution.failure} /></If>
@@ -114,7 +116,7 @@ false
 <Let as="assessment" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"The consumer requires a missing API operation.",evidence:[witness]}} />
 <Let as="apiConflict" value={{expected:"The API provides the consumer operation.",observed:"The focused consumer check fails without it.",reproducer:"Run the saved consumer check.",artifact:witness}} />
 <Let as="original" value={{schema:"phase-result.v2",phase:"implementation",work:"conflict-" + variant,outcome:"needs_discovery",revision:head.stdout.trim(),summary:"The existing API cannot express the consumer.",handoff:"Planner: repair the original API conflict.",artifacts:[witness],evidence:[{revision:head.stdout.trim(),command:"false",outcome:"failed",artifact:witness}],findings:["The required consumer operation is missing."],assessment,apiConflict,next:{phase:"discovery",role:"planner"},handoffInputs:["unrecorded.md"],discoveryRequests:[],discoveryGaps:[]}} />
-<Let as="assignment" value={{phase:"implementation",work:original.work,repository,revision:head.stdout.trim(),priorRevision:null,request:JSON.stringify(original),assessment,artifacts:[],evidence:[],findings:[],changedPaths:[],continuation:{phase:"review",role:"planner"}}} />
+<Let as="assignment" value={{identityDirectory:temporary.stdout.trim() + "/sessions",phase:"implementation",work:original.work,repository,revision:head.stdout.trim(),priorRevision:null,request:JSON.stringify(original),assessment,artifacts:[],evidence:[],findings:[],changedPaths:[],continuation:{phase:"review",role:"planner"}}} />
 <Let as="attempt" value={temporary.stdout.trim() + "/response"} />
 <TestAgent agent="codex">
 <TestAgent.Scenario session="original-conflict-implementor" src="./agents/api-conflict-correction.md" models={{selected:"fixture-default",options:[{id:"fixture-default"},{id:"gpt-6.1-sol",efforts:{selected:"high",options:["medium","high"]}}]}} />
@@ -153,7 +155,7 @@ false
 </Test>
 
 <Test name="A2 production instructions and schema distinguish actual author from requested successor">
-<Let as="assignment" value={{phase:"discovery",work:"ordinary",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Ask the original Architect for the missing boundary.",continuation:{phase:"implementation",role:"implementor"}}} />
+<Let as="assignment" value={{identityDirectory,phase:"discovery",work:"ordinary",repository:location.stdout.trim(),revision:"a".repeat(40),request:"Ask the original Architect for the missing boundary.",continuation:{phase:"implementation",role:"implementor"}}} />
 <Let as="instructions"><Phase.Instructions role="planner" assignment={assignment} /></Let>
 <AssertStringIncludes actual={instructions} expected="discoveryRequests[].role and discoveryGaps[].request.role equal to planner" />
 <AssertStringIncludes actual={instructions} expected="next.role names the requested successor" />

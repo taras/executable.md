@@ -108,7 +108,7 @@ pwd -P
 <If condition={workspace.exitCode !== 0}><Fail message={JSON.stringify(workspace)} /></If>
 <Let as="attempt" value={workspace.stdout.slice(0,-1) + "/" + attempt} />
 </If>
-<Let as="assignment" value={{...parsed,artifactDirectory:attempt,contract:parsed.contract ?? null,continuation:{phase:successor,role:nextRole}}} />
+<Let as="assignment" value={{...parsed,artifactDirectory:attempt,identityDirectory:parsed.identityDirectory ?? attempt.slice(0,attempt.lastIndexOf("/")) + "/sessions",contract:parsed.contract ?? null,continuation:{phase:successor,role:nextRole}}} />
 <If condition={assignment.phase !== props.phase}>
 <Fail message="The prepared assignment belongs to another phase." />
 </If>

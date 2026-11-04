@@ -20,10 +20,14 @@ Review these recorded acceptance clauses against their original selected sources
 Original captured source text:
 <Json value={props.delivery.inputs} />
 
+Keep summary within {schemas.review.properties.summary.maxLength} characters, including spaces and newlines. Put detailed observations in findings; do not compress the whole report into summary. Check revision against the assigned full SHA and acceptance against the recorded clause IDs before returning.
+
 Return exactly one JSON object satisfying this schema. acceptance lists every clause ID actually examined. pass requires no blocking finding. The workflow supplies work, reviewer, attempt and completion metadata.
 <Json value={schemas.review} />
 </Let>
 <If condition={instructions.length > 64000}><Fail message="The complete independent-review request exceeds 64000 characters. Prepare concise accepted inputs before dispatch." /></If>
 <Let as="reviewer" value={props.delivery.policy.reviewer} />
-<Let as="reply"><Dir path={props.delivery.repository}><Agent name={reviewer.provider}><Session name={reviewer.session} model={reviewer.model} effort={reviewer.effort ?? undefined}><Prompt throwOnError={true}>{instructions}</Prompt></Session></Agent></Dir></Let>
+<Dir path={props.delivery.directory}><Glob include={["review-*/assignment.json"]} as="priorReviews" /></Dir>
+<Let as="continuation" value={props.delivery.sessionEstablished === true || priorReviews.some(path => path !== "review-" + props.revision + "/assignment.json")} />
+<Let as="reply"><Dir path={props.delivery.repository}><Agent name={reviewer.provider}><Session name={reviewer.session} model={reviewer.model} effort={reviewer.effort ?? undefined}><Phase.Session directory={props.delivery.directory + "/sessions"} name={reviewer.session} requireExisting={continuation}><Prompt throwOnError={true}>{instructions}</Prompt></Phase.Session></Session></Agent></Dir></Let>
 <Return value={reply} />

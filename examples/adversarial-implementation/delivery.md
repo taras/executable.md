@@ -4,7 +4,7 @@ props:
   properties:
     record: {type: string, minLength: 1}
     number: {type: integer, minimum: 1}
-    action: {enum: [status, review], default: status}
+    action: {enum: [status, review, reconcile, closeout], default: status}
   required: [record, number]
   additionalProperties: false
 ---
@@ -20,6 +20,14 @@ for reconciliation and never automatically repeats it. Readiness permits no merg
 <If condition={status.nextAction !== "review"}><Fail message={"The next action is " + status.nextAction + "; do not start another review."} /></If>
 <Delivery.Review delivery={delivery} revision={status.revision} as="receipt" />
 <Delivery.Status delivery={delivery} number={props.number} as="status" />
+</If>
+<If condition={props.action === "reconcile"}>
+<If condition={status.status !== "reconciliation_required"}><Fail message="Reconciliation requires an existing incomplete review on the current feedback revision." /></If>
+<Delivery.Reconcile delivery={delivery} revision={status.revision} publish={true} as="receipt" />
+<Delivery.Status delivery={delivery} number={props.number} as="status" />
+</If>
+<If condition={props.action === "closeout"}>
+<Delivery.Closeout delivery={delivery} number={props.number} as="status" />
 </If>
 <Dir path={delivery.directory}><File path="status.json"><Json value={status} /></File></Dir>
 <Output><Json value={status} /></Output>

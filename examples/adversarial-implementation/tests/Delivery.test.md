@@ -86,3 +86,57 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <AssertEquals actual={request.includes("x".repeat(64000))} expected={true} />
 </Each>
 </Test>
+
+<Test name="review summary accepts 1500 characters and refuses 1501">
+<Delivery.Schema as="schemas" />
+<Let as="review" value={{revision:"a".repeat(40),verdict:"pass",summary:"x".repeat(1500),acceptance:["behavior"],findings:[]}} />
+<SafeParse schema={schemas.review} as="accepted"><Json value={review} /></SafeParse>
+<AssertEquals actual={accepted.ok} expected={true} />
+<SafeParse schema={schemas.review} as="rejected"><Json value={{...review,summary:"x".repeat(1501)}} /></SafeParse>
+<AssertEquals actual={rejected.ok} expected={false} />
+</Test>
+
+<Test name="session continuity refuses changed keys, native identities and missing established receipts before content">
+<TempDir>
+```bash exec as="temporaryDirectory"
+pwd -P
+```
+<Let as="directory" value={temporaryDirectory.stdout.trim()} />
+<Let as="original" value={{sessionKey:"original-adapter-key",cwd:"/source",agentSessionId:"original-native"}} />
+<Fixture.Session session={original}><Phase.Session directory={directory} name="reviewer">first</Phase.Session></Fixture.Session>
+<Ticket.Text path={directory + "/reviewer.json"} as="first" />
+<Fixture.Session session={original}><Phase.Session directory={directory} name="reviewer" requireExisting={true}>continued</Phase.Session></Fixture.Session>
+<Each in={[{...original,sessionKey:"changed-adapter-key"},{...original,agentSessionId:"fresh-native"},{...original,cwd:"/other-source"},{sessionKey:original.sessionKey,cwd:original.cwd}]} let="changed">
+<Ticket.Capture as="refused"><Fixture.Session session={changed}><Phase.Session directory={directory} name="reviewer" requireExisting={true}><Fail message="PROMPT CONTENT WAS EXPANDED" /></Phase.Session></Fixture.Session></Ticket.Capture>
+<AssertEquals actual={refused.status} expected="failed" />
+<AssertStringIncludes actual={refused.failure} expected="session identity changed" />
+<Ticket.Text path={directory + "/reviewer.json"} as="retained" />
+<AssertEquals actual={retained} expected={first} />
+</Each>
+<Ticket.Capture as="missing"><Fixture.Session session={original}><Phase.Session directory={directory} name="missing-reviewer" requireExisting={true}><Fail message="PROMPT CONTENT WAS EXPANDED" /></Phase.Session></Fixture.Session></Ticket.Capture>
+<AssertStringIncludes actual={missing.failure} expected="identity receipt is unavailable" />
+<Fixture.Session session={{sessionKey:"fresh",cwd:"/source"}}><Phase.Session directory={directory} name="fresh"><Fixture.Session nativeId="asserted-during-turn" /></Phase.Session></Fixture.Session>
+<Ticket.Text path={directory + "/fresh.json"} as="learnedText" />
+<Parse schema={{type:"object"}} as="learned">{learnedText}</Parse>
+<AssertEquals actual={learned.nativeId} expected="asserted-during-turn" />
+<Fixture.Session session={{sessionKey:"fresh",cwd:"/source",agentSessionId:"asserted-during-turn"}}><Phase.Session directory={directory} name="fresh" requireExisting={true}>continued</Phase.Session></Fixture.Session>
+</TempDir>
+</Test>
+
+<Test name="session identity learns the provider assertion beyond a frozen placement and retains it after failure">
+<TempDir>
+```bash exec as="temporaryDirectory"
+pwd -P
+```
+<Let as="directory" value={temporaryDirectory.stdout.trim()} />
+<Each in={[false,true]} let="fail">
+<Let as="name" value={fail ? "failed" : "joined"} />
+<Ticket.Capture as="turn"><Fixture.Session session={{sessionKey:name,cwd:"/source"}} startedNativeId={"native-" + name} fail={fail}><Phase.Session directory={directory} name={name}><Prompt throwOnError={true}>fixture</Prompt></Phase.Session></Fixture.Session></Ticket.Capture>
+<If condition={!fail && turn.status !== "completed"}><Fail message={turn.failure} /></If>
+<AssertEquals actual={turn.status} expected={fail ? "failed" : "completed"} />
+<Ticket.Text path={directory + "/" + name + ".json"} as="savedText" />
+<Parse schema={{type:"object"}} as="saved">{savedText}</Parse>
+<AssertEquals actual={saved.nativeId} expected={"native-" + name} />
+</Each>
+</TempDir>
+</Test>

@@ -32,17 +32,7 @@ test -e {quotedAttempt} -o -L {quotedAttempt}
 <Let as="reviewState" value="reconciliation_required" />
 <If condition={files.includes("review-" + revision + "/receipt.json") && files.includes("review-" + revision + "/execution.json")}>
 <Ticket.Capture as="reading">
-<Ticket.Text path={attempt + "/receipt.json"} as="receiptText" />
-<Parse schema={{type:"object"}} as="receipt">{receiptText}</Parse>
-<Ticket.Text path={attempt + "/execution.json"} as="executionText" />
-<Parse schema={{type:"object"}} as="execution">{executionText}</Parse>
-<Parse schema={schemas.review} as="result"><Json value={receipt.result} /></Parse>
-<If condition={receipt.work !== props.delivery.work || receipt.revision !== revision || JSON.stringify(receipt.reviewer) !== JSON.stringify(policy.reviewer) || JSON.stringify(receipt.acceptance) !== JSON.stringify(policy.acceptance) || receipt.execution !== attempt + "/execution.json" || execution.status !== "completed" || result.revision !== revision || result.acceptance.length !== policy.acceptance.length || policy.acceptance.some(clause => !result.acceptance.includes(clause.id)) || result.verdict === "pass" && result.findings.some(finding => finding.blocking)}><Fail message="The saved review does not establish the recorded requirement." /></If>
-<Parse schema={{type:"object",properties:{reply:{type:"string"}},required:["reply"],additionalProperties:false}} as="returned">{execution.output}</Parse>
-<Phase.Extract text={returned.reply} as="extracted" />
-<If condition={!extracted.ok}><Fail message="The joined operation has no canonical review reply." /></If>
-<Parse schema={schemas.review} as="joinedResult">{extracted.json}</Parse>
-<If condition={JSON.stringify(joinedResult) !== JSON.stringify(result)}><Fail message="The receipt differs from its joined review. Reconcile the original operation." /></If>
+<Delivery.Reconcile delivery={props.delivery} revision={revision} as="receipt" />
 <Json value={receipt} />
 </Ticket.Capture>
 <If condition={reading.status === "completed"}>

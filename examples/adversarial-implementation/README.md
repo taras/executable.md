@@ -178,6 +178,42 @@ The roles use the normal agent permission policy. Running this example invokes
 paid coding agents and permits the assigned implementation work. Publication,
 issue/PR metadata and delivery remain with the Sidekick running Codex.
 
+## Keep the original conversation
+
+Every production role passes through `Phase.Session` inside its resolved Session,
+before its Prompt. The first call records the agent, logical name, resolved
+session key, cwd and provider-native identity under the work's `sessions`
+directory. Fresh placements that acquire their native identity during the turn
+retain it when that turn unwinds. Subsequent calls compare the resolved identity
+before expanding the prompt. A mismatch preserves the original receipt and saves
+the observed mismatch; it sends no prompt and grants no retry or fallback.
+Session resolution retains its existing provider setup behavior.
+
+Ordinary Tickets and API foundation/migration work share their original identity
+directory across attempts. For standalone `phase.md` requests, retain
+`assignment.identityDirectory` and set `assignment.sessionEstablished=true` on
+continuations. An established continuation with a missing receipt holds; recover
+the original evidence rather than treating it as a fresh call. Adopting a runtime
+or adapter never proves native continuity from a logical session name alone.
+Independent review uses `delivery.directory/sessions` and requires its retained
+identity when an earlier review assignment exists. An explicitly prepared
+continuation can likewise require the original receipt with
+`delivery.sessionEstablished=true`.
+
+## Select typing evidence and record amendments
+
+When a shared type, required property or exported interface changes, planning
+identifies its typing consumers, declarations and test fixtures as well as
+runtime callers. Include the applicable Deno and Node typecheck in the focused
+evidence for affected shared shapes. Runtime affected-test selection follows
+imports and does not establish that every typing consumer still compiles.
+This does not require full runtime suites for ordinary changes.
+
+Record user-directed amendments separately from implementation defects in plans,
+handoffs and cost reports, with their accepted scope and approval evidence.
+Both retain the existing correction allowances. Classification grants no extra
+call, resets no counter and does not turn an amendment into a defect metric.
+
 ## Complete delivery from recorded requirements
 
 Use this after implementation feedback, for ordinary runs and REPL entries.
@@ -218,6 +254,23 @@ feedback ready   -> independent review pending -> joined exact-commit verdict
                       | all passed + PR ready       -> await authorized merge
                       | confirmed merge             -> delivered
 ```
+
+Independent review summaries allow 1500 characters; detailed observations belong
+in `findings`. The request states this bound alongside the exact revision and
+clause IDs. Ordinary phase and API-foundation summaries retain their own bounds.
+
+Use `--props-action reconcile` when an original joined review has saved execution
+and raw reply but no accepted receipt. It checks the original assignment,
+joined execution, unchanged raw reply, current schema, clauses and source before
+creating the missing receipt. It never shortens text, changes a verdict, repeats
+a model call or overwrites a contradictory receipt. Missing or uncertain execution
+continues to hold. Status uses this same validation boundary to read receipts.
+
+Use `--props-action closeout` to write `delivery/closeout.json` and
+`delivery/closeout.md` from the actual `Delivery.Status` result. The JSON retains
+the full status and evidence; the report names the revision, gates, review,
+findings and next action. Incomplete gates remain visible. This action starts no
+model, publishes nothing and grants no merge permission.
 
 A complete review covers every recorded clause and has no blocking finding.
 The component writes its completion receipt after the role operation has returned
@@ -533,7 +586,7 @@ installed.
 `ExactCorrection` and `Guide.ExactCorrection` package the existing local feedback
 workflow. The normal launch composes those owners from prepared scope while retaining
 validated foundations, role profiles, API-conflict repair, retirement and Codex
-editorial ownership. Delivery
+editorial ownership. Publication
 automation, task-specific attachment/routing programs and historical trial
 artifacts are outside this example.
 

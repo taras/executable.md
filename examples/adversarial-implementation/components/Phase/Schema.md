@@ -12,6 +12,8 @@ returns:
   "assignment": {
     "type": "object",
     "properties": {
+      "identityDirectory": {type:"string",pattern:"^/"},
+      "sessionEstablished": {type:"boolean"},
       "assessment": assessmentSchema,
       "reviewKind": {enum:["feature","correction"],default:"feature"},
       "gate": {
