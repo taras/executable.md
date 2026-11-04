@@ -26,6 +26,7 @@
 
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
+import type { FilesystemExpansion } from "./filesystem-placement.ts";
 import type { OutputFrame } from "./expand.ts";
 import type { ErrorMode } from "./errors.ts";
 import type { ComponentElement, Segment } from "./types.ts";
@@ -69,6 +70,7 @@ export interface ProjectionHandle {
      */
     elementPath: string,
     current?: OutputFrame,
+    filesystem?: FilesystemExpansion,
   ): Operation<Segment[]>;
   /** Structured result — ErrorSegments stay identifiable to the caller. */
   project(request: ProjectionRequest): Operation<Segment[]>;
