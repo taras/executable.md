@@ -17,6 +17,12 @@ manual entries start in the invocation’s project directory. Read
 components. Configured component directories are searched before this session’s
 `components/`; inspect the selected definition before invoking it.
 
+TEMPORARY (https://github.com/taras/executable.md/issues/999): before drafting
+entries, keep large workflow records, logs, artifacts and reports in workspace
+files. Keep ordinary paths and small necessary summaries/status in root
+bindings. Read `<Guide.Bindings />` before authoring entries that handle this
+material.
+
 The attached index tells you which guides to read and their exact invocations.
 For example, `<Guide.Entries />` teaches how to prepare literal entry source;
 `<Guide.Effection />` teaches asynchronous entry code. You may request several

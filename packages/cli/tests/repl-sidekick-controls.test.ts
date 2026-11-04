@@ -34,6 +34,7 @@ import { CORE_REGISTRY } from "../../core/src/components/registry.ts";
 import { isJsonObject } from "../../core/src/json.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { appendFile, open, readFile } from "node:fs/promises";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
@@ -60,7 +61,7 @@ import type { FunctionComponentDefinition } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
 
-import { API, cwd, platform, Permissions } from "@executablemd/runtime";
+import { API, cwd, platform, Permissions, useHostFiles } from "@executablemd/runtime";
 
 import { DESIGNATED, GUIDE_CHAPTERS } from "../src/repl/sidekick/controls.ts";
 import { openReplSession } from "../src/repl/session.ts";
@@ -1301,6 +1302,8 @@ describe("Tier R3 — the guide index describes what is admitted", () => {
     expect(read.value).toContain("Write each response as an XMD program");
     expect(read.value).toContain("starts\nwith no bindings");
     expect(read.value).toContain("no native shell, file-editing or MCP tools");
+    expect(read.value).toContain("<Guide.Bindings />");
+    expect(read.value).toContain("TEMPORARY (https://github.com/taras/executable.md/issues/999)");
   });
 
   it("R3: the index is the admitted chapters, with their own stated purpose", function* () {
@@ -1433,6 +1436,56 @@ describe("Tier R3 — a shipped example prepares a draft and runs", () => {
     // Literal: the captured source reached the draft as source, not as output.
     expect(draft).toContain('<Let as="names" value={["Ada", "Lin"]} />');
     expect(yield* ranAsEntry(draft)).toContain("Hello, Ada!");
+  });
+
+  it("R3: Bindings keeps report contents local and publishes only its path and status", function* () {
+    const directory = yield* useTempDirectory("xmd-guide-bindings-");
+    yield* useHostFiles();
+    yield* useNormalizedOutput();
+    yield* API.Env.around(
+      {
+        *cwd(): Operation<string> {
+          return directory;
+        },
+      },
+      { at: "min" },
+    );
+    const { draft, fills } = yield* prepared("Bindings");
+    expect(fills).toBe(1);
+    const stream = new InMemoryStream();
+    const opened = yield* openReplSession({ execution: { id: "guide-bindings", stream } });
+    if (!opened.ok) {
+      throw opened.error;
+    }
+    const session = opened.value;
+    const submitted = yield* session.submit(draft);
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    const outcome = yield* submitted.value.join();
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    expect(session.overlay.output).toMatch(
+      /Report status:\s*ready\s+Report file: artifacts\/bindings-demo\.json/,
+    );
+    const report = JSON.parse(yield* readTextFile(join(directory, "artifacts/bindings-demo.json")));
+    expect(report).toEqual({ status: "ready", details: ["demonstration report"] });
+    const projected = projectRepl(yield* stream.readAll());
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    const bindings = entryInitialBindings(projected.value);
+    expect(Object.keys(bindings).sort()).toEqual(["reportPath", "statusSummary"]);
+    expect(bindings.reportPath).toBe("artifacts/bindings-demo.json");
+    expect(typeof bindings.statusSummary).toBe("string");
+    if (typeof bindings.statusSummary !== "string") {
+      throw new Error("the Each capture did not publish text");
+    }
+    expect(bindings.statusSummary.trim()).toBe("ready");
+    for (const local of ["path", "reportText", "report"]) {
+      expect(Object.hasOwn(bindings, local)).toBe(false);
+    }
   });
 
   it("R3: Effection drafts an executable fence, and the entry suspends and resumes", function* () {
