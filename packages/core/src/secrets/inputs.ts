@@ -33,6 +33,7 @@ export interface InputValues {
   contains(value: unknown): boolean;
   validate(value: unknown, name: string, schema: ReturnsSchema): Operation<unknown>;
   text(): InputText;
+  flushOutput(): Operation<void>;
   exec(input: InputCommand, options: InputExecOptions): Operation<ProcessOutcome>;
 }
 
@@ -45,7 +46,9 @@ const CONVERSION =
   "This elicited field is protected and cannot be converted to text or JSON. Pass it directly with {answer.field} in a built-in exec block, use a capture or Let value, or render a redacted view with Json.";
 const ATTACH = "executablemd.secret-input.attach";
 
-export function* createInputOwner(): Operation<SecretInputOwner> {
+export function* createInputOwner(
+  flushOutput: () => Operation<void> = function* () {},
+): Operation<SecretInputOwner> {
   const owner = new SecretInputOwner();
   const fields = new Map<string, object>();
   let leaves = new WeakMap<object, { field: InputField; value: string }>();
@@ -204,6 +207,10 @@ export function* createInputOwner(): Operation<SecretInputOwner> {
         throw new ReturnValidationError(name, normalizeIssues(validator.errors ?? []));
       }
       return value;
+    },
+    *flushOutput() {
+      alive();
+      yield* flushOutput();
     },
     text() {
       alive();

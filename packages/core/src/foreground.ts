@@ -196,6 +196,9 @@ export function* route(
     }
   };
   yield* ensure(function* () {
+    if (inputs !== undefined) {
+      yield* inputs.flushOutput();
+    }
     finish();
     if (selected.stdout === "forward" && stdoutTail !== "" && sendStdout !== undefined) {
       yield* sendStdout(encoder.encode(stdoutTail));

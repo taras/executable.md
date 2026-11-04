@@ -563,3 +563,97 @@ describe("REPL command routing, containment and history E2–E5", () => {
     });
   });
 });
+
+describe("protected command tails join their producing host", () => {
+  it("joins held prefixes and the newline control without crossing command routing", function* () {
+    for (const newline of [false, true]) {
+      yield* scoped(function* () {
+        yield* useTempFileCompiler();
+        let secret = "";
+        let commands = 0;
+        const encoder = new TextEncoder();
+        const opened = yield* openReplSession({
+          execution: { id: "protected-tail-" + String(newline), stream: new InMemoryStream() },
+          installations: [
+            {
+              *install() {
+                yield* Elicitation.around({
+                  *elicit() {
+                    secret = String(Math.floor(100000 + Math.random() * 900000));
+                    return { code: secret };
+                  },
+                });
+                yield* API.Process.around({
+                  *exec([options]) {
+                    commands++;
+                    const program = options.command[2].trim();
+                    const label = program.split(" ")[0];
+                    expect(program.includes(secret)).toBe(true);
+                    if (label === "first" || label === "hidden") {
+                      yield* Stdio.operations.stdout(
+                        encoder.encode(
+                          label + "-out " + secret.slice(0, 5) + (newline ? "\n" : ""),
+                        ),
+                      );
+                    } else {
+                      yield* Stdio.operations.stderr(
+                        encoder.encode(
+                          label + "-err " + secret.slice(0, 5) + (newline ? "\n" : ""),
+                        ),
+                      );
+                    }
+                    return { exitCode: 0, stdout: undefined, stderr: undefined };
+                  },
+                });
+              },
+            },
+          ],
+        });
+        if (!opened.ok) {
+          throw opened.error;
+        }
+        const session = opened.value;
+        const declaration = {
+          type: "object",
+          properties: { code: { type: "string", writeOnly: true } },
+          required: ["code"],
+          additionalProperties: false,
+        };
+        const admitted = yield* session.submit(
+          [
+            "```ts eval",
+            `const schema = ${JSON.stringify(declaration)};`,
+            "```",
+            '<Elicit schema={schema} as="answer">Code.</Elicit>',
+            "```sh exec",
+            "first {answer.code}",
+            "```",
+            "```sh silent exec",
+            "hidden {answer.code}",
+            "```",
+            '```sh exec as="bound"',
+            "bound {answer.code}",
+            "```",
+            "```sh exec",
+            "last {answer.code}",
+            "```",
+          ].join("\n\n"),
+        );
+        expect(admitted.ok).toBe(true);
+        expect((yield* session.join()).ok).toBe(true);
+        expect(session.live).toBe(false);
+        expect(commands).toBe(4);
+        const output = session.commandOutput;
+        expect(output.length).toBe(1);
+        expect(output[0].entry).toBe("entry-1");
+        expect(JSON.stringify(output).includes(secret)).toBe(false);
+        const tail = newline ? secret.slice(0, 5) + "\n" : "[redacted]";
+        const expected = [
+          { channel: "stdout", text: "first-out " + tail },
+          { channel: "stderr", text: "last-err " + tail },
+        ];
+        expect(JSON.stringify(output[0].chunks) === JSON.stringify(expected)).toBe(true);
+      });
+    }
+  });
+});

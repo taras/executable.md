@@ -65,8 +65,8 @@ export function interpolateEvalBindings(
     };
     const path = key.split(".");
     let value: unknown = bindings;
-    for (const name of path) {
-      if (value === null || typeof value !== "object" || !(name in value)) {
+    for (const [index, name] of path.entries()) {
+      if (value === null || typeof value !== "object" || (index === 0 && !(name in value))) {
         return emit(match);
       }
       value = Reflect.get(value, name);
