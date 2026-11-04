@@ -28,7 +28,8 @@ describe("protected local forms", () => {
     if (question === undefined) {
       throw new Error("No active question.");
     }
-    expect(question.form.fields.map((field) => field.secret)).toEqual([true, false]);
+    expect(question.form.fields.map((field) => field.secret === true)).toEqual([true, false]);
+    expect(Object.hasOwn(question.form.fields[1], "secret")).toBe(false);
     const value = String(Math.floor(100000 + Math.random() * 900000));
     const invalid = question.submit({ code: value.slice(0, 2), public: "useful" });
     expect(invalid.kind).toBe("invalid");

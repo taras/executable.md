@@ -1,4 +1,4 @@
-import { inputValues } from "./secrets/inputs.ts";
+import { inputValues, validateLiveReturnValue } from "./secrets/inputs.ts";
 import type { ProtectedInput } from "./secrets/inputs.ts";
 /**
  * Expansion engine (spec §5).
@@ -147,12 +147,7 @@ import {
 } from "@executablemd/durable-streams";
 import type { DurablePosition, Workflow } from "@executablemd/durable-streams";
 import { SourceOwner } from "./source-owner.ts";
-import {
-  SchemaValidationError,
-  validateProps,
-  validateReturnValue,
-  validateLiveReturnValue,
-} from "./validate.ts";
+import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments, splitTextFences } from "./scanner.ts";
