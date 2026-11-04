@@ -47,6 +47,7 @@ import type { Json } from "@executablemd/core";
 import { queryJournal } from "./journal-query.ts";
 
 import type { ReplAgentTurn, ReplEntry, ReplPosition, ReplRecord } from "../model.ts";
+import type { ReplEntryExecution } from "../session.ts";
 
 /** Why one inspection could not be performed. */
 export class EntryInspectionError extends Error {
@@ -68,8 +69,9 @@ export type PromptStatus = "completed" | "failed" | "cancelled";
 /** Which of a saved turn's three texts a Prompt read asks for. */
 export type PromptField = "reply" | "request" | "error";
 
-/** What one inspection reads: the acknowledged entries, and what is printing. */
+/** One acknowledged reading and detached host observations; cold reads have no executions. */
 export interface InspectedHistory {
+  readonly executions?: Readonly<Record<string, ReplEntryExecution>>;
   readonly joined?: { readonly entry: string; readonly output: string };
   readonly entries: readonly ReplEntry[];
   /**
@@ -334,6 +336,7 @@ export function* readEntryJournal(
     entry: entry.order,
     status: statusOf(entry, history.printing),
     failure: entry.terminal?.message ?? null,
+    execution: history.executions?.[entry.key] ?? { joined: null, outcome: null, error: null },
     prompts: countPrompts(entry.turns),
     records: entry.records.map((record) =>
       pageRecord(

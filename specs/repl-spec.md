@@ -571,9 +571,13 @@ two kinds of it.
 **Left unfinished.** Exit, EOF, a terminal failure and the command's own
 teardown end an entry without appending any outcome for it. The file holds no
 close, so the entry is unfinished, and an unfinished entry permits no successor
-— reopen that execution and it resumes where its records stop, without
-repeating the effects it already recorded, and another entry can be submitted
-once it has settled.
+— opening that execution can resume where its records stop, without repeating
+the effects it already recorded. It can perform unrecorded work; it is not
+passive inspection or a general repair. Inspect the exact entry through Source
+and Journal first. A joined fatal refusal may leave this history unfinished;
+Entry Stop then refuses because no task remains, and no successor is permitted.
+In particular, reopening immutable source entering B does not replace the
+session-owned repository A or resolve that repository refusal.
 
 **Stopped.** An explicit Entry Stop is the other kind, and it is final. The
 entry's own root retains a cancelled close before the entry is released, so the
@@ -620,11 +624,12 @@ same outcomes, the same selected entry and scope, the same binding values, the
 same transcript, the same generated source, the same recorded question and
 answer, the same History positions and the same terminal output.
 
-Nothing is re-run to do it. No component source is read, no `eval` block is
-compiled, and nobody is asked anything: everything on that screen was
-reconstructed from the location and the retained events. Settled entries are
-projected and never performed again; only a final entry the file shows as
-unfinished is given back to the engine to continue. A location naming a history
+Settled entries are projected from the retained events without reading component
+source, compiling an `eval` block or asking anyone anything. A final entry the
+file shows as unfinished is different: opening this execution gives that entry
+back to the engine to continue and may perform unrecorded work. Passive Source
+and Journal inspection does not open execution. It preserves uncertainty when
+no live host observation remains and never reconstructs an old joined verdict. A location naming a history
 this version cannot read, or naming an entry its selected prefix never admitted,
 refuses whole — with nothing appended and no execution started. So does a
 history longer than 536,870,888 UTF-16 code units, newlines included, and its
@@ -2426,6 +2431,13 @@ REPL.Entry.Journal. Reuse navigation as `--yq` with the same positive entry;
 `--cursor` is refused for Journal and `--yq` is refused for other views.
 Reads accept no file path, source, write operation or limit override.
 
+A new authenticated connection to the same surviving root reads that exact
+entry's session-owned `execution` observation alongside its retained Journal.
+The original submit connection need not remain attached. After root loss a saved
+journal has unknown execution, and the old attachment refuses; no replacement
+host or cold attachment endpoint is created. Idle Sidekick status proves no
+entry outcome: a live entry can be awaiting Elicit while `busy` is false.
+
 The private versioned framed protocol bounds Sidekick message text and each
 direct source part at 64 KiB, descriptors at
 16 KiB and frames at 1 MiB. Each observer has at most 64 pending public updates.
@@ -2956,8 +2968,8 @@ each of them answers with a page rather than with prose:
 
 Source is the exact source that entry was admitted with. Prompt is one saved
 agent turn's reply, request or complete failure message. Output is what the
-entry printed. Journal queries the complete permitted retained value
-`{entry,status,failure,prompts,records}` before paging the query result. Its
+entry printed. Journal queries the complete permitted value
+`{entry,status,failure,prompts,records,execution}` before paging the query result. Its
 optional `yq` defaults to `.`. Each record carries `marker`, `type`, nullable
 `name`, `position`, `prompt` and `agent`, its `status`, `exec` and required nullable `promptError`. A supported
 settled exec has `{exitCode,stdout?,stderr?}`; other records have `exec: null`.
@@ -2965,6 +2977,51 @@ Missing channels are absent members, retained empty channels are empty strings,
 and timeout, cancellation or missing results invent no exit or complete output.
 Protocol `ok`, a nonzero command exit and the enclosing failed entry remain
 separate facts. Journal exposes no arbitrary result payload or provider data.
+
+`execution` is exactly this host's observation of the selected entry:
+
+```ts
+{
+  joined: boolean | null;
+  outcome: "completed" | "failed" | "interrupted" | null;
+  error: { name: string; message: string } | null;
+}
+```
+
+| Host observation | joined | outcome | error |
+| --- | --- | --- | --- |
+| Admitted work or owned cleanup is live | false | null | null |
+| Exact task and cleanup joined successfully | true | completed | null |
+| Clean explicit interruption and cleanup joined | true | interrupted | null |
+| Actual execution, Stop or cleanup failure after join | true | failed | Disclosed name/message |
+| No observation for this entry, including cold reading | null | null | null |
+
+The retained `status` and `failure` keep their meanings. A joined fatal refusal
+can have `status: "unfinished"` and `failure: null`; a successful Close followed
+by cleanup failure can have `status: "completed"` beside failed execution.
+Canonical failure precedence stays unchanged; an actual Stop or cleanup failure
+outranks the interrupt request. A Close, last operation, absent question,
+printing flag or Sidekick `busy` value never establishes join.
+
+Only detached name/message cleared under the original entry's disclosure policy
+appears. Unavailable or failed clearance supplies exactly
+`{name:"Error",message:"Execution error details were withheld because disclosure checks could not complete."}`.
+Joined remains true and outcome remains failed; that sentence describes
+withholding rather than the original failure. Errors outside entry expansion,
+such as outer entry cleanup, can lack clearance and use this form. A later
+response's policy clears no earlier error. No unchecked text reaches the query
+input, and no stack, cause, provider data or capability is exposed. The original
+direct submitter can receive diagnostic text that this later Journal read must
+withhold; that difference does not describe a different failure.
+
+Observations belong to the selected admitted entry and the surviving session,
+not the latest task or observing connection. Reading performs no join, Stop,
+admission or recovery. An unfinished entry with joined failed execution permits
+no successor and has no running task for Entry Stop. Inspect its Source and
+Journal, preserve completed effects and explain the specific refusal. Blind
+resend or reopening is not a demonstrated safe continuation: opening unfinished
+execution can perform unrecorded work. Cold history keeps unknown execution,
+even beside a completed terminal.
 
 `promptError` contains exactly the selected saved Prompt error: required
 `message`, optional `name` and `cause` strings, and optional `diagnostic` in
@@ -3015,7 +3072,7 @@ Zero or multiple top-level results, invalid expressions and non-JSON results
 refuse through the existing query engine; null and false are valid answers.
 
 Returned navigation is ordinary yq. Reuse it with the same positive entry
-number. Each request recomputes current retained data; growth can shift pages.
+number. Each request recomputes current retained data and host observation; growth can shift pages.
 Generated windows preserve the original query and finite range so later requests
 can offer next, prev and last without retained inspection state. The exact
 formatter shape is recognized through strict JSON and complete formatter equality;

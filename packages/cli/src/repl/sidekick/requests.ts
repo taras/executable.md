@@ -155,6 +155,7 @@ export function rootReads(
         ? yield* readEntryJournal(request, {
             entries: read.value.model.entries,
             printing: session.printing,
+            executions: session.executions,
           })
         : read;
     },
