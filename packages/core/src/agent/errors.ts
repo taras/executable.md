@@ -8,7 +8,31 @@
 import { z } from "zod";
 
 const PROMPT_DIAGNOSTIC = "executablemd.agent.prompt-diagnostic";
-const Diagnostic = z
+const Diagnostic: z.ZodObject<
+  {
+    provider: z.ZodLiteral<"acp">;
+    operation: z.ZodLiteral<"session/prompt">;
+    stage: z.ZodLiteral<"runtime-turn">;
+    requestId: z.ZodOptional<z.ZodString>;
+    code: z.ZodOptional<z.ZodString>;
+    detailCode: z.ZodOptional<z.ZodString>;
+    retryable: z.ZodOptional<z.ZodBoolean>;
+    origin: z.ZodOptional<
+      z.ZodEnum<{ cli: "cli"; runtime: "runtime"; queue: "queue"; acp: "acp" }>
+    >;
+    acp: z.ZodOptional<
+      z.ZodObject<
+        {
+          code: z.ZodNumber;
+          message: z.ZodOptional<z.ZodString>;
+          details: z.ZodOptional<z.ZodString>;
+        },
+        z.core.$strict
+      >
+    >;
+  },
+  z.core.$strict
+> = z
   .object({
     provider: z.literal("acp"),
     operation: z.literal("session/prompt"),

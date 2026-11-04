@@ -35,6 +35,7 @@ import {
   installAgentComponents,
   useNormalizedOutput,
 } from "@executablemd/core";
+import type { AgentPromptEvent } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { applySessionConfiguration } from "../src/session-configuration.ts";
@@ -116,7 +117,7 @@ function respond(request) {
     if (text !== "no-accept") update({sessionUpdate: "session_info_update", _meta: {"executablemd.session-materialization/v1": {state: "accepted"}}});
     update({sessionUpdate: "agent_message_chunk", content: {type: "text", text: "answer:" + text}});
     if (text === "diagnostic") {
-      send({jsonrpc: "2.0", id: request.id, error: {code: -32041, message: "Internal error", data: {details: "/work/project: adapter unavailable", authorization: "excluded raw field"}}});
+      send({jsonrpc: "2.0", id: request.id, error: {code: -32041, message: "Internal error", data: {details: "/work/project: adapter unavailable", authorization: "<redacted>"}}});
     } else if (text === "fail") {
       send({jsonrpc: "2.0", id: request.id, error: {code: -32000, message: "backend refusal"}});
     } else {
@@ -413,7 +414,7 @@ describe(
         mode: "prompt",
         requestId: "actual-request",
       });
-      const channel = createChannel<import("@executablemd/core").AgentPromptEvent, string>();
+      const channel = createChannel<AgentPromptEvent, string>();
       const subscription = yield* channel;
       const consumer = yield* spawn(() =>
         consumeTurn(
@@ -423,7 +424,7 @@ describe(
           () => {},
         ),
       );
-      const events = [];
+      const events: AgentPromptEvent[] = [];
       let next = yield* subscription.next();
       while (!next.done) {
         events.push(next.value);
@@ -440,7 +441,7 @@ describe(
           acp: { code: -32041, details: "/work/project: adapter unavailable" },
         },
       });
-      expect(JSON.stringify(result)).not.toContain("excluded raw field");
+      expect(JSON.stringify(result)).not.toContain("<redacted>");
       expect(terminal?.error?.message).toBe("Internal error");
       expect(
         terminal?.error && Reflect.get(terminal.error, "executablemd.agent.prompt-diagnostic"),
