@@ -39,6 +39,14 @@ git symbolic-ref --short HEAD
 <AssertEquals actual={duplicate.status} expected="failed" />
 <If condition={scenario === "pass"}>
 <Ticket.Text path={delivery.directory + "/called.json"} as="calledBefore" />
+<Ticket.Text path={delivery.directory + "/review-" + revision + "/assignment.json"} as="originalAssignment" />
+<Parse schema={{type:"object"}} as="assigned">{originalAssignment}</Parse>
+<Dir path={delivery.directory + "/review-" + revision}><File path="assignment.json"><Json value={{...assigned,responseSchema:{...assigned.responseSchema,properties:{...assigned.responseSchema.properties,summary:{type:"string",minLength:1,maxLength:1200}}}}} /></File></Dir>
+<Ticket.Capture as="schemaChanged"><Delivery.Reconcile delivery={delivery} revision={revision} publish={true} as="unexpectedSchemaReceipt" /></Ticket.Capture>
+<AssertEquals actual={schemaChanged.status} expected="failed" />
+<AssertStringIncludes actual={schemaChanged.failure} expected="response schema differs" />
+<Dir path={delivery.directory + "/review-" + revision}><File path="assignment.json">{originalAssignment}</File></Dir>
+
 <Dir path={delivery.directory + "/review-" + revision}><File.Delete path="receipt.json" /></Dir>
 <Delivery.Status delivery={delivery} number={7} as="unreconciled" />
 <AssertEquals actual={unreconciled.status} expected="reconciliation_required" />

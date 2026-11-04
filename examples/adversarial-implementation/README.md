@@ -183,7 +183,11 @@ issue/PR metadata and delivery remain with the Sidekick running Codex.
 Every production role passes through `Phase.Session` inside its resolved Session,
 before its Prompt. The first call records the agent, logical name, resolved
 session key, cwd and provider-native identity under the work's `sessions`
-directory. Fresh placements that acquire their native identity during the turn
+directory. It records prompt subscription attempts separately from the first
+actual started event. An attempted call with no confirmed identity holds for
+reconciliation even if later resolution offers an identity. A verified placement
+that was never prompted remains distinct from an uncertain attempted call.
+Fresh placements that acquire their native identity during the turn
 retain it when that turn unwinds. Subsequent calls compare the resolved identity
 before expanding the prompt. A mismatch preserves the original receipt and saves
 the observed mismatch; it sends no prompt and grants no retry or fallback.
@@ -207,7 +211,7 @@ identifies its typing consumers, declarations and test fixtures as well as
 runtime callers. Include the applicable Deno and Node typecheck in the focused
 evidence for affected shared shapes. Runtime affected-test selection follows
 imports and does not establish that every typing consumer still compiles.
-This does not require full runtime suites for ordinary changes.
+Include real cross-runtime child-execution witnesses when fixture filenames, module boundaries or loader behavior change; typing alone cannot show which module mode a child selects. This does not require full runtime suites for ordinary changes.
 
 Record user-directed amendments separately from implementation defects in plans,
 handoffs and cost reports, with their accepted scope and approval evidence.
@@ -265,6 +269,17 @@ joined execution, unchanged raw reply, current schema, clauses and source before
 creating the missing receipt. It never shortens text, changes a verdict, repeats
 a model call or overwrites a contradictory receipt. Missing or uncertain execution
 continues to hold. Status uses this same validation boundary to read receipts.
+
+Reconciliation is limited to independent review from a work item launched under
+the same response contract. Its assignment retains the exact response schema; a
+missing or different schema refuses rather than reinterpreting an old reply. It cannot repair or adopt an ordinary rejected role
+verdict, rewrite its raw rejection or partial work, or reset a correction budget.
+A current schema accepting older text does not retroactively approve that work.
+Preserve the original rejection and require an explicit applicable
+schema-amendment decision, recording the old bound, amended bound, exact raw
+reply and source revision before any historical acceptance. This example's
+new-ticket pilot imports no historical review attempts; historical adoption is
+held for explicit reconciliation rather than automatic schema migration.
 
 Use `--props-action closeout` to write `delivery/closeout.json` and
 `delivery/closeout.md` from the actual `Delivery.Status` result. The JSON retains

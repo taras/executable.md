@@ -26,6 +26,14 @@ const identitySchema = z.strictObject({
   sessionKey: z.string().min(1),
   cwd: z.string().min(1),
   nativeId: z.string().min(1).nullable(),
+  attempted: z.boolean(),
+  started: z
+    .strictObject({
+      sessionKey: z.string().min(1),
+      cwd: z.string().min(1),
+      nativeId: z.string().min(1).nullable(),
+    })
+    .nullable(),
 });
 
 export default function* Session(input: Record<string, unknown>) {
@@ -50,11 +58,18 @@ export default function* Session(input: Record<string, unknown>) {
     sessionKey: session.sessionKey,
     cwd: session.cwd,
     nativeId: session.agentSessionId ?? null,
+    attempted: false,
+    started: null,
   });
   const prior = yield* API.Files.operations.readTextFile(target);
   let established = observed;
   if (prior.ok) {
     established = identitySchema.parse(JSON.parse(prior.value));
+    if (established.attempted && established.nativeId === null) {
+      throw new Error(
+        "The original workflow call was attempted without a confirmed identity. Preserve its failure and reconcile it before another prompt.",
+      );
+    }
     if (
       established.agent !== observed.agent ||
       established.name !== observed.name ||
@@ -94,13 +109,24 @@ export default function* Session(input: Record<string, unknown>) {
     throw saved.error;
   }
   let assertedId: string | undefined;
+  let attempted = established.attempted;
+  let started = established.started;
   yield* ensure(function* () {
     // A fresh placement acquires its provider-native identity during the first turn.
     const nativeId = assertedId ?? session.agentSessionId;
-    if (established.nativeId === null && nativeId !== undefined) {
+    if (
+      attempted !== established.attempted ||
+      started !== established.started ||
+      (established.nativeId === null && nativeId !== undefined)
+    ) {
       const retained = yield* API.Files.operations.writeTextFile({
         ...target,
-        content: JSON.stringify({ ...established, nativeId }),
+        content: JSON.stringify({
+          ...established,
+          attempted,
+          started,
+          nativeId: established.nativeId ?? nativeId ?? null,
+        }),
       });
       if (!retained.ok) {
         throw retained.error;
@@ -112,12 +138,25 @@ export default function* Session(input: Record<string, unknown>) {
       const stream = yield* next(...args);
       const observedStream: Stream<AgentPromptEvent, string> = {
         *[Symbol.iterator]() {
+          attempted = true;
+          const marked = yield* API.Files.operations.writeTextFile({
+            ...target,
+            content: JSON.stringify({ ...established, attempted }),
+          });
+          if (!marked.ok) {
+            throw marked.error;
+          }
           const subscription = yield* stream;
           return {
             *next() {
               const event = yield* subscription.next();
               if (!event.done && event.value.type === "started") {
                 assertedId = event.value.session.agentSessionId;
+                started ??= {
+                  sessionKey: event.value.session.sessionKey,
+                  cwd: event.value.session.cwd,
+                  nativeId: assertedId ?? null,
+                };
               }
               return event;
             },

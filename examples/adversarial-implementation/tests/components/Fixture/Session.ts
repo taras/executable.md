@@ -9,6 +9,7 @@ export const props = {
     session: { type: "object" },
     nativeId: { type: "string" },
     startedNativeId: { type: "string" },
+    failBeforeStarted: { type: "boolean", default: false },
     fail: { type: "boolean", default: false },
   },
   additionalProperties: false,
@@ -23,6 +24,7 @@ const schema = z.strictObject({
     .optional(),
   nativeId: z.string().optional(),
   startedNativeId: z.string().optional(),
+  failBeforeStarted: z.boolean(),
   fail: z.boolean(),
 });
 
@@ -48,7 +50,7 @@ export default function* Session(input: Record<string, unknown>) {
       return session;
     },
   });
-  if (selected.startedNativeId !== undefined) {
+  if (selected.startedNativeId !== undefined || selected.failBeforeStarted) {
     Object.freeze(session);
     yield* Agent.around(
       {
@@ -59,6 +61,11 @@ export default function* Session(input: Record<string, unknown>) {
               let terminal = false;
               return {
                 *next() {
+                  if (selected.failBeforeStarted) {
+                    throw new Error(
+                      "The original fixture turn failed without an identity assertion.",
+                    );
+                  }
                   if (!started) {
                     started = true;
                     return {

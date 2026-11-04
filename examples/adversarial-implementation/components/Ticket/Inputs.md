@@ -21,6 +21,6 @@ remain available without adding their contents to the prompt.
 <Ticket.Documents repository={props.call.assignment.repository} paths={references} documents={props.record.documents} as="documents" />
 <Let as="inputs" value={references.map(path => documents[path])} />
 <If condition={inputs.reduce((total,input) => total + input.content.length,0) > 64000}>
-<Fail message="Selected handoff inputs exceed 64000 characters. Return a concise handoff document and preserve full logs as artifacts; nothing was truncated or dispatched." />
+<Fail message={"Selected handoff inputs total " + inputs.reduce((total,input) => total + input.content.length,0) + " characters, exceeding 64000. Selected references and sizes: " + inputs.map(input => input.path + " (" + input.content.length + ")").join(", ") + ". Return concise handoff documents; preserve full logs as artifacts. No provider prompt began."} />
 </If>
 <Return value={{documents,inputs,deliveredInputs:{...(props.record.manifest.deliveredInputs ?? {}),...(props.record.deliveredInputs ?? {}),[props.call.session]:[...new Set([...received,...references])]}}} />

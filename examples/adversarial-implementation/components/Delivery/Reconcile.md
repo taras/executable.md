@@ -13,10 +13,10 @@ returns: {type: object}
 
 <Delivery.Schema as="schemas" />
 <Let as="attempt" value={props.delivery.directory + "/review-" + props.revision} />
-<Let as="assigned" value={{work:props.delivery.work,revision:props.revision,reviewer:props.delivery.policy.reviewer,acceptance:props.delivery.policy.acceptance}} />
+<Let as="assigned" value={{work:props.delivery.work,revision:props.revision,reviewer:props.delivery.policy.reviewer,acceptance:props.delivery.policy.acceptance,responseSchema:schemas.review}} />
 <Ticket.Text path={attempt + "/assignment.json"} as="assignmentText" />
 <Parse schema={{type:"object"}} as="assignment">{assignmentText}</Parse>
-<If condition={JSON.stringify(assignment) !== JSON.stringify(assigned)}><Fail message="The original review assignment differs from the recorded delivery requirement. Reconcile it without dispatch." /></If>
+<If condition={JSON.stringify(assignment) !== JSON.stringify(assigned)}><Fail message="The original review assignment or response schema differs from the recorded delivery requirement. Preserve the original rejection; schema changes require an explicit applicable amendment decision outside this action. No provider prompt began." /></If>
 <Ticket.Text path={attempt + "/execution.json"} as="executionText" />
 <Parse schema={{type:"object",properties:{status:{const:"completed"},output:{type:"string"},failure:{type:"null"}},required:["status","output","failure"],additionalProperties:false}} as="execution">{executionText}</Parse>
 <Parse schema={{type:"object",properties:{reply:{type:"string"}},required:["reply"],additionalProperties:false}} as="returned">{execution.output}</Parse>

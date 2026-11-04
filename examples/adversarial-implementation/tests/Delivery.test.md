@@ -140,3 +140,26 @@ pwd -P
 </Each>
 </TempDir>
 </Test>
+
+<Test name="an uncertain attempted call holds without rebinding or prompting a replacement">
+<TempDir>
+```bash exec as="temporaryDirectory"
+pwd -P
+```
+<Let as="directory" value={temporaryDirectory.stdout.trim()} />
+<Ticket.Capture as="firstFailure"><Fixture.Session session={{sessionKey:"uncertain",cwd:"/source"}} failBeforeStarted={true}><Phase.Session directory={directory} name="uncertain"><Prompt throwOnError={true}>first attempt</Prompt></Phase.Session></Fixture.Session></Ticket.Capture>
+<AssertEquals actual={firstFailure.status} expected="failed" />
+<File path="first-failure.json"><Json value={firstFailure} /></File>
+<Ticket.Text path={directory + "/uncertain.json"} as="firstReceipt" />
+<Parse schema={{type:"object"}} as="unknown">{firstReceipt}</Parse>
+<AssertEquals actual={{attempted:unknown.attempted,nativeId:unknown.nativeId,started:unknown.started}} expected={{attempted:true,nativeId:null,started:null}} />
+<Ticket.Capture as="continuation"><Fixture.Session session={{sessionKey:"uncertain",cwd:"/source",agentSessionId:"replacement-native"}}><Phase.Session directory={directory} name="uncertain" requireExisting={true}><Fail message="PROMPT CONTENT WAS EXPANDED" /></Phase.Session></Fixture.Session></Ticket.Capture>
+<AssertEquals actual={continuation.status} expected="failed" />
+<AssertStringIncludes actual={continuation.failure} expected="attempted without a confirmed identity" />
+<Ticket.Text path={directory + "/uncertain.json"} as="unchanged" />
+<AssertEquals actual={unchanged} expected={firstReceipt} />
+<Ticket.Text path={directory + "/first-failure.json"} as="failureText" />
+<Parse schema={{type:"object"}} as="preserved">{failureText}</Parse>
+<AssertEquals actual={preserved} expected={firstFailure} />
+</TempDir>
+</Test>
