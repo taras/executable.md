@@ -1,3 +1,4 @@
+import { scanSegments } from "../../core/src/scanner.ts";
 import { registerComponents } from "../../core/src/components/registration.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -10,6 +11,81 @@ import type { FilePathInput } from "@executablemd/runtime";
 
 const question = '<Elicit schema={{ type: "object" }} as="answer">Continue?</Elicit>';
 describe("retained mount files", () => {
+  it("985: Content carries mounted placement through retained read continuation", function* () {
+    const wrapper = {
+      *before() {
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            if (name !== "InDirectory") {
+              return yield* next(name, position);
+            }
+            return {
+              kind: "markdown",
+              name,
+              path: "test://InDirectory.md",
+              meta: {},
+              props: {
+                type: "object",
+                properties: { path: { type: "string" } },
+                required: ["path"],
+              },
+              bodySegments: scanSegments("<Dir path={props.path}><Content /></Dir>"),
+            };
+          },
+        });
+      },
+    };
+    const stream = new InMemoryStream();
+    const source = `<InDirectory path="/reference"><File path="old.md" as="saved" />${question}{saved}<File path="next.md" /></InDirectory>`;
+    const first = trace();
+    yield* mountedRun(source, stream, [{ source: "/owned/old", target: "/reference" }], first, {
+      ...wrapper,
+      pause: true,
+      allowAbsolute: true,
+      ownedFileCoverage: { root: "/owned" },
+      onRead: () => "historical",
+    });
+    expect(first.reads).toEqual([{ cwd: "/owned/old", path: "old.md" }]);
+    const prefix = yield* stream.readAll();
+    const associations = prefix.filter(
+      (event) => event.type === "yield" && event.description.type === MOUNT_FILE,
+    );
+    expect(associations).toHaveLength(2);
+    for (const event of associations) {
+      if (event.type === "yield" && event.result.status === "ok") {
+        const record = yield* parseMountRecord(event.result.value, event.description.name);
+        expect(record.binding.selected).toEqual({ source: "/owned/old", target: "/reference" });
+        expect(record.coverage.kind).toBe("existing");
+        if (record.operation === "file-read") {
+          expect(record.authored).toMatchObject({
+            directory: "/reference",
+            path: "old.md",
+            destination: "/reference/old.md",
+            form: "self-closing",
+          });
+        }
+      }
+    }
+    const resumed = trace();
+    const output = yield* mountedRun(
+      source,
+      stream,
+      [{ source: "/owned/new", target: "/reference" }],
+      resumed,
+      {
+        ...wrapper,
+        allowAbsolute: true,
+        ownedFileCoverage: { root: "/owned" },
+        onRead: () => "current",
+      },
+    );
+    expect(output).toContain("historical");
+    expect(output).toContain("current");
+    expect(resumed.ensures).toEqual([]);
+    expect(resumed.reads).toEqual([{ cwd: "/owned/new", path: "next.md" }]);
+    expect((yield* stream.readAll()).slice(0, prefix.length)).toEqual(prefix);
+  });
+
   it("1075: replays mapped ensure/read before changed policy and refuses a new converted relative ensure without a file record", function* () {
     const observed: unknown[] = [];
     yield* registerComponents([

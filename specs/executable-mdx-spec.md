@@ -6262,7 +6262,9 @@ the once-only slot errors of §6.3.3 — and the resolved segments ride on the
 invocation's content scope (§4.4), so a resource projected content creates stops
 when that scope is halted, before the component releases its own.
 
-Only the resource scope moves. Projected content keeps the caller's metadata,
+Projection uses the working directory in effect at its projection point while
+keeping caller binding and source ownership; its resources remain owned by the
+content scope. Projected content keeps the caller's metadata,
 validated props object, cycle-detection hide set, and block counter. For
 ordinary bindings, `renderChildren()` and `useContent()` retain their caller
 environment, while structural `<Content />` layers the caller's props binding
@@ -12190,6 +12192,7 @@ visible warning blocks, gather into a separate error report).
 | C48 | **No bare prop binding** | Declaring `name` makes `{props.name}` available but leaves `{name}` verbatim until authored code creates that binding |
 | C49 | **Validated object identity** | The environment and function-component argument observe the exact defaulted object returned by validation |
 | C50 | Nested `<Content />` | Caller content projects from a position inside another invocation, inside a structural construct, several levels deep, and inside an `<Output>` region; a nested named slot resolves and consumes its `slot` prop; wrapping a projection in `<Section slot="header">` reaches a nested invocation's named slot; two projections at different depths receive the same content; slot errors are still emitted once; an unclaimed `<Content />` passed through nested bodies stays the reserved-name failure |
+| C51/C52 | Dir around `<Content />` | A Markdown wrapper and direct Dir run commands and relative File reads at the same target, preserving caller bindings and props; sibling projections use their own directories, leaving restores the enclosing cwd, and completed replay runs no second process |
 
 ### Tier NO — Nested Output (§6.9)
 

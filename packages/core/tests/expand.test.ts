@@ -1,6 +1,13 @@
+import { API, cwd, useHostFiles } from "@executablemd/runtime";
+import { ensureDir, writeTextFile } from "@effectionx/fs";
+import { Stdio } from "@effectionx/process";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { realpath } from "node:fs/promises";
+import { join } from "node:path";
+import { registerComponents } from "../src/components/registration.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, spawn, withResolvers } from "effection";
+import { ensure, scoped, spawn, until, withResolvers } from "effection";
 import type { Subscription } from "effection";
 import { createBlockCounter, expandSegments } from "../src/expand.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -2201,4 +2208,144 @@ describe("993 exported projection helpers with production eval", () => {
       }
     }
   }
+});
+
+const DIRECTORY_WRAPPER = `---
+props:
+  type: object
+  properties:
+    path: {type: string}
+  required: [path]
+---
+<Dir path={props.path}>
+  <Content />
+</Dir>`;
+
+describe("Content directory placement", () => {
+  it("C51: wrapper placement matches direct Dir, preserves caller bindings and replays completed work", function* () {
+    const root = yield* until(realpath(yield* useTempDirectory("content-dir-")));
+    yield* ensureDir(join(root, "target"));
+    yield* ensureDir(join(root, "components"));
+    yield* writeTextFile(join(root, "components", "InDirectory.md"), DIRECTORY_WRAPPER);
+    yield* writeTextFile(join(root, "note.txt"), "ROOT");
+    yield* writeTextFile(join(root, "target", "note.txt"), "TARGET");
+    for (const tag of ["Dir", "InDirectory"]) {
+      yield* scoped(function* () {
+        yield* API.Env.around(
+          {
+            *cwd() {
+              return root;
+            },
+          },
+          { at: "min" },
+        );
+        yield* useHostFiles();
+        yield* useNormalizedOutput();
+        let stdout = "";
+        let executions = 0;
+        const observed: unknown[] = [];
+        const decoder = new TextDecoder();
+        yield* Stdio.around({
+          *stdout([bytes]) {
+            stdout += decoder.decode(bytes);
+          },
+        });
+        yield* API.Process.around({
+          *exec(args, next) {
+            executions++;
+            return yield* next(...args);
+          },
+        });
+        yield* registerComponents([
+          {
+            name: "Observe",
+            origin: "test://content-dir",
+            props: {
+              type: "object",
+              properties: { value: { type: "string" }, caller: { type: "string" } },
+              required: ["value", "caller"],
+            },
+            *fn(props) {
+              observed.push({ ...props, cwd: yield* cwd() });
+              return "";
+            },
+          },
+        ]);
+        const pwd = "```bash exec\npwd -P\n```";
+        const source = `---
+props:
+  type: object
+  properties:
+    path: {type: string}
+  required: [path]
+---
+<Let as="caller" value="CALLER" />
+<${tag} path="target">
+${pwd}
+<Observe value={caller} caller={props.path} />
+<File path="note.txt" />
+</${tag}>
+${pwd}
+<File path="note.txt" />`;
+        const path = join(root, "doc.md");
+        yield* writeTextFile(path, source);
+        const stream = new InMemoryStream();
+        const options = {
+          path,
+          props: { path: "caller-props" },
+          includes: [join(root, "components")],
+          stream,
+        };
+        const output = String(yield* collect(yield* execute(options)));
+        expect(stdout.trim().split("\n")).toEqual([join(root, "target"), root]);
+        expect(observed).toEqual([
+          { value: "CALLER", caller: "caller-props", cwd: join(root, "target") },
+        ]);
+        expect(output).toContain("TARGET");
+        expect(output).toContain("ROOT");
+        expect(yield* cwd()).toBe(root);
+        expect(executions).toBe(2);
+        expect(String(yield* collect(yield* execute(options)))).toBe(output);
+        expect(executions).toBe(2);
+        expect(observed).toHaveLength(1);
+      });
+    }
+  });
+
+  it("C52: each projection captures its own sibling Dir placement", function* () {
+    const root = yield* until(realpath(yield* useTempDirectory("content-dirs-")));
+    yield* ensureDir(join(root, "components"));
+    yield* writeTextFile(
+      join(root, "components", "Twice.md"),
+      '<Dir path="first"><Content /></Dir>\n<Dir path="second"><Content /></Dir>',
+    );
+    const observed: string[] = [];
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return root;
+        },
+      },
+      { at: "min" },
+    );
+    yield* useHostFiles();
+    yield* registerComponents([
+      {
+        name: "Here",
+        origin: "test://content-dirs",
+        props: { type: "object", properties: {} },
+        *fn() {
+          observed.push(yield* cwd());
+          return "";
+        },
+      },
+    ]);
+    const path = join(root, "doc.md");
+    yield* writeTextFile(path, "<Twice><Here /></Twice>\n<Here />");
+    yield* collect(
+      yield* execute({ path, includes: [join(root, "components")], stream: new InMemoryStream() }),
+    );
+    expect(observed).toEqual([join(root, "first"), join(root, "second"), root]);
+    expect(yield* cwd()).toBe(root);
+  });
 });
