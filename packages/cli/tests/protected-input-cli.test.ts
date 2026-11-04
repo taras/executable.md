@@ -45,10 +45,10 @@ describe("protected input in the actual CLI", () => {
         yield* Stdio.around({ *stdout() {}, *stderr() {} }, { at: "min" });
         const observer = yield* useProtectedInputObserver();
         const root = yield* useTempDirectory("protected-cli-");
-        yield* writeTextFile(join(root, "provider.ts"), protectedInputPlugin(observer.url));
+        yield* writeTextFile(join(root, "provider.mjs"), protectedInputPlugin(observer.url));
         yield* writeTextFile(join(root, "child.cjs"), protectedInputChild(observer.url));
         yield* writeTextFile(join(root, "doc.md"), document(mode !== "unmarked"));
-        const args = ["run", "doc.md", "--raw", "--plugin", "./provider.ts"];
+        const args = ["run", "doc.md", "--raw", "--plugin", "./provider.mjs"];
         if (mode !== "ordinary") {
           args.push("--journal", "journal.jsonl");
         }
@@ -158,7 +158,7 @@ describe("BootstrapNpmPackage protected command spellings", () => {
         protectedInputChild(observer.url).replace("process accepted input", "{}"),
     );
     yield* until(chmod(join(root, "npm"), 0o700));
-    yield* writeTextFile(join(root, "provider.ts"), protectedInputPlugin(observer.url));
+    yield* writeTextFile(join(root, "provider.mjs"), protectedInputPlugin(observer.url));
     yield* writeTextFile(
       join(root, "doc.md"),
       [
@@ -178,7 +178,7 @@ describe("BootstrapNpmPackage protected command spellings", () => {
         "journal.jsonl",
         "--verbose",
         "--plugin",
-        "./provider.ts",
+        "./provider.mjs",
       ],
       { cwd: root, env: { PATH: root + ":" + (process.env.PATH ?? "") } },
     ).join();
