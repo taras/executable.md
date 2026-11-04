@@ -97,30 +97,10 @@ mkdir -- {directoryPath}
 <If condition={reserved.exitCode !== 0}><Let as="work" value={{status:"hold",reason:"The fresh work directory could not be reserved: " + task.directory + ". Preserve any existing effects and reconcile the original record before retrying. " + reserved.stderr,history:[]}} /><Break /></If>
 <Dir path={task.directory + "/delivery"}><File path="requirements.json"><Json value={delivery} /></File></Dir>
 <Let as="assignment" value={{phase:"implementation",work:task.work,repository:task.repository,revision:task.revision,priorRevision:null,request:task.request,assessment:task.assessment,changedPaths:[],artifacts:[],evidence:[],findings:[]}} />
-<Let as="planned" value={false} />
-<Let as="deliveredInputs" value={{}} />
 <If condition={task.scope.sharedApi.needed || !task.scope.implementation.ready}>
-<Let as="planning" value={{...assignment,phase:"discovery",request:"Prepare the missing ordinary implementation plan and focused evidence for this accepted work: " + task.request + "\nProduce plan/evidence only. Do not edit or commit source or build an API foundation. Necessary API work and consumers belong to one Implementor. Preserve existing product and architecture approval gates; return needs_decision for any unanswered material choice.",recipient:"planner",continuation:{phase:"implementation",role:"implementor"}}} />
-<Ticket.Capture as="execution"><Phase.Run plannerProvider={task.providers.planner} maxResponseCorrections={task.maxResponseCorrections} phase="discovery" role="planner" session={task.sessions.planner} initialize={true} inputs={[...inputs,plannerGuide].filter((input,index,all) => all.findIndex(other => other.path === input.path) === index)} assignment={planning} attempt={task.directory + "/planning"} successor="implementation" nextRole="implementor" as="plan" /><Json value={plan} /></Ticket.Capture>
-<Dir path={task.directory}><File path="planning-execution.json"><Json value={execution} /></File></Dir>
-<If condition={execution.status !== "completed"}><Let as="work" value={{status:"hold",reason:execution.failure,history:[{owner:"planner",attempt:task.directory + "/planning",status:execution.status}]}} /><Break /></If>
-<Parse schema={{type:"object"}} as="plan">{execution.output}</Parse>
-<If condition={plan.outcome !== "complete"}><Let as="work" value={{status:"hold",reason:plan.handoff,history:[{owner:"planner",path:task.directory + "/planning/result.json",outcome:plan.outcome}]}} /><Break /></If>
-<Ticket.Checkout repository={task.repository} as="afterPlan" />
-<If condition={plan.revision !== task.revision || afterPlan.head !== task.revision || !afterPlan.clean}><Let as="work" value={{status:"hold",reason:"Ordinary planning must leave source clean at the unchanged launch revision. Preserve the planning record and reconcile " + task.repository + " before implementation.",history:[{owner:"planner",path:task.directory + "/planning/result.json"}]}} /><Break /></If>
-<Ticket.Text path={task.directory + "/planning/assignment.json"} as="savedText" />
-<Parse schema={{type:"object"}} as="saved">{savedText}</Parse>
-<Phase.Next result={plan} successor="implementation" role="implementor" as="next" />
-<Phase.Preparation from={{assignment:saved,result:plan,next}} target="implementation" as="prepared" />
-<Let as="assignment" value={prepared.assignment} />
-<Ticket.Capture as="selection"><Ticket.Documents repository={task.repository} paths={plan.handoffInputs ?? []} documents={documents} as="selected" /><Json value={selected} /></Ticket.Capture>
-<If condition={selection.status !== "completed"}><Let as="work" value={{status:"hold",reason:selection.failure,history:[{owner:"planner",path:task.directory + "/planning/result.json"}]}} /><Break /></If>
-<Parse schema={{type:"object"}} as="documents">{selection.output}</Parse>
-<Let as="inputs" value={[...new Set([...task.inputs,...(plan.handoffInputs ?? [])])].map(path => documents[path])} />
-<Let as="planned" value={true} />
-<Let as="deliveredInputs" value={{[task.sessions.planner]:[...new Set([...task.inputs,plannerGuide.path])]}} />
+<Let as="assignment" value={{...assignment,phase:"discovery",request:"Prepare the missing ordinary implementation plan and focused evidence for this accepted work: " + task.request + "\nProduce plan/evidence only. Do not edit or commit source or build an API foundation. Necessary API work and consumers belong to one Implementor. Preserve existing product and architecture approval gates; return needs_decision for any unanswered material choice.",recipient:"planner",continuation:{phase:"implementation",role:"implementor"}}} />
 </If>
-<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,delivery,deliveredInputs,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:planned},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
+<Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,delivery,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:false},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
 <Dir path={task.directory}><File path="implementation.json"><Json value={manifest} /></File></Dir>
 <Ticket.Run manifest={task.directory + "/implementation.json"} as="work" />
 </Else>

@@ -98,8 +98,8 @@ The table is ordered. Missing or unknown facts never become false or null.
 | Any `decisions.openQuestions` item | Hold before paid roles; show the unanswered question and evidence |
 | Valid non-null migration record and `sharedApi.needed=true` | Existing Planner foundation and representative validation, then remaining consumer implementation, selected review and retirement |
 | `migration=null`, `sharedApi.needed=false`, `implementation.ready=true` | Direct Implementor, then existing impact-selected independent review |
-| `migration=null`, `sharedApi.needed=false`, `implementation.ready=false` | Ordinary Planner plan/evidence, then Implementor and selected review |
-| `migration=null`, `sharedApi.needed=true`, either readiness value | Ordinary Planner plan/evidence, then one Implementor for necessary API work and consumers, followed by selected review |
+| `migration=null`, `sharedApi.needed=false`, `implementation.ready=false` | Ordinary Planner plan/evidence, with original Architect discovery when requested, then the same Planner handoff to Implementor and selected review |
+| `migration=null`, `sharedApi.needed=true`, either readiness value | Ordinary Planner plan/evidence, with original Architect discovery when requested, then the same Planner handoff to one Implementor for necessary API work and consumers, followed by selected review |
 
 ```text
 Normal run.md launch
@@ -123,7 +123,9 @@ Justified migration record?  (requires sharedApi.needed=true)
         v
 Shared API needed?
         | yes -----------------------> STANDARD
-        |                              Planner plan/evidence -> Implementor
+        |                              Planner plan/evidence
+        |                              -> original Architect if discovery needed
+        |                              -> same Planner -> Implementor
         |                              -> impact-selected review
         | no
         v
@@ -154,6 +156,17 @@ with no fabricated phase call or checkpoint. Simple and standard return the
 existing Ticket record; migration returns the existing Adversarial result.
 Provider and persistence failures retain their existing handling. Preserve first
 failure output and partial effects before another attempt.
+
+The ordinary Ticket starts before the first Planner call. A validated
+`needs_discovery` request reaches the original Architect and returns its answer
+to the same Planner. Only that Planner's complete handoff starts implementation.
+The initial journey runs at most those three discovery calls. Another discovery
+request returns `status=paused`, `dispatchable=true`, `hold=null` and the exact
+pending gate. Save the complete returned record and advance it with `continue.md
+--props-record /absolute/path/to/ticket-record.json --props-steps 1`.
+Planning and discovery must leave source clean at the exact launch revision,
+including when a reply is rejected or absent. They require no signed feedback
+commit. Routing consumes and resets none of the three correction allowances.
 
 An occupied fresh-work directory holds; it is never an implicit retry or
 continuation. An ordinary command's diagnostic journal is not a continuation
@@ -253,7 +266,12 @@ for complete/pass. Explicit conflicting fields remain errors. The Implementor
 still supplies its actual resulting commit, and every role supplies its real
 verdict, findings and evidence. The existing zero-response-correction option
 continues to validate and retain a reply at zero; missing substantive facts are
-never synthesized to make a reply pass.
+never synthesized to make a reply pass. `discoveryRequests[].role` and
+`discoveryGaps[].request.role` name the invoked reporting actor. A Planner
+requesting Architect discovery still names `planner` as author; `next.role`
+names `architect` as successor. Explicit contradictory authors are rejected.
+The raw reply, rejection and disposition remain inspectable without becoming a
+canonical result.
 
 Acceptance clauses preserve their original source and wording through delivery.
 A reviewer reports a material ambiguity as blocked instead of strengthening a
@@ -346,7 +364,7 @@ Here `request` is the prepared phase request above and `documents` is the
 selected input map returned by `<Ticket.Documents>`. Keep the original session
 and reserved attempts when changing this limit at a completed phase boundary.
 
-To advance a saved `Ticket.Run` or `Ticket.Continue` record, pass that complete
+To advance a saved ordinary `run.md`, `Ticket.Run` or `Ticket.Continue` record, pass that complete
 record rather than reconstructing its assignment or artifact paths:
 
 ```bash
@@ -356,7 +374,11 @@ deno task xmd run --allow-absolute examples/adversarial-implementation/continue.
 ```
 
 The returned record preserves the original manifest, sessions, documents, calls
-and correction counts. Each step executes at most one recorded role. Held and
+and correction counts, including a pre-implementation planning checkpoint.
+Each explicit step executes at most one recorded role and joins settlement.
+A dispatchable pause names its next gate and continuation action. A genuine
+hold is nondispatchable and retains its pending assignment and reconciliation
+reason. Held and
 completed records return without a prompt. This entry does not clear a hold or
 retry an uncertain execution. Resolve the recorded cause before preparing a
 continuation, and preserve the original evidence. Capture the complete output
@@ -390,7 +412,8 @@ refuses editorial assignments; technical handoffs and API documentation remain
 part of the roles' work.
 
 Architect is conditional: reserving its conversation name starts no discovery
-call. A Planner can return `needs_architect` with one structural question. An
+call. An ordinary Planner returns `needs_discovery` with its concrete structural
+question; the foundation route retains its `needs_architect` handoff. An
 implemented change's impact selects architecture review. Existing repository
 rules still govern material product decisions and architectural choices.
 When the API foundation has structural impact, Architect reviews that committed

@@ -1,0 +1,20 @@
+[
+  {
+    "issue": 1075,
+    "source": "/private/tmp/xmd-host-absolute-1075-20261102/workflow-adoption/initial-planning-hold-reconciliation.json",
+    "validationCode": "metadata-8",
+    "canonicalResultCreated": false,
+    "implementationStarted": false,
+    "responseCorrections": 0,
+    "rawRewritten": false
+  },
+  {
+    "issue": 1081,
+    "source": "/private/tmp/xmd-standard-acp-1081-20261102-1/normal-launch-1/planner-reconciliation.json",
+    "validationCode": "metadata-8",
+    "canonicalResultCreated": false,
+    "implementationStarted": false,
+    "responseCorrections": 0,
+    "rawRewritten": false
+  }
+]

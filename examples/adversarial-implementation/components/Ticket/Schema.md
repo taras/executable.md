@@ -5,6 +5,7 @@ props: {type: object, additionalProperties: false}
 returns: {type: object}
 ---
 
+<Phase.Schema as="phases" />
 <Return value={{
   "type": "object",
   "properties": {
@@ -21,9 +22,7 @@ returns: {type: object}
     },
     "api": {"type": "object"},
     "delivery": {"type": "object"},
-    "assignment": {
-      "type": "object"
-    },
+    "assignment": phases.assignment,
     "maxApiRepairs": {"type":"integer","minimum":0,"maximum":10},
     "maxResponseCorrections": {"type":"integer","minimum":0,"maximum":3},
     "maxCorrections": {
