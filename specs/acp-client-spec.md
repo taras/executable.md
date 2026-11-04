@@ -821,6 +821,50 @@ the configuration it ran under. An unconfigured prompt omits it. A `sequence`
 records execution order explicitly, and per-location
 ordinals keep durable identities stable across `<Each>` loops.
 
+### Saved Prompt failure details
+
+A failed Prompt keeps its readable `message`, optional `name` and cause message.
+Its optional `error.diagnostic` retains selected ACP facts in the same record:
+
+| Field | Meaning |
+| --- | --- |
+| `provider`, `operation`, `stage` | Exactly `acp`, `session/prompt`, `runtime-turn`: receipt of a failed runtime turn. |
+| `requestId` | The actual runtime turn's request ID, when supplied; it need not be the wire JSON-RPC ID. |
+| `code`, `detailCode` | Supplied nonempty runtime classifications. `RUNTIME` is the normalizer's fallback, not a backend diagnosis. |
+| `retryable` | A supplied boolean hint, including false; it grants no resend. |
+| `origin` | The supplied normalization layer: `cli`, `runtime`, `queue` or `acp`, not a proven root cause. |
+| `acp` | Optional selected protocol facts: finite numeric `code`, optional nonempty `message`, and optional string `details` extracted only from `data.details`. An explicit empty details string remains empty. |
+
+Conversation correlation stays in the existing `agent`, `sessionKey` and
+`agentSessionId` fields. No raw protocol payload, prompt, environment or unrelated
+history is added. A plain Error has no diagnostic; stream exceptions,
+cancellation and host permission refusal keep their existing paths. A message-only
+upstream failure remains undiagnosed. Diagnostics establish neither backend
+acceptance nor a successful retry and never enter the agent's reply text.
+
+Core selects these optional facts before constructing the saved failure. With
+secret detection enabled, it screens each optional textual field in its retained
+JSON representation, omits offending fields, then screens the complete selected
+diagnostic. Unsafe secondary text does not discard a safe protocol code. If
+policy authentication or screening fails, the whole optional diagnostic is absent;
+the original message, name, cause, status and partial reply stay unchanged.
+Cancellation remains cancellation. Explicit host-disabled detection is respected.
+The complete event still crosses the unchanged rejection gate: upstream selection
+never repairs an event rejected by that gate.
+
+The current reader validates a present diagnostic completely and refuses malformed
+or unknown members. An absent diagnostic preserves message/name/cause-only records
+without a migration or rewrite. Reconstructed thrown and aggregated Prompt failures
+keep the selected diagnostic under `executablemd.agent.prompt-diagnostic`.
+The existing REPL error read exposes the retained object after cold reopen:
+
+```xmd
+<REPL.Entry.Prompt entry={1} prompt={1} field="error" as="failure" />
+<Output><Json value={failure} /></Output>
+```
+
+Reading sends no prompt and reads no runtime log or native history.
+
 ### The permission audit a turn retains
 
 `permissions` is the account of what the agent was allowed to do while this turn
@@ -1414,6 +1458,10 @@ none.
   associates a checkpoint only with a successful completed terminal in
   `checkpoint.ts` and `events.ts`. Cancellation and failure never acquire one,
   and no local runtime metadata patch remains.
+  The pinned in-process runtime preserves normalized origin and selected protocol
+  code/message/details at `failRuntimeTurn`; arbitrary `acp.data` remains excluded.
+  The shared/queue result projection is unchanged. The generated correction and
+  its matching declaration are recorded in vendor provenance and offline Tier AV.
 - **Serialization.** Prompts for one session run FIFO on that session's queue;
   different sessions run concurrently. A subscription enters that queue before
   any route, ensure or runtime creation for its session, and re-reads the

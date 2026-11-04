@@ -130,6 +130,7 @@ export type EntryPromptPage = {
   readonly field: PromptField;
   /** The saved text, or `null` where the turn recorded none at all. */
   readonly text: string | null;
+  readonly diagnostic?: ReplAgentTurn["diagnostic"] | null;
   readonly offset: number;
   readonly length: number;
   readonly limit: number;
@@ -291,6 +292,7 @@ export function readEntryPrompt(
     promptStatus: turn.status,
     position: pagePosition(turn.position),
     field: field.value,
+    ...(field.value === "error" ? { diagnostic: turn.diagnostic ?? null } : {}),
   };
   if (text === undefined) {
     return Ok(

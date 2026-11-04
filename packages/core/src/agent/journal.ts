@@ -585,12 +585,16 @@ export function promptFailureFromRecord(record: PromptRecord): AgentPromptError 
     sessionKey: string;
     stopReason?: string;
     cause?: unknown;
+    diagnostic?: SerializedPromptFailure["diagnostic"];
   } = { agent: record.agent, sessionKey: record.sessionKey };
   if (record.stopReason !== undefined) {
     options.stopReason = record.stopReason;
   }
   if (record.error?.cause !== undefined) {
     options.cause = record.error.cause;
+  }
+  if (record.error?.diagnostic !== undefined) {
+    options.diagnostic = record.error.diagnostic;
   }
   return new AgentPromptError(message, options);
 }

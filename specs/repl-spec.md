@@ -3011,6 +3011,17 @@ the entry and prompt stated as the numbers they resolved to, an absolute offset,
 the limit that was asked for and the same Prompt field. A continuation followed
 after another entry has been admitted therefore reads the entry it was about.
 
+Every `field="error"` page also carries `diagnostic`: the complete retained
+structured Prompt diagnostic, or `null` when none was saved. It stays the same
+on every text window and is copied and frozen with the turn's other saved facts.
+The readable `text`, Unicode offsets and navigation keep their existing meaning.
+Reply and request pages carry no diagnostic member; Journal query input is unchanged.
+
+```xmd
+<REPL.Entry.Prompt entry={1} prompt={1} field="error" as="failure" />
+<Output><Json value={failure} /></Output>
+```
+
 Text pages state the entry's status and, for a Prompt read, the turn's own
 separately. Journal exposes those statuses in its complete query input. An entry is completed, failed, cancelled, running or unfinished; a
 saved turn is completed, failed or cancelled, and a turn that returned
