@@ -1,3 +1,7 @@
+import { parseInputRecord } from "../src/secrets/input-record.ts";
+import { parseJsonObject } from "../src/json.ts";
+import { ELICITATION_SCHEMA_FIELD } from "../src/elicit-journal.ts";
+import { SOURCE_POSITION_FIELD } from "../src/source-position.ts";
 import { useProtectedInputObserver, protectedInputCommand } from "./support/protected-input.ts";
 import { until } from "effection";
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -328,5 +332,120 @@ describe("conversion failure preserves earlier acknowledgements", () => {
     expect(b).toBe(0);
     expect(compiled).toBe(1);
     expect(inputs.some((value) => JSON.stringify(stream.snapshot()).includes(value))).toBe(false);
+  });
+});
+
+describe("protected input preserves durable protocol identity", () => {
+  it("continues an unfinished run when the entered text is also a protocol word", function* () {
+    yield* useTempFileCompiler();
+    yield* useNormalizedOutput();
+    const held = withResolvers<void>();
+    let first = true;
+    let asks = 0;
+    let commands = 0;
+    yield* registerComponents([
+      {
+        name: "Hold",
+        origin: "protected-identity-test",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          if (first) {
+            held.resolve();
+            yield* suspend();
+          }
+          return "";
+        },
+      },
+    ]);
+    yield* Elicitation.around({
+      *elicit() {
+        asks++;
+        return { exec: asks === 1 ? ["ex", "ec"].join("") : ["fresh", "input"].join("-") };
+      },
+    });
+    yield* API.Process.around({
+      *exec() {
+        commands++;
+        return { exitCode: 0, stdout: undefined, stderr: undefined };
+      },
+    });
+    const declaration = {
+      type: "object",
+      properties: { exec: { type: "string", writeOnly: true } },
+      required: ["exec"],
+      additionalProperties: false,
+    };
+    yield* useStubFs({
+      "exec.md": [
+        `<Elicit schema={${JSON.stringify(declaration)}} as="answer">Enter input.</Elicit>`,
+        "```ts eval",
+        "const exec = answer.exec;",
+        "```",
+        "```bash exec",
+        "printf public",
+        "```",
+        "<Hold />",
+        "<Json value={exec} />",
+      ].join("\n\n"),
+    });
+    const stream = new InMemoryStream();
+    yield* scoped(function* () {
+      const task = yield* spawn(function* () {
+        yield* collect(yield* execute({ path: "exec.md", stream }));
+      });
+      yield* held.operation;
+      yield* task.halt();
+    });
+    expect(
+      stream.snapshot().some((event) => event.type === "close" && event.coroutineId === "root"),
+    ).toBe(false);
+    const elicited = stream
+      .snapshot()
+      .find((event) => event.type === "yield" && event.description.type === "elicit");
+    if (elicited?.type !== "yield" || elicited.result.status !== "ok") {
+      throw new Error("Missing marked elicitation receipt.");
+    }
+    expect(ELICITATION_SCHEMA_FIELD in elicited.description).toBe(true);
+    expect(SOURCE_POSITION_FIELD in elicited.description).toBe(true);
+    const receipt = parseInputRecord(parseJsonObject(elicited.result.value)["executablemd.input"]);
+    expect(
+      receipt.kind === "object" &&
+        receipt.members.exec?.kind === "input" &&
+        receipt.members.exec.field.field === "exec",
+    ).toBe(true);
+    const evaluated = stream
+      .snapshot()
+      .find((event) => event.type === "yield" && event.description.type === "eval");
+    if (evaluated?.type !== "yield" || evaluated.result.status !== "ok") {
+      throw new Error("Missing designated eval references.");
+    }
+    const exports = parseInputRecord(
+      parseJsonObject(evaluated.result.value)["executablemd.input-exports"],
+    );
+    expect(
+      exports.kind === "object" &&
+        exports.members.exec?.kind === "input" &&
+        exports.members.exec.field.field === "exec",
+    ).toBe(true);
+    const command = stream
+      .snapshot()
+      .find((event) => event.type === "yield" && event.description.type === "exec");
+    if (command?.type !== "yield") {
+      throw new Error("Missing canonical command identity.");
+    }
+    const program = Array.isArray(command.description.command)
+      ? command.description.command[2]
+      : undefined;
+    expect(
+      typeof program === "string" &&
+        command.description.name === "exec:" + program.slice(0, 40).replace(/\n/g, " "),
+    ).toBe(true);
+    expect(SOURCE_POSITION_FIELD in command.description).toBe(true);
+    expect(commands).toBe(1);
+    first = false;
+    const output = yield* collect(yield* execute({ path: "exec.md", stream }));
+    expect(asks).toBe(2);
+    expect(commands).toBe(1);
+    expect(String(output).includes("[redacted]")).toBe(true);
   });
 });

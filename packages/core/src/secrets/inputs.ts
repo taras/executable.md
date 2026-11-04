@@ -106,10 +106,7 @@ export function* createInputOwner(): Operation<SecretInputOwner> {
         return {
           kind: "object",
           members: Object.fromEntries(
-            Object.entries(value).map(([name, member]) => [
-              projectText(name),
-              encode(member, seen),
-            ]),
+            Object.entries(value).map(([name, member]) => [name, encode(member, seen)]),
           ),
         };
       } finally {
