@@ -182,6 +182,14 @@ describe("the one-file runner commands", () => {
       command: "bun",
       arguments: ["test", "--timeout=300000", "packages/core/tests/a.test.ts"],
     });
+    expect(oneFileCommand("bun", "packages/cli/tests/adversarial-implementation.test.ts")).toEqual({
+      command: "bun",
+      arguments: [
+        "test",
+        "--timeout=450000",
+        "packages/cli/tests/adversarial-implementation.test.ts",
+      ],
+    });
   });
 });
 

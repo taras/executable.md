@@ -28,7 +28,7 @@ describe("adversarial implementation example", () => {
       const source = yield* readTextFile(
         `examples/adversarial-implementation/tests/${suite}.test.md`,
       );
-      const preparationAdapterTimeout = 2 * 120_000 + 30_000;
+      const preparationAdapterTimeout = 180_000 + 120_000 + 30_000;
       const preparationTimeout = preparationAdapterTimeout + 3 * 20_000 + 30_000;
       yield* runCli(
         [

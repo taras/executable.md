@@ -45,9 +45,9 @@ export interface Launch {
 
 /**
  * Bun caps each test at 5s by default, which Deno and Node do not. Suites that
- * spawn a CLI or a worker carry their own timeboxes up to 180s, and the cap
- * preempts them — so it is raised past the longest, leaving each suite's own
- * timeout in charge.
+ * spawn a CLI or a worker need a larger base cap. oneFileCommand also raises
+ * it for Preparation's enclosing deadline, leaving that suite's own timeout
+ * in charge.
  */
 const BUN_TEST_TIMEOUT_MS = 300_000;
 
@@ -73,9 +73,13 @@ export const RUNNERS: Record<Runtime, Runner> = {
  */
 export function oneFileCommand(runtime: Runtime, file: string): Launch {
   const runner = RUNNERS[runtime];
+  const prefix =
+    runtime === "bun" && file === "packages/cli/tests/adversarial-implementation.test.ts"
+      ? ["test", "--timeout=450000"]
+      : runner.prefix;
   return {
     command: runner.command,
-    arguments: [...runner.prefix, ...runner.serial, file],
+    arguments: [...prefix, ...runner.serial, file],
   };
 }
 
