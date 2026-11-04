@@ -102,6 +102,25 @@ function* collectPrompt(
 }
 
 describe("Tier AP — ACPX provider", () => {
+  it("1039 A3: a message-only upstream failure supplies no inferred diagnosis", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ result: { status: "failed", error: { message: "Internal error" } } });
+    yield* installProvider(harness);
+    const { events } = yield* collectPrompt("do once");
+    const terminal = events.find((event) => event.type === "terminal");
+    expect(terminal?.error?.message).toBe("Internal error");
+    expect(terminal?.error?.cause).toBe(undefined);
+    expect(
+      terminal?.error && Reflect.get(terminal.error, "executablemd.agent.prompt-diagnostic"),
+    ).toEqual({
+      provider: "acp",
+      operation: "session/prompt",
+      stage: "runtime-turn",
+      requestId: harness.turns[0].turn.requestId,
+    });
+    expect(harness.turns).toHaveLength(1);
+  });
+
   it("1039 A1: runtime classification and actual request correlation survive mapping", function* () {
     const harness = createFakeRuntime();
     harness.script({
