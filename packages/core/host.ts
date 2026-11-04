@@ -439,3 +439,9 @@ export type {
   PreparedDirectory,
 } from "./src/filesystem-host.ts";
 export { admitDocumentHostPath, authoredOperation } from "./src/filesystem-placement.ts";
+
+export { projectElicitationAnswer } from "./src/secrets/input-schema.ts";
+export { default as elicitComponent } from "./src/components/Elicit.ts";
+export type { SecretInputOwner } from "./src/secrets/inputs.ts";
+
+export { useSecretInputs } from "./src/secrets/input-host.ts";

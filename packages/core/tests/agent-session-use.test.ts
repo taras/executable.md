@@ -65,6 +65,40 @@ describe("Tier SU — an authentic session use", () => {
     expect(carried).toEqual({ model: "gpt-5.4", effort: "high" });
   });
 
+  it("SI: a frozen use observes confirmation live and keeps saved readings fixed", function* () {
+    const session: Session & { identity?: { readonly kind: string; readonly value: string } } = {
+      sessionKey: "fresh",
+      cwd: "/repo",
+    };
+    const use = issueSessionUse(session, { model: "selected" }, {});
+    expect(use.identity).toBe(undefined);
+    expect(JSON.parse(JSON.stringify(use))).toEqual({ sessionKey: "fresh", cwd: "/repo" });
+    const before = { ...use };
+    session.identity = Object.freeze({ kind: "acpx.acpSessionId", value: "loading" });
+    const saved = use.identity;
+    expect(Object.isFrozen(saved)).toBe(true);
+    expect({ ...use }.identity).toBe(saved);
+    expect(JSON.parse(JSON.stringify(use))).toEqual({
+      sessionKey: "fresh",
+      cwd: "/repo",
+      identity: saved,
+    });
+    session.agentSessionId = "native";
+    session.identity = Object.freeze({ kind: "acpx.agentSessionId", value: "native" });
+    expect(use.identity).toBe(session.identity);
+    expect(use.agentSessionId).toBe("native");
+    expect(saved).toEqual({ kind: "acpx.acpSessionId", value: "loading" });
+    expect(before.identity).toBe(undefined);
+    expect(JSON.parse(JSON.stringify(use))).toEqual({
+      sessionKey: "fresh",
+      cwd: "/repo",
+      agentSessionId: "native",
+      identity: session.identity,
+    });
+    expect(Object.keys(use).sort()).toEqual(["agentSessionId", "cwd", "identity", "sessionKey"]);
+    expect(Object.isFrozen(use)).toBe(true);
+  });
+
   it("SU3: an ordinary session answers with itself and no configuration", function* () {
     const read = readSessionUse(SESSION, {});
     expect(read?.session).toBe(SESSION);

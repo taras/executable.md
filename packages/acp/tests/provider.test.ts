@@ -87,11 +87,11 @@ function* installProvider(harness: FakeRuntimeHarness, strong = false): Operatio
 function* collectPrompt(
   content: string,
   options?: PromptOptions,
+  events: AgentPromptEvent[] = [],
 ): Operation<{ events: AgentPromptEvent[]; close: string }> {
   return yield* scoped(function* () {
     const stream = yield* Agent.operations.prompt(content, options);
     const subscription = yield* stream;
-    const events: AgentPromptEvent[] = [];
     let next = yield* subscription.next();
     while (!next.done) {
       events.push(next.value);
@@ -1072,6 +1072,11 @@ describe("Tier SM — session requests and creation", () => {
 
       yield* collectPrompt("first", { session });
 
+      expect(session.identity).toEqual({
+        kind: "acpx.agentSessionId",
+        value: `agent-session:${WORKFLOW_SESSION_KEY}`,
+      });
+      expect(Object.isFrozen(session.identity)).toBe(true);
       expect(log.recorded).toHaveLength(1);
       expect(log.recorded[0]!.agentSessionId).toBe(`agent-session:${WORKFLOW_SESSION_KEY}`);
 
@@ -1104,6 +1109,7 @@ describe("Tier SM — session requests and creation", () => {
       // provider's own record still says it is awaiting one.
       expect(log.recorded).toEqual([]);
       expect(session.agentSessionId).toBe(undefined);
+      expect(session.identity).toBe(undefined);
       expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.agentSessionId).toBe(undefined);
       expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.sessionMaterialization?.state).toBe(
         "pending",
@@ -1144,12 +1150,18 @@ describe("Tier SM — session requests and creation", () => {
         raised !== undefined ||
         events.some((event) => event.type === "terminal" && event.status !== "completed");
       expect(failed).toBe(true);
+      expect(session.identity).toEqual({
+        kind: "acpx.agentSessionId",
+        value: `agent-session:${WORKFLOW_SESSION_KEY}`,
+      });
+      const saved = session.identity;
       expect(log.recorded).toHaveLength(1);
       expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.sessionMaterialization).toBe(undefined);
 
       // And the next prompt continues it rather than constructing a second one.
       yield* collectPrompt("second", { session });
 
+      expect(session.identity).toEqual(saved);
       expect(log.recorded).toHaveLength(1);
       expect(harness.ensureCalls).toHaveLength(1);
       expect(harness.turns).toHaveLength(2);
@@ -1184,8 +1196,9 @@ describe("Tier SM — session requests and creation", () => {
       const session = yield* Agent.operations.session();
 
       let raised: Error | undefined;
+      const events: AgentPromptEvent[] = [];
       try {
-        yield* collectPrompt("first", { session });
+        yield* collectPrompt("first", { session }, events);
       } catch (error) {
         raised = error as Error;
       }
@@ -1193,6 +1206,8 @@ describe("Tier SM — session requests and creation", () => {
       // The pre-commit window: the provider's own record was promoted and
       // asserts a conversation, and the host never recorded what it is.
       expect(raised?.message).toContain("could not retain this session");
+      expect(session.identity).toBe(undefined);
+      expect(events.filter((event) => event.type === "started")).toEqual([]);
       const asserted = log.store.records.get(WORKFLOW_SESSION_KEY)?.agentSessionId;
       expect(asserted).toBe(`agent-session:${WORKFLOW_SESSION_KEY}`);
       expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.sessionMaterialization).toBe(undefined);
@@ -1664,7 +1679,12 @@ describe("Tier WAP — strict workflow Agent profile", () => {
       harness.script({ result: exit.result });
       yield* scoped(function* () {
         yield* installStrictProvider(harness);
-        yield* collectPrompt(`turn that ends ${exit.name}`);
+        const session = yield* Agent.operations.session();
+        yield* collectPrompt(`turn that ends ${exit.name}`, { session });
+        expect(session.identity).toEqual({
+          kind: "acpx.agentSessionId",
+          value: `agent-session:${WORKFLOW_SESSION_KEY}`,
+        });
         // The turn's own finalizers ran with the prompt's scope, before this.
         expect(harness.turns).toHaveLength(1);
       });
@@ -1678,9 +1698,16 @@ describe("Tier WAP — strict workflow Agent profile", () => {
     harness.script({ manual: true });
     yield* scoped(function* () {
       yield* installStrictProvider(harness);
-      const prompt = yield* spawn(() => collectPrompt("a turn nobody waits for"));
+      const session = yield* Agent.operations.session();
+      const prompt = yield* spawn(() => collectPrompt("a turn nobody waits for", { session }));
       yield* sleep(20);
+      const saved = session.identity;
+      expect(saved).toEqual({
+        kind: "acpx.agentSessionId",
+        value: `agent-session:${WORKFLOW_SESSION_KEY}`,
+      });
       yield* prompt.halt();
+      expect(session.identity).toBe(saved);
       expect(harness.turns[0]!.cancelled).toBe(true);
     });
     expect(harness.closeCalls.map((handle) => handle.sessionKey)).toEqual([WORKFLOW_SESSION_KEY]);

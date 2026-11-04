@@ -1,3 +1,4 @@
+import { secretInputFields } from "./secrets/input-schema.ts";
 /**
  * The Elicitation Api — how a document asks a person something.
  *
@@ -60,9 +61,12 @@ export class ElicitationProviderError extends Error {
 
 export const Elicitation: Api<ElicitationApi> = createApi<ElicitationApi>("Elicitation", {
   // deno-lint-ignore require-yield
-  *elicit(_request: ElicitationRequest): Operation<unknown> {
+  *elicit(request: ElicitationRequest): Operation<unknown> {
     throw new ElicitationProviderError(
-      "no elicitation provider configured — a host installs one with " +
+      (secretInputFields(request.schema).length > 0
+        ? "Protected input requires a live elicitation responder. "
+        : "") +
+        "no elicitation provider configured — a host installs one with " +
         'yield* Elicitation.around({ *elicit([request], next) { ... } }, { at: "min" }). ' +
         "`xmd run` installs the WebForm provider; under `xmd test`, supply the answer " +
         "with an <Answers> region.",

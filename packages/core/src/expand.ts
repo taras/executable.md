@@ -1,3 +1,5 @@
+import { inputValues, validateLiveReturnValue } from "./secrets/inputs.ts";
+import type { ProtectedInput } from "./secrets/inputs.ts";
 /**
  * Expansion engine (spec §5).
  *
@@ -1120,6 +1122,7 @@ function* expandListSegments(
           textEvalEnv !== undefined && "props" in textEvalEnv.values
             ? textEvalEnv.values.props
             : parentProps;
+        const textInputs = yield* inputValues();
         const final = splitTextFences(segment, healed)
           .map(({ content, passive }) => {
             if (passive) {
@@ -1128,7 +1131,7 @@ function* expandListSegments(
             const protectedEscapes = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
             const interpolated = interpolate(protectedEscapes, parentMeta, textProps);
             const bound = textEvalEnv
-              ? interpolateEvalBindings(interpolated, textEvalEnv.values)
+              ? interpolateEvalBindings(interpolated, textEvalEnv.values, textInputs)
               : interpolated;
             return bound.replaceAll(ESCAPED_BRACE_PLACEHOLDER, "{");
           })
@@ -1603,9 +1606,11 @@ function* expandListSegments(
         }
         const lastModifier = segment.modifiers[segment.modifiers.length - 1];
         const isEvalTerminal = lastModifier !== undefined && lastModifier.name === "eval";
+        const inputs = yield* inputValues();
+        const inputParts: (string | ProtectedInput)[] = [];
         const interpolatedContent =
           evalEnv && !isEvalTerminal
-            ? interpolateEvalBindings(segment.content, evalEnv.values)
+            ? interpolateEvalBindings(segment.content, evalEnv.values, inputs, inputParts)
             : segment.content;
 
         // Compose modifier chain from info string and run it.
@@ -1620,6 +1625,9 @@ function* expandListSegments(
           ...(segment.position === undefined ? {} : { position: segment.position }),
         };
 
+        const input = inputParts.some((part) => typeof part !== "string")
+          ? { language: context.language, parts: inputParts }
+          : undefined;
         if (bindingName !== undefined) {
           if (!evalEnv) {
             result.push(
@@ -1641,7 +1649,7 @@ function* expandListSegments(
           // ordinary block, and neither the fact that authorizes the chain nor
           // the outcome it settles to passes through its hands. What comes back
           // from the operation is not read at all.
-          const issued = issueBoundExec(segment.modifiers, context);
+          const issued = issueBoundExec(segment.modifiers, context, input);
           let thrown: { raised: unknown } | undefined;
           try {
             yield* applyBoundModifiers(segment.modifiers, issued.request);
@@ -1682,9 +1690,14 @@ function* expandListSegments(
         }
 
         try {
-          const codeResult = yield* withExecutingOutput(projectedFrame, () =>
-            applyModifiers(segment.modifiers, context),
-          );
+          const codeResult = yield* withExecutingOutput(projectedFrame, function* () {
+            if (inputParts.some((part) => typeof part !== "string")) {
+              const issued = issueBoundExec(segment.modifiers, context, input, false);
+              yield* applyBoundModifiers(segment.modifiers, issued.request);
+              return issued.result();
+            }
+            return yield* applyModifiers(segment.modifiers, context);
+          });
 
           // What the command printed and whether it failed are two separate
           // questions, and the exit code alone answers the second one (#307).
@@ -3507,7 +3520,7 @@ function* expandComponent(
 
     const returns = definition.returns;
     if (returns !== undefined) {
-      let value: Json;
+      let value: unknown;
       try {
         value = yield* SourceOwner.with(importedOwner, () =>
           withInvocation(function* (invocation) {
@@ -4190,9 +4203,7 @@ function* expandFunctionComponent(
         // returned. `returns` is the opt-in that says this one is a validated
         // JSON record, and it is checked before binding.
         parentEnv.values[asBinding] =
-          returns === undefined
-            ? output
-            : yield* validateReturnValue(name, parseJson(output), returns);
+          returns === undefined ? output : yield* validateLiveReturnValue(name, output, returns);
         return [];
       }
       // Without `as` there is nowhere to bind, so only text can be observed:
@@ -4867,7 +4878,7 @@ export function* resolveReturnValue(
   componentName: string,
   returns: ReturnsSchema,
   segment: ComponentElement,
-): Operation<Json> {
+): Operation<unknown> {
   const raw =
     "value" in segment.expressions
       ? yield* evaluateExpression(
@@ -4877,7 +4888,7 @@ export function* resolveReturnValue(
           segment.projectedEnv,
         )
       : segment.props.value;
-  return yield* validateReturnValue(componentName, raw, returns);
+  return yield* validateLiveReturnValue(componentName, raw, returns);
 }
 
 /**
@@ -4909,7 +4920,7 @@ function* expandValueBody(
   returnBody: ReturnBody | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
   outputFrame: OutputFrame | undefined = undefined,
-): Operation<Json> {
+): Operation<unknown> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
   const project = makeProjectFn(callerEnv);

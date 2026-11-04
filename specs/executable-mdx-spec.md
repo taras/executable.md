@@ -1711,6 +1711,8 @@ Each run compiles and imports the current transformed source.
 
 ### 4.3 Durable and live binding environments
 
+Protected Elicit leaves remain in the ordinary live execution binding tree used by eval, captures and direct exec interpolation. They do not move into the ephemeral overlay. Aliases, objects and arrays preserve the leaf identity. Durable/public views of those same bindings are safe JSON, rather than usable credentials.
+
 ```typescript
 // src/types.ts
 export interface EvalEnv {
@@ -1941,6 +1943,8 @@ processor. Instead:
    invocation's eval scope is destroyed, when the invocation completes
 
 ### 4.5 Eval journal entries
+
+An export tree containing protected fields uses a designated reference codec. References identify the Elicit coroutine position and field, independently of answer bytes. Ordinary user JSON is encoded as data and cannot impersonate a reference. Partial replay restores references from freshly reached inputs without evaluating the body. Unrelated nonserializable exports retain their existing omission behavior; unmarked records keep their ordinary shape.
 
 #### What is journaled
 
@@ -7434,6 +7438,8 @@ merging nothing back — before the fragment performs its first effect.
 
 ### 6.6 Eval binding interpolation
 
+A protected leaf interpolated directly into built-in exec remains a private program segment with its canonical block language until the process terminal. Public block context and descriptions contain fixed replacements. Prose uses a safe view. Unsupported string conversions, ordinary JSON props and custom modifier chains refuse before dependent commands or recipients run. Earlier acknowledged effects remain completed after a later conversion failure. Ordinary interpolation and escaping retain their behavior.
+
 Bare `{name}` references (no namespace prefix) resolve against
 `env.values` — the eval binding environment populated by preceding
 `eval` blocks within the same component. This applies to both
@@ -8587,6 +8593,8 @@ coercion, so a document that means JSON says so.
 
 #### Rendering a value: `<Json>`
 
+A captured operand containing protected leaves renders their fixed `[redacted]` view and preserves public siblings. Ordinary operands retain the native serialization semantics below.
+
 ```md
 <Let as="schema" value={{ type: "object", required: ["bump"] }} />
 
@@ -9699,6 +9707,10 @@ shares.
 
 ### 6.16 Asking without choosing how: `<Elicit>`
 
+Mark a top-level string property with `writeOnly: true` to bind a protected live field. Nested, conditional and referenced secret declarations are outside this bounded surface and refuse before interaction. False or absent markers preserve ordinary behavior. Pass a field directly through `{answer.code}` in built-in exec, or render its safe view with `<Json value={answer} />`. JavaScript string operations and primitive/JSON conversions refuse actionably. Public sibling fields remain useful.
+
+Marked records contain receipts and field identities. Reached partial continuation asks for missing secret fields, shows recorded public fields as context, and validates the merged original answer. An omitted optional field remains absent. Original schema/message fingerprints still refuse changed questions. Completed roots ask nothing, and completed effects are not repeated. Workflow marked questions use this canonical receipt and a foreground live responder; unmarked workflow questions retain their suspension/delivery path.
+
 `<WebForm>` is a browser form by construction. `<Elicit>` asks the same kind of
 question without saying where the asking happens:
 
@@ -9796,6 +9808,8 @@ itself.
 `Elicit.test.md` is the authoring contract in Markdown.
 
 #### 6.16.1 The Elicitation Api
+
+For marked input the provider still receives only message/schema and returns raw unknown input for Core validation. It masks the marked fields and omits sensitive operands from validation diagnostics and submission observations. No installed responder produces an immediate live-input-required refusal. A capable connected ACP form responder remains valid over pipes; an incapable presenter refuses and withdraws its correlated marked wait. Unmarked cancellation keeps its existing behavior.
 
 The CLI's embedded headless-child ACP callback uses this same contextual provider
 in the original Prompt subscriber scope. It supplies the actual message and full
@@ -10806,6 +10820,8 @@ identity, its locks and its evidence do not reach its parent or a sibling.
 
 #### Secret detection
 
+Explicit Elicit protection is mandatory and precedes heuristic scanning at publication boundaries. The scanner retains its existing decisions for other content, including when an unmarked value resembles a credential. Scanner opt-out never reveals marked input.
+
 Every execution refuses to persist a durable event that carries a credential.
 `execute` selects its journal before the durable run starts, so the root
 component import is already covered, and the same policy holds for every later
@@ -11002,9 +11018,10 @@ a host resolves a selector to one exact target before anything runs.
 `DocumentExecution` is an `Operation<Result<Json>>`: `yield* execution`
 completes with `Ok(value)` on success and `Err(error)` on document,
 infrastructure, or middleware failure. `executeInstalled()` answers with
-`HostExecution`, which is that handle plus `evaluateGeneratedXmdRoot()`; the
-ordinary `execute()` handle carries no evaluator at runtime, including through
-its prototype, so the boundary is the object rather than the annotation.
+`HostExecution`, which adds owned `bindings()`, `disclose(data)` and
+`evaluateGeneratedXmdRoot()` operations. The ordinary `execute()` handle carries
+none of those instance operations at runtime, including through its prototype,
+so the boundary is the object rather than the annotation.
 Evaluating a root neither completes nor replaces the main document: its
 rendering comes back from the method and reaches neither the output stream nor
 the completion value, and the method works only while that execution is live —
@@ -11026,6 +11043,25 @@ chunk for buffered `<Output>` roots — §5.4); it carries body text for both
 kinds of root, and for a value root it is observability rather than a second
 return value. Late and repeated subscribers receive the full sequence, and the
 stream closes with the full (or partial) output as its close value.
+
+`HostExecution.disclose(data: JsonObject)` returns `Operation<Result<JsonObject>>`.
+The selected handle invokes `Execution.disclose` through the existing contextual
+Api. Trusted middleware may replace arguments, return a replacement Result without
+delegating, transform a delegated Result, or refuse. After the entire chain
+returns, the handle validates its successful candidate and applies its original
+execution's captured protected-input projection followed by its scanner. Scanner
+disablement preserves protected-input projection. The returned object is detached;
+a contextual Result alone does not establish clearance.
+
+The public `Execution` descriptor defaults to refusal without a selected host.
+The owned method refuses before policy readiness, after settlement or disposal,
+and if parsing, middleware or clearance fails. Refusal is a data-free
+`Err(new Error("This execution cannot disclose the supplied data."))` and never
+echoes the input. Readiness and revocation are checked before dispatch and after
+suspending work; a read spanning closure cannot succeed. Cancellation remains
+cancellation. Disclosure grants no permission, starts no document work, appends
+no record and changes no canonical execution outcome. Keeping a handle extends
+neither its owner nor its policy lifetime.
 
 Execution runs in its own scope. Before the durable workflow starts,
 `execute` installs the document's scope-local runtime providers —
@@ -12970,6 +13006,7 @@ leaves the child alive, and parent termination performs owned shutdown.
 | AF34 | Only `<Session>` admits them | `model` and `effort` on `<Agent>`, `<Prompt>` or `<Session.Launch>` fail prop validation before anything runs |
 | AF37-AF45 | Middleware routes whole Sessions | An ordinary handler may route the raw Session a use names, remove the Session, substitute another authentic use or send the prompt to a different conversation. The provider follows the final route: an authentic use applies its own configuration; a raw Session, name or absence performs no configuration work; and a copied or foreign configured claim refuses before provider work. Reading and delegating the original use is unchanged. Prompt records retain only the verified configuration of the final route that actually started. Session middleware receives no standalone configuration, and the exact provider Session is configured only through coordination delivered directly to the provider factory |
 | AF46-AF52 | Session setup registration is operation-owned | `with({ name })` preserves one request issuance; another live request substitutes its own configuration and optional durable identity; a raw string or directly returned raw Session selects the unconfigured route. A programmatic configured string uses one non-durable operation-local issuance. One provider-installation closure owns exact Session registration, duplicate detection, completion and configured-use lookup; it refuses a different apply operation, registration or lookup after teardown, sibling/run state, same-name Context substitution, and values from another loaded Core copy, then drops every registration after provider finalizers. The established apply operation's canonical verified return is sealed into the use; a new session performs no configuration work |
+| SI1-SI2, SI5 | Confirmed public Session observations | A fresh ordinary Session has no identity. The public configured use retained before its first Prompt and that Prompt's actual started event expose the confirmed frozen kind/value pair live, across separate Core copies, while preserving verified configuration and the native-only Prompt record. Reads, JSON and spread snapshots perform no provider work and confer no execution rights; foreign configured use still refuses |
 
 
 ### Tier CR — Component registration and resolution
@@ -13944,6 +13981,13 @@ acceptance. Standard ACP creation instead retains `acpx.acpSessionId` when no
 native assertion exists, commits the mapping before events and reopens only
 through supported loading. A changed assertion kind refuses. An ACP loading
 target supplies no native handoff or stronger acceptance proof.
+
+SI3-SI4 retain public confirmation through transport close and failed or
+interrupted turns. Strong first attempts without acceptance expose no pair or
+started event. Publication follows the asserting save and required host mapping;
+a refused mapping admits no new public association. Explicit supported loading
+continues the exact pair or refuses without replacement; metadata changes none
+of those decisions.
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
 

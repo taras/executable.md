@@ -730,6 +730,8 @@ describe("Tier NL — native session launch", () => {
       expect(argv).not.toContain(`backend:${SESSION_KEY}`);
       expect(argv).not.toContain(`record:${SESSION_KEY}`);
       expect(argv).not.toContain(SESSION_KEY);
+      const session = yield* Agent.operations.session();
+      expect(session.identity).toEqual({ kind: "acpx.agentSessionId", value: nativeSessionId });
     });
   });
 
@@ -1891,6 +1893,7 @@ describe("Tier CN — client-allocated construction", () => {
     const session = yield* Agent.operations.session();
 
     expect(yield* routeOf(routes)).toBe(undefined);
+    expect(session.identity).toBe(undefined);
     expect(harness.ensureCalls).toEqual([]);
     expect(harness.createdOptions).toEqual([]);
 
@@ -1905,6 +1908,7 @@ describe("Tier CN — client-allocated construction", () => {
 
     expect(harness.ensureCalls.at(-1)?.resumeSessionId).toBe(ALLOCATED);
     expect(session.agentSessionId).toBe(ALLOCATED);
+    expect(session.identity).toEqual({ kind: "acpx.agentSessionId", value: ALLOCATED });
   });
 
   it("CN10: a fresh Session publishes nothing, and the launch publishes before any runtime", function* () {

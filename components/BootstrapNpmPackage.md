@@ -8,16 +8,8 @@ props:
     description: Workspace package directory, e.g. packages/workflow
 ---
 
-> [!WARNING]
-> Run this **without `-j`/`--journal` and without `--verbose`**. A durable entry
-> records the one-time password twice over: once as the answer you gave, and
-> again inside the publish and trust commands it is interpolated into.
-> `--verbose` reports the same records to stderr. Rendered output carries only
-> what a command printed, so the code stays out of the document — but a journal
-> file or a verbose stderr stream would hold it. Neither is needed here.
->
-> `README.md#Bootstrap` is the target this is normally run from, and
-> `specs/release-process-spec.md` §6 carries the whole procedure.
+Run this from `README.md#Bootstrap`;
+`specs/release-process-spec.md` §6 describes the procedure.
 
 # Bootstrapping {props.package}
 
@@ -462,6 +454,7 @@ rest.
   "properties": {
     "code": {
       "type": "string",
+      "writeOnly": true,
       "pattern": "^\\d{6}$"
     }
   },

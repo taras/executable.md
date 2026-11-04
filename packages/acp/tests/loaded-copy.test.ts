@@ -25,7 +25,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
-import { rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
@@ -39,7 +39,12 @@ import type {
   AgentSessionRequest,
   Session,
   SessionConfiguration,
+  AgentProviderFactory,
 } from "@executablemd/core";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { world } from "./released-peer.ts";
+import { retainedSession } from "../src/session-store.ts";
+import { readTextFile } from "@effectionx/fs";
 import { createAcpxProvider } from "../src/provider.ts";
 // This run's own copy, for the case that needs a canonical owner to refuse a
 // foreign request.
@@ -389,6 +394,204 @@ function refusalOf(operation: () => Operation<unknown>): Operation<string> {
     }
   })();
 }
+
+function useForeignPublicConsumer(): Operation<
+  (
+    factory: AgentProviderFactory,
+    path: string,
+    journal: InMemoryStream,
+    observe: (
+      stage: string,
+      session: Session,
+      configuration?: SessionConfiguration,
+    ) => Operation<void>,
+  ) => Operation<void>
+> {
+  return resource(function* (provide) {
+    const directory = yield* until(mkdtemp(join(tmpdir(), "si-public-core-")));
+    yield* ensure(() => rm(directory, { recursive: true, force: true }));
+    const entry = join(directory, "entry.ts");
+    const bundle = join(directory, "core.js");
+    for (const path of ["components/components.md", "agent/components.md"]) {
+      const target = join(directory, path);
+      yield* ensureDir(join(directory, path.split("/")[0]!));
+      yield* writeTextFile(
+        target,
+        yield* readTextFile(join(REPOSITORY, "packages/core/src", path)),
+      );
+    }
+    yield* writeTextFile(
+      entry,
+      `
+      import { Agent } from ${JSON.stringify(join(CORE_AGENT, "agent-api.ts"))};
+      import { installAgentComponents, agentIdentityComponents } from ${JSON.stringify(join(CORE_AGENT, "components.ts"))};
+      import { useNormalizedOutput } from ${JSON.stringify(join(REPOSITORY, "packages/core/src/output/normalize.ts"))};
+      import { configurationOf } from ${JSON.stringify(join(CORE_AGENT, "session-use.ts"))};
+      import { executeInstalled } from ${JSON.stringify(join(REPOSITORY, "packages/core/host.ts"))};
+      export function* run(factory, path, journal, observe) {
+        yield* installAgentComponents({ defaultAgent: "scribe", rootProvider: {
+          options: { defaultAgent: "scribe", permissionMode: "deny-all" }, factory,
+        }});
+        yield* Agent.around({
+          *session(args, next) {
+            const session = yield* next(...args);
+            yield* observe("resolved", session);
+            return session;
+          },
+          *prompt(args, next) {
+            const source = yield* next(...args);
+            return { *[Symbol.iterator]() {
+              const subscription = yield* source;
+              return { *next() {
+                const event = yield* subscription.next();
+                if (!event.done && event.value.type === "started") {
+                  yield* observe("started", event.value.session, configurationOf(event.value.session));
+                }
+                return event;
+              }};
+            }};
+          },
+        });
+        yield* useNormalizedOutput();
+        const execution = yield* executeInstalled({ path, stream: journal }, [
+          { components: agentIdentityComponents() },
+        ]);
+        const output = yield* execution.output;
+        while (!(yield* output.next()).done) {}
+        const result = yield* execution;
+        if (!result.ok) { throw result.error; }
+      }
+    `,
+    );
+    const built = yield* exec(process.execPath, {
+      arguments: [
+        "bundle",
+        "--frozen",
+        "--node-modules-dir=none",
+        "--external=@effectionx/process",
+        entry,
+        "--output",
+        bundle,
+      ],
+      cwd: REPOSITORY,
+    }).join();
+    if (built.code !== 0) {
+      throw new Error(`could not bundle the public Core consumer: ${built.stdout}${built.stderr}`);
+    }
+    const run = methodOf<Operation<void>>(yield* until(import(`file://${bundle}`)), "run");
+    if (run === undefined) {
+      throw new Error("the other Core copy exports no public consumer");
+    }
+    yield* provide((factory, path, journal, observe) => run(factory, path, journal, observe));
+  });
+}
+
+describe("Session information", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("SI: a separate Core's public configured first started event observes native confirmation", function* () {
+    const run = yield* useForeignPublicConsumer();
+    const current = yield* world(true);
+    const doc = join(current.dir, "native.md");
+    yield* writeTextFile(
+      doc,
+      '<Agent name="scribe"><Session name="review" model="selected" effort="xhigh"><Prompt text="hello" /></Session></Agent>',
+    );
+    let held: Session | undefined;
+    let hostCalls = 0;
+    let started = 0;
+    const factory = createAcpxProvider({
+      sessionStore: current.store,
+      agentRegistry: current.registry,
+      nativeAdapters: {
+        scribe: {
+          launcher: "scribe",
+          identity: "provider-returned",
+          acceptance: "first-turn-acceptance",
+          resume: () => [],
+        },
+      },
+      advertiseNativeLaunch: [],
+      advertiseClientNativeAttachment: [],
+      *agentCwd() {
+        return current.dir;
+      },
+      sessions: {
+        *requestSession() {
+          return { sessionKey: "foreign-public", cwd: current.dir, state: "new" };
+        },
+        *recordSessionIdentity(_details, identity) {
+          expect((yield* retainedSession(current.store, "foreign-public"))?.agentSessionId).toBe(
+            identity.agentSessionId,
+          );
+          expect(held?.identity).toBe(undefined);
+          expect(started).toBe(0);
+          hostCalls++;
+        },
+      },
+    });
+    const journal = new InMemoryStream();
+    yield* scoped(function* () {
+      yield* run(factory, doc, journal, function* (stage, session, configuration) {
+        if (stage === "resolved") {
+          held = session;
+          expect(session.identity).toBe(undefined);
+          expect(session.agentSessionId).toBe(undefined);
+          expect(yield* retainedSession(current.store, "foreign-public")).toBe(undefined);
+          const io = { ...current.storeCalls };
+          const history = journal.snapshot();
+          for (let i = 0; i < 10; i++) {
+            expect(session.identity).toBe(undefined);
+            expect(JSON.parse(JSON.stringify(session)).identity).toBe(undefined);
+            expect({ ...session }.agentSessionId).toBe(undefined);
+          }
+          expect(hostCalls).toBe(0);
+          expect(current.storeCalls).toEqual(io);
+          expect(journal.snapshot()).toEqual(history);
+        } else {
+          started++;
+          expect(hostCalls).toBe(1);
+          expect(session).toBe(held);
+          expect(configuration).toEqual({ model: "selected", effort: "xhigh" });
+          expect(session.identity).toEqual({
+            kind: "acpx.agentSessionId",
+            value: "native-fixed-session",
+          });
+          expect(held?.identity).toEqual(session.identity);
+          expect(session.agentSessionId).toBe("native-fixed-session");
+          expect(Object.isFrozen(session.identity)).toBe(true);
+          const before = yield* readTextFile(join(current.dir, "methods.jsonl"));
+          const io = { ...current.storeCalls };
+          const history = journal.snapshot();
+          for (let i = 0; i < 10; i++) {
+            expect(JSON.parse(JSON.stringify(session)).identity).toEqual(session.identity);
+            expect({ ...session }.agentSessionId).toBe("native-fixed-session");
+          }
+          expect(current.storeCalls).toEqual(io);
+          expect(journal.snapshot()).toEqual(history);
+          expect(yield* readTextFile(join(current.dir, "methods.jsonl"))).toBe(before);
+          expect(hostCalls).toBe(1);
+        }
+      });
+    });
+    expect(started).toBe(1);
+    expect(held?.identity).toEqual({ kind: "acpx.agentSessionId", value: "native-fixed-session" });
+    const promptRecord = journal
+      .snapshot()
+      .find((event) => event.type === "yield" && event.description.type === "agent_prompt");
+    expect(promptRecord).not.toHaveProperty("result.value.identity");
+    expect(journal.snapshot()).toContainEqual(
+      expect.objectContaining({
+        type: "yield",
+        description: expect.objectContaining({ type: "agent_prompt" }),
+        result: expect.objectContaining({
+          value: expect.objectContaining({
+            agentSessionId: "native-fixed-session",
+            configuration: { model: "selected", effort: "xhigh" },
+          }),
+        }),
+      }),
+    );
+  });
+});
 
 describe("Tier LP — a provider and a Core copy that are not the same copy", () => {
   it("LP1: an unconfigured request from another copy resolves through the delivered coordinator", function* () {

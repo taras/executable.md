@@ -1,3 +1,4 @@
+import { useSecretInputs } from "@executablemd/core/host";
 import { inspectRecoveryOwnership } from "./recovery-owner.ts";
 import { recoveryBlocked, uncertainRequests } from "./recovery-state.ts";
 import { bindRetainedPrefix } from "./history.ts";
@@ -999,6 +1000,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     ): Operation<Result<AgentConversation>> {
       const ready = withResolvers<Result<AgentConversation>>();
       const task = mine.run(function* (): Operation<void> {
+        const privacy = yield* useSecretInputs();
         const directory = input.workspace;
         if (directory !== undefined) {
           yield* API.Env.around(
@@ -1018,7 +1020,12 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           // installs. It goes inside the conversation's execution because that
           // is where its turns run: installed around `message()` instead, it
           // would be in a scope the saved conversation does not execute in.
-          installations: [...assembly.installations, capturing, { install: () => watcher() }],
+          installations: [
+            privacy,
+            ...assembly.installations,
+            capturing,
+            { install: () => watcher() },
+          ],
         });
         ready.resolve(opened);
         if (!opened.ok) {

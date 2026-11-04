@@ -71,7 +71,7 @@ import {
   runPreparedElicitation,
 } from "@executablemd/core";
 import type { ElicitationRequest, Json } from "@executablemd/core";
-import { elicitProps, elicitReturns } from "@executablemd/core/host";
+import { elicitProps, elicitReturns, elicitComponent } from "@executablemd/core/host";
 import { suspendFor } from "./suspend.ts";
 
 /** How this registration names itself, in a refusal and in the registry. */
@@ -94,8 +94,11 @@ export const ELICITATION_REQUEST_KIND = "elicitation";
  * the answer is consumed at the durable position that published the request,
  * and two questions in one procedure sit at two positions.
  */
-export function* Elicit(props: Record<string, Json>): Operation<Json> {
+export function* Elicit(props: Record<string, Json>): Operation<unknown> {
   const prepared = yield* prepareElicitation(props.schema);
+  if (prepared.secretFields.length > 0) {
+    return yield* elicitComponent(props);
+  }
   const message = yield* content();
   return yield* runPreparedElicitation(prepared, message);
 }
@@ -124,7 +127,11 @@ export function* useWorkflowElicitation(): Operation<void> {
   // enclosing scope — would answer ahead of this one and nothing would suspend.
   yield* Elicitation.around(
     {
-      *elicit([request]: [ElicitationRequest]): Operation<unknown> {
+      *elicit([request]: [ElicitationRequest], next): Operation<unknown> {
+        const prepared = yield* prepareElicitation(request.schema);
+        if (prepared.secretFields.length > 0) {
+          return yield* next(request);
+        }
         return yield* suspendFor({
           request: { kind: ELICITATION_REQUEST_KIND, message: request.message },
           responseSchema: request.schema,

@@ -83,6 +83,37 @@ function* fetchText(url: string): Operation<string> {
 }
 
 describe("the WebForm elicitation provider", () => {
+  it("preserves marked field metadata for password presentation without serving the entered value", function* () {
+    yield* fixtureAssets();
+    yield* silentOpener();
+    let value = "";
+    let config = "";
+    let validator = "";
+    yield* FormResponder.around({
+      *respond([url]) {
+        config = yield* fetchText(`${url}config.json`);
+        validator = yield* fetchText(`${url}validator.js`);
+        value = String(Math.floor(100000 + Math.random() * 900000));
+        yield* submitForm(url, { code: value });
+      },
+    });
+    yield* installWebElicitation();
+    const answer = parseJson(
+      yield* Elicitation.operations.elicit({
+        message: "Code",
+        schema: {
+          type: "object",
+          properties: { code: { type: "string", writeOnly: true } },
+          required: ["code"],
+          additionalProperties: false,
+        },
+      }),
+    );
+    expect(JSON.stringify(answer).includes(value)).toBe(true);
+    expect(/"writeOnly"\s*:\s*true/.test(validator)).toBe(true);
+    expect((config + validator).includes(value)).toBe(false);
+  });
+
   it("answers an elicitation with a real form", function* () {
     const served: Served = { config: "", validator: "" };
 

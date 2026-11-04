@@ -1,3 +1,4 @@
+import type { InputValues } from "./secrets/inputs.ts";
 /**
  * Source transform for generator eval blocks (spec §4).
  *
@@ -455,11 +456,12 @@ export function isJson(value: unknown): boolean {
 export function serializeExports(
   env: Record<string, unknown>,
   names: string[],
+  inputs?: InputValues,
 ): Record<string, Json> {
   const result: Record<string, Json> = {};
   for (const name of names) {
     const value = env[name];
-    if (isJson(value)) {
+    if (!inputs?.contains(value) && isJson(value)) {
       result[name] = value as Json;
     }
     // Non-serializable values silently omitted.

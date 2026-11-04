@@ -1,3 +1,4 @@
+import { secretPresentation, secretValidationErrors } from "./secret-fields.ts";
 /**
  * The form page.
  *
@@ -27,7 +28,7 @@
 
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
-import type { RJSFSchema, UiSchema } from "@rjsf/utils";
+import type { RJSFSchema, UiSchema, RJSFValidationError } from "@rjsf/utils";
 import withTheme from "@rjsf/core/lib/withTheme.js";
 import { generateTheme } from "@rjsf/shadcn/lib/Theme/index.js";
 import createPrecompiledValidator from "@rjsf/validator-ajv8/lib/createPrecompiledValidator.js";
@@ -175,7 +176,9 @@ function mount(config: FormConfig, registration: Registration, scope: Scope): vo
   createRoot(element("root")).render(
     createElement(Form, {
       schema: registration.rootSchema,
-      uiSchema: registration.uiSchema ?? {},
+      uiSchema: secretPresentation(registration.rootSchema, registration.uiSchema),
+      transformErrors: (errors: RJSFValidationError[]) =>
+        secretValidationErrors(registration.rootSchema, errors),
       validator,
       onSubmit: (event: { formData?: unknown }) => {
         // React calls this outside any operation. Re-entering through the

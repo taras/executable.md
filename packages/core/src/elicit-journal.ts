@@ -1,3 +1,9 @@
+import { durablePosition } from "@executablemd/durable-streams";
+import { inputValues } from "./secrets/inputs.ts";
+import { parseInputRecord } from "./secrets/input-record.ts";
+import { prepareElicitation, runPreparedElicitation, ElicitValidationError } from "./elicit.ts";
+import type { PreparedElicitation } from "./elicit.ts";
+import { validateParsed } from "./components/parse-schema.ts";
 /**
  * What an elicitation leaves behind.
  *
@@ -163,4 +169,116 @@ export function* persistElicitation(
     },
   );
   return parseJson(stored);
+}
+
+export function* persistProtectedElicitation(
+  identity: ElicitationIdentity,
+  prepared: PreparedElicitation,
+  message: string,
+): Workflow<unknown> {
+  const owner = yield* ephemeral(inputValues());
+  if (owner === undefined) {
+    throw new Error("Protected elicitation requires an execution-owned input owner.");
+  }
+  const position = yield* ephemeral(durablePosition());
+  const sourceOwner = yield* ephemeral(SourceOwner.get());
+  const bind = (answer: Json) => {
+    if (!isJsonObject(answer)) {
+      throw new Error("Protected elicitation requires an object answer.");
+    }
+    const result: Record<string, unknown> = { ...answer };
+    for (const field of prepared.secretFields) {
+      const value = answer[field];
+      if (typeof value === "string") {
+        result[field] = owner.protect(
+          { coroutine: position.coroutineId, index: position.index, field },
+          value,
+        );
+      }
+    }
+    return result;
+  };
+  let live: unknown;
+  const stored = yield createDurableOperation<DurableJson>(
+    {
+      type: ELICIT,
+      name: recordName(identity.location),
+      input: identity.fingerprint,
+      [ELICITATION_SCHEMA_FIELD]: identity.schema,
+      ...sourceOwnerDescription(identity.position, sourceOwner),
+    },
+    function* () {
+      live = bind(yield* runPreparedElicitation(prepared, message));
+      const recorded = owner.record(live);
+      if (!recorded.ok) {
+        throw recorded.error;
+      }
+      return parseJson({ "executablemd.input": recorded.value });
+    },
+  );
+  if (live !== undefined) {
+    return live;
+  }
+  const envelope = parseJson(stored);
+  if (!isJsonObject(envelope)) {
+    throw new Error("Invalid protected elicitation history.");
+  }
+  const record = parseInputRecord(envelope["executablemd.input"]);
+  if (record.kind !== "object") {
+    throw new Error("Invalid protected elicitation receipt.");
+  }
+  const publicAnswer: JsonObject = {};
+  const missing: string[] = [];
+  for (const [name, member] of Object.entries(record.members)) {
+    if (member.kind === "input") {
+      if (
+        !prepared.secretFields.includes(name) ||
+        member.field.coroutine !== position.coroutineId ||
+        member.field.index !== position.index ||
+        member.field.field !== name
+      ) {
+        throw new Error("Invalid protected elicitation field identity.");
+      }
+      missing.push(name);
+    } else {
+      const restored = owner.restore(member);
+      if (!restored.ok) {
+        throw restored.error;
+      }
+      publicAnswer[name] = parseJson(restored.value);
+    }
+  }
+  if (missing.length === 0) {
+    return publicAnswer;
+  }
+  const properties = prepared.schema.properties;
+  if (!isJsonObject(properties)) {
+    throw new Error("Invalid protected elicitation schema.");
+  }
+  const fresh = yield* ephemeral(
+    prepareElicitation({
+      type: "object",
+      properties: Object.fromEntries(missing.map((name) => [name, properties[name]])),
+      required: missing.filter(
+        (field) =>
+          Array.isArray(prepared.schema.required) && prepared.schema.required.includes(field),
+      ),
+      additionalProperties: false,
+    }),
+  );
+  const answer = yield* ephemeral(
+    runPreparedElicitation(
+      fresh,
+      `${message}\n\nRecorded public fields: ${JSON.stringify(publicAnswer)}`,
+    ),
+  );
+  if (!isJsonObject(answer)) {
+    throw new Error("Invalid protected elicitation response.");
+  }
+  const merged = { ...publicAnswer, ...answer };
+  const issues = validateParsed(prepared.validate, merged);
+  if (issues.length > 0) {
+    throw new ElicitValidationError(prepared.label, issues);
+  }
+  return bind(merged);
 }

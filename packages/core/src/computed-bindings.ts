@@ -1,3 +1,4 @@
+import type { InputValues } from "./secrets/inputs.ts";
 /**
  * The root data one execution computed, handed back to the host that owns it
  * (spec §4.5, `specs/repl-spec.md`).
@@ -75,6 +76,8 @@ export interface ComputedBindings {
   computed(): JsonObject | undefined;
   /** What a host reads: eligible data, or why it cannot be disclosed. */
   read(): Operation<Result<JsonObject>>;
+  /** Clear a contextual candidate through this owner while its policy is live. */
+  disclose(data: JsonObject, compose: BindingsDisclosure): Operation<Result<JsonObject>>;
 }
 
 /**
@@ -85,6 +88,8 @@ export interface ComputedBindings {
  * happened to hold would report data no later run can start from.
  */
 /** What a read answers before this execution has established its own policy. */
+export const CANNOT_DISCLOSE = "This execution cannot disclose the supplied data.";
+
 export const NO_DISCLOSURE_POLICY =
   "this execution has not established its disclosure policy yet, so it discloses nothing.";
 
@@ -108,7 +113,7 @@ export const NO_ACCEPTED_RESULT =
  * nothing special still reads through a policy, so there is one path and not
  * two.
  */
-export function useComputedBindings(): Operation<ComputedBindings> {
+export function useComputedBindings(inputs?: InputValues): Operation<ComputedBindings> {
   return resource(function* (provide) {
     let disclose: BindingsDisclosure | undefined;
     let root: EvalEnv | undefined;
@@ -129,9 +134,29 @@ export function useComputedBindings(): Operation<ComputedBindings> {
         // whichever way the run ends.
         root = undefined;
         disclose = undefined;
+        inputs = undefined;
       },
       computed(): JsonObject | undefined {
-        return root === undefined ? undefined : eligibleRootBindings(root);
+        return root === undefined ? undefined : eligibleRootBindings(root, inputs);
+      },
+      *disclose(data, compose): Operation<Result<JsonObject>> {
+        if (disclose === undefined || ended) {
+          return Err(new Error(CANNOT_DISCLOSE));
+        }
+        try {
+          const candidate = yield* compose(detached(data));
+          const policy = disclose;
+          if (!candidate.ok || policy === undefined || ended) {
+            return Err(new Error(CANNOT_DISCLOSE));
+          }
+          const cleared = yield* policy(detached(candidate.value));
+          if (!cleared.ok || disclose !== policy || ended) {
+            return Err(new Error(CANNOT_DISCLOSE));
+          }
+          return Ok(detached(cleared.value));
+        } catch {
+          return Err(new Error(CANNOT_DISCLOSE));
+        }
       },
       *read(): Operation<Result<JsonObject>> {
         const settled = accepted;
@@ -150,7 +175,7 @@ export function useComputedBindings(): Operation<ComputedBindings> {
           // starts does not look like a read after it was halted.
           return ended ? Err(new Error(NO_ACCEPTED_RESULT)) : Ok({});
         }
-        const disclosed = yield* policy(eligibleRootBindings(live));
+        const disclosed = yield* policy(eligibleRootBindings(live, inputs));
         return disclosed.ok ? Ok(detached(disclosed.value)) : disclosed;
       },
     };
@@ -163,6 +188,7 @@ export function useComputedBindings(): Operation<ComputedBindings> {
       // and no live environment left to read instead.
       root = undefined;
       disclose = undefined;
+      inputs = undefined;
       ended = true;
     }
   });
@@ -196,7 +222,7 @@ function detached(data: JsonObject): JsonObject {
  * what a reader holds is its own graph and a later mutation of the operand
  * changes nothing it already handed over.
  */
-export function eligibleRootBindings(root: EvalEnv): JsonObject {
+export function eligibleRootBindings(root: EvalEnv, inputs?: InputValues): JsonObject {
   const eligible: JsonObject = {};
   for (const name of Object.keys(root.values)) {
     if (name === ROOT_PROPS_BINDING) {
@@ -206,7 +232,13 @@ export function eligibleRootBindings(root: EvalEnv): JsonObject {
     if (!binding.ok || binding.value !== name) {
       continue;
     }
-    const copied = attemptJson(root.values[name]);
+    const projection = inputs?.display(root.values[name]);
+    const copied =
+      projection === undefined
+        ? attemptJson(root.values[name])
+        : projection.ok
+          ? projection.value
+          : undefined;
     if (copied === undefined) {
       continue;
     }

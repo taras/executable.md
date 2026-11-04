@@ -8,8 +8,9 @@ import { exec } from "@effectionx/process";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { z } from "zod";
+import { Execution } from "@executablemd/core/api";
 import { API, Permissions } from "@executablemd/runtime";
-import { isJsonObject, registerComponents, retainedSource } from "@executablemd/core";
+import { Elicitation, isJsonObject, registerComponents, retainedSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import { sidekickRequests } from "../src/repl/sidekick/requests.ts";
@@ -624,6 +625,99 @@ describe("joined entry diagnostics", () => {
     expect(f.host.fake.prompts).toHaveLength(0);
     console.log("RECOVERY_GUIDE_RENDER_BEGIN\n" + text + "\nRECOVERY_GUIDE_RENDER_END");
   });
+
+  for (const composed of [false, true]) {
+    it(`E7: protected backend diagnostics cross original disclosure with contextual composition=${composed}`, function* () {
+      const secret = "249731";
+      const failure = new StaleInputError(`Backend rejected ${secret}; contact support.`);
+      failure.name = "BackendFailure";
+      let replacements = 0;
+      let transforms = 0;
+      yield* Elicitation.around({
+        *elicit() {
+          return { code: secret };
+        },
+      });
+      yield* useSecretScannerFactory(() => ({
+        *scan() {
+          return [];
+        },
+      }));
+      if (composed) {
+        yield* Execution.around(
+          {
+            *disclose() {
+              replacements += 1;
+              return Ok({ name: "SupportFailure", message: `Replacement for ${secret}` });
+            },
+          },
+          { at: "min" },
+        );
+        yield* Execution.around({
+          *disclose([data], next) {
+            const proposed = yield* next(data);
+            if (!proposed.ok) {
+              return proposed;
+            }
+            transforms += 1;
+            return Ok({
+              ...proposed.value,
+              message: `${proposed.value.message}; outer support advice.`,
+            });
+          },
+        });
+      }
+      yield* registerComponents([
+        {
+          name: "CrashAfterSecret",
+          origin: "test://protected-diagnostic",
+          props: { type: "object" },
+          *fn(): Operation<string> {
+            throw failure;
+          },
+        },
+      ]);
+      const f = yield* fixture();
+      const source =
+        '<Elicit as="answer" schema={{type:"object",properties:{code:{type:"string",writeOnly:true}},required:["code"],additionalProperties:false}}>Code?</Elicit><CrashAfterSecret />';
+      const call = yield* submit(f, source);
+      const joined = yield* deadline(call.submission.join());
+      expect(joined.ok).toBe(false);
+      if (!joined.ok) {
+        expect(joined.error).toBe(failure);
+      }
+      expect(failure.message).toBe(`Backend rejected ${secret}; contact support.`);
+      yield* deadline(call.task);
+      const expected = composed
+        ? { name: "SupportFailure", message: "Replacement for [redacted]; outer support advice." }
+        : { name: "BackendFailure", message: "Backend rejected [redacted]; contact support." };
+      expect(yield* deadline(settled(f, 1))).toEqual({
+        joined: true,
+        outcome: "failed",
+        error: expected,
+      });
+      const whole = page.parse(yield* journal(f, 1));
+      const selected = page.parse(yield* journal(f, 1, ".execution.error"));
+      expect(whole.value).toMatchObject({ status: "unfinished", failure: null });
+      expect(selected.value).toEqual(expected);
+      expect((yield* control(f.root, "<REPL.Entry.Journal entry={1} />")).observations).toEqual([
+        whole,
+      ]);
+      expect(
+        (yield* control(f.root, '<REPL.Entry.Journal entry={1} yq=".execution.error" />'))
+          .observations,
+      ).toEqual([selected]);
+      expect(JSON.stringify(whole.value)).not.toContain(secret);
+      expect(JSON.stringify(selected.value)).not.toContain(secret);
+      expect((yield* history(f)).bytes).not.toContain(secret);
+      expect(f.root.session.model.entries[0]?.terminal).toBeUndefined();
+      expect(f.host.fake.prompts).toHaveLength(0);
+      if (composed) {
+        expect(replacements).toBeGreaterThan(0);
+        expect(transforms).toBe(replacements);
+      }
+    });
+  }
 
   for (const mode of ["permitted", "secret", "scanner-failure"]) {
     it(`E7: original entry disclosure is ${mode} despite a later permissive reader`, function* () {

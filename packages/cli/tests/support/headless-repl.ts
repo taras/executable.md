@@ -259,6 +259,7 @@ export function* useHeadlessFixture(
   beforeClose?: () => Operation<void>,
   dataRoot?: string,
   native?: {
+    formCapable?: boolean;
     event?(event: AcpRuntimeEvent): void;
     /** Replace one raw ACP runtime event before `consumeTurn` reads it. */
     transform?(event: AcpRuntimeEvent): AcpRuntimeEvent;
@@ -310,12 +311,14 @@ export function* useHeadlessFixture(
           if (!options.elicitationModes?.includes("form")) {
             return host.fake.create(options);
           }
-          const permission = options.onPermissionRequest;
+          const configured =
+            native?.formCapable === false ? { ...options, elicitationModes: [] } : options;
+          const permission = configured.onPermissionRequest;
           const runtime: ProbeCapableRuntime = createAcpRuntime(
             native?.permission === undefined
-              ? options
+              ? configured
               : {
-                  ...options,
+                  ...configured,
                   onPermissionRequest(request, context) {
                     native.permission?.(request);
                     if (permission === undefined) {
