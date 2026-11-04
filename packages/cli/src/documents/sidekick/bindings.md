@@ -1,13 +1,32 @@
 # Bindings
 
-Read this before using values created by earlier REPL entries, or before
-carrying state from one entry to the next.
+Read this before drafting entries that handle large records or reports, or
+before reusing values created by earlier REPL entries.
 
 ## Applies to
 
 Sidekick responses, and the root bindings a REPL entry inherits.
 
 ## Instructions
+
+TEMPORARY (https://github.com/taras/executable.md/issues/999): keep large
+workflow records, logs, artifacts and reports in workspace files. Root bindings
+retain ordinary file paths/references and only small necessary summaries or
+status. Do not put full large text, parsed objects or successive checkpoint
+copies at root.
+
+Read, parse and process only what the entry needs inside an existing component
+body or `Each` iteration, and capture only the compact result at root. `Let`,
+`If` and `Output` do not create a local binding scope. A path is an ordinary
+value: a later entry must explicitly read the file again. It provides neither
+automatic lazy loading nor permission to read it.
+
+This workaround prevents new large root bindings; existing root values and
+retained history remain. Switching variable names or evicting workflow caches
+does not clear those values. Local bindings do not make arbitrary large reads
+safe. Remove this TEMPORARY size workaround when #999 satisfies its safe
+file-backed/deduplicated binding contract; ordinary file-reference guidance may
+remain.
 
 - Read the current published values with `<REPL.Bindings />`. It returns a JSON
   map of binding names and values as feedback, then the host asks for your next
@@ -68,6 +87,44 @@ Sidekick responses, and the root bindings a REPL entry inherits.
 
 The host returns a JSON map of published binding names and values as feedback,
 then requests your next response.
+
+### Keep file contents local to one iteration
+
+Read `<Guide.Environment />` and `<Guide.Entries />`, and inspect
+`<REPL.Syntax names={["File", "Json", "Parse"]} />` before preparing file work.
+This complete response prepares an entry that writes or replaces
+`artifacts/bindings-demo.json` in the session workspace when submitted. The tiny
+report demonstrates binding placement; it is not a large-file processing recipe.
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Let as="reportPath" value="artifacts/bindings-demo.json" />
+<File path={reportPath}>
+<Json value={{status: "ready", details: ["demonstration report"]}} />
+</File>
+<Each in={[reportPath]} let="path" as="statusSummary">
+<File path={path} as="reportText" />
+<Parse schema={{type: "object", properties: {status: {type: "string"}, details: {type: "array", items: {type: "string"}}}, required: ["status", "details"], additionalProperties: false}} as="report">{reportText}</Parse>
+{report.status}
+</Each>
+<Output>
+Report status: {statusSummary}
+
+Report file: {reportPath}
+</Output>
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+````
+
+The response fills the draft once and executes none of it. After you submit the
+entry, its output reports status `ready` and path
+`artifacts/bindings-demo.json`. Only `reportPath` and the short captured text
+`statusSummary` reach root; the capture can include surrounding whitespace.
+`path`, `reportText` and the parsed `report` belong to the one `Each` iteration.
+The next entry receives the path and summary, and must explicitly read the file
+if it needs its contents.
 
 ## Common mistake
 
