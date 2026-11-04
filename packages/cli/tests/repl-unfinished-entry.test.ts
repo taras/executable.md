@@ -1,9 +1,10 @@
 import { describe, it } from "@executablemd/test-support/bdd";
-import { cliCommand } from "@executablemd/test-support/launch";
+import { cliCommand, cliRuntime } from "@executablemd/test-support/launch";
 import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, ensure, race, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { exec } from "@effectionx/process";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { z } from "zod";
@@ -17,8 +18,7 @@ import {
   sidekickResponseCeiling,
 } from "../src/repl/sidekick/profile.ts";
 import type { ControlJournal } from "../src/repl/sidekick/controls.ts";
-import { gitPlugin } from "@executablemd/git";
-import { GitOperationAdmissionError } from "../../git/src/composition/errors.ts";
+import { GitOperationAdmissionError, gitPlugin } from "@executablemd/git";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { useMountedHost, MOUNTED_AGENT } from "./support/mounted-repl.ts";
 import { runGit } from "./support/fixture-git.ts";
@@ -209,7 +209,7 @@ function* fixture() {
 }
 type Fixture = ReturnType<typeof fixture> extends Operation<infer T> ? T : never;
 function* repositories(A: string, B: string) {
-  const result = [];
+  const result: { head: string; tracked: string }[] = [];
   for (const repository of [A, B]) {
     result.push({
       head: yield* runGit(repository, ["rev-parse", "HEAD"]),
@@ -322,91 +322,121 @@ function control(root: Root, source: string) {
   });
 }
 
-describe("joined entry diagnostics", () => {
-  it("E1/E2/E5: a later connection explains a fatal checkout refusal without replay or a fabricated Close", function* () {
-    const f = yield* fixture();
-    let writes = 0;
-    yield* API.Files.around({
-      *writeTextFile([input], next) {
-        writes += 1;
-        return yield* next(input);
-      },
-    });
-    const source = `<File path="probe.txt">performed once</File><Dir path=${JSON.stringify(f.B)}>${checkout(f.B)}</Dir>`;
-    const call = yield* submit(f, source);
-    const joined = yield* deadline(call.submission.join());
-    expect(joined.ok).toBe(false);
-    if (joined.ok) {
-      throw new Error("The cross-repository admission unexpectedly succeeded.");
-    }
-    expect(joined.error).toBeInstanceOf(GitOperationAdmissionError);
-    expect(yield* deadline(call.task)).toBe(1);
-    const observation = yield* deadline(settled(f, 1));
-    expect(observation).toEqual({
-      joined: true,
-      outcome: "failed",
-      error: { name: joined.error.name, message: joined.error.message },
-    });
-    const whole = page.parse(yield* journal(f, 1));
-    expect(whole.value).toMatchObject({
-      entry: 1,
-      status: "unfinished",
-      failure: null,
-      execution: observation,
-      prompts: { completed: 0, failed: 0, cancelled: 0 },
-    });
-    expect((yield* control(f.root, "<REPL.Entry.Journal entry={1} />")).observations).toEqual([
-      whole,
-    ]);
-    const saved = yield* history(f);
-    yield* writeTextFile(`${f.A}/probe.txt`, "external edit");
-    for (let i = 0; i < 2; i += 1) {
-      expect(yield* journal(f, 1)).toEqual(whole);
-      expect(
-        yield* requestAttachment(f.path, { method: "entry", entry: 1, view: "source" }),
-      ).toMatchObject({ text: source });
-      expect((yield* f.root.session.stopEntry(call.submission.entry)).ok).toBe(false);
-      expect((yield* f.root.session.submit("A successor must refuse.")).ok).toBe(false);
-    }
-    expect(f.root.session.live).toBe(false);
-    expect(yield* readTextFile(`${f.A}/probe.txt`)).toBe("external edit");
-    expect((yield* history(f)).bytes).toBe(saved.bytes);
-    expect(f.root.session.model.entries).toHaveLength(1);
-    expect(writes).toBe(1);
-    expect(f.host.fake.prompts).toHaveLength(0);
-    expect(yield* repositories(f.A, f.B)).toEqual(f.baseline);
-    const cold = value(projectRepl(yield* readRecords(saved.path)));
-    const coldPage = value(
-      yield* readEntryJournal({ entry: 1 }, { entries: cold.entries, printing: undefined }),
-    );
-    expect(coldPage.value).toMatchObject({
-      status: "unfinished",
-      failure: null,
-      execution: unknownExecution,
-    });
-    expect((yield* history(f)).bytes).toBe(saved.bytes);
-    console.log(
-      JSON.stringify({
-        witness: "E1/E2/E5",
-        source,
-        join: { name: joined.error.name, message: joined.error.message },
-        public: whole,
-        journalBytes: saved.bytes,
-        cold: coldPage,
-        prompts: f.host.fake.prompts.length,
-        writes,
-      }),
-    );
-    yield* f.task.halt();
-    let refused = false;
-    try {
-      yield* requestAttachment(f.path, { method: "status" });
-    } catch {
-      refused = true;
-    }
-    expect(refused).toBe(true);
+function* repositoryOwnerWitness() {
+  const f = yield* fixture();
+  let writes = 0;
+  yield* API.Files.around({
+    *writeTextFile([input], next) {
+      writes += 1;
+      return yield* next(input);
+    },
   });
+  const source = `<File path="probe.txt">performed once</File><Dir path=${JSON.stringify(f.B)}>${checkout(f.B)}</Dir>`;
+  const call = yield* submit(f, source);
+  const joined = yield* deadline(call.submission.join());
+  expect(joined.ok).toBe(false);
+  if (joined.ok) {
+    throw new Error("The cross-repository admission unexpectedly succeeded.");
+  }
+  expect(joined.error).toBeInstanceOf(GitOperationAdmissionError);
+  expect(yield* deadline(call.task)).toBe(1);
+  const observation = yield* deadline(settled(f, 1));
+  expect(observation).toEqual({
+    joined: true,
+    outcome: "failed",
+    error: { name: joined.error.name, message: joined.error.message },
+  });
+  const whole = page.parse(yield* journal(f, 1));
+  expect(whole.value).toMatchObject({
+    entry: 1,
+    status: "unfinished",
+    failure: null,
+    execution: observation,
+    prompts: { completed: 0, failed: 0, cancelled: 0 },
+  });
+  expect((yield* control(f.root, "<REPL.Entry.Journal entry={1} />")).observations).toEqual([
+    whole,
+  ]);
+  const saved = yield* history(f);
+  yield* writeTextFile(`${f.A}/probe.txt`, "external edit");
+  for (let i = 0; i < 2; i += 1) {
+    expect(yield* journal(f, 1)).toEqual(whole);
+    expect(
+      yield* requestAttachment(f.path, { method: "entry", entry: 1, view: "source" }),
+    ).toMatchObject({ text: source });
+    expect((yield* f.root.session.stopEntry(call.submission.entry)).ok).toBe(false);
+    expect((yield* f.root.session.submit("A successor must refuse.")).ok).toBe(false);
+  }
+  expect(f.root.session.live).toBe(false);
+  expect(yield* readTextFile(`${f.A}/probe.txt`)).toBe("external edit");
+  expect((yield* history(f)).bytes).toBe(saved.bytes);
+  expect(f.root.session.model.entries).toHaveLength(1);
+  expect(writes).toBe(1);
+  expect(f.host.fake.prompts).toHaveLength(0);
+  expect(yield* repositories(f.A, f.B)).toEqual(f.baseline);
+  const cold = value(projectRepl(yield* readRecords(saved.path)));
+  const coldPage = value(
+    yield* readEntryJournal({ entry: 1 }, { entries: cold.entries, printing: undefined }),
+  );
+  expect(coldPage.value).toMatchObject({
+    status: "unfinished",
+    failure: null,
+    execution: unknownExecution,
+  });
+  expect((yield* history(f)).bytes).toBe(saved.bytes);
+  console.log(
+    JSON.stringify({
+      witness: "E1/E2/E5",
+      source,
+      join: { name: joined.error.name, message: joined.error.message },
+      public: whole,
+      journalBytes: saved.bytes,
+      cold: coldPage,
+      prompts: f.host.fake.prompts.length,
+      writes,
+    }),
+  );
+  yield* f.task.halt();
+  let refused = false;
+  try {
+    yield* requestAttachment(f.path, { method: "status" });
+  } catch {
+    refused = true;
+  }
+  expect(refused).toBe(true);
+}
 
+describe("joined entry repository-owner witness", () => {
+  it("E1/E2/E5: a later connection explains a fatal checkout refusal without replay or a fabricated Close", function* () {
+    if (cliRuntime() === "deno") {
+      yield* repositoryOwnerWitness();
+    } else {
+      yield* deadline(
+        scoped(function* () {
+          const result = yield* exec("deno", {
+            arguments: [
+              "test",
+              "--allow-all",
+              "--frozen",
+              "--filter=joined entry repository-owner witness",
+              fileURLToPath(import.meta.url),
+            ],
+            cwd: fileURLToPath(new URL("../../../", import.meta.url)),
+          }).join();
+          expect(result.code).toBe(0);
+          expect(result.signal).toBeFalsy();
+          expect(result.stdout).toContain("joined entry repository-owner witness");
+          expect(result.stdout).toContain(
+            "E1/E2/E5: a later connection explains a fatal checkout refusal",
+          );
+          expect(result.stdout).toMatch(/ok \| 1 passed \(1 step\) \| 0 failed/);
+        }),
+      );
+    }
+  });
+});
+
+describe("joined entry diagnostics", () => {
   it("E3/E4/E5: exact earlier outcomes coexist with a live idle entry and joined Stop cleanup", function* () {
     const cleanup = gate();
     yield* ensure(cleanup.release);
