@@ -2469,7 +2469,7 @@ function respond(request) {
     fs.appendFile(process.argv[2], "prompt\\n", error => {
       if (error) throw error;
       send({jsonrpc: "2.0", method: "session/update", params: {sessionId: "diagnostic-session", update: {sessionUpdate: "agent_message_chunk", content: {type: "text", text: "partial:" + text}}}});
-      send({jsonrpc: "2.0", id: request.id, error: {code: text === "first" ? -32041 : -32042, message: "Internal error", data: {details: text === "first" ? "/work/project: adapter unavailable" : "", authorization: "excluded raw field", prompt: "excluded prompt", env: {TOKEN: "excluded environment"}}}});
+      send({jsonrpc: "2.0", id: request.id, error: {code: text === "first" ? -32041 : -32042, message: "Internal error", data: {details: text === "first" ? "/work/project: adapter unavailable" : "", authorization: "<redacted>", prompt: "excluded prompt", env: {TOKEN: "excluded environment"}}}});
     });
   } else send({jsonrpc: "2.0", id: request.id, error: {code: -32601, message: "unsupported"}});
 }
@@ -2593,7 +2593,7 @@ function respond(request) {
       expect(Object.isFrozen(diagnostic)).toBe(true);
       expect(diagnostic && Object.isFrozen(diagnostic.acp)).toBe(true);
       expect(model.entries).toHaveLength(1);
-      expect(JSON.stringify([one, two])).not.toContain("excluded raw field");
+      expect(JSON.stringify([one, two])).not.toContain("<redacted>");
       expect(JSON.stringify([one, two])).not.toContain("excluded prompt");
       expect(JSON.stringify([one, two])).not.toContain("excluded environment");
     });
