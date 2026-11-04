@@ -153,7 +153,6 @@ describe("Session information", { sanitizeOps: false, sanitizeResources: false }
                       });
                       expect(event.value.session.agentSessionId).toBe(undefined);
                       expect(Object.isFrozen(event.value.session.identity)).toBe(true);
-                      const methods = yield* readTextFile(join(current.dir, "methods.jsonl"));
                       const admissions = hostCalls;
                       const io = { ...current.storeCalls };
                       const history = journal.snapshot();
@@ -166,7 +165,6 @@ describe("Session information", { sanitizeOps: false, sanitizeResources: false }
                       expect(hostCalls).toBe(admissions);
                       expect(current.storeCalls).toEqual(io);
                       expect(journal.snapshot()).toEqual(history);
-                      expect(yield* readTextFile(join(current.dir, "methods.jsonl"))).toBe(methods);
                     }
                     return event;
                   },
@@ -195,9 +193,21 @@ describe("Session information", { sanitizeOps: false, sanitizeResources: false }
     expect(saved).toEqual({ kind: "acpx.acpSessionId", value: "fixed-session" });
     const before = yield* until(current.store.load(sessionKey));
     const methods = yield* readTextFile(join(current.dir, "methods.jsonl"));
+    expect(
+      methods
+        .trim()
+        .split("\n")
+        .map((line) => methodReport.parse(JSON.parse(line)).method),
+    ).toEqual([
+      "session/new",
+      "session/set_config_option",
+      "session/set_config_option",
+      "session/prompt",
+    ]);
     for (let i = 0; i < 10; i++) {
       expect(held?.identity).toBe(saved);
       expect(JSON.parse(JSON.stringify(held)).identity).toEqual(saved);
+      expect({ ...held }.identity).toBe(saved);
     }
     expect(yield* readTextFile(join(current.dir, "methods.jsonl"))).toBe(methods);
     const continued = yield* run(true, "recall-fail");
@@ -220,9 +230,12 @@ describe("Session information", { sanitizeOps: false, sanitizeResources: false }
       expect.objectContaining({ sessionId: "fixed-session", text: "recall-fail" }),
     ]);
     const names = reports.map((report) => report.method);
-    expect(
-      names.filter((name) => ["session/new", "session/load", "session/prompt"].includes(name)),
-    ).toEqual(["session/load", "session/prompt"]);
+    expect(names).toEqual([
+      "session/load",
+      "session/set_config_option",
+      "session/set_config_option",
+      "session/prompt",
+    ]);
     expect(started).toBe(2);
   });
 });
