@@ -1,4 +1,4 @@
-import { parseJson } from "@executablemd/core";
+import { JsonParseError, parseJson } from "@executablemd/core";
 import type {
   ComponentInvocationHooks,
   ComponentInvocationObservation,
@@ -70,7 +70,7 @@ import { fatalFailure } from "./testing.ts";
  */
 
 import { Component, Execution, SYNTAX_COMPONENT } from "@executablemd/core";
-import type { GeneratedSelection, InvocationForm } from "@executablemd/core";
+import type { GeneratedSelection, InvocationForm, Json } from "@executablemd/core";
 import type {
   ComponentAnswerInstallation,
   ComponentAnswerRegistrar,
@@ -155,8 +155,18 @@ export function sidekickResponseCeiling(
             throw fatal;
           }
         }
+        let observed: Json | undefined;
+        if (outcome.ok) {
+          try {
+            observed = parseJson(outcome.value);
+          } catch (error) {
+            if (!(error instanceof JsonParseError)) {
+              throw error;
+            }
+          }
+        }
         try {
-          yield* journal.settled(order, outcome, outcome.ok ? parseJson(outcome.value) : undefined);
+          yield* journal.settled(order, outcome, observed);
         } catch (error) {
           failed(error instanceof Error ? error : new Error(String(error)));
           throw error;
