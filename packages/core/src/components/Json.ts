@@ -1,3 +1,4 @@
+import { inputValues } from "../secrets/inputs.ts";
 /**
  * `<Json>` — render a structured value as JSON text
  * (specs/executable-mdx-spec.md §6.12).
@@ -81,9 +82,18 @@ export default printErrors(function* Json(): Operation<string> {
 
   const value = yield* capture("value");
 
+  const owner = yield* inputValues();
+  let operand = value;
+  if (owner?.contains(value)) {
+    const projected = owner.display(value);
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    operand = projected.value;
+  }
   let text: unknown;
   try {
-    text = JSON.stringify(value, null, 2);
+    text = JSON.stringify(operand, null, 2);
   } catch (error) {
     throw new JsonRenderError(THREW, { cause: error });
   }

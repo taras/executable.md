@@ -569,6 +569,7 @@ describe("1048 — reuse Transcript facts", () => {
       stopReason: "finished",
       text: "saved reply",
       failure: undefined,
+      error: undefined,
       configuration: undefined,
       permissions: [
         {

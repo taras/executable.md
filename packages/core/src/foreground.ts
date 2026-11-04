@@ -1,3 +1,4 @@
+import { inputValues } from "./secrets/inputs.ts";
 /**
  * Where a foreground command's output goes, and what is kept of it (spec §3.6).
  *
@@ -38,7 +39,7 @@
  * chooses transient execution explicitly when no `--journal` was asked for.
  */
 
-import { createContext, scoped } from "effection";
+import { createContext, scoped, ensure } from "effection";
 import type { Context, Operation } from "effection";
 import { Stdio } from "@effectionx/process";
 
@@ -155,68 +156,79 @@ export function* route(
   let boundStderr = "";
   const fromStdout = new TextDecoder();
   const fromStderr = new TextDecoder();
-  const wantsStdout = retain || bind || selected.stdout === "capture";
-  const wantsStderr = retain || bind;
-
+  const inputs = yield* inputValues();
+  const stdout = inputs?.text();
+  const stderr = inputs?.text();
+  const encoder = new TextEncoder();
+  let sendStdout: ((bytes: Uint8Array) => Operation<void>) | undefined;
+  let sendStderr: ((bytes: Uint8Array) => Operation<void>) | undefined;
+  let finished = false;
+  let stdoutTail = "";
+  let stderrTail = "";
+  const keepStdout = (text: string) => {
+    if (retain) {
+      retainedStdout += text;
+    }
+    if (bind) {
+      boundStdout += text;
+    }
+    if (selected.stdout === "capture") {
+      captured += text;
+    }
+  };
+  const keepStderr = (text: string) => {
+    if (retain) {
+      retainedStderr += text;
+    }
+    if (bind) {
+      boundStderr += text;
+    }
+  };
+  const finish = () => {
+    if (!finished) {
+      finished = true;
+      const out = fromStdout.decode();
+      const err = fromStderr.decode();
+      stdoutTail = stdout === undefined ? out : stdout.write(out) + stdout.finish();
+      stderrTail = stderr === undefined ? err : stderr.write(err) + stderr.finish();
+      keepStdout(stdoutTail);
+      keepStderr(stderrTail);
+    }
+  };
+  yield* ensure(function* () {
+    if (inputs !== undefined) {
+      yield* inputs.flushOutput();
+    }
+    finish();
+    if (selected.stdout === "forward" && stdoutTail !== "" && sendStdout !== undefined) {
+      yield* sendStdout(encoder.encode(stdoutTail));
+    }
+    if (selected.stderr === "forward" && stderrTail !== "" && sendStderr !== undefined) {
+      yield* sendStderr(encoder.encode(stderrTail));
+    }
+  });
   yield* Stdio.around({
     *stdout([bytes], next) {
-      // Decoded once, for whoever wants it: feeding the same bytes through a
-      // stateful decoder twice would corrupt a split code point.
-      const text = wantsStdout ? fromStdout.decode(bytes, { stream: true }) : "";
-      if (retain) {
-        retainedStdout += text;
+      sendStdout = next;
+      const decoded = fromStdout.decode(bytes, { stream: true });
+      const text = stdout?.write(decoded) ?? decoded;
+      keepStdout(text);
+      if (selected.stdout === "forward" && text !== "") {
+        yield* next(encoder.encode(text));
       }
-      if (bind) {
-        boundStdout += text;
-      }
-      if (selected.stdout === "capture") {
-        captured += text;
-        return;
-      }
-      if (selected.stdout === "hidden") {
-        return;
-      }
-      return yield* next(bytes);
     },
     *stderr([bytes], next) {
-      const text = wantsStderr ? fromStderr.decode(bytes, { stream: true }) : "";
-      if (retain) {
-        retainedStderr += text;
+      sendStderr = next;
+      const decoded = fromStderr.decode(bytes, { stream: true });
+      const text = stderr?.write(decoded) ?? decoded;
+      keepStderr(text);
+      if (selected.stderr === "forward" && text !== "") {
+        yield* next(encoder.encode(text));
       }
-      if (bind) {
-        boundStderr += text;
-      }
-      if (selected.stderr === "hidden") {
-        return;
-      }
-      return yield* next(bytes);
     },
   });
-
   return () => {
-    // Flushed once the child is done, so a truncated final sequence is
-    // reported rather than held.
-    if (wantsStdout) {
-      const tail = fromStdout.decode();
-      if (retain) {
-        retainedStdout += tail;
-      }
-      if (bind) {
-        boundStdout += tail;
-      }
-      if (selected.stdout === "capture") {
-        captured += tail;
-      }
-    }
-    if (wantsStderr) {
-      const tail = fromStderr.decode();
-      if (retain) {
-        retainedStderr += tail;
-      }
-      if (bind) {
-        boundStderr += tail;
-      }
-    }
+    finish();
     return {
       captured,
       retainedStdout: retain ? retainedStdout : undefined,

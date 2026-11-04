@@ -1,3 +1,4 @@
+import type { InputCommand } from "./secrets/inputs.ts";
 /**
  * The capability-backed request a bound command is executed through.
  *
@@ -58,6 +59,7 @@ export type BoundExecRequest = CodeBlockContext;
 class BoundBlock {
   consumed = false;
   outcome: ExecResult | undefined;
+  result: CodeBlockResult | undefined;
   /** A canonical failure, kept whether or not middleware caught it. */
   failure: { raised: unknown } | undefined;
 
@@ -75,6 +77,8 @@ class BoundBlock {
   constructor(
     modifiers: readonly Modifier[],
     readonly context: CodeBlockContext,
+    readonly input?: InputCommand,
+    readonly binding = true,
   ) {
     this.authored = Object.freeze(
       modifiers.map((modifier) =>
@@ -155,6 +159,7 @@ export interface IssuedBoundExec {
    * that catches what canonical execution raised cannot turn it into silence.
    */
   settlement(): BoundSettlement;
+  result(): CodeBlockResult;
 }
 
 /**
@@ -168,12 +173,17 @@ export interface IssuedBoundExec {
  */
 export function* claimBoundExec(
   request: unknown,
-  run: (modifiers: readonly Modifier[], context: CodeBlockContext) => Operation<CodeBlockResult>,
+  run: (
+    modifiers: readonly Modifier[],
+    context: CodeBlockContext,
+    input: InputCommand | undefined,
+    binding: boolean,
+  ) => Operation<CodeBlockResult>,
 ): Operation<void> {
   const block = CanonicalBoundRequest.claim(request);
   let result: CodeBlockResult;
   try {
-    result = yield* run(block.authored, block.context);
+    result = yield* run(block.authored, block.context, block.input, block.binding);
   } catch (error) {
     // Kept whether or not a handler catches what propagates: a failure
     // canonical execution raised is not middleware's to rescue.
@@ -183,16 +193,35 @@ export function* claimBoundExec(
   // The outcome the authorized terminal obtained from the settled process. A
   // chain that produced none settled nothing, so nothing is bound.
   block.outcome = result.bound;
+  block.result = result;
 }
 
 /** Issue one bound command, retaining the chain the document wrote for it. */
 export function issueBoundExec(
   modifiers: readonly Modifier[],
   context: CodeBlockContext,
+  input?: InputCommand,
+  binding = true,
 ): IssuedBoundExec {
-  const block = new BoundBlock(modifiers, context);
+  const block = new BoundBlock(
+    modifiers,
+    context,
+    input === undefined
+      ? undefined
+      : Object.freeze({ language: input.language, parts: Object.freeze([...input.parts]) }),
+    binding,
+  );
   return {
     request: new CanonicalBoundRequest(block),
+    result() {
+      if (block.failure !== undefined) {
+        throw block.failure.raised;
+      }
+      if (block.result === undefined) {
+        throw new BoundExecProtocolError("returned without a canonical command result");
+      }
+      return block.result;
+    },
     settlement(): BoundSettlement {
       const failure = block.failure;
       if (failure !== undefined) {

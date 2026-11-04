@@ -2,7 +2,7 @@
 
 Read this when changing the ACP provider or a host that retains its sessions.
 It identifies the released API XMD uses and the local acceptance boundary it
-still needs.
+still needs, together with the selected failure facts it retains.
 
 ## Applies to
 
@@ -33,6 +33,13 @@ has nine files instead of the old five; that is additional upstream packaging,
 not a reduction in maintenance. `resolveAgentCommand()` adds one small boundary
 adaptation for released argv registries, preserving the runtime's persisted
 spelling and leaving existing string commands unchanged.
+
+**Failure details:** the local in-process result projection preserves the
+normalizer's origin and selected numeric ACP code/message/`data.details` under
+the `XMD prompt diagnostic:` seam. It carries no arbitrary protocol data. Core
+screens the optional diagnostic before saving it; the REPL's existing Journal
+query reads those facts under `promptError` without a runtime log or another agent call.
+Classification and retryable hints never authorize resend or establish acceptance.
 
 **Maintenance:** keep the runtime and its declarations on the same exact
 artifact. An ordinary Prompt change belongs in the provider; provider turn-key

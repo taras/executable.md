@@ -2073,10 +2073,15 @@ var AcpRuntimeManager = class {
 		task.promptStarted.reject(error);
 		task.sessionReady.reject(error);
 		const normalized = normalizeOutputError(error, { origin: "runtime" });
+		// XMD prompt diagnostic: retain the extracted protocol facts, never raw data.
+		const acp = normalized.acp;
+		const details = acp?.data !== null && typeof acp?.data === "object" ? acp.data.details : void 0;
 		return {
 			status: "failed",
 			error: {
 				message: normalized.message,
+				...normalized.origin !== void 0 ? { origin: normalized.origin } : {},
+				...acp ? { acp: { code: acp.code, message: acp.message, ...typeof details === "string" ? { details } : {} } } : {},
 				...normalized.code ? { code: normalized.code } : {},
 				...normalized.detailCode ? { detailCode: normalized.detailCode } : {},
 				...normalized.retryable !== void 0 ? { retryable: normalized.retryable } : {}

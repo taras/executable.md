@@ -27,9 +27,11 @@
  * and before anyone is asked. The body expands next, on every execution
  * including a replay, because the rendered message is half of what identifies
  * the question. The journal wraps only the asking, so a replay restores the
- * answer without contacting a provider.
+ * unmarked answer without contacting a provider. Marked continuation obtains
+ * fresh missing fields while retaining recorded public context.
  *
- * It returns the validated response and nothing else. `as`, expression props,
+ * It returns protected live fields for marked input, and validated JSON
+ * otherwise. `as`, expression props,
  * props and return validation, binding, invocation lifetime, and settlement are
  * all core's, and this component deliberately does none of them.
  *
@@ -43,6 +45,7 @@ import { content } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
 import {
   persistElicitation,
+  persistProtectedElicitation,
   questionFingerprint,
   refuseChangedQuestion,
 } from "../elicit-journal.ts";
@@ -87,7 +90,7 @@ export const returns = {
   $schema: "http://json-schema.org/draft-07/schema#",
 } satisfies ReturnsSchema;
 
-export default function* Elicit(props: Record<string, Json>): Operation<Json> {
+export default function* Elicit(props: Record<string, Json>): Operation<unknown> {
   const prepared = yield* prepareElicitation(props.schema);
 
   const message = yield* content();
@@ -104,6 +107,9 @@ export default function* Elicit(props: Record<string, Json>): Operation<Json> {
   // was given to a different question.
   yield* refuseChangedQuestion(identity);
 
+  if (prepared.secretFields.length > 0) {
+    return yield* persistProtectedElicitation(identity, prepared, message);
+  }
   return yield* persistElicitation(identity, () => runPreparedElicitation(prepared, message));
 }
 

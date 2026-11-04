@@ -126,6 +126,23 @@ describe("Tier SU — a use from another loaded copy", () => {
     // frozen configuration.
     const foreign = copy.issueSessionUse(SESSION, { model: "gpt-5.4", effort: "high" }, {});
 
+    expect(foreign.identity).toBe(undefined);
+    Object.defineProperty(SESSION, "identity", {
+      configurable: true,
+      value: Object.freeze({ kind: "acpx.acpSessionId", value: "foreign-loading" }),
+    });
+    const saved = foreign.identity;
+    expect(Object.isFrozen(saved)).toBe(true);
+    expect({ ...foreign }.identity).toBe(saved);
+    expect(JSON.parse(JSON.stringify(foreign)).identity).toEqual(saved);
+    Object.defineProperty(SESSION, "identity", {
+      configurable: true,
+      value: Object.freeze({ kind: "acpx.agentSessionId", value: "foreign-native" }),
+    });
+    SESSION.agentSessionId = "foreign-native";
+    expect(foreign.identity).toEqual({ kind: "acpx.agentSessionId", value: "foreign-native" });
+    expect(foreign.agentSessionId).toBe("foreign-native");
+    expect(saved).toEqual({ kind: "acpx.acpSessionId", value: "foreign-loading" });
     // Visible, because the claim is a registered symbol and is meant to be.
     expect(claimsConfiguration(foreign)).toBe(true);
     // And not this copy's to act on, because the authority is not.

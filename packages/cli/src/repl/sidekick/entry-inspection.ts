@@ -146,6 +146,7 @@ type PageRecord = {
   readonly position: PagePosition | null;
   readonly prompt: number | null;
   readonly agent: string | null;
+  readonly promptError: NonNullable<ReplAgentTurn["error"]> | null;
   readonly exec: {
     readonly exitCode: number;
     readonly stdout?: string;
@@ -334,7 +335,12 @@ export function* readEntryJournal(
     status: statusOf(entry, history.printing),
     failure: entry.terminal?.message ?? null,
     prompts: countPrompts(entry.turns),
-    records: entry.records.map(pageRecord),
+    records: entry.records.map((record) =>
+      pageRecord(
+        record,
+        entry.turns.find((turn) => turn.marker === record.marker),
+      ),
+    ),
   });
 }
 
@@ -601,7 +607,7 @@ function countPrompts(turns: readonly ReplAgentTurn[]): PromptCounts {
   return Object.freeze({ completed, failed, cancelled });
 }
 
-function pageRecord(record: ReplRecord): PageRecord {
+function pageRecord(record: ReplRecord, turn: ReplAgentTurn | undefined): PageRecord {
   return Object.freeze({
     marker: record.marker,
     type: record.type,
@@ -611,6 +617,7 @@ function pageRecord(record: ReplRecord): PageRecord {
     prompt: record.prompt ?? null,
     agent: record.agent ?? null,
     exec: record.exec ?? null,
+    promptError: turn !== undefined && turn.status !== "completed" ? (turn.error ?? null) : null,
   });
 }
 

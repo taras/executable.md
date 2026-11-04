@@ -1148,6 +1148,8 @@ process opening the same URL opens each reading at its start.
 
 ## The form language a question is drawn in
 
+A top-level string field marked writeOnly is presented as a password. Its entered text is absent from validation diagnostics and submit observations. The live resolver still supplies the original answer to Core. A correlated marked question with no capable ACP presenter is refused and withdrawn; closing or cancelling an unmarked presentation retains its existing pending behavior.
+
 The child ACP path delivers the actual message and complete normalized schema.
 Standard requestedSchema preserves original field names and unconditional rules;
 visible text explains conditional requirements. Namespaced optional metadata
@@ -1573,6 +1575,8 @@ written and something was recorded — never that anything is running now.
 
 ## One entry, read as output and then source
 
+Marked input is projected before command bytes enter the entry’s output buffer or undergo control escaping. The producing entry owns that privacy operation through provider cleanup after root Close and through Stop/join, preserving channel routing, selection and drafts.
+
 The transcript pane holds one entry's reading: what it produced, and then the
 source that produced it. A narrow frame has no transcript pane; its one routed
 Entries outlet holds the catalog and the reading of the entry the catalog has
@@ -1682,6 +1686,8 @@ recovers on resize. It is never a clip: shortening somebody's source would be
 this screen editing the content it exists to show.
 
 ## What is retained, and what is not
+
+Protected input has no retained plaintext representation. Public bindings, command facts and feedback contain safe views or field receipts. Cold inspection remains passive and starts no provider or command. The feature adds no second retained output log.
 
 Include directories configure the current command. They add no location member,
 manifest or profile record; pass them again when reopening if new work needs
@@ -2435,6 +2441,8 @@ is unavailable, rather than reconstructed from a saved preview or text.
 
 ## Who owns what
 
+The host acquires one protected-input installation before each producing entry’s providers. It keeps that owner until those providers join, safely seals each independent output channel, and then disposes live input and pending text. Output received after disposal refuses instead of falling back to raw forwarding.
+
 Only the REPL terminal renderer writes presentation bytes while the interface
 owns the terminal. Each entry installs its downstream process display handlers
 before acquiring execution resources and keeps them through joined teardown.
@@ -2959,12 +2967,28 @@ agent turn's reply, request or complete failure message. Output is what the
 entry printed. Journal queries the complete permitted retained value
 `{entry,status,failure,prompts,records}` before paging the query result. Its
 optional `yq` defaults to `.`. Each record carries `marker`, `type`, nullable
-`name`, `position`, `prompt` and `agent`, its `status`, and `exec`. A supported
+`name`, `position`, `prompt` and `agent`, its `status`, `exec` and required nullable `promptError`. A supported
 settled exec has `{exitCode,stdout?,stderr?}`; other records have `exec: null`.
 Missing channels are absent members, retained empty channels are empty strings,
 and timeout, cancellation or missing results invent no exit or complete output.
 Protocol `ok`, a nonzero command exit and the enclosing failed entry remain
 separate facts. Journal exposes no arbitrary result payload or provider data.
+
+`promptError` contains exactly the selected saved Prompt error: required
+`message`, optional `name` and `cause` strings, and optional `diagnostic` in
+Core's saved-failure schema. Its turn is joined by marker within the selected
+entry, independently of record position.
+
+| Saved record | `promptError` |
+| --- | --- |
+| Non-Prompt record, including a failed command or root Close | `null` |
+| Completed Prompt | `null` |
+| Failed or cancelled Prompt with a saved error | The selected saved error object |
+| Message-only failed Prompt | `{message: "Internal error"}`, with name/cause only if saved |
+| Failed or cancelled Prompt without a saved error | `null` |
+
+Empty messages and details stay empty; optional absent fields stay absent.
+The entry-level `failure` string and numeric `prompt` keep their own meanings.
 
 For example, find a failed command anywhere in the selected entry:
 
@@ -2972,12 +2996,29 @@ For example, find a failed command anywhere in the selected entry:
 <REPL.Entry.Journal entry={22} yq={'[.records[] | select(.type == "exec" and .exec.exitCode == 1)]'} />
 ```
 
+Find failed Prompts anywhere in the entry, then inspect one returned Prompt
+number without relying on record position:
+
+```xmd
+<REPL.Entry.Journal entry={22} yq={'[.records[] | select(.prompt != null and .status == "failed")]'} as="failures" />
+<Output><Json value={failures} /></Output>
+<REPL.Entry.Journal entry={22} yq={'.records[] | select(.prompt == 9) | .promptError'} as="failure" />
+<Output><Json value={failure} /></Output>
+```
+
+The existing attachment CLI returns the same page for that selection:
+
+```sh
+xmd sidekick read --attach /absolute/private/attachment.json entry 22 journal --yq '.records[] | select(.prompt == 9) | .promptError'
+```
+
 Every successful Journal read has exactly `{value,next,prev,last}`. The value
 may be any JSON type. Small complete results have null navigation. Strings use
 4096-code-point windows; arrays use at most twenty items per page and the
 serialized response bound. Objects and indivisible items that exceed that bound
 refuse clearly and direct a narrower yq selection, such as a record's
-`.exec.stdout` or `.exec.stderr`. No text or record is cut before the query.
+`.exec.stdout`, `.exec.stderr` or `.promptError.diagnostic.acp.details`. No text
+or record is cut before the query.
 Zero or multiple top-level results, invalid expressions and non-JSON results
 refuse through the existing query engine; null and false are valid answers.
 

@@ -1,4 +1,3 @@
-import type { Json } from "@executablemd/durable-streams";
 import type { ReturnsSchema } from "./types.ts";
 
 /**
@@ -53,17 +52,17 @@ export interface ReturnBody {
    * Record the value the reserving return produced. Only a reserved body
    * accepts one, so a value is selected exactly where the reservation was made.
    */
-  select(value: Json): void;
+  select(value: unknown): void;
   /**
    * What the body finally produced, read by its owner once the body and its
    * teardown have finished.
    */
-  settle(): { value: Json } | undefined;
+  settle(): { value: unknown } | undefined;
 }
 
 export function createReturnBody(owner: string, returns: ReturnsSchema): ReturnBody {
   let claimed = false;
-  let selected: { value: Json } | undefined;
+  let selected: { value: unknown } | undefined;
 
   return {
     claim() {
@@ -73,7 +72,7 @@ export function createReturnBody(owner: string, returns: ReturnsSchema): ReturnB
       claimed = true;
       return { owner, returns };
     },
-    select(value: Json) {
+    select(value: unknown) {
       if (claimed) {
         selected = { value };
       }

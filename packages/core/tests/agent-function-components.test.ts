@@ -33,17 +33,19 @@ import type {
   Session,
   SessionConfiguration,
 } from "../src/agent/agent-api.ts";
-import { AgentPromptError } from "../src/agent/errors.ts";
+import { parsePromptFailure, AgentPromptError } from "../src/agent/errors.ts";
 import { executeInstalled, useAgentPromptPublisher } from "../host.ts";
 import { agentIdentityComponents } from "../src/agent/components.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { AgentInternal } from "../src/agent/internal.ts";
-import { parsePromptRecord } from "../src/agent/journal.ts";
+import { promptFailureFromRecord, parsePromptRecord } from "../src/agent/journal.ts";
 import { installApproveAll, installPromptFailurePolicy } from "../src/agent/permission.ts";
 import { inspectComponent } from "../src/inspect.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
 import type { Json } from "../src/types.ts";
+import { useSecretScannerFactory } from "../src/secrets/policy.ts";
+import { createSecretScanner } from "../src/secrets/scanner.ts";
 
 /** What the stub agent was asked to do, in order. */
 interface Trace {
@@ -332,6 +334,7 @@ function stubStream(
 }
 
 interface RunOptions {
+  secretDetection?: boolean;
   /** Extra files written beside the document, e.g. a repository component. */
   files?: Record<string, string>;
   trace?: Trace;
@@ -428,6 +431,7 @@ function* runDoc(
       {
         path: docPath,
         stream,
+        secretDetection: options.secretDetection,
         includes: [dir],
       },
       [{ components: agentIdentityComponents() }],
@@ -1893,4 +1897,192 @@ describe("AFP — a publisher that never appends retains nothing", () => {
       events.filter((event) => event.type === "yield" && event.description.type === "agent_prompt"),
     ).toEqual([]);
   });
+});
+
+const DIAGNOSTIC_KEY = "executablemd.agent.prompt-diagnostic";
+const DIAGNOSTIC = {
+  provider: "acp",
+  operation: "session/prompt",
+  stage: "runtime-turn",
+  requestId: "request-1039",
+  code: "RUNTIME",
+  retryable: false,
+  origin: "runtime",
+  acp: {
+    code: -32041,
+    message: "secondary summary",
+    details: "/work/project: ordinary useful detail",
+  },
+};
+
+function diagnosticPrompt(error: Error): Operation<void> {
+  return Agent.around({
+    *prompt() {
+      return {
+        *[Symbol.iterator]() {
+          const events: AgentPromptEvent[] = [
+            {
+              type: "started",
+              agent: "stub-agent",
+              session: { sessionKey: "diagnostic-session", cwd: "." },
+            },
+            { type: "text_delta", text: "partial reply" },
+            { type: "terminal", status: "failed", error },
+          ];
+          let index = 0;
+          return {
+            *next() {
+              return index < events.length
+                ? { done: false, value: events[index++]! }
+                : { done: true, value: "partial reply" };
+            },
+          };
+        },
+      };
+    },
+  });
+}
+
+function diagnosticRecord(events: DurableEvent[]) {
+  const event = events.find(
+    (event) => event.type === "yield" && event.description.type === "agent_prompt",
+  );
+  if (event?.type !== "yield" || event.result.status !== "ok") {
+    throw new Error("no saved Prompt");
+  }
+  const record = parsePromptRecord(event.result.value);
+  if (!record) {
+    throw new Error("unreadable saved Prompt");
+  }
+  return record;
+}
+
+describe("1039 saved Prompt diagnostics", () => {
+  for (const raised of [false, true]) {
+    it(`A1/A3: selected facts survive publication and ${raised ? "thrown" : "aggregate"} reconstruction`, function* () {
+      const diagnostic = { ...DIAGNOSTIC, acp: { ...DIAGNOSTIC.acp, details: "" } };
+      const error = Object.assign(
+        new Error("Internal error", { cause: new Error("original cause") }),
+        { [DIAGNOSTIC_KEY]: diagnostic },
+      );
+      error.name = "AdapterError";
+      const run = yield* runDoc(`<Prompt text="once" throwOnError={${raised}} />`, {
+        handler: () => diagnosticPrompt(error),
+      });
+      const record = diagnosticRecord(run.events);
+      expect(record).toMatchObject({
+        status: "failed",
+        text: "partial reply",
+        error: {
+          message: "Internal error",
+          name: "AdapterError",
+          cause: "original cause",
+          diagnostic,
+        },
+      });
+      expect(run.output).not.toContain("request-1039");
+      const restored = promptFailureFromRecord(record);
+      expect(restored && Reflect.get(restored, DIAGNOSTIC_KEY)).toEqual(diagnostic);
+      expect(run.result.ok).toBe(false);
+      if (!run.result.ok) {
+        const failure =
+          run.result.error instanceof AggregateError
+            ? run.result.error.errors[0]
+            : run.result.error;
+        expect(Reflect.get(failure, DIAGNOSTIC_KEY)).toEqual(diagnostic);
+      }
+    });
+  }
+
+  it("A3: absent diagnostics preserve legacy failures and malformed present data refuses", function* () {
+    const legacy = { message: "Internal error", name: "AdapterError", cause: "original cause" };
+    expect(parsePromptFailure(legacy)).toEqual(legacy);
+    expect(parsePromptFailure({ ...legacy, diagnostic: { ...DIAGNOSTIC, extra: true } })).toBe(
+      undefined,
+    );
+    expect(
+      parsePromptFailure({ ...legacy, diagnostic: { ...DIAGNOSTIC, retryable: "false" } }),
+    ).toBe(undefined);
+    const run = yield* runDoc('<Prompt text="once" />', {
+      handler: () => diagnosticPrompt(new Error("Internal error")),
+    });
+    expect(diagnosticRecord(run.events).error).toEqual({ message: "Internal error" });
+  });
+
+  for (const disabled of [false, true]) {
+    it(`A4: optional credential text is ${disabled ? "retained under explicit disabled detection" : "omitted while safe classification remains"}`, function* () {
+      const credential = ["ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789"].join("");
+      const diagnostic = {
+        ...DIAGNOSTIC,
+        acp: { code: -32041, message: credential, details: credential },
+      };
+      const error = Object.assign(new Error("Internal error"), { [DIAGNOSTIC_KEY]: diagnostic });
+      const run = yield* runDoc('<Prompt text="once" />', {
+        secretDetection: !disabled,
+        handler: () => diagnosticPrompt(error),
+      });
+      expect(diagnosticRecord(run.events).error).toMatchObject({
+        message: "Internal error",
+        diagnostic: { ...DIAGNOSTIC, acp: disabled ? diagnostic.acp : { code: -32041 } },
+      });
+      expect(JSON.stringify(run.events).includes(credential)).toBe(disabled);
+    });
+  }
+
+  for (const mode of ["clean", "assembled", "scanner-failure"]) {
+    it(`A4/A4-F: ${mode} selection preserves the original outcome`, function* () {
+      const scans: string[] = [];
+      const error = Object.assign(
+        new Error("Internal error", { cause: new Error("original cause") }),
+        { [DIAGNOSTIC_KEY]: DIAGNOSTIC },
+      );
+      error.name = "AdapterError";
+      const run = yield* runDoc('<Prompt text="once" />', {
+        *handler() {
+          yield* useSecretScannerFactory(() => {
+            const ordinary = createSecretScanner();
+            return {
+              *scan(content) {
+                scans.push(content);
+                if (
+                  mode === "scanner-failure" &&
+                  content === JSON.stringify(DIAGNOSTIC.acp.details)
+                ) {
+                  throw new Error("detector error must stay private");
+                }
+                if (mode === "assembled" && content === JSON.stringify(DIAGNOSTIC)) {
+                  return [
+                    {
+                      ruleId: "combined",
+                      messageId: "combined",
+                      location: { line: 1, column: 0 },
+                      fingerprint: "synthetic",
+                    },
+                  ];
+                }
+                return yield* ordinary.scan(content);
+              },
+            };
+          });
+          yield* diagnosticPrompt(error);
+        },
+      });
+      const failure = diagnosticRecord(run.events).error;
+      expect(failure).toEqual({
+        message: "Internal error",
+        name: "AdapterError",
+        cause: "original cause",
+        ...(mode === "clean" ? { diagnostic: DIAGNOSTIC } : {}),
+      });
+      expect(diagnosticRecord(run.events).text).toBe("partial reply");
+      expect(run.result.ok).toBe(false);
+      expect(scans).toContain(JSON.stringify(DIAGNOSTIC.requestId));
+      expect(scans).toContain(JSON.stringify(DIAGNOSTIC.acp.details));
+      if (mode !== "scanner-failure") {
+        expect(scans).toContain(JSON.stringify(DIAGNOSTIC));
+      }
+      expect(JSON.stringify(run.events)).not.toContain("detector error must stay private");
+      expect(JSON.stringify(run.events)).not.toContain('"fingerprint"');
+    });
+  }
 });

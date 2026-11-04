@@ -1,3 +1,4 @@
+import type { RJSFSchema } from "@rjsf/utils";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 
@@ -155,5 +156,28 @@ describe("client: marking a required field", () => {
         classNames: REQUIRED_FIELD_CLASS,
       });
     }
+  });
+});
+
+import { secretPresentation, secretValidationErrors } from "../client/secret-fields.ts";
+
+describe("client: protected field presentation", () => {
+  it("derives password fields and removes sensitive validation operands", function* () {
+    const schema = {
+      type: "object",
+      properties: { code: { type: "string", writeOnly: true }, public: { type: "string" } },
+    } satisfies RJSFSchema;
+    expect(secretPresentation(schema)).toEqual({ code: { "ui:widget": "password" } });
+    const operand = String(Math.floor(100000 + Math.random() * 900000));
+    const errors = secretValidationErrors(schema, [
+      {
+        name: "enum",
+        property: ".code",
+        message: operand,
+        params: { allowedValues: [operand] },
+        stack: operand,
+      },
+    ]);
+    expect(JSON.stringify(errors).includes(operand)).toBe(false);
   });
 });

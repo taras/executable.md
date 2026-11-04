@@ -69,6 +69,7 @@ export type {
   PermissionRequest,
   PromptOptions,
   Session,
+  SessionIdentity,
   SessionConfiguration,
 } from "./src/agent/agent-api.ts";
 export type { AgentSessionRequest } from "./src/agent/session-request.ts";

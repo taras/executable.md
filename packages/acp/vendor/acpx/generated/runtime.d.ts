@@ -302,6 +302,9 @@ type AcpRuntimeEvent = {
   retryable?: boolean;
 };
 type AcpRuntimeTurnResultError = {
+  /** XMD prompt diagnostic: selected normalized facts, without raw protocol data. */
+  origin?: "cli" | "runtime" | "queue" | "acp";
+  acp?: { code: number; message: string; details?: string };
   message: string;
   code?: string;
   detailCode?: string;

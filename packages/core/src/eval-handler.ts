@@ -1,3 +1,6 @@
+import { inputValues } from "./secrets/inputs.ts";
+import { parseInputRecord } from "./secrets/input-record.ts";
+import { parseJson, isJsonObject } from "./json.ts";
 /**
  * The `eval` terminal modifier factory (spec §4).
  *
@@ -150,7 +153,9 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
     const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(evalEnv.values));
     validateDurableExports(transformed.exports, liveEnvironment(evalEnv));
 
-    const bindings = serializeExports(evalEnv.values, transformed.imports);
+    const inputs = yield* ephemeral(inputValues());
+    const bindings = serializeExports(evalEnv.values, transformed.imports, inputs);
+    let liveExports = false;
     const result = (yield createDurableOperation<Json>(
       {
         type: "eval",
@@ -204,7 +209,28 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         // holding a reference — sees live values the journal cannot carry.
         commitExports(evalEnv.values, blockEnv, transformed.exports);
 
-        const exports = serializeExports(blockEnv, transformed.exports);
+        liveExports = true;
+        const exports = serializeExports(blockEnv, transformed.exports, inputs);
+        const protectedExports: Record<string, unknown> = { ...exports };
+        let marked = false;
+        if (inputs !== undefined) {
+          for (const name of transformed.exports) {
+            if (inputs.contains(blockEnv[name])) {
+              protectedExports[name] = blockEnv[name];
+              marked = true;
+            }
+          }
+          if (marked) {
+            const recorded = inputs.record(protectedExports);
+            if (!recorded.ok) {
+              throw recorded.error;
+            }
+            return parseJson({
+              "executablemd.input-exports": recorded.value,
+              __output: outputRef.text,
+            });
+          }
+        }
 
         if (outputRef.text) {
           (exports as Record<string, unknown>).__output = outputRef.text;
@@ -214,13 +240,35 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
       },
     )) as unknown as { value: Json };
 
-    if (result.value && typeof result.value === "object") {
+    const envelope = parseJson(result);
+    if (isJsonObject(envelope) && "executablemd.input-exports" in envelope) {
+      if (inputs === undefined) {
+        throw new Error("Protected eval history requires its input owner.");
+      }
+      if (!liveExports) {
+        const restored = inputs.restore(parseInputRecord(envelope["executablemd.input-exports"]));
+        if (!restored.ok) {
+          throw restored.error;
+        }
+        if (
+          restored.value === null ||
+          typeof restored.value !== "object" ||
+          Array.isArray(restored.value)
+        ) {
+          throw new Error("Invalid protected eval history.");
+        }
+        Object.assign(evalEnv.values, restored.value);
+      }
+      outputRef.text = typeof envelope.__output === "string" ? envelope.__output : "";
+    } else if (result.value && typeof result.value === "object") {
       const restored = result.value as Record<string, unknown>;
       if (typeof restored.__output === "string") {
         outputRef.text = restored.__output;
       }
       const { __output: _, ...exports } = restored;
-      Object.assign(evalEnv.values, exports);
+      if (!liveExports) {
+        Object.assign(evalEnv.values, exports);
+      }
     }
 
     return { output: outputRef.text, exitCode: 0, stderr: "" };

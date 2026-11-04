@@ -1,3 +1,4 @@
+import { useSecretInputs } from "@executablemd/core/host";
 import { runSessionOwnership } from "./session-ownership.ts";
 import { attachChildUi } from "./headless/ui.ts";
 import { runSidekickCommand, SIDEKICK_HELP } from "./sidekick-acp/command.ts";
@@ -1393,6 +1394,9 @@ function* runDocument(
   installService: HostServiceInstaller,
 ): Operation<Result<void>> {
   const { root, include, verbose, journal, raw, secretDetection, retainProcessOutput } = config;
+  if (!(mode.installations ?? []).some((installation) => installation.secretInputs !== undefined)) {
+    mode = { ...mode, installations: [yield* useSecretInputs(), ...(mode.installations ?? [])] };
+  }
 
   // Every CLI invocation starts from an empty stream unless the caller owns
   // one. --journal writes current-run diagnostics only; existing traces are
@@ -3459,46 +3463,49 @@ function* dispatch(
             };
       announceSecretDetection(config.secretDetection);
       const outcome = yield* runWorkflow(request, start, workflowHost, (execution) =>
-        execution.around(
-          runScopedDocument(
-            {
-              root: execution.root,
-              // A workflow definition is one immutable object. A component
-              // search path would read the mutable checkout beside it, so a
-              // repository component fails to resolve rather than resolving
-              // to content the definition does not describe.
-              include: [],
-              verbose: request.verbose,
-              journal: undefined,
-              raw: request.raw,
-              secretDetection: request.secretDetection,
-              stream: execution.stream,
-              // A workflow owns its journal, so its process results are part of
-              // the run's retained history: a resumed procedure reads back what
-              // its commands printed rather than re-running them to find out.
-              // It names no `--journal`, which is exactly why this is stated
-              // here and never derived from that pathname.
-              retainProcessOutput: true,
-              // A fork's compatibility replay renders history another run
-              // already produced; the fork's own execution renders it again.
-              ...(execution.discardOutput === true ? { discardOutput: true } : {}),
-            },
-            // No elicitation provider is composed around this document. The
-            // workflow host attached the execution and installed the suspending
-            // one already; a browser form here would sit nearer, answer first,
-            // and wait for a reader the run has no way to reach.
-            {
-              testing: false,
-              plugins,
-              props: execution.props,
-              installations: execution.installations,
-            },
-            // The workflow permission boundary sits exactly where a host
-            // service adapter would: installed inside the execution scope,
-            // before the root document is imported.
-            useWorkflowServiceDenial,
-          ),
-        ),
+        scoped(function* () {
+          const privacy = yield* useSecretInputs();
+          yield* installWebElicitation();
+          return yield* execution.around(
+            runScopedDocument(
+              {
+                root: execution.root,
+                // A workflow definition is one immutable object. A component
+                // search path would read the mutable checkout beside it, so a
+                // repository component fails to resolve rather than resolving
+                // to content the definition does not describe.
+                include: [],
+                verbose: request.verbose,
+                journal: undefined,
+                raw: request.raw,
+                secretDetection: request.secretDetection,
+                stream: execution.stream,
+                // A workflow owns its journal, so its process results are part of
+                // the run's retained history: a resumed procedure reads back what
+                // its commands printed rather than re-running them to find out.
+                // It names no `--journal`, which is exactly why this is stated
+                // here and never derived from that pathname.
+                retainProcessOutput: true,
+                // A fork's compatibility replay renders history another run
+                // already produced; the fork's own execution renders it again.
+                ...(execution.discardOutput === true ? { discardOutput: true } : {}),
+              },
+              // The live provider surrounds the workflow's suspending adapter:
+              // marked questions delegate outward, while unmarked questions
+              // retain suspension and durable answer delivery.
+              {
+                testing: false,
+                plugins,
+                props: execution.props,
+                installations: [privacy, ...execution.installations],
+              },
+              // The workflow permission boundary sits exactly where a host
+              // service adapter would: installed inside the execution scope,
+              // before the root document is imported.
+              useWorkflowServiceDenial,
+            ),
+          );
+        }),
       );
       yield* exit(outcome.exitCode);
       break;

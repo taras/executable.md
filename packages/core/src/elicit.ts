@@ -36,6 +36,7 @@ import type { NameKind } from "./schema-walk.ts";
 import { SchemaValidationError } from "./validate.ts";
 import type { NormalizedIssue } from "./validate.ts";
 import type { Json, JsonObject } from "./types.ts";
+import { secretInputFields } from "./secrets/input-schema.ts";
 
 /** The label a host with no component name of its own reports. */
 const DEFAULT_LABEL = "Elicit";
@@ -54,6 +55,7 @@ export interface PreparedElicitation {
   schema: JsonObject;
   validate: ValidateFunction;
   label: string;
+  readonly secretFields: readonly string[];
 }
 
 /**
@@ -71,7 +73,14 @@ export function* prepareElicitation(
   refuseUnsupportedNames(label, declaration);
   refuseExternalReferences(label, declaration);
 
-  return { schema: declaration, validate: yield* compileParseSchema(label, declaration), label };
+  const secretFields = secretInputFields(declaration);
+
+  return {
+    schema: declaration,
+    validate: yield* compileParseSchema(label, declaration),
+    label,
+    secretFields,
+  };
 }
 
 /** Ask the configured provider, and judge what it returns. */
@@ -84,7 +93,23 @@ export function* runPreparedElicitation(
 
   // Parsed rather than asserted: a provider is host code, and what it hands
   // back is `unknown` until this boundary has walked it.
-  const response = parseJson(answer);
+  let response: Json;
+  try {
+    response = parseJson(answer);
+  } catch (error) {
+    if (prepared.secretFields.length === 0) {
+      throw error;
+    }
+    throw new ElicitValidationError(prepared.label, [
+      {
+        instancePath: "",
+        schemaPath: "",
+        keyword: "json",
+        params: {},
+        message: "must be JSON; protected operands are withheld",
+      },
+    ]);
+  }
 
   const issues = validateParsed(prepared.validate, response);
   if (issues.length > 0) {

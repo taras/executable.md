@@ -53,7 +53,7 @@ import type {
 import type { LaunchIdentity } from "./launch-journal.ts";
 import { installApproveAll, installAskPermission } from "./permission.ts";
 import { AgentInternal, formatLocation } from "./internal.ts";
-import { serializePromptFailure } from "./errors.ts";
+import { readPromptDiagnostic, serializePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import {
   auditedPromptStream,
@@ -70,7 +70,7 @@ import type {
   AgentPromptHandle,
   AgentPromptPublisher,
 } from "./publication.ts";
-import { clearsLiveOutput } from "../secrets/policy.ts";
+import { clearsLiveOutput, secretPolicy, scanSecrets } from "../secrets/policy.ts";
 import type { Stream } from "effection";
 import type { AgentPromptEvent } from "./agent-api.ts";
 
@@ -489,6 +489,47 @@ function liveObservation(
   };
 }
 
+function* selectPromptDiagnostic(error: Error): Operation<SerializedPromptFailure["diagnostic"]> {
+  const selected = readPromptDiagnostic(error);
+  if (selected === undefined) {
+    return undefined;
+  }
+  try {
+    const policy = yield* secretPolicy();
+    if (!policy.enabled) {
+      return selected;
+    }
+    const fields: ("requestId" | "code" | "detailCode" | "origin")[] = [
+      "requestId",
+      "code",
+      "detailCode",
+      "origin",
+    ];
+    for (const field of fields) {
+      if (
+        selected[field] !== undefined &&
+        (yield* scanSecrets(JSON.stringify(selected[field]))).length > 0
+      ) {
+        delete selected[field];
+      }
+    }
+    if (selected.acp !== undefined) {
+      const fields: ("message" | "details")[] = ["message", "details"];
+      for (const field of fields) {
+        if (
+          selected.acp[field] !== undefined &&
+          (yield* scanSecrets(JSON.stringify(selected.acp[field]))).length > 0
+        ) {
+          delete selected.acp[field];
+        }
+      }
+    }
+    return (yield* scanSecrets(JSON.stringify(selected))).length === 0 ? selected : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Consume one provider turn into the record the journal holds.
  *
@@ -593,7 +634,10 @@ export function* runPrompt(
             result.stopReason = event.stopReason;
           }
           if (event.error) {
-            result.failure = serializePromptFailure(event.error);
+            result.failure = serializePromptFailure(
+              event.error,
+              yield* selectPromptDiagnostic(event.error),
+            );
           }
           const checkpoint = checkpointOf(event);
           if (checkpoint !== undefined) {

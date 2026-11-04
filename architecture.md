@@ -73,6 +73,8 @@ contracts keep their separately stated requirements.
 
 ### Security model
 
+Explicitly marked Elicit fields have mandatory protection alongside heuristic secret scanning. Live bindings carry protected leaves; journals and public reads carry safe views or field receipts. Disabling the scanner does not disable this protection. The intentional plaintext recipients remain the live input provider and Core’s built-in process terminal.
+
 Installed plugins, providers, middleware and TypeScript components are trusted
 application code. XMD does not contain malicious behavior from these extensions.
 Their code runs with whatever access the surrounding runtime permits; selecting
@@ -206,6 +208,8 @@ Determinism is two properties:
 
 ### State ownership
 
+A protected-input owner belongs to one producing execution. A host whose providers outlive Core acquires its installation before those providers, keeps it through their joined teardown, and disposes it afterwards. Root Close does not end that host lifetime. Each output channel holds its own undecided suffix and never flushes it unscreened.
+
 The parent REPL also owns each established headless XMD child. Registration follows
 readiness of the child's root, exact selected Sidekick conversation and private
 endpoint. Before registration, creator cancellation joins startup; afterwards,
@@ -269,6 +273,8 @@ mint, or one whose name, checkout path or identity was edited after it did, is
 refused before Git or a service is touched.
 
 ### State across loaded copies
+
+Protected-input installations carry owned operations across loaded copies. Canonical execution captures its selected owner before public installation and document work. Journal projection and root disclosure close over that owner; replacing contextual scanner policy cannot replace enforcement. Live plaintext and reference resolution stay with that owner, rather than in a shared registry.
 
 The binary bundles its own package code while components and integrations may
 load another copy of the same package. Those loaded copies must be able to
@@ -468,6 +474,8 @@ reading it is total — every way journal-controlled data can refuse to be read 
 the same refusal, carrying nothing the record supplied.
 
 ### The ordinary component prop boundary
+
+A protected field refuses native JSON conversion through an ordinary prop before the component body runs. Json remains the JSON domain. Existing captures and Let value preserve protected leaves by reference; Json renders their safe view through its capture. Other operands retain the native JSON round trip.
 
 An ordinary component's props are JSON, and one resolver decides that for both
 Markdown and function components — before validation, and before anything
@@ -1099,6 +1107,8 @@ another Agent turn.
   coerced.
 
 ### Foreground commands
+
+Protected command interpolation retains an immutable private pair of canonical language and program segments. Public block content, command arguments and the preview use a safe view before truncation. Only the uncompleted built-in exec callback resolves leaves and calls the existing buildCommand and Process APIs. Unsupported modifier chains refuse before invocation. Separate channel filters project received bytes before forwarding, capture or retention, and host output stays protected through joined cleanup. Existing routing, result ownership and the pump-tail limitation still apply.
 
 An executable block is a foreground child process. Its output reaches the reader
 as the child produces it, before it exits, and each byte is displayed once: what
@@ -2492,6 +2502,8 @@ the journal and the document receive only the fingerprint.
 
 ### Replay and effect transactions
 
+A marked Elicit records public fields and occurrence/field references instead of its entered strings. Eval retains those references separately from live export trees. Reached partial continuation obtains fresh missing fields, validates the merged original answer, and restores eval references without evaluating the body. The original question fingerprint still rejects changed questions. Completed effects and completed roots perform no new interaction or process work.
+
 Replay rehydrates the Effection tree. A completed durable effect restores its
 recorded result without executing again. Ephemeral operations run again only to
 rebuild live structure: attach the Workspace, enter lexical working-directory
@@ -3560,6 +3572,14 @@ session, and `xmd agent options` renders them as text or version-1 JSON.
 Session configuration was delivered on 2026-09-21 in `c77a4b882fb528663137cb04552cec90a569d18a` (#828/#829); ACP
 translation lives entirely in `@executablemd/acp`, and no ACP or ACPX type crosses into core.
 
+Configured uses expose the provider Session's `identity` and native-only
+`agentSessionId` as live enumerable observations. Freezing the carrier preserves
+private configuration and exact-object admission without taking a snapshot of
+first-turn confirmation. The real `started` event retains the final routed use,
+so its public observations and verified configuration remain readable across
+loaded Core copies. JSON and spreads retain a fixed data reading and grant no
+operational authority.
+
 #### Provider identity
 
 A provider-native session identity is the identity an agent asserts for its own durable
@@ -3570,6 +3590,15 @@ native CLI would accept is one. A workflow may retain the distinctly tagged
 `acpx.agentSessionId` takes precedence; changed kind or value refuses
 reattachment. The ACP target never becomes `Session.agentSessionId` or a native
 CLI handoff identity.
+
+`Session.identity` is optional readonly `{ kind, value }` data published by its
+provider after successful confirmation and required host retention. ACPX prefers
+`acpx.agentSessionId` over `acpx.acpSessionId`. Each returned pair is frozen;
+saving it preserves that reading while a later property read observes the latest
+confirmation. Reads perform no provider, storage, journal or model work and
+expose no configuration or execution capability. Third-party providers may omit
+this member. Provider confirmation changes update their own projection through
+the same confirmation owner.
 
 #### Inert placement
 
@@ -3604,7 +3633,8 @@ Promotion shares the session owner's writer: the asserting copy is saved before
 memory adopts it, and finalization joins promotion before saving. Host mapping
 commits after that save and before events. Missing acceptance never selects the
 standard path. Client-native materialization keeps the native launch's retained
-construction.
+construction. Public identity remains absent until the save and required host
+retention succeed; a retention refusal publishes no new association.
 
 A standard adapter uses ordinary ACP creation without this barrier. The provider
 saves its record and the host retains its identity before configuration,
@@ -3628,6 +3658,11 @@ provider storage is gone, setup refuses before creation or sending, preserves th
 keeps the conversation usable. A history containing only failed-before-answer
 turns retains its creation retry. An outcome-less turn still refuses opening
 and is never resent.
+
+Transport release preserves the Session's last confirmed pair without retaining
+a runtime or handle to answer reads. Failed and interrupted turns preserve any
+prior confirmation; an unconfirmed strong attempt stays absent. Passive data
+neither reattaches nor resends work.
 
 Established strong sessions retain their construction route, asserted native
 identity and executable checks. Their continuation never silently downgrades.
@@ -6929,6 +6964,8 @@ so replay derives the identical record from the identical bytes.
 
 #### Execution computes the root data its result hands back
 
+Protected root data is projected before JSON eligibility and disclosure. Public bindings and root results contain fixed replacements, never usable input references. Safe retained data remains readable after the producing owner releases its live state; a later entry receives that safe data only.
+
 An `eval` block's exports are journaled because evaluating one is a durable
 effect. A root `<Let>` and an ordinary component capture are not, and nothing
 here makes them one. A binding is a **byproduct of running the document**: the
@@ -8488,6 +8525,11 @@ forms one row per retained `Yield` and `Close` in append order: marker, type,
 name, status, optional source position, prompt number, agent and supported exec
 facts. A saved Prompt's row takes its semantic outcome, number and agent from
 the turn that same reading parsed; the root close takes the parsed entry outcome.
+Journal joins that row to its entry-local turn by marker and exposes `promptError`:
+the selected saved message, optional name/cause and optional diagnostic for a
+failed or cancelled Prompt with a retained error. Completed Prompts, missing
+errors and non-Prompt rows have null. The model detaches and freezes the error
+and its nested diagnostic containers; the existing failure summary stays text.
 Other rows retain their protocol status. An exec result with protocol `ok`
 projects its validated integral `exitCode` and independently retained string
 channels. An absent channel stays absent; an empty retained channel stays empty.

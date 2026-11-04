@@ -13,9 +13,8 @@ import {
   useScope,
   withResolvers,
 } from "effection";
-import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { createAcpRuntime, resolveAgentCommand } from "../src/acpx-runtime.ts";
@@ -27,14 +26,16 @@ import type {
   AcpRuntimeTurn,
   AcpSessionRecord,
 } from "../src/acpx-runtime.ts";
-import { createAcpxSessionStore, retainedSession } from "../src/session-store.ts";
+import { retainedSession } from "../src/session-store.ts";
 import { createAcpxProvider } from "../src/provider.ts";
 import {
   Agent,
   agentIdentityComponents,
   installAgentComponents,
   useNormalizedOutput,
+  configurationOf,
 } from "@executablemd/core";
+import type { AgentPromptEvent, Session } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { applySessionConfiguration } from "../src/session-configuration.ts";
@@ -46,99 +47,7 @@ import {
   l as runPromptTurn,
 } from "../vendor/acpx/generated/queue-owner-runtime-B0mPqOu4.js";
 
-const AGENT_SOURCE = `
-const fs = require("node:fs");
-const path = require("node:path");
-const controlDirectory = process.argv[2];
-let sessionId;
-let model = "initial";
-let effort = "high";
-const options = () => [
-  { id: "model", name: "Model", category: "model", type: "select", currentValue: model,
-    options: ["initial", "selected", "gpt-5.6-luna"].map(value => ({value, name: value})) },
-  { id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: effort,
-    options: ["high", "xhigh"].map(value => ({value, name: value})) },
-];
-const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
-const reply = (id, result) => send({jsonrpc: "2.0", id, result});
-const update = update => send({jsonrpc: "2.0", method: "session/update", params: {sessionId, update}});
-let buffer = "";
-process.stdin.on("data", chunk => {
-  buffer += chunk;
-  let index;
-  while ((index = buffer.indexOf("\\n")) >= 0) {
-    const line = buffer.slice(0, index);
-    buffer = buffer.slice(index + 1);
-    if (line.trim()) handle(JSON.parse(line));
-  }
-});
-function handle(request) {
-  if (!controlDirectory || !request.method.startsWith("session/")) return respond(request);
-  fs.appendFile(path.join(controlDirectory, "methods.jsonl"), JSON.stringify({method: request.method, value: request.params?.value}) + "\\n", error => {
-    if (error) throw error;
-    const name = request.method === "session/load" ? "load" : request.method === "session/prompt" ? "prompt" : undefined;
-    if (!name) return respond(request);
-    fs.access(path.join(controlDirectory, "hold-" + name), error => {
-      if (error) return respond(request);
-      const wait = () => fs.access(path.join(controlDirectory, "release-" + name), error => {
-        if (error) setTimeout(wait, 5);
-        else respond(request);
-      });
-      wait();
-    });
-  });
-}
-function respond(request) {
-  if (request.id === undefined) return;
-  if (request.method === "initialize") {
-    const initialize = () => fs.access(controlDirectory ? path.join(controlDirectory, "no-load") : "", error => reply(request.id, {protocolVersion: 1, agentCapabilities: {loadSession: Boolean(error), promptCapabilities: {}}, authMethods: []}));
-    if (process.env.XMD_RELEASE_ENV_LOG) {
-      require("node:fs").writeFile(process.env.XMD_RELEASE_ENV_LOG, JSON.stringify({
-        bound: process.env.CLAUDE_CODE_EXECUTABLE ?? null,
-        auth: process.env.XMD_TEST_AUTH ?? null,
-      }), error => { if (error) throw error; initialize(); });
-    } else initialize();
-  } else if (request.method === "session/new" || request.method === "session/load") {
-    sessionId = request.params.sessionId ?? (controlDirectory ? "fixed-session" : "session-" + process.pid);
-    const loaded = () => reply(request.id, {sessionId, configOptions: options(), _meta: {agentSessionId: "native-" + sessionId}});
-    if (controlDirectory && request.method === "session/load") {
-      fs.access(path.join(controlDirectory, "fail-load"), error => {
-        if (error) loaded();
-        else send({jsonrpc: "2.0", id: request.id, error: {code: -32603, message: "Controlled cold load failure"}});
-      });
-    } else loaded();
-  } else if (request.method === "session/set_config_option") {
-    if (request.params.configId === "model") model = request.params.value;
-    if (request.params.configId === "effort") effort = request.params.value;
-    reply(request.id, {configOptions: options()});
-  } else if (request.method === "session/prompt") {
-    const text = request.params.prompt.map(block => block.text ?? "").join("");
-    if (text !== "no-accept") update({sessionUpdate: "session_info_update", _meta: {"executablemd.session-materialization/v1": {state: "accepted"}}});
-    update({sessionUpdate: "agent_message_chunk", content: {type: "text", text: "answer:" + text}});
-    if (text === "fail") {
-      send({jsonrpc: "2.0", id: request.id, error: {code: -32000, message: "backend refusal"}});
-    } else {
-      reply(request.id, {stopReason: text === "cancel" ? "cancelled" : "end_turn", _meta: {codex: {turnId: "turn-" + text}, opaque: {left: [3, null]}}});
-    }
-  } else {
-    send({jsonrpc: "2.0", id: request.id, error: {code: -32601, message: "unsupported"}});
-  }
-}
-`;
-
-function* world(trace = false) {
-  const dir = join(tmpdir(), `xmd-released-${randomUUID()}`);
-  yield* ensureDir(dir);
-  yield* ensure(() => rm(dir, { recursive: true, force: true }));
-  const agent = join(dir, "agent with spaces.cjs");
-  yield* writeTextFile(agent, AGENT_SOURCE);
-  const registry = {
-    resolve: () => ["node", agent, ...(trace ? [dir] : [])],
-    list: () => ["scribe"],
-  };
-  const store = createAcpxSessionStore(dir);
-  return { dir, agent, registry, store };
-}
+import { AGENT_SOURCE, world } from "./released-peer.ts";
 
 function* runtimeWorld() {
   const current = yield* world();
@@ -159,6 +68,274 @@ function* runtimeWorld() {
   );
   return { ...current, runtime, handle };
 }
+
+describe("Session information", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("SI: standard public configured sessions retain loading identity through close and load", function* () {
+    const current = yield* world(true);
+    yield* writeTextFile(
+      current.agent,
+      AGENT_SOURCE.replace(', _meta: {agentSessionId: "native-" + sessionId}', ""),
+    );
+    const sessionKey = "public-standard";
+    let held: Session | undefined;
+    let hostCalls = 0;
+    let started = 0;
+    function* run(existing: boolean, text: string) {
+      return yield* scoped(function* () {
+        yield* installAgentComponents({
+          defaultAgent: "scribe",
+          rootProvider: {
+            options: { defaultAgent: "scribe", permissionMode: "deny-all" },
+            factory: createAcpxProvider({
+              sessionStore: current.store,
+              agentRegistry: current.registry,
+              advertiseNativeLaunch: [],
+              advertiseClientNativeAttachment: [],
+              *agentCwd() {
+                return current.dir;
+              },
+              sessions: {
+                *requestSession() {
+                  return { sessionKey, cwd: current.dir, state: existing ? "existing" : "new" };
+                },
+                *recordSessionIdentity(_details, identity) {
+                  expect((yield* retainedSession(current.store, sessionKey))?.acpSessionId).toBe(
+                    identity.acpSessionId,
+                  );
+                  expect(identity.agentSessionId).toBe(undefined);
+                  expect(started).toBe(existing ? 1 : 0);
+                  hostCalls++;
+                },
+              },
+            }),
+          },
+        });
+        let resolved: Session | undefined;
+        yield* Agent.around({
+          *session(args, next) {
+            const session = yield* next(...args);
+            resolved = session;
+            if (!existing) {
+              held = session;
+              expect(session.identity).toBe(undefined);
+              const before = yield* retainedSession(current.store, sessionKey);
+              for (let i = 0; i < 10; i++) {
+                expect(JSON.parse(JSON.stringify(session)).identity).toBe(undefined);
+                expect({ ...session }.identity).toBe(undefined);
+              }
+              expect(yield* retainedSession(current.store, sessionKey)).toEqual(before);
+              expect(before).toBe(undefined);
+              expect(hostCalls).toBe(0);
+            } else {
+              expect(session.identity).toEqual(held?.identity);
+            }
+            return session;
+          },
+          *prompt(args, next) {
+            const source = yield* next(...args);
+            return {
+              *[Symbol.iterator]() {
+                const subscription = yield* source;
+                return {
+                  *next() {
+                    const event = yield* subscription.next();
+                    if (!event.done && event.value.type === "started") {
+                      started++;
+                      expect(hostCalls).toBeGreaterThan(existing ? 1 : 0);
+                      expect(event.value.session).toBe(resolved);
+                      expect(configurationOf(event.value.session)).toEqual({
+                        model: "selected",
+                        effort: "xhigh",
+                      });
+                      expect(event.value.session.identity).toEqual({
+                        kind: "acpx.acpSessionId",
+                        value: "fixed-session",
+                      });
+                      expect(event.value.session.agentSessionId).toBe(undefined);
+                      expect(Object.isFrozen(event.value.session.identity)).toBe(true);
+                      const admissions = hostCalls;
+                      const io = { ...current.storeCalls };
+                      const history = journal.snapshot();
+                      for (let i = 0; i < 10; i++) {
+                        expect(JSON.parse(JSON.stringify(event.value.session)).identity).toEqual(
+                          held?.identity,
+                        );
+                        expect({ ...event.value.session }.agentSessionId).toBe(undefined);
+                      }
+                      expect(hostCalls).toBe(admissions);
+                      expect(current.storeCalls).toEqual(io);
+                      expect(journal.snapshot()).toEqual(history);
+                    }
+                    return event;
+                  },
+                };
+              },
+            };
+          },
+        });
+        const doc = join(current.dir, "standard.md");
+        yield* writeTextFile(
+          doc,
+          `<Agent name="scribe"><Session name="review" model="selected" effort="xhigh"><Prompt text="${text}" /></Session></Agent>`,
+        );
+        yield* useNormalizedOutput();
+        const journal = new InMemoryStream();
+        const execution = yield* executeInstalled({ path: doc, stream: journal }, [
+          { components: agentIdentityComponents() },
+        ]);
+        const output = yield* execution.output;
+        while (!(yield* output.next()).done) {}
+        return { result: yield* execution, history: journal.snapshot() };
+      });
+    }
+    expect((yield* run(false, "marker")).result.ok).toBe(true);
+    const saved = held?.identity;
+    expect(saved).toEqual({ kind: "acpx.acpSessionId", value: "fixed-session" });
+    const before = yield* until(current.store.load(sessionKey));
+    const methods = yield* readTextFile(join(current.dir, "methods.jsonl"));
+    expect(
+      methods
+        .trim()
+        .split("\n")
+        .map((line) => methodReport.parse(JSON.parse(line)).method),
+    ).toEqual([
+      "session/new",
+      "session/set_config_option",
+      "session/set_config_option",
+      "session/prompt",
+    ]);
+    for (let i = 0; i < 10; i++) {
+      expect(held?.identity).toBe(saved);
+      expect(JSON.parse(JSON.stringify(held)).identity).toEqual(saved);
+      expect({ ...held }.identity).toBe(saved);
+    }
+    expect(yield* readTextFile(join(current.dir, "methods.jsonl"))).toBe(methods);
+    const continued = yield* run(true, "recall-fail");
+    expect(continued.result.ok).toBe(false);
+    expect(JSON.stringify(continued.history)).toContain("answer:recall-fail:marker");
+    expect(held?.identity).toBe(saved);
+    const after = yield* until(current.store.load(sessionKey));
+    expect(after?.acpSessionId).toBe(before?.acpSessionId);
+    expect(after?.messages.slice(0, before?.messages.length)).toEqual(before?.messages);
+    const delta = (yield* readTextFile(join(current.dir, "methods.jsonl"))).slice(methods.length);
+    const reports = delta
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => methodReport.parse(JSON.parse(line)));
+    expect(reports.filter((report) => report.method === "session/load")).toEqual([
+      expect.objectContaining({ sessionId: "fixed-session" }),
+    ]);
+    expect(reports.filter((report) => report.method === "session/prompt")).toEqual([
+      expect.objectContaining({ sessionId: "fixed-session", text: "recall-fail" }),
+    ]);
+    const names = reports.map((report) => report.method);
+    expect(names).toEqual([
+      "session/load",
+      "session/set_config_option",
+      "session/set_config_option",
+      "session/prompt",
+    ]);
+    expect(started).toBe(2);
+  });
+});
+
+describe(
+  "Unconfirmed Session information",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("a real strong first attempt without acceptance exposes no identity or started event", function* () {
+      const current = yield* world(true);
+      let retained = 0;
+      yield* installAgentComponents({
+        defaultAgent: "scribe",
+        rootProvider: {
+          options: { defaultAgent: "scribe", permissionMode: "deny-all" },
+          factory: createAcpxProvider({
+            sessionStore: current.store,
+            agentRegistry: current.registry,
+            nativeAdapters: {
+              scribe: {
+                launcher: "scribe",
+                identity: "provider-returned",
+                acceptance: "first-turn-acceptance",
+                resume: () => [],
+              },
+            },
+            advertiseNativeLaunch: [],
+            advertiseClientNativeAttachment: [],
+            *agentCwd() {
+              return current.dir;
+            },
+            sessions: {
+              *requestSession() {
+                return { sessionKey: "unconfirmed", cwd: current.dir, state: "new" };
+              },
+              *recordSessionIdentity() {
+                retained++;
+              },
+            },
+          }),
+        },
+      });
+      let session: Session | undefined;
+      const events: AgentPromptEvent[] = [];
+      yield* Agent.around({
+        *session(args, next) {
+          session = yield* next(...args);
+          expect(session.identity).toBe(undefined);
+          return session;
+        },
+        *prompt(args, next) {
+          const source = yield* next(...args);
+          return {
+            *[Symbol.iterator]() {
+              const subscription = yield* source;
+              return {
+                *next() {
+                  const event = yield* subscription.next();
+                  if (!event.done) {
+                    events.push(event.value);
+                  }
+                  return event;
+                },
+              };
+            },
+          };
+        },
+      });
+      const doc = join(current.dir, "uncertain.md");
+      yield* writeTextFile(
+        doc,
+        '<Agent name="scribe"><Session name="uncertain" model="selected"><Prompt text="no-accept" /></Session></Agent>',
+      );
+      const execution = yield* executeInstalled({ path: doc, stream: new InMemoryStream() }, [
+        { components: agentIdentityComponents() },
+      ]);
+      const output = yield* execution.output;
+      while (!(yield* output.next()).done) {}
+      const result = yield* execution;
+      expect(result.ok).toBe(false);
+      expect(events.filter((event) => event.type === "started")).toEqual([]);
+      expect(session?.identity).toBe(undefined);
+      expect(retained).toBe(0);
+      expect(yield* retainedSession(current.store, "unconfirmed")).toMatchObject({
+        agentCommand: expect.any(String),
+      });
+      expect((yield* retainedSession(current.store, "unconfirmed"))?.agentSessionId).toBe(
+        undefined,
+      );
+      const methods = yield* readTextFile(join(current.dir, "methods.jsonl"));
+      expect(
+        methods
+          .trim()
+          .split("\n")
+          .map((line) => methodReport.parse(JSON.parse(line)).method)
+          .filter((method) => method === "session/prompt"),
+      ).toHaveLength(1);
+    });
+  },
+);
 
 describe(
   "released ACPX production consumers",
@@ -403,6 +580,60 @@ describe(
       }
     });
 
+    it("1039 A1/A5: real protocol failure details reach the terminal Error", function* () {
+      const current = yield* runtimeWorld();
+      const turn = current.runtime.startTurn({
+        handle: current.handle,
+        text: "diagnostic",
+        mode: "prompt",
+        requestId: "actual-request",
+      });
+      const channel = createChannel<AgentPromptEvent, string>();
+      const subscription = yield* channel;
+      const consumer = yield* spawn(() =>
+        consumeTurn(
+          turn,
+          { agent: "scribe", session: { sessionKey: "released", cwd: current.dir } },
+          channel,
+          () => {},
+        ),
+      );
+      const events: AgentPromptEvent[] = [];
+      let next = yield* subscription.next();
+      while (!next.done) {
+        events.push(next.value);
+        next = yield* subscription.next();
+      }
+      yield* consumer;
+      expect(next.value).toBe("answer:diagnostic");
+      const terminal = events.find((event) => event.type === "terminal");
+      const result = yield* until(turn.result);
+      expect(result).toMatchObject({
+        status: "failed",
+        error: {
+          origin: "runtime",
+          acp: { code: -32041, details: "/work/project: adapter unavailable" },
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("<redacted>");
+      expect(terminal?.error?.message).toBe("Internal error");
+      expect(
+        terminal?.error && Reflect.get(terminal.error, "executablemd.agent.prompt-diagnostic"),
+      ).toEqual({
+        provider: "acp",
+        operation: "session/prompt",
+        stage: "runtime-turn",
+        requestId: "actual-request",
+        code: "RUNTIME",
+        origin: "runtime",
+        acp: {
+          code: -32041,
+          message: "Internal error",
+          details: "/work/project: adapter unavailable",
+        },
+      });
+    });
+
     it("a final save failure keeps the returned reply inspectable and does not reprompt", function* () {
       const current = yield* world();
       let fail = true;
@@ -450,7 +681,12 @@ describe(
   },
 );
 
-const methodReport = z.object({ method: z.string(), value: z.string().optional() });
+const methodReport = z.object({
+  method: z.string(),
+  value: z.string().optional(),
+  sessionId: z.string().optional(),
+  text: z.string().optional(),
+});
 
 function* explicitResumeWorld() {
   const current = yield* world(true);

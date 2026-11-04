@@ -695,7 +695,7 @@ describe("minimal live Sidekick ACP attachment", () => {
     expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 3);
   });
 
-  it("1006 E3/E4/E7: passive Journal reads match the component route across cold three-page navigation", function* () {
+  it("1006 E3/E4/E7: passive Journal reads match component, attachment and CLI for shell pages and saved Prompt errors", function* () {
     const text = "A🦊".repeat(7000);
     let launches = 0;
     const one = yield* world({
@@ -719,6 +719,13 @@ describe("minimal live Sidekick ACP attachment", () => {
       throw submitted.error;
     }
     expect((yield* submitted.value.join()).ok).toBe(false);
+    one.held.fake.script({ reply: "partial reply", failure: "controlled Prompt failure" });
+    const failedPrompt = yield* one.held.session.submit('<Prompt text="record a failure" />');
+    if (!failedPrompt.ok) {
+      throw failedPrompt.error;
+    }
+    expect((yield* failedPrompt.value.join()).ok).toBe(false);
+    expect(one.held.session.model.entries).toHaveLength(2);
     const before = yield* readTextFile(one.held.execution.stream.path);
     const beforeChat = yield* records(one.held.execution);
     const calls = one.held.fake.prompts.length;
@@ -753,6 +760,33 @@ describe("minimal live Sidekick ACP attachment", () => {
         ),
       ).toEqual(component.value);
     }
+    const failureQuery = ".records[] | select(.prompt == 1) | .promptError";
+    const failure = yield* reads.inspectJournal({ entry: 2, yq: failureQuery });
+    if (!failure.ok) {
+      throw failure.error;
+    }
+    expect(failure.value).toMatchObject({ value: { message: "controlled Prompt failure" } });
+    expect(
+      pageSchema.parse(
+        yield* requestAttachment(one.path, {
+          method: "entry",
+          entry: 2,
+          view: "journal",
+          yq: failureQuery,
+        }),
+      ),
+    ).toEqual(failure.value);
+    const reopenedFailure = yield* one.held.repository.open(one.held.execution.id);
+    const coldFailure = yield* openReplSession({ execution: reopenedFailure });
+    if (!coldFailure.ok) {
+      throw coldFailure.error;
+    }
+    expect(
+      yield* rootReads(coldFailure.value, one.held.profile).inspectJournal({
+        entry: 2,
+        yq: failureQuery,
+      }),
+    ).toEqual(failure);
     let yq: string | null = ".records[1].exec.stdout";
     let collected = "";
     let count = 0;
@@ -833,6 +867,8 @@ describe("minimal live Sidekick ACP attachment", () => {
     expect(Request.safeParse({ method: "entry", entry: 1, view: "source", yq: "." }).success).toBe(
       false,
     );
+    const afterLater = yield* readTextFile(one.held.execution.stream.path);
+    expect(one.held.session.model.entries).toHaveLength(3);
     const cli = cliCommand([
       "sidekick",
       "read",
@@ -851,6 +887,29 @@ describe("minimal live Sidekick ACP attachment", () => {
     }).join();
     expect(actual.code).toBe(0);
     expect(JSON.parse(actual.stdout)).toEqual({ value: 1, next: null, prev: null, last: null });
+    const promptCli = cliCommand([
+      "sidekick",
+      "read",
+      "--attach",
+      one.path,
+      "entry",
+      "2",
+      "journal",
+      "--yq",
+      failureQuery,
+    ]);
+    const actualFailure = yield* exec(promptCli.command, {
+      arguments: promptCli.arguments,
+      cwd: one.held.workspace,
+      env: { HOME: one.home, PATH: process.env.PATH ?? "", DENO_DIR: process.env.DENO_DIR ?? "" },
+    }).join();
+    expect(actualFailure.code).toBe(0);
+    expect(pageSchema.parse(JSON.parse(actualFailure.stdout))).toEqual(failure.value);
+    expect(yield* readTextFile(one.held.execution.stream.path)).toBe(afterLater);
+    expect(one.held.session.model.entries).toHaveLength(3);
+    expect(one.held.fake.prompts).toHaveLength(calls);
+    expect(launches).toBe(1);
+    expect(yield* records(one.held.execution)).toEqual(beforeChat);
   });
 
   it("A1/A3: the actual embedded provider keeps serial attachment identity and completing RPC metadata", function* () {

@@ -1,3 +1,6 @@
+import type { InputCommand } from "./secrets/inputs.ts";
+import { createInputOwner, attachInputOwner, inputValues } from "./secrets/inputs.ts";
+import type { SecretInputOwner } from "./secrets/inputs.ts";
 import type { FilesystemHost, FilesystemInstaller } from "./filesystem-host.ts";
 import type { FilesystemExpansion } from "./filesystem-placement.ts";
 /**
@@ -1744,9 +1747,14 @@ function* execTerminal(
   retainProcessOutput: boolean,
   context: CodeBlockContext,
   bound: boolean,
+  input?: InputCommand,
 ): CodeBlockWorkflow {
   {
     {
+      const owner = yield* ephemeral(inputValues());
+      if (input !== undefined && owner === undefined) {
+        throw new Error("Protected command requires its owning execution.");
+      }
       const command = buildCommand(context.language, context.content);
       // Resolved here, where the block is, and handed to the Process operation
       // explicitly: an enclosing `timeout=` has already made this its own value,
@@ -1777,12 +1785,19 @@ function* execTerminal(
           const finished = yield* route(selected, retainProcessOutput, bound);
           // `retain: false`: this execution keeps what it decided to keep, on
           // the chain above, where silencing cannot hide it from a record.
-          const execResult = yield* API.Process.operations.exec({
-            command,
-            cwd: yield* cwd(),
-            timeout,
-            retain: false,
-          });
+          const workingDirectory = yield* cwd();
+          const execResult =
+            input !== undefined && owner !== undefined
+              ? yield* owner.exec(input, { cwd: workingDirectory, timeout })
+              : yield* API.Process.operations.exec({
+                  command,
+                  cwd: workingDirectory,
+                  timeout,
+                  retain: false,
+                });
+          if (owner !== undefined) {
+            yield* owner.flushOutput();
+          }
           const kept = finished();
           live = kept.captured;
           liveStdout = kept.boundStdout ?? "";
@@ -2174,10 +2189,15 @@ function* runValueRoot(
   if (!selected) {
     throw new Error(missingReturnMessage("__root__"));
   }
+  const inputs = yield* inputValues();
+  const safe = inputs?.display(selected.value);
+  if (safe !== undefined && !safe.ok) {
+    throw safe.error;
+  }
   return {
     status: "ok",
     output: chunks.join(""),
-    value: selected.value,
+    value: safe?.ok ? safe.value : parseJson(selected.value),
     ...carriedBindings(computed),
   };
 }
@@ -2926,7 +2946,8 @@ function* executeDocument(
   // expansion creates it, and the disclosure policy when the execution
   // establishes one. Acquired here, ahead of that work, so its finalizer is
   // established before there is a live reference for it to release.
-  const computed = yield* useComputedBindings();
+  const inputs = yield* inputValues();
+  const computed = yield* useComputedBindings(inputs);
 
   const registry = createModifierRegistry();
   // Held by identity as well as by name: a bound block is authorized against
@@ -2935,7 +2956,9 @@ function* executeDocument(
   const boundChain: BoundExecChain = {
     exec: createExecFactory(retainProcessOutput),
     timeout: timeoutFactory,
-    terminal: (context) => execTerminal(retainProcessOutput, context, true),
+    silent: silentFactory,
+    terminal: (context, bound = true, input) =>
+      execTerminal(retainProcessOutput, context, bound, input),
   };
   registry.set("exec", boundChain.exec);
   registry.set("silent", silentFactory);
@@ -2961,6 +2984,7 @@ function* executeDocument(
   // scanner, the one settlement this completion ever takes, and the one close
   // its consumers ever see.
   let emittedText = "";
+  let documentText: import("./secrets/inputs.ts").InputText | undefined;
   let settled = false;
   /** Settle this completion once. A terminal already acknowledged wins. */
   const settle = (result: Result<Json>): void => {
@@ -2976,6 +3000,12 @@ function* executeDocument(
       return;
     }
     closed = true;
+    const tail = documentText?.finish() ?? "";
+    documentText = undefined;
+    if (tail !== "") {
+      emittedText += tail;
+      yield* channel.send(tail);
+    }
     yield* channel.close(text);
   }
   /**
@@ -3024,8 +3054,10 @@ function* executeDocument(
       // not sent, accumulated, or described — while the durable journal gate
       // stays what fails the run. Restored output crossed that
       // gate when it was journaled, so restoration is not screened again.
+      documentText = inputs?.text();
       yield* DocumentOutput.around({
-        *output([text]) {
+        *output([received]) {
+          const text = restoring ? received : (documentText?.write(received) ?? received);
           if (!restoring && !(yield* clearsLiveOutput(text))) {
             return;
           }
@@ -3179,8 +3211,15 @@ function* executeDocument(
           *applyBoundModifiers([_modifiers, request], _next) {
             // The delegated array is inspectable data and nothing more: what
             // runs is the chain the request retained.
-            yield* claimBoundExec(request, (authored, context) => {
-              const chain = composeBoundExecChain(authored, context, registry, boundChain);
+            yield* claimBoundExec(request, (authored, context, input, binding) => {
+              const chain = composeBoundExecChain(
+                authored,
+                context,
+                registry,
+                boundChain,
+                input,
+                binding,
+              );
               return chain() as unknown as Operation<CodeBlockResult>;
             });
           },
@@ -3194,7 +3233,7 @@ function* executeDocument(
       // root component import is already behind the gate. What comes back is
       // the stream to journal through; the policy itself stays inside the
       // execution that owns it.
-      const detection = yield* useSecretDetection(secretDetection, stream);
+      const detection = yield* useSecretDetection(secretDetection, stream, inputs);
       const journal = detection.journal;
       // Adopted here, where the policy is established, and held by value: a
       // reader asking this execution later must be answered by the scanner the
@@ -3413,7 +3452,11 @@ function* executeDocument(
       );
       // Taken rather than read, so the handoff belongs to the run that made it.
       const live = yield* takeLiveFailure(liveFailure);
-      const result = parseDocumentResult(returned);
+      const projected = inputs?.display(returned);
+      if (projected !== undefined && !projected.ok) {
+        throw projected.error;
+      }
+      const result = parseDocumentResult(projected?.ok ? projected.value : returned);
       // Accepted, live or restored: from here the owner answers from the result
       // rather than from a root environment, which is what lets a completed run
       // be read without being executed again.
@@ -3586,6 +3629,7 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
  * `install` runs contextual behavior the document inherits.
  */
 export interface ExecutionInstallation {
+  readonly secretInputs?: SecretInputOwner;
   readonly filesystem?: FilesystemInstaller;
   /**
    * Retained-history requirements, copied into an execution-owned collection
@@ -4221,6 +4265,13 @@ function* invoke(
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
 ): Operation<CanonicalInvocation> {
+  const owners = installations.flatMap((installation) =>
+    installation.secretInputs === undefined ? [] : [installation.secretInputs],
+  );
+  if (owners.length > 1) {
+    throw new Error("Multiple protected-input owners");
+  }
+  yield* attachInputOwner(owners[0] ?? (yield* createInputOwner()));
   const filesystemFactories = installations.flatMap((installation) => {
     const factory = installation.filesystem;
     return factory === undefined ? [] : [factory.bind(installation)];

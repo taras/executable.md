@@ -660,10 +660,12 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
         additionalProperties: false,
       },
       description:
-        "Inspect saved commands and locate agent turns in one entry. " +
-        '`<REPL.Entry.Journal entry={22} yq=".records" />` ' +
-        "queries complete retained facts before paging. Read .exec.exitCode, .exec.stdout and " +
-        ".exec.stderr on a command record; reuse next, prev or last as yq with the same positive entry.",
+        "Inspect saved commands and Prompt failures in one entry. " +
+        "`<REPL.Entry.Journal entry={22} yq={'[.records[] | select(.prompt != null and .status == \"failed\")]'} />` " +
+        "finds failed Prompts across the complete entry before paging. Select a returned " +
+        "Prompt number with .records[] | select(.prompt == 9) | .promptError to read its saved error. " +
+        "Read .exec.exitCode, .exec.stdout and .exec.stderr on a command record; " +
+        "reuse next, prev or last as yq with the same positive entry.",
       *fn(props: EntryJournalRequest): Operation<EntryJournalPage | string> {
         return yield* inspected(
           journal,

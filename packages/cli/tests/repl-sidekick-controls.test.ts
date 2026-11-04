@@ -34,13 +34,28 @@ import { CORE_REGISTRY } from "../../core/src/components/registry.ts";
 import { isJsonObject } from "../../core/src/json.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { readFile } from "node:fs/promises";
+import { appendFile, open, readFile } from "node:fs/promises";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createAcpxProvider } from "../../acp/src/provider.ts";
+import { createAcpxSessionStore } from "../../acp/src/session-store.ts";
 import { fileURLToPath } from "node:url";
-import { Err, Ok, scoped, spawn, until, withResolvers } from "effection";
+import { Err, Ok, ensure, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { parseDurableEvent, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { Component, Execution, retainedSource, useTempFileCompiler } from "@executablemd/core";
+import {
+  Agent,
+  agentIdentityComponents,
+  installAgentComponents,
+  useNormalizedOutput,
+  Component,
+  Execution,
+  retainedSource,
+  useTempFileCompiler,
+} from "@executablemd/core";
 import type { FunctionComponentDefinition } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
@@ -61,7 +76,12 @@ import { assembleReplProfile, entryVocabulary } from "../src/repl-profile.ts";
 import { installPlugins, NO_PLUGINS } from "../src/plugin-host.ts";
 import { ADAPTERS, AGENT } from "./support/plan-harness.ts";
 import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
-import { readRecords } from "../src/repl/journal.ts";
+import {
+  createExecutionFile,
+  openExecutionFile,
+  executionPath,
+  readRecords,
+} from "../src/repl/journal.ts";
 import type { ReplPrinting } from "../src/repl/session.ts";
 import { BALLOT_REPLY, PROMPT_REPLIES } from "./fixtures/repl/issue-932/history.ts";
 import type {
@@ -2419,6 +2439,357 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
     return held;
   }
 
+  it("1039 A2: real failed turns remain distinct after cold reopen without resending", function* () {
+    const directory = join(tmpdir(), `xmd-diagnostic-${randomUUID()}`);
+    yield* ensure(() => rm(directory, { recursive: true, force: true }));
+    yield* ensureDir(directory);
+    const details = "/work/project: adapter unavailable\n" + "🦊".repeat(270000);
+    const adapter = join(directory, "diagnostic agent.cjs");
+    const calls = join(directory, "prompt-count.txt");
+    yield* writeTextFile(
+      adapter,
+      `
+const fs = require("node:fs");
+const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
+let buffer = "";
+process.stdin.on("data", chunk => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
+    if (line.trim()) respond(JSON.parse(line));
+  }
+});
+function respond(request) {
+  if (request.id === undefined) return;
+  const reply = result => send({jsonrpc: "2.0", id: request.id, result});
+  if (request.method === "initialize") reply({protocolVersion: 1, agentCapabilities: {loadSession: true, promptCapabilities: {}}, authMethods: []});
+  else if (request.method === "session/new" || request.method === "session/load") reply({sessionId: "diagnostic-session"});
+  else if (request.method === "session/prompt") {
+    const text = request.params.prompt.map(block => block.text ?? "").join("");
+    fs.appendFile(process.argv[2], "prompt\\n", error => {
+      if (error) throw error;
+      send({jsonrpc: "2.0", method: "session/update", params: {sessionId: "diagnostic-session", update: {sessionUpdate: "agent_message_chunk", content: {type: "text", text: "partial:" + text}}}});
+      send({jsonrpc: "2.0", id: request.id, error: {code: text === "first" ? -32041 : -32042, message: "Internal error", data: {details: text === "first" ? ${JSON.stringify(details)} : "", authorization: "<redacted>", prompt: "excluded prompt", env: {TOKEN: "excluded environment"}}}});
+    });
+  } else send({jsonrpc: "2.0", id: request.id, error: {code: -32601, message: "unsupported"}});
+}
+`,
+    );
+    yield* ReplHost.around(
+      {
+        *createExclusive([file]) {
+          const handle = yield* until(open(file, "wx"));
+          yield* until(handle.close());
+        },
+        *appendRecord([file, record]) {
+          yield* until(appendFile(file, record));
+        },
+      },
+      { at: "min" },
+    );
+    yield* scoped(function* () {
+      const execution = yield* createExecutionFile(directory, "diagnostics");
+      yield* useNormalizedOutput();
+      yield* installAgentComponents({
+        defaultAgent: "scribe",
+        rootProvider: {
+          options: { defaultAgent: "scribe", permissionMode: "deny-all" },
+          factory: createAcpxProvider({
+            sessionStore: createAcpxSessionStore(join(directory, "provider")),
+            agentRegistry: { resolve: () => ["node", adapter, calls], list: () => ["scribe"] },
+            advertiseNativeLaunch: [],
+            advertiseClientNativeAttachment: [],
+            *agentCwd() {
+              return directory;
+            },
+            sessions: {
+              *requestSession() {
+                return { sessionKey: "owning-conversation", cwd: directory, state: "new" };
+              },
+              *recordSessionIdentity() {},
+            },
+          }),
+        },
+      });
+      const opened = yield* openReplSession({
+        execution,
+        installations: [{ components: agentIdentityComponents() }],
+      });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const submitted = yield* opened.value.submit(
+        Array.from(
+          { length: 24 },
+          (_, index) => `<Json value={${index}} as="before${index}" />`,
+        ).join("\n") +
+          '\n<Session name="review"><Prompt text="first" /><Prompt text="second" /></Session>',
+      );
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      expect((yield* opened.value.join()).ok).toBe(false);
+    });
+    expect(yield* readTextFile(calls)).toBe("prompt\nprompt\n");
+    const file = executionPath(directory, "diagnostics");
+    const before = yield* readTextFile(file);
+    yield* scoped(function* () {
+      yield* Agent.around({
+        *prompt() {
+          throw new Error("cold read started a provider turn");
+        },
+        *session() {
+          throw new Error("cold read opened a provider");
+        },
+      });
+      const reopened = yield* openExecutionFile(directory, "diagnostics");
+      const model = projectedOf(yield* readRecords(file));
+      expect(yield* reopened.stream.readAll()).toEqual(yield* readRecords(file));
+      expect(model.entries).toHaveLength(1);
+      const requests = readsOver(model);
+      const first = answered(
+        yield* requests.inspectPrompt({ entry: 1, prompt: 1, field: "error" }),
+      );
+      const second = answered(
+        yield* requests.inspectPrompt({ entry: 1, prompt: 2, field: "error" }),
+      );
+      expect(first.text).toBe("Internal error");
+      expect(second.text).toBe(first.text);
+      const discovered = answered(
+        yield* requests.inspectJournal({
+          entry: 1,
+          yq: '[.records[] | select(.prompt != null and .status == "failed") | {"prompt": .prompt, "marker": .marker, "status": .status}]',
+        }),
+      );
+      const locators = z
+        .array(z.object({ prompt: z.number(), marker: z.string(), status: z.string() }))
+        .parse(discovered.value);
+      expect(locators).toHaveLength(2);
+      for (const locator of locators) {
+        const turn = model.entries[0].turns.find((one) => one.marker === locator.marker);
+        expect(turn?.sequence).toBe(locator.prompt - 1);
+        expect(turn?.status).toBe(locator.status);
+      }
+      const entry = model.entries[0];
+      expect(entry.records.findIndex((one) => one.marker === locators[0].marker)).toBeGreaterThan(
+        20,
+      );
+      const defaultPage = answered(
+        yield* requests.inspectJournal({ entry: 1, yq: "[.records[] | del(.promptError)]" }),
+      );
+      expect(z.array(z.json()).parse(defaultPage.value)).toHaveLength(20);
+      const firstError = `.records[] | select(.prompt == ${locators[0].prompt}) | .promptError`;
+      const secondError = `.records[] | select(.prompt == ${locators[1].prompt}) | .promptError`;
+      for (const yq of [firstError, `[${firstError}]`]) {
+        expect(refused(yield* requests.inspectJournal({ entry: 1, yq }))).toContain(
+          "narrower yq selection",
+        );
+      }
+      const asked = fresh();
+      const response = yield* replyThrough(
+        `<REPL.Entry.Journal entry={1} yq={${JSON.stringify(firstError + " | del(.diagnostic.acp.details)")}} as="failure" /><Output><Json value={failure} /></Output>\n<REPL.Entry.Journal entry={1} yq={${JSON.stringify(secondError)}} />`,
+        cold(model),
+        asked,
+      );
+      expect(rendered(response)).toContain('"diagnostic"');
+      const one = observed(asked, 0);
+      const two = observed(asked, 1);
+      expect(one).toMatchObject({
+        value: {
+          message: "Internal error",
+          diagnostic: {
+            provider: "acp",
+            operation: "session/prompt",
+            stage: "runtime-turn",
+            code: "RUNTIME",
+            origin: "runtime",
+            acp: { code: -32041, message: "Internal error" },
+          },
+        },
+        next: null,
+        prev: null,
+        last: null,
+      });
+      expect(two).toMatchObject({
+        value: { message: "Internal error", diagnostic: { acp: { code: -32042, details: "" } } },
+      });
+      const selected = answered(
+        yield* requests.inspectJournal({ entry: 1, yq: secondError }),
+      ).value;
+      const savedEvents = yield* readRecords(file);
+      const raw = savedEvents.find(
+        (event) =>
+          event.type === "yield" &&
+          event.description.type === "agent_prompt" &&
+          event.result.status === "ok" &&
+          isJsonObject(event.result.value) &&
+          event.result.value.sequence === locators[1].prompt - 1,
+      );
+      if (raw?.type !== "yield" || raw.result.status !== "ok" || !isJsonObject(raw.result.value)) {
+        throw new Error("saved Prompt result missing");
+      }
+      expect(selected).toEqual(raw.result.value.error);
+      for (const locator of locators) {
+        const turn = entry.turns.find((one) => one.marker === locator.marker);
+        const event = savedEvents.find(
+          (one) =>
+            one.type === "yield" &&
+            one.description.type === "agent_prompt" &&
+            one.result.status === "ok" &&
+            isJsonObject(one.result.value) &&
+            one.result.value.sequence === locator.prompt - 1,
+        );
+        if (
+          turn === undefined ||
+          event?.type !== "yield" ||
+          event.result.status !== "ok" ||
+          !isJsonObject(event.result.value)
+        ) {
+          throw new Error("saved turn correlation missing");
+        }
+        const error = Reflect.get(turn, "error");
+        const source = event.result.value.error;
+        if (
+          !isJsonObject(error) ||
+          !isJsonObject(source) ||
+          !isJsonObject(error.diagnostic) ||
+          !isJsonObject(source.diagnostic)
+        ) {
+          throw new Error("selected error missing");
+        }
+        expect(typeof error.diagnostic.requestId).toBe("string");
+        expect(error.diagnostic.requestId).toBe(source.diagnostic.requestId);
+        expect(Object.isFrozen(error)).toBe(true);
+        expect(Object.isFrozen(error.diagnostic)).toBe(true);
+        expect(Object.isFrozen(error.diagnostic.acp)).toBe(true);
+        expect(error).not.toBe(source);
+        expect(error.diagnostic).not.toBe(source.diagnostic);
+        expect(error.diagnostic.acp).not.toBe(source.diagnostic.acp);
+        expect(turn).not.toHaveProperty("diagnostic");
+      }
+      const original = firstError + ".diagnostic.acp.details";
+      let yq: string | null = original;
+      let complete = "";
+      let pages = 0;
+      let previous: EntryJournalPage | undefined;
+      while (yq !== null) {
+        const page: EntryJournalPage = answered(yield* requests.inspectJournal({ entry: 1, yq }));
+        complete += z.string().parse(page.value);
+        pages += 1;
+        if (page.prev !== null) {
+          expect(answered(yield* requests.inspectJournal({ entry: 1, yq: page.prev }))).toEqual(
+            previous,
+          );
+        }
+        if (page.last !== null && pages === 1) {
+          const last = answered(yield* requests.inspectJournal({ entry: 1, yq: page.last }));
+          expect(last.next).toBe(null);
+          expect(last.last).toBe(null);
+          expect(last.prev).not.toBe(null);
+          expect(z.string().parse(last.value)).toBe(
+            Array.from(details)
+              .slice(-(((Array.from(details).length - 1) % 4096) + 1))
+              .join(""),
+          );
+        }
+        previous = page;
+        yq = page.next;
+      }
+      expect(pages).toBeGreaterThan(2);
+      expect(complete).toBe(details);
+      const continuation = fresh();
+      yield* replyThrough(
+        '<REPL.Entry.Prompt entry={1} prompt={1} field="error" limit={3} />\n<REPL.Entry.Prompt entry={1} prompt={1} field="error" offset={3} limit={3} />',
+        cold(model),
+        continuation,
+      );
+      expect(observed(continuation, 0)).toMatchObject({
+        text: "Int",
+        next: { entry: 1, prompt: 1, field: "error", offset: 3, limit: 3 },
+      });
+      expect(observed(continuation, 1)).toMatchObject({ text: "ern" });
+      expect(observed(continuation, 0)).not.toHaveProperty("diagnostic");
+      expect(observed(continuation, 1)).not.toHaveProperty("diagnostic");
+      expect(model.entries).toHaveLength(1);
+      expect(JSON.stringify([one, two])).not.toContain("<redacted>");
+      expect(JSON.stringify([one, two])).not.toContain("excluded prompt");
+      expect(JSON.stringify([one, two])).not.toContain("excluded environment");
+    });
+    expect(yield* readTextFile(file)).toBe(before);
+    expect(yield* readTextFile(calls)).toBe("prompt\nprompt\n");
+    expect(projectedOf(yield* readRecords(file)).entries).toHaveLength(1);
+  });
+
+  it("1039 A3-J: Journal preserves selected message-only errors and nullable absence", function* () {
+    const cases: {
+      status: string;
+      error?: { message: string; name?: string; cause?: string };
+      expected: Json;
+    }[] = [
+      { status: "completed", error: { message: "ignored completed error" }, expected: null },
+      { status: "completed", expected: null },
+      {
+        status: "failed",
+        error: { message: "Internal error" },
+        expected: { message: "Internal error" },
+      },
+      {
+        status: "cancelled",
+        error: { message: "", name: "AdapterError", cause: "" },
+        expected: { message: "", name: "AdapterError", cause: "" },
+      },
+      { status: "failed", expected: null },
+      { status: "cancelled", expected: null },
+    ];
+    let index = 0;
+    const events = (yield* savedEvents()).map((event): DurableEvent => {
+      if (
+        event.type !== "yield" ||
+        event.description.type !== "agent_prompt" ||
+        event.result.status !== "ok" ||
+        !isJsonObject(event.result.value)
+      ) {
+        return event;
+      }
+      const row = cases[index];
+      index += 1;
+      if (row === undefined) {
+        return event;
+      }
+      const value: Record<string, Json> = { ...event.result.value, status: row.status };
+      delete value.error;
+      return {
+        ...event,
+        result: {
+          status: "ok",
+          value: { ...value, ...(row.error === undefined ? {} : { error: row.error }) },
+        },
+      };
+    });
+    const model = projectedOf(events);
+    const reads = readsOver(model);
+    for (const [at, row] of cases.entries()) {
+      const yq = `.records[] | select(.prompt == ${at + 1}) | .promptError`;
+      const page = answered(yield* reads.inspectJournal({ entry: 1, yq }));
+      expect(page).toEqual({ value: row.expected, next: null, prev: null, last: null });
+      const turn = model.entries[0].turns.find((one) => one.sequence === at);
+      expect(Reflect.get(turn ?? {}, "error")).toEqual(row.error);
+      expect(turn).not.toHaveProperty("diagnostic");
+      if (row.error !== undefined) {
+        expect(Object.isFrozen(Reflect.get(turn ?? {}, "error"))).toBe(true);
+      }
+    }
+    expect(
+      answered(
+        yield* reads.inspectJournal({
+          entry: 1,
+          yq: "[.records[] | select(.prompt == null) | .promptError] | unique",
+        }),
+      ).value,
+    ).toEqual([null]);
+  });
+
   it("E2: a relative read pins its continuation to the entry it resolved", function* () {
     const events = yield* savedEvents();
     // A real session over the saved history, so the later admission below is
@@ -2826,6 +3197,8 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
       previous: null,
       next: null,
     });
+
+    expect(none).not.toHaveProperty("diagnostic");
 
     // A turn that saved an empty reply answers with the empty string it saved.
     const silent = readsOver(projectedOf(retexted(events, 0, "")));

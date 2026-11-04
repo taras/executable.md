@@ -258,6 +258,40 @@ function eventsOfType(events: readonly DurableEvent[], type: string): DurableEve
 }
 
 describe("Tier WAD — a delivered answer, and the resume that spends it", () => {
+  it("refuses marked delivery before storage with either scanner selection", function* () {
+    const root = yield* useStorageRoot();
+    const attempted = yield* attempt(root, "start", () =>
+      suspendFor({
+        request: { kind: "elicitation" },
+        responseSchema: {
+          type: "object",
+          properties: { code: { type: "string", writeOnly: true } },
+          required: ["code"],
+          additionalProperties: false,
+        },
+      }),
+    );
+    const id = attempted.notice?.suspensionId;
+    if (id === undefined) {
+      throw new Error("No retained wait.");
+    }
+    const before = runState(root);
+    const events = (yield* attemptEvents(root)).length;
+    for (const secretDetection of [true, false]) {
+      const value = String(Math.floor(100000 + Math.random() * 900000));
+      const result = yield* deliver(root, {
+        suspensionId: id,
+        value: { code: value },
+        secretDetection,
+      });
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error.message.includes("foreground resume")).toBe(true);
+      expect(answerRows(root)).toEqual([]);
+      expect(runState(root)).toEqual(before);
+      expect((yield* attemptEvents(root)).length).toBe(events);
+    }
+  });
+
   it("WAD1: one value correlates to the exact wait it names", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);

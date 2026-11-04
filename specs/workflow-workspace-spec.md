@@ -497,6 +497,8 @@ Providers remain lazy and are not contacted for replayed effects.
 
 #### Typed answer delivery
 
+Marked Elicit fields use foreground live input and Core’s receipt, rather than suspension storage. Workflow answer refuses a retained marked schema before storing any answer, with either scanner selection, and directs the operator to foreground resume with a live responder. Unmarked delivery and its transactional consumption remain unchanged.
+
 Delivery is an operation separate from execution. Its public correlation
 boundary is the retained suspension ID and response schema:
 
@@ -2611,6 +2613,8 @@ transaction and associates nothing — and a Prompt replayed from a run that
 retained no checkpoint remains unassociated.
 
 ## 9. Replay and continuation
+
+A reached marked question on partial continuation obtains fresh missing input from the foreground responder. Recorded public fields stay fixed and completed commands stay completed. Missing live input refuses immediately without a pending secret delivery. Completed roots attach no operational responder and ask nothing.
 
 Everything in this section is workflow-only. An ordinary `xmd run` has no
 WorkflowRun, no retained history and nothing to replay: its repository
