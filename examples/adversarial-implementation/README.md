@@ -182,23 +182,28 @@ issue/PR metadata and delivery remain with the Sidekick running Codex.
 
 Every production role passes through `Phase.Session` inside its resolved Session,
 before its Prompt. The first call records the agent, logical name, resolved
-session key, cwd and provider-native identity under the work's `sessions`
+session key, cwd and exact public `Session.identity` kind/value pair under the work's `sessions`
 directory. It records prompt subscription attempts separately from the first
 actual started event. An attempted call with no confirmed identity holds for
 reconciliation even if later resolution offers an identity. A verified placement
 that was never prompted remains distinct from an uncertain attempted call.
-Fresh placements that acquire their native identity during the turn
+Fresh placements that acquire their confirmed identity during the turn
 retain it when that turn unwinds. Subsequent calls compare the resolved identity
-before expanding the prompt. A mismatch preserves the original receipt and saves
+by both kind and value before expanding the prompt. An ACP loading target stays
+distinct from a native identity. A mismatch preserves the original receipt and saves
 the observed mismatch; it sends no prompt and grants no retry or fallback.
 Session resolution retains its existing provider setup behavior.
+
+This candidate writes `phase-session.v2` receipts. Older receipts refuse without
+changes; they are not migrated. Existing tickets keep their pinned workflow and
+original receipts.
 
 Ordinary Tickets and API foundation/migration work share their original identity
 directory across attempts. For standalone `phase.md` requests, retain
 `assignment.identityDirectory` and set `assignment.sessionEstablished=true` on
 continuations. An established continuation with a missing receipt holds; recover
 the original evidence rather than treating it as a fresh call. Adopting a runtime
-or adapter never proves native continuity from a logical session name alone.
+or adapter never proves conversation continuity from a logical session name alone.
 Independent review uses `delivery.directory/sessions` and requires its retained
 identity when an earlier review assignment exists. An explicitly prepared
 continuation can likewise require the original receipt with

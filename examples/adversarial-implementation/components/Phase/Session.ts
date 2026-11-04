@@ -1,4 +1,4 @@
-import { Agent, Component, sessionOf } from "@executablemd/core/api";
+import { Agent, Component } from "@executablemd/core/api";
 import type { AgentPromptEvent } from "@executablemd/core/api";
 import { API, cwd, parseFilesFailure } from "@executablemd/runtime";
 import { ensure, type Stream } from "effection";
@@ -20,18 +20,23 @@ const inputSchema = z.strictObject({
   name: z.string().min(1),
   requireExisting: z.boolean(),
 });
+const pairSchema = z.strictObject({
+  kind: z.string().min(1),
+  value: z.string().min(1),
+});
 const identitySchema = z.strictObject({
+  schema: z.literal("phase-session.v2"),
   agent: z.string().min(1),
   name: z.string().min(1),
   sessionKey: z.string().min(1),
   cwd: z.string().min(1),
-  nativeId: z.string().min(1).nullable(),
+  identity: pairSchema.nullable(),
   attempted: z.boolean(),
   started: z
     .strictObject({
       sessionKey: z.string().min(1),
       cwd: z.string().min(1),
-      nativeId: z.string().min(1).nullable(),
+      identity: pairSchema.nullable(),
     })
     .nullable(),
 });
@@ -39,8 +44,8 @@ const identitySchema = z.strictObject({
 export default function* Session(input: Record<string, unknown>) {
   const selected = inputSchema.parse(input);
   const agent = yield* Agent.operations.agent();
-  const session = sessionOf(yield* Agent.operations.session());
-  if (session === undefined) {
+  const session = yield* Agent.operations.session();
+  if (session === undefined || typeof session === "string") {
     throw new Error("The workflow needs its enclosing resolved Session before prompting.");
   }
   const directory = { cwd: yield* cwd(), path: selected.directory };
@@ -53,11 +58,12 @@ export default function* Session(input: Record<string, unknown>) {
     path: `${encodeURIComponent(selected.name)}.json`,
   };
   const observed = identitySchema.parse({
+    schema: "phase-session.v2",
     agent,
     name: selected.name,
     sessionKey: session.sessionKey,
     cwd: session.cwd,
-    nativeId: session.agentSessionId ?? null,
+    identity: session.identity ?? null,
     attempted: false,
     started: null,
   });
@@ -65,7 +71,7 @@ export default function* Session(input: Record<string, unknown>) {
   let established = observed;
   if (prior.ok) {
     established = identitySchema.parse(JSON.parse(prior.value));
-    if (established.attempted && established.nativeId === null) {
+    if (established.attempted && established.identity === null) {
       throw new Error(
         "The original workflow call was attempted without a confirmed identity. Preserve its failure and reconcile it before another prompt.",
       );
@@ -75,7 +81,9 @@ export default function* Session(input: Record<string, unknown>) {
       established.name !== observed.name ||
       established.sessionKey !== observed.sessionKey ||
       established.cwd !== observed.cwd ||
-      (established.nativeId !== null && established.nativeId !== observed.nativeId)
+      (established.identity !== null &&
+        (established.identity.kind !== observed.identity?.kind ||
+          established.identity.value !== observed.identity?.value))
     ) {
       const mismatch = { ...target, path: target.path + ".mismatch.json" };
       const first = yield* API.Files.operations.readTextFile(mismatch);
@@ -108,16 +116,15 @@ export default function* Session(input: Record<string, unknown>) {
   if (!saved.ok) {
     throw saved.error;
   }
-  let assertedId: string | undefined;
+  let confirmed = established.identity;
   let attempted = established.attempted;
   let started = established.started;
   yield* ensure(function* () {
-    // A fresh placement acquires its provider-native identity during the first turn.
-    const nativeId = assertedId ?? session.agentSessionId;
+    confirmed ??= pairSchema.nullable().parse(session.identity ?? null);
     if (
       attempted !== established.attempted ||
       started !== established.started ||
-      (established.nativeId === null && nativeId !== undefined)
+      (established.identity === null && confirmed !== null)
     ) {
       const retained = yield* API.Files.operations.writeTextFile({
         ...target,
@@ -125,7 +132,7 @@ export default function* Session(input: Record<string, unknown>) {
           ...established,
           attempted,
           started,
-          nativeId: established.nativeId ?? nativeId ?? null,
+          identity: confirmed,
         }),
       });
       if (!retained.ok) {
@@ -141,7 +148,7 @@ export default function* Session(input: Record<string, unknown>) {
           attempted = true;
           const marked = yield* API.Files.operations.writeTextFile({
             ...target,
-            content: JSON.stringify({ ...established, attempted }),
+            content: JSON.stringify({ ...established, attempted, started, identity: confirmed }),
           });
           if (!marked.ok) {
             throw marked.error;
@@ -151,11 +158,12 @@ export default function* Session(input: Record<string, unknown>) {
             *next() {
               const event = yield* subscription.next();
               if (!event.done && event.value.type === "started") {
-                assertedId = event.value.session.agentSessionId;
+                const identity = pairSchema.nullable().parse(event.value.session.identity ?? null);
+                confirmed ??= identity;
                 started ??= {
                   sessionKey: event.value.session.sessionKey,
                   cwd: event.value.session.cwd,
-                  nativeId: assertedId ?? null,
+                  identity,
                 };
               }
               return event;

@@ -1,4 +1,4 @@
-import { Agent, Component, sessionOf } from "@executablemd/core/api";
+import { Agent, Component } from "@executablemd/core/api";
 import type { AgentPromptEvent } from "@executablemd/core/api";
 import type { Stream } from "effection";
 import { z } from "zod";
@@ -7,37 +7,30 @@ export const props = {
   type: "object",
   properties: {
     session: { type: "object" },
-    nativeId: { type: "string" },
-    startedNativeId: { type: "string" },
+    startedIdentity: { type: "object" },
+    laterIdentity: { type: "object" },
     failBeforeStarted: { type: "boolean", default: false },
     fail: { type: "boolean", default: false },
   },
   additionalProperties: false,
 };
+const identitySchema = z.strictObject({ kind: z.string().min(1), value: z.string().min(1) });
 const schema = z.strictObject({
   session: z
     .strictObject({
       sessionKey: z.string(),
       cwd: z.string(),
-      agentSessionId: z.string().optional(),
+      identity: identitySchema.optional(),
     })
     .optional(),
-  nativeId: z.string().optional(),
-  startedNativeId: z.string().optional(),
+  startedIdentity: identitySchema.optional(),
+  laterIdentity: identitySchema.optional(),
   failBeforeStarted: z.boolean(),
   fail: z.boolean(),
 });
 
 export default function* Session(input: Record<string, unknown>) {
   const selected = schema.parse(input);
-  if (selected.nativeId !== undefined) {
-    const session = sessionOf(yield* Agent.operations.session());
-    if (session === undefined) {
-      throw new Error("The fixture needs its enclosing session.");
-    }
-    session.agentSessionId = selected.nativeId;
-    return "";
-  }
   const session = selected.session;
   if (session === undefined) {
     throw new Error("Provide the fixture session.");
@@ -50,13 +43,18 @@ export default function* Session(input: Record<string, unknown>) {
       return session;
     },
   });
-  if (selected.startedNativeId !== undefined || selected.failBeforeStarted) {
+  if (selected.startedIdentity !== undefined || selected.failBeforeStarted) {
     Object.freeze(session);
+    let subscriptions = 0;
     yield* Agent.around(
       {
         *prompt() {
           const stream: Stream<AgentPromptEvent, string> = {
             *[Symbol.iterator]() {
+              const identity =
+                subscriptions++ === 0
+                  ? selected.startedIdentity
+                  : (selected.laterIdentity ?? selected.startedIdentity);
               let started = false;
               let terminal = false;
               return {
@@ -73,7 +71,7 @@ export default function* Session(input: Record<string, unknown>) {
                       value: {
                         type: "started",
                         agent: "fixture",
-                        session: { ...session, agentSessionId: selected.startedNativeId },
+                        session: { ...session, identity },
                       },
                     };
                   }

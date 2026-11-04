@@ -96,30 +96,35 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <AssertEquals actual={rejected.ok} expected={false} />
 </Test>
 
-<Test name="session continuity refuses changed keys, native identities and missing established receipts before content">
+<Test name="session continuity refuses changed keys, typed identities and missing established receipts before content">
 <TempDir>
 ```bash exec as="temporaryDirectory"
 pwd -P
 ```
 <Let as="directory" value={temporaryDirectory.stdout.trim()} />
-<Let as="original" value={{sessionKey:"original-adapter-key",cwd:"/source",agentSessionId:"original-native"}} />
+<Let as="original" value={{sessionKey:"original-adapter-key",cwd:"/source",identity:{kind:"fixture.native",value:"original-native"}}} />
 <Fixture.Session session={original}><Phase.Session directory={directory} name="reviewer">first</Phase.Session></Fixture.Session>
 <Ticket.Text path={directory + "/reviewer.json"} as="first" />
 <Fixture.Session session={original}><Phase.Session directory={directory} name="reviewer" requireExisting={true}>continued</Phase.Session></Fixture.Session>
-<Each in={[{...original,sessionKey:"changed-adapter-key"},{...original,agentSessionId:"fresh-native"},{...original,cwd:"/other-source"},{sessionKey:original.sessionKey,cwd:original.cwd}]} let="changed">
+<Each in={[{...original,sessionKey:"changed-adapter-key"},{...original,identity:{kind:"fixture.native",value:"fresh-native"}},{...original,cwd:"/other-source"},{sessionKey:original.sessionKey,cwd:original.cwd}]} let="changed">
 <Ticket.Capture as="refused"><Fixture.Session session={changed}><Phase.Session directory={directory} name="reviewer" requireExisting={true}><Fail message="PROMPT CONTENT WAS EXPANDED" /></Phase.Session></Fixture.Session></Ticket.Capture>
 <AssertEquals actual={refused.status} expected="failed" />
 <AssertStringIncludes actual={refused.failure} expected="session identity changed" />
 <Ticket.Text path={directory + "/reviewer.json"} as="retained" />
 <AssertEquals actual={retained} expected={first} />
 </Each>
+<Ticket.Text path={directory + "/reviewer.json.mismatch.json"} as="firstMismatch" />
+<Ticket.Capture as="again"><Fixture.Session session={{...original,cwd:"/again"}}><Phase.Session directory={directory} name="reviewer"><Fail message="PROMPT CONTENT WAS EXPANDED" /></Phase.Session></Fixture.Session></Ticket.Capture>
+<Ticket.Text path={directory + "/reviewer.json.mismatch.json"} as="sameMismatch" />
+<AssertEquals actual={sameMismatch} expected={firstMismatch} />
 <Ticket.Capture as="missing"><Fixture.Session session={original}><Phase.Session directory={directory} name="missing-reviewer" requireExisting={true}><Fail message="PROMPT CONTENT WAS EXPANDED" /></Phase.Session></Fixture.Session></Ticket.Capture>
 <AssertStringIncludes actual={missing.failure} expected="identity receipt is unavailable" />
-<Fixture.Session session={{sessionKey:"fresh",cwd:"/source"}}><Phase.Session directory={directory} name="fresh"><Fixture.Session nativeId="asserted-during-turn" /></Phase.Session></Fixture.Session>
-<Ticket.Text path={directory + "/fresh.json"} as="learnedText" />
-<Parse schema={{type:"object"}} as="learned">{learnedText}</Parse>
-<AssertEquals actual={learned.nativeId} expected="asserted-during-turn" />
-<Fixture.Session session={{sessionKey:"fresh",cwd:"/source",agentSessionId:"asserted-during-turn"}}><Phase.Session directory={directory} name="fresh" requireExisting={true}>continued</Phase.Session></Fixture.Session>
+<File path="old.json">{"agent":"fixture","name":"old","sessionKey":"old","cwd":"/source","nativeId":"old-native","attempted":true,"started":null}</File>
+<Ticket.Text path={directory + "/old.json"} as="oldBytes" />
+<Ticket.Capture as="oldRefusal"><Fixture.Session session={original}><Phase.Session directory={directory} name="old"><Fail message="PROMPT CONTENT WAS EXPANDED" /></Phase.Session></Fixture.Session></Ticket.Capture>
+<AssertEquals actual={oldRefusal.status} expected="failed" />
+<Ticket.Text path={directory + "/old.json"} as="oldUnchanged" />
+<AssertEquals actual={oldUnchanged} expected={oldBytes} />
 </TempDir>
 </Test>
 
@@ -131,12 +136,14 @@ pwd -P
 <Let as="directory" value={temporaryDirectory.stdout.trim()} />
 <Each in={[false,true]} let="fail">
 <Let as="name" value={fail ? "failed" : "joined"} />
-<Ticket.Capture as="turn"><Fixture.Session session={{sessionKey:name,cwd:"/source"}} startedNativeId={"native-" + name} fail={fail}><Phase.Session directory={directory} name={name}><Prompt throwOnError={true}>fixture</Prompt></Phase.Session></Fixture.Session></Ticket.Capture>
+<Ticket.Capture as="turn"><Fixture.Session session={{sessionKey:name,cwd:"/source"}} startedIdentity={{kind:"fixture.native",value:"native-" + name}} laterIdentity={{kind:"fixture.native",value:"later"}} fail={fail}><Phase.Session directory={directory} name={name}><Prompt throwOnError={true}>fixture</Prompt><Prompt throwOnError={true}>second</Prompt></Phase.Session></Fixture.Session></Ticket.Capture>
 <If condition={!fail && turn.status !== "completed"}><Fail message={turn.failure} /></If>
 <AssertEquals actual={turn.status} expected={fail ? "failed" : "completed"} />
 <Ticket.Text path={directory + "/" + name + ".json"} as="savedText" />
 <Parse schema={{type:"object"}} as="saved">{savedText}</Parse>
-<AssertEquals actual={saved.nativeId} expected={"native-" + name} />
+<AssertEquals actual={saved.schema} expected="phase-session.v2" />
+<AssertEquals actual={saved.identity} expected={{kind:"fixture.native",value:"native-" + name}} />
+<AssertEquals actual={saved.started} expected={{sessionKey:name,cwd:"/source",identity:{kind:"fixture.native",value:"native-" + name}}} />
 </Each>
 </TempDir>
 </Test>
@@ -152,8 +159,8 @@ pwd -P
 <File path="first-failure.json"><Json value={firstFailure} /></File>
 <Ticket.Text path={directory + "/uncertain.json"} as="firstReceipt" />
 <Parse schema={{type:"object"}} as="unknown">{firstReceipt}</Parse>
-<AssertEquals actual={{attempted:unknown.attempted,nativeId:unknown.nativeId,started:unknown.started}} expected={{attempted:true,nativeId:null,started:null}} />
-<Ticket.Capture as="continuation"><Fixture.Session session={{sessionKey:"uncertain",cwd:"/source",agentSessionId:"replacement-native"}}><Phase.Session directory={directory} name="uncertain" requireExisting={true}><Fail message="PROMPT CONTENT WAS EXPANDED" /></Phase.Session></Fixture.Session></Ticket.Capture>
+<AssertEquals actual={{attempted:unknown.attempted,identity:unknown.identity,started:unknown.started}} expected={{attempted:true,identity:null,started:null}} />
+<Ticket.Capture as="continuation"><Fixture.Session session={{sessionKey:"uncertain",cwd:"/source",identity:{kind:"fixture.native",value:"replacement-native"}}}><Phase.Session directory={directory} name="uncertain" requireExisting={true}><Fail message="PROMPT CONTENT WAS EXPANDED" /></Phase.Session></Fixture.Session></Ticket.Capture>
 <AssertEquals actual={continuation.status} expected="failed" />
 <AssertStringIncludes actual={continuation.failure} expected="attempted without a confirmed identity" />
 <Ticket.Text path={directory + "/uncertain.json"} as="unchanged" />
