@@ -3490,10 +3490,9 @@ function* dispatch(
                 // already produced; the fork's own execution renders it again.
                 ...(execution.discardOutput === true ? { discardOutput: true } : {}),
               },
-              // No elicitation provider is composed around this document. The
-              // workflow host attached the execution and installed the suspending
-              // one already; a browser form here would sit nearer, answer first,
-              // and wait for a reader the run has no way to reach.
+              // The live provider surrounds the workflow's suspending adapter:
+              // marked questions delegate outward, while unmarked questions
+              // retain suspension and durable answer delivery.
               {
                 testing: false,
                 plugins,

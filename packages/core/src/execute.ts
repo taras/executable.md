@@ -1795,6 +1795,9 @@ function* execTerminal(
                   timeout,
                   retain: false,
                 });
+          if (owner !== undefined) {
+            yield* owner.flushOutput();
+          }
           const kept = finished();
           live = kept.captured;
           liveStdout = kept.boundStdout ?? "";

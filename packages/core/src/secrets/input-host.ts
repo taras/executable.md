@@ -19,35 +19,52 @@ import type { ExecutionInstallation } from "../execute.ts";
  * and disposal, while the host still owns its providers and their joined scope.
  */
 export function* useSecretInputs(): Operation<ExecutionInstallation> {
-  const secretInputs = yield* createInputOwner();
+  const secretInputs = yield* createInputOwner(flush);
   const values = inspectInputOwner(secretInputs);
-  const out = values.text();
-  const err = values.text();
+  let out = values.text();
+  let err = values.text();
   const stdout = new TextDecoder();
   const stderr = new TextDecoder();
   const encoder = new TextEncoder();
-  let sendOut: ((bytes: Uint8Array) => Operation<void>) | undefined;
-  let sendErr: ((bytes: Uint8Array) => Operation<void>) | undefined;
-  yield* ensure(function* () {
+  const projectedTails = new Set<Uint8Array>();
+  function* publish(channel: "stdout" | "stderr", text: string): Operation<void> {
+    const bytes = encoder.encode(text);
+    projectedTails.add(bytes);
+    try {
+      yield* Stdio.operations[channel](bytes);
+    } finally {
+      projectedTails.delete(bytes);
+    }
+  }
+  function* flush(): Operation<void> {
     const outTail = out.write(stdout.decode()) + out.finish();
     const errTail = err.write(stderr.decode()) + err.finish();
-    if (outTail !== "" && sendOut !== undefined) {
-      yield* sendOut(encoder.encode(outTail));
+    out = values.text();
+    err = values.text();
+    // Command completion drains through its still-live route; host teardown
+    // resolves the host's own downstream rather than a captured command chain.
+    if (outTail !== "") {
+      yield* publish("stdout", outTail);
     }
-    if (errTail !== "" && sendErr !== undefined) {
-      yield* sendErr(encoder.encode(errTail));
+    if (errTail !== "") {
+      yield* publish("stderr", errTail);
     }
-  });
+  }
+  yield* ensure(flush);
   yield* Stdio.around({
     *stdout([bytes], next) {
-      sendOut = next;
+      if (projectedTails.has(bytes)) {
+        return yield* next(bytes);
+      }
       const text = out.write(stdout.decode(bytes, { stream: true }));
       if (text !== "") {
         yield* next(encoder.encode(text));
       }
     },
     *stderr([bytes], next) {
-      sendErr = next;
+      if (projectedTails.has(bytes)) {
+        return yield* next(bytes);
+      }
       const text = err.write(stderr.decode(bytes, { stream: true }));
       if (text !== "") {
         yield* next(encoder.encode(text));

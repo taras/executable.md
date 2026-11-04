@@ -166,3 +166,11 @@ describe("Tier P — Eval binding interpolation", () => {
     expect(result).toBe("{props.release.version.value} {props.release.name.value}");
   });
 });
+
+describe("ordinary final-member interpolation", () => {
+  it("renders an absent final member as undefined while preserving root and intermediate misses", function* () {
+    expect(interpolateEvalBindings("{obj.absent}", { obj: {} })).toBe("undefined");
+    expect(interpolateEvalBindings("{absent.final}", {})).toBe("{absent.final}");
+    expect(interpolateEvalBindings("{obj.absent.final}", { obj: {} })).toBe("{obj.absent.final}");
+  });
+});
