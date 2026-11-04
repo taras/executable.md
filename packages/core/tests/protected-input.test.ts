@@ -269,6 +269,7 @@ describe("protected input", () => {
         });
         const stream = new InMemoryStream();
         const modifier = form === "provider-error" ? "exec" : form;
+        const prefix = "printf useful; # " + "x".repeat(20) + " ";
         yield* useStubFs({
           "doc.md": [
             "```ts eval",
@@ -276,7 +277,7 @@ describe("protected input", () => {
             "```",
             '<Elicit schema={schema} as="answer">Code.</Elicit>',
             "```bash " + modifier,
-            "printf useful; # {answer.code}",
+            prefix + "{answer.code}",
             "```",
             form.includes("as=") ? "<Json value={result} />" : "",
           ].join("\n\n"),
@@ -292,6 +293,20 @@ describe("protected input", () => {
           false,
         );
         expect(JSON.stringify(stream.snapshot()).includes("useful")).toBe(true);
+        const command = stream
+          .snapshot()
+          .find((event) => event.type === "yield" && event.description.type === "exec");
+        const safeCommand = command?.type === "yield" ? command.description.command : undefined;
+        const safeProgram = Array.isArray(safeCommand) ? safeCommand[2] : undefined;
+        expect(
+          command?.type === "yield" &&
+            typeof safeProgram === "string" &&
+            command.description.name === "exec:" + safeProgram.slice(0, 40).replace(/\n/g, " "),
+        ).toBe(true);
+        expect(
+          command?.type === "yield" &&
+            JSON.stringify(command.description.command).includes(prefix + "[redacted]"),
+        ).toBe(true);
       });
     }
   });
@@ -364,6 +379,7 @@ describe("protected input", () => {
       "```bash exec",
       "printf 'useful %s' '{alias}'",
       "```",
+      "Protected prose: {answer.code}; public: {answer.public}.",
       "<Json value={answer} />",
     ].join("\n\n");
     yield* useStubFs({ "doc.md": source });
@@ -375,6 +391,7 @@ describe("protected input", () => {
     expect(String(result).includes(secret)).toBe(false);
     expect(JSON.stringify(stream.snapshot()).includes(secret)).toBe(false);
     expect(String(result).includes("useful")).toBe(true);
+    expect(String(result).includes("Protected prose: [redacted]; public: useful.")).toBe(true);
   });
 });
 
