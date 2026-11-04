@@ -20,7 +20,7 @@ inputs, run one phase and preserve the returned execution before settlement.
 <Ticket.Capture as="preflight">
 <Ticket.Check record={record} as="checked" />
 <Ticket.Gate record={record} as="selected" />
-<Ticket.Inputs record={record} call={selected.call} as="inputSelection" />
+<Ticket.Prepare record={record} call={selected.call} as="inputSelection" />
 <Json value={{selected,...inputSelection}} />
 </Ticket.Capture>
 <If condition={preflight.status === "failed"}>
@@ -29,8 +29,11 @@ inputs, run one phase and preserve the returned execution before settlement.
 <If condition={preflight.status !== "failed"}>
 <Parse schema={{type:"object"}} as="prepared">{preflight.output}</Parse>
 <Let as="selected" value={prepared.selected} />
-<Let as="record" value={{...record,documents:prepared.documents,deliveredInputs:prepared.deliveredInputs}} />
-<Let as="call" value={{...selected.call,inputs:prepared.inputs}} />
+<Let as="record" value={{...record,documents:prepared.documents}} />
+<If condition={prepared.status === "hold"}>
+<Return value={{...record,checkpoint:{...record.checkpoint,status:"hold",dispatchable:false,hold:{kind:"input_preparation",reason:prepared.reason,receipt:prepared.receipt}}}} />
+<Else>
+<Let as="call" value={{...prepared.call,inputs:prepared.inputs,preparation:prepared.receipt}} />
 <Ticket.Capture as="execution">
   <Dir path={call.assignment.repository}>
     <Phase.Run phase={call.assignment.phase} role={call.role} session={call.session}
@@ -55,7 +58,21 @@ mkdir -- {recordDirectory}
 </Ticket.Capture>
 <Let as="result" value={null} />
 <If condition={canonical.status === "completed"}><Parse schema={{type:"object"}} as="result">{canonical.output}</Parse></If>
-<Ticket.Settle pending={{...record,checkpoint:selected.checkpoint,call,execution,result,resultPath:call.attempt + "/result.json"}} as="settled" />
+<Ticket.Capture as="deliveryCapture"><Ticket.Text path={call.attempt + "/delivery.json"} as="text" /><Json value={text} /></Ticket.Capture>
+<Let as="delivery" value={null} />
+<If condition={deliveryCapture.status === "completed"}>
+<Parse schema={{type:"string"}} as="deliveryText">{deliveryCapture.output}</Parse>
+<Parse schema={{type:"object"}} as="delivery">{deliveryText}</Parse>
+<If condition={delivery.role !== call.role || delivery.session !== call.session || delivery.provider !== call.provider}><Fail message="Delivery witness names another recipient." /></If>
+<Ticket.Fingerprint inputs={call.inputs} as="expectedInputs" />
+<If condition={JSON.stringify(delivery.inputs) !== JSON.stringify(expectedInputs)}><Fail message="Delivery witness differs from the selected packet." /></If>
+<Let as="record" value={{...record,deliveredInputs:prepared.deliveryProposal}} />
+</If>
+<Let as="checkpoint" value={{...selected.checkpoint,initialized:{...record.checkpoint.initialized,[call.role]:delivery !== null || record.checkpoint.initialized[call.role]}}} />
+<Let as="call" value={{...call,delivery:delivery === null ? null : call.attempt + "/delivery.json",profile:delivery?.profile ?? null}} />
+<Dir path={prepared.receipt.slice(0,prepared.receipt.lastIndexOf("/"))}><File path="dispatch.json"><Json value={{call:call.record + "/call.json",role:call.role,session:call.session,attempt:call.attempt,execution:call.record + "/execution.json",result:result === null ? null : call.attempt + "/result.json",delivery:call.delivery}} /></File></Dir>
+<Ticket.Settle pending={{...record,checkpoint,call,execution,result,resultPath:call.attempt + "/result.json"}} as="settled" />
 <Return value={settled} />
+</Else>
 </If>
 </If>

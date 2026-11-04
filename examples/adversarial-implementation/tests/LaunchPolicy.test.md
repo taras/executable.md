@@ -133,3 +133,33 @@ git rev-parse HEAD
 <SafeParse schema={schemas.launch} as="parsed">{text}</SafeParse>
 <AssertEquals actual={parsed.ok} expected={true} />
 </Test>
+
+<Test name="C preparation covers foundation and direct discovery without incidental artifacts" timeout="90s">
+<TempDir>
+<Fixture.Repository guides={true} as="fixture" />
+<Let as="evidence" value={fixture.root+"/accepted.md"} />
+<File path="accepted.md">Keep the existing foundation and consumer behavior.</File>
+<Let as="impact" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Preserve the accepted fixture behavior.",evidence:[evidence]}} />
+<Let as="workText">
+<Dir path={fixture.repository}>
+<Execution host="run" target={root+"/examples/adversarial-implementation/tests/foundation-preparation-journey.md"} props={{task:{work:"preparation-callers",repository:fixture.repository,directory:fixture.directory,request:"needs-architecture",inputs:[evidence],sessions:{planner:"original-planner",architect:"conditional-architect",implementor:"original-implementor"},providers:{architect:"codex",planner:"codex",implementor:"codex"},maxCorrections:1,maxApiRepairs:0,maxResponseCorrections:0},assessment:impact}}>
+<CollectOutput as="stdout" />
+{stdout}
+</Execution>
+</Dir>
+</Let>
+<Parse schema={{type:"object"}} as="work">{workText}</Parse>
+<If condition={work.status !== "feedback_ready"}><Fail message={JSON.stringify({status:work.status,reason:work.reason,history:work.history})} /></If>
+<AssertEquals actual={work.history.map(item => item.owner)} expected={["planner","planner","implementor"]} />
+<Ticket.Text path={fixture.directory+"/preparations/foundation-0/receipt.json"} as="text" /><Parse schema={{type:"object"}} as="foundation">{text}</Parse>
+<AssertEquals actual={foundation.before.map(input => input.path)} expected={[evidence,fixture.repository+"/.agents/planner.md"]} />
+<AssertEquals actual={foundation.attempts} expected={[]} />
+<Ticket.Text path={fixture.directory+"/preparations/architecture-1/receipt.json"} as="text" /><Parse schema={{type:"object"}} as="architecture">{text}</Parse>
+<AssertEquals actual={architecture.before.map(input => input.path)} expected={[evidence]} />
+<AssertEquals actual={architecture.attempts} expected={[]} />
+<Ticket.Text path={fixture.directory+"/preparations/foundation-1/receipt.json"} as="text" /><Parse schema={{type:"object"}} as="continued">{text}</Parse>
+<AssertEquals actual={continued.before} expected={[]} />
+<AssertEquals actual={work.ticket.checkpoint.plannerCall} expected={fixture.directory+"/foundation-1/preparation-owner.json"} />
+<AssertEquals actual={work.ticket.manifest.deliveredInputs["conditional-architect"]} expected={[evidence]} />
+</TempDir>
+</Test>

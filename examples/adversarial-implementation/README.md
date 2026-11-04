@@ -566,3 +566,42 @@ Read [Planner](../../.agents/planner.md) and
 [Implementor](../../.agents/implementor.md) for role assignments.
 Read `<Adversarial.Schema />` for the API handoff shape and `<ReviewPolicy />`
 for impact-based review selection.
+
+## Prepare the next handoff
+
+`<Ticket.Prepare record={record} call={call} as="prepared" />` checks the exact
+recipient selected by Gate before its productive call starts. Inputs counts the
+undelivered accepted inputs, that role's guide and explicitly selected handoff
+files once each. Its 64,000 UTF-16-unit limit is separate from the complete
+phase prompt's 256,000-character ceiling. A recorded delivery for the current
+session takes precedence over the manifest's earlier delivery list.
+
+A fitting packet keeps its paths, order and captured text and starts no analysis
+prompt. Preparation saves its inventory, hashes and remaining allowance under
+`preparations/<call.id>/receipt.json`. Oversize originals remain in `original.json`;
+a reduced candidate uses a fresh path and links to that receipt. The original
+Planner prepares exact extracts and supporting references, then compares the
+candidate with the originals. The comparison is a recorded semantic judgment;
+hashes establish text identity, not completeness of requirement extraction.
+
+Preparation permits one reduction prompt, one comparison prompt and no correction
+prompt. Captured windows contain at most 8,000 UTF-16 units without splitting a
+surrogate pair. Every acquisition is recorded, including repeated original
+windows in comparison; each prompt admits at most 64,000 selected units and
+128,000 acquired material units. These measurements describe workflow acquisition,
+not a sandbox on the native agent's tools. A mandatory floor above the limit,
+missing original Planner evidence, remaining excess or uncertain preservation
+holds before the successor. Continuing a held record replenishes no allowance.
+
+Step, foundation, direct Architect and standalone callers retain their dispatch
+owners. Only a successful captured raw reply establishes input delivery and
+initialization. A later phase-validation refusal does not erase that delivery;
+a pre-Prompt refusal or uncertain completion establishes none. Dispatch receipts
+link the exact selection to the original recipient, execution and result. The
+foundation passes its saved Planner call and factual delivery into migration;
+standalone preparation has no delivery ledger or replacement reducer.
+
+#1101's pending diagnostics and native identity work remain on their original
+branch. This component shares Inputs selection and leaves that later composition
+at the existing boundary. It does not repair or dispatch the live #1086 ticket,
+adopt a new pilot runtime, or change the storage and cache work in #999/#1108.

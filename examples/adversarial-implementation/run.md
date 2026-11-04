@@ -80,7 +80,6 @@ test -f {referencePath} -a -r {referencePath}
 </Loop>
 <If condition={unreadable.length !== 0}><Let as="work" value={{status:"hold",reason:"Prepare readable selected evidence and role-guide texts before launch: " + unreadable.join(", "),history:[]}} /><Break /></If>
 <Ticket.Documents repository={task.repository} paths={[...task.inputs,...guidePaths]} as="documents" />
-<If condition={Object.values(documents).reduce((total,input) => total + input.content.length,0) > 64000}><Let as="work" value={{status:"hold",reason:"Selected initial evidence and role guides exceed 64000 characters. Prepare a concise accepted packet and keep full logs as references.",history:[]}} /><Break /></If>
 <Let as="inputs" value={task.inputs.map(path => documents[path])} />
 <Ticket.Capture as="deliveryCheck"><Delivery.Prepare task={task} inputs={inputs} as="delivery" /><Json value={delivery} /></Ticket.Capture>
 <If condition={deliveryCheck.status !== "completed"}><Let as="work" value={{status:"hold",reason:deliveryCheck.failure,history:[]}} /><Break /></If>
@@ -103,6 +102,7 @@ mkdir -- {directoryPath}
 <Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,delivery,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:false},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
 <Dir path={task.directory}><File path="implementation.json"><Json value={manifest} /></File></Dir>
 <Ticket.Run manifest={task.directory + "/implementation.json"} as="work" />
+<If condition={work.status === "hold" && work.calls.length === 0}><Let as="work" value={{...work,history:[],reason:work.checkpoint.hold?.reason ?? "Initial handoff preparation holds."}} /></If>
 </Else>
 </If>
 </Loop>

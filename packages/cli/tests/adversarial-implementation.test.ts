@@ -11,6 +11,7 @@ describe("adversarial implementation example", () => {
     "LaunchPolicy",
     "Delivery",
     "ProductionRole",
+    "Preparation",
   ]) {
     it(`runs the ${suite} Markdown journeys without native models`, function* () {
       const workflowCommand = [
@@ -29,16 +30,24 @@ describe("adversarial implementation example", () => {
       );
       yield* runCli(
         [
-          ...(suite === "ProductionRole"
+          ...(["ProductionRole", "Preparation"].includes(suite)
             ? [
                 "test",
                 `examples/adversarial-implementation/tests/${suite}.test.md`,
                 "--plugin",
                 "./packages/cli/tests/fixtures/workflow-test-permissions.mjs",
               ]
-            : ["run", "--allow-absolute", "--eval", `<Testing>\n${source}\n</Testing>`]),
+            : [
+                "run",
+                "--allow-absolute",
+                ...(suite === "LaunchPolicy"
+                  ? ["--plugin", "./packages/cli/tests/fixtures/workflow-test-permissions.mjs"]
+                  : []),
+                "--eval",
+                `<Testing>\n${source}\n</Testing>`,
+              ]),
           "--include",
-          suite === "ProductionRole"
+          ["ProductionRole", "Preparation"].includes(suite)
             ? "examples/adversarial-implementation/components"
             : "examples/adversarial-implementation/tests/components",
           "--include",

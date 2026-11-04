@@ -23,6 +23,11 @@ mkdir -- {quoted}
 <Adversarial.PlannerRole assignment={assignment} guide={props.guide} as="raw" />
 </Dir>
 <Dir path={assignment.attempt}><File path="raw.txt">{raw}</File></Dir>
+<Phase.Profile role="planner" design={true} plannerProvider={assignment.plannerProvider} assessment={assignment.assessment} as="profile" />
+<Ticket.Fingerprint inputs={[...(assignment.inputs ?? []),...(assignment.initialize ? [{path:assignment.guidePath ?? "planner guide (inline)",content:props.guide}] : [])]} as="sentInputs" />
+<Dir path={assignment.attempt}><File path="delivery.json"><Json value={{schema:"role-input-delivery.v1",role:"planner",session:assignment.session,provider:profile.provider,profile,initialize:assignment.initialize,inputs:sentInputs,raw:assignment.attempt + "/raw.txt"}} /></File></Dir>
+<Dir path={assignment.attempt}><File path="call.json"><Json value={{role:"planner",session:assignment.session,provider:profile.provider,assignment,design:true,delivery:assignment.attempt+"/delivery.json",record:assignment.attempt}} /></File></Dir>
+<Dir path={assignment.attempt}><File path="preparation-owner.json"><Json value={{role:"planner",session:assignment.session,provider:profile.provider,assignment:{assessment:assignment.assessment},design:true,delivery:assignment.attempt+"/delivery.json",record:assignment.attempt}} /></File></Dir>
 <Adversarial.Response assignment={assignment} raw={raw} as="accepted" />
 <Let as="result" value={accepted.result} />
 <Dir path={assignment.attempt}><File path="response-acceptance.json"><Json value={{round:accepted.round,raw:accepted.rawPath}} /></File></Dir>
