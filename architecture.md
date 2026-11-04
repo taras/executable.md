@@ -8488,6 +8488,11 @@ forms one row per retained `Yield` and `Close` in append order: marker, type,
 name, status, optional source position, prompt number, agent and supported exec
 facts. A saved Prompt's row takes its semantic outcome, number and agent from
 the turn that same reading parsed; the root close takes the parsed entry outcome.
+Journal joins that row to its entry-local turn by marker and exposes `promptError`:
+the selected saved message, optional name/cause and optional diagnostic for a
+failed or cancelled Prompt with a retained error. Completed Prompts, missing
+errors and non-Prompt rows have null. The model detaches and freezes the error
+and its nested diagnostic containers; the existing failure summary stays text.
 Other rows retain their protocol status. An exec result with protocol `ok`
 projects its validated integral `exitCode` and independently retained string
 channels. An absent channel stays absent; an empty retained channel stays empty.
