@@ -28,6 +28,8 @@ describe("adversarial implementation example", () => {
       const source = yield* readTextFile(
         `examples/adversarial-implementation/tests/${suite}.test.md`,
       );
+      const preparationAdapterTimeout = 2 * 120_000 + 30_000;
+      const preparationTimeout = preparationAdapterTimeout + 3 * 20_000 + 30_000;
       yield* runCli(
         [
           ...(["ProductionRole", "Preparation"].includes(suite)
@@ -54,7 +56,7 @@ describe("adversarial implementation example", () => {
           "examples/adversarial-implementation/components",
         ],
         {
-          timeout: 120_000,
+          timeout: suite === "Preparation" ? preparationTimeout : 120_000,
           env: {
             XMD_EXAMPLE_COMMAND: workflowCommand,
             XMD_EXAMPLE_TEST_COMMAND: workflowTestCommand,
