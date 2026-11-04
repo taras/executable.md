@@ -1,6 +1,8 @@
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import type { InputValues } from "./inputs.ts";
-import { parseJsonObject } from "../json.ts";
+import { isJsonObject, parseJsonObject } from "../json.ts";
+import { ELICITATION_SCHEMA_FIELD } from "../elicit-journal.ts";
+import { secretInputFields } from "./input-schema.ts";
 /**
  * The execution's secret-detection policy.
  *
@@ -41,7 +43,7 @@ import {
   preserveJournalProvenance,
   serializeDurableEvent,
 } from "@executablemd/durable-streams";
-import type { DurableStream } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { SecretDetectedError } from "./findings.ts";
 import type { SecretFinding } from "./findings.ts";
 import { createSecretScanner } from "./scanner.ts";
@@ -251,6 +253,60 @@ export function* clearsLiveOutput(content: string): Operation<boolean> {
   }
 }
 
+function projectInputEvent(event: DurableEvent, inputs: InputValues): DurableEvent {
+  const project = (value: unknown) => {
+    const safe = inputs.display(value);
+    if (!safe.ok) {
+      throw safe.error;
+    }
+    return safe.value;
+  };
+  let result = event.result;
+  if (result.status === "err") {
+    const parsed = parseDurableEvent(
+      JSON.stringify({ ...event, result: { ...result, error: project(result.error) } }),
+    );
+    if (!parsed.ok) {
+      throw parsed.error;
+    }
+    return parsed.value;
+  }
+  if (result.status === "ok" && result.value !== undefined) {
+    const schema = event.type === "yield" ? event.description[ELICITATION_SCHEMA_FIELD] : undefined;
+    const codec =
+      event.type === "yield" && event.description.type === "eval"
+        ? "executablemd.input-exports"
+        : event.type === "yield" &&
+            event.description.type === "elicit" &&
+            isJsonObject(schema) &&
+            secretInputFields(schema).length > 0
+          ? "executablemd.input"
+          : undefined;
+    const value = result.value;
+    // The canonical owners already project codec data; its tags and field
+    // coordinates remain protocol, even when an answer spells the same text.
+    result = {
+      ...result,
+      value:
+        codec !== undefined && isJsonObject(value) && Object.hasOwn(value, codec)
+          ? Object.fromEntries(
+              Object.entries(value).map(([name, member]) => [
+                name,
+                name === codec ? member : project(member),
+              ]),
+            )
+          : project(value),
+    };
+  }
+  // Descriptions are constructed by their owners before yielding. Rewriting
+  // them here would change replay matching and source/guard coordinates.
+  const parsed = parseDurableEvent(serializeDurableEvent({ ...event, result }));
+  if (!parsed.ok) {
+    throw parsed.error;
+  }
+  return parsed.value;
+}
+
 /**
  * Apply the normalized policy to `stream`, and install it for this execution.
  *
@@ -273,15 +329,7 @@ export function* useSecretDetection(
     stream = preserveJournalProvenance(original, {
       readAll: () => original.readAll(),
       *append(event) {
-        const projected = inputs.display(JSON.parse(serializeDurableEvent(event)));
-        if (!projected.ok) {
-          throw projected.error;
-        }
-        const parsed = parseDurableEvent(JSON.stringify(projected.value));
-        if (!parsed.ok) {
-          throw parsed.error;
-        }
-        yield* original.append(parsed.value);
+        yield* original.append(projectInputEvent(event, inputs));
       },
     });
   }
