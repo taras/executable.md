@@ -112,5 +112,13 @@ describe("Tier ANP — the produced npm package", () => {
     // And the exchange completed against the real adapter the package wrote,
     // returning the identity the fake App Server emitted for that turn.
     expect(driven.stdout).toContain('CHECKPOINT {"turnId":"turn:thread-1:1"}');
+    const claude = yield* scoped(function* () {
+      yield* useQuietProcessOutput();
+      return yield* exec({
+        command: ["node", "packages/acp/tests/fixtures/npm-claude-source-driver.mjs", path],
+      });
+    });
+    expect(claude.exitCode).toBe(0);
+    expect(claude.stdout).toContain("CLAUDE_SDK_SOURCE true");
   });
 });

@@ -32,20 +32,23 @@
       "tarball": "claude/agentclientprotocol-claude-agent-acp-0.70.0.tgz",
       "repository": "https://github.com/agentclientprotocol/claude-agent-acp",
       "upstreamBase": "8710ce1cbccf562cb04b4bcc30e053e960aee05f",
-      "patchedCommit": "bea799c86d16ed2b1bf1cfe8d7fd6e22e6525b56",
+      "patchedCommit": "e3a6ceb7a50e1151fb49322ea83d331a4c8b74ca",
       "pullRequest": "https://github.com/agentclientprotocol/claude-agent-acp/pull/1047",
       "buildCommand": "npm run build && npm pack",
       "license": "Apache-2.0",
       "contract": "_meta.claudeCode.assistantMessageUuid",
       "materializationContract": "session_info_update _meta[executablemd.session-materialization/v1]",
-      "byteLength": 195823,
-      "sha256": "6490fb5dccf0273720587bf0a2e2d5940d4afb73119b82011e9cedf6ffe9be8f",
+      "byteLength": 1075186,
+      "sha256": "2d9bd79ad674eb7ba78fc6c47e9070c63ea3a9f850fcbec1028b28bdbdd3f4ae",
       "files": [
         "package/LICENSE",
         "package/README.md",
         "package/dist/acp-agent.d.ts",
         "package/dist/acp-agent.d.ts.map",
         "package/dist/acp-agent.js",
+        "package/dist/claude-sdk.d.ts",
+        "package/dist/claude-sdk.d.ts.map",
+        "package/dist/claude-sdk.js",
         "package/dist/clear-context-coordinator.d.ts",
         "package/dist/clear-context-coordinator.d.ts.map",
         "package/dist/clear-context-coordinator.js",
@@ -97,6 +100,8 @@
         "package/dist/permissions/response.d.ts",
         "package/dist/permissions/response.d.ts.map",
         "package/dist/permissions/response.js",
+        "package/dist/sdk/sdk.d.mts",
+        "package/dist/sdk/sdk.mjs",
         "package/dist/session-config-ids.d.ts",
         "package/dist/session-config-ids.d.ts.map",
         "package/dist/session-config-ids.js",
@@ -124,9 +129,23 @@
         "package/dist/utils.d.ts",
         "package/dist/utils.d.ts.map",
         "package/dist/utils.js",
-        "package/package.json"
+        "package/package.json",
+        "package/vendor/claude-agent-sdk/PROVENANCE.json",
+        "package/vendor/claude-agent-sdk/UPSTREAM-README.md",
+        "package/vendor/claude-agent-sdk/UPSTREAM-package.json",
+        "package/vendor/claude-agent-sdk/build.mjs",
+        "package/vendor/claude-agent-sdk/sdk.d.ts",
+        "package/vendor/claude-agent-sdk/sdk.mjs",
+        "package/vendor/claude-agent-sdk/transform.mjs"
       ],
-      "identityContract": "_meta.agentSessionId"
+      "identityContract": "_meta.agentSessionId",
+      "sdk": {
+        "version": "0.3.238",
+        "license": "SEE LICENSE IN vendor/claude-agent-sdk/UPSTREAM-README.md",
+        "pristineSha256": "fa36c6862927f6f1d0c3bff35d524a1d8fa81f1746bebfc7aeddb6fbf4b572c8",
+        "repairedSha256": "76ac7b5abf2a819885ca05a18c3966bb29f2bd043466daed67e93ffd74d1ab62",
+        "transform": "vendor/claude-agent-sdk/transform.mjs"
+      }
     }
   ]
 }

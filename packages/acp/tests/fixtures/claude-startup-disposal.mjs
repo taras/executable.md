@@ -2,11 +2,12 @@ import { main, ensure, until, sleep, withResolvers } from "effection";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { readTextFile } from "@effectionx/fs";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import process from "node:process";
 
-const [entry, root] = process.argv.slice(2);
+const [entry, root, mode] = process.argv.slice(2);
 const log = join(root, "backend.log");
 
 main(function* () {
@@ -21,6 +22,31 @@ main(function* () {
     },
   };
   const closed = withResolvers();
+  const exited = withResolvers();
+  const holderReady = withResolvers();
+  const holderHeld = withResolvers();
+  const sockets = new Set();
+  const handlers = new Map();
+  let server;
+  let port;
+  let openingSettled = false;
+  let settingsDisposed = 0;
+  let endedInputs = 0;
+  const restores = [];
+  const onConnection = (socket) => {
+    sockets.add(socket);
+    const onData = (data) => {
+      if (data.toString().includes("ready")) {
+        holderReady.resolve();
+      }
+      if (data.toString().includes("held")) {
+        holderHeld.resolve();
+      }
+    };
+    handlers.set(socket, onData);
+    socket.on("data", onData);
+  };
+  const onExit = () => exited.resolve();
   let child;
   let outcome;
   const onClose = (code, signal) => {
@@ -30,6 +56,10 @@ main(function* () {
   };
   yield* ensure(function* () {
     try {
+      for (const socket of sockets) {
+        socket.write("release\n");
+        socket.end();
+      }
       if (agent) {
         yield* until(agent.dispose());
       }
@@ -41,10 +71,28 @@ main(function* () {
       }
     } finally {
       child?.off("close", onClose);
+      child?.off("exit", onExit);
+      for (const [socket, handler] of handlers) {
+        socket.off("data", handler);
+        socket.destroy();
+      }
+      server?.off("connection", onConnection);
+      server?.close();
+      for (const restore of restores) {
+        restore();
+      }
       childProcess.spawn = nativeSpawn;
       syncBuiltinESMExports();
     }
   });
+  if (mode === "gated") {
+    server = createServer();
+    server.on("connection", onConnection);
+    const listening = withResolvers();
+    server.listen(0, "127.0.0.1", () => listening.resolve());
+    yield* listening.operation;
+    port = server.address().port;
+  }
   // The SDK custom-spawn seam delivers raw exit events; observe its default launcher unchanged.
   childProcess.spawn = (command, args, options) => {
     const spawned = nativeSpawn(command, args, options);
@@ -54,6 +102,7 @@ main(function* () {
     ) {
       child = spawned;
       child.on("close", onClose);
+      child.on("exit", onExit);
     }
     return spawned;
   };
@@ -61,6 +110,28 @@ main(function* () {
   const { ClaudeAcpAgent } = yield* until(
     import(pathToFileURL(join(dirname(entry), "lib.js")).href),
   );
+  const { SettingsManager } = yield* until(
+    import(pathToFileURL(join(dirname(entry), "settings.js")).href),
+  );
+  const { Pushable } = yield* until(import(pathToFileURL(join(dirname(entry), "utils.js")).href));
+  const disposeSettings = SettingsManager.prototype.dispose;
+  SettingsManager.prototype.dispose = function () {
+    const result = disposeSettings.call(this);
+    settingsDisposed++;
+    return result;
+  };
+  restores.push(() => {
+    SettingsManager.prototype.dispose = disposeSettings;
+  });
+  const endInput = Pushable.prototype.end;
+  Pushable.prototype.end = function () {
+    const result = endInput.call(this);
+    endedInputs++;
+    return result;
+  };
+  restores.push(() => {
+    Pushable.prototype.end = endInput;
+  });
   agent = new ClaudeAcpAgent(client, { log() {}, error() {} });
   yield* until(agent.initialize({ protocolVersion: 1, clientCapabilities: {} }));
   const opening = agent
@@ -73,15 +144,22 @@ main(function* () {
             env: {
               FAKE_CLAUDE_LOG: log,
               FAKE_CLAUDE_CONFIRMATION: "held",
-              FAKE_CLAUDE_HELD_HELPER: "1",
+              FAKE_CLAUDE_HELD_HELPER: mode === "gated" ? "0" : "1",
+              ...(port ? { FAKE_CLAUDE_CLOSE_GATE_PORT: String(port) } : {}),
             },
           },
         },
       },
     })
     .then(
-      () => ({ status: "returned" }),
-      (error) => ({ status: "refused", message: error.message }),
+      () => {
+        openingSettled = true;
+        return { status: "returned" };
+      },
+      (error) => {
+        openingSettled = true;
+        return { status: "refused", message: error.message };
+      },
     );
   let ready = false;
   while (!ready) {
@@ -94,10 +172,32 @@ main(function* () {
       yield* sleep(10);
     }
   }
+  if (mode === "gated") {
+    yield* holderReady.operation;
+  }
   events.push("dispose-start");
-  yield* until(agent.dispose());
-  events.push("dispose-return");
-  const closedWhenDisposeReturned = outcome !== undefined;
+  let returnedWhileHeld;
+  let closedWhenDisposeReturned;
+  let cleanupAtReturn;
+  let returned = false;
+  const disposal = agent.dispose().then(() => {
+    returned = true;
+    events.push("dispose-return");
+    closedWhenDisposeReturned = outcome !== undefined;
+    cleanupAtReturn = { openingSettled, settingsDisposed, endedInputs };
+  });
+  if (mode === "gated") {
+    yield* exited.operation;
+    for (const socket of sockets) {
+      socket.write("check\n");
+    }
+    yield* holderHeld.operation;
+    returnedWhileHeld = returned;
+    for (const socket of sockets) {
+      socket.write("release\n");
+    }
+  }
+  yield* until(disposal);
   const result = yield* until(opening);
   if (child === undefined) {
     throw new Error("the SDK backend spawn was not observed");
@@ -112,6 +212,8 @@ main(function* () {
       events,
       outcome,
       closedWhenDisposeReturned,
+      returnedWhileHeld,
+      cleanupAtReturn,
       result,
       updates,
       helperClosed: entries.some(

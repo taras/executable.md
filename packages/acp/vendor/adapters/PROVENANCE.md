@@ -184,8 +184,11 @@ did; the run simply holds no association for it.
 
 ## Licences
 
-Both packages are Apache-2.0. Each provider directory carries the upstream
-`LICENSE` beside its tarball, and each tarball contains its own copy.
+Both adapter packages are Apache-2.0. Each provider directory carries the
+adapter's upstream `LICENSE` beside its tarball, and each tarball contains its
+own copy. Claude's carried Agent SDK bytes have separate terms, recorded in
+[the SDK notice](claude/SDK-NOTICE.md) and the archive's
+`vendor/claude-agent-sdk/UPSTREAM-README.md`. The SDK is not Apache-2.0 adapter source.
 
 ## Who owns this
 
@@ -211,3 +214,28 @@ library and required adapter dependencies remain, while its eight platform
 Claude executable packages are physically absent. Existing content-addressed
 caches are reused unchanged; the new snapshot has its own digest directory.
 Codex installation policy and snapshot bytes remain unchanged.
+
+### Claude native close and startup cleanup
+
+Producer `e3a6ceb7a50e1151fb49322ea83d331a4c8b74ca` extends
+`bea799c86d16ed2b1bf1cfe8d7fd6e22e6525b56`. Its opening account exists before cwd
+validation and owns settings, input, callbacks and the Query reader until cleanup
+finishes or the same Query transfers to a Session. Disposal initiates shutdown
+for every opening and Session and joins their cleanup. A refused opening publishes
+no Session or acceptance; the initiating identity failure remains primary.
+
+The private SDK remains version 0.3.238. Its default transport retains actual
+native child close, separately from exit status and its bounded exit wait.
+`Query.return(undefined)` joins that completion through the existing idempotent
+cleanup promise. Custom spawners keep their exit/error-only contract and the
+default launcher's executable selection, arguments, stderr and escalation remain.
+
+`npm run build && npm pack` runs `node vendor/claude-agent-sdk/build.mjs && tsc`
+before packing. The carried `transform.mjs` checks the complete pristine SDK hash
+and every unique patch site before generating `dist/sdk/sdk.mjs`. Runtime SDK
+imports pass through `dist/claude-sdk.js`; declarations still refer to the pinned
+SDK package. The pristine module is source evidence and is never executed by the
+adapter. Its declarations, registry integrity, upstream terms and readable
+transform travel in the same verified archive. The vendor test reproduces the
+runtime module offline from those bytes and checks input/site refusals. Two
+identical producer builds produce byte-identical archives.

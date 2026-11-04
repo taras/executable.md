@@ -25,6 +25,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped, until } from "effection";
 import type { Operation } from "effection";
 import { Buffer } from "node:buffer";
+import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -65,6 +66,18 @@ describe("Tier ADD — embedded adapters across distributions", () => {
         provider: snapshot.provider,
         sha256: createHash("sha256").update(bytes).digest("hex"),
       }).toEqual({ provider: snapshot.provider, sha256: snapshot.sha256 });
+      if (snapshot.provider === "claude") {
+        const archive = gunzipSync(bytes).toString("utf8");
+        for (const member of [
+          "dist/sdk/sdk.mjs",
+          "vendor/claude-agent-sdk/sdk.mjs",
+          "vendor/claude-agent-sdk/transform.mjs",
+          "vendor/claude-agent-sdk/UPSTREAM-README.md",
+          "vendor/claude-agent-sdk/PROVENANCE.json",
+        ]) {
+          expect(archive).toContain(`package/${member}`);
+        }
+      }
     }
     expect(digests()).toHaveLength(2);
   });

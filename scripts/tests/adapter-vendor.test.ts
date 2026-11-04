@@ -14,11 +14,14 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { until } from "effection";
+import { ensure, until } from "effection";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import type { Operation } from "effection";
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { Buffer } from "node:buffer";
 import { gunzipSync } from "node:zlib";
 import { embeddedAdapterIdentities } from "@executablemd/acp/embedded-adapters";
@@ -33,7 +36,7 @@ const PINNED = {
   },
   claude: {
     upstreamBase: "8710ce1cbccf562cb04b4bcc30e053e960aee05f",
-    patchedCommit: "bea799c86d16ed2b1bf1cfe8d7fd6e22e6525b56",
+    patchedCommit: "e3a6ceb7a50e1151fb49322ea83d331a4c8b74ca",
   },
 } as const;
 
@@ -45,8 +48,12 @@ const PINNED = {
  * header blocks so the comparison is against the archive.
  */
 function archiveInventory(tarball: Uint8Array): string[] {
+  return [...archiveFiles(tarball).keys()].sort();
+}
+
+function archiveFiles(tarball: Uint8Array): Map<string, Buffer> {
   const raw = gunzipSync(tarball);
-  const names: string[] = [];
+  const files = new Map<string, Buffer>();
   for (let at = 0; at + 512 <= raw.length; ) {
     const header = raw.subarray(at, at + 512);
     // Two consecutive zero blocks end the archive.
@@ -62,11 +69,11 @@ function archiveInventory(tarball: Uint8Array): string[] {
     // '0' and '\0' are ordinary files; directories and metadata entries are not
     // what the manifest lists.
     if (type === "0" || type === "\0") {
-      names.push(name);
+      files.set(name, raw.subarray(at + 512, at + 512 + size));
     }
     at += 512 + Math.ceil((Number.isNaN(size) ? 0 : size) / 512) * 512;
   }
-  return names.sort();
+  return files;
 }
 
 interface ManifestSnapshot {
@@ -207,5 +214,60 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
         expect(snapshot.identityContract).toMatch(/^_meta\./);
       }
     }
+  });
+  it("AD7: the shipped Claude SDK regenerates offline from exact carried source", function* () {
+    const snapshot = (yield* manifest()).find((entry) => entry.provider === "claude");
+    if (!snapshot) {
+      throw new Error("Claude snapshot missing");
+    }
+    const files = archiveFiles(yield* until(readFile(join(VENDOR, snapshot.tarball))));
+    const text = (name: string): string => {
+      const bytes = files.get(`package/${name}`);
+      if (!bytes) {
+        throw new Error(`Snapshot member missing: ${name}`);
+      }
+      return bytes.toString("utf8");
+    };
+    const root = yield* until(mkdtemp(join(tmpdir(), "xmd-sdk-source-")));
+    yield* ensure(() => rm(root, { recursive: true, force: true }));
+    for (const [name, bytes] of files) {
+      if (name.startsWith("package/vendor/claude-agent-sdk/")) {
+        const target = join(root, name);
+        yield* ensureDir(dirname(target));
+        yield* writeTextFile(target, bytes.toString("utf8"));
+      }
+    }
+    const module = yield* until(
+      import(pathToFileURL(join(root, "package/vendor/claude-agent-sdk/transform.mjs")).href),
+    );
+    if (typeof module.transformSdk !== "function") {
+      throw new Error("Carried SDK transform missing");
+    }
+    const pristine = text("vendor/claude-agent-sdk/sdk.mjs");
+    expect(createHash("sha256").update(pristine).digest("hex")).toBe(
+      "fa36c6862927f6f1d0c3bff35d524a1d8fa81f1746bebfc7aeddb6fbf4b572c8",
+    );
+    expect(
+      createHash("sha256").update(text("vendor/claude-agent-sdk/sdk.d.ts")).digest("hex"),
+    ).toBe("544c4efabd6761a66110bf32b2e3749b77bbee4f958e2c929dd1045f52302653");
+    expect(module.transformSdk(pristine)).toBe(text("dist/sdk/sdk.mjs"));
+    expect(() => module.transformSdk(pristine + "\n")).toThrow("SHA-256 mismatch");
+    expect(() =>
+      module.transformSdk(pristine.replace("class yk{options;process;", "class missing{")),
+    ).toThrow("found 0");
+    expect(() => module.transformSdk(pristine + "class yk{options;process;")).toThrow("found 2");
+    expect(text("dist/claude-sdk.js")).toContain('export * from "../dist/sdk/sdk.mjs"');
+    for (const [name, bytes] of files) {
+      if (name.startsWith("package/dist/") && name.endsWith(".js")) {
+        expect(bytes.toString("utf8")).not.toMatch(/from ["']@anthropic-ai\/claude-agent-sdk["']/);
+      }
+    }
+    expect(text("vendor/claude-agent-sdk/UPSTREAM-README.md")).toContain(
+      "Commercial Terms of Service",
+    );
+    expect(text("vendor/claude-agent-sdk/PROVENANCE.json")).toContain("0.3.238");
+    expect(JSON.parse(text("package.json")).dependencies["@anthropic-ai/claude-agent-sdk"]).toBe(
+      "0.3.238",
+    );
   });
 });
