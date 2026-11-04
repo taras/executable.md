@@ -115,7 +115,9 @@ function respond(request) {
     const text = request.params.prompt.map(block => block.text ?? "").join("");
     if (text !== "no-accept") update({sessionUpdate: "session_info_update", _meta: {"executablemd.session-materialization/v1": {state: "accepted"}}});
     update({sessionUpdate: "agent_message_chunk", content: {type: "text", text: "answer:" + text}});
-    if (text === "fail") {
+    if (text === "diagnostic") {
+      send({jsonrpc: "2.0", id: request.id, error: {code: -32041, message: "Internal error", data: {details: "/work/project: adapter unavailable", authorization: "excluded raw field"}}});
+    } else if (text === "fail") {
       send({jsonrpc: "2.0", id: request.id, error: {code: -32000, message: "backend refusal"}});
     } else {
       reply(request.id, {stopReason: text === "cancel" ? "cancelled" : "end_turn", _meta: {codex: {turnId: "turn-" + text}, opaque: {left: [3, null]}}});
@@ -401,6 +403,60 @@ describe(
           }
         }
       }
+    });
+
+    it("1039 A1/A5: real protocol failure details reach the terminal Error", function* () {
+      const current = yield* runtimeWorld();
+      const turn = current.runtime.startTurn({
+        handle: current.handle,
+        text: "diagnostic",
+        mode: "prompt",
+        requestId: "actual-request",
+      });
+      const channel = createChannel<import("@executablemd/core").AgentPromptEvent, string>();
+      const subscription = yield* channel;
+      const consumer = yield* spawn(() =>
+        consumeTurn(
+          turn,
+          { agent: "scribe", session: { sessionKey: "released", cwd: current.dir } },
+          channel,
+          () => {},
+        ),
+      );
+      const events = [];
+      let next = yield* subscription.next();
+      while (!next.done) {
+        events.push(next.value);
+        next = yield* subscription.next();
+      }
+      yield* consumer;
+      expect(next.value).toBe("answer:diagnostic");
+      const terminal = events.find((event) => event.type === "terminal");
+      const result = yield* until(turn.result);
+      expect(result).toMatchObject({
+        status: "failed",
+        error: {
+          origin: "runtime",
+          acp: { code: -32041, details: "/work/project: adapter unavailable" },
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("excluded raw field");
+      expect(terminal?.error?.message).toBe("Internal error");
+      expect(
+        terminal?.error && Reflect.get(terminal.error, "executablemd.agent.prompt-diagnostic"),
+      ).toEqual({
+        provider: "acp",
+        operation: "session/prompt",
+        stage: "runtime-turn",
+        requestId: "actual-request",
+        code: "RUNTIME",
+        origin: "runtime",
+        acp: {
+          code: -32041,
+          message: "Internal error",
+          details: "/work/project: adapter unavailable",
+        },
+      });
     });
 
     it("a final save failure keeps the returned reply inspectable and does not reprompt", function* () {

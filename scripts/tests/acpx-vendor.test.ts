@@ -38,6 +38,7 @@ const SEAMS: readonly string[] = [
   "exactSessionRecordIds",
   "strictResume",
   "Strict explicit resume:",
+  "XMD prompt diagnostic:",
 ];
 
 /** How far an introduced line may sit from one that names the seam. */

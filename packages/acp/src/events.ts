@@ -100,7 +100,7 @@ export function* consumeTurn(
       ]);
     }
     const result = yield* until(turn.result);
-    terminal = mapResult(result);
+    terminal = mapResult(result, turn.requestId);
     // Read from the result rather than from the mapped event: a turn ACP
     // reported as completed under a stop reason this host treats as a failure
     // is a failure here, and a failure names no turn.
@@ -145,7 +145,7 @@ export function* consumeTurn(
   yield* channel.close(text);
 }
 
-function mapResult(result: AcpRuntimeTurnResult): AgentPromptEvent {
+function mapResult(result: AcpRuntimeTurnResult, requestId: string): AgentPromptEvent {
   if (result.status === "completed") {
     // ACP defines end_turn as the only successful stop reason. An absent
     // stop reason on a completed turn is treated as end_turn — some
@@ -169,5 +169,28 @@ function mapResult(result: AcpRuntimeTurnResult): AgentPromptEvent {
     return terminal;
   }
   const failure = new Error(result.error.message);
+  Object.defineProperty(failure, "executablemd.agent.prompt-diagnostic", {
+    value: {
+      provider: "acp",
+      operation: "session/prompt",
+      stage: "runtime-turn",
+      requestId,
+      ...(result.error.code === undefined ? {} : { code: result.error.code }),
+      ...(result.error.detailCode === undefined ? {} : { detailCode: result.error.detailCode }),
+      ...(result.error.retryable === undefined ? {} : { retryable: result.error.retryable }),
+      ...(result.error.origin === undefined ? {} : { origin: result.error.origin }),
+      ...(result.error.acp === undefined
+        ? {}
+        : {
+            acp: {
+              code: result.error.acp.code,
+              message: result.error.acp.message,
+              ...(result.error.acp.details === undefined
+                ? {}
+                : { details: result.error.acp.details }),
+            },
+          }),
+    },
+  });
   return { type: "terminal", status: "failed", error: failure };
 }

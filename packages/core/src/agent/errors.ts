@@ -5,7 +5,40 @@
  * prompt record and the prompt stream's close value.
  */
 
-import type { Json } from "../types.ts";
+import { z } from "zod";
+
+const PROMPT_DIAGNOSTIC = "executablemd.agent.prompt-diagnostic";
+const Diagnostic = z
+  .object({
+    provider: z.literal("acp"),
+    operation: z.literal("session/prompt"),
+    stage: z.literal("runtime-turn"),
+    requestId: z.string().optional(),
+    code: z.string().min(1).optional(),
+    detailCode: z.string().min(1).optional(),
+    retryable: z.boolean().optional(),
+    origin: z.enum(["cli", "runtime", "queue", "acp"]).optional(),
+    acp: z
+      .object({
+        code: z.number().finite(),
+        message: z.string().min(1).optional(),
+        details: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+type PromptDiagnostic = z.infer<typeof Diagnostic>;
+
+export function readPromptDiagnostic(error: unknown): PromptDiagnostic | undefined {
+  return isRecord(error) ? parsePromptDiagnostic(error[PROMPT_DIAGNOSTIC]) : undefined;
+}
+
+function parsePromptDiagnostic(value: unknown): PromptDiagnostic | undefined {
+  const parsed = Diagnostic.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
 
 export class AgentPromptError extends Error {
   override name = "AgentPromptError";
@@ -15,22 +48,37 @@ export class AgentPromptError extends Error {
 
   constructor(
     message: string,
-    options: { agent: string; sessionKey: string; stopReason?: string; cause?: unknown },
+    options: {
+      agent: string;
+      sessionKey: string;
+      stopReason?: string;
+      cause?: unknown;
+      diagnostic?: PromptDiagnostic;
+    },
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.agent = options.agent;
     this.sessionKey = options.sessionKey;
+    if (options.diagnostic !== undefined) {
+      Object.defineProperty(this, PROMPT_DIAGNOSTIC, { value: options.diagnostic });
+    }
     if (options.stopReason !== undefined) {
       this.stopReason = options.stopReason;
     }
   }
 }
 
-export interface SerializedPromptFailure extends Record<string, Json> {
+export type SerializedPromptFailure = {
   message: string;
-}
+  name?: string;
+  cause?: string;
+  diagnostic?: PromptDiagnostic;
+};
 
-export function serializePromptFailure(error: unknown): SerializedPromptFailure {
+export function serializePromptFailure(
+  error: unknown,
+  diagnostic?: PromptDiagnostic,
+): SerializedPromptFailure {
   if (error instanceof Error) {
     const serialized: SerializedPromptFailure = { message: error.message };
     if (error.name !== "Error") {
@@ -38,6 +86,9 @@ export function serializePromptFailure(error: unknown): SerializedPromptFailure 
     }
     if (error.cause instanceof Error) {
       serialized.cause = error.cause.message;
+    }
+    if (diagnostic !== undefined) {
+      serialized.diagnostic = diagnostic;
     }
     return serialized;
   }
@@ -62,6 +113,13 @@ export function parsePromptFailure(value: unknown): SerializedPromptFailure | un
   }
   if (typeof cause === "string") {
     parsed.cause = cause;
+  }
+  if (Object.hasOwn(value, "diagnostic")) {
+    const diagnostic = parsePromptDiagnostic(value.diagnostic);
+    if (diagnostic === undefined) {
+      return undefined;
+    }
+    parsed.diagnostic = diagnostic;
   }
   return parsed;
 }

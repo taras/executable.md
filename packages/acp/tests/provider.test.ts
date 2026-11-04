@@ -102,6 +102,37 @@ function* collectPrompt(
 }
 
 describe("Tier AP — ACPX provider", () => {
+  it("1039 A1: runtime classification and actual request correlation survive mapping", function* () {
+    const harness = createFakeRuntime();
+    harness.script({
+      result: {
+        status: "failed",
+        error: {
+          message: "Internal error",
+          code: "ADAPTER",
+          detailCode: "REQUEST_REJECTED",
+          retryable: false,
+        },
+      },
+    });
+    yield* installProvider(harness);
+    const { events } = yield* collectPrompt("do once");
+    const terminal = events.find((event) => event.type === "terminal");
+    expect(terminal?.error?.message).toBe("Internal error");
+    expect(
+      terminal?.error && Reflect.get(terminal.error, "executablemd.agent.prompt-diagnostic"),
+    ).toEqual({
+      provider: "acp",
+      operation: "session/prompt",
+      stage: "runtime-turn",
+      requestId: harness.turns[0].turn.requestId,
+      code: "ADAPTER",
+      detailCode: "REQUEST_REJECTED",
+      retryable: false,
+    });
+    expect(harness.turns).toHaveLength(1);
+  });
+
   it("AP1: a successful turn emits started, output deltas, terminal, and the close value", function* () {
     const harness = createFakeRuntime();
     yield* scoped(function* () {

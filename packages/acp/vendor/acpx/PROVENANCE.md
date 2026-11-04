@@ -116,6 +116,26 @@ the reviewed strictness and passes the same prompt/control, alias, configuration
 and admission regressions. That release qualification is separate from retiring
 the materialization patch or the vendor closure.
 
+## Selected Prompt failure facts (#1039)
+
+The released normalizer extracts protocol error code/message and `data.details`,
+but the in-process `failRuntimeTurn` projection drops them and normalized origin.
+The generated `runtime.js` correction retains origin and selected numeric
+code/message/details, and `runtime.d.ts` declares those same fields. It preserves
+an explicit empty details string and excludes arbitrary raw `acp.data`.
+
+The uniquely named `XMD prompt diagnostic:` seam bounds this correction in Tier AV.
+Pristine upstream, exact pins, materialization and strict-resume patches stay
+unchanged. The shared/queue result projection is unchanged. Real adapter-child
+failures pass through this runtime into production Prompt publication and cold
+REPL error reads; no runtime log is needed for retained selected facts.
+
+Other arbitrary adapter data remains unavailable through this selected result.
+This correction establishes no cause for the historical `Internal error` incident,
+and neither origin nor a retryable hint establishes acceptance or permits resend.
+Remove the correction only when a published runtime retains the same selected facts
+and passes those deterministic consumers and offline vendor verification.
+
 ## Released environment seam (#566)
 
 The released runtime snapshots `agentProcessEnv`, delivers it to every child and

@@ -34,13 +34,28 @@ import { CORE_REGISTRY } from "../../core/src/components/registry.ts";
 import { isJsonObject } from "../../core/src/json.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { readFile } from "node:fs/promises";
+import { appendFile, open, readFile } from "node:fs/promises";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createAcpxProvider } from "../../acp/src/provider.ts";
+import { createAcpxSessionStore } from "../../acp/src/session-store.ts";
 import { fileURLToPath } from "node:url";
-import { Err, Ok, scoped, spawn, until, withResolvers } from "effection";
+import { Err, Ok, ensure, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { parseDurableEvent, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { Component, Execution, retainedSource, useTempFileCompiler } from "@executablemd/core";
+import {
+  Agent,
+  agentIdentityComponents,
+  installAgentComponents,
+  useNormalizedOutput,
+  Component,
+  Execution,
+  retainedSource,
+  useTempFileCompiler,
+} from "@executablemd/core";
 import type { FunctionComponentDefinition } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
@@ -61,7 +76,12 @@ import { assembleReplProfile, entryVocabulary } from "../src/repl-profile.ts";
 import { installPlugins, NO_PLUGINS } from "../src/plugin-host.ts";
 import { ADAPTERS, AGENT } from "./support/plan-harness.ts";
 import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
-import { readRecords } from "../src/repl/journal.ts";
+import {
+  createExecutionFile,
+  openExecutionFile,
+  executionPath,
+  readRecords,
+} from "../src/repl/journal.ts";
 import type { ReplPrinting } from "../src/repl/session.ts";
 import { BALLOT_REPLY, PROMPT_REPLIES } from "./fixtures/repl/issue-932/history.ts";
 import type {
@@ -2419,6 +2439,169 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
     return held;
   }
 
+  it("1039 A2: real failed turns remain distinct after cold reopen without resending", function* () {
+    const directory = join(tmpdir(), `xmd-diagnostic-${randomUUID()}`);
+    yield* ensure(() => rm(directory, { recursive: true, force: true }));
+    yield* ensureDir(directory);
+    const adapter = join(directory, "diagnostic agent.cjs");
+    const calls = join(directory, "prompt-count.txt");
+    yield* writeTextFile(
+      adapter,
+      `
+const fs = require("node:fs");
+const send = message => process.stdout.write(JSON.stringify(message) + "\\n");
+let buffer = "";
+process.stdin.on("data", chunk => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
+    if (line.trim()) respond(JSON.parse(line));
+  }
+});
+function respond(request) {
+  if (request.id === undefined) return;
+  const reply = result => send({jsonrpc: "2.0", id: request.id, result});
+  if (request.method === "initialize") reply({protocolVersion: 1, agentCapabilities: {loadSession: true, promptCapabilities: {}}, authMethods: []});
+  else if (request.method === "session/new" || request.method === "session/load") reply({sessionId: "diagnostic-session"});
+  else if (request.method === "session/prompt") {
+    const text = request.params.prompt.map(block => block.text ?? "").join("");
+    fs.appendFile(process.argv[2], "prompt\\n", error => {
+      if (error) throw error;
+      send({jsonrpc: "2.0", method: "session/update", params: {sessionId: "diagnostic-session", update: {sessionUpdate: "agent_message_chunk", content: {type: "text", text: "partial:" + text}}}});
+      send({jsonrpc: "2.0", id: request.id, error: {code: text === "first" ? -32041 : -32042, message: "Internal error", data: {details: text === "first" ? "/work/project: adapter unavailable" : "", authorization: "excluded raw field", prompt: "excluded prompt", env: {TOKEN: "excluded environment"}}}});
+    });
+  } else send({jsonrpc: "2.0", id: request.id, error: {code: -32601, message: "unsupported"}});
+}
+`,
+    );
+    yield* ReplHost.around(
+      {
+        *createExclusive([file]) {
+          const handle = yield* until(open(file, "wx"));
+          yield* until(handle.close());
+        },
+        *appendRecord([file, record]) {
+          yield* until(appendFile(file, record));
+        },
+      },
+      { at: "min" },
+    );
+    yield* scoped(function* () {
+      const execution = yield* createExecutionFile(directory, "diagnostics");
+      yield* useNormalizedOutput();
+      yield* installAgentComponents({
+        defaultAgent: "scribe",
+        rootProvider: {
+          options: { defaultAgent: "scribe", permissionMode: "deny-all" },
+          factory: createAcpxProvider({
+            sessionStore: createAcpxSessionStore(join(directory, "provider")),
+            agentRegistry: { resolve: () => ["node", adapter, calls], list: () => ["scribe"] },
+            advertiseNativeLaunch: [],
+            advertiseClientNativeAttachment: [],
+            *agentCwd() {
+              return directory;
+            },
+            sessions: {
+              *requestSession() {
+                return { sessionKey: "owning-conversation", cwd: directory, state: "new" };
+              },
+              *recordSessionIdentity() {},
+            },
+          }),
+        },
+      });
+      const opened = yield* openReplSession({
+        execution,
+        installations: [{ components: agentIdentityComponents() }],
+      });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const submitted = yield* opened.value.submit(
+        '<Session name="review"><Prompt text="first" /><Prompt text="second" /></Session>',
+      );
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      expect((yield* opened.value.join()).ok).toBe(false);
+    });
+    expect(yield* readTextFile(calls)).toBe("prompt\nprompt\n");
+    const file = executionPath(directory, "diagnostics");
+    const before = yield* readTextFile(file);
+    yield* scoped(function* () {
+      yield* Agent.around({
+        *prompt() {
+          throw new Error("cold read started a provider turn");
+        },
+        *session() {
+          throw new Error("cold read opened a provider");
+        },
+      });
+      const reopened = yield* openExecutionFile(directory, "diagnostics");
+      const model = projectedOf(yield* readRecords(file));
+      expect(yield* reopened.stream.readAll()).toEqual(yield* readRecords(file));
+      expect(model.entries).toHaveLength(1);
+      const requests = readsOver(model);
+      const first = answered(
+        yield* requests.inspectPrompt({ entry: 1, prompt: 1, field: "error" }),
+      );
+      const second = answered(
+        yield* requests.inspectPrompt({ entry: 1, prompt: 2, field: "error" }),
+      );
+      expect(first.text).toBe("Internal error");
+      expect(second.text).toBe(first.text);
+      const asked = fresh();
+      const response = yield* replyThrough(
+        '<REPL.Entry.Prompt entry={1} prompt={1} field="error" limit={3} as="failure" /><Output><Json value={failure} /></Output>\n<REPL.Entry.Prompt entry={1} prompt={2} field="error" />',
+        cold(model),
+        asked,
+      );
+      expect(rendered(response)).toContain('"diagnostic"');
+      const one = observed(asked, 0);
+      const two = observed(asked, 1);
+      expect(one).toMatchObject({
+        text: "Int",
+        diagnostic: {
+          provider: "acp",
+          operation: "session/prompt",
+          stage: "runtime-turn",
+          code: "RUNTIME",
+          origin: "runtime",
+          acp: {
+            code: -32041,
+            message: "Internal error",
+            details: "/work/project: adapter unavailable",
+          },
+        },
+        next: { entry: 1, prompt: 1, field: "error", offset: 3, limit: 3 },
+      });
+      expect(two).toMatchObject({
+        text: "Internal error",
+        diagnostic: { acp: { code: -32042, details: "" } },
+      });
+      const firstDiagnostic = isJsonObject(one) ? one.diagnostic : undefined;
+      expect(isJsonObject(firstDiagnostic) && typeof firstDiagnostic.requestId).toBe("string");
+      const continuation = fresh();
+      yield* replyThrough(
+        '<REPL.Entry.Prompt entry={1} prompt={1} field="error" offset={3} limit={3} />',
+        cold(model),
+        continuation,
+      );
+      expect(observed(continuation, 0)).toMatchObject({ text: "ern", diagnostic: firstDiagnostic });
+      const diagnostic = Reflect.get(model.turns[0], "diagnostic");
+      expect(Object.isFrozen(diagnostic)).toBe(true);
+      expect(diagnostic && Object.isFrozen(diagnostic.acp)).toBe(true);
+      expect(model.entries).toHaveLength(1);
+      expect(JSON.stringify([one, two])).not.toContain("excluded raw field");
+      expect(JSON.stringify([one, two])).not.toContain("excluded prompt");
+      expect(JSON.stringify([one, two])).not.toContain("excluded environment");
+    });
+    expect(yield* readTextFile(file)).toBe(before);
+    expect(yield* readTextFile(calls)).toBe("prompt\nprompt\n");
+    expect(projectedOf(yield* readRecords(file)).entries).toHaveLength(1);
+  });
+
   it("E2: a relative read pins its continuation to the entry it resolved", function* () {
     const events = yield* savedEvents();
     // A real session over the saved history, so the later admission below is
@@ -2820,6 +3003,7 @@ describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
     const none = answered(yield* reads.inspectPrompt({ entry: 1, prompt: 1, field: "error" }));
     expect(none).toMatchObject({
       promptStatus: "completed",
+      diagnostic: null,
       text: null,
       offset: 0,
       length: 0,
