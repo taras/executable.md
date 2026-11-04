@@ -29,7 +29,7 @@
  * structural copy is.
  */
 
-import type { Session, SessionConfiguration } from "./agent-api.ts";
+import type { Session, SessionConfiguration, SessionIdentity } from "./agent-api.ts";
 
 /**
  * What a configured use presents itself as.
@@ -87,26 +87,31 @@ let authorityOf: (routed: unknown) => Authority | undefined;
 /**
  * The one value this module will admit as a configured use.
  *
- * It extends nothing and copies everything the provider's `Session` carried, so
- * it is that session by every public measure. `agentSessionId` is copied as it
- * stood when the use was issued; a provider that asserts one later updates its
- * own object, which is why an operation resolves the session it was handed
- * rather than reading identity off this copy.
+ * Its enumerable observations follow the exact provider Session even though
+ * the carrier is frozen before a first turn confirms the conversation.
  */
 class ConfiguredSession implements AgentSessionUse {
   readonly #authority: Authority;
   readonly sessionKey: string;
   readonly cwd: string;
-  readonly agentSessionId?: string;
+  declare readonly agentSessionId?: string;
+  declare readonly identity?: SessionIdentity;
   readonly [CONFIGURED_SESSION] = true as const;
 
   constructor(session: Session, authority: Authority) {
     this.#authority = authority;
     this.sessionKey = session.sessionKey;
     this.cwd = session.cwd;
-    if (session.agentSessionId !== undefined) {
-      this.agentSessionId = session.agentSessionId;
-    }
+    Object.defineProperties(this, {
+      agentSessionId: {
+        enumerable: true,
+        get: () => this.#authority.session.agentSessionId,
+      },
+      identity: {
+        enumerable: true,
+        get: () => this.#authority.session.identity,
+      },
+    });
     Object.freeze(this);
   }
 

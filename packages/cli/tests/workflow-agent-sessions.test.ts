@@ -540,7 +540,7 @@ describe("workflow ACP loading identity", { sanitizeOps: false, sanitizeResource
           }
           expect(record.agentSessionId).toBe(undefined);
           if (differentKind) {
-            record.agentSessionId = "asserted-native";
+            record.agentSessionId = record.acpSessionId;
             yield* until(store.save(record));
           }
           held = false;
