@@ -18,6 +18,8 @@ Implementor; their actual impact selects the next required reviews.
 <Let as="state" value={props.record.checkpoint} />
 <ReviewPolicy assessment={state.assignment.assessment} kind={state.assignment.reviewKind ?? "feature"} as="policy" />
 <Let as="gates" value={{
+  planning: {role:"planner",continuation:{phase:"implementation",role:"implementor"}},
+  "architect-discovery": {role:"architect",continuation:{phase:"discovery",role:"planner"}},
   implementation: {
     role: "implementor",
     continuation: policy.reviewers.length === 0 ? {phase:"ready",role:null} : {phase:"review",role:policy.reviewers[0]}
