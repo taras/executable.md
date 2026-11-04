@@ -440,6 +440,11 @@ export type {
 } from "./src/filesystem-host.ts";
 export { admitDocumentHostPath, authoredOperation } from "./src/filesystem-placement.ts";
 
+export { ComponentInvocationCancelled } from "./src/component-invocation-hooks.ts";
+export type {
+  ComponentInvocationHooks,
+  ComponentInvocationObservation,
+} from "./src/component-invocation-hooks.ts";
 export { projectElicitationAnswer } from "./src/secrets/input-schema.ts";
 export { default as elicitComponent } from "./src/components/Elicit.ts";
 export type { SecretInputOwner } from "./src/secrets/inputs.ts";

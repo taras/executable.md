@@ -1,3 +1,5 @@
+import type { Plugin } from "@executablemd/core/api";
+import { installPlugins } from "../../src/plugin-host.ts";
 import {
   createSignal,
   ensure,
@@ -267,6 +269,7 @@ export function* useHeadlessFixture(
     beforeClose?(): Operation<void>;
   },
   profileFacts: Pick<ReplProfileFacts, "testingHarness"> = {},
+  plugins: readonly Plugin[] = [],
 ) {
   const scope = yield* useScope();
   yield* usePosixSidekickTransport(process.platform, undefined, beforeClose);
@@ -299,73 +302,79 @@ export function* useHeadlessFixture(
   const view = yield* useReplLiveScreen();
   const ready = withResolvers<Parameters<HeadlessReplRoot["ready"]>[0]>();
   const task = yield* spawn(function* () {
-    const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
-      ...profileFacts,
-      sidekickAgent: MOUNTED_AGENT,
-      observeChildInputPass: input.observe,
-      observeChildRoot: (root) => children.push(root),
-      acp: {
-        sessionStore: store,
-        agentRegistry: makeRegistry({ [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd` }),
-        createRuntime(options) {
-          if (!options.elicitationModes?.includes("form")) {
-            return host.fake.create(options);
-          }
-          const configured =
-            native?.formCapable === false ? { ...options, elicitationModes: [] } : options;
-          const permission = configured.onPermissionRequest;
-          const runtime: ProbeCapableRuntime = createAcpRuntime(
-            native?.permission === undefined
-              ? configured
-              : {
-                  ...configured,
-                  onPermissionRequest(request, context) {
-                    native.permission?.(request);
-                    if (permission === undefined) {
-                      throw new Error("The actual parent permission callback is absent.");
-                    }
-                    return permission(request, context);
+    const profile = yield* assembleReplProfile(
+      stack.value,
+      plugins.length === 0
+        ? NO_PLUGINS
+        : yield* installPlugins(plugins, { command: "repl", args: [] }),
+      {
+        ...profileFacts,
+        sidekickAgent: MOUNTED_AGENT,
+        observeChildInputPass: input.observe,
+        observeChildRoot: (root) => children.push(root),
+        acp: {
+          sessionStore: store,
+          agentRegistry: makeRegistry({ [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd` }),
+          createRuntime(options) {
+            const configured =
+              native?.formCapable === false ? { ...options, elicitationModes: [] } : options;
+            if (!options.elicitationModes?.includes("form")) {
+              return host.fake.create(configured);
+            }
+            const permission = configured.onPermissionRequest;
+            const runtime: ProbeCapableRuntime = createAcpRuntime(
+              native?.permission === undefined
+                ? configured
+                : {
+                    ...configured,
+                    onPermissionRequest(request, context) {
+                      native.permission?.(request);
+                      if (permission === undefined) {
+                        throw new Error("The actual parent permission callback is absent.");
+                      }
+                      return permission(request, context);
+                    },
+                  },
+            );
+            const start = runtime.startTurn.bind(runtime);
+            runtime.startTurn = (input) => {
+              const turn = start(intercept?.(input) ?? input);
+              const source = turn.events[Symbol.asyncIterator]();
+              return {
+                ...turn,
+                events: {
+                  [Symbol.asyncIterator]() {
+                    return {
+                      next: () =>
+                        source.next().then((next) => {
+                          if (next.done) {
+                            return next;
+                          }
+                          native?.event?.(next.value);
+                          const transform = native?.transform;
+                          return transform === undefined
+                            ? next
+                            : { ...next, value: transform(next.value) };
+                        }),
+                    };
                   },
                 },
-          );
-          const start = runtime.startTurn.bind(runtime);
-          runtime.startTurn = (input) => {
-            const turn = start(intercept?.(input) ?? input);
-            const source = turn.events[Symbol.asyncIterator]();
-            return {
-              ...turn,
-              events: {
-                [Symbol.asyncIterator]() {
-                  return {
-                    next: () =>
-                      source.next().then((next) => {
-                        if (next.done) {
-                          return next;
-                        }
-                        native?.event?.(next.value);
-                        const transform = native?.transform;
-                        return transform === undefined
-                          ? next
-                          : { ...next, value: transform(next.value) };
-                      }),
-                  };
-                },
-              },
+              };
             };
-          };
-          const beforeClose = native?.beforeClose;
-          if (beforeClose !== undefined) {
-            const close = runtime.close.bind(runtime);
-            runtime.close = (input) =>
-              scope.run(function* () {
-                yield* beforeClose();
-                yield* until(close(input));
-              });
-          }
-          return runtime;
+            const beforeClose = native?.beforeClose;
+            if (beforeClose !== undefined) {
+              const close = runtime.close.bind(runtime);
+              runtime.close = (input) =>
+                scope.run(function* () {
+                  yield* beforeClose();
+                  yield* until(close(input));
+                });
+            }
+            return runtime;
+          },
         },
       },
-    });
+    );
     return yield* runReplProgram({
       profile,
       root: host.root,

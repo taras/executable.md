@@ -18,6 +18,7 @@
       "@executablemd/core/host/bun": ["./packages/core/component-modules/bun.ts"],
       "@executablemd/acp": ["./packages/acp/mod.ts"],
       "@executablemd/cli": ["./packages/cli/src/cli.ts"],
+      "@executablemd/cli/api": ["./packages/cli/api.ts"],
       "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],
       "@executablemd/core": ["./packages/core/mod.ts"],
       "@executablemd/durable-streams": ["./packages/durable-streams/mod.ts"],

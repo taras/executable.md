@@ -43,6 +43,12 @@ import type { AgentSessionRequest } from "./session-request.ts";
 /**
  * What one installed provider offers a conversation it serves.
  *
+ * A trusted conversation installation may decorate this object before capture,
+ * retaining its prior receiver and forwarding setup and inspection unchanged.
+ * Prompt composition keeps the selected agent and exact checked Session. The
+ * decoration belongs to the conversation and preserves cold subscription-owned
+ * work and cleanup. Retained turns do not dispatch the ordinary Agent chain.
+ *
  * Four operations, each the provider's own implementation of what the public
  * chain would have reached — and each taking explicitly what the chain used to
  * supply implicitly. The agent is an argument rather than an ambient

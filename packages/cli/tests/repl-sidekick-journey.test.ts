@@ -1,3 +1,9 @@
+import { Plugin } from "@executablemd/core/api";
+import type { ReplPluginInstallation } from "../api.ts";
+import { createDurableOperation } from "@executablemd/durable-streams";
+import type { Contributions } from "./fixtures/repl/contributed-plugin.ts";
+import { usePluginProgram } from "./support/plugin-program.ts";
+import { contributedPlugin } from "./fixtures/repl/contributed-plugin.ts";
 import { SidekickOwnerError } from "../src/repl/sidekick/owner.ts";
 /**
  * Tier R5 — a message, a turn, and the reply that runs (#883, J1/J4/J10).
@@ -4708,6 +4714,129 @@ describe("993 mounted nested Output journeys", () => {
       expect(saved.model.entries).toEqual([]);
     });
   }
+});
+
+describe("Contributed Sidekick controls", () => {
+  it("records effect-only success without JSON observation and continues feedback", function* () {
+    let calls = 0;
+    const plugin = Plugin({
+      name: "effect-only-contribution",
+      *install(): Operation<ReplPluginInstallation> {
+        yield* sleep(0);
+        return {
+          repl: {
+            components: [
+              {
+                name: "EffectOnly",
+                origin: "test://effect-only",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                generated: {
+                  "self-closing": {
+                    identity: "https://executable.md/test/effect-only",
+                    effect: "write",
+                  },
+                },
+                factory: (claim) =>
+                  function* (_props, invocation) {
+                    const name = yield* claim(invocation);
+                    yield createDurableOperation({ type: "effect_only", name }, function* () {
+                      calls++;
+                      yield* sleep(0);
+                      return null;
+                    });
+                  },
+              },
+            ],
+          },
+        };
+      },
+    });
+    const held = yield* usePluginProgram({ plugins: [plugin] });
+    held.host.fake.script({ reply: "<EffectOnly />" });
+    held.host.fake.script({ reply: "<Output>Effect completed.</Output>" });
+    const answer = yield* held.root.owner.message("Perform the contributed effect");
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(calls).toBe(1);
+    const saved = yield* records(yield* held.host.repository.open(held.root.execution));
+    const intents = saved
+      .filter((record) => record.kind === "control")
+      .filter((record) => record.component === "EffectOnly");
+    expect(intents).toHaveLength(1);
+    const outcomes = saved.filter((record) => record.kind === "control-outcome");
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({
+      conversation: intents[0]?.conversation,
+      response: intents[0]?.response,
+      order: intents[0]?.order,
+      outcome: { status: "ok" },
+    });
+    expect(outcomes[0]).not.toHaveProperty("observed");
+    expect(held.host.fake.prompts).toHaveLength(2);
+    expect(held.host.fake.prompts[1]).toBe("null");
+    expect(held.host.fake.prompts[1]).not.toContain("Your response did not finish");
+    expect(saved.filter((record) => record.kind === "response")).toEqual([
+      expect.objectContaining({ outcome: { status: "ok" }, hasOutput: false }),
+      expect.objectContaining({ outcome: { status: "ok" }, output: "Effect completed." }),
+    ]);
+  });
+
+  it("R4f/R5: one declaration supplies both forms, documentation and real typed feedback", function* () {
+    const counts: Contributions = { initialized: 0, conversations: 0, closed: 0, calls: [] };
+    yield* scoped(function* () {
+      const held = yield* usePluginProgram({ plugins: [contributedPlugin(counts)] });
+      held.host.fake.script({
+        reply:
+          '<Contributed as="read" /><Contributed as="write">edit</Contributed><Output><Json value={[read,write]} /></Output>',
+      });
+      held.host.fake.script({ reply: "<Output>done</Output>" });
+      const answered = yield* held.root.owner.message("Use both contributed forms");
+      if (!answered.ok) {
+        throw answered.error;
+      }
+      expect(counts.initialized).toBe(1);
+      expect(counts.conversations).toBe(1);
+      expect(counts.calls).toEqual(["read", "write"]);
+      expect(held.host.fake.prompts[0]).toContain("<Contributed /> — read");
+      expect(held.host.fake.prompts[0]).toContain("<Contributed>…</Contributed> — write");
+      expect(held.host.fake.prompts[1]).toContain('"count": 1');
+      expect(held.host.fake.prompts[1]).toContain('"count": 2');
+      expect(held.host.fake.prompts[0]).toContain("contribution-conversation");
+      const execution = yield* held.host.repository.open(held.root.execution);
+      const saved = yield* records(execution);
+      const intents = saved.filter(
+        (one) => one.kind === "control" && one.component === "Contributed",
+      );
+      expect(intents).toHaveLength(2);
+      expect(saved.filter((one) => one.kind === "control-outcome")).toHaveLength(2);
+      held.host.fake.script({
+        reply:
+          '<Syntax names={["Contributed","Authored"]} as="response" /><REPL.Syntax names={["Contributed","Authored"]} as="entry" /><Output><Json value={[response,entry]} /></Output>',
+      });
+      held.host.fake.script({ reply: "<Output>described</Output>" });
+      expect((yield* held.root.owner.message("Describe both vocabularies")).ok).toBe(true);
+      expect(counts.calls).toHaveLength(2);
+      const described = yield* records(yield* held.host.repository.open(held.root.execution));
+      expect(JSON.stringify(described)).toContain("Authored");
+      expect(JSON.stringify(described)).toContain("Contributed");
+      held.host.fake.script({ reply: '<Authored as="refused" />' });
+      held.host.fake.script({ reply: "<Output>Authored is entry-only.</Output>" });
+      expect((yield* held.root.owner.message("Try the authored-only form")).ok).toBe(true);
+      expect(counts.calls).toHaveLength(2);
+      held.host.fake.script({ reply: "entry reply" });
+      const submitted = yield* held.root.session.submit(
+        '<Session><Prompt text="entry request" /></Session><Authored as="only" />',
+      );
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      expect((yield* submitted.value.join()).ok).toBe(true);
+      expect(held.host.fake.prompts.at(-1)).not.toContain("contribution-conversation");
+      expect(counts.conversations).toBe(1);
+    });
+    expect(counts.closed).toBe(1);
+  });
 });
 
 describe("protected Sidekick question feedback", () => {

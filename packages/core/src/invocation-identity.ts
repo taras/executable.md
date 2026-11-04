@@ -49,6 +49,7 @@
  */
 
 import { useScope } from "effection";
+import type { ComponentInvocationHooks } from "./component-invocation-hooks.ts";
 import type { Operation, Scope } from "effection";
 import { printErrors, printsErrors } from "./component-failures.ts";
 import { documentationOf } from "./components/documentation.ts";
@@ -157,6 +158,7 @@ export interface IdentityComponent extends ComponentDocumentation {
 
 /** One execution's domain for one component name. Reachable from nowhere. */
 export interface IdentityDomain {
+  readonly componentInvocations?: ComponentInvocationHooks;
   readonly component: string;
 }
 
@@ -244,6 +246,7 @@ export interface ProtectedSite {
  * with the execution.
  */
 export interface ComponentRouting {
+  hooks(fn: unknown): ComponentInvocationHooks | undefined;
   /** The body canonical expansion may enter for this exact implementation. */
   body(fn: unknown): ProtectedBody | undefined;
   /** Project an already routed source; report its documentation origin, never its body. */
@@ -264,6 +267,7 @@ export interface ComponentRouting {
 }
 
 interface ComponentRoutingInstallation extends ComponentRouting {
+  associate(fn: FunctionComponent, domain: IdentityDomain, origin: string): void;
   /**
    * Build one implementation and keep its real body here.
    *
@@ -295,7 +299,7 @@ function createComponentRouting(): ComponentRoutingInstallation {
   // WeakMap, so liveness rather than reachability is what invalidates it.
   let live = true;
   interface Entry {
-    readonly body: ProtectedBody;
+    readonly body?: ProtectedBody;
     readonly domain: IdentityDomain;
     readonly origin: string;
   }
@@ -303,16 +307,22 @@ function createComponentRouting(): ComponentRoutingInstallation {
     let open = true;
     const active = () => open && parent();
     return {
+      hooks(fn) {
+        return active() && typeof fn === "function"
+          ? bodies.get(fn)?.domain.componentInvocations
+          : undefined;
+      },
       body(fn): ProtectedBody | undefined {
         const entry = active() && typeof fn === "function" ? bodies.get(fn) : undefined;
-        if (entry === undefined) {
+        const body = entry?.body;
+        if (body === undefined) {
           return undefined;
         }
         return function* (props, invocation, site) {
           if (!active()) {
             throw new ComponentInvocationError("this protected-body route has closed");
           }
-          return yield* entry.body(props, invocation, site);
+          return yield* body(props, invocation, site);
         };
       },
       project(source, wrapper): string | undefined {
@@ -355,6 +365,9 @@ function createComponentRouting(): ComponentRoutingInstallation {
   const base = route(bodies, () => live);
   return {
     ...base,
+    associate(fn, domain, origin) {
+      bodies.set(fn, { domain, origin });
+    },
     implementation(name, build, claim, domain, origin): FunctionComponent {
       // deno-lint-ignore require-yield
       function* unreachable(): Operation<never> {
@@ -854,9 +867,9 @@ interface Minted {
   revoke(): void;
 }
 
-function mintDomain(component: string): Minted {
+function mintDomain(component: string, componentInvocations?: ComponentInvocationHooks): Minted {
   let active = false;
-  const domain: IdentityDomain = Object.freeze({ component });
+  const domain: IdentityDomain = Object.freeze({ component, componentInvocations });
   return {
     domain,
     activate: () => {
@@ -1081,6 +1094,7 @@ export function installIdentities(
   privateComponents: readonly IdentityComponent[] = [],
   protectedComponents: readonly ProtectedDeclaration[] = [],
   fixedComponents: readonly FunctionComponentDefinition[] = [],
+  observations: ReadonlyMap<IdentityComponent, ComponentInvocationHooks> = new Map(),
 ): IdentityInstallation {
   // Before any factory: a set nobody can register is a set nobody may build
   // implementations from either, and a duplicate that reached a factory would
@@ -1167,12 +1181,13 @@ export function installIdentities(
   }
   for (const component of components) {
     const admitted = admittedGenerated(component);
-    const domain = mintDomain(component.name);
+    const domain = mintDomain(component.name, observations.get(component));
     minted.set(component.name, domain);
     // Built here, and held by identity: this exact function is what canonical
     // resolution has to have selected for an invocation to be in this domain.
     const implementation = component.factory(domain.claim);
     domain.implementation = implementation;
+    componentRouting.associate(implementation, domain.domain, component.origin);
     registrations.push({
       name: component.name,
       origin: component.origin,

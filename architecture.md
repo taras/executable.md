@@ -1078,6 +1078,43 @@ failure outranks ordinary root-scope teardown. [Plan candidate recovery](#typed-
 adds its own condition: cleanup must succeed before a refused request can become
 another Agent turn.
 
+A trusted `ExecutionInstallation` can supply `componentInvocations` on
+`@executablemd/core/host`. Core captures the callbacks before installed code runs
+and associates them privately with that installation's selected identity
+implementations, including generated capture and routing. A same-named replacement
+acquires no observation. The original factory dispatcher and genuine invocation
+remain authoritative; descriptive observations carry no execution capability.
+
+After selection and ordinary prop validation, `before` receives one fresh detached,
+deeply frozen `{ component, props }` snapshot, including validator defaults and
+excluding engine attributes, captures and projected content. Normal return proceeds;
+a throw prevents body work. `after` receives that same observation, the selected
+Effection Result and a required `cancelled` boolean after ordered component cleanup
+and declared return acceptance. Both callbacks are independently optional and their
+work and cleanup are call-owned. Caller binding and rendering follow notification.
+
+The boolean is true only for actual cancellation selected after successful owning
+cleanup, accompanied by `Err(ComponentInvocationCancelled)`. The notification has
+fixed name `ComponentInvocationCancelled` and message
+`The component invocation was cancelled.`; it has no operation or cause payload.
+An ordinary throw of that Error stays an ordinary failure with false. Selected
+owning teardown failure also supplies false and retains its actual failure.
+Cancellation control flow remains cancellation. Callback returns replace nothing
+and retry nothing. An after failure converts success to failure; an existing
+ordinary failure remains first with callback failure alongside it. Fatal precedence
+is unchanged. Nested before notifications follow entry order; after notifications
+follow unwind order, including when an inner notification fails.
+
+Sidekick attaches the observer only to contributed identity components. Its private
+response journal acknowledges intent before body work, correlates order by the
+observation object, and retains accepted typed outcomes after settlement. Actual
+cancellation leaves acknowledged intent unmatched. Failed acknowledgement or owning
+cleanup produces no successful feedback. The response owner stays selected through
+joined cleanup and reads designated records in admission order. Syntax remains the
+exception; builtin controls, Submit and Elicit retain their existing recording owners.
+Ordinary entries attach no host observer. Public `Component.expand` phases retain
+their existing `Result<void>` observation contract.
+
 ### Attempts
 
 - The journal records every attempt in full; replay restores the outcome
@@ -5547,6 +5584,23 @@ workflow actions that execute a document — `start`, `resume` and `fork` — an
 for nothing else. `xmd test`, `upgrade` and a workflow management action carry
 no Plugin they did not ask for.
 
+Selected Plugins may return a CLI-owned `repl` contribution from
+`@executablemd/cli/api`. `initialize({ workspace })` runs once per live logical
+session after route and history validation; its resources end with that session.
+A child initializes independently in its own workspace. UI attachment, detachment
+and history inspection initialize nothing. Failure or cancellation joins prior
+setup before entry work, conversation work or attachment publication begins.
+
+`repl.components` declares identity components once. The ordinary entry vocabulary
+and eligible Sidekick forms derive from those declarations; absent generated
+metadata offers no generated form. Canonical identity, form dispatch and effect
+permissions still decide execution. `repl.sidekick()` runs once per live
+conversation after its provider is installed and before capture, sharing initialized
+session state. Its resources and provider decorations end with that conversation;
+entry Prompts inherit none of them. Command installation contributes package
+documentation through the existing documentation helpers and starts no session
+service. Documentation lookup grants no execution authority.
+
 `repl` is the one command that assembles the bundled value rather than installing
 it directly. Git contributes the vocabulary and its two domain admissions; what
 an entry wrote down about the checkout it was standing in is that command's own
@@ -7109,6 +7163,12 @@ constructs the includes-dependent declaration and vocabulary once without
 reinstalling Agent or Plugin stacks. Protected names and the ordinary resolution
 tiers retain their existing precedence. Only genuine absence falls through;
 a selected unreadable or malformed definition fails.
+
+The finalized profile retains selected REPL contributions without starting them.
+The logical session owner composes their initialization after location and history
+checks; each held conversation applies its own setup after provider installation.
+Their declaration-derived entry and generated surfaces follow the
+[Plugin boundary](#the-plugin-boundary).
 
 The command also captures the normalized, frozen mount table once. It is separate
 from includes, permissions, Repository selection and held native Agent cwd.

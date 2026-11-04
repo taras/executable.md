@@ -299,6 +299,14 @@ flag, configuration approval, history mapping or completion receipt: it is
 trusted behavior a conversation selects, and everything it is held to stays with
 Core.
 
+Before capture, a trusted conversation installation may decorate the selected
+provider to compose prompt content and its cold stream. It retains the prior
+provider directly, forwards session setup and inspection unchanged, and sends
+composed content under the same selected agent and exact checked Session.
+Decorations belong to that conversation and preserve subscription-owned work
+and cleanup. A retained turn never dispatches the ordinary Agent routing chain;
+later provider selection cannot replace its captured behavior.
+
 Each of the four operations takes explicitly what the public chain supplied
 implicitly. `agent` resolves through this provider rather than through
 `Agent.agent`. `session` accepts the genuine opaque request — a name, a `Session`
@@ -634,6 +642,14 @@ options and prompt operation of that chat goes to that object. Reading selects;
 it probes no agent, creates no runtime, ensures no session, sends no turn and
 saves nothing, so a cold opening and a replay reach none of its four methods.
 A later selection cannot reach a conversation that is already open.
+
+Before capture, a trusted conversation installation may decorate the selected
+provider to compose prompt content and its cold stream. It retains the prior
+provider directly, forwards session setup and inspection unchanged, and sends
+composed content under the same selected agent and exact checked Session.
+Decorations belong to that conversation and preserve subscription-owned work
+and cleanup. A retained turn never dispatches the ordinary Agent routing chain;
+later provider selection cannot replace its captured behavior.
 
 `Agent` middleware is compositional on purpose, and that is what makes it the
 wrong channel for this: a handler that forwarded a request's descriptive name

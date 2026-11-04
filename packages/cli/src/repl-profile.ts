@@ -1,3 +1,4 @@
+import type { ReplPluginExtension } from "./repl-api.ts";
 import type { WorkspaceMountTable } from "./workspace-mounts.ts";
 /**
  * Capture command selections once, then finalize one execution's component paths.
@@ -114,6 +115,7 @@ export interface ReplProfileAssembly {
 
 /** One finalized execution profile, shared by validation, descriptions and entries. */
 export interface ReplExecutionProfile {
+  readonly repl?: readonly ReplPluginExtension[];
   readonly children?: HeadlessChildren;
   readonly mounts?: WorkspaceMountTable;
   readonly testing?: ReplTesting;
@@ -268,13 +270,17 @@ export function* assembleReplProfile(
         },
     },
     stack.sessions?.ownershipAdministration,
+    plugins.repl ?? [],
   );
   const context = planAgentContext(stack, facts.acp);
   const planWriterRoot = facts.planWriterRoot;
   const sessions = stack.sessions;
   const permissionMode = stack.permissionMode;
   const names = Object.freeze(plugins.plugins.map((plugin) => plugin.name));
-  const installations = Object.freeze([...plugins.installations]);
+  const installations = Object.freeze([
+    ...plugins.installations,
+    ...(plugins.repl ?? []).map((one) => ({ components: one.components ?? [] })),
+  ]);
   return Object.freeze({
     children,
     projectCwd,
@@ -312,6 +318,7 @@ export function* assembleReplProfile(
         }),
       ]);
       const profile = Object.freeze({
+        repl: plugins.repl ?? [],
         children,
         mounts,
         includes,
@@ -323,7 +330,7 @@ export function* assembleReplProfile(
         // changed.
         plugins: names,
         installations: entryInstallations,
-        generated: ordinaryGeneratedSelection(),
+        generated: replGeneratedSelection(plugins.repl ?? []),
         permissionMode,
         ...(entryInstallation === undefined ? {} : { entryInstallation }),
         // Settled here, with the stack and the Plugins, because it is a fact about
@@ -456,3 +463,23 @@ The file runs as a test document; do not submit it as an ordinary entry.
  */
 // deno-lint-ignore require-yield
 function* noElicitationOfItsOwn(): Operation<void> {}
+
+function replGeneratedSelection(extensions: readonly ReplPluginExtension[]): GeneratedSelection {
+  const selection = { ...ordinaryGeneratedSelection() };
+  for (const extension of extensions) {
+    for (const component of extension.components ?? []) {
+      const forms = component.generated;
+      if (forms !== undefined) {
+        selection[component.name] = [
+          ...(forms["self-closing"] === undefined
+            ? []
+            : (["self-closing"] satisfies import("@executablemd/core").InvocationForm[])),
+          ...(forms.paired === undefined
+            ? []
+            : (["paired"] satisfies import("@executablemd/core").InvocationForm[])),
+        ];
+      }
+    }
+  }
+  return Object.freeze(selection);
+}

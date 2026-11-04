@@ -1,3 +1,5 @@
+import type { Plugin } from "@executablemd/core/api";
+import { installPlugins } from "../../src/plugin-host.ts";
 /**
  * The real REPL command, run on a terminal this test owns.
  *
@@ -690,6 +692,7 @@ export const OTHER_MOUNTED_AGENT = "scrivener";
 export function* useMountedHost(
   options: {
     /** A gate over the host's appends, for a case that holds a real record. */
+    readonly plugins?: readonly Plugin[];
     readonly gate?: AppendGate;
     /**
      * A gate over the *operation* each append is, for a case about cancelling.
@@ -786,24 +789,30 @@ export function* useMountedHost(
   if (!stack.ok) {
     throw stack.error;
   }
-  const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
-    ...(options.includes === undefined ? {} : { includes: options.includes }),
-    acp: {
-      ...(options.agentCwd === undefined ? {} : { agentCwd: options.agentCwd }),
-      createRuntime: fake.create,
-      sessionStore: makeStore(),
-      agentRegistry: makeRegistry({
-        [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd`,
-        [OTHER_MOUNTED_AGENT]: `${OTHER_MOUNTED_AGENT}-cmd`,
-      }),
+  const profile = yield* assembleReplProfile(
+    stack.value,
+    options.plugins === undefined
+      ? NO_PLUGINS
+      : yield* installPlugins(options.plugins, { command: "repl", args: [] }),
+    {
+      ...(options.includes === undefined ? {} : { includes: options.includes }),
+      acp: {
+        ...(options.agentCwd === undefined ? {} : { agentCwd: options.agentCwd }),
+        createRuntime: fake.create,
+        sessionStore: makeStore(),
+        agentRegistry: makeRegistry({
+          [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd`,
+          [OTHER_MOUNTED_AGENT]: `${OTHER_MOUNTED_AGENT}-cmd`,
+        }),
+      },
+      // Named to the profile rather than left to the environment: the Sidekick
+      // assembly is built with it, and a conversation opened under an agent this
+      // registry does not know would fail as an availability refusal before it
+      // ever reached the fake.
+      sidekickAgent: options.sidekickAgent ?? MOUNTED_AGENT,
+      planWriterRoot: yield* useTemporary("xmd-repl-mounted-plan-"),
     },
-    // Named to the profile rather than left to the environment: the Sidekick
-    // assembly is built with it, and a conversation opened under an agent this
-    // registry does not know would fail as an availability refusal before it
-    // ever reached the fake.
-    sidekickAgent: options.sidekickAgent ?? MOUNTED_AGENT,
-    planWriterRoot: yield* useTemporary("xmd-repl-mounted-plan-"),
-  });
+  );
   // The directory the command itself resolves, so a case that writes a file for
   // the command to find writes it where the command actually looks.
   const root = join(dataRoot, ...REPL_DIRECTORY);

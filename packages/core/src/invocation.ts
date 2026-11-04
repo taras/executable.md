@@ -1,3 +1,9 @@
+import { ComponentInvocationCancelled } from "./component-invocation-hooks.ts";
+import type {
+  ComponentInvocationHooks,
+  ComponentInvocationObservation,
+} from "./component-invocation-hooks.ts";
+import { fatalCause } from "./errors.ts";
 /**
  * The component invocation boundary (spec §4.4).
  *
@@ -21,8 +27,8 @@
  * not the loop itself, so `A.eval(...)` never deadlocks against it.
  */
 
-import { ensure, scoped, spawn, suspend, useScope, withResolvers } from "effection";
-import type { Operation, Scope, Task } from "effection";
+import { Err, Ok, ensure, scoped, spawn, suspend, useScope, withResolvers } from "effection";
+import type { Operation, Result, Scope, Task } from "effection";
 import { useEvalScope } from "@effectionx/scope-eval";
 import type { EvalScope } from "@effectionx/scope-eval";
 
@@ -90,8 +96,14 @@ export function* withInvocation<T>(
    * what a reader watching an element wants to see it waiting in.
    */
   settled?: (reason: "returned" | "failed" | "cancelled") => void,
+  observation?: {
+    readonly hooks: ComponentInvocationHooks;
+    readonly value: ComponentInvocationObservation;
+    accept(value: T): Operation<T>;
+  },
 ): Operation<T> {
-  return yield* scoped(function* () {
+  const result = yield* scoped(function* () {
+    let returned: { value: T } | undefined;
     let told = false;
     const tell = (reason: "returned" | "failed" | "cancelled"): void => {
       if (!told) {
@@ -112,17 +124,50 @@ export function* withInvocation<T>(
     // throws — or declines to throw, letting the body failure through — is
     // what the caller receives.
     yield* ensure(function* () {
-      if (teardownFailures.length === 0) {
-        return;
+      let failure = bodyFailure;
+      if (teardownFailures.length > 0) {
+        const teardown = new InvocationTeardownError(teardownFailures);
+        failure =
+          bodyFailure === undefined
+            ? teardown
+            : new AggregateError(
+                [bodyFailure, teardown],
+                "component invocation body and teardown both failed",
+              );
       }
-      const teardown = new InvocationTeardownError(teardownFailures);
-      if (bodyFailure === undefined) {
-        throw teardown;
+      const cancelled = failure === undefined && returned === undefined;
+      if (observation !== undefined) {
+        if (failure === undefined && returned !== undefined) {
+          try {
+            returned.value = yield* observation.accept(returned.value);
+          } catch (error) {
+            failure = asError(error);
+          }
+        }
+        const selected: Result<unknown> =
+          failure !== undefined
+            ? Err(fatalCause(failure) ?? failure)
+            : returned !== undefined
+              ? Ok(returned.value)
+              : Err(new ComponentInvocationCancelled());
+        try {
+          yield* scoped(function* () {
+            yield* observation.hooks.after?.(observation.value, selected, cancelled) ?? noop();
+          });
+        } catch (error) {
+          const callback = asError(error);
+          failure =
+            failure === undefined
+              ? callback
+              : new AggregateError(
+                  [failure, callback],
+                  "component invocation and after callback both failed",
+                );
+        }
       }
-      throw new AggregateError(
-        [bodyFailure, teardown],
-        "component invocation body and teardown both failed",
-      );
+      if (failure !== undefined) {
+        throw observation === undefined ? failure : (fatalCause(failure) ?? failure);
+      }
     });
 
     const evalPublished = withResolvers<EvalScope>();
@@ -150,6 +195,9 @@ export function* withInvocation<T>(
       }
       const invocation = yield* start.operation;
       try {
+        if (observation?.hooks.before !== undefined) {
+          yield* observation.hooks.before(observation.value);
+        }
         resultPublished.resolve(yield* body(invocation));
       } catch (error) {
         resultPublished.reject(asError(error));
@@ -216,7 +264,8 @@ export function* withInvocation<T>(
     try {
       const value = yield* resultPublished.operation;
       tell("returned");
-      return value;
+      returned = { value };
+      return returned;
     } catch (error) {
       tell("failed");
       // Recorded so the outcome destructor can keep it when a teardown stage
@@ -226,6 +275,7 @@ export function* withInvocation<T>(
       throw error;
     }
   });
+  return result.value;
 }
 
 // deno-lint-ignore require-yield

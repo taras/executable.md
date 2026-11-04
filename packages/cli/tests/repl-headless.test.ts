@@ -1,3 +1,5 @@
+import { Plugin } from "@executablemd/core/api";
+import type { ReplPluginInstallation } from "../api.ts";
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { attachChildUi } from "../src/headless/ui.ts";
 import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
@@ -985,5 +987,84 @@ describe("987 — original child input ownership", () => {
     expect((yield* entry.value.join()).ok).toBe(true);
     expect(held.host.fake.prompts).toHaveLength(3);
     yield* held.children.close();
+  });
+});
+
+describe("REPL Plugin session ownership", () => {
+  it("R2: parent and child initialize once; UI and history reads initialize nothing", function* () {
+    const workspaces: string[] = [];
+    const stopped: string[] = [];
+    let holdCleanup = false;
+    const cleaning = withResolvers<void>();
+    const release = withResolvers<void>();
+    const plugin = Plugin({
+      name: "session-counts",
+      *install(): import("effection").Operation<ReplPluginInstallation> {
+        yield* sleep(0);
+        return {
+          repl: {
+            *initialize({ workspace }) {
+              workspaces.push(workspace);
+              yield* ensure(function* () {
+                if (holdCleanup && workspace !== workspaces[0]) {
+                  cleaning.resolve();
+                  yield* release.operation;
+                }
+                stopped.push(workspace);
+              });
+            },
+          },
+        };
+      },
+    });
+    const held = yield* useHeadlessFixture(undefined, undefined, undefined, undefined, {}, [
+      plugin,
+    ]);
+    holdCleanup = true;
+    expect(workspaces).toHaveLength(2);
+    expect(new Set(workspaces).size).toBe(2);
+    for (let pass = 0; pass < 2; pass++) {
+      const terminal = recordingTerminal();
+      const ui = yield* spawn(function* () {
+        yield* terminal.install();
+        yield* attachChildUi(held.reference.sessionId);
+      });
+      yield* race([
+        (function* () {
+          while (!terminal.terminal.screen?.rows().some((one) => one.includes("[detach]"))) {
+            yield* terminal.terminal.after(terminal.terminal.drawn);
+          }
+        })(),
+        (function* () {
+          yield* sleep(15000);
+          throw new Error("Child UI never attached");
+        })(),
+      ]);
+      terminal.terminal.end();
+      yield* ui;
+      yield* requestAttachment(held.path, { method: "status" });
+      expect(workspaces).toHaveLength(2);
+    }
+    const shutdown = yield* held.root.session.submit(
+      "<XMD.Session.Shutdown sessionId={child.sessionId} />",
+    );
+    if (!shutdown.ok) {
+      throw shutdown.error;
+    }
+    let joined = false;
+    const joining = yield* spawn(function* () {
+      const result = yield* shutdown.value.join();
+      if (!result.ok) {
+        throw result.error;
+      }
+      joined = true;
+    });
+    yield* cleaning.operation;
+    expect(joined).toBe(false);
+    release.resolve();
+    yield* joining;
+    expect(stopped).toEqual([workspaces[1]]);
+    yield* held.task.halt();
+    expect(stopped).toEqual([workspaces[1], workspaces[0]]);
   });
 });

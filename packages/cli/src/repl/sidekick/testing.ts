@@ -1,3 +1,4 @@
+import { InvocationTeardownError } from "@executablemd/core";
 import { allSettled, ensure, Err, Ok, scoped, spawn } from "effection";
 import type { Operation, Result, Scope, Task } from "effection";
 import { Stdio } from "@effectionx/process";
@@ -229,8 +230,9 @@ function detachTest(result: TestResult): CompletedTest {
   };
 }
 
-function fatalFailure(error: unknown): Error | undefined {
+export function fatalFailure(error: unknown): Error | undefined {
   if (
+    error instanceof InvocationTeardownError ||
     error instanceof DurablePersistenceError ||
     error instanceof DivergenceError ||
     error instanceof StaleInputError ||

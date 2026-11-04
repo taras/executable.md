@@ -1,3 +1,4 @@
+import { Repl } from "../repl-api.ts";
 import type { ReplChatPreparationStore } from "./application.ts";
 import { recoveryReference } from "./sidekick/recovery-record.ts";
 import type { ReplRecovering } from "./application.ts";
@@ -400,6 +401,19 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
     unresolved = cold.value;
     resumedWorkspaceEntry = placement.value;
   }
+
+  for (const extension of profile.repl ?? []) {
+    const initialize = extension.initialize;
+    if (initialize !== undefined) {
+      yield* Repl.around({
+        *initialize([session], next) {
+          yield* initialize(session);
+          yield* next(session);
+        },
+      });
+    }
+  }
+  yield* Repl.operations.initialize({ workspace });
 
   const opened = yield* openReplSession({
     execution,

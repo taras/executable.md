@@ -18,6 +18,8 @@
  */
 
 import type { Operation } from "effection";
+import { inspectSyntax } from "@executablemd/core";
+import type { ReplPluginExtension } from "./repl-api.ts";
 
 import { ActivePlugins } from "@executablemd/core/api";
 import type { Plugin, PluginInstallRequest } from "@executablemd/core/api";
@@ -63,6 +65,7 @@ export interface CommandPlugins {
    * invocation was written on — never a second reading of either.
    */
   readonly args: readonly string[];
+  readonly repl?: readonly ReplPluginExtension[];
 }
 
 /** An assembly that contributes nothing, for a command that installs none. */
@@ -71,6 +74,7 @@ export const NO_PLUGINS: CommandPlugins = Object.freeze({
   installations: Object.freeze([]),
   declarations: Object.freeze([]),
   args: Object.freeze([]),
+  repl: Object.freeze([]),
 });
 
 /**
@@ -142,6 +146,7 @@ export function* installPlugins(
 
   const installations: ExecutionInstallation[] = [];
   const declared: ExecutionDeclaration[] = [];
+  const repl: ReplPluginExtension[] = [];
   for (const plugin of plugins) {
     if (plugin.install === undefined) {
       continue;
@@ -149,6 +154,10 @@ export function* installPlugins(
     const installed = yield* plugin.install(request);
     if (installed === undefined) {
       continue;
+    }
+    const extension = captureRepl(installed, plugin.name);
+    if (extension !== undefined) {
+      repl.push(extension);
     }
     // Copied here, while the value is the one the Plugin returned: the arrays
     // belong to whoever built them, and what canonical execution captures must
@@ -181,10 +190,61 @@ export function* installPlugins(
       ...(expand === undefined ? {} : { expand: (call) => expand.call(installed, call) }),
     });
   }
+  if (repl.length > 0) {
+    yield* inspectSyntax({
+      includes: [],
+      components: repl.flatMap((one) => [...(one.components ?? [])]),
+      declarations: declared,
+    });
+  }
   return {
+    repl: Object.freeze(repl),
     plugins,
     installations: Object.freeze(installations),
     declarations: Object.freeze(declared),
     args: request.args,
   };
+}
+
+function captureRepl(installed: object, plugin: string): ReplPluginExtension | undefined {
+  const extension: unknown = Reflect.get(installed, "repl");
+  if (extension === undefined) {
+    return undefined;
+  }
+  if (extension === null || typeof extension !== "object" || Array.isArray(extension)) {
+    throw new Error(`the Plugin ${plugin} returned a malformed repl extension`);
+  }
+  const initialize: unknown = Reflect.get(extension, "initialize");
+  const sidekick: unknown = Reflect.get(extension, "sidekick");
+  if (initialize !== undefined && typeof initialize !== "function") {
+    throw new Error(`the Plugin ${plugin} repl.initialize must be callable`);
+  }
+  if (sidekick !== undefined && typeof sidekick !== "function") {
+    throw new Error(`the Plugin ${plugin} repl.sidekick must be callable`);
+  }
+  const input: unknown = Reflect.get(extension, "components");
+  if (input !== undefined && !Array.isArray(input)) {
+    throw new Error(`the Plugin ${plugin} repl.components must be an array`);
+  }
+  const components: IdentityComponent[] = [];
+  for (const component of input ?? []) {
+    if (
+      component === null ||
+      typeof component !== "object" ||
+      typeof component.factory !== "function"
+    ) {
+      throw new Error(`the Plugin ${plugin} repl.components must declare identity factories`);
+    }
+    components.push(component);
+  }
+  return Object.freeze({
+    components: Object.freeze(components),
+    ...(initialize === undefined
+      ? {}
+      : {
+          initialize: (session: { readonly workspace: string }) =>
+            initialize.call(extension, session),
+        }),
+    ...(sidekick === undefined ? {} : { sidekick: () => sidekick.call(extension) }),
+  });
 }

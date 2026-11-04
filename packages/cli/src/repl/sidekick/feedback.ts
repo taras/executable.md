@@ -244,12 +244,13 @@ export function designatedResults(
     readonly component: string;
     readonly reason: string;
   }[] = [],
+  designated: ReadonlySet<string> = DESIGNATED,
 ): readonly DesignatedResult[] {
   const intents = new Map<number, ControlRecord>();
   const results: DesignatedResult[] = refused
     // Through the same set, so a control that is not designated does not get
     // its refusals delivered either. One set decides what comes back.
-    .filter((held) => DESIGNATED.has(held.component))
+    .filter((held) => designated.has(held.component))
     .map((held) => ({
       order: held.order,
       component: held.component,
@@ -271,7 +272,7 @@ export function designatedResults(
       continue;
     }
     const intent = intents.get(record.order);
-    if (intent === undefined || !DESIGNATED.has(intent.component)) {
+    if (intent === undefined || !designated.has(intent.component)) {
       continue;
     }
     results.push({ order: record.order, ...answered(intent, record) });
@@ -305,9 +306,10 @@ export function designatedResults(
 export function recoveredWork(
   records: readonly SidekickRecord[],
   at: { readonly conversation: string; readonly response: string },
+  designated: ReadonlySet<string> = DESIGNATED,
 ): string | undefined {
   const items: { order: number; component: string; body: string }[] = [];
-  for (const result of designatedResults(records, at)) {
+  for (const result of designatedResults(records, at, [], designated)) {
     items.push({
       order: result.order,
       component: result.component,
@@ -319,7 +321,7 @@ export function recoveredWork(
           : `${refusal(result.component)}: ${result.text}`,
     });
   }
-  for (const waiting of unanswered(records, at)) {
+  for (const waiting of unanswered(records, at, designated)) {
     items.push(waiting);
   }
   if (items.length === 0) {
@@ -344,6 +346,7 @@ export function recoveredWork(
 function unanswered(
   records: readonly SidekickRecord[],
   at: { readonly conversation: string; readonly response: string },
+  designated: ReadonlySet<string> = DESIGNATED,
 ): { order: number; component: string; body: string }[] {
   const intents = new Map<number, ControlRecord>();
   const settled = new Set<number>();
@@ -363,7 +366,7 @@ function unanswered(
   }
   const waiting: { order: number; component: string; body: string }[] = [];
   for (const [order, intent] of intents) {
-    if (settled.has(order) || !DESIGNATED.has(intent.component)) {
+    if (settled.has(order) || !designated.has(intent.component)) {
       continue;
     }
     waiting.push({ order, component: intent.component, body: asking(intent) });
