@@ -4869,6 +4869,7 @@
         "npm:remark@15",
         "npm:remend@^1.2.2",
         "npm:semver@^7.8.5",
+        "npm:tar-stream@3.2.0",
         "npm:tsx@^4.19.0",
         "npm:typescript@5",
         "npm:unist-util-select@5",

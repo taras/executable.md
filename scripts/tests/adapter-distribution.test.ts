@@ -32,11 +32,12 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { copyFile, ensureDir, exists, writeTextFile } from "@effectionx/fs";
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import { embeddedAdapterIdentities } from "@executablemd/acp/embedded-adapters";
+import { copyPreparedCandidate } from "./candidate-copy.ts";
 
 const VENDOR = "packages/acp/vendor/adapters";
 const GENERATED = `${VENDOR}/generated/snapshots.ts`;
@@ -145,17 +146,20 @@ describe("Tier ADD — embedded adapters across distributions", () => {
     }
   });
   it("ADD7: JSR selects the ignored Claude module and its selected ACP layout resolves", function* () {
+    const directory = yield* useTempDirectory("xmd-jsr-candidate-");
+    const candidate = yield* until(realpath(directory));
+    yield* copyPreparedCandidate(candidate);
+    const config = JSON.parse(yield* until(readFile(join(candidate, "deno.json"), "utf8")));
+    // Deno 2.9.5 publish takes dependency modes from config, not command flags.
+    yield* writeTextFile(
+      join(candidate, "deno.json"),
+      JSON.stringify({ ...config, nodeModulesDir: "manual", lock: { frozen: true } }),
+    );
     const published = yield* scoped(function* () {
       yield* useQuietProcessOutput();
       return yield* exec({
-        command: [
-          process.execPath,
-          "publish",
-          "--dry-run",
-          "--allow-dirty",
-          "--node-modules-dir=manual",
-          "--frozen",
-        ],
+        command: [process.execPath, "publish", "--dry-run", "--allow-dirty"],
+        cwd: candidate,
       });
     });
     if (published.exitCode !== 0) {
@@ -171,8 +175,13 @@ describe("Tier ADD — embedded adapters across distributions", () => {
     const urls = [...section.matchAll(/file:\/\/[^\n]+?(?= \()/g)].map(
       (match) => new URL(match[0]),
     );
-    const source = new URL("../../packages/acp/", import.meta.url);
-    const selected = urls.map((url) => decodeURIComponent(url.href.slice(source.href.length)));
+    const source = pathToFileURL(`${candidate}/packages/acp/`);
+    const selected = urls.map((url) => {
+      if (!url.href.startsWith(source.href)) {
+        throw new Error(`ACP publish inventory escapes its candidate: ${url.href}`);
+      }
+      return decodeURIComponent(url.href.slice(source.href.length));
+    });
     expect(selected).toContain("generated/claude-snapshot.ts");
     const root = yield* useTempDirectory("xmd-jsr-selected-");
     for (const [index, path] of selected.entries()) {
@@ -180,7 +189,6 @@ describe("Tier ADD — embedded adapters across distributions", () => {
       yield* ensureDir(dirname(target));
       yield* copyFile(urls[index]!, target);
     }
-    const config = JSON.parse(yield* until(readFile("deno.json", "utf8")));
     const imports: Record<string, string> = { ...config.imports };
     const { listWorkspacePaths } = yield* until(import("../lib/workspace.ts"));
     const repo = new URL("../../", import.meta.url);
