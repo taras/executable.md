@@ -90,7 +90,7 @@ import type {
   RootDocumentSource,
 } from "@executablemd/core";
 import { useAcpxProvider } from "@executablemd/acp";
-import { API, command as hostCommand, cwd, Permissions } from "@executablemd/runtime";
+import { API, command as hostCommand, cwd, env, Permissions } from "@executablemd/runtime";
 import { runReplProgram, prepareReplStartup, refuseReplStartup } from "./repl/program.ts";
 import { ReplTerminal } from "./repl/terminal.ts";
 import { decodeLocation } from "./repl/route.ts";
@@ -583,26 +583,50 @@ const upgradeConfig = object({
 /** The version this build reports, from the manifest it was built with. */
 export const XMD_VERSION: string = denoJson.version;
 
+/** Every command an invocation offers whether or not retained workflows are enabled. */
+const ORDINARY_COMMANDS = {
+  run: runConfig,
+  plan: { ...planConfig, description: PLAN_DESCRIPTION },
+  test: testConfig,
+  syntax: syntaxConfig,
+  agent: { ...agentConfig, description: AGENT_DESCRIPTION },
+  upgrade: { ...upgradeConfig, description: UPGRADE_DESCRIPTION },
+  repl: { ...replConfig, description: REPL_DESCRIPTION },
+  session: { description: "Inspect or explicitly reclaim session ownership.", ...object({}) },
+  sidekick: { description: "Attach to or passively read one live Sidekick.", ...object({}) },
+  "test-agent": testAgentConfig,
+};
+
 const xmd = program({
   name: "xmd",
   version: XMD_VERSION,
-  config: commands(
-    {
-      run: runConfig,
-      plan: { ...planConfig, description: PLAN_DESCRIPTION },
-      test: testConfig,
-      syntax: syntaxConfig,
-      agent: { ...agentConfig, description: AGENT_DESCRIPTION },
-      upgrade: { ...upgradeConfig, description: UPGRADE_DESCRIPTION },
-      repl: { ...replConfig, description: REPL_DESCRIPTION },
-      session: { description: "Inspect or explicitly reclaim session ownership.", ...object({}) },
-      sidekick: { description: "Attach to or passively read one live Sidekick.", ...object({}) },
-      "test-agent": testAgentConfig,
-      workflow: workflowConfig,
-    },
-    { default: "run" },
-  ),
+  config: commands({ ...ORDINARY_COMMANDS, workflow: workflowConfig }, { default: "run" }),
 });
+
+/**
+ * Program help for an invocation that has not enabled retained workflows.
+ *
+ * Only help reads it. Execution keeps parsing with `xmd`, because removing the
+ * `workflow` entry makes the parser select the default `run` for a first token
+ * of `workflow`; a disabled `xmd workflow` is refused before any parse instead.
+ */
+const ordinaryXmd = program({
+  name: "xmd",
+  version: XMD_VERSION,
+  config: commands(ORDINARY_COMMANDS, { default: "run" }),
+});
+
+/** The operator variable whose exact value `1` enables `xmd workflow`. */
+const WORKFLOW_ACTIVATION_VARIABLE = "XMD_EXPERIMENTAL_WORKFLOW";
+
+/** What a disabled `xmd workflow` says, and what enabled workflow help repeats. */
+const WORKFLOW_ACTIVATION =
+  "xmd workflow is experimental. Set XMD_EXPERIMENTAL_WORKFLOW=1 to enable it.";
+
+/** Whether this invocation's operator environment enables `xmd workflow`. */
+function* workflowActivated(): Operation<boolean> {
+  return (yield* env(WORKFLOW_ACTIVATION_VARIABLE)) === "1";
+}
 
 /** The switches `xmd upgrade` defines, and the whole of what it accepts. */
 const UPGRADE_SWITCHES: readonly string[] = ["--status", "--allow-downgrade", "--allow-prerelease"];
@@ -2713,17 +2737,18 @@ const PLUGIN_HELP = [
  * during the props phase is reinstated there rather than falling back to
  * program help.
  */
-function renderHelp(phase: PropsPhase): string {
+function renderHelp(phase: PropsPhase, workflowEnabled: boolean): string {
   const [first] = phase.args;
   const command = COMMAND_NAMES.includes(first) ? first : phase.root ? "run" : undefined;
+  const offered = workflowEnabled ? xmd : ordinaryXmd;
 
   if (!command) {
-    return `${xmd.help({ args: phase.args })}\n\n${PLUGIN_HELP}`;
+    return `${offered.help({ args: phase.args })}\n\n${PLUGIN_HELP}`;
   }
 
   const help = xmd.parse({ args: [command, "--help"] });
   const parsed =
-    help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
+    help.ok && help.value.config.help ? help.value.config.text : offered.help({ args: [] });
   const base = `${parsed}\n\n${PLUGIN_HELP}`;
   const epilogue =
     command === "run"
@@ -2736,7 +2761,9 @@ function renderHelp(phase: PropsPhase): string {
             ? AGENT_OPTIONS_HELP
             : command === "repl"
               ? REPL_HELP + "\n\n" + SIDEKICK_HELP
-              : "";
+              : command === "workflow"
+                ? WORKFLOW_ACTIVATION
+                : "";
   const withSource = epilogue === "" ? base : `${base}\n\n${epilogue}`;
 
   if (!phase.root) {
@@ -2817,6 +2844,7 @@ function* resolveRunProps(
 function* dispatch(
   evalFlags: EvalFlags,
   helpRequest: { requested: boolean; args: string[] },
+  workflowEnabled: boolean,
   installService: HostServiceInstaller,
   upgrade: UpgradeAssembly,
   readStandardInput: StandardInputReader,
@@ -2858,7 +2886,7 @@ function* dispatch(
   const parsed = xmd.parse({ args: propsPhase.args });
 
   if (helpRequest.requested) {
-    console.log(renderHelp(propsPhase));
+    console.log(renderHelp(propsPhase, workflowEnabled));
     yield* exit(0);
     return;
   }
@@ -3677,6 +3705,21 @@ function* runCommand(
 
   const helpRequest = takeHelpFlag(evalFlags.rest);
 
+  // Before the workflow host, the props phase and every Plugin. A saved run, an
+  // artifact or a definition grants nothing here: each invocation reads its own
+  // environment, and a disabled one has created, read and loaded nothing.
+  const workflowEnabled = yield* workflowActivated();
+  if (!workflowEnabled && namesWorkflow(helpRequest.args)) {
+    if (helpRequest.requested) {
+      console.log(WORKFLOW_ACTIVATION);
+      yield* exit(0);
+      return;
+    }
+    console.error(WORKFLOW_ACTIVATION);
+    yield* exit(1);
+    return;
+  }
+
   // Before the props phase, because that phase establishes a workflow start's
   // definition in order to read what the *retained* document declares. On a
   // host without workflow support the first thing a caller would otherwise see
@@ -3809,6 +3852,7 @@ function* runCommand(
     dispatch(
       evalFlags,
       helpRequest,
+      workflowEnabled,
       installService,
       upgrade,
       readStandardInput,

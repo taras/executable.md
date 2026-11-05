@@ -659,7 +659,11 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
       name: "REPL.Entry.Journal",
       props: {
         type: "object",
-        properties: { entry: { type: "number" }, yq: { type: "string", minLength: 1 } },
+        properties: {
+          entry: { type: "number" },
+          yq: { type: "string", minLength: 1 },
+          maxBytes: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+        },
         additionalProperties: false,
       },
       description:
@@ -668,7 +672,8 @@ function entryInspections(requests: SidekickRequests, journal: ControlJournal): 
         "finds failed Prompts across the complete entry before paging. Select a returned " +
         "Prompt number with .records[] | select(.prompt == 9) | .promptError to read its saved error. " +
         "Read .exec.exitCode, .exec.stdout and .exec.stderr on a command record; " +
-        "reuse next, prev or last as yq with the same positive entry.",
+        "reuse next, prev or last as yq with the same positive entry. " +
+        "Use maxBytes={8388608} for an 8 MiB compact UTF-8 JSON response budget; navigation carries it, and a later explicit budget overrides it.",
       *fn(props: EntryJournalRequest): Operation<EntryJournalPage | string> {
         return yield* inspected(
           journal,

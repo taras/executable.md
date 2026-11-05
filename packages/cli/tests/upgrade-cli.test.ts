@@ -216,7 +216,9 @@ describe("Tier UC — xmd upgrade", { sanitizeOps: false, sanitizeResources: fal
     // switch here, a run-state value there. A parse that let one answer for the
     // other would either refuse a valid workflow query or read a workflow state
     // as consent.
-    const { code, stderr } = yield* runCli(["workflow", "list", "--status=nonsense"]).join();
+    const { code, stderr } = yield* runCli(["workflow", "list", "--status=nonsense"], {
+      env: { XMD_EXPERIMENTAL_WORKFLOW: "1" },
+    }).join();
 
     expect(code).toBe(1);
     // Whatever this host says about `xmd workflow`, it is not this command's

@@ -96,6 +96,7 @@ function xmd(fixture: Fixture, server: PullRequestServer, args: string[]) {
     env: {
       HOME: fixture.home,
       XMD_WORKFLOW_RUNS: fixture.runs,
+      XMD_EXPERIMENTAL_WORKFLOW: "1",
       GH_TOKEN: TOKEN,
       XMD_WORKFLOW_GITHUB_PULL_REQUESTS: JSON.stringify({
         allowed: ["https://github.com/octo/project"],

@@ -95,7 +95,7 @@ function useExportedRun<T>(body: (fixture: Fixture) => Operation<T>): Operation<
 
     const started = yield* runCli(["workflow", "start", "--id=release-1", "flows/release.md"], {
       cwd: fixture.repository,
-      env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+      env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs, XMD_EXPERIMENTAL_WORKFLOW: "1" },
     }).join();
     if (started.code !== 0) {
       throw new Error(`the fixture run did not start: ${started.stderr}`);

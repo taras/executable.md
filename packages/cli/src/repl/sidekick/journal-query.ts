@@ -3,45 +3,15 @@ import type { Operation, Result } from "effection";
 import { parseJson } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import { selectJson } from "@executablemd/core/host";
-import { z } from "zod";
+import {
+  formatJournalWindow as format,
+  recognizeJournalWindow as recognize,
+  resolveJournalMaxBytes,
+} from "./journal-policy.ts";
 import { MAX_FRAME } from "../../sidekick-acp/protocol.ts";
 import type { EntryJournalPage } from "./entry-inspection.ts";
 
-const windowMetadata = z
-  .tuple([
-    z.number().int().positive().safe(),
-    z.string(),
-    z.number().int().nonnegative().safe(),
-    z.number().int().positive().safe(),
-  ])
-  .refine(([, , start, end]) => start < end);
-
 type Range = { start: number; end: number };
-
-function format(entry: number, query: string, range: Range): string {
-  return (
-    `select(${JSON.stringify([entry, query, range.start, range.end])} != null) |\n` +
-    `select(.entry == ${entry}) |\n(\n${query}\n) | .[${range.start}:${range.end}]`
-  );
-}
-
-function recognize(expression: string) {
-  const line = expression.slice(0, expression.indexOf("\n"));
-  if (!line.startsWith("select(") || !line.endsWith(" != null) |")) {
-    return undefined;
-  }
-  try {
-    const parsed = windowMetadata.safeParse(JSON.parse(line.slice(7, -11)));
-    if (!parsed.success) {
-      return undefined;
-    }
-    const [entry, query, start, end] = parsed.data;
-    const range = { start, end };
-    return expression === format(entry, query, range) ? { entry, query, range } : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 function* evaluate(expression: string, input: string): Operation<Result<Json>> {
   if (expression.trim() === "") {
@@ -55,7 +25,10 @@ function* evaluate(expression: string, input: string): Operation<Result<Json>> {
   }
 }
 
-function fits(page: EntryJournalPage): boolean {
+function fits(page: EntryJournalPage, maxBytes?: number): boolean {
+  if (maxBytes !== undefined) {
+    return new TextEncoder().encode(JSON.stringify(page)).length <= maxBytes;
+  }
   return (
     new TextEncoder().encode(
       JSON.stringify({
@@ -116,7 +89,13 @@ function rangesOf(value: string | Json[], entry: number, query: string): Result<
 export function* queryJournal(
   expression: string,
   input: { entry: number; [key: string]: Json },
+  explicitMaxBytes?: number,
 ): Operation<Result<EntryJournalPage>> {
+  const policy = resolveJournalMaxBytes(expression, explicitMaxBytes);
+  if (!policy.ok) {
+    return policy;
+  }
+  const maxBytes = policy.value;
   const recognized = recognize(expression);
   // A collecting query can emit a value after an empty guard; check the resolved entry too.
   if (recognized !== undefined && recognized.entry !== input.entry) {
@@ -145,11 +124,25 @@ export function* queryJournal(
   }
   const empty = { value, next: null, prev: null, last: null };
   if (typeof value !== "string" && !Array.isArray(value)) {
-    return fits(empty) ? Ok(empty) : tooLarge();
+    return fits(empty, maxBytes) ? Ok(empty) : tooLarge();
   }
   const length = typeof value === "string" ? [...value].length : value.length;
-  if (range === undefined && length <= (typeof value === "string" ? 4096 : 20) && fits(empty)) {
+  if (
+    range === undefined &&
+    length <= (typeof value === "string" ? 4096 : 20) &&
+    fits(empty, maxBytes)
+  ) {
     return Ok(empty);
+  }
+  if (maxBytes !== undefined) {
+    return budgetedPage(
+      value,
+      input.entry,
+      query,
+      maxBytes,
+      range,
+      recognized?.maxBytes === maxBytes,
+    );
   }
   const cuts = rangesOf(value, input.entry, query);
   if (!cuts.ok) {
@@ -175,4 +168,75 @@ export function* queryJournal(
     last: navigation(last),
   };
   return fits(page) ? Ok(page) : tooLarge();
+}
+
+function budgetedPage(
+  value: string | Json[],
+  entry: number,
+  query: string,
+  maxBytes: number,
+  requested?: Range,
+  preserveWindow = false,
+): Result<EntryJournalPage> {
+  const items = typeof value === "string" ? [...value] : value;
+  const limit = typeof value === "string" ? 4096 : 20;
+  const cuts: Range[] = [];
+  for (let start = 0; start < items.length; ) {
+    let end = Math.min(start + limit, items.length);
+    if (requested !== undefined) {
+      for (const boundary of [requested.start, ...(preserveWindow ? [requested.end] : [])]) {
+        if (boundary > start && boundary < end) {
+          end = boundary;
+        }
+      }
+    }
+    cuts.push({ start, end });
+    start = end;
+  }
+  const navigation = (one: Range | undefined): string | null =>
+    one === undefined ? null : format(entry, query, one, maxBytes);
+  const pageAt = (index: number): EntryJournalPage => {
+    const current = cuts[index];
+    const part = current === undefined ? [] : items.slice(current.start, current.end);
+    return {
+      value: typeof value === "string" ? part.join("") : part,
+      next: navigation(cuts[index + 1]),
+      prev: navigation(cuts[index - 1]),
+      last: navigation(index < cuts.length - 1 ? cuts.at(-1) : undefined),
+    };
+  };
+  // Splitting changes neighbouring navigation too; settle the actual complete pages together.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let index = 0; index < cuts.length; index += 1) {
+      if (fits(pageAt(index), maxBytes)) {
+        continue;
+      }
+      const current = cuts[index];
+      if (current.end - current.start <= 1) {
+        return tooLarge();
+      }
+      const middle = current.start + Math.floor((current.end - current.start) / 2);
+      cuts.splice(
+        index,
+        1,
+        { start: current.start, end: middle },
+        { start: middle, end: current.end },
+      );
+      changed = true;
+    }
+  }
+  const index =
+    requested === undefined ? 0 : cuts.findIndex((one) => one.start === requested.start);
+  const page =
+    index < 0
+      ? {
+          value: typeof value === "string" ? "" : [],
+          next: null,
+          prev: navigation(cuts.at(-1)),
+          last: null,
+        }
+      : pageAt(index);
+  return fits(page, maxBytes) ? Ok(page) : tooLarge();
 }

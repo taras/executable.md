@@ -1,3 +1,4 @@
+import { JournalMaxBytes } from "../repl/sidekick/journal-policy.ts";
 import { UiSize } from "../headless/ui-schema.ts";
 import { z } from "zod";
 import { createContext } from "effection";
@@ -147,6 +148,7 @@ export const Request = z.discriminatedUnion("method", [
       entry: z.number().int().positive(),
       view: z.enum(["source", "prompt", "output", "journal"]),
       yq: z.string().min(1).optional(),
+      maxBytes: JournalMaxBytes.optional(),
       prompt: z.number().int().positive().optional(),
       field: z.enum(["request", "reply", "error"]).optional(),
       cursor: z.string().max(16384).optional(),
@@ -157,7 +159,7 @@ export const Request = z.discriminatedUnion("method", [
         ? request.cursor === undefined &&
           request.prompt === undefined &&
           request.field === undefined
-        : request.yq === undefined,
+        : request.yq === undefined && request.maxBytes === undefined,
     ),
 ]);
 export type Request = z.infer<typeof Request>;
@@ -179,9 +181,44 @@ export const Reply = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 export type Reply = z.infer<typeof Reply>;
+export const JournalReplyAllowance = z
+  .object({
+    id: z.number().int().nonnegative().safe(),
+    maxBytes: JournalMaxBytes,
+  })
+  .strict();
+export type JournalReplyAllowance = Readonly<z.infer<typeof JournalReplyAllowance>>;
+const JournalPage = z
+  .object({
+    value: z.json(),
+    next: z.string().nullable(),
+    prev: z.string().nullable(),
+    last: z.string().nullable(),
+  })
+  .strict();
+
+export function journalReplyBound(allowance: JournalReplyAllowance): bigint {
+  const { id, maxBytes } = JournalReplyAllowance.parse(allowance);
+  const header =
+    new TextEncoder().encode(JSON.stringify({ id, kind: "value", value: null }) + "\n").length - 4;
+  return BigInt(maxBytes) + BigInt(header);
+}
+
+export function validateJournalReply(frame: unknown, allowance: JournalReplyAllowance) {
+  const reply = Reply.parse(frame);
+  if (reply.id !== allowance.id || reply.kind !== "value") {
+    throw new Error("The Journal allowance requires its matching value reply.");
+  }
+  const page = JournalPage.parse(reply.value);
+  if (new TextEncoder().encode(JSON.stringify(page)).length > allowance.maxBytes) {
+    throw new Error("Journal result exceeds its serialized response byte budget.");
+  }
+  return { id: reply.id, kind: reply.kind, value: page };
+}
+
 export interface Wire {
   receive(): Operation<unknown>;
-  send(frame: unknown): Operation<void>;
+  send(frame: unknown, journalReply?: JournalReplyAllowance): Operation<void>;
   close(): void;
 }
 export interface SidekickTransport {
@@ -192,7 +229,10 @@ export interface SidekickTransport {
     path: string,
     descriptor: Omit<Descriptor, "version" | "transport" | "socket">,
   ): Operation<{ descriptor: Descriptor; accept(): Operation<Operation<Wire>> }>;
-  connect(path: string): Operation<{ descriptor: Descriptor; wire: Wire }>;
+  connect(
+    path: string,
+    journalReply?: JournalReplyAllowance,
+  ): Operation<{ descriptor: Descriptor; wire: Wire }>;
   stdio(): Operation<{ input: ReadableStream<Uint8Array>; output: WritableStream<Uint8Array> }>;
 }
 export const SidekickTransport = createContext<SidekickTransport>(

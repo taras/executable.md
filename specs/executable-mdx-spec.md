@@ -11769,6 +11769,15 @@ and the commands differ:
   selected REPL host registers rather than this Plugin
   ([the REPL](./repl-spec.md)).
 
+The workflow host installer is invoked only for an enabled `xmd workflow`. The
+shared command reads `XMD_EXPERIMENTAL_WORKFLOW` through `API.Env` once per
+invocation, after help extraction and before the installer, the props phase and
+Plugin loading; any value other than exactly `1` refuses the whole command, or
+answers its help with the activation sentence, having reached none of them
+([Workflow workspaces](./workflow-workspace-spec.md) §2.2). Program help is
+assembled from the same command definitions with or without `workflow`, so what
+help offers is what this invocation runs.
+
 The service installer is invoked only for `xmd run` and `xmd test`, immediately
 before `execute()`. Help, inspection and agent-worker paths never install or
 attach a service. Document-aware `xmd run … --help` is one of those inspection
@@ -14006,11 +14015,29 @@ the production Deno adapter, on real run files.
 
 ### Tier WFH — Workflow host boundary
 
+Every row runs with `XMD_EXPERIMENTAL_WORKFLOW=1`; Tier WFA owns the disabled
+command.
+
 | # | Test | Verify |
 |---|------|--------|
 | WFH1/WFH3 | Unsupported host | Node and Bun refuse `start` and `resume` with the settled sentence, report no run id or status, and create no run store |
 | WFH2 | One grammar | Every runtime renders the same `xmd workflow` help |
 | WFH4 | Unsupported delivery | Node and Bun refuse `answer` with the same sentence, write no delivery line and create no run store |
+
+### Tier WFA — Retained workflow activation
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §2.2.
+
+| # | Test | Verify |
+|---|------|--------|
+| WFA1 | Exact value | Unset, empty, `0`, `true`, `01`, `1 ` and ` 1` refuse `start` with the activation sentence and exit 1; exactly `1` reaches the host's own behavior |
+| WFA2 | One boundary | Every action, artifact inspection, a bare or unknown action, `--` and a leading or trailing `--plugin` refuse alike, with no run store, export, Plugin load or change to any input byte |
+| WFA3 | Help | Disabled workflow help in every position prints only the activation sentence and exits 0; enabled help keeps its grammar and repeats the sentence |
+| WFA4 | Plugin control | The same leading `--plugin` command line, enabled, loads the Plugin |
+| WFA5 | Ordinary commands | A file named `workflow` run explicitly, shorthand run, inline source naming the variable and `xmd repl --help` behave as without the feature |
+| WFA6 | Saved state | A completed run resumes, inspects and exports when enabled; disabled, its resume, status, artifact status and history and export refuse and leave the run store, artifact and directory byte-identical |
+| WFA7–WFA9 | Contextual environment | In-process `runXmd` follows the contextual `API.Env` answer over the host's, reaches no workflow host, service, standard input or Plugin loader while disabled, reaches the workflow host under `1`, and reads each invocation's answer afresh in one process |
+| WFA10 | REPL | A disabled invocation still reaches the REPL host |
 
 ### Tier WGP — Workflow Git push reconciliation
 

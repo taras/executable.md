@@ -10,7 +10,17 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
-import { Descriptor, MAILBOX, MAX_DESCRIPTOR, MAX_FRAME, SidekickTransport } from "./protocol.ts";
+import {
+  Descriptor,
+  MAILBOX,
+  MAX_DESCRIPTOR,
+  MAX_FRAME,
+  SidekickTransport,
+  JournalReplyAllowance,
+  Reply,
+  journalReplyBound,
+  validateJournalReply,
+} from "./protocol.ts";
 import type { Wire } from "./protocol.ts";
 
 function useFile(
@@ -183,8 +193,19 @@ function* readDescriptor(path: string, uid: number): Operation<Descriptor> {
   }
   return descriptor;
 }
-function useWire(socket: Socket): Operation<Wire> {
+function useWire(socket: Socket, journalReply?: JournalReplyAllowance): Operation<Wire> {
   return resource(function* (provide) {
+    let expected =
+      journalReply === undefined ? undefined : JournalReplyAllowance.parse(journalReply);
+    const bound = expected === undefined ? BigInt(MAX_FRAME) : journalReplyBound(expected) - 1n;
+    const prefix =
+      expected === undefined
+        ? Buffer.alloc(0)
+        : Buffer.from(`{"id":${expected.id},"kind":"value","value":`);
+    const enlarged = (line: Uint8Array): boolean =>
+      expected !== undefined &&
+      line.length >= prefix.length &&
+      prefix.equals(line.subarray(0, prefix.length));
     const wake = createSignal<void, never>();
     const changed = yield* wake;
     const frames: unknown[] = [];
@@ -210,14 +231,28 @@ function useWire(socket: Socket): Operation<Wire> {
         if (at < 0) {
           break;
         }
-        if (at > MAX_FRAME || frames.length >= MAILBOX) {
+        const line = bytes.subarray(0, at);
+        if (
+          frames.length >= MAILBOX ||
+          (at > MAX_FRAME && (!enlarged(line) || BigInt(at) > bound))
+        ) {
           failed();
           return;
         }
         try {
-          frames.push(
-            JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, at))),
-          );
+          const frame: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(line));
+          if (at > MAX_FRAME && expected !== undefined) {
+            validateJournalReply(frame, expected);
+          }
+          const terminal = Reply.safeParse(frame);
+          if (
+            terminal.success &&
+            terminal.data.id === expected?.id &&
+            terminal.data.kind !== "update"
+          ) {
+            expected = undefined;
+          }
+          frames.push(frame);
         } catch {
           failed();
           return;
@@ -225,7 +260,7 @@ function useWire(socket: Socket): Operation<Wire> {
         bytes = bytes.subarray(at + 1);
         wake.send();
       }
-      if (bytes.length > MAX_FRAME) {
+      if (bytes.length > MAX_FRAME && (!enlarged(bytes) || BigInt(bytes.length) > bound)) {
         failed();
       }
     };
@@ -249,9 +284,18 @@ function useWire(socket: Socket): Operation<Wire> {
           }
           return frames.shift();
         },
-        *send(frame) {
-          const text = JSON.stringify(frame) + "\n";
-          if (ended || Buffer.byteLength(text) > MAX_FRAME || socket.writableLength > MAX_FRAME) {
+        *send(frame, journalReply) {
+          const allowance =
+            journalReply === undefined ? undefined : JournalReplyAllowance.parse(journalReply);
+          const outgoing = allowance === undefined ? frame : validateJournalReply(frame, allowance);
+          const maximum =
+            allowance === undefined ? BigInt(MAX_FRAME) : journalReplyBound(allowance);
+          const text = JSON.stringify(outgoing) + "\n";
+          if (
+            ended ||
+            BigInt(Buffer.byteLength(text)) > maximum ||
+            BigInt(socket.writableLength) > maximum
+          ) {
             socket.destroy();
             throw new Error("The attachment observer exceeded its output bound.");
           }
@@ -750,8 +794,10 @@ export function* usePosixSidekickTransport(
         }
       });
     },
-    connect(path) {
+    connect(path, journalReply) {
       return resource(function* (provide) {
+        const allowance =
+          journalReply === undefined ? undefined : JournalReplyAllowance.parse(journalReply);
         if (platform === "win32" || uid === undefined) {
           throw new Error("Sidekick ACP requires a same-user POSIX Unix socket.");
         }
@@ -764,7 +810,7 @@ export function* usePosixSidekickTransport(
         });
         socket = createConnection(descriptor.socket);
         try {
-          const wire = yield* useWire(socket);
+          const wire = yield* useWire(socket, allowance);
           yield* provide({ descriptor, wire });
         } finally {
           socket.destroy();
