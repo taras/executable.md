@@ -15,6 +15,7 @@
     "**/npm/**",
     "packages/workflow/vendor/cloudflare-computer-dofs/**",
     "packages/acp/vendor/acpx/**",
+    "packages/acp/vendor/adapters/claude/sdk-transform.mjs",
     "packages/cli/src/repl/vendor/freedom/**"
   ]
 }

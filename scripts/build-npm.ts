@@ -38,7 +38,7 @@
  */
 
 import { ensure, exit, main, scoped, until } from "effection";
-import { validateDocumentation } from "./validate-documentation.ts";
+import { assertPrepared } from "./lib/preflight-deno.ts";
 import type { Operation } from "effection";
 import { build } from "jsr:@deno/dnt@0.42.3";
 import {
@@ -205,6 +205,9 @@ function* observeNothing(): Operation<void> {}
  */
 export function* buildNpmPackage(options: BuildNpmOptions): Operation<void> {
   const { repoRoot } = options;
+  if (yield* exists(new URL("packages/acp/vendor/adapters/claude/recipe.json", repoRoot))) {
+    assertPrepared(repoRoot);
+  }
 
   const rootDeno = RootDenoSchema.parse(
     JSON.parse(yield* readTextFile(new URL("deno.json", repoRoot))),
@@ -588,6 +591,8 @@ if (import.meta.main) {
     // time somebody asked it for documentation. The same assembly the run
     // profile uses runs here, so a missing, unknown or duplicated section fails
     // the build for exactly the reason it would fail a run.
+    assertPrepared(new URL("../", import.meta.url));
+    const { validateDocumentation } = yield* until(import("./validate-documentation.ts"));
     yield* validateDocumentation();
 
     yield* buildNpmPackage({

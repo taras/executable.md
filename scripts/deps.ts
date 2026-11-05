@@ -9,11 +9,13 @@
  * something just as surely. This step owns both:
  *
  * 1. `deno install --frozen` — `node_modules/` and the npm half of the cache.
- * 2. `deno install --entrypoint --frozen` over the entry points a build and a
+ * 2. The pinned Claude source/SDK build in private scratch, before any graph
+ *    that imports its generated snapshot is cached.
+ * 3. `deno install --entrypoint --frozen` over the entry points a build and a
  *    compile walk, so their module graphs are cached and every later phase can
  *    run `--cached-only`.
- * 3. The `sideEffects` fact the bundle needs (`lib/side-effect-free.ts`).
- * 4. The record `lib/prepared.ts` describes — a copy of each input — so a build
+ * 4. The `sideEffects` fact the bundle needs (`lib/side-effect-free.ts`).
+ * 5. The record `lib/prepared.ts` describes — a copy of each input — so a build
  *    can tell a prepared tree from an unprepared one without resolving a single
  *    dependency.
  *
@@ -30,6 +32,7 @@ import { exec } from "@effectionx/process";
 import { copyFile, ensureDir, rm } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 
+import { prepareClaude } from "./lib/prepare-claude.ts";
 import { PREPARED_INPUTS, PREPARED_MARKER, recordedCopy } from "./lib/prepared.ts";
 import { normalizeEvery, sideEffectFreeManifests } from "./lib/side-effect-free.ts";
 
@@ -81,7 +84,9 @@ export function* recordSideEffectFree(): Operation<void> {
  * Deno's own message, and `deno install` without the flag is how it is updated.
  */
 export function* installDependencies(): Operation<void> {
+  yield* rm(new URL(PREPARED_MARKER, repoRoot), { recursive: true, force: true });
   yield* deno(["install", "--frozen"]);
+  yield* prepareClaude(repoRoot);
   yield* deno(["install", "--entrypoint", "--frozen", ...ENTRYPOINTS]);
 
   yield* recordSideEffectFree();

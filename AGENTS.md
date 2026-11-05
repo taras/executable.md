@@ -15,6 +15,8 @@ bundle needs — and `deno task setup` runs it, then `pnpm install`, then record
 that fact again (pnpm restores its own copy of that manifest from its store),
 then builds the bundle.
 
+`deno task deps` also verifies the pinned Claude producer/SDK inputs and publishes its generated snapshot before caching graphs that import it. It owns the isolated producer dependency tree and input downloads. Builds and checks consume the prepared output; they do not generate it or repair stale preparation. Changed recipe inputs require preparation again.
+
 The order is load-bearing: `pnpm install` adds its store beside Deno's without
 pruning it, and the union resolves for Deno, for `tsc` and the Node suite, for
 Bun, for oxlint, and for the site. Run setup again after changing a dependency.
@@ -303,6 +305,8 @@ update a dedicated issue labeled `flake`. Include the failing test or command,
 runtime, run link, output, and evidence of intermittence. A green re-run restores
 health but does not close the issue; close it only after the cause is fixed and
 the regression evidence is recorded.
+
+Claude preparation is checked with two isolated fresh setups, exact executable correspondence, input and patch refusals, staged publication cancellation and real JSR/npm/compiled carriage. These checks use private trees and preserve shared prepared output; committed `verify:clean` proves the subsequent offline builds.
 
 The site check and build belong to the dedicated `site` job. Nothing in
 composability runs them.

@@ -17,17 +17,28 @@
  *   is itself the "not prepared" answer.
  *
  * It is content-based, so a checkout or a branch switch that restores the same
- * bytes does not read as a change. Two files of a few hundred kilobytes is the
- * whole cost.
+ * bytes does not read as a change. Only small source inputs are copied; the generated Claude payload is checked
+ * separately against the recipe's module hash.
  */
 
 /** Where preparation records what it prepared from. Inside `node_modules/`, which is untracked. */
 export const PREPARED_MARKER = "node_modules/.xmd-prepared";
 
 /** The files whose contents decide whether a preparation is still current. */
-export const PREPARED_INPUTS = ["deno.lock", "package.json"];
+export const PREPARED_INPUTS = [
+  "deno.lock",
+  "package.json",
+  "packages/acp/vendor/adapters/claude/recipe.json",
+  "packages/acp/vendor/adapters/claude/adapter.patch",
+  "packages/acp/vendor/adapters/claude/sdk-transform.mjs",
+  "packages/acp/vendor/adapters/claude/SDK-NOTICE.md",
+  "scripts/lib/prepare-claude.ts",
+  "scripts/lib/claude-recipe.ts",
+  "scripts/lib/claude-snapshot-module.ts",
+  "packages/acp/src/adapter-snapshot-type.ts",
+];
 
 /** Where the copy of `input` lives inside the marker directory. */
 export function recordedCopy(input: string): string {
-  return `${PREPARED_MARKER}/${input.replaceAll("/", "%2F")}`;
+  return `${PREPARED_MARKER}/${input.replaceAll("/", "__")}`;
 }

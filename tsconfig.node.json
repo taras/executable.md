@@ -50,6 +50,8 @@
     "packages/workflow/**/*.ts",
     "scripts/runtime-tests.ts",
     "scripts/runtime-test-exclusions.ts",
+    "scripts/tests/claude-snapshot-module.test.ts",
+    "scripts/tests/claude-preparation.test.ts",
     "scripts/lib/changed-paths.ts",
     "scripts/lib/consumer-cycle.ts",
     "scripts/lib/github.ts",
