@@ -93,6 +93,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { realpath, rmdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
@@ -129,6 +130,7 @@ export type HostFilesObserver = (event: HostFilesEvent) => void;
 
 export interface HostFilesOptions {
   readonly observe?: HostFilesObserver;
+  readonly access?: HostFilesAccess;
   /**
    * The directory temporary directories are minted under, defaulting to the
    * host's temporary root. The host's root is shared by every process on the
@@ -137,6 +139,74 @@ export interface HostFilesOptions {
    * owns, where the only entries are the ones this provider created.
    */
   readonly temporaryRoot?: string;
+}
+
+/** Canonical roots captured by the host before document work. */
+export interface HostFilesAccess {
+  readonly project: string;
+  readonly private: string;
+  readonly assets: string;
+  readonly components: string;
+}
+
+export function* captureHostFilesAccess(input: HostFilesAccess): Operation<HostFilesAccess> {
+  const project = yield* resolveExisting(resolve(input.project));
+  const privateRoot = yield* resolveExisting(resolve(input.private));
+  const assets = yield* resolveExisting(resolve(input.assets));
+  const components = yield* resolveExisting(resolve(input.components));
+  if (
+    assets !== join(privateRoot, relative(input.private, input.assets)) ||
+    components !== join(privateRoot, relative(input.private, input.components))
+  ) {
+    throw new Error("Session assets or components resolve outside their session subtree.");
+  }
+  return Object.freeze({ project, private: privateRoot, assets, components });
+}
+
+function permits(access: HostFilesAccess, path: string, write: boolean): boolean {
+  if (within(access.assets, path)) {
+    return !write;
+  }
+  if (within(access.components, path)) {
+    return true;
+  }
+  return within(access.project, path) && !within(access.private, path);
+}
+
+/** Check a live request after restoration, before coverage discovery. */
+export function* hostFileAccessReason(
+  access: HostFilesAccess | undefined,
+  operation: "read" | "write" | "delete" | "ensure-directory" | "glob",
+  input: FilePathInput,
+): Operation<FilesReason | undefined> {
+  if (access === undefined) {
+    return undefined;
+  }
+  if (operation !== "ensure-directory") {
+    const lexical = inadmissible(input);
+    if (lexical !== undefined) {
+      return lexical;
+    }
+  }
+  const write = operation !== "read" && operation !== "glob";
+  if (
+    !(yield* Permissions.operations.files(write ? "write" : "read")) ||
+    (operation === "ensure-directory" &&
+      isAbsolute(input.path) &&
+      !(yield* Permissions.operations.files("absolute")))
+  ) {
+    return "permission-denied";
+  }
+  const resolved =
+    operation === "delete"
+      ? yield* removalDestination(input)
+      : operation === "ensure-directory"
+        ? yield* directoryDestination(input)
+        : yield* destination(input);
+  if ("reason" in resolved) {
+    return resolved.reason;
+  }
+  return permits(access, resolved.path, write) ? undefined : "resolved-escape";
 }
 
 /**
@@ -391,6 +461,10 @@ function byCodePoint(left: string, right: string): number {
  * with {@link useHostFiles}.
  */
 export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
+  options = Object.freeze({
+    ...options,
+    ...(options.access === undefined ? {} : { access: Object.freeze({ ...options.access }) }),
+  });
   const observe = options.observe;
 
   function* checkFilePath(input: FilePathInput): Operation<Result<void>> {
@@ -414,6 +488,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     const target = yield* destination(input);
     if ("reason" in target) {
       return nonWriteFailure("read", "resolution", target.reason);
+    }
+
+    if (options.access !== undefined && !permits(options.access, target.path, false)) {
+      return nonWriteFailure("read", "resolution", "resolved-escape");
     }
 
     notify(observe, { operation: "read", phase: "target" });
@@ -472,6 +550,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     const target = yield* destination(input);
     if ("reason" in target) {
       return writeFailure({ phase: "resolution", reason: target.reason });
+    }
+
+    if (options.access !== undefined && !permits(options.access, target.path, true)) {
+      return writeFailure({ phase: "resolution", reason: "resolved-escape" });
     }
 
     notify(observe, { operation: "write", phase: "target" });
@@ -576,6 +658,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("delete", "resolution", target.reason);
     }
 
+    if (options.access !== undefined && !permits(options.access, target.path, true)) {
+      return nonWriteFailure("delete", "resolution", "resolved-escape");
+    }
+
     notify(observe, { operation: "delete", phase: "target" });
     let wasSymbolicLink = false;
     try {
@@ -661,6 +747,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("ensure-directory", "resolution", target.reason);
     }
 
+    if (options.access !== undefined && !permits(options.access, target.path, true)) {
+      return nonWriteFailure("ensure-directory", "resolution", "resolved-escape");
+    }
+
     notify(observe, { operation: "ensure-directory", phase: "target" });
     try {
       const info = yield* API.Fs.operations.stat(target.path);
@@ -700,6 +790,27 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("glob", "target", "permission-denied");
     }
 
+    if (
+      [...input.include, ...(input.exclude ?? [])].some(
+        (pattern) =>
+          pattern.length === 0 ||
+          pattern.startsWith("/") ||
+          /^[a-zA-Z]:/.test(pattern) ||
+          pattern === ".." ||
+          pattern.startsWith("../"),
+      )
+    ) {
+      return nonWriteFailure("glob", "pattern", "invalid-pattern");
+    }
+    if (options.access !== undefined) {
+      const reason = yield* hostFileAccessReason(options.access, "glob", {
+        cwd: input.cwd,
+        path: ".",
+      });
+      if (reason !== undefined) {
+        return nonWriteFailure("glob", "resolution", reason);
+      }
+    }
     try {
       const info = yield* API.Fs.operations.stat(input.cwd);
       if (!info.exists) {
@@ -713,7 +824,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     }
 
     try {
-      const matched = yield* traverse(input, observe);
+      const matched = yield* traverse(input, observe, options.access);
       const files = matched.filter((entry) => entry.isFile).map((entry) => entry.path);
       return Ok([...new Set(files)].sort(byCodePoint));
     } catch (error) {
@@ -744,6 +855,17 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
         return;
       }
 
+      if (options.access !== undefined) {
+        const root = options.temporaryRoot ?? options.access.project;
+        const reason = yield* hostFileAccessReason(options.access, "write", {
+          cwd: root,
+          path: ".",
+        });
+        if (reason !== undefined) {
+          yield* provide(nonWriteFailure("temporary-directory", "acquire", reason));
+          return;
+        }
+      }
       let created: string;
       try {
         // Synchronous on purpose: nothing may suspend between naming the
@@ -751,7 +873,9 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
         // asynchronous creation halted mid-flight would finish afterwards and
         // leave a directory nothing owns.
         // oxlint-disable-next-line local/no-sync-filesystem
-        created = mkdtempSync(join(options.temporaryRoot ?? tmpdir(), "xmd-tempdir-"));
+        created = mkdtempSync(
+          join(options.temporaryRoot ?? options.access?.project ?? tmpdir(), "xmd-tempdir-"),
+        );
       } catch (error) {
         yield* provide(nonWriteFailure("temporary-directory", "acquire", reasonOf(error)));
         return;
@@ -763,6 +887,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
         canonical = yield* until(realpath(created));
       } catch (error) {
         yield* provide(nonWriteFailure("temporary-directory", "acquire", reasonOf(error)));
+        return;
+      }
+      if (options.access !== undefined && !permits(options.access, canonical, true)) {
+        yield* provide(nonWriteFailure("temporary-directory", "acquire", "resolved-escape"));
         return;
       }
       yield* provide(Ok(canonical));
@@ -806,16 +934,29 @@ function* discard(directory: string): Operation<void> {
 function traverse(
   input: GlobInput,
   observe: HostFilesObserver | undefined,
+  access?: HostFilesAccess,
 ): Operation<Array<{ path: string; isFile: boolean }>> {
   const search = { patterns: input.include, root: input.cwd, exclude: input.exclude };
-  if (observe === undefined) {
+  if (observe === undefined && access === undefined) {
     return API.Fs.operations.glob(search);
   }
   return scoped(function* () {
     yield* FsApi.around({
       *readdirDirents([directory], next) {
-        observe({ operation: "glob", phase: "read-dir" });
-        return yield* next(directory);
+        const canonical =
+          access === undefined
+            ? undefined
+            : yield* resolveExisting(
+                typeof directory === "string" ? directory : fileURLToPath(directory),
+              );
+        if (access !== undefined && canonical !== undefined && !permits(access, canonical, false)) {
+          return [];
+        }
+        observe?.({ operation: "glob", phase: "read-dir" });
+        const entries = yield* next(directory);
+        return access === undefined || canonical === undefined
+          ? entries
+          : entries.filter((entry) => permits(access, join(canonical, entry.name), false));
       },
     });
     return yield* API.Fs.operations.glob(search);

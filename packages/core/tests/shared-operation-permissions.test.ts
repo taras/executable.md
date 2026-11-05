@@ -892,3 +892,87 @@ describe("Tier PRM — authored, generated and direct operations under one restr
     expect(yield* exists(join(fixture.workspace, "nested", "beside.txt"))).toBe(false);
   });
 });
+
+describe("1113: permission ceilings across projection", () => {
+  for (const operation of ["read", "absolute"]) {
+    for (const structural of [false, true]) {
+      it(`1113: ${structural ? "Markdown Content" : "programmatic content()"} carries ${operation} denial through a permitting receiver`, function* () {
+        const fixture = yield* useFixture();
+        yield* useHost(fixture);
+        yield* useRegions();
+        yield* Permissions.around(
+          { files: ([requested], next) => (requested === "absolute" ? true : next(requested)) },
+          { at: "min" },
+        );
+        yield* registerComponents([
+          {
+            name: "Narrowed",
+            origin: "test://1113-projection",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn(): Operation<string> {
+              yield* Permissions.around({
+                files: ([requested], next) => (requested === operation ? false : next(requested)),
+              });
+              return yield* content();
+            },
+          },
+        ]);
+        yield* writeTextFile(
+          join(fixture.workspace, "Restricted.md"),
+          "<Narrowed><Content /></Narrowed>",
+        );
+        const region = structural ? "Restricted" : "Narrowed";
+        const child =
+          operation === "read"
+            ? '<File path="source.txt" />'
+            : `<Dir path=${JSON.stringify(fixture.workspace)}><File path="sentinel.txt">wrong</File></Dir>`;
+        const output = String(
+          yield* collect(
+            yield* executeInstalled(
+              {
+                ...retainedSource(
+                  ROOT_PATH,
+                  `<PrintErrors><${region}><Permitting>${child}</Permitting></${region}></PrintErrors><File path="source.txt" />`,
+                ),
+                includes: [fixture.workspace],
+                stream: new InMemoryStream(),
+              },
+              [ceiling()],
+            ),
+          ),
+        );
+        expect(output).toMatch(/permission denied|not allowed to create or enter/);
+        expect(output.split(SOURCE.trim()).length - 1).toBe(1);
+        expect(yield* exists(join(fixture.workspace, "sentinel.txt"))).toBe(false);
+        expect(yield* readTextFile(join(fixture.workspace, "source.txt"))).toBe(SOURCE);
+      });
+    }
+  }
+  for (const structural of [false, true]) {
+    it(`1113: ${structural ? "Markdown Content" : "programmatic content()"} carries write denial and restores a sibling`, function* () {
+      const fixture = yield* useFixture();
+      yield* useHost(fixture);
+      yield* useRegions();
+      yield* writeTextFile(
+        join(fixture.workspace, "Restricted.md"),
+        "<ReadOnly><Content /></ReadOnly>",
+      );
+      const region = structural ? "Restricted" : "ReadOnly";
+      const source = `<${region}><Permitting><File path="refused.txt">wrong</File><File.Delete path="source.txt" /></Permitting></${region}><File path="sibling.txt">allowed</File>`;
+      const output = yield* collect(
+        yield* executeInstalled(
+          {
+            ...retainedSource(ROOT_PATH, source),
+            includes: [fixture.workspace],
+            stream: new InMemoryStream(),
+          },
+          [ceiling()],
+        ),
+      );
+      expect(String(output)).toContain("permission denied");
+      expect(yield* exists(join(fixture.workspace, "refused.txt"))).toBe(false);
+      expect(yield* readTextFile(join(fixture.workspace, "source.txt"))).toBe(SOURCE);
+      expect(yield* readTextFile(join(fixture.workspace, "sibling.txt"))).toBe("allowed");
+    });
+  }
+});

@@ -1,3 +1,8 @@
+import { canonicalProject } from "./repl/startup.ts";
+import type { EntryPlacement } from "./repl/entry-placement.ts";
+import { sessionDirectories } from "./repl/session-directories.ts";
+import { captureHostFilesAccess } from "@executablemd/runtime";
+import type { HostFilesAccess } from "@executablemd/runtime";
 import type { WorkspaceMountTable } from "./workspace-mounts.ts";
 /**
  * Capture command selections once, then finalize one execution's component paths.
@@ -16,7 +21,7 @@ import type { GeneratedSelection } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { scoped, useScope } from "effection";
 import { cwd } from "@executablemd/runtime";
-import { resolve, join } from "node:path";
+import { resolve, join, dirname } from "node:path";
 import type { Operation } from "effection";
 
 import { contextualAgent, hostAcpDependencies, installAgentProviderStack } from "./agent-stack.ts";
@@ -71,7 +76,10 @@ export interface ReplProfileSeams {
  */
 export interface ReplProfileFacts extends ReplProfileSeams {
   readonly mounts?: WorkspaceMountTable;
-  readonly testingHarness?: (includes: readonly string[]) => Operation<ExecutionInstallation>;
+  readonly testingHarness?: (
+    includes: readonly string[],
+    access?: HostFilesAccess,
+  ) => Operation<ExecutionInstallation>;
   readonly includes?: readonly string[];
   /**
    * The name `--sidekick-agent` carried, or none when the line named none.
@@ -109,11 +117,13 @@ export interface EntryVocabulary {
 export interface ReplProfileAssembly {
   readonly children?: HeadlessChildren;
   readonly projectCwd: string;
-  finalize(workspace?: string): Operation<ReplExecutionProfile>;
+  finalize(workspace?: string, privateRoot?: string): Operation<ReplExecutionProfile>;
 }
 
 /** One finalized execution profile, shared by validation, descriptions and entries. */
 export interface ReplExecutionProfile {
+  readonly access?: HostFilesAccess;
+  readonly placement?: EntryPlacement;
   readonly children?: HeadlessChildren;
   readonly mounts?: WorkspaceMountTable;
   readonly testing?: ReplTesting;
@@ -278,7 +288,16 @@ export function* assembleReplProfile(
   return Object.freeze({
     children,
     projectCwd,
-    *finalize(workspace?: string): Operation<ReplExecutionProfile> {
+    *finalize(workspace?: string, privateRoot?: string): Operation<ReplExecutionProfile> {
+      const access =
+        workspace === undefined
+          ? undefined
+          : yield* captureHostFilesAccess({
+              project: projectCwd,
+              private: privateRoot ?? dirname(workspace),
+              assets: join(workspace, "assets"),
+              components: join(workspace, "components"),
+            });
       const includes = Object.freeze([
         ...configuredIncludes,
         ...(workspace === undefined ? [] : [join(workspace, "components")]),
@@ -307,11 +326,19 @@ export function* assembleReplProfile(
         ...installations,
         children.installation,
         Object.freeze({
-          components: agentIdentityComponents(),
+          components: [
+            ...agentIdentityComponents(),
+            ...(workspace === undefined ? [] : sessionDirectories(workspace)),
+          ],
           declarations: Object.freeze([plan]),
         }),
       ]);
       const profile = Object.freeze({
+        access,
+        placement: {
+          projectDirectory: projectCwd,
+          canonicalProjectRoot: access?.project ?? (yield* canonicalProject(projectCwd)),
+        },
         children,
         mounts,
         includes,

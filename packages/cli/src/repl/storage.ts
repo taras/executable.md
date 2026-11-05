@@ -51,7 +51,11 @@ export const REPL_DIRECTORY: readonly string[] = ["xmd", "repl"];
  * files is somebody's work.
  */
 export function* useReplRoot(): Operation<string> {
-  const root = join(yield* ReplStorage.operations.dataRoot(), ...REPL_DIRECTORY);
+  const root = yield* replRoot();
   yield* ensureDir(root);
   return root;
+}
+
+export function* replRoot(): Operation<string> {
+  return join(yield* ReplStorage.operations.dataRoot(), ...REPL_DIRECTORY);
 }

@@ -1,3 +1,6 @@
+import type { EntryPlacement } from "./entry-placement.ts";
+import { useHostFiles } from "@executablemd/runtime";
+import type { HostFilesAccess } from "@executablemd/runtime";
 import { useSecretInputs } from "@executablemd/core/host";
 import { workspaceMountInstallation } from "./workspace-mount-installation.ts";
 import type { WorkspaceMountTable } from "../workspace-mounts.ts";
@@ -484,7 +487,7 @@ export interface ReplSession {
     source: string,
     pausing?: PendingPause,
     starting?: StartingCheck,
-    workspace?: true,
+    workspace?: true | "project",
     /** Retain the exact handle synchronously at acknowledged admission; perform no I/O. */
     onAdmitted?: (submission: ReplSubmission) => void,
   ): Operation<Result<ReplSubmission>>;
@@ -561,6 +564,9 @@ export interface ReplSubmission {
 /** What starting or reopening a session needs. */
 export interface ReplSessionOptions {
   readonly projectCwd?: string;
+  readonly access?: HostFilesAccess;
+  readonly placement?: EntryPlacement;
+  readonly resumedProjectEntry?: string;
   readonly workspace?: string;
   readonly resumedWorkspaceEntry?: string;
   readonly execution: ReplExecution;
@@ -1086,7 +1092,7 @@ function* start(
         source: string,
         pausing?: PendingPause,
         starting?: StartingCheck,
-        workspace?: true,
+        workspace?: true | "project",
         onAdmitted?: (submission: ReplSubmission) => void,
       ): Operation<Result<ReplSubmission>> {
         return submitting(source, pausing, starting, workspace, onAdmitted);
@@ -1418,7 +1424,7 @@ function* start(
       source: string,
       pausing?: PendingPause,
       starting?: StartingCheck,
-      workspace?: true,
+      workspace?: true | "project",
       onAdmitted?: (submission: ReplSubmission) => void,
     ): Operation<Result<ReplSubmission>> {
       const before = admissible();
@@ -1449,7 +1455,7 @@ function* start(
       const started = begin(
         entryKey(after.value.entries.length + 1),
         source,
-        new EntrySegmentStream(stream),
+        new EntrySegmentStream(stream, { placement: options.placement }),
         // From the live head of the file, and from nothing else: not from what
         // this process remembers of the entry that just ran, and not from the
         // prefix somebody happens to be inspecting.
@@ -1506,7 +1512,7 @@ function* start(
        * already crossed its first gate.
        */
       pausing?: PendingPause,
-      workspace?: true,
+      workspace?: true | "project",
       onAdmitted?: (submission: ReplSubmission) => void,
     ): ReplEntryTask {
       const admission = withResolvers<Result<void>>();
@@ -1857,7 +1863,7 @@ function* start(
       supplyStop: (stop: ReplEntryStop) => void,
       observedOutput: (text: string) => void,
       observedFailure: (details: ReplEntryExecution["error"]) => void,
-      workspace?: true,
+      workspace?: true | "project",
     ): Operation<Result<unknown>> {
       let hostExecution: HostExecution | undefined;
       let caughtFailure: Error | undefined;
@@ -1939,6 +1945,9 @@ function* start(
           },
           { at: "min" },
         );
+        if (workspace !== undefined && options.access !== undefined) {
+          yield* useHostFiles({ access: options.access, temporaryRoot: options.access.project });
+        }
         const directory = workspace === true ? options.workspace : options.projectCwd;
         if (directory !== undefined) {
           yield* API.Env.around(
@@ -1971,10 +1980,19 @@ function* start(
         // the entry rather than to a scope that has already closed.
         const owned =
           entryInstallation === undefined
-            ? [workspaceMountInstallation(options.mounts ?? [])]
+            ? [
+                workspaceMountInstallation(
+                  options.mounts ?? [],
+                  undefined,
+                  workspace !== undefined ? options.access : undefined,
+                ),
+              ]
             : [
                 yield* entryInstallation(entryOwner(execution.id, key), {
                   mounts: options.mounts ?? [],
+                  ...(workspace !== undefined && options.access !== undefined
+                    ? { access: options.access }
+                    : {}),
                   ...(options.projectCwd === undefined ? {} : { projectCwd: options.projectCwd }),
                   ...(workspace === true && options.workspace !== undefined
                     ? { workspace: options.workspace }
@@ -2174,13 +2192,17 @@ function* start(
         new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
         entryInitialBindings(head, resumed.entry),
         undefined,
-        options.resumedWorkspaceEntry === resumed.entry.key ? true : undefined,
+        options.resumedWorkspaceEntry === resumed.entry.key
+          ? true
+          : options.resumedProjectEntry === resumed.entry.key
+            ? "project"
+            : undefined,
       );
     } else if (submitted !== undefined) {
       begin(
         entryKey(head.entries.length + 1),
         submitted,
-        new EntrySegmentStream(stream),
+        new EntrySegmentStream(stream, { placement: options.placement }),
         entryInitialBindings(head),
       );
     } else {

@@ -10,10 +10,10 @@ answer.
 
 ## Instructions
 
-- Responses and entries submitted through `<REPL.Submit />` start in this
-  session's workspace, beside its journals. A manually submitted entry starts
-  in the invocation's project directory. Read `<REPL.Environment />` for your
-  current cwd; do not infer a project path from the workspace path.
+- Responses, manual entries and entries submitted through `<REPL.Submit />`
+  start in the selected launch project. `<Cwd />` renders that contextual
+  directory with no added newline; `as="directory"` captures the same text.
+  `<REPL.Environment />` reports it with the host's other current facts.
 - Resolve relative paths against the current working directory. For example,
   `inputs/sales.json` names a file beneath that directory. Do not add a leading
   slash or reinterpret an absolute path as relative to the workspace.
@@ -26,22 +26,26 @@ answer.
   to import it with `<REPL.ImportAsset />`, then use its returned relative path.
   Import remains available with absolute denied when effective read and write
   allow it. Its individual approval grants no subsequent absolute access.
-- Write session components under `components/`, copied inputs under `inputs/`,
-  and generated files at an appropriate workspace-relative path. These files
-  survive reopening; another session has its own directory.
-- On Deno and compiled hosts, a fresh `<Repository>` selection in a submitted
-  entry places its checkout beneath this workspace's `repositories/`. Worktrees
-  follow that root. Read the actual returned checkout path and current workspace
-  before deriving a relative address; do not guess the slot layout. Later entries
-  can read that relative path without acquiring again, including after reopening.
-  Existing recorded placements keep their paths. Placement grants no permission.
+- Write project files with ordinary File operations. Sidekick XMD file access
+  stays within the launch project, read-only session assets and this session's
+  components. Journals, compiler files and other private session storage remain
+  unavailable even when storage is beneath the project. Absolute opt-in, mounts,
+  Repository and cwd selection grant no additional file authority. Shell and
+  trusted native code have their own permissions; these XMD limits are not an
+  operating-system sandbox.
+- Use `<REPL.ComponentDir>…</REPL.ComponentDir>` to publish or edit session
+  component source, tests and contained fixtures. Paths inside are relative to
+  `SESSION/components`; outside they are ordinary project paths. Publishing a
+  definition invokes none of it. A later invocation runs in its caller's cwd.
+- Use `<REPL.AssetDir>…</REPL.AssetDir>` to read or list approved assets. Paths
+  inside are relative to `SESSION/assets`. The scope is read-only, including
+  nested scopes and temporary allocation, and entering it creates nothing.
 - Import a non-repository asset directly in your response with
-  `<REPL.ImportAsset source="/known/external/mock ü.html" destination="inputs/mock ü.html" />`.
-  Propose `inputs/<original filename>`, preserving spaces and Unicode. The
+  `<REPL.ImportAsset source="/known/external/mock ü.html" destination="assets/mock ü.html" />`.
+  Propose `assets/<original filename>`, preserving spaces and Unicode. The
   question shows the exact resolved source, destination and relative result.
   Only Import permits copying; Decline or Stop copies nothing while approval
-  waits. A supplied path alone is not approval. Use the returned relative path
-  for later ordinary reads, including after reopening.
+  waits. A supplied path alone is not approval. Read the returned session-relative copy inside AssetDir, including after reopening.
 - An occupied file, directory or symlink refuses import. Choose another explicit
   destination and request fresh approval. An unfinished import has an unknown
   outcome; inspect the saved evidence and destination before another request.
@@ -108,27 +112,30 @@ then asks for your next response.
 For a known non-repository asset, write this in your **response**:
 
 ```xmd
-<REPL.ImportAsset source="/known/external/mock ü.html" destination="inputs/mock ü.html" />
+<REPL.ImportAsset source="/known/external/mock ü.html" destination="assets/mock ü.html" />
 ```
 
 The person sees the exact source and destination before any file content is
-read. After Import succeeds, feedback gives `inputs/mock ü.html`. A later
+read. After Import succeeds, feedback gives `assets/mock ü.html`. A later
 **entry** reads that copy, including after reopening:
 
 ```xmd
-<File path="inputs/mock ü.html" />
+<REPL.AssetDir><File path="mock ü.html" /></REPL.AssetDir>
 ```
 
-The same imported file can be read inside an explicit relative directory
-context. Here `mock ü.html` resolves from `inputs/`; after `Dir` ends, the
-enclosing working directory is restored:
+Capture or list that same copy in its read-only context:
 
 ```xmd
-<Dir path="inputs">
+<REPL.AssetDir as="asset">
 <File path="mock ü.html" as="mock" />
+<Glob include={["*.html"]} as="paths" />
 <Output>{mock}</Output>
-</Dir>
+</REPL.AssetDir>
+<Output>{asset}</Output>
 ```
+
+Outside AssetDir, `assets/mock ü.html` names the project's independent file.
+After either session scope ends, the enclosing cwd and permissions return.
 
 ## Common mistake
 

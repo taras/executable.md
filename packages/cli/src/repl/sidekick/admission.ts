@@ -1,3 +1,5 @@
+import { samePlacement } from "../entry-placement.ts";
+import type { EntryPlacement } from "../entry-placement.ts";
 /**
  * The root's side of admitting an entry for a reply, and recovering one it did
  * not finish admitting.
@@ -131,6 +133,7 @@ export function take(
 
 /** What one entry history says, as this module needs to read it. */
 export interface AdmittedEntry {
+  readonly placement?: EntryPlacement;
   readonly key: string;
   readonly source: string;
   readonly terminal?: { readonly status: "ok" | "err" | "cancelled" };
@@ -207,6 +210,7 @@ export function* submitForSidekick(
   at: { readonly conversation: string; readonly response: string },
   options: {
     readonly session: AdmittingSession;
+    readonly placement?: EntryPlacement;
     /**
      * The root's draft facts, asked rather than carried.
      *
@@ -306,7 +310,7 @@ export function* submitForSidekick(
       entry: reservation.entry,
       source: reservation.source,
       revision: reservation.revision,
-      workspace: true,
+      ...(options.placement === undefined ? {} : { placement: options.placement }),
       retained,
     },
   );
@@ -469,6 +473,15 @@ export function* coldReservations(
     if (!finding.ok) {
       return finding;
     }
+    if (
+      finding.value.kind === "admitted" &&
+      !samePlacement(
+        intent.placement,
+        entries.find((entry) => entry.key === intent.entry)?.placement,
+      )
+    ) {
+      return Err(new AdmissionRefused("The Submit and entry project placements disagree."));
+    }
     findings.push({ intent, finding: finding.value });
   }
   return Ok(findings);
@@ -512,6 +525,9 @@ export function* coldWorkspaceEntry(
     }
     if (finding.value.kind !== "admitted") {
       continue;
+    }
+    if (!samePlacement(intent.placement, final.placement)) {
+      return Err(new AdmissionRefused("The Submit and entry project placements disagree."));
     }
     const selected = intent.workspace === true;
     if (workspace !== undefined && workspace !== selected) {

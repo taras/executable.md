@@ -1,3 +1,5 @@
+import { admissionPlacement, PLACEMENT } from "./entry-placement.ts";
+import type { EntryPlacement } from "./entry-placement.ts";
 /**
  * Where one entry's history stops and the next one begins.
  *
@@ -76,6 +78,7 @@ export function entryMarker(order: number, local: string): string {
 
 /** One entry's range of the physical stream. */
 export interface EntrySegment {
+  readonly placement?: EntryPlacement;
   /** The admission-order key of the entry this range belongs to. */
   readonly key: string;
   /** Its admission order, counting from one. */
@@ -156,6 +159,10 @@ export function partitionEntrySegments(
           ),
         );
       }
+      const placement = admissionPlacement(admission);
+      if (!placement.ok) {
+        return placement;
+      }
       open = { start: index, admission };
       continue;
     }
@@ -204,6 +211,7 @@ function segment(
   settled: boolean,
 ): EntrySegment {
   return Object.freeze({
+    ...retainedPlacement(open.admission),
     key: entryKey(order),
     order,
     start: open.start,
@@ -216,6 +224,7 @@ function segment(
 
 /** What range of the physical stream one execution may read and write. */
 export interface EntrySegmentView {
+  readonly placement?: EntryPlacement;
   /** The events this entry's range already holds, in append order. */
   readonly retained?: readonly DurableEvent[];
   /** Whether nothing follows this range in the physical stream. */
@@ -253,9 +262,11 @@ export class EntrySegmentStream implements DurableStream {
   private readonly snapshot: DurableEvent[];
   private readonly last: boolean;
   private closed: boolean;
+  private readonly placement: EntryPlacement | undefined;
 
   constructor(physical: DurableStream, view: EntrySegmentView = {}) {
     this.physical = physical;
+    this.placement = view.placement;
     this.snapshot = (view.retained ?? []).map((event) => sealEvent(event));
     this.last = view.final ?? true;
     // Read off the range rather than taken as a claim: what settles an entry is
@@ -290,7 +301,14 @@ export class EntrySegmentStream implements DurableStream {
     // Sealed before the write suspends, so what the caller does with its own
     // object afterwards reaches neither this range nor the physical stream.
     // Both keep this one graph: it is frozen, so neither side can edit it.
-    const recorded = sealEvent(event);
+    const recorded = sealEvent(
+      this.snapshot.length === 0 &&
+        rootAdmission(event) !== undefined &&
+        this.placement !== undefined &&
+        event.type === "yield"
+        ? { ...event, description: { ...event.description, [PLACEMENT]: { ...this.placement } } }
+        : event,
+    );
 
     yield* this.physical.append(recorded);
 
@@ -299,4 +317,9 @@ export class EntrySegmentStream implements DurableStream {
       this.closed = true;
     }
   }
+}
+
+function retainedPlacement(admission: Yield): { placement?: EntryPlacement } {
+  const parsed = admissionPlacement(admission);
+  return parsed.ok && parsed.value !== undefined ? { placement: parsed.value } : {};
 }

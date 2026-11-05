@@ -252,6 +252,12 @@ directory** — `Env.cwd`, read where the block runs. Its default is the
 process's own working directory, so a document that rebinds nothing behaves as
 it always has.
 
+Ordinary CLI execution starts in the captured launch project even when the source
+is elsewhere. `<Cwd />` renders the contextual directory as text with no added
+newline. It has no props other than ordinary optional `as`, which captures the
+same text. Reading cwd performs no filesystem operation and needs no file
+permission. Its self-closing generated declaration is read-only.
+
 A component rebinds it for its content by installing `Env.cwd` middleware on
 its own invocation:
 
@@ -2026,6 +2032,7 @@ the read that asked for it rather than appearing in it.
 | `src/components/registration.ts` | `registerComponents()`, `ComponentRegistration`, `ComponentRegistrationError`, `mergeRegistry()` — scope-local registration (§5.3) |
 | `src/components/select.ts` | `selectComponent()`, `DEFAULT_INCLUDES` — the resolver execution and inspection share (§5.3) |
 | `src/components/registry.ts` | `CORE_REGISTRY` — the components core supplies, as non-reserved defaults (§5.3) |
+| `src/components/Cwd.ts` | `<Cwd />` — render or capture the performing scope's directory without filesystem access (§1.2) |
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
@@ -6264,7 +6271,12 @@ when that scope is halted, before the component releases its own.
 
 Projection uses the working directory in effect at its projection point while
 keeping caller binding and source ownership; its resources remain owned by the
-content scope. Projected content keeps the caller's metadata,
+content scope. At each structural or programmatic projection, the effective Files read, write
+and absolute restrictions intersect the receiving task's restrictions: a captured
+false refuses and a captured true delegates. This transfers no arbitrary Context
+state or permission grant and changes no content resource ownership.
+
+Projected content keeps the caller's metadata,
 validated props object, cycle-detection hide set, and block counter. For
 ordinary bindings, `renderChildren()` and `useContent()` retain their caller
 environment, while structural `<Content />` layers the caller's props binding
@@ -8384,6 +8396,11 @@ command line through the JSON result contract of `xmd run` (§9.6).
 ---
 
 ### 6.11 Temporary working directories: `<TempDir>`
+
+A Sidekick host allocates temporary directories beneath its fixed project root.
+Effective write refusal prevents allocation, including inside read-only AssetDir.
+Ordinary run and manual hosts retain their usual temporary directory provider.
+
 
 A test needs a filesystem it can dirty without coordinating with anything else.
 `<TempDir>` gives its content one:

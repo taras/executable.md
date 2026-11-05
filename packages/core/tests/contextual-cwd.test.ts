@@ -1,3 +1,4 @@
+import { API, cwd, Permissions } from "@executablemd/runtime";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier CW — contextual working directory (spec §1.2).
@@ -211,5 +212,87 @@ describe("Tier CW — Contextual working directory", () => {
     expect((yield* readTextFile(marker)).trim()).toBe(here);
     // The fixture's own directories were never involved.
     expect(yield* exists(fixture.target)).toBe(true);
+  });
+});
+
+describe("1113: Cwd reports the performing scope", () => {
+  it("1113: reads and captures launch cwd without filesystem permission or a newline", function* () {
+    const fixture = yield* useFixture();
+    yield* useComponentModuleLoader();
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return fixture.target;
+        },
+      },
+      { at: "min" },
+    );
+    yield* Permissions.around({ files: () => false });
+    yield* writeDocument(fixture, '<Cwd as="directory" /><Output>[{directory}]<Cwd /></Output>');
+    const output = yield* collect(
+      yield* execute({ path: join(fixture.root, "doc.md"), stream: new InMemoryStream() }),
+    );
+    expect(output).toBe(`[${fixture.target}]${fixture.target}`);
+    expect(yield* cwd()).toBe(fixture.target);
+  });
+
+  it("1113: wrapper Content observes projection cwd and a sibling restores the launch directory", function* () {
+    const fixture = yield* useFixture();
+    yield* useComponentModuleLoader();
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return fixture.root;
+        },
+      },
+      { at: "min" },
+    );
+    yield* writeDocument(
+      fixture,
+      `<Output><InDirectory path=${JSON.stringify(fixture.target)}><Cwd /></InDirectory>|<Cwd /></Output>`,
+    );
+    expect(
+      yield* collect(
+        yield* execute({
+          path: join(fixture.root, "doc.md"),
+          includes: [fixture.root],
+          stream: new InMemoryStream(),
+        }),
+      ),
+    ).toBe(`${fixture.target}|${fixture.root}`);
+    expect(yield* cwd()).toBe(fixture.root);
+  });
+});
+
+describe("1113: source location does not set execution cwd", () => {
+  it("1113: Cwd and the supported shell report P when the source is elsewhere", function* () {
+    const fixture = yield* useFixture();
+    yield* useTempFileCompiler();
+    yield* useComponentModuleLoader();
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return fixture.target;
+        },
+      },
+      { at: "min" },
+    );
+    yield* writeDocument(
+      fixture,
+      [
+        '<Cwd as="directory" />',
+        '```sh exec as="process"',
+        "pwd",
+        "```",
+        "<Output><Json value={{ directory, stdout: process.stdout }} /></Output>",
+      ].join("\n"),
+    );
+    const output = yield* collect(
+      yield* execute({ path: join(fixture.root, "doc.md"), stream: new InMemoryStream() }),
+    );
+    expect(JSON.parse(String(output))).toEqual({
+      directory: fixture.target,
+      stdout: fixture.target + "\n",
+    });
   });
 });

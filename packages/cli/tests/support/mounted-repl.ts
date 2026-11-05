@@ -1,3 +1,4 @@
+import type { Plugin } from "@executablemd/core/api";
 /**
  * The real REPL command, run on a terminal this test owns.
  *
@@ -23,9 +24,9 @@ import type { ReplTerminalSize } from "../../src/repl/terminal.ts";
 import { runReplProgram } from "../../src/repl/program.ts";
 import type { ReplOutcome } from "../../src/repl/program.ts";
 import { assembleReplProfile } from "../../src/repl-profile.ts";
-import type { ReplProfileAssembly } from "../../src/repl-profile.ts";
+import type { ReplProfileAssembly, ReplProfileFacts } from "../../src/repl-profile.ts";
 import { resolveAgentStack } from "../../src/agent-stack.ts";
-import { NO_PLUGINS } from "../../src/plugin-host.ts";
+import { NO_PLUGINS, installPlugins } from "../../src/plugin-host.ts";
 import { pairedReplRepository } from "../../src/repl/sidekick/repository.ts";
 import { PAIRED_DIRECTORY } from "../../src/repl/sidekick/history.ts";
 import type { SidekickRecord } from "../../src/repl/sidekick/history.ts";
@@ -718,6 +719,8 @@ export function* useMountedHost(
      */
     readonly defaultAgent?: string;
     readonly sidekickAgent?: string;
+    readonly testingHarness?: ReplProfileFacts["testingHarness"];
+    readonly plugins?: readonly Plugin[];
     readonly projectCwd?: string;
     readonly includes?: readonly string[];
     readonly entryInstallation?: ReplEntryInstallation;
@@ -786,24 +789,31 @@ export function* useMountedHost(
   if (!stack.ok) {
     throw stack.error;
   }
-  const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
-    ...(options.includes === undefined ? {} : { includes: options.includes }),
-    acp: {
-      ...(options.agentCwd === undefined ? {} : { agentCwd: options.agentCwd }),
-      createRuntime: fake.create,
-      sessionStore: makeStore(),
-      agentRegistry: makeRegistry({
-        [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd`,
-        [OTHER_MOUNTED_AGENT]: `${OTHER_MOUNTED_AGENT}-cmd`,
-      }),
+  const profile = yield* assembleReplProfile(
+    stack.value,
+    options.plugins === undefined
+      ? NO_PLUGINS
+      : yield* installPlugins(options.plugins, { command: "repl", args: [] }),
+    {
+      ...(options.testingHarness === undefined ? {} : { testingHarness: options.testingHarness }),
+      ...(options.includes === undefined ? {} : { includes: options.includes }),
+      acp: {
+        ...(options.agentCwd === undefined ? {} : { agentCwd: options.agentCwd }),
+        createRuntime: fake.create,
+        sessionStore: makeStore(),
+        agentRegistry: makeRegistry({
+          [MOUNTED_AGENT]: `${MOUNTED_AGENT}-cmd`,
+          [OTHER_MOUNTED_AGENT]: `${OTHER_MOUNTED_AGENT}-cmd`,
+        }),
+      },
+      // Named to the profile rather than left to the environment: the Sidekick
+      // assembly is built with it, and a conversation opened under an agent this
+      // registry does not know would fail as an availability refusal before it
+      // ever reached the fake.
+      sidekickAgent: options.sidekickAgent ?? MOUNTED_AGENT,
+      planWriterRoot: yield* useTemporary("xmd-repl-mounted-plan-"),
     },
-    // Named to the profile rather than left to the environment: the Sidekick
-    // assembly is built with it, and a conversation opened under an agent this
-    // registry does not know would fail as an availability refusal before it
-    // ever reached the fake.
-    sidekickAgent: options.sidekickAgent ?? MOUNTED_AGENT,
-    planWriterRoot: yield* useTemporary("xmd-repl-mounted-plan-"),
-  });
+  );
   // The directory the command itself resolves, so a case that writes a file for
   // the command to find writes it where the command actually looks.
   const root = join(dataRoot, ...REPL_DIRECTORY);

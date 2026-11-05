@@ -1,4 +1,4 @@
-import { API, cwd } from "@executablemd/runtime";
+import { API, cwd, Permissions } from "@executablemd/runtime";
 import { inputValues, validateLiveReturnValue } from "./secrets/inputs.ts";
 import type { ProtectedInput } from "./secrets/inputs.ts";
 /**
@@ -599,6 +599,11 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
 
     function* project(): Operation<Segment[]> {
       const directory = yield* cwd();
+      const files = {
+        read: yield* Permissions.operations.files("read"),
+        write: yield* Permissions.operations.files("write"),
+        absolute: yield* Permissions.operations.files("absolute"),
+      };
       const contentScope = yield* state.invocation.useContentScope();
       // The projection's failure travels back to the caller rather than into
       // the content scope. Raising it there would poison the scope, and the
@@ -620,6 +625,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             },
             { at: "min" },
           );
+          yield* Permissions.around({
+            files: ([operation], next) => (files[operation] ? next(operation) : false),
+          });
           yield* ErrorMode.set(options.mode);
           yield* SourceOwner.set(options.sourceOwner);
           if (state.narrowedSyntax !== undefined) {
@@ -700,6 +708,12 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     // is interpreted and before anything it does can suspend. An operation that
     // is constructed and never yielded takes none.
     const path = projectionPath(request);
+    const directory = yield* cwd();
+    const files = {
+      read: yield* Permissions.operations.files("read"),
+      write: yield* Permissions.operations.files("write"),
+      absolute: yield* Permissions.operations.files("absolute"),
+    };
     const segments = select(request);
     const mode = request.mode ?? (yield* ErrorMode.get()) ?? "print";
     const contentScope = yield* state.invocation.useContentScope();
@@ -740,6 +754,17 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         const errors: Segment[] = [];
         const task = contentScope.scope.run(function* () {
           try {
+            yield* API.Env.around(
+              {
+                *cwd() {
+                  return directory;
+                },
+              },
+              { at: "min" },
+            );
+            yield* Permissions.around({
+              files: ([operation], next) => (files[operation] ? next(operation) : false),
+            });
             yield* ErrorMode.set(mode);
             yield* SourceOwner.set(frame.sourceOwner);
             if (state.narrowedSyntax !== undefined) {

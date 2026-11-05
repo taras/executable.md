@@ -132,7 +132,7 @@ describe("retained mount files", () => {
     );
     expect(observed).toEqual(["historical"]);
     expect(output).toContain("not allowed to create or enter");
-    expect(policyReads).toBe(1);
+    expect(policyReads).toBe(3);
     expect(calls.ensures).toEqual([]);
     expect(calls.reads).toEqual([]);
     const events = yield* stream.readAll();
@@ -483,7 +483,7 @@ describe("additional focused boundary 5", () => {
         });
       },
     });
-    expect(asked).toBe(0);
+    expect(asked).toBe(3);
     expect(calls.ensures).toEqual([]);
     expect(calls.reads).toEqual([]);
   });

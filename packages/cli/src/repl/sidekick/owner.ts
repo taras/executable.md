@@ -1,3 +1,4 @@
+import { cwd } from "@executablemd/runtime";
 import { useSecretInputs } from "@executablemd/core/host";
 import { inspectRecoveryOwnership } from "./recovery-owner.ts";
 import { recoveryBlocked, uncertainRequests } from "./recovery-state.ts";
@@ -384,6 +385,7 @@ export interface SidekickLiveTurn {
 
 /** What the owner needs, and nothing it could reach the rest of the root with. */
 export interface SidekickOwnerInput {
+  readonly projectCwd?: string;
   readonly test?: ReplTesting;
   follow?(): boolean;
   readonly workspace?: string;
@@ -1001,7 +1003,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       const ready = withResolvers<Result<AgentConversation>>();
       const task = mine.run(function* (): Operation<void> {
         const privacy = yield* useSecretInputs();
-        const directory = input.workspace;
+        const directory = input.projectCwd ?? (yield* cwd());
         if (directory !== undefined) {
           yield* API.Env.around(
             {

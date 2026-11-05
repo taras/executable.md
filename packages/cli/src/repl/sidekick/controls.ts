@@ -1,3 +1,4 @@
+import type { EntryPlacement } from "../entry-placement.ts";
 import type { ReplTesting, ReplTestReport } from "./testing.ts";
 /**
  * The words a reply may use, and what each of them asks the root to do.
@@ -202,6 +203,7 @@ export interface ControlJournal {
 /** The entry slot a Submit intent binds, so a dead process can be reconciled. */
 export interface ReservedSlot {
   readonly workspace?: true;
+  readonly placement?: EntryPlacement;
   /** How many entries preceded the reservation, which names the slot. */
   readonly ordinal: number;
   readonly entry: string;

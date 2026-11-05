@@ -1037,7 +1037,7 @@ describe("1075 approved import into the actual managed checkout", () => {
     }
     const example =
       '<Dir path="inputs">\n<File path="mock ü.html" as="mock" />\n<Output>{mock}</Output>\n</Dir>';
-    expect(guide.value).toContain(example);
+    expect(guide.value).toContain("<REPL.AssetDir>");
     const places: string[] = [];
     yield* API.Files.around({
       *readTextFile([input], next) {
