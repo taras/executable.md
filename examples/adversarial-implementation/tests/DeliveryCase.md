@@ -38,11 +38,39 @@ git symbolic-ref --short HEAD
 <Ticket.Capture as="duplicate"><Delivery.Review delivery={delivery} revision={revision} as="again" /></Ticket.Capture>
 <AssertEquals actual={duplicate.status} expected="failed" />
 <If condition={scenario === "pass"}>
+<Ticket.Text path={delivery.directory + "/called.json"} as="calledBefore" />
+<Ticket.Text path={delivery.directory + "/review-" + revision + "/assignment.json"} as="originalAssignment" />
+<Parse schema={{type:"object"}} as="assigned">{originalAssignment}</Parse>
+<Dir path={delivery.directory + "/review-" + revision}><File path="assignment.json"><Json value={{...assigned,responseSchema:{...assigned.responseSchema,properties:{...assigned.responseSchema.properties,summary:{type:"string",minLength:1,maxLength:1200}}}}} /></File></Dir>
+<Ticket.Capture as="schemaChanged"><Delivery.Reconcile delivery={delivery} revision={revision} publish={true} as="unexpectedSchemaReceipt" /></Ticket.Capture>
+<AssertEquals actual={schemaChanged.status} expected="failed" />
+<AssertStringIncludes actual={schemaChanged.failure} expected="response schema differs" />
+<Dir path={delivery.directory + "/review-" + revision}><File path="assignment.json">{originalAssignment}</File></Dir>
+
+<Dir path={delivery.directory + "/review-" + revision}><File.Delete path="receipt.json" /></Dir>
+<Delivery.Status delivery={delivery} number={7} as="unreconciled" />
+<AssertEquals actual={unreconciled.status} expected="reconciliation_required" />
+<Delivery.Reconcile delivery={delivery} revision={revision} publish={true} as="reconciled" />
+<AssertEquals actual={reconciled.result.verdict} expected="pass" />
+<Ticket.Text path={delivery.directory + "/called.json"} as="calledAfter" />
+<AssertEquals actual={calledAfter} expected={calledBefore} />
+<Delivery.Closeout delivery={delivery} number={7} as="closeout" />
+<AssertEquals actual={closeout.status} expected="ready_for_merge" />
+<Ticket.Text path={delivery.directory + "/closeout.json"} as="reportText" />
+<Parse schema={{type:"object"}} as="report">{reportText}</Parse>
+<AssertEquals actual={report} expected={closeout} />
+<Ticket.Text path={delivery.directory + "/closeout.md"} as="reportMarkdown" />
+<If condition={!reportMarkdown.includes(revision)}><Fail message={"closeout report omitted revision: " + reportMarkdown} /></If>
+<If condition={!reportMarkdown.includes("await_authorized_merge")}><Fail message={"closeout report omitted next action: " + reportMarkdown} /></If>
 <Dir path={fixture.repository}><File path="remote.json"><Json value={remote} /></File></Dir>
 <Let as="entryArguments" value={[input.root + "/examples/adversarial-implementation/delivery.md","--props-record",delivery.directory + "/requirements.json","--props-number","7","--include",input.root + "/examples/adversarial-implementation/tests/components","--include",input.root + "/examples/adversarial-implementation/components","--raw"].map(value => "'" + value.replaceAll("'","'\"'\"'") + "'").join(" ")} />
+<Dir path={delivery.directory + "/review-" + revision}><File.Delete path="receipt.json" /></Dir>
 <Dir path={fixture.repository}>
 ```bash exec as="entryStatus"
-{input.runner} {entryArguments}
+{input.runner} {entryArguments} --props-action reconcile
+```
+```bash exec as="entryCloseout"
+{input.runner} {entryArguments} --props-action closeout
 ```
 ```bash exec as="entryDuplicate"
 {input.runner} {entryArguments} --props-action review
@@ -51,8 +79,11 @@ git symbolic-ref --short HEAD
 <If condition={entryStatus.exitCode !== 0}><Fail message={entryStatus.stderr + entryStatus.stdout} /></If>
 <Parse schema={{type:"object"}} as="entry">{entryStatus.stdout}</Parse>
 <AssertEquals actual={entry.status} expected="ready_for_merge" />
+<If condition={entryCloseout.exitCode !== 0}><Fail message={entryCloseout.stderr + entryCloseout.stdout} /></If>
+<Parse schema={{type:"object"}} as="entryReport">{entryCloseout.stdout}</Parse>
+<AssertEquals actual={entryReport.status} expected="ready_for_merge" />
 <AssertEquals actual={entryDuplicate.exitCode === 0} expected={false} />
-<AssertStringIncludes actual={entryDuplicate.stderr} expected="do not start another review" />
+<If condition={!entryDuplicate.stderr.includes("do not start another review")}><Fail message={"duplicate review returned: " + JSON.stringify(entryDuplicate)} /></If>
 <Each in={[
  {change:{ci:{status:"in_progress",conclusion:null}},status:"checks_pending"},
  {change:{ci:{status:"completed",conclusion:"failure"}},status:"checks_failed"},
@@ -74,6 +105,9 @@ git symbolic-ref --short HEAD
 <Dir path={delivery.directory + "/review-" + revision}><File path="receipt.json"><Json value={{...original,result:{...original.result,summary:"A replacement claim."}}} /></File></Dir>
 <Delivery.Status delivery={delivery} number={7} as="mismatched" />
 <AssertEquals actual={mismatched.status} expected="reconciliation_required" />
+<Ticket.Capture as="contradictory"><Delivery.Reconcile delivery={delivery} revision={revision} publish={true} as="unexpectedReceipt" /></Ticket.Capture>
+<AssertEquals actual={contradictory.status} expected="failed" />
+<If condition={!contradictory.failure.includes("receipt differs")}><Fail message={"contradictory reconciliation returned: " + JSON.stringify(contradictory)} /></If>
 <Dir path={fixture.repository}>
 <File path="legacy.fixture">A changed source after review.</File>
 ```bash exec as="changedSource"

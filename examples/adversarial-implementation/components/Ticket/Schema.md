@@ -20,6 +20,7 @@ returns: {type: object}
       "type": "string",
       "pattern": "^/"
     },
+    "identityDirectory": {"type":"string","pattern":"^/"},
     "api": {"type": "object"},
     "delivery": {"type": "object"},
     "assignment": phases.assignment,
