@@ -502,6 +502,66 @@ describe("headless renderer lifetime", () => {
 });
 
 describe("headless live UI", () => {
+  it("C3: Control-C typed while the attached first frame is still being written detaches", function* () {
+    const held = yield* useHeadlessFixture();
+    const prompts = held.host.fake.prompts.length;
+    const recording = recordingTerminal();
+    const terminal = recording.terminal;
+    const reached = withResolvers<void>();
+    const release = withResolvers<void>();
+    yield* ensure(() => {
+      release.resolve();
+    });
+    let gated = false;
+    let detached = false;
+    const ui = yield* spawn(function* () {
+      yield* recording.install();
+      yield* ReplTerminal.around({
+        *write([bytes], next) {
+          if (!gated && new TextDecoder().decode(bytes).includes("XMD REPL")) {
+            gated = true;
+            reached.resolve();
+            yield* release.operation;
+          }
+          yield* next(bytes);
+        },
+      });
+      yield* attachChildUi(held.reference.sessionId);
+      detached = true;
+    });
+    yield* reached.operation;
+    // Nothing is on the screen yet, so no message box is in front of anybody.
+    expect(terminal.screen?.rows().join("").trim() ?? "").toBe("");
+    expect(terminal.readers).toBe(1);
+    terminal.feed("\t\t\tfirst\x03");
+    yield* sleep(100);
+    release.resolve();
+    yield* race([
+      ui,
+      (function* (): Operation<never> {
+        yield* sleep(10000);
+        throw new Error(`The attached UI did not detach: ${terminal.screen?.rows().join("\n")}`);
+      })(),
+    ]);
+    expect(detached).toBe(true);
+    expect(held.host.fake.prompts).toHaveLength(prompts);
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+    expect(terminal.listeners).toBe(0);
+    // The child kept running, and the next attachment can use it.
+    const second = recordingTerminal();
+    const reattached = yield* spawn(function* () {
+      yield* second.install();
+      yield* attachChildUi(held.reference.sessionId);
+    });
+    yield* visible(second.terminal, "[detach]");
+    second.terminal.feed("usable");
+    yield* visible(second.terminal, "usable");
+    second.terminal.end();
+    yield* reattached;
+    yield* held.task.halt();
+  });
+
   it("C3: Control-C clears the attached message box, and detaches only from an empty one", function* () {
     const held = yield* useHeadlessFixture();
     const frames: AppliedFrames = new WeakMap();

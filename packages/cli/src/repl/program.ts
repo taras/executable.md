@@ -1047,9 +1047,16 @@ function* drive(
     const wakes = queued();
     const shutdown = withResolvers<void>();
     let ending = false;
-    // Until a frame is presented, Control-C has no focused message box to clear
-    // and ends here. After that the loop decides, through the tree.
-    let presented = false;
+    // Until a screen's first frame is presented, Control-C has no focused message
+    // box to clear and leaves. After that the loop decides, through the tree. A
+    // standalone terminal is generation 0; an attached UI starts a generation of
+    // its own each time it connects.
+    let presentedAt: number | undefined;
+    const showing = (): number => liveScreen?.generation ?? 0;
+    // The exact Control-C events read before their screen was presented, so the
+    // loop leaves on them even if keys queued ahead of them focused the message
+    // box once the frame arrived.
+    const unpresented = new WeakSet<ReplScreenEvent>();
 
     yield* spawn(function* reading(): Operation<void> {
       while (true) {
@@ -1060,13 +1067,15 @@ function* drive(
           wakes.close();
           return;
         }
-        if (
-          next.value.kind === "eof" ||
-          (next.value.kind === "input" &&
-            next.value.event?.kind === "key" &&
-            next.value.event.key === "Interrupt" &&
-            !presented)
-        ) {
+        const early =
+          next.value.kind === "input" &&
+          next.value.event?.kind === "key" &&
+          next.value.event.key === "Interrupt" &&
+          presentedAt !== showing();
+        if (early) {
+          unpresented.add(next.value);
+        }
+        if (next.value.kind === "eof" || early) {
           if (liveScreen === undefined) {
             ending = true;
             shutdown.resolve();
@@ -2309,7 +2318,9 @@ function* drive(
     const first = yield* draw();
     // Only a frame that finished presenting can have put a message box in front
     // of anybody; keys that arrived while it was being drawn still end here.
-    presented = first !== undefined;
+    if (first !== undefined) {
+      presentedAt = showing();
+    }
     rendered = first?.rendered;
     presenting = first === undefined ? undefined : presentedDrawer(first.view);
     // The first frame has the same obligation as every other one: draw again
@@ -2405,11 +2416,11 @@ function* drive(
           }
           // Control-C through the tree, where only the focused message box
           // handles it. Anything else leaves, and so does a screen too small to
-          // draw that box or one the reader already chose to end before it was
-          // presented.
+          // draw that box or a Control-C read before its screen was presented.
           if (delivered.kind === "key" && delivered.key === "Interrupt") {
             if (
               ending ||
+              unpresented.has(wake.event) ||
               profileFor(yield* screen.size()) === "too-small" ||
               (yield* act(delivered))
             ) {
@@ -2606,7 +2617,7 @@ function* drive(
       if (painted === undefined) {
         continue;
       }
-      presented = true;
+      presentedAt = showing();
       rendered = painted.rendered;
       presenting = presentedDrawer(painted.view);
       // Focus is read against the view that was committed, which a resize may
