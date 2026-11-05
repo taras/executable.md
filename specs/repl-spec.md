@@ -348,14 +348,13 @@ Review the committed TODO changes supplied with this request and continue
 appropriately. Read Sidekick.Todo if you need the current checklist.
 ```
 
-Selected Plugins register middleware through ordinary `Plugin.install`.
-`Repl.initialize(workspace): Operation<void>` from the neutral
-`@executablemd/cli/api` export defaults to no-op and runs once in the logical
-runtime after cold validation and profile selection, before operational entry
-or Sidekick work. It owns feature resources and joins partial initialization
-on failure/cancellation. Terminal attachment does not initialize again; passive
-history inspection initializes nothing. Importing `/api` evaluates no runtime
-entrypoint or provider.
+The checklist is one selected Plugin's `repl` contribution: the service one live
+logical session owns, the single `Sidekick.Todo` declaration both surfaces read
+it through, and the conversation-local provider decoration that carries
+committed changes into a held turn's content. A profile without that value has
+no checklist service, declaration or documentation, and leaves other
+contributions untouched. [Selected Plugin session
+services](#selected-plugin-session-services) owns when each part runs.
 
 ## Testing session components
 

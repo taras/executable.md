@@ -11,7 +11,7 @@ import {
   suspend,
   withResolvers,
 } from "effection";
-import type { Operation, Result, Stream } from "effection";
+import type { Operation, Result, Stream, Subscription } from "effection";
 import {
   API,
   FilesInvariantError,
@@ -23,7 +23,8 @@ import { applyTodoDiff, parseTodo, todoDiff, TodoEditError } from "./document.ts
 import type { TodoDocument, TodoItem } from "./document.ts";
 import { captureTodoSource } from "./source.ts";
 import { TodoSourceError } from "./source.ts";
-import { Agent } from "@executablemd/core";
+import { AgentConversationProvider } from "@executablemd/core/api";
+import type { AgentPromptEvent } from "@executablemd/core";
 
 interface TodoObservation {
   readonly origin: "human" | "sidekick";
@@ -217,9 +218,29 @@ export function* useTodo(workspace: string): Operation<TodoService> {
         prompting = undefined;
       },
       *installPrompt(): Operation<void> {
-        yield* Agent.around({
-          *prompt([text, options], next) {
-            return resource(function* (provide) {
+        // The conversation's own provider, retained by value: a retained turn
+        // dispatches this object directly, so composing its content is the only
+        // place TODO can reach one. Setup and inspection forward untouched,
+        // with their receiver, so the session this turn is held to is still the
+        // one core settled and checked.
+        const retained = yield* AgentConversationProvider.expect();
+        if (retained === undefined) {
+          throw new TodoEditError(
+            "a Sidekick conversation serving TODO changes needs an installed conversation " +
+              "provider; this one offers none, so there is no turn to compose content for.",
+          );
+        }
+        yield* AgentConversationProvider.set({
+          agent: retained.agent.bind(retained),
+          session: retained.session.bind(retained),
+          options: retained.options.bind(retained),
+          // deno-lint-ignore require-yield
+          *prompt(text, options): Operation<Stream<AgentPromptEvent, string>> {
+            // Cold, like the provider this composes: obtaining the stream
+            // selects nothing and sends nothing. The resource is acquired by
+            // the subscription that begins the turn, which is what owns the
+            // selected observations, the delegated request and their cleanup.
+            return resource<Subscription<AgentPromptEvent, string>>(function* (provide) {
               const selected = [...pending];
               prompting = selected;
               let succeeded = false;
@@ -235,7 +256,10 @@ export function* useTodo(workspace: string): Operation<TodoService> {
                   ? ""
                   : "Committed TODO changes (in commit order):\n" +
                     JSON.stringify(selected.map(({ origin, diff }) => ({ origin, diff })));
-              const stream = yield* next(context === "" ? text : text + "\n\n" + context, options);
+              const stream = yield* retained.prompt(
+                context === "" ? text : text + "\n\n" + context,
+                options,
+              );
               const subscription = yield* stream;
               yield* provide({
                 *next() {

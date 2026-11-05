@@ -1,23 +1,69 @@
-import { Agent, isJsonObject, parseJson } from "@executablemd/core";
-import { Plugin } from "@executablemd/core/api";
-import { installPlugins } from "../src/plugin-host.ts";
-import type { CommandPlugins } from "../src/plugin-host.ts";
+import { isJsonObject, parseJson } from "@executablemd/core";
+import { AgentConversationProvider, Plugin } from "@executablemd/core/api";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, spawn, withResolvers } from "effection";
-import type { Operation } from "effection";
+import { ensure, resource, scoped, spawn, withResolvers } from "effection";
+import type { Operation, Stream, Subscription } from "effection";
+import type { AgentPromptEvent } from "@executablemd/core";
+import type { ReplPluginInstallation } from "../api.ts";
 import { writeTextFile } from "@effectionx/fs";
 import { useHostFiles } from "@executablemd/runtime";
 import { installTodoSource } from "../src/node-todo-source.ts";
+import { todoPlugin } from "../src/repl/todo/plugin.ts";
 import { useTodo } from "../src/repl/todo/service.ts";
 import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sidekick/dispatch.ts";
 import type { SidekickDispatch, SidekickExchange } from "../src/repl/sidekick/dispatch.ts";
 import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 
-function* setup(plugins?: CommandPlugins) {
+/**
+ * One contributed conversation decoration, composed where a retained turn is.
+ *
+ * A retained turn dispatches its captured provider directly, so a selected
+ * Plugin reaches its content through `repl.sidekick()` rather than through
+ * ordinary `Agent` routing. `compose` enriches the delegated text; `bracket`
+ * holds one resource open around the composed stream, which is what a case
+ * about joined cleanup needs.
+ */
+function composing(
+  name: string,
+  compose: (text: string) => string,
+  bracket?: () => Operation<void>,
+): Plugin {
+  return Plugin({
+    name,
+    *install(): Operation<ReplPluginInstallation> {
+      return {
+        repl: {
+          *sidekick(): Operation<void> {
+            const retained = yield* AgentConversationProvider.expect();
+            if (retained === undefined) {
+              throw new Error(`${name} found no conversation provider to compose`);
+            }
+            yield* AgentConversationProvider.set({
+              agent: retained.agent.bind(retained),
+              session: retained.session.bind(retained),
+              options: retained.options.bind(retained),
+              // deno-lint-ignore require-yield
+              *prompt(text, options): Operation<Stream<AgentPromptEvent, string>> {
+                return resource<Subscription<AgentPromptEvent, string>>(function* (provide) {
+                  if (bracket !== undefined) {
+                    yield* ensure(bracket);
+                  }
+                  yield* provide(yield* yield* retained.prompt(compose(text), options));
+                });
+              },
+            });
+          },
+        },
+      };
+    },
+  });
+}
+
+function* setup(extra: readonly Plugin[] = []) {
   yield* useHostFiles();
   yield* installTodoSource();
-  const host = yield* useHarness(undefined, { plugins });
+  const host = yield* useHarness(undefined, { plugins: [todoPlugin, ...extra] });
   const todo = yield* useTodo(host.workspace);
   const dispatch = yield* useSidekickDispatch({
     owner: host.owner,
@@ -187,30 +233,19 @@ describe("TODO context on independently admitted prompts", () => {
       let successful: boolean | undefined;
       try {
         yield* scoped(function* () {
-          const plugins = yield* installPlugins(
-            [
-              Plugin({
-                name: "owned-cleanup",
-                *install() {
-                  yield* Agent.around({
-                    *prompt([text, options], next) {
-                      yield* ensure(function* () {
-                        entered.resolve();
-                        yield* release.operation;
-                        if (fails) {
-                          throw new Error("composed cleanup failed");
-                        }
-                      });
-                      return yield* next(text, options);
-                    },
-                  });
-                  return undefined;
-                },
-              }),
-            ],
-            { command: "repl", args: [] },
-          );
-          const { host, todo, dispatch } = yield* setup(plugins);
+          const { host, todo, dispatch } = yield* setup([
+            composing(
+              "owned-cleanup",
+              (text) => text,
+              function* () {
+                entered.resolve();
+                yield* release.operation;
+                if (fails) {
+                  throw new Error("composed cleanup failed");
+                }
+              },
+            ),
+          ]);
           state = () => ({ pending: todo.pending.length, recovery: todo.recovery });
           yield* todo.save("", "- [ ] retained through cleanup\n");
           host.fake.script({ reply: "<Output>canonical source</Output>" });
@@ -241,23 +276,9 @@ describe("TODO context on independently admitted prompts", () => {
   });
 
   it("uses selected Plugin prompt middleware and retains identical final canonical and feedback input", function* () {
-    const plugins = yield* installPlugins(
-      [
-        Plugin({
-          name: "todo-context-example",
-          *install() {
-            yield* Agent.around({
-              *prompt([text, options], next) {
-                return yield* next(text + "\nSelected Plugin context.", options);
-              },
-            });
-            return undefined;
-          },
-        }),
-      ],
-      { command: "repl", args: [] },
-    );
-    const { host, todo, dispatch } = yield* setup(plugins);
+    const { host, todo, dispatch } = yield* setup([
+      composing("todo-context-example", (text) => text + "\nSelected Plugin context."),
+    ]);
     yield* todo.save("", "- [ ] shared\n");
     host.fake.script({ reply: '<Sidekick.Todo as="items" />' });
     host.fake.script({ reply: "<Output>done</Output>" });

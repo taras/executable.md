@@ -29,6 +29,7 @@ import { assembleReplProfile } from "../../src/repl-profile.ts";
 import type { ReplProfileAssembly, ReplProfileFacts } from "../../src/repl-profile.ts";
 import { resolveAgentStack } from "../../src/agent-stack.ts";
 import { NO_PLUGINS, installPlugins } from "../../src/plugin-host.ts";
+import { todoPlugin, todoPluginDeclaresFor } from "../../src/repl/todo/plugin.ts";
 import { pairedReplRepository } from "../../src/repl/sidekick/repository.ts";
 import { PAIRED_DIRECTORY } from "../../src/repl/sidekick/history.ts";
 import type { SidekickRecord } from "../../src/repl/sidekick/history.ts";
@@ -793,11 +794,19 @@ export function* useMountedHost(
   if (!stack.ok) {
     throw stack.error;
   }
+  // The command's own prefix first, then whatever a case selected, which is the
+  // order `assembleRunProfile` installs for `xmd repl`: every mounted session
+  // has the session checklist a real one has, and a case adding contributions
+  // composes outside it rather than replacing it.
+  const selected = [
+    ...(todoPluginDeclaresFor("repl") ? [todoPlugin] : []),
+    ...(options.plugins ?? []),
+  ];
   const profile = yield* assembleReplProfile(
     stack.value,
-    options.plugins === undefined
+    selected.length === 0
       ? NO_PLUGINS
-      : yield* installPlugins(options.plugins, { command: "repl", args: [] }),
+      : yield* installPlugins(selected, { command: "repl", args: [] }),
     {
       ...(options.testingHarness === undefined ? {} : { testingHarness: options.testingHarness }),
       ...(options.includes === undefined ? {} : { includes: options.includes }),

@@ -1556,7 +1556,9 @@ function* drive(
     function todoIdle(): boolean {
       return todoWakeEligible({
         live: !ending && state.route.at === undefined,
-        storage: upgrading === undefined && unresolved === undefined,
+        // A held reservation is a list rather than one optional finding, so
+        // emptiness is what says storage has nothing unanswered waiting.
+        storage: upgrading === undefined && unresolved.length === 0,
         entry: current.admits().ok,
         reservation:
           admitting.held === undefined &&

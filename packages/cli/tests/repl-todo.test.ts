@@ -10,18 +10,27 @@ import { installTodoSource } from "../src/node-todo-source.ts";
 import { captureTodoSource } from "../src/repl/todo/source.ts";
 import { useTodo } from "../src/repl/todo/service.ts";
 import { applyTodoDiff, editTodo, parseTodo, todoDiff } from "../src/repl/todo/document.ts";
-import type { ControlJournal } from "../src/repl/sidekick/controls.ts";
 import { todoDeclaration } from "../src/repl/todo/component.ts";
 import { Component, retainedSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
+import type { ComponentInvocationHooks } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 
-function entry(source: string, history = new InMemoryStream(), journal?: ControlJournal) {
+function entry(
+  source: string,
+  history = new InMemoryStream(),
+  componentInvocations?: ComponentInvocationHooks,
+) {
   return scoped(function* () {
     const execution = yield* executeInstalled(
       { ...retainedSource("todo-entry.md", source), stream: history },
-      [{ components: [todoDeclaration(journal)] }],
+      [
+        {
+          components: [todoDeclaration()],
+          ...(componentInvocations === undefined ? {} : { componentInvocations }),
+        },
+      ],
     );
     yield* forEach(function* (_chunk: string) {}, execution.output);
     return yield* execution;
@@ -360,12 +369,13 @@ describe("TODO typed component and historical result", () => {
     const todo = yield* useTodo(root);
     const delivering = withResolvers<void>();
     const release = withResolvers<void>();
-    const journal: ControlJournal = {
-      *began() {
-        return 0;
-      },
-      *settled(_order, result) {
-        if (result.ok) {
+    // Held in the host's own invocation observation, which is what records a
+    // contributed control now: the body has committed and produced its value,
+    // and a newer mutation arriving before that value is delivered must not
+    // change the items this invocation answers with.
+    const observing: ComponentInvocationHooks = {
+      *after(_observation, outcome) {
+        if (outcome.ok) {
           delivering.resolve();
           yield* release.operation;
         }
@@ -375,7 +385,7 @@ describe("TODO typed component and historical result", () => {
       entry(
         '<Sidekick.Todo as="items">\n```diff\n@@ -0,0 +1 @@\n+- [ ] earlier\n```\n</Sidekick.Todo>\n<Json value={items} />',
         new InMemoryStream(),
-        journal,
+        observing,
       ),
     );
     yield* delivering.operation;

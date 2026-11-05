@@ -749,73 +749,59 @@ describe("Tier DP — a saved conversation reaches its provider directly", () =>
   });
 
   it("DP2: neither the session nor the agent of a chat is something a handler decides", function* () {
-    for (const redirect of [false, true]) {
-      const seen: string[] = [];
-      // A session this chat has never been in, and a canary on the prompt: if
-      // either handler were reached, the turn would run somewhere else and the
-      // runtime below would say so.
-      const canary: Session = { sessionKey: "xmd:chat:v1:acpx:elsewhere", cwd: SESSION_DIR };
-      const target = host({
-        agents: { scribe: "scribe-cmd", editor: "editor-cmd" },
-        around: function* (): Operation<void> {
-          yield* Agent.around(
-            {
-              *session([request], next) {
-                seen.push("session");
-                return yield* next(named(request));
-              },
-              *agent([_name], next) {
-                seen.push("agent");
-                return yield* next("scribe");
-              },
-              *prompt([content, promptOptions], next) {
-                seen.push("prompt");
-                return yield* next("enriched " + content, {
-                  ...promptOptions,
-                  ...(redirect ? { session: canary } : {}),
-                });
-              },
+    const seen: string[] = [];
+    // A session this chat has never been in, and a canary on the prompt: if
+    // either handler were reached, the turn would run somewhere else and the
+    // runtime below would say so.
+    const canary: Session = { sessionKey: "xmd:chat:v1:acpx:elsewhere", cwd: SESSION_DIR };
+    const target = host({
+      agents: { scribe: "scribe-cmd", editor: "editor-cmd" },
+      around: function* (): Operation<void> {
+        yield* Agent.around(
+          {
+            *session([request], next) {
+              seen.push("session");
+              return yield* next(named(request));
             },
-            { at: "max" },
-          );
-        },
-      });
-      const stream = new InMemoryStream();
-
-      const answered = yield* withConversation(
-        stream,
-        target.installation,
-        function* (chat): Operation<Result<string>> {
-          return yield* chat.prompt("first");
-        },
-        "editor",
-      );
-
-      expect(seen).toEqual(["prompt"]);
-      if (redirect) {
-        expect(answer(answered)).toContain(
-          "A held prompt cannot redirect its agent or verified session",
+            *agent([_name], next) {
+              seen.push("agent");
+              return yield* next("scribe");
+            },
+            *prompt([content, promptOptions], next) {
+              seen.push("prompt");
+              return yield* next(content, { ...promptOptions, session: canary });
+            },
+          },
+          { at: "max" },
         );
-        expect(target.harness.ensureCalls).toEqual([]);
-        expect(asked(target)).toEqual([]);
-        expect(turns(yield* stream.readAll())).toEqual([]);
-        expect(target.retained).toEqual([]);
-        expect(configurations(yield* stream.readAll())).toBe(1);
-      } else {
-        expect(answer(answered)).toBe("hello world");
-        expect(target.harness.ensureCalls.map((call) => call.sessionKey)).toEqual([
-          CHAT_SESSION_KEY,
-        ]);
-        expect(asked(target)).toEqual(["enriched first"]);
-        const retained = turns(yield* stream.readAll());
-        expect(retained.map((turn) => turn.name)).toEqual(["turn:1"]);
-        expect(retained[0]!.record.agentSessionId).toBe(NATIVE);
-        expect(retained[0]!.record.agent).toBe("editor");
-        expect(retained[0]!.record.sessionKey).toBe(CHAT_SESSION_KEY);
-        expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
-        expect(configurations(yield* stream.readAll())).toBe(1);
-      }
-    }
+      },
+    });
+    const stream = new InMemoryStream();
+
+    const answered = yield* withConversation(
+      stream,
+      target.installation,
+      function* (chat): Operation<Result<string>> {
+        return yield* chat.prompt("first");
+      },
+      "editor",
+    );
+
+    expect(answer(answered)).toBe("hello world");
+    // None of the three handlers was reached on the chat's path.
+    expect(seen).toEqual([]);
+    // The turn ran in this conversation's own native session, under the agent
+    // the conversation selected rather than the host's default — and the
+    // command the configuration was saved against is that agent's.
+    expect(target.harness.ensureCalls.map((call) => call.sessionKey)).toEqual([CHAT_SESSION_KEY]);
+    expect(asked(target)).toEqual(["first"]);
+    const retained = turns(yield* stream.readAll());
+    expect(retained.map((turn) => turn.name)).toEqual(["turn:1"]);
+    expect(retained[0]!.record.agentSessionId).toBe(NATIVE);
+    expect(retained[0]!.record.agent).toBe("editor");
+    expect(retained[0]!.record.sessionKey).toBe(CHAT_SESSION_KEY);
+    expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
+    expect(configurations(yield* stream.readAll())).toBe(1);
   });
 });
 

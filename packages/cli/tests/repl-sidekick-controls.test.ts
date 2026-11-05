@@ -99,6 +99,7 @@ import {
   sidekickResponseCeiling,
 } from "../src/repl/sidekick/profile.ts";
 import type { ResponseCeiling } from "../src/repl/sidekick/profile.ts";
+import { todoDeclaration } from "../src/repl/todo/component.ts";
 import type { OutputRead, OutputReadRequest } from "../src/repl/sidekick/output.ts";
 import type {
   EntryJournalPage,
@@ -318,7 +319,11 @@ function textPage(text: string, request: EntryReadRequest): EntryTextPage {
  */
 function ceilingFor(asked: Asked, options: StubOptions = {}): ResponseCeiling {
   const journal = journalOf(asked);
-  return sidekickResponseCeiling(requests(asked, journal, options), journal);
+  // The session checklist arrives as the contribution a `repl` command selects,
+  // which is how every control beyond this CLI's builtins reaches a ceiling.
+  return sidekickResponseCeiling(requests(asked, journal, options), journal, [
+    { components: [todoDeclaration()] },
+  ]);
 }
 
 /** The journal the owner keeps, in the order a response admitted its controls. */

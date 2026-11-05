@@ -5,12 +5,10 @@ import {
   packageDocumentation,
   contributeDocumentation,
 } from "@executablemd/core";
-import type { FunctionComponent, FunctionComponentDefinition, Json } from "@executablemd/core";
+import type { FunctionComponent, Json } from "@executablemd/core";
 import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import { createDurableOperation } from "@executablemd/durable-streams";
-import { Err, Ok } from "effection";
 import type { Operation } from "effection";
-import type { ControlJournal, SidekickControl } from "../sidekick/controls.ts";
 import { Todo } from "./service.ts";
 import { TodoEditError } from "./document.ts";
 
@@ -35,7 +33,7 @@ const GENERATED = {
   },
 } as const;
 
-export function todoDeclaration(journal?: ControlJournal): IdentityComponent {
+export function todoDeclaration(): IdentityComponent {
   return {
     name: "Sidekick.Todo",
     origin: "@executablemd/cli:repl/todo",
@@ -47,11 +45,11 @@ export function todoDeclaration(journal?: ControlJournal): IdentityComponent {
       'Read your session checklist with `<Sidekick.Todo as="items" />`. Apply a matching unified diff in its content to edit the same checklist.',
     as: "Required. Captures ordered items with text and completed fields.",
     context: "One fenced unified diff for todo.md.",
-    factory: (claim) => todoBody(claim, journal),
+    factory: todoBody,
   };
 }
 
-function todoBody(claim: IdentityClaimant, journal?: ControlJournal): FunctionComponent {
+function todoBody(claim: IdentityClaimant): FunctionComponent {
   function body(edit: boolean): FunctionComponent {
     return function* (_props, invocation): Operation<Json> {
       const name = yield* claim(invocation);
@@ -63,30 +61,9 @@ function todoBody(claim: IdentityClaimant, journal?: ControlJournal): FunctionCo
           if (service === undefined) {
             throw new TodoEditError("Sidekick.Todo requires an initialized live REPL session.");
           }
-          const order =
-            journal === undefined
-              ? undefined
-              : yield* journal.began({
-                  component: "Sidekick.Todo",
-                  arguments: patch === undefined ? {} : { diff: patch },
-                });
-          try {
-            const items =
-              patch === undefined ? (yield* service.read()).items : yield* service.apply(patch);
-            const value = parseJson(items);
-            if (journal !== undefined && order !== undefined) {
-              yield* journal.settled(order, Ok(value), value);
-            }
-            return value;
-          } catch (error) {
-            if (journal !== undefined && order !== undefined) {
-              yield* journal.settled(
-                order,
-                Err(error instanceof Error ? error : new Error(String(error))),
-              );
-            }
-            throw error;
-          }
+          return parseJson(
+            patch === undefined ? (yield* service.read()).items : yield* service.apply(patch),
+          );
         },
       );
       return parseJson(stored);
@@ -103,21 +80,6 @@ function patchBody(source: string): string {
     throw new TodoEditError("Sidekick.Todo requires exactly one fenced unified diff for todo.md.");
   }
   return match[2] + "\n";
-}
-
-export function todoControls(journal: ControlJournal): readonly SidekickControl[] {
-  const declared = todoDeclaration(journal);
-  const definition: FunctionComponentDefinition = {
-    ...declared,
-    kind: "function",
-    fn: declared.factory(function* () {
-      throw new TodoEditError("This descriptive Todo definition is not an execution.");
-    }),
-  };
-  return [
-    { name: declared.name, form: "self-closing", effect: "read", definition },
-    { name: declared.name, form: "paired", effect: "write", definition },
-  ];
 }
 
 export function* installTodoDocumentation(): Operation<void> {

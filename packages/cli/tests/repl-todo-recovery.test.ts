@@ -2,7 +2,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, suspend, withResolvers } from "effection";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
-import { Repl } from "../src/api.ts";
+import { Repl } from "../api.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import { intoComposer, sendMessage, pasteDraft } from "./support/screen-journeys.ts";
 import { awaitedFact, useMountedHost, useMountedRepl } from "./support/mounted-repl.ts";
@@ -15,12 +15,12 @@ describe("TODO logical runtime recovery", () => {
     let initialized = 0;
     let cleaned = 0;
     yield* Repl.around({
-      *initialize([workspace], next) {
+      *initialize([session], next) {
         initialized++;
         yield* ensure(() => {
           cleaned++;
         });
-        yield* next(workspace);
+        yield* next(session);
       },
     });
     const first = yield* useReplPage();
@@ -161,15 +161,15 @@ describe("TODO logical runtime recovery", () => {
 
   it("exports a neutral no-op initialization API with the existing runtime roots", function* () {
     yield* scoped(function* () {
-      yield* Repl.operations.initialize("unused");
+      yield* Repl.operations.initialize({ workspace: "unused" });
     });
     const deno = JSON.parse(yield* readTextFile(new URL("../deno.json", import.meta.url)));
     const npm = JSON.parse(yield* readTextFile(new URL("../package.json", import.meta.url)));
-    expect(deno.exports).toEqual({ ".": "./src/deno.ts", "./api": "./src/api.ts" });
+    expect(deno.exports).toEqual({ ".": "./src/deno.ts", "./api": "./api.ts" });
     expect(npm.exports["."]).toEqual({ bun: "./src/bun.ts", default: "./src/node.ts" });
-    expect(npm.exports["./api"]).toBe("./src/api.ts");
-    const source = yield* readTextFile(new URL("../src/api.ts", import.meta.url));
-    expect(source).toContain("./repl-api.ts");
+    expect(npm.exports["./api"]).toBe("./api.ts");
+    const source = yield* readTextFile(new URL("../api.ts", import.meta.url));
+    expect(source).toContain("./src/repl-api.ts");
     expect(source).not.toContain("./deno.ts");
     expect(source).not.toContain("./node.ts");
   });
