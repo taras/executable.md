@@ -1,13 +1,15 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn, suspend, until, withResolvers } from "effection";
-import { readTextFile, writeTextFile, readdir } from "@effectionx/fs";
-import { writeFile } from "node:fs/promises";
+import { ensure, race, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
+import { exists, FsApi, readTextFile, writeTextFile, readdir } from "@effectionx/fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Buffer } from "node:buffer";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { ClaudeRecipe, recipeInputsSha256 } from "../lib/claude-recipe.ts";
-import { publishClaude, verifyHash } from "../lib/prepare-claude.ts";
+import { buildClaudePayload, publishClaude, verifyHash } from "../lib/prepare-claude.ts";
 import { FileWrites } from "../lib/staged-write.ts";
 import { claudeSnapshotModule, sha256 } from "../lib/claude-snapshot-module.ts";
 
@@ -41,6 +43,191 @@ function recipe(bytes: Uint8Array): ClaudeRecipe {
   parsed.inputsSha256 = recipeInputsSha256(parsed);
   return parsed;
 }
+
+function* directoryInputs() {
+  const value = ClaudeRecipe.parse(
+    JSON.parse(yield* readTextFile("packages/acp/vendor/adapters/claude/recipe.json")),
+  );
+  const source = Buffer.from("directory source input");
+  const sdk = Buffer.from("directory SDK input");
+  value.source = { ...value.source, sha256: sha256(source), bytes: source.length };
+  value.sdk = {
+    ...value.sdk,
+    sha256: sha256(sdk),
+    bytes: sdk.length,
+    integrity: `sha512-${createHash("sha512").update(sdk).digest("base64")}`,
+  };
+  value.inputsSha256 = recipeInputsSha256(value);
+  return { recipe: value, source, sdk };
+}
+
+describe("Claude preparation directory ownership", () => {
+  it("joins held directory creation before removing scratch and returning from halt", function* () {
+    const root = yield* useTempDirectory("claude-mkdir-sibling-");
+    const sibling = join(root, "sibling");
+    yield* writeTextFile(sibling, "owned elsewhere");
+    const inputs = yield* directoryInputs();
+    const entered = withResolvers<void>();
+    let release = (): void => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let native: Promise<void> = Promise.resolve();
+    let scratch = "";
+    const events: string[] = [];
+    yield* ensure(() =>
+      until(
+        native.then(
+          () => {},
+          () => {},
+        ),
+      ),
+    );
+    yield* FsApi.around({
+      *ensureDir([path], next) {
+        if (typeof path === "string" && path.endsWith("/source")) {
+          scratch = dirname(path);
+          events.push("mkdir:start");
+          native = released
+            .then(() => mkdir(path, { recursive: true }))
+            .then(() => {
+              events.push("mkdir:settle");
+            });
+          entered.resolve();
+          yield* until(native);
+        } else {
+          yield* next(path);
+        }
+      },
+      *rm([path, options], next) {
+        yield* next(path, options);
+        if (path === scratch) {
+          events.push("scratch:removed");
+        }
+      },
+    });
+    try {
+      const task = yield* spawn(() =>
+        scoped(() => buildClaudePayload(new URL("../../", import.meta.url), inputs.recipe, inputs)),
+      );
+      yield* race([entered.operation, task]);
+      let halted = false;
+      const halting = yield* spawn(function* () {
+        yield* task.halt();
+        halted = true;
+        events.push("halt:return");
+      });
+      yield* race([halting, sleep(250)]);
+      const returnedBeforeRelease = halted;
+      const presentBeforeRelease = yield* exists(scratch);
+      release();
+      yield* until(native);
+      yield* halting;
+      expect(returnedBeforeRelease).toBe(false);
+      expect(presentBeforeRelease).toBe(true);
+      expect(events).toEqual(["mkdir:start", "mkdir:settle", "scratch:removed", "halt:return"]);
+      expect(yield* exists(scratch)).toBe(false);
+      expect(yield* readTextFile(sibling)).toBe("owned elsewhere");
+    } finally {
+      release();
+    }
+  });
+
+  it("completes both initial directories and retains a later setup failure", function* () {
+    const inputs = yield* directoryInputs();
+    const failure = new Error("stop before extraction");
+    let scratch = "";
+    const completed: string[] = [];
+    yield* FsApi.around({
+      *ensureDir([path], next) {
+        yield* next(path);
+        if (typeof path === "string") {
+          completed.push(path);
+          scratch = dirname(path);
+          expect(yield* exists(path)).toBe(true);
+          if (path.endsWith("/sdk")) {
+            throw failure;
+          }
+        }
+      },
+    });
+    let observed: unknown;
+    try {
+      yield* scoped(() =>
+        buildClaudePayload(new URL("../../", import.meta.url), inputs.recipe, inputs),
+      );
+    } catch (error) {
+      observed = error;
+    }
+    expect(observed).toBe(failure);
+    expect(completed).toEqual([join(scratch, "source"), join(scratch, "sdk")]);
+    expect(yield* exists(scratch)).toBe(false);
+  });
+
+  it("propagates a native mkdir failure after scratch cleanup", function* () {
+    const inputs = yield* directoryInputs();
+    let scratch = "";
+    let nativeFailure: unknown;
+    yield* FsApi.around({
+      *ensureDir([path], next) {
+        if (typeof path === "string") {
+          scratch = dirname(path);
+          yield* writeTextFile(path, "blocks directory creation");
+          try {
+            yield* next(path);
+          } catch (error) {
+            nativeFailure = error;
+            throw error;
+          }
+        } else {
+          yield* next(path);
+        }
+      },
+    });
+    let observed: unknown;
+    try {
+      yield* scoped(() =>
+        buildClaudePayload(new URL("../../", import.meta.url), inputs.recipe, inputs),
+      );
+    } catch (error) {
+      observed = error;
+    }
+    expect(observed).toBe(nativeFailure);
+    expect(observed).toMatchObject({ code: "EEXIST" });
+    expect(yield* exists(scratch)).toBe(false);
+  });
+
+  it("retains scratch cleanup failure after directory creation", function* () {
+    const inputs = yield* directoryInputs();
+    const cleanupFailure = new Error("scratch removal failed");
+    let scratch = "";
+    yield* FsApi.around({
+      *ensureDir([path], next) {
+        yield* next(path);
+        if (typeof path === "string") {
+          scratch = dirname(path);
+          throw new Error("stop after directory creation");
+        }
+      },
+      *rm([path, options], next) {
+        yield* next(path, options);
+        if (path === scratch) {
+          throw cleanupFailure;
+        }
+      },
+    });
+    let observed: unknown;
+    try {
+      yield* scoped(() =>
+        buildClaudePayload(new URL("../../", import.meta.url), inputs.recipe, inputs),
+      );
+    } catch (error) {
+      observed = error;
+    }
+    expect(observed).toBe(cleanupFailure);
+    expect(yield* exists(scratch)).toBe(false);
+  });
+});
 
 describe("Claude preparation publication", () => {
   it("hashes recipe inputs independently of expected outputs", function* () {
@@ -146,10 +333,7 @@ describe("Claude preparation tool ownership", () => {
   it("retains scratch until a failed real tool closes and starts no later work", function* () {
     const { ProcessApi } = yield* until(import("@effectionx/process"));
     const { createServer } = yield* until(import("node:net"));
-    const { ensure } = yield* until(import("effection"));
     const { once } = yield* until(import("@effectionx/node/events"));
-    const { exists } = yield* until(import("@effectionx/fs"));
-    const { buildClaudePayload } = yield* until(import("../lib/prepare-claude.ts"));
     const connected = withResolvers<import("node:net").Socket>();
     const server = createServer();
     const handler = (socket: import("node:net").Socket): void => {

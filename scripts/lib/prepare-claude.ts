@@ -122,6 +122,13 @@ function writeScratch(path: string, bytes: string | Uint8Array): Operation<void>
   });
 }
 
+function ensureDirectory(path: string): Operation<void> {
+  return scoped(function* () {
+    // Teardown joins mkdir even when cancellation stops observing its native promise.
+    yield* ensure(() => ensureDir(path));
+  });
+}
+
 function* command(cwd: string, executable: string, args: string[]): Operation<void> {
   console.log(`Claude preparation: ${executable} ${args.join(" ")}`);
   yield* scoped(() => exec(executable, { arguments: args, cwd }).expect());
@@ -249,8 +256,8 @@ export function* buildClaudePayload(
   if (`sha512-${createHash("sha512").update(sdkBytes).digest("base64")}` !== recipe.sdk.integrity) {
     throw new Error("SDK archive SHA-512 integrity mismatch");
   }
-  yield* ensureDir(source);
-  yield* ensureDir(sdk);
+  yield* ensureDirectory(source);
+  yield* ensureDirectory(sdk);
   yield* writeScratch(join(scratch, "source.tgz"), sourceBytes);
   yield* writeScratch(join(scratch, "sdk.tgz"), sdkBytes);
   yield* command(scratch, "tar", ["-xzf", "source.tgz", "--strip-components=1", "-C", source]);
@@ -303,7 +310,7 @@ export function* buildClaudePayload(
   if (installedCompiler.version !== recipe.compiler.version) {
     throw new Error("Installed TypeScript version mismatch");
   }
-  yield* ensureDir(join(source, "dist/sdk"));
+  yield* ensureDirectory(join(source, "dist/sdk"));
   yield* writeScratch(join(scratch, "sdk-transform.mjs"), transform);
   const module = yield* until(import(pathToFileURL(join(scratch, "sdk-transform.mjs")).href));
   const transformed = z
@@ -373,6 +380,6 @@ export function* publishClaude(
   }
   const source = claudeSnapshotModule(bytes);
   verifyHash("Claude module", source, recipe.expected.moduleSha256);
-  yield* ensureDir(fileURLToPath(new URL(".", output)));
+  yield* ensureDirectory(fileURLToPath(new URL(".", output)));
   yield* replaceThroughStaging(output, source);
 }
