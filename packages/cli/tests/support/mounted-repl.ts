@@ -1,3 +1,4 @@
+import { useNodeReplProjectAccess } from "../../src/node-repl-project-access.ts";
 import type { Plugin } from "@executablemd/core/api";
 /**
  * The real REPL command, run on a terminal this test owns.
@@ -751,6 +752,7 @@ export function* useMountedHost(
   // harness without it would run entries that fail for a reason no row is about.
   yield* useTempFileCompiler();
   const dataRoot = options.dataRoot ?? (yield* useTemporary("xmd-repl-mounted-"));
+  yield* useNodeReplProjectAccess();
   yield* installReplHost({
     dataRoot: () => dataRoot,
     environment: () => [

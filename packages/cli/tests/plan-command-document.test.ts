@@ -1353,6 +1353,7 @@ describe("Tier PI — the ordinary selection offers the question with the write"
     // promises nobody will be interrupted without this file deciding it.
     expect(selection.Elicit).toEqual(["paired"]);
     expect(Object.keys(selection).sort()).toEqual([
+      "Cwd",
       "Elicit",
       "File",
       "File.Delete",

@@ -797,20 +797,22 @@ function* phases(): Operation<unknown> {
     const repl = page.repl;
     const id = yield* mounted.mountedExecution(repl);
     const location = pairedLocation(repository, id);
+    const filesDirectory = join(location.directory, "components");
     if (phase === "workspace-start") {
-      yield* until(writeFile(join(location.directory, "obsolete.md"), "remove"));
-      const source = [
-        '<File path="note.md">A</File>',
-        '<File path="note.md" as="historical" />',
-        "<Dir path=" +
-          JSON.stringify(location.directory) +
-          '><Dir path="nested">ensured</Dir></Dir>',
-        '<File.Delete path="obsolete.md" />',
-        '<Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">Continue?</Elicit>',
-        "{historical}",
-        '<File path="suffix.md">once</File>',
-        '<File path="note.md" />',
-      ].join("\n");
+      yield* until(writeFile(join(filesDirectory, "obsolete.md"), "remove"));
+      const source =
+        "<REPL.ComponentDir>" +
+        [
+          '<File path="note.md">A</File>',
+          '<File path="note.md" as="historical" />',
+          "<Dir path=" + JSON.stringify(filesDirectory) + '><Dir path="nested">ensured</Dir></Dir>',
+          '<File.Delete path="obsolete.md" />',
+          '<Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">Continue?</Elicit>',
+          "{historical}",
+          '<File path="suffix.md">once</File>',
+          '<File path="note.md" />',
+        ].join("\n") +
+        "</REPL.ComponentDir>";
       repl.fake.script({
         reply:
           '<Let as="code" select="code">\n```xmd\n' +
@@ -821,7 +823,7 @@ function* phases(): Operation<unknown> {
       const read = yield* settledReading(repl);
       return {
         execution: id,
-        workspace: location.directory,
+        workspace: filesDirectory,
         source: read.model.entries[0]?.source,
         settled: read.model.entries[0]?.settled,
         records: yield* until(readFile(location.entries, "utf8")),
@@ -838,9 +840,9 @@ function* phases(): Operation<unknown> {
       output: read.model.entries[0]?.terminal?.output,
       source: read.model.entries[0]?.source,
       settled: read.model.entries[0]?.settled,
-      note: yield* until(readFile(join(location.directory, "note.md"), "utf8")),
-      obsolete: yield* until(readFile(join(location.directory, "obsolete.md"), "utf8")),
-      suffix: yield* until(readFile(join(location.directory, "suffix.md"), "utf8")),
+      note: yield* until(readFile(join(filesDirectory, "note.md"), "utf8")),
+      obsolete: yield* until(readFile(join(filesDirectory, "obsolete.md"), "utf8")),
+      suffix: yield* until(readFile(join(filesDirectory, "suffix.md"), "utf8")),
       sessions: repl.fake.ensured.length,
       prompts: repl.fake.prompts.length,
     };

@@ -521,16 +521,14 @@ export function runReplProgram(options: ReplProgramOptions): Operation<Result<Re
 }
 
 function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOutcome>> {
-  const prepared =
-    options.startup ??
-    (options.location === undefined
-      ? undefined
-      : yield* prepareReplStartup(options.location, options.root, false));
-  if (prepared !== undefined && !prepared.ok) {
-    return prepared;
+  if (options.location !== undefined) {
+    const decoded = decodeLocation(options.location);
+    if (!decoded.ok) {
+      return decoded;
+    }
   }
-  const startup = prepared?.value;
-  let state = startup?.state ?? initialState("pending");
+  let state =
+    options.location === undefined ? initialState("pending") : yield* stateOf(options.location);
   if (options.headless === undefined && !(yield* ReplTerminal.operations.interactive())) {
     return Err(
       new ReplRefusedError(
@@ -538,6 +536,18 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
         encodeLocation(state.route),
       ),
     );
+  }
+  const prepared =
+    options.startup ??
+    (options.location === undefined
+      ? undefined
+      : yield* prepareReplStartup(options.location, options.root, false));
+  if (prepared !== undefined && !prepared.ok) {
+    return options.headless === undefined ? yield* refuse(state, prepared.error.message) : prepared;
+  }
+  const startup = prepared?.value;
+  if (startup !== undefined) {
+    state = startup.state;
   }
   const root = startup?.root ?? options.root ?? (yield* useReplRoot());
   const repository = pairedReplRepository(root);
@@ -739,6 +749,13 @@ function* stateOf(location: string): Operation<ReplState> {
  * A screen, because a refusal a caller cannot see is a command that exited
  * silently; and only a screen, because there is nothing behind it to act on.
  */
+export function* refuseReplStartup(
+  location: string,
+  reason: string,
+): Operation<Result<ReplOutcome>> {
+  return yield* refuse(yield* stateOf(location), reason);
+}
+
 function* refuse(state: ReplState, reason: string): Operation<Result<ReplOutcome>> {
   yield* scoped(function* (): Operation<void> {
     const screen = yield* useReplScreen();

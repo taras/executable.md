@@ -1287,50 +1287,56 @@ describe("one entry's local file work", () => {
   });
 });
 
-describe("975 — native Git keeps project selection and requires an authored checkout", () => {
-  it("refuses an operation left in workspace cwd without falling back to the project", function* () {
+describe("975 — native Git keeps project selection and refuses an outside cwd", () => {
+  it("reads the launch project and refuses native Git outside its selected checkout", function* () {
     yield* Permissions.around(
       { files: ([operation], next) => (operation === "absolute" ? true : next(operation)) },
       { at: "min" },
     );
     const project = yield* useTemporary("xmd-git-project-");
+    const outside = yield* useTemporary("xmd-git-outside-");
     yield* useCompositionComponents();
     yield* runGit(project, ["init", "-b", "main"]);
     yield* until(writeFile(join(project, "request.md"), "project file"));
     yield* runGit(project, ["add", "request.md"]);
     yield* runGit(project, ["commit", "-m", "seed"]);
+    const entryHost = denoReplEntry(
+      { runtime: "source", platform: "unix", execPath: "/nonexistent/xmd" },
+      join(project, "managed"),
+    );
     const host = yield* useMountedHost({
       projectCwd: project,
       hostFiles: true,
-      entryInstallation: denoReplEntry(
-        { runtime: "source", platform: "unix", execPath: "/nonexistent/xmd" },
-        join(project, "managed"),
-      ),
+      entryInstallation: entryHost,
     });
-    let stopped: MountedRepl | undefined;
+    yield* scoped(function* () {
+      const page = yield* useReplPage({ host });
+      page.repl.fake.script({
+        reply: `<Let as="code" value={'<Git.Files as="files" /><Json value={files} />'} /><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />`,
+      });
+      page.repl.fake.script({ reply: "<Output>Read the project checkout.</Output>" });
+      yield* asked(page, "read the launch checkout", "Read the project checkout.");
+      const retained = yield* settledReading(page.repl);
+      expect(retained.model.entries).toHaveLength(1);
+      expect(retained.model.entries[0]?.terminal?.output).toContain("request.md");
+      expect(page.repl.fake.prompts).toHaveLength(2);
+    });
+    const stream = new InMemoryStream();
     const [answer] = yield* allSettled([
       scoped(function* () {
-        const page = yield* useReplPage({ host });
-        const repl = page.repl;
-        stopped = repl;
-        repl.fake.script({
-          reply:
-            '<Let as="code" select="code">\n```xmd\n<Dir path=' +
-            JSON.stringify(project) +
-            '><Git.Files as="files" /><Json value={files} /></Dir>\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
-        });
-        repl.fake.script({ reply: "<Output>Read the project checkout.</Output>" });
-        yield* asked(page, "read the known project checkout", "Read the project checkout.");
-        expect((yield* settledReading(repl)).model.entries[0]?.terminal?.output).toContain(
-          "request.md",
+        const installation = yield* entryHost("native-outside", { projectCwd: project });
+        yield* collect(
+          yield* executeInstalled(
+            {
+              ...inlineSource(
+                `<Dir path=${JSON.stringify(outside)}><Git.Files as="files" /></Dir>`,
+              ),
+              stream,
+              includes: [],
+            },
+            [installation],
+          ),
         );
-        repl.fake.script({
-          reply:
-            '<Let as="code" select="code">\n```xmd\n<Git.Files as="files" />\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
-        });
-        repl.fake.script({ reply: "<Output>Read the checkout refusal.</Output>" });
-        yield* sendMessage(page, "read Git without entering the project");
-        yield* suspend();
       }),
     ]);
     expect(answer?.ok).toBe(false);
@@ -1340,19 +1346,6 @@ describe("975 — native Git keeps project selection and requires an authored ch
       expect(answer.error.message).toContain("inside none of the checkouts");
       expect(answer.error.message).not.toContain("no retained terminal");
     }
-    if (stopped === undefined) {
-      throw new Error("the mounted refusal ran no command");
-    }
-    expect(stopped.fake.prompts).toHaveLength(3);
-    const retained = yield* settledReading(stopped);
-    expect(retained.model.entries).toHaveLength(2);
-    expect(retained.model.entries[1]?.terminal).toBeUndefined();
-    expect(retained.chat.filter((record) => record.kind === "response")).toHaveLength(2);
-    expect(
-      retained.chat.filter(
-        (record) => record.kind === "feedback" && record.response === "response:3",
-      ),
-    ).toEqual([]);
   });
 });
 

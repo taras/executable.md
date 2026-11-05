@@ -1793,9 +1793,9 @@ describe("workflow document filesystem — permission", () => {
         );
       });
 
-      // The read was permitted and the write was not, so the class each
-      // operation asked for is what decided it.
-      expect(asked).toEqual(["read", "write"]);
+      // The write projects its content with a captured permission ceiling before
+      // the terminal asks for the operation it is about to perform.
+      expect(asked).toEqual(["read", "read", "write", "absolute", "write"]);
       expect(run.host.seen).toEqual([]);
 
       const recorded = yield* recordedFileEffects(database);
@@ -1895,9 +1895,9 @@ describe("workflow document filesystem — permission", () => {
           return yield* raised(runDocument(database, source));
         });
 
-        // One question, asked for the one write this run still had to do. The
-        // recorded write ahead of it neither asked nor reached the filesystem.
-        expect(asked).toEqual(["write"]);
+        // Both content projections capture the current ceiling. Only the new
+        // write asks terminal policy; the acknowledged write reaches no I/O.
+        expect(asked).toEqual(["read", "write", "absolute", "read", "write", "absolute", "write"]);
         expect(written).toEqual([]);
 
         const recorded = yield* recordedFileEffects(database);

@@ -36,7 +36,7 @@ import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
 import { renameSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import process from "node:process";
 import { API } from "../apis.ts";
 import {
@@ -1716,7 +1716,7 @@ describe("1113: bounded temporary allocation", () => {
       yield* suspend();
     });
     const allocated = yield* entered.operation;
-    expect(allocated.startsWith(fixture.workspace + "/")).toBe(true);
+    expect(allocated.startsWith(fixture.workspace + sep)).toBe(true);
     expect(yield* exists(allocated)).toBe(true);
     yield* owner.halt();
     expect(yield* exists(allocated)).toBe(false);

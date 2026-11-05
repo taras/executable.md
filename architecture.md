@@ -6855,6 +6855,7 @@ The implementation owners are explicit:
 | `repl/entry-placement.ts`, `repl/entries.ts` | Parse the strict project pair and retain it on root admission. |
 | `repl/program.ts`, `repl/startup.ts`, `cli.ts` | Inspect cold history, own the original-directory offer, validate its roots and select cwd before assembly. |
 | `runtime/host-files.ts` | Capture fixed roots and enforce canonical effective Files destinations. |
+| `repl/host.ts`, `node-repl-project-access.ts`, runtime REPL entrypoints | Check native project read/search access through the scoped host operation. |
 | `repl/session-directories.ts` | Declare AssetDir and ComponentDir from the host's session paths. |
 | `core/src/expand.ts` | Carry projection cwd and the intersected Files restrictions into the content owner. |
 
@@ -7786,7 +7787,8 @@ the question happens for the first time.
 Four file operations are retained and no others: a `<File>` text read, a
 `<File>` write, a `<File.Delete />`, and the directory a `<Dir>` ensures, each in
 a checkout this entry is working in — the captured project ambient checkout, or
-a managed one it selected — or the owned session workspace of a marked entry. A read is retained because a document binds its text
+a managed one it selected — or the host-captured project, assets and components roots of a Sidekick entry,
+and the owned session workspace of a retained workspace-marked entry. A read is retained because a document binds its text
 and a continuation has to offer the same binding; a glob, a path check and a
 temporary directory bind nothing a continuation must answer again, and are left
 alone. Three local Git operations are retained beside them — `<Git.Add>`,
@@ -7795,13 +7797,15 @@ request and whose external outcome are two records of their own. Those counts
 are separate: the file rules below are about the four, the local Git rules
 further down are about the three, and the publication rules after them are about
 the one. Except for the selected mapped reads described above, a call outside every such
-checkout and the marked entry's owned workspace is ordinary filesystem behavior, recorded by nothing, so it runs again during a
+checkout and the entry's owned roots is ordinary filesystem behavior, recorded by nothing, so it runs again during a
 partial continuation. A managed placement is looked
 for first and the most specific one wins; the ambient route answers everything no
 placement covers, so an entry that selects nothing works exactly as it did
-before. If neither checkout covers the live target, the owned workspace adds
-coverage through the same local-operation records, including an ensure of the
-workspace root itself. Workspace-only work takes no Git lease. Root and target
+before. If neither checkout covers the live target, the owned roots add
+coverage through the same local-operation records, including an ensure of a
+root itself. The portable Files owner uses those same records without a Git
+provider; an acknowledged answer restores before current live permission and
+root checks. Work covered only by owned roots takes no Git lease. Root and target
 use the same canonical path basis for live routing; restored operations reach
 no canonicalization. Glob and path checks remain unrecorded. These records are
 historical observations, not file snapshots or an atomic host-filesystem/journal

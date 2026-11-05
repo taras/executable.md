@@ -1,18 +1,12 @@
 import { API } from "@executablemd/runtime";
-import { access } from "node:fs/promises";
 import { stat } from "@effectionx/fs";
-import { constants } from "node:fs";
-import { until } from "effection";
 import type { Operation } from "effection";
 import type { EntryPlacement } from "./entry-placement.ts";
-
-function accessible(directory: string): Operation<void> {
-  return until(access(directory, constants.R_OK | constants.X_OK));
-}
+import { ReplHost } from "./host.ts";
 
 export function* validateProjectPlacement(
   placement: EntryPlacement,
-  checkAccess: (directory: string) => Operation<void> = accessible,
+  checkAccess: (directory: string) => Operation<void> = ReplHost.operations.checkProjectAccess,
 ): Operation<void> {
   try {
     yield* checkAccess(placement.projectDirectory);

@@ -12,6 +12,13 @@ import type { EntryFileCalls } from "./file-recorder.ts";
 import { createMountPolicy } from "./mount-files.ts";
 import type { AwaitedMountPolicy } from "./mount-files.ts";
 import type { ReplLocalValue } from "./repositories/records.ts";
+import {
+  localRecordName,
+  retainedResultAhead,
+  recordedLocalOperation,
+} from "./repositories/deno/local.ts";
+import { API } from "@executablemd/runtime";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export interface MountFileEntry {
   readonly files: EntryFileCalls;
@@ -21,6 +28,7 @@ export function workspaceMountInstallation(
   mounts: WorkspaceMountTable,
   access?: () => MountFileEntry,
   limits?: HostFilesAccess,
+  ownedDirectory?: string,
 ): ExecutionInstallation {
   mounts = Object.freeze(mounts.map((pair) => Object.freeze({ ...pair })));
   let entry: MountFileEntry | undefined;
@@ -50,6 +58,10 @@ export function workspaceMountInstallation(
                 return yield* replay;
               }
             }
+            const name = yield* localRecordName({ operation, request });
+            if (yield* retainedResultAhead(name)) {
+              return yield* recordedLocalOperation({ operation, request, perform });
+            }
             const reason = yield* hostFileAccessReason(
               limits,
               operation === "file-read"
@@ -76,6 +88,37 @@ export function workspaceMountInstallation(
                       reason,
                     }),
               );
+            }
+            const roots = [
+              ...(ownedDirectory === undefined ? [] : [ownedDirectory]),
+              ...(limits === undefined ? [] : [limits.project, limits.assets, limits.components]),
+            ];
+            if (roots.length > 0) {
+              const directory = (yield* API.Fs.operations.realpath(request.cwd)) ?? request.cwd;
+              const target = isAbsolute(request.path)
+                ? resolve(
+                    (yield* API.Fs.operations.realpath(dirname(request.path))) ??
+                      dirname(request.path),
+                    basename(request.path),
+                  )
+                : resolve(directory, request.path);
+              for (const directory of roots) {
+                const root = (yield* API.Fs.operations.realpath(directory)) ?? resolve(directory);
+                const suffix = relative(root, target);
+                if (
+                  suffix === "" ||
+                  (!isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(".." + sep))
+                ) {
+                  return authored === undefined
+                    ? yield* recordedLocalOperation({ operation, request, perform })
+                    : yield* policy.record(authored, request, perform, {
+                        kind: "existing",
+                        owner: "session",
+                        root,
+                        target,
+                      });
+                }
+              }
             }
             if (authored !== undefined) {
               return yield* policy.record(authored, request, perform, {

@@ -360,8 +360,8 @@ describe("1113: session scopes retain their restrictions", () => {
       join(session, "components/ReadAssets.md"),
       "<REPL.AssetDir><Content /></REPL.AssetDir>",
     );
-    const projectInventory = (yield* until(readdir(project))).toSorted();
-    const assetInventory = (yield* until(readdir(assets))).toSorted();
+    const projectInventory = (yield* until(readdir(project))).sort();
+    const assetInventory = (yield* until(readdir(assets))).sort();
     yield* pasteDraft(
       page,
       '<ReadAssets><File path="asset-canary">wrong</File></ReadAssets><File path="sibling-canary">allowed</File>',
@@ -383,8 +383,8 @@ describe("1113: session scopes retain their restrictions", () => {
     expect(yield* readTextFile(join(project, "project-canary"))).toBe("project bytes");
     expect(yield* readTextFile(join(assets, "asset-canary"))).toBe("asset bytes");
     expect(yield* readTextFile(join(project, "sibling-canary"))).toBe("allowed");
-    expect((yield* until(readdir(project))).toSorted()).toEqual(projectInventory);
-    expect((yield* until(readdir(assets))).toSorted()).toEqual(assetInventory);
+    expect((yield* until(readdir(project))).sort()).toEqual(projectInventory);
+    expect((yield* until(readdir(assets))).sort()).toEqual(assetInventory);
     expect((yield* settledReading(page.repl)).model.entries[0]?.terminal?.output).toContain(
       "permission denied",
     );
