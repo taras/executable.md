@@ -89,8 +89,11 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
         *ready() {
           throw new Error("probe workers only initialize; they never start a behavior document");
         },
+        identity() {
+          throw new Error("probe workers only initialize; they never create a session");
+        },
         // deno-lint-ignore require-yield
-        *startSession(): Operation<string> {
+        *startSession(): Operation<void> {
           throw new Error("probe workers only initialize; they never create a session");
         },
         // deno-lint-ignore require-yield
@@ -277,19 +280,24 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
       *ready() {
         yield* current.ready;
       },
+      // The scenario owns both names, not this process: a worker that
+      // reconnects to the same scenario names the state that already exists,
+      // exactly as an agent with its own durable store does. They arrived with
+      // the config, so establishing a session costs no round-trip on the queue
+      // a turn's journal commits are using.
+      identity() {
+        return {
+          acpSessionId: scenario.acpSessionId,
+          nativeSessionId: scenario.nativeSessionId,
+        };
+      },
       // deno-lint-ignore require-yield
-      *startSession(instructions): Operation<string> {
-        // The scenario owns this identity, not this process: a worker that
-        // reconnects to the same scenario names the state that already
-        // exists, exactly as an agent with its own durable store does. It
-        // arrived with the config, so establishing a session costs no
-        // round-trip on the queue a turn's journal commits are using.
+      *startSession(instructions): Operation<void> {
         const session: WorkerMessage = { t: "session" };
         if (instructions !== undefined) {
           session.systemPrompt = instructions;
         }
         client.send(session);
-        return scenario.nativeSessionId;
       },
       *configuration() {
         yield* current.ready;

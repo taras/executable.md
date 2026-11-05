@@ -55,6 +55,12 @@ export type ControllerMessage =
        * already exists rather than minting a replacement for it.
        */
       nativeSessionId: string;
+      /**
+       * The ACP handle a client loads this scenario's conversation through.
+       * Allocated by the scenario beside its native identity and never equal
+       * to it, so neither can be mistaken for the other.
+       */
+      acpSessionId: string;
       models?: ScenarioModels;
     }
   | { t: "configuration"; models: ScenarioModels }
@@ -123,6 +129,7 @@ const configMessage: z.ZodType<ControllerMessage> = z.discriminatedUnion("mode",
     doc: z.object({ path: z.string(), source: z.string() }),
     journal: z.array(durableEvent),
     nativeSessionId: z.string(),
+    acpSessionId: z.string(),
     models: modelsSchema.optional(),
   }),
 ]);
