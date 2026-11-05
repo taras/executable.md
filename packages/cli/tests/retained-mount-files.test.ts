@@ -6,7 +6,10 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { mountedRun, trace } from "./support/mount-run.ts";
 import { MOUNT_FILE, parseMountRecord } from "../src/repl/mount-records.ts";
 import { parseReplLocalRecord, REPL_REPOSITORY_LOCAL } from "../src/repl/repositories/records.ts";
-import { parseFilesFailure } from "@executablemd/runtime";
+import { parseFilesFailure, useHostFiles } from "@executablemd/runtime";
+import { collect, inlineSource } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import { workspaceMountInstallation } from "../src/repl/workspace-mount-installation.ts";
 import type { FilePathInput } from "@executablemd/runtime";
 
 const question = '<Elicit schema={{ type: "object" }} as="answer">Continue?</Elicit>';
@@ -649,7 +652,7 @@ describe("portable entry without a retention adapter", () => {
 });
 
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { ensureDir } from "@effectionx/fs";
+import { ensureDir, exists } from "@effectionx/fs";
 import { until } from "effection";
 import { symlink, realpath } from "node:fs/promises";
 import { join } from "node:path";
@@ -765,5 +768,67 @@ describe("mounted Dir output failure", () => {
       outputs.push(output);
     }
     expect(outputs[1]).toBe(outputs[0]);
+  });
+});
+
+describe("portable manual-entry permission admission", () => {
+  it("refuses absolute Dir before target routing and permits an allowed outside directory", function* () {
+    const root = yield* until(realpath(yield* useTempDirectory("portable-permission-")));
+    const project = join(root, "project");
+    const outside = join(root, "outside");
+    const child = join(outside, "child");
+    yield* ensureDir(project);
+    yield* ensureDir(outside);
+    const routing: string[] = [];
+    const effects: unknown[] = [];
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return project;
+        },
+      },
+      { at: "min" },
+    );
+    yield* useHostFiles({ observe: (event) => effects.push(event) });
+    yield* API.Fs.around({
+      *realpath([path], next) {
+        if (path === outside || path === child) {
+          routing.push(path);
+        }
+        return yield* next(path);
+      },
+    });
+    const source = `<PrintErrors><Dir path=${JSON.stringify(child)}>CHILD-RAN</Dir></PrintErrors>`;
+    const denied = new InMemoryStream();
+    const output = yield* collect(
+      yield* executeInstalled({ ...inlineSource(source), includes: [], stream: denied }, [
+        workspaceMountInstallation([], undefined, undefined, project),
+      ]),
+    );
+    expect(output).toContain("this run is not allowed to create or enter it");
+    expect(output).not.toContain("CHILD-RAN");
+    expect(routing).toEqual([]);
+    expect(effects).toEqual([]);
+    expect(yield* exists(child)).toBe(false);
+    expect(
+      (yield* denied.readAll()).filter(
+        (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_LOCAL,
+      ),
+    ).toEqual([]);
+
+    yield* Permissions.around(
+      {
+        files: ([operation], next) => (operation === "absolute" ? true : next(operation)),
+      },
+      { at: "min" },
+    );
+    const allowed = yield* collect(
+      yield* executeInstalled(
+        { ...inlineSource(source), includes: [], stream: new InMemoryStream() },
+        [workspaceMountInstallation([], undefined, undefined, project)],
+      ),
+    );
+    expect(allowed).toContain("CHILD-RAN");
+    expect(yield* exists(child)).toBe(true);
   });
 });
