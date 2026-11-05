@@ -11,7 +11,7 @@ import { Reply, SidekickTransport } from "../src/sidekick-acp/protocol.ts";
 import { applied, physical, presentation } from "../src/headless/ui-schema.ts";
 import { attachmentDescriptor, requestAttachment } from "../src/sidekick-acp/client.ts";
 import { useHeadlessFixture, START_CHILD, promptChild } from "./support/headless-repl.ts";
-import { recordingTerminal } from "./support/mounted-repl.ts";
+import { awaited, recordingTerminal } from "./support/mounted-repl.ts";
 import type { Terminal } from "./support/mounted-repl.ts";
 import { z } from "zod";
 import { useTerminalScreen } from "./support/terminal-screen.ts";
@@ -530,6 +530,9 @@ describe("headless live UI", () => {
       detached = true;
     });
     yield* reached.operation;
+    // Reaching the held write says nothing about the input subscription, which
+    // the UI takes on its own schedule; wait for it while the write stays held.
+    yield* awaited("the attached UI reading its terminal", () => terminal.readers > 0);
     // Nothing is on the screen yet, so no message box is in front of anybody.
     expect(terminal.screen?.rows().join("").trim() ?? "").toBe("");
     expect(terminal.readers).toBe(1);
