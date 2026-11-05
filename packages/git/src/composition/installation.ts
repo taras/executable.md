@@ -13,7 +13,8 @@
  *
  * Ten of the sixteen reach nothing beyond the selected checkout: Repository and
  * Worktree choose one, Git.Switch, Git.Add and Git.Commit change one, the four
- * Git reads observe one, and IssueTracker names a destination.
+ * Git reads and Git.Commit's read form observe one, and IssueTracker names a
+ * destination.
  *
  * The other six — `<Git.Push />`, `<PullRequest>`, its three evidence reads and
  * `<Issue>` — reach something no local transaction encloses. Each of those has
@@ -63,7 +64,8 @@ import Repository, { props as repositoryProps } from "./components/Repository.ts
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
 import GitSwitch, { props as gitSwitchProps } from "./components/GitSwitch.ts";
 import GitAdd, { props as gitAddProps } from "./components/GitAdd.ts";
-import GitCommit, {
+import {
+  commitForm,
   props as gitCommitProps,
   returns as gitCommitReturns,
 } from "./components/GitCommit.ts";
@@ -149,8 +151,9 @@ const SELECTIONS: readonly ComponentRegistration[] = [
 /**
  * What one selected checkout answers about itself, or changes inside itself.
  *
- * Git.Switch, Git.Add and Git.Commit change one and the four reads observe one;
- * either way a local transaction encloses the work, so none of them is an
+ * Git.Switch, Git.Add and Git.Commit change one, and the four reads and
+ * Git.Commit's read form observe one; either way a local transaction encloses
+ * the work, so none of them is an
  * operation a declaring execution names an invocation of.
  */
 const LOCAL_OPERATIONS: readonly ComponentRegistration[] = [
@@ -181,11 +184,11 @@ const LOCAL_OPERATIONS: readonly ComponentRegistration[] = [
     origin: COMPOSITION_ORIGIN,
     props: gitCommitProps,
     returns: gitCommitReturns,
-    fn: GitCommit,
+    fn: formDispatcher(commitForm),
     ...documented({
-      description: `Commit staged changes. \`<Git.Commit>Prepare 1.4</Git.Commit>\` uses its expanded content as the commit message.`,
-      as: "Optional. The full object id of the commit.",
-      context: "The message body, expanded before the commit is made.",
+      description: `Commit staged changes, or read an existing commit. \`<Git.Commit>Prepare 1.4</Git.Commit>\` uses its expanded content as the commit message. \`<Git.Commit ref={feedbackSha} verify={true} yq=".git_verify_commit_result" as="verification" />\` reads that commit's metadata and runs the checkout's configured signature verifier; your Markdown decides what the result permits.`,
+      as: "Required. Creating binds the full object id of the new commit. A ref read binds value, next, prev and last: the yq selection and the queries that read its neighbouring pages.",
+      context: "The message body, expanded before the commit is made. A ref read takes none.",
     }),
   },
   {

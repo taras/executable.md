@@ -1,8 +1,8 @@
 /**
  * What one REPL entry's local Git observation looks like on the wire.
  *
- * An entry that lists tracked files, compares changes, reads a patch window or
- * reads a committed file records the page it produced. Reopen the entry and the
+ * An entry that lists tracked files, compares changes, reads a patch window,
+ * reads a committed file or reads a commit records the page it produced. Reopen the entry and the
  * saved page answers again — the same paths, the same statuses, the same
  * resolved commit, the same complete `next`, and no `git`. That is what lets an
  * entry interrupted at a question be continued rather than repeated, and it is
@@ -26,8 +26,10 @@
  * ## What a result may carry
  *
  * The exact page the read answered with, including its complete `next`. Nothing
- * else: no Git output, no credential, no handle, no live selection identifier
- * and no second copy of the observation the page was cut from.
+ * else: no credential, no handle, no live selection identifier and no second
+ * copy of the observation the page was cut from. The only Git output a page can
+ * carry is the `git verify-commit` receipt a commit read explicitly asked for,
+ * and only as far as its yq selection kept it.
  *
  * A refusal carries a word from the closed observation vocabulary and the
  * sentence this host wrote for it, so a continuation raises the same refusal the
@@ -64,7 +66,13 @@ import { digest, RECORD_PREFIX, REPL_REPOSITORY_VERSION } from "./records.ts";
 /** The durable type one completed local Git observation is journaled under. */
 export const REPL_REPOSITORY_OBSERVATION = "repl_repository_observation";
 
-const OBSERVATION_KINDS: readonly GitObservationKind[] = ["files", "changes", "diff", "file"];
+const OBSERVATION_KINDS: readonly GitObservationKind[] = [
+  "files",
+  "changes",
+  "diff",
+  "file",
+  "commit",
+];
 
 /**
  * The words an observation may be refused under and retained as.
@@ -79,6 +87,8 @@ const RETAINABLE: readonly GitObservationReason[] = [
   "nontext-blob",
   "unusable-repository",
   "stale-continuation",
+  "invalid-query",
+  "undecodable-text",
 ];
 
 /** Where one observation ran, as the entry authenticated it. */
@@ -286,6 +296,15 @@ function queryJson(query: GitObservationRequest): Json {
       limit: query.limit,
     };
   }
+  if (query.kind === "commit") {
+    return {
+      kind: "commit",
+      ref: query.ref,
+      verify: query.verify,
+      yq: query.yq,
+      maxBytes: query.maxBytes,
+    };
+  }
   const shared = {
     comparison: comparisonJson(query.comparison),
     paths: query.paths === null ? null : [...query.paths],
@@ -429,6 +448,25 @@ function parseQuery(
     }
     return Object.freeze({ kind: "file" as const, commit, path, offset, limit });
   }
+  if (operation === "commit") {
+    const read = members(value, ["kind", "ref", "verify", "yq", "maxBytes"]);
+    if (read === undefined || read["kind"] !== "commit") {
+      return undefined;
+    }
+    const ref = text(read["ref"]);
+    const verify = read["verify"];
+    const yq = read["yq"];
+    const maxBytes = read["maxBytes"] === null ? null : positive(read["maxBytes"]);
+    if (
+      ref === undefined ||
+      typeof verify !== "boolean" ||
+      typeof yq !== "string" ||
+      maxBytes === undefined
+    ) {
+      return undefined;
+    }
+    return Object.freeze({ kind: "commit" as const, ref, verify, yq, maxBytes });
+  }
   const own =
     operation === "changes"
       ? ["kind", "comparison", "paths", "limit", "cursor"]
@@ -493,6 +531,9 @@ export function elementOf(kind: GitObservationKind): string {
   }
   if (kind === "changes") {
     return "<Git.Changes>";
+  }
+  if (kind === "commit") {
+    return "<Git.Commit>";
   }
   return kind === "diff" ? "<Git.Diff>" : "<Git.File>";
 }

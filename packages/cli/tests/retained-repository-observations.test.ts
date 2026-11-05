@@ -29,7 +29,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Err, Ok } from "effection";
+import { Err, Ok, race, sleep, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { exists, rm } from "@effectionx/fs";
 import { join } from "node:path";
@@ -64,6 +64,8 @@ import {
   useEntryPlace,
 } from "./support/repl-observations.ts";
 import { commonDirectoryOf } from "../../git/tests/support/run-composition.ts";
+import { denoCommitVerifier } from "@executablemd/git/deno";
+import type { CommitVerifier } from "@executablemd/git/deno";
 
 /** This payload as an object a case can change one member of. */
 function objectOf(payload: Json): Record<string, Json> {
@@ -773,4 +775,135 @@ describe("ROB5 — cancellation, persistence and ownership", () => {
   // two. Inside one entry a read owns the native turn and a mutation waits;
   // between entries a mutation lease is a different mechanism and a read does
   // not wait for it.
+});
+
+/** A verifier that counts its starts and then runs the real one. */
+function countingVerifier(count: { starts: number }): CommitVerifier {
+  const real = denoCommitVerifier();
+  return function* (request) {
+    count.starts += 1;
+    return yield* real(request);
+  };
+}
+
+describe("ROB6 — a commit read's page and verification receipt are history", () => {
+  it("replays a verified read with no Git and no verifier after everything moved", function* () {
+    const fixture = yield* useObservationFixture();
+    const place = yield* useEntryPlace(fixture);
+    const head = fixture.run("rev-parse", "HEAD");
+    const source = [
+      '<Git.Commit ref="HEAD" verify={true} yq="." as="commit" />',
+      "",
+      "<Json value={commit} />",
+      "",
+    ].join("\n");
+    const first = entryCounters();
+    const verified = { starts: 0 };
+    const live = yield* runEntry(place, source, new InMemoryStream(), first, {
+      verifier: countingVerifier(verified),
+    });
+    expect(live.refusal).toBe(undefined);
+    expect(verified.starts).toBe(1);
+    expect(live.output).toContain(head);
+    expect(live.output).toContain("git_verify_commit_result");
+    expect(observations(live.events).map((entry) => entry.record.operation)).toEqual(["commit"]);
+
+    // HEAD moves, the trust configuration names a verifier that is not there,
+    // and then the checkout is deleted and the entry's directory points away.
+    fixture.run("commit", "--allow-empty", "-m", "moved");
+    fixture.run("config", "gpg.ssh.program", "./missing-verifier");
+    yield* rm(fixture.root, { recursive: true, force: true });
+    yield* repoint(place, place.root);
+
+    const second = entryCounters();
+    const again = { starts: 0 };
+    const replayed = yield* runEntry(place, source, new InMemoryStream([...live.events]), second, {
+      verifier: countingVerifier(again),
+    });
+    expect(replayed.refusal).toBe(undefined);
+    expect(replayed.output).toBe(live.output);
+    expect(methodsCalled(second)).toEqual([]);
+    expect(readKinds(second)).toEqual([]);
+    expect(again.starts).toBe(0);
+  });
+
+  it("binds nothing and records nothing when cancelled inside the verifier", function* () {
+    const fixture = yield* useObservationFixture();
+    const place = yield* useEntryPlace(fixture);
+    const reached = withResolvers<void>();
+    const release = withResolvers<void>();
+    let finished = false;
+    const held: CommitVerifier = function* (request) {
+      try {
+        reached.resolve();
+        yield* release.operation;
+        return yield* denoCommitVerifier()(request);
+      } finally {
+        finished = true;
+      }
+    };
+    const stream = new InMemoryStream();
+    try {
+      const task = yield* spawn(() =>
+        runEntry(
+          place,
+          [
+            '<Git.Commit ref="HEAD" verify={true} yq=".sha" as="commit" />',
+            '<File path="after-read.md">{commit.value}</File>',
+          ].join("\n"),
+          stream,
+          entryCounters(),
+          { verifier: held },
+        ),
+      );
+      yield* race([
+        reached.operation,
+        (function* (): Operation<never> {
+          yield* sleep(30_000);
+          throw new Error("the read never reached its verifier");
+        })(),
+      ]);
+      yield* task.halt();
+      // The verifier's own teardown finished before the halt returned.
+      expect(finished).toBe(true);
+    } finally {
+      release.resolve();
+    }
+    expect(observations(yield* stream.readAll())).toEqual([]);
+    expect(yield* exists(join(fixture.root, "after-read.md"))).toBe(false);
+  });
+
+  it("keeps a failed commit-page append fatal, with no binding and nothing after", function* () {
+    const fixture = yield* useObservationFixture();
+    const place = yield* useEntryPlace(fixture);
+    const counted = entryCounters();
+    const verified = { starts: 0 };
+    const events: DurableEvent[] = [];
+    const rejecting = collecting(events, function* (event) {
+      if (event.type === "yield" && event.description.type === REPL_REPOSITORY_OBSERVATION) {
+        throw new Error("the journal refused this event");
+      }
+    });
+
+    const performed = yield* runEntry(
+      place,
+      [
+        "<PrintErrors>",
+        '<Git.Commit ref="HEAD" verify={true} yq=".sha" as="commit" />',
+        "Commit: {commit.value}",
+        "</PrintErrors>",
+        '<File path="sentinel.md">sentinel</File>',
+      ].join("\n"),
+      rejecting,
+      counted,
+      { verifier: countingVerifier(verified) },
+    );
+
+    expect(readKinds(counted)).toContain("commit");
+    expect(verified.starts).toBe(1);
+    const reported = performed.refusal ?? performed.output;
+    expect(reported).not.toContain("sentinel");
+    expect(observations(events)).toEqual([]);
+    expect(yield* exists(join(fixture.root, "sentinel.md"))).toBe(false);
+  });
 });

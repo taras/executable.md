@@ -3,7 +3,7 @@
  *
  * A host that retains what an entry did needs real Git: it has to discover the
  * checkout somebody started in, select a managed one, switch, stage and commit
- * in it, read a branch and a commit back, answer the four local reads, and hand
+ * in it, read a branch and a commit back, answer the five local reads, and hand
  * the shared Git-host engine a provider for one publication. None of that is
  * retention, and none of it is this module's to retain.
  *
@@ -43,8 +43,9 @@ import type { GitSession } from "./composition/git.ts";
 import type { HelperAssembly } from "./composition/credential-helper.ts";
 import { objectSourceAt } from "./composition/object-source.ts";
 import { pushProvider } from "./composition/push.ts";
-import { performGitObservation } from "./composition/observations.ts";
+import { performGitCommitRead, performGitObservation } from "./composition/observations.ts";
 import type { ObservationPlace } from "./composition/observations.ts";
+import type { CommitVerifier } from "./run-composition/verification.ts";
 import { discoverAmbientCheckout, discoverAmbientRepository } from "./run-composition/ambient.ts";
 import type { AmbientCheckout, AmbientRepository } from "./run-composition/ambient.ts";
 import { selectManagedRepository, selectManagedWorktree } from "./run-composition/checkouts.ts";
@@ -110,10 +111,15 @@ export interface DenoRepositoryOperations {
   currentBranch(directory: string): Operation<string | undefined>;
   resolveCommit(directory: string, revision: string): Operation<string | undefined>;
   commitPresent(directory: string, commit: string): Operation<boolean>;
+  /**
+   * One contained read. A commit read that asks to verify runs the verifier the
+   * calling host trusts, and only then.
+   */
   observe(
     element: string,
     request: GitObservationRequest,
     place: ObservationPlace,
+    verifier: CommitVerifier,
   ): Operation<GitObservationValue>;
 
   pushProvider(
@@ -210,10 +216,13 @@ export function* repositoryOperationsOver(
       element: string,
       request: GitObservationRequest,
       place: ObservationPlace,
+      verifier: CommitVerifier,
     ): Operation<GitObservationValue> {
       // The existing joined child scope is this operation's own, so it is
       // handed through rather than wrapped in a second one.
-      return performGitObservation(host, element, request, place);
+      return request.kind === "commit"
+        ? performGitCommitRead(host, element, request, place, verifier)
+        : performGitObservation(host, element, request, place);
     },
 
     *pushProvider(commonDirectory, origin, inputs): Operation<GitHostProvider> {

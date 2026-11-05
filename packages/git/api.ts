@@ -19,7 +19,7 @@
  * Each name says what its operations do. `Repository` selects a checkout,
  * `Git` performs the four authored durable transitions behind `<Git.*>`, and
  * `GitQuery` asks read-only questions — four of the checkout the contextual
- * working directory is in, and four of the checkout a Repository selected. The
+ * working directory is in, and five of the checkout a Repository selected. The
  * last two are never the same seam: replacing `GitQuery` answers questions and
  * moves no branch.
  *
@@ -64,7 +64,7 @@ export {
 } from "./src/git.ts";
 export type { GitObjectFormat, GitQueryApi } from "./src/git.ts";
 
-// What the four selected-checkout reads ask for and answer with, and the
+// What the five selected-checkout reads ask for and answer with, and the
 // continuation that carries one page to the next.
 export type {
   GitChange,
@@ -73,6 +73,9 @@ export type {
   GitChangesRequest,
   GitChangesResult,
   GitChangeStatus,
+  GitCommitPage,
+  GitCommitReadInvocation,
+  GitCommitReadRequest,
   GitCompareMode,
   GitComparison,
   GitComparisonRequest,

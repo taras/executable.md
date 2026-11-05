@@ -36,7 +36,7 @@ import { Execution } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { collect, Elicitation } from "@executablemd/core";
 import { useDenoRepositoryOperations } from "@executablemd/git/deno";
-import type { DenoRepositoryOperations } from "@executablemd/git/deno";
+import type { CommitVerifier, DenoRepositoryOperations } from "@executablemd/git/deno";
 import type { GitObservationRequest } from "@executablemd/git/api";
 import { useCompositionComponents } from "@executablemd/git";
 import { useReplRepositoryRecording } from "../../src/repl/repositories/deno/provider.ts";
@@ -136,10 +136,10 @@ export function countingEntryOperations(
         yield* note("commitPresent");
         return yield* operations.commitPresent(directory, commit);
       },
-      *observe(element, request, place) {
+      *observe(element, request, place, verifier) {
         counted.reads.push(request);
         yield* note("observe");
-        return yield* operations.observe(element, request, place);
+        return yield* operations.observe(element, request, place, verifier);
       },
       *pushProvider(commonDirectory, origin, inputs) {
         yield* note("pushProvider");
@@ -168,6 +168,8 @@ export interface EntryRunOptions {
   readonly root?: string | undefined;
   /** The handle this entry runs through, when a row supplies its own. */
   readonly operations?: () => Operation<DenoRepositoryOperations>;
+  /** How this entry verifies a commit read, when a row counts or holds it. */
+  readonly verifier?: CommitVerifier;
 }
 
 /** Where one scenario's entries are opened, and what they can reach. */
@@ -239,6 +241,7 @@ export function runEntry(
         yield* useReplRepositoryRecording({
           operations: options.operations ?? countingEntryOperations(counted, options.barrier),
           ...(managed === undefined ? {} : { root: managed }),
+          ...(options.verifier === undefined ? {} : { verifier: options.verifier }),
         });
         yield* next();
       },

@@ -536,9 +536,9 @@ describe("1113: project selection belongs to the actual entry", () => {
             const actual = yield* useDenoRepositoryOperations();
             return {
               ...actual,
-              *observe(element, request, place) {
+              *observe(element, request, place, verifier) {
                 observed.push(place.root);
-                return yield* actual.observe(element, request, place);
+                return yield* actual.observe(element, request, place, verifier);
               },
             };
           },

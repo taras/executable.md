@@ -2046,17 +2046,22 @@ Inside the same checkout, type this:
 <Git.Changes compare="unstaged" as="changes" />
 <Git.Diff compare="unstaged" limit={4096} as="diff" />
 <Git.File commit="HEAD~1" path="src/expand.ts" as="before" />
+<Git.Commit ref="HEAD" verify={true} yq='pick(["sha", "git_verify_commit_result"])' as="head" />
 <Json value={files.paths} />
 ```
 
-Four reads and nothing changed. `<Git.Files>` lists the tracked paths the index
+Five reads and nothing changed. `<Git.Files>` lists the tracked paths the index
 holds, relative to the repository root, excluding untracked files and the
 contents of any checkout nested beside them. `<Git.Changes>` reports each
 changed path with Git's own letter for what happened to it, for the index
 against the working tree, HEAD against the index, or two commits you name
 directly. `<Git.Diff>` answers the same comparison as patch text. `<Git.File>`
 answers the text one commit holds at one path — the commit's bytes, not the
-working copy, so it still answers after you have edited the file.
+working copy, so it still answers after you have edited the file. `<Git.Commit
+ref>` answers one commit's stored metadata, and with `verify={true}` the receipt
+of this checkout's own `git verify-commit`. Reopen the entry and the saved page
+answers with the same receipt, running neither Git nor the verifier, even after
+HEAD or the trust configuration changed.
 
 A page is bounded: 100 records, or 4096 characters of text, unless you ask for
 more. Ask for more and you get more; nothing caps it beyond what a number can
@@ -3508,10 +3513,11 @@ resolved against the frame that published its coordinates.
   What an entry retains is `<Repository>` and `<Worktree>` selection, the file
   and directory work inside those checkouts and the one it was started in,
   `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in them, the page each of
-  `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>` and `<Git.File>` answered with,
+  `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>`, `<Git.File>` and a `<Git.Commit
+  ref>` read answered with,
   the branch `<Git.Push />` published, and the issues it filed and read. A
   runtime that installs no repository provider — Node and Bun — refuses the Git
-  components, the four reads and publication included, before any native
+  components, the five reads and publication included, before any native
   operation or remote contact, while ordinary `<File>` and `<Dir>` work keeps
   working there.
 - A read confers nothing. Nothing a page holds authorizes a mutation, a
