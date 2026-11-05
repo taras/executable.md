@@ -214,6 +214,7 @@ function* useGatedController(
             doc,
             journal: [...journal],
             nativeSessionId: "native-worker-lifecycle",
+            acpSessionId: "acp-worker-lifecycle",
             ...(models === undefined ? {} : { models }),
           }),
         );
@@ -464,7 +465,7 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       expect(record.journal.length).toBe(beforeCorruptLoad);
     });
   });
-  it("TW1: initialize, session/new, matched turns, mismatch, restart + session/load", function* () {
+  it("TW1: initialize, session/new, matched turns, mismatch, restart + session/load through the returned ACP id", function* () {
     const dir = path.join(os.tmpdir(), `xmd-tw-${randomUUID()}`);
     yield* ensureDir(dir);
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -476,8 +477,13 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
         document: { path: "review.md", source: BEHAVIOR },
         rootDir: dir,
       });
+      const sibling = yield* controller.useScenario({
+        document: { path: "review.md", source: BEHAVIOR },
+        rootDir: dir,
+      });
 
       let sessionId = "";
+      let nativeId: unknown;
       yield* scoped(function* () {
         const worker = yield* useWorker(scenario.route);
         const init = yield* worker.request("initialize", {
@@ -494,6 +500,11 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
         if (typeof created.result?.sessionId === "string") {
           sessionId = created.result.sessionId;
         }
+        const createdMeta = created.result?._meta;
+        nativeId = isRecord(createdMeta) ? createdMeta.agentSessionId : undefined;
+        expect(typeof nativeId).toBe("string");
+        // The ACP handle loads the conversation; the native identity names it.
+        expect(nativeId).not.toBe(sessionId);
 
         const first = yield* worker.request("session/prompt", {
           sessionId,
@@ -520,12 +531,36 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
       yield* scoped(function* () {
         const worker = yield* useWorker(scenario.route);
         yield* worker.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
+        const record = controller.getScenarioRecord(scenario.id)!;
+        const reported = record.sessions.length;
+        const committed = record.journal.length;
+        // Another scenario's names and an unrelated one are not this
+        // conversation, and loading them establishes and reports nothing.
+        for (const target of [
+          sibling.acpSessionId,
+          sibling.nativeSessionId,
+          "native-unrelated",
+          "",
+        ]) {
+          const refused = yield* worker.request("session/load", {
+            sessionId: target,
+            cwd: "/",
+            mcpServers: [],
+          });
+          expect(refused.result).toBe(undefined);
+          expect(refused.error).toBeDefined();
+        }
+        expect(record.sessions.length).toBe(reported);
+        expect(record.journal.length).toBe(committed);
+        expect(controller.getScenarioRecord(sibling.id)?.sessions).toEqual([]);
+
         const loaded = yield* worker.request("session/load", {
           sessionId,
           cwd: "/",
           mcpServers: [],
         });
         expect(loaded.error).toBe(undefined);
+        expect(loaded.result?._meta).toEqual({ agentSessionId: nativeId });
 
         const second = yield* worker.request("session/prompt", {
           sessionId,
@@ -538,6 +573,13 @@ describe("Tier TW — worker lifecycle", { sanitizeOps: false, sanitizeResources
         expect(chunkText(worker.notifications)).toContain(
           "The review of **packages/core** passed.",
         );
+        // Each completed stage was committed exactly once across the reconnect.
+        const stages = controller
+          .getScenarioRecord(scenario.id)!
+          .journal.filter(
+            (event) => event.type === "yield" && event.description.type === "when_prompt",
+          );
+        expect(stages.length).toBe(2);
 
         const exhaustedReply = yield* worker.request("session/prompt", {
           sessionId,

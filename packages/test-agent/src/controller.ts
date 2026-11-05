@@ -124,6 +124,13 @@ export interface ScenarioRecord extends ScenarioHandle {
    * session, which is the one thing a launch must never do.
    */
   nativeSessionId: string;
+  /**
+   * The ACP handle every worker serving this scenario answers `session/new`
+   * with and accepts on `session/load`. Owned by the scenario for the same
+   * reason its native identity is: a reconnecting client names the handle it
+   * was given, and a per-process handle would name nothing a new worker holds.
+   */
+  acpSessionId: string;
 }
 
 /**
@@ -281,6 +288,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
               doc: scenario.document,
               journal: scenario.journal,
               nativeSessionId: scenario.nativeSessionId,
+              acpSessionId: scenario.acpSessionId,
               ...(scenario.models === undefined ? {} : { models: scenario.models }),
             });
           }
@@ -439,6 +447,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
           sessions: [],
           models: normalizeModels(options.models),
           nativeSessionId: `native-${randomUUID()}`,
+          acpSessionId: randomUUID(),
         };
         scenarios.set(id, scenario);
         yield* ensure(function* () {

@@ -138,6 +138,22 @@ function preparedRecords(events: DurableEvent[]): Record<string, Json>[] {
   });
 }
 
+function promptRecords(events: DurableEvent[]): Record<string, Json>[] {
+  return events.flatMap((event) => {
+    if (
+      event.type !== "yield" ||
+      event.description.type !== "agent_prompt" ||
+      event.result.status !== "ok" ||
+      typeof event.result.value !== "object" ||
+      event.result.value === null ||
+      Array.isArray(event.result.value)
+    ) {
+      return [];
+    }
+    return [event.result.value];
+  });
+}
+
 function testDoc(body: string): string {
   return [
     "<TestAgent>",
@@ -379,6 +395,43 @@ describe(
       expect(run.result.ok ? "" : run.result.error.message).toBe("");
       expect(run.launches.length).toBe(1);
       expect(run.sessions.filter((report) => report.systemPrompt !== undefined).length).toBe(1);
+    });
+
+    it("TL11: a prompt attaches to the conversation XMD named, under that same identity", function* () {
+      const run = yield* runDoc(
+        [
+          "<TestAgent>",
+          '<TestAgent.Scenario agent="test-agent-client-native" session="implementor" src="scenario.md" />',
+          "",
+          '<Test name="client-native">',
+          '<Agent name="test-agent-client-native">',
+          LAUNCH_BODY,
+          "",
+          '<Session name="implementor">',
+          "<Prompt>what changed?</Prompt>",
+          "</Session>",
+          "</Agent>",
+          "</Test>",
+          "</TestAgent>",
+          "",
+        ].join("\n"),
+      );
+
+      expect(run.result.ok ? "" : run.result.error.message).toBe("");
+      expect(run.results.map((result) => result.status)).toEqual(["pass"]);
+      // XMD chose the identity and handed it to the native process...
+      const named = preparedRecords(run.events)[0]?.nativeSessionId;
+      expect(typeof named).toBe("string");
+      expect(run.launches[0]?.command.slice(1, 3)).toEqual(["--session-id", named]);
+      // ...and the worker the prompt attached to reported that conversation,
+      // not one of its own and not the loading target it was asked for.
+      expect(run.sessions.length).toBeGreaterThan(0);
+      for (const report of run.sessions) {
+        expect(report.nativeSessionId).toBe(named);
+      }
+      expect(promptRecords(run.events).map((record) => record.agentSessionId)).toEqual([named]);
+      // The one scripted stage answered exactly once.
+      expect(run.output.split("nothing yet").length - 1).toBe(1);
     });
 
     it("TL8: full replay contacts neither the agent nor the launcher", function* () {

@@ -79,7 +79,7 @@ describe("Tier TP — controller protocol", () => {
     expect(parseControllerMessage(workerLine).ok).toBe(false);
   });
 
-  it("TP5: scenario config carries the document, journal and native identity", function* () {
+  it("TP5: scenario config carries the document, journal, native identity and ACP handle", function* () {
     const result = parseControllerMessage(
       JSON.stringify({
         t: "config",
@@ -87,6 +87,7 @@ describe("Tier TP — controller protocol", () => {
         doc: { path: "agents/review.md", source: '<WhenPrompt template="hi" />' },
         journal: [],
         nativeSessionId: "native-1",
+        acpSessionId: "acp-1",
       }),
     );
     expect(result.ok).toBe(true);
@@ -98,6 +99,7 @@ describe("Tier TP — controller protocol", () => {
         mode: "scenario",
         doc: { path: "a", source: "b" },
         nativeSessionId: "native-1",
+        acpSessionId: "acp-1",
       }),
     );
     expect(withoutJournal.ok).toBe(false);
@@ -107,9 +109,20 @@ describe("Tier TP — controller protocol", () => {
         mode: "scenario",
         doc: { path: "a", source: "b" },
         journal: [],
+        acpSessionId: "acp-1",
       }),
     );
     expect(withoutIdentity.ok).toBe(false);
+    const withoutHandle = parseControllerMessage(
+      JSON.stringify({
+        t: "config",
+        mode: "scenario",
+        doc: { path: "a", source: "b" },
+        journal: [],
+        nativeSessionId: "native-1",
+      }),
+    );
+    expect(withoutHandle.ok).toBe(false);
   });
 
   it("TP6: the line splitter reassembles partial chunks", function* () {
