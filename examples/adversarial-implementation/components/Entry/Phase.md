@@ -1,0 +1,17 @@
+---
+props:
+  type: object
+  properties:
+    request: {type: string, minLength: 1}
+  required: [request]
+  additionalProperties: false
+returns: {type: object}
+---
+
+<Ticket.Read path={props.request} limit={1048576} as="text" />
+<Parse schema={{type:"object",properties:{role:{enum:["architect","planner","implementor"]},session:{type:"string",minLength:1},assignment:{type:"object"},attempt:{type:"string",pattern:"^/"},initialize:{type:"boolean",default:false},inputPaths:{type:"array",items:{type:"string"},default:[]},plannerProvider:{enum:["claude","codex"],default:"claude"},implementationProvider:{enum:["claude","codex"],default:"claude"},maxResponseCorrections:{type:"integer",minimum:0,maximum:3,default:3}},required:["role","session","assignment","attempt"],additionalProperties:false}} as="request">{text}</Parse>
+<Ticket.Documents directory={request.attempt + ".inputs"} repository={request.assignment.repository} paths={[...new Set([...(request.inputPaths ?? []),...(request.assignment.handoffInputs ?? [])])]} as="documents" />
+<Ticket.Selected repository={request.assignment.repository} documents={documents} as="documents" />
+<If condition={Object.values(documents).reduce((total,input) => total + input.content.length,0) > 64000}><Fail message="Selected phase inputs exceed 64000 characters. Select concise documents before dispatch." /></If>
+<Phase.Run phase={request.assignment.phase} role={request.role} session={request.session} assignment={request.assignment} attempt={request.attempt} initialize={request.initialize ?? false} inputs={Object.values(documents)} plannerProvider={request.plannerProvider ?? "claude"} implementationProvider={request.implementationProvider ?? "claude"} maxResponseCorrections={request.maxResponseCorrections ?? 3} successor={request.assignment.continuation?.phase ?? null} nextRole={request.assignment.continuation?.role ?? null} as="result" />
+<Ticket.Outward value={{status:result.outcome,revision:result.revision,result:request.attempt + "/result.json"}} as="bounded" /><Return value={bounded} />

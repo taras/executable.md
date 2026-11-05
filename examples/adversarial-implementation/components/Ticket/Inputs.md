@@ -18,8 +18,17 @@ remain available without adding their contents to the prompt.
 
 <Let as="received" value={props.record.deliveredInputs?.[props.call.session] ?? props.record.manifest.deliveredInputs?.[props.call.session] ?? []} />
 <Let as="references" value={[...new Set([...props.record.manifest.acceptedInputs.map(input => input.path),...(props.record.manifest.roleInputs?.[props.call.role] ?? []).map(input => input.path),...(props.call.assignment.handoffInputs ?? [])])].filter(path => !received.includes(path))} />
-<Ticket.Documents repository={props.call.assignment.repository} paths={references} documents={props.record.documents} as="documents" />
-<Let as="inputs" value={references.map(path => documents[path])} />
+<Ticket.Documents repository={props.call.assignment.repository} directory={props.record.manifest.directory} paths={references} documents={props.record.documents} as="documents" />
+<Let as="inputs" value={[]} />
+<Let as="index" value={0} />
+<If condition={references.length !== 0}>
+<Loop max={references.length}>
+<Let as="reference" value={references[index]} />
+<Ticket.Hydrate repository={props.call.assignment.repository} document={documents[reference]} as="hydrated" />
+<Let as="inputs" value={[...inputs,hydrated]} />
+<Let as="index" value={index + 1} />
+</Loop>
+</If>
 <If condition={inputs.reduce((total,input) => total + input.content.length,0) > 64000}>
 <Fail message="Selected handoff inputs exceed 64000 characters. Return a concise handoff document and preserve full logs as artifacts; nothing was truncated or dispatched." />
 </If>

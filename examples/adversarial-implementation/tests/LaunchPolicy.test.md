@@ -73,15 +73,17 @@ git rev-parse HEAD
 <AssertEquals actual={review.role} expected="architect" />
 <AssertEquals actual={review.revision} expected={work.api.revision} />
 <AssertEquals actual={review.initialize} expected={true} />
-<AssertEquals actual={work.ticket.calls.map(call => call.role)} expected={["implementor","architect","planner"]} />
-<AssertEquals actual={work.ticket.calls.map(call => call.initialize)} expected={[true,false,false]} />
-<AssertEquals actual={work.ticket.calls[0].assignment.revision} expected={work.api.revision} />
-<AssertEquals actual={work.ticket.calls[0].inputs.find(input => input.path === evidence).content} expected={foundation.inputs[0].content} />
-<AssertEquals actual={work.ticket.manifest.maxCorrections} expected={1} />
-<AssertEquals actual={work.ticket.manifest.maxApiRepairs} expected={2} />
-<AssertEquals actual={work.ticket.manifest.maxResponseCorrections} expected={scenario.limit} />
-<AssertEquals actual={work.ticket.manifest.roles.planner.provider} expected="codex" />
-<AssertEquals actual={work.ticket.calls.filter(call => call.role !== "architect").every(call => call.provider === "codex")} expected={true} />
+<Ticket.Load record={work.ticket} as="migrationState" />
+<AssertEquals actual={migrationState.calls.map(call => call.role)} expected={["implementor","architect","planner"]} />
+<AssertEquals actual={migrationState.calls.map(call => call.initialize)} expected={[true,false,false]} />
+<AssertEquals actual={migrationState.calls[0].assignment.revision} expected={work.api.revision} />
+<Ticket.Read path={migrationState.calls[0].attempt + "/called.json"} as="migrationCallText" /><Parse schema={{type:"object"}} as="migrationCall">{migrationCallText}</Parse>
+<AssertEquals actual={migrationCall.inputs.find(input => input.path === evidence).content} expected={foundation.inputs[0].content} />
+<AssertEquals actual={migrationState.manifest.maxCorrections} expected={1} />
+<AssertEquals actual={migrationState.manifest.maxApiRepairs} expected={2} />
+<AssertEquals actual={migrationState.manifest.maxResponseCorrections} expected={scenario.limit} />
+<AssertEquals actual={migrationState.manifest.roles.planner.provider} expected="codex" />
+<AssertEquals actual={migrationState.calls.filter(call => call.role !== "architect").every(call => call.provider === "codex")} expected={true} />
 <Ticket.Text path={fixture.directory + "/retirement.json"} as="retirement" />
 <AssertStringIncludes actual={retirement} expected="legacy.fixture" />
 </Else>

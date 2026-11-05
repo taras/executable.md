@@ -1,18 +1,24 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { runCli, shellQuote } from "@executablemd/test-support/launch";
 import { fileURLToPath } from "node:url";
+import { env } from "@executablemd/runtime";
 import { readTextFile } from "@effectionx/fs";
 
-describe("adversarial implementation example", () => {
-  for (const suite of [
-    "Workflow",
-    "Friction",
-    "Implementation",
-    "LaunchPolicy",
-    "Delivery",
-    "ProductionRole",
-  ]) {
+for (const suite of [
+  "ArtifactReturn",
+  "ArtifactReturnRecovery",
+  "Workflow",
+  "Friction",
+  "Implementation",
+  "LaunchPolicy",
+  "Delivery",
+  "ProductionRole",
+]) {
+  describe(`runs the ${suite} Markdown journeys without native models`, () => {
     it(`runs the ${suite} Markdown journeys without native models`, function* () {
+      const retainedEvidence = suite.startsWith("ArtifactReturn")
+        ? yield* env("XMD_ARTIFACT_RETURN_EVIDENCE")
+        : undefined;
       const workflowCommand = [
         "deno",
         "run",
@@ -46,9 +52,14 @@ describe("adversarial implementation example", () => {
         ],
         {
           timeout: 120_000,
-          env: { XMD_EXAMPLE_COMMAND: workflowCommand },
+          env: {
+            XMD_EXAMPLE_COMMAND: workflowCommand,
+            ...(retainedEvidence === undefined
+              ? {}
+              : { XMD_ARTIFACT_RETURN_EVIDENCE: retainedEvidence }),
+          },
         },
       ).expect();
     });
-  }
-});
+  });
+}
