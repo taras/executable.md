@@ -104,10 +104,9 @@ export function runText(runs: readonly ReplTokenRun[]): string {
  * Named because each one means something structural — submit, dismiss, move
  * focus, erase, interrupt — as opposed to text, which means only itself.
  *
- * `Interrupt` is the one named key no mounted node handles: ending the command is
- * a lifecycle outcome its owner decides, so the program answers this key where
- * it answers end of input, rather than a row answering it for the screen that
- * happens to be up.
+ * `Interrupt` is handled only by the focused message box, which asks the root
+ * to clear it. Anywhere else no node handles it, and the program answers it as
+ * leaving, because ending the command is a lifecycle outcome its owner decides.
  *
  * The arrows, Home, End and the Page keys are named as pressed. A field reads
  * them as caret movement and a reading as scrolling; whatever the focused

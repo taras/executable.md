@@ -1047,6 +1047,16 @@ function* drive(
     const wakes = queued();
     const shutdown = withResolvers<void>();
     let ending = false;
+    // Until a screen's first frame is presented, Control-C has no focused message
+    // box to clear and leaves. After that the loop decides, through the tree. A
+    // standalone terminal is generation 0; an attached UI starts a generation of
+    // its own each time it connects.
+    let presentedAt: number | undefined;
+    const showing = (): number => liveScreen?.generation ?? 0;
+    // The exact Control-C events read before their screen was presented, so the
+    // loop leaves on them even if keys queued ahead of them focused the message
+    // box once the frame arrived.
+    const unpresented = new WeakSet<ReplScreenEvent>();
 
     yield* spawn(function* reading(): Operation<void> {
       while (true) {
@@ -1057,12 +1067,15 @@ function* drive(
           wakes.close();
           return;
         }
-        if (
-          next.value.kind === "eof" ||
-          (next.value.kind === "input" &&
-            next.value.event?.kind === "key" &&
-            next.value.event.key === "Interrupt")
-        ) {
+        const early =
+          next.value.kind === "input" &&
+          next.value.event?.kind === "key" &&
+          next.value.event.key === "Interrupt" &&
+          presentedAt !== showing();
+        if (early) {
+          unpresented.add(next.value);
+        }
+        if (next.value.kind === "eof" || early) {
           if (liveScreen === undefined) {
             ending = true;
             shutdown.resolve();
@@ -1858,7 +1871,8 @@ function* drive(
           state = { ...state, restore: undefined };
           focused = keyOfFocus(tree);
         }
-        return false;
+        // Control-C that no focused control handled is leaving.
+        return event.kind === "key" && event.key === "Interrupt";
       }
       // Measured for the size and the reading this action is being answered at,
       // before the action runs. A scroll moves from the clamp the screen is
@@ -2302,6 +2316,11 @@ function* drive(
       observePass("start");
     }
     const first = yield* draw();
+    // Only a frame that finished presenting can have put a message box in front
+    // of anybody; keys that arrived while it was being drawn still end here.
+    if (first !== undefined) {
+      presentedAt = showing();
+    }
     rendered = first?.rendered;
     presenting = first === undefined ? undefined : presentedDrawer(first.view);
     // The first frame has the same obligation as every other one: draw again
@@ -2395,12 +2414,22 @@ function* drive(
           if (delivered === undefined) {
             continue;
           }
-          // Control-C, from wherever it was pressed. Taken here rather than
-          // through the tree because no node claims it: ending is this owner's
-          // outcome, and a key answered by whichever row happened to have focus
-          // would stop meaning the same thing from one screen to the next.
+          // Control-C through the tree, where only the focused message box
+          // handles it. Anything else leaves, and so does a screen too small to
+          // draw that box or a Control-C read before its screen was presented.
           if (delivered.kind === "key" && delivered.key === "Interrupt") {
-            departing = true;
+            if (
+              ending ||
+              unpresented.has(wake.event) ||
+              profileFor(yield* screen.size()) === "too-small" ||
+              (yield* act(delivered))
+            ) {
+              if (liveScreen === undefined) {
+                ending = true;
+                shutdown.resolve();
+              }
+              departing = true;
+            }
             continue;
           }
           // A window too small to draw in shows a refusal and places no cell, so
@@ -2588,6 +2617,7 @@ function* drive(
       if (painted === undefined) {
         continue;
       }
+      presentedAt = showing();
       rendered = painted.rendered;
       presenting = presentedDrawer(painted.view);
       // Focus is read against the view that was committed, which a resize may

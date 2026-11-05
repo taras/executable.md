@@ -492,6 +492,11 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       if (event.key === "Backspace") {
         return { kind: "erase", ...owns };
       }
+      if (event.key === "Interrupt") {
+        // Only the message box. Control-C anywhere else, including in the draft
+        // or an answer, goes on up and leaves.
+        return purpose === "message" ? { kind: "interrupt-message" } : undefined;
+      }
       const caret = CARET_KEYS.get(event.key);
       if (caret !== undefined) {
         const input = fields(node.input);
