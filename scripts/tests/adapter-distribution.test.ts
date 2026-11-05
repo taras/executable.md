@@ -20,6 +20,7 @@
  * inspects are Deno's own build outputs; the portable half of the contract is Tier
  * EA and Tier AM, which do run under all three.
  */
+import { z } from "zod";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, until } from "effection";
@@ -27,6 +28,10 @@ import type { Operation } from "effection";
 import { Buffer } from "node:buffer";
 import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { copyFile, ensureDir, exists, writeTextFile } from "@effectionx/fs";
+import { dirname } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
@@ -68,13 +73,7 @@ describe("Tier ADD — embedded adapters across distributions", () => {
       }).toEqual({ provider: snapshot.provider, sha256: snapshot.sha256 });
       if (snapshot.provider === "claude") {
         const archive = gunzipSync(bytes).toString("utf8");
-        for (const member of [
-          "dist/sdk/sdk.mjs",
-          "vendor/claude-agent-sdk/sdk.mjs",
-          "vendor/claude-agent-sdk/transform.mjs",
-          "vendor/claude-agent-sdk/UPSTREAM-README.md",
-          "vendor/claude-agent-sdk/PROVENANCE.json",
-        ]) {
+        for (const member of ["dist/sdk/sdk.mjs", "SDK-NOTICE.md"]) {
           expect(archive).toContain(`package/${member}`);
         }
       }
@@ -89,6 +88,7 @@ describe("Tier ADD — embedded adapters across distributions", () => {
     const graph = yield* moduleGraph(["--node-modules-dir=none"], "packages/cli/src/compiled.ts");
 
     expect(graph).toContain("vendor/adapters/generated/snapshots.ts");
+    expect(graph).toContain("generated/claude-snapshot.ts");
   });
 
   it("ADD3: the graph probe refuses a command that did not run", function* () {
@@ -113,6 +113,7 @@ describe("Tier ADD — embedded adapters across distributions", () => {
     const graph = yield* moduleGraph([], "packages/acp/embedded-adapters.ts");
 
     expect(graph).toContain("vendor/adapters/generated/snapshots.ts");
+    expect(graph).toContain("generated/claude-snapshot.ts");
   });
 
   it("ADD6: the compiled entrypoint keeps semver despite --exclude-unused-npm", function* () {
@@ -128,7 +129,9 @@ describe("Tier ADD — embedded adapters across distributions", () => {
   });
 
   it("ADD5: the generated module is the manifest's bytes, not a stale copy", function* () {
-    const source = yield* until(readFile(GENERATED, "utf8"));
+    const source =
+      (yield* until(readFile(GENERATED, "utf8"))) +
+      (yield* until(readFile("packages/acp/generated/claude-snapshot.ts", "utf8")));
     const manifest: unknown = JSON.parse(
       yield* until(readFile(join(VENDOR, "MANIFEST.json"), "utf8")),
     );
@@ -140,5 +143,84 @@ describe("Tier ADD — embedded adapters across distributions", () => {
       expect(source).toContain(snapshot.sha256);
       expect(source).toContain(snapshot.version);
     }
+  });
+  it("ADD7: JSR selects the ignored Claude module and its selected ACP layout resolves", function* () {
+    const published = yield* scoped(function* () {
+      yield* useQuietProcessOutput();
+      return yield* exec({
+        command: [
+          process.execPath,
+          "publish",
+          "--dry-run",
+          "--allow-dirty",
+          "--node-modules-dir=manual",
+          "--frozen",
+        ],
+      });
+    });
+    if (published.exitCode !== 0) {
+      throw new Error(`JSR dry run failed: ${published.stderr}`);
+    }
+    const output = published.stdout + published.stderr;
+    const section = output
+      .split("Simulating publish of @executablemd/acp@")[1]
+      ?.split("Simulating publish of ")[0];
+    if (!section) {
+      throw new Error("No actual ACP publish inventory");
+    }
+    const urls = [...section.matchAll(/file:\/\/[^\n]+?(?= \()/g)].map(
+      (match) => new URL(match[0]),
+    );
+    const source = new URL("../../packages/acp/", import.meta.url);
+    const selected = urls.map((url) => decodeURIComponent(url.href.slice(source.href.length)));
+    expect(selected).toContain("generated/claude-snapshot.ts");
+    const root = yield* useTempDirectory("xmd-jsr-selected-");
+    for (const [index, path] of selected.entries()) {
+      const target = join(root, path);
+      yield* ensureDir(dirname(target));
+      yield* copyFile(urls[index]!, target);
+    }
+    const config = JSON.parse(yield* until(readFile("deno.json", "utf8")));
+    const imports: Record<string, string> = { ...config.imports };
+    const { listWorkspacePaths } = yield* until(import("../lib/workspace.ts"));
+    const repo = new URL("../../", import.meta.url);
+    for (const member of yield* listWorkspacePaths(config.workspace, repo)) {
+      if (!(yield* exists(new URL(`${member}/deno.json`, repo)))) {
+        continue;
+      }
+      const parsed = z
+        .object({
+          name: z.string(),
+          exports: z.union([z.string(), z.record(z.string(), z.string())]),
+        })
+        .safeParse(
+          JSON.parse(yield* until(readFile(new URL(`${member}/deno.json`, repo), "utf8"))),
+        );
+      if (!parsed.success) {
+        continue;
+      }
+      const manifest = parsed.data;
+      const base =
+        member === "packages/acp" ? pathToFileURL(`${root}/`) : new URL(`${member}/`, repo);
+      const exports =
+        typeof manifest.exports === "string" ? { ".": manifest.exports } : manifest.exports;
+      for (const [path, value] of Object.entries(exports)) {
+        if (typeof value === "string") {
+          imports[manifest.name + (path === "." ? "" : path.slice(1))] = new URL(value, base).href;
+        }
+      }
+    }
+    yield* writeTextFile(join(root, "selected-imports.json"), JSON.stringify({ imports }));
+    const graph = yield* moduleGraph(
+      [
+        "--config",
+        fileURLToPath(new URL("../../deno.json", import.meta.url)),
+        "--import-map",
+        join(root, "selected-imports.json"),
+        "--node-modules-dir=none",
+      ],
+      join(root, "embedded-adapters.ts"),
+    );
+    expect(graph).toContain(join(root, "generated/claude-snapshot.ts"));
   });
 });

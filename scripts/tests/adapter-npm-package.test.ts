@@ -18,15 +18,16 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, until } from "effection";
+import { resource, scoped, until } from "effection";
 import type { Operation } from "effection";
-import { exists, rm } from "@effectionx/fs";
+import { exists } from "@effectionx/fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 
-const PACKAGE = "packages/acp/npm";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { copyPreparedCandidate } from "./candidate-copy.ts";
 const DRIVER = "packages/acp/tests/fixtures/npm-package-driver.mjs";
 const FAKE_CODEX = "packages/acp/tests/fixtures/fake-codex-app-server.cjs";
 
@@ -41,28 +42,27 @@ function inheritedEnvironment(): Record<string, string> {
   return environment;
 }
 
-/**
- * Build the npm artifact from this checkout, and remove it afterwards.
- *
- * Forced, never reused. `packages/acp/npm` is shared generated output, so an
- * artifact left by another revision would otherwise be the thing under test —
- * a regression that passes because somebody built the package before the bug
- * was introduced proves nothing. The build happens here so the provenance is
- * this test's, not a preceding command's.
- *
- * Removed through `ensure`, so a failure partway leaves nothing behind for the
- * next run to mistake for its own.
- */
+/** Build the real package and its dependency closure in invocation-private output. */
 function useBuiltPackage(): Operation<string> {
   return resource(function* (provide) {
-    const path = resolve(PACKAGE);
-    yield* rm(path, { recursive: true, force: true });
-    yield* ensure(() => rm(path, { recursive: true, force: true }));
+    const root = yield* useTempDirectory("xmd-npm-candidate-");
+    yield* copyPreparedCandidate(root);
+    const path = join(root, "packages/acp/npm");
 
     const built = yield* scoped(function* () {
       yield* useQuietProcessOutput();
       return yield* exec({
-        command: [process.execPath, "run", "-A", "scripts/build-npm.ts", "packages/acp"],
+        command: [
+          process.execPath,
+          "run",
+          "-A",
+          "--node-modules-dir=manual",
+          "--cached-only",
+          "--frozen",
+          "scripts/build-npm.ts",
+          "packages/acp",
+        ],
+        cwd: root,
         // Merged, not replaced: the build resolves through the caller's Deno
         // cache and npm configuration, and a bare pair would drop both.
         env: {
@@ -115,10 +115,17 @@ describe("Tier ANP — the produced npm package", () => {
     const claude = yield* scoped(function* () {
       yield* useQuietProcessOutput();
       return yield* exec({
-        command: ["node", "packages/acp/tests/fixtures/npm-claude-source-driver.mjs", path],
+        command: [
+          "node",
+          "packages/acp/tests/fixtures/npm-claude-source-driver.mjs",
+          path,
+          resolve("packages/acp/tests/fixtures/fake-claude-cli.cjs"),
+          resolve("packages/acp/vendor/adapters/claude/recipe.json"),
+        ],
       });
     });
     expect(claude.exitCode).toBe(0);
-    expect(claude.stdout).toContain("CLAUDE_SDK_SOURCE true");
+    expect(claude.stdout).toContain('"originalSdkAbsent":true');
+    expect(claude.stdout).toContain('"accepted":true');
   });
 });

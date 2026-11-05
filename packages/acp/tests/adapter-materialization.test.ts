@@ -11,6 +11,8 @@
  * The install is real. `npm` resolves the adapter's own dependency tree here,
  * which is what a run does, and is why these carry their own timeout.
  */
+import { packagedClaudeExchange } from "./fixtures/claude-packaged-exchange.mjs";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { all, ensure, spawn, until } from "effection";
@@ -104,6 +106,18 @@ function* refusal(body: () => Operation<unknown>): Operation<unknown> {
 }
 
 describe("Tier AM — embedded adapter materialization", () => {
+  it("AM Claude: installs one reviewed runtime and completes an accepted fake exchange", function* () {
+    const recipe = JSON.parse(
+      yield* until(readFile("packages/acp/vendor/adapters/claude/recipe.json", "utf8")),
+    );
+    const result = yield* packagedClaudeExchange(
+      createEmbeddedAdapters,
+      fileURLToPath(new URL("./fixtures/fake-claude-cli.cjs", import.meta.url)),
+      recipe.runtime,
+    );
+    expect(result).toMatchObject({ accepted: true, answered: true, originalSdkAbsent: true });
+  });
+
   it("AM1: the command is content-addressed and answers before anything is on disk", function* () {
     const root = yield* useRoot();
     const adapters = createEmbeddedAdapters(root);
@@ -833,7 +847,7 @@ describe("Tier AM — embedded adapter materialization", () => {
 });
 
 describe("HC fresh Claude materialization", () => {
-  it("HC5: the SDK library and required packages survive without platform executables", function* () {
+  it("HC5: required packages survive with one carried SDK and no original SDK package", function* () {
     const root = yield* useRoot();
     const adapters = createEmbeddedAdapters(root);
     yield* adapters.materialize("claude");
@@ -852,7 +866,7 @@ describe("HC fresh Claude materialization", () => {
     }
     yield* walk(join(root, digestOf("claude"), "node_modules"));
     expect(names).toContain("@agentclientprotocol/claude-agent-acp");
-    expect(names).toContain("@anthropic-ai/claude-agent-sdk");
+    expect(names).not.toContain("@anthropic-ai/claude-agent-sdk");
     expect(names).toContain("@agentclientprotocol/sdk");
     expect(names).toContain("zod");
     expect(names.filter((name) => name.startsWith("@anthropic-ai/claude-agent-sdk-"))).toEqual([]);

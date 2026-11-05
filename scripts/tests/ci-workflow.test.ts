@@ -245,6 +245,27 @@ describe("the CI smoke job", () => {
    * for it. Hence the ordering, and hence "the first one": a later `xmd` step
    * added above the build would reintroduce exactly that.
    */
+  it("prepares lint before pnpm and runs Claude's real compiled smoke", function* () {
+    const parsed = yield* workflow();
+    const lint = parsed.lint;
+    if (!lint) {
+      throw new Error("lint job missing");
+    }
+    const runs = lint.steps.map((step) => step.run ?? "");
+    expect(runs.indexOf("deno task deps")).toBeLessThan(runs.indexOf("pnpm install"));
+    expect(lint.steps.some((step) => step.uses?.startsWith("denoland/setup-deno@"))).toBe(true);
+    const smoke = parsed.smoke;
+    if (!smoke) {
+      throw new Error("smoke job missing");
+    }
+    expect(
+      smoke.steps.some(
+        (step) =>
+          step.run === "deno run --allow-all --frozen scripts/smoke-claude-adapter.ts dist/xmd",
+      ),
+    ).toBe(true);
+  });
+
   it("prepares the checkout before its first source-CLI invocation", function* () {
     const smoke = (yield* workflow()).smoke;
     if (smoke === undefined) {
@@ -378,10 +399,10 @@ describe("the sharded runtime jobs", () => {
     const parsed = yield* workflow();
     const required: Record<string, string[]> = {
       "test-deno": [
-        "deno task check",
-        "deno task gen:publish-workflow",
         "deno task deps",
         "deno task build:web",
+        "deno task check",
+        "deno task gen:publish-workflow",
       ],
       "test-node": [
         "deno task deps",
@@ -389,7 +410,7 @@ describe("the sharded runtime jobs", () => {
         "pnpm install",
         "pnpm exec tsc --project tsconfig.node.json",
       ],
-      "test-bun": ["bun install"],
+      "test-bun": ["deno task deps", "bun install"],
     };
 
     for (const [id, commands] of Object.entries(required)) {

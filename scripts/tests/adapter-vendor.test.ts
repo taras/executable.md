@@ -14,16 +14,16 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, until } from "effection";
-import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
-import { tmpdir } from "node:os";
-import { pathToFileURL } from "node:url";
+import { until } from "effection";
 import type { Operation } from "effection";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { Buffer } from "node:buffer";
 import { gunzipSync } from "node:zlib";
+import { AdapterManifest } from "../lib/adapter-manifest.ts";
+import { ClaudeRecipe } from "../lib/claude-recipe.ts";
+import { sha256 } from "../lib/claude-snapshot-module.ts";
 import { embeddedAdapterIdentities } from "@executablemd/acp/embedded-adapters";
 
 const VENDOR = "packages/acp/vendor/adapters";
@@ -76,42 +76,35 @@ function archiveFiles(tarball: Uint8Array): Map<string, Buffer> {
   return files;
 }
 
-interface ManifestSnapshot {
-  provider: string;
-  package: string;
-  version: string;
-  tarball: string;
-  sha256: string;
-  byteLength: number;
-  files: string[];
-  upstreamBase: string;
-  patchedCommit: string;
-  license: string;
-  buildCommand: string;
-  contract: string;
-  materializationContract: string;
-  identityContract?: string;
+function* manifest() {
+  return AdapterManifest.parse(
+    JSON.parse(yield* until(readFile(join(VENDOR, "MANIFEST.json"), "utf8"))),
+  ).snapshots;
 }
 
-function* manifest(): Operation<ManifestSnapshot[]> {
-  const raw: unknown = JSON.parse(yield* until(readFile(join(VENDOR, "MANIFEST.json"), "utf8")));
-  const snapshots = (raw as { snapshots?: unknown }).snapshots;
-  if (!Array.isArray(snapshots)) {
-    throw new Error("the adapter manifest declares no snapshots");
+function* snapshotBytes(snapshot: { provider: string; tarball?: string }): Operation<Uint8Array> {
+  if (snapshot.tarball) {
+    return yield* until(readFile(join(VENDOR, snapshot.tarball)));
   }
-  return snapshots as ManifestSnapshot[];
+  const embedded = embeddedAdapterIdentities().find(
+    (entry) => entry.provider === snapshot.provider,
+  );
+  if (!embedded) {
+    throw new Error(`Missing snapshot ${snapshot.provider}`);
+  }
+  return Buffer.from(embedded.base64, "base64");
 }
 
 describe("Tier AD — embedded ACP adapter snapshots", () => {
   it("AD1: every tarball matches its recorded digest and length", function* () {
     for (const snapshot of yield* manifest()) {
-      const bytes = yield* until(readFile(join(VENDOR, snapshot.tarball)));
+      const bytes = yield* snapshotBytes(snapshot);
       expect({
-        tarball: snapshot.tarball,
+        tarball: "tarball" in snapshot ? snapshot.tarball : snapshot.recipe,
         sha256: createHash("sha256").update(bytes).digest("hex"),
         byteLength: bytes.byteLength,
       }).toEqual({
-        tarball: snapshot.tarball,
+        tarball: "tarball" in snapshot ? snapshot.tarball : snapshot.recipe,
         sha256: snapshot.sha256,
         byteLength: snapshot.byteLength,
       });
@@ -144,7 +137,7 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
 
   it("AD3: each snapshot names the exact source commits", function* () {
     for (const snapshot of yield* manifest()) {
-      const reviewed = PINNED[snapshot.provider as keyof typeof PINNED];
+      const reviewed = snapshot.provider === "claude" ? PINNED.claude : PINNED.codex;
       // Pinned in this file as well as in the manifest: a snapshot rebuilt from
       // some other commit would otherwise rewrite the record of what it is and
       // still pass every byte check above.
@@ -154,19 +147,24 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
         patchedCommit: snapshot.patchedCommit,
       });
       expect(snapshot.license).toBe("Apache-2.0");
-      expect(snapshot.buildCommand).toBe("npm run build && npm pack");
+      expect(snapshot.buildCommand).toBe(
+        snapshot.provider === "claude" ? "deno task deps" : "npm run build && npm pack",
+      );
     }
   });
 
   it("AD4: the manifest inventory is exactly what the archive contains", function* () {
     for (const snapshot of yield* manifest()) {
-      const bytes = yield* until(readFile(join(VENDOR, snapshot.tarball)));
+      const bytes = yield* snapshotBytes(snapshot);
 
       // The archive's own answer, not the manifest compared with itself. A file
       // added to or dropped from the tarball has to show up here, because this
       // is the list a reviewer trusts instead of unpacking.
-      expect({ tarball: snapshot.tarball, files: archiveInventory(bytes) }).toEqual({
-        tarball: snapshot.tarball,
+      expect({
+        tarball: "tarball" in snapshot ? snapshot.tarball : snapshot.recipe,
+        files: archiveInventory(bytes),
+      }).toEqual({
+        tarball: "tarball" in snapshot ? snapshot.tarball : snapshot.recipe,
         files: [...snapshot.files].sort(),
       });
 
@@ -215,59 +213,42 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
       }
     }
   });
-  it("AD7: the shipped Claude SDK regenerates offline from exact carried source", function* () {
-    const snapshot = (yield* manifest()).find((entry) => entry.provider === "claude");
+  it("AD7: Claude carries exactly the reviewed runtime, metadata and separate SDK terms", function* () {
+    const recipe = ClaudeRecipe.parse(
+      JSON.parse(yield* until(readFile(join(VENDOR, "claude/recipe.json"), "utf8"))),
+    );
+    const snapshot = embeddedAdapterIdentities().find((entry) => entry.provider === "claude");
     if (!snapshot) {
       throw new Error("Claude snapshot missing");
     }
-    const files = archiveFiles(yield* until(readFile(join(VENDOR, snapshot.tarball))));
-    const text = (name: string): string => {
-      const bytes = files.get(`package/${name}`);
+    const files = archiveFiles(Buffer.from(snapshot.base64, "base64"));
+    expect([...files.keys()].sort()).toEqual(recipe.files.map((path) => `package/${path}`).sort());
+    for (const [path, expected] of Object.entries(recipe.runtime)) {
+      const bytes = files.get(`package/${path}`);
       if (!bytes) {
-        throw new Error(`Snapshot member missing: ${name}`);
+        throw new Error(`Missing executable ${path}`);
       }
-      return bytes.toString("utf8");
-    };
-    const root = yield* until(mkdtemp(join(tmpdir(), "xmd-sdk-source-")));
-    yield* ensure(() => rm(root, { recursive: true, force: true }));
-    for (const [name, bytes] of files) {
-      if (name.startsWith("package/vendor/claude-agent-sdk/")) {
-        const target = join(root, name);
-        yield* ensureDir(dirname(target));
-        yield* writeTextFile(target, bytes.toString("utf8"));
-      }
+      expect({ path, sha256: sha256(bytes) }).toEqual({ path, sha256: expected });
     }
-    const module = yield* until(
-      import(pathToFileURL(join(root, "package/vendor/claude-agent-sdk/transform.mjs")).href),
-    );
-    if (typeof module.transformSdk !== "function") {
-      throw new Error("Carried SDK transform missing");
-    }
-    const pristine = text("vendor/claude-agent-sdk/sdk.mjs");
-    expect(createHash("sha256").update(pristine).digest("hex")).toBe(
-      "fa36c6862927f6f1d0c3bff35d524a1d8fa81f1746bebfc7aeddb6fbf4b572c8",
-    );
-    expect(
-      createHash("sha256").update(text("vendor/claude-agent-sdk/sdk.d.ts")).digest("hex"),
-    ).toBe("544c4efabd6761a66110bf32b2e3749b77bbee4f958e2c929dd1045f52302653");
-    expect(module.transformSdk(pristine)).toBe(text("dist/sdk/sdk.mjs"));
-    expect(() => module.transformSdk(pristine + "\n")).toThrow("SHA-256 mismatch");
-    expect(() =>
-      module.transformSdk(pristine.replace("class yk{options;process;", "class missing{")),
-    ).toThrow("found 0");
-    expect(() => module.transformSdk(pristine + "class yk{options;process;")).toThrow("found 2");
-    expect(text("dist/claude-sdk.js")).toContain('export * from "../dist/sdk/sdk.mjs"');
-    for (const [name, bytes] of files) {
-      if (name.startsWith("package/dist/") && name.endsWith(".js")) {
-        expect(bytes.toString("utf8")).not.toMatch(/from ["']@anthropic-ai\/claude-agent-sdk["']/);
-      }
-    }
-    expect(text("vendor/claude-agent-sdk/UPSTREAM-README.md")).toContain(
+    const pkg = JSON.parse(files.get("package/package.json")!.toString("utf8"));
+    expect(pkg.dependencies).toEqual({
+      "@agentclientprotocol/sdk": "1.3.0",
+      zod: "^3.25.0 || ^4.0.0",
+    });
+    expect(pkg.scripts).toBeUndefined();
+    expect(pkg.types).toBeUndefined();
+    expect(pkg.exports).toEqual({ ".": { import: "./dist/lib.js" }, "./*": "./*" });
+    expect(files.get("package/SDK-NOTICE.md")!.toString("utf8")).toContain(
       "Commercial Terms of Service",
     );
-    expect(text("vendor/claude-agent-sdk/PROVENANCE.json")).toContain("0.3.238");
-    expect(JSON.parse(text("package.json")).dependencies["@anthropic-ai/claude-agent-sdk"]).toBe(
-      "0.3.238",
+    expect(files.get("package/dist/claude-sdk.js")!.toString("utf8")).toContain(
+      "../dist/sdk/sdk.mjs",
+    );
+    expect(sha256(yield* until(readFile(join(VENDOR, "claude/adapter.patch"))))).toBe(
+      recipe.patchSha256,
+    );
+    expect(sha256(yield* until(readFile(join(VENDOR, "claude/sdk-transform.mjs"))))).toBe(
+      recipe.transformSha256,
     );
   });
 });

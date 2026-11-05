@@ -1,20 +1,5 @@
-/**
- * Regenerate the embedded ACP adapter snapshots.
- *
- * `packages/acp/vendor/adapters` holds one npm tarball per provider, built from
- * an exact patched upstream commit by that project's own build and `npm pack`.
- * A tarball is bytes on disk, and bytes on disk are not reachable from a
- * compiled binary or from the npm artifact — so the same bytes are also carried
- * as a module in the graph, which every distribution inlines the same way.
- *
- * This writes that module. It is committed rather than built, because a
- * generated file the source distribution needs cannot be one the source
- * distribution has to build first; `scripts/tests/adapter-vendor.test.ts` is
- * what keeps it honest, by regenerating in memory and comparing.
- *
- *     deno run --allow-all scripts/build-adapter-snapshots.ts
- */
-
+/** Regenerate the maintained Codex snapshot; deps owns prepared Claude output. */
+import { AdapterManifest } from "./lib/adapter-manifest.ts";
 import { main, until } from "effection";
 import { writeTextFile } from "@effectionx/fs";
 import { encodeBase64 } from "@std/encoding/base64";
@@ -26,15 +11,6 @@ const GENERATED = `${VENDOR}/generated/snapshots.ts`;
 
 /** How wide an embedded line is, so a diff of this file stays readable. */
 const COLUMNS = 96;
-
-interface ManifestSnapshot {
-  readonly provider: string;
-  readonly package: string;
-  readonly version: string;
-  readonly tarball: string;
-  readonly sha256: string;
-  readonly byteLength: number;
-}
 
 /**
  * The encoded bytes as a joined array of chunks.
@@ -53,12 +29,13 @@ function wrap(value: string): string {
 }
 
 await main(function* () {
-  const manifest: { snapshots: ManifestSnapshot[] } = JSON.parse(
-    yield* until(readFile(`${VENDOR}/MANIFEST.json`, "utf8")),
+  const manifest = AdapterManifest.parse(
+    JSON.parse(yield* until(readFile(`${VENDOR}/MANIFEST.json`, "utf8"))),
   );
+  const maintained = manifest.snapshots.filter((entry) => "tarball" in entry);
 
   const parts: string[] = [];
-  for (const snapshot of manifest.snapshots) {
+  for (const snapshot of maintained) {
     const bytes = yield* until(readFile(`${VENDOR}/${snapshot.tarball}`));
     const digest = createHash("sha256").update(bytes).digest("hex");
     if (digest !== snapshot.sha256 || bytes.byteLength !== snapshot.byteLength) {
@@ -72,7 +49,7 @@ await main(function* () {
     );
   }
 
-  const entries = manifest.snapshots
+  const entries = maintained
     .map((snapshot) =>
       [
         "  Object.freeze({",
@@ -104,21 +81,8 @@ await main(function* () {
       " */",
       "",
       ...parts.map((part) => `${part}\n`),
-      "/** One adapter, and the identity its bytes must prove before anything runs it. */",
-      "export interface EmbeddedAdapterSnapshot {",
-      "  /** The agent name this adapter serves. */",
-      "  readonly provider: string;",
-      "  /** The upstream package these bytes were packed from. */",
-      "  readonly package: string;",
-      "  /** That package's version. */",
-      "  readonly version: string;",
-      "  /** SHA-256 of the tarball. Checked against the decoded bytes before use. */",
-      "  readonly sha256: string;",
-      "  /** The tarball's exact length. */",
-      "  readonly byteLength: number;",
-      "  /** The tarball itself. */",
-      "  readonly base64: string;",
-      "}",
+      'import type { EmbeddedAdapterSnapshot } from "../../../src/adapter-snapshot-type.ts";',
+      'export type { EmbeddedAdapterSnapshot } from "../../../src/adapter-snapshot-type.ts";',
       "",
       "/** Every embedded snapshot, in manifest order. */",
       "export const EMBEDDED_ADAPTER_SNAPSHOTS: readonly EmbeddedAdapterSnapshot[] = Object.freeze([",
@@ -128,5 +92,5 @@ await main(function* () {
     ].join("\n"),
   );
 
-  console.log(`wrote ${GENERATED} (${manifest.snapshots.length} snapshots)`);
+  console.log(`wrote ${GENERATED} (${maintained.length} snapshots)`);
 });

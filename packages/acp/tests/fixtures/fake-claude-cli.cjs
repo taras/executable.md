@@ -43,7 +43,11 @@ if (process.env.FAKE_CLAUDE_EXIT_STDERR) {
   process.stderr.write("native-close-tail", () => process.exit(7));
   return;
 }
-log({ argv: process.argv.slice(2) });
+log({ executable: process.argv[1], argv: process.argv.slice(2) });
+if (process.argv.includes("--version")) {
+  console.log("Fake Claude Code 0.0.0");
+  return;
+}
 process.on("exit", () => log({ event: "exit", pid: process.pid }));
 
 emit({
