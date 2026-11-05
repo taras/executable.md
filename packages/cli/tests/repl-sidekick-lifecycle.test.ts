@@ -1,3 +1,8 @@
+import { scoped } from "effection";
+import { ReplHost } from "../src/repl/host.ts";
+import { usePluginProgram } from "./support/plugin-program.ts";
+import { contributedPlugin } from "./fixtures/repl/contributed-plugin.ts";
+import type { Contributions } from "./fixtures/repl/contributed-plugin.ts";
 /**
  * Tier R6 — Stop, and what it does and does not reach (#883, J3/J5/J11).
  *
@@ -2207,5 +2212,137 @@ describe("Follow: mounted Stop owns continuation", () => {
     expect(page.repl.fake.prompts).toHaveLength(3);
     expect(page.repl.fake.prompts[2]).toContain("Entry entry-2 completed.");
     expect(page.screen().shows("[x] Follow")).toBe(true);
+  });
+});
+
+describe("Contributed control acknowledgement and teardown", () => {
+  it("R4f: intent acknowledgement and joined cleanup precede outcome and feedback", function* () {
+    const counts: Contributions = { initialized: 0, conversations: 0, closed: 0, calls: [] };
+    const gate = appendGate();
+    const intent = gate.holdNext(
+      (_path, record) =>
+        record.includes('"kind":"control"') && record.includes('"component":"Contributed"'),
+    );
+    const outcome = gate.holdNext((_path, record) => record.includes('"kind":"control-outcome"'));
+    const cleaning = withResolvers<void>();
+    const release = withResolvers<void>();
+    counts.cleanup = function* () {
+      cleaning.resolve();
+      yield* release.operation;
+    };
+    const held = yield* usePluginProgram({ plugins: [contributedPlugin(counts)], gate });
+    held.host.fake.script({ reply: '<Contributed as="actual" />' });
+    held.host.fake.script({ reply: "<Output>joined</Output>" });
+    const sending = yield* spawn(() => held.root.owner.message("Read the contributed value"));
+    yield* intent.started();
+    expect(counts.calls).toEqual([]);
+    expect(held.host.fake.prompts).toHaveLength(1);
+    intent.release();
+    yield* cleaning.operation;
+    expect(counts.calls).toEqual(["read"]);
+    expect(held.host.fake.prompts).toHaveLength(1);
+    const execution = yield* held.host.repository.open(held.root.execution);
+    expect((yield* records(execution)).filter((one) => one.kind === "control-outcome")).toEqual([]);
+    release.resolve();
+    yield* outcome.started();
+    expect(held.host.fake.prompts).toHaveLength(1);
+    outcome.release();
+    expect((yield* sending).ok).toBe(true);
+    expect(held.host.fake.prompts[1]).toContain('"count": 1');
+    expect(
+      (yield* records(yield* held.host.repository.open(held.root.execution))).filter(
+        (one) => one.kind === "control-outcome",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("R4g: actual cancellation leaves only acknowledged intent after joined cleanup", function* () {
+    const counts: Contributions = { initialized: 0, conversations: 0, closed: 0, calls: [] };
+    const entered = withResolvers<void>();
+    const cleaning = withResolvers<void>();
+    const release = withResolvers<void>();
+    counts.beforeBody = function* () {
+      entered.resolve();
+      yield* suspend();
+    };
+    counts.cleanup = function* () {
+      cleaning.resolve();
+      yield* release.operation;
+    };
+    const held = yield* usePluginProgram({ plugins: [contributedPlugin(counts)] });
+    held.host.fake.script({ reply: '<Contributed as="actual" />' });
+    const sending = yield* spawn(() => held.root.owner.message("Hold the contributed call"));
+    yield* entered.operation;
+    let joined = false;
+    const stopping = yield* spawn(function* () {
+      yield* held.root.owner.stop();
+      joined = true;
+    });
+    yield* cleaning.operation;
+    expect(joined).toBe(false);
+    release.resolve();
+    yield* stopping;
+    yield* sending;
+    const execution = yield* held.host.repository.open(held.root.execution);
+    const saved = yield* records(execution);
+    expect(
+      saved.filter((one) => one.kind === "control" && one.component === "Contributed"),
+    ).toHaveLength(1);
+    expect(saved.filter((one) => one.kind === "control-outcome")).toEqual([]);
+    expect(held.host.fake.prompts).toHaveLength(1);
+    expect(counts.calls).toEqual([]);
+  });
+
+  it("R4h: failed intent/outcome publication and owning cleanup produce no success feedback", function* () {
+    for (const cut of ["intent", "outcome", "cleanup"]) {
+      const failure = new Error(`contributed ${cut} failed`);
+      let terminal: unknown;
+      try {
+        yield* scoped(function* () {
+          const counts: Contributions = { initialized: 0, conversations: 0, closed: 0, calls: [] };
+          if (cut === "cleanup") {
+            counts.cleanup = function* () {
+              yield* sleep(0);
+              throw failure;
+            };
+          }
+          yield* ReplHost.around(
+            {
+              *appendRecord([path, record], next) {
+                const rejected =
+                  cut === "intent"
+                    ? record.includes('"kind":"control"') &&
+                      record.includes('"component":"Contributed"')
+                    : cut === "outcome" && record.includes('"kind":"control-outcome"');
+                if (rejected) {
+                  throw failure;
+                }
+                yield* next(path, record);
+              },
+            },
+            { at: "max" },
+          );
+          const held = yield* usePluginProgram({ plugins: [contributedPlugin(counts)] });
+          held.host.fake.script({ reply: '<Contributed as="actual" />' });
+          let failed = false;
+          try {
+            const result = yield* held.root.owner.message("Exercise acknowledged failure");
+            failed = !result.ok;
+          } catch {
+            failed = true;
+          }
+          expect(failed).toBe(true);
+          expect(counts.calls).toHaveLength(cut === "intent" ? 0 : 1);
+          expect(held.host.fake.prompts).toHaveLength(1);
+          const execution = yield* held.host.repository.open(held.root.execution);
+          expect(
+            (yield* records(execution)).filter((one) => one.kind === "control-outcome"),
+          ).toEqual([]);
+        });
+      } catch (error) {
+        terminal = error;
+      }
+      expect(terminal instanceof Error && terminal.message).toContain(failure.message);
+    }
   });
 });

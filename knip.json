@@ -26,6 +26,7 @@
         "@executablemd/acp": ["packages/acp/mod.ts"],
         "@executablemd/acp/embedded-adapters": ["packages/acp/embedded-adapters.ts"],
         "@executablemd/cli": ["packages/cli/src/deno.ts"],
+        "@executablemd/cli/api": ["packages/cli/api.ts"],
         "@executablemd/code-review-agent": ["packages/code-review-agent/mod.ts"],
         "@executablemd/code-review-agent/review-components": [
           "packages/code-review-agent/src/review-components.ts"
@@ -70,6 +71,7 @@
         "@executablemd/acp": ["../../packages/acp/mod.ts"],
         "@executablemd/acp/embedded-adapters": ["../../packages/acp/embedded-adapters.ts"],
         "@executablemd/cli": ["../../packages/cli/src/deno.ts"],
+        "@executablemd/cli/api": ["../../packages/cli/api.ts"],
         "@executablemd/code-review-agent": ["../../packages/code-review-agent/mod.ts"],
         "@executablemd/code-review-agent/review-components": [
           "../../packages/code-review-agent/src/review-components.ts"

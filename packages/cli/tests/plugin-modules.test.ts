@@ -1,3 +1,5 @@
+import { until } from "effection";
+import { usePluginProgram } from "./support/plugin-program.ts";
 /**
  * Tier PM — what a `--plugin` specifier names.
  *
@@ -121,5 +123,34 @@ describe("PM3 — resolution follows the classification", () => {
     // is that the specifier reached path resolution at all rather than the
     // remote refusal — the defect was a refusal, not a wrong directory.
     expect(resolvePluginSpecifier("C:\\plugins\\review.mjs", "/opt/work").protocol).toBe("file:");
+  });
+});
+
+describe("REPL Plugin author API", () => {
+  it("R8: imports the public API and executes the selected author example", function* () {
+    const { Repl } = yield* until(import("@executablemd/cli/api"));
+    expect(Repl.operations.initialize).toBeDefined();
+    const { default: counter } = yield* until(import("../../../examples/repl-plugins/counter.ts"));
+    const held = yield* usePluginProgram({ plugins: [counter] });
+    for (const visit of [1, 2]) {
+      const submitted = yield* held.root.session.submit(
+        '<Counter as="visits" /><Output>Visit <Json value={visits} /></Output>',
+      );
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      const joined = yield* submitted.value.join();
+      if (!joined.ok) {
+        throw joined.error;
+      }
+      const printed = yield* submitted.value.output();
+      if (!printed.ok) {
+        throw printed.error;
+      }
+      expect(printed.value.output).toContain(`Visit ${visit}`);
+    }
+    held.host.fake.script({ reply: "<Output>Example conversation.</Output>" });
+    expect((yield* held.root.owner.message("Read the counter")).ok).toBe(true);
+    expect(held.host.fake.prompts[0]).toContain("Session counter: 2");
   });
 });

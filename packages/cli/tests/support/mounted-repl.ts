@@ -1,5 +1,5 @@
-import { useNodeReplProjectAccess } from "../../src/node-repl-project-access.ts";
 import type { Plugin } from "@executablemd/core/api";
+import { useNodeReplProjectAccess } from "../../src/node-repl-project-access.ts";
 /**
  * The real REPL command, run on a terminal this test owns.
  *

@@ -1,3 +1,4 @@
+import { InvocationTeardownError } from "@executablemd/core";
 import { useHostFiles } from "@executablemd/runtime";
 import type { HostFilesAccess } from "@executablemd/runtime";
 import { allSettled, ensure, Err, Ok, scoped, spawn } from "effection";
@@ -237,8 +238,9 @@ function detachTest(result: TestResult): CompletedTest {
   };
 }
 
-function fatalFailure(error: unknown): Error | undefined {
+export function fatalFailure(error: unknown): Error | undefined {
   if (
+    error instanceof InvocationTeardownError ||
     error instanceof DurablePersistenceError ||
     error instanceof DivergenceError ||
     error instanceof StaleInputError ||

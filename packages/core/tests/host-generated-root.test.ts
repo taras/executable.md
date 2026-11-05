@@ -1,3 +1,4 @@
+import { Component } from "../mod.ts";
 /**
  * Tier E — a generated root is evaluated by the execution that owns it.
  *
@@ -1579,5 +1580,61 @@ describe("Tier E9 — an availability refusal is the call's answer", () => {
     expect(rendered(answer.value ?? { ok: false, error: new Error("none") }).output).toContain(
       "probed",
     );
+  });
+});
+
+describe("R6 — generated ordinary identity remains execution-owned", () => {
+  it("refuses a borrowed implementation before any local durable work", function* () {
+    let borrowed: import("../mod.ts").FunctionComponent | undefined;
+    let work = 0;
+    const metadata = {
+      name: "ForeignIdentity",
+      origin: "test://foreign",
+      props: NO_PROPS,
+      generated: {
+        "self-closing": { identity: "https://executable.md/test/foreign/read", effect: "read" },
+      },
+    } satisfies Omit<import("../host.ts").IdentityComponent, "factory">;
+    const first = yield* useHeldHost({
+      installations: [
+        {
+          components: [
+            {
+              ...metadata,
+              factory(claim) {
+                borrowed = function* (_props, invocation) {
+                  yield* claim(invocation);
+                  work++;
+                  return "claimed";
+                };
+                return borrowed;
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const original = borrowed;
+    if (original === undefined) {
+      throw new Error("First execution did not build its implementation");
+    }
+    const second = yield* useHeldHost({
+      installations: [
+        {
+          components: [{ ...metadata, factory: () => original }],
+          *install() {
+            yield* Component.around({ generated: () => ({ ForeignIdentity: ["self-closing"] }) });
+          },
+        },
+      ],
+    });
+    const result = yield* second.execution.evaluateGeneratedXmdRoot({
+      id: "borrowed",
+      source: "<ForeignIdentity />",
+      allow: ["read"],
+    });
+    expect(result.ok).toBe(false);
+    expect(work).toBe(0);
+    first.release();
   });
 });

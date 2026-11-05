@@ -3516,8 +3516,8 @@ describe("1113: response Cwd is ordinary text", () => {
     ).toBe("/selected/project|/selected/project");
     expect(asked.requests).toEqual([]);
     expect(asked.began).toEqual([]);
-    expect(
-      responseSurface(ceilingFor(asked)).find((entry) => entry.name === "Cwd")?.designated,
-    ).toBe(false);
+    expect(responseSurface(ceilingFor(asked)).filter((entry) => entry.name === "Cwd")).toEqual([
+      { name: "Cwd", effect: "read", form: "self-closing", props: [], designated: false },
+    ]);
   });
 });

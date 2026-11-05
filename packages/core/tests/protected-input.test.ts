@@ -1,3 +1,4 @@
+import { projectInputValue } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { capture } from "../src/component-api.ts";
 import type { Json, JsonObject } from "../src/types.ts";
@@ -931,5 +932,59 @@ describe("owned execution disclosure", () => {
     });
     live.release();
     expect((yield* live.watched).ok).toBe(true);
+  });
+});
+
+describe("host protected-input observation", () => {
+  it("projects owned input and known text without replacing live values or requiring JSON", function* () {
+    const owner = yield* createInputOwner();
+    const values = yield* attachInputOwner(owner);
+    const secret = String(Math.floor(100000 + Math.random() * 900000));
+    const leaf = values.protect({ coroutine: "root", index: 0, field: "code" }, secret);
+    const live = { code: leaf, public: "useful" };
+    expect(projectInputValue(owner, live)).toEqual(Ok({ code: "[redacted]", public: "useful" }));
+    expect(projectInputValue(owner, `entered ${secret}`)).toEqual(Ok("entered [redacted]"));
+    expect(projectInputValue(owner, { public: [1, true, null] })).toEqual(
+      Ok({ public: [1, true, null] }),
+    );
+    expect(projectInputValue(owner, undefined)).toEqual(Ok(undefined));
+    expect(projectInputValue(owner, new Date(0))).toEqual(Ok(undefined));
+    expect(live.code).toBe(leaf);
+    expect(live.public).toBe("useful");
+    expect(values.contains(live)).toBe(true);
+  });
+
+  it("withholds unsafe owned values, foreign input and disposed owners", function* () {
+    const owner = yield* createInputOwner();
+    const values = yield* attachInputOwner(owner);
+    const secret = String(Math.floor(100000 + Math.random() * 900000));
+    const leaf = values.protect({ coroutine: "root", index: 0, field: "code" }, secret);
+    const unsafe = { code: leaf, unsupported: undefined };
+    const foreign = yield* scoped(function* () {
+      const other = yield* createInputOwner();
+      const inputs = yield* attachInputOwner(other);
+      return inputs.protect({ coroutine: "root", index: 0, field: "other" }, secret);
+    });
+    let disposed: SecretInputOwner | undefined;
+    yield* scoped(function* () {
+      disposed = yield* createInputOwner();
+    });
+    if (disposed === undefined) {
+      throw new Error("Owner was not acquired.");
+    }
+    for (const result of [
+      projectInputValue(owner, unsafe),
+      projectInputValue(owner, { foreign }),
+      projectInputValue(disposed, undefined),
+      projectInputValue(disposed, { public: "useful" }),
+    ]) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("withheld");
+        expect(result.error.message.includes(secret)).toBe(false);
+        expect(result.error.cause).toBeUndefined();
+      }
+    }
+    expect(projectInputValue(owner, undefined)).toEqual(Ok(undefined));
   });
 });

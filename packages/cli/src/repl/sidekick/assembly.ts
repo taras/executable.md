@@ -1,3 +1,4 @@
+import type { ReplPluginExtension } from "../../repl-api.ts";
 /**
  * What the Sidekick's own conversations are built under (#883).
  *
@@ -53,6 +54,7 @@ export function sidekickAssembly(
   agent: string,
   dependencies: AcpxProviderDependencies,
   ownershipAdministration?: import("@executablemd/runtime").AgentSessionOwnershipAdministration,
+  repl: readonly ReplPluginExtension[] = [],
 ): SidekickAssembly {
   const options = { defaultAgent: agent, permissionMode: PERMISSION_MODE };
   const factory = createAcpxProvider({
@@ -77,6 +79,7 @@ export function sidekickAssembly(
   };
   return {
     agent,
+    repl,
     installations: [installation],
     ...(ownershipAdministration === undefined ? {} : { ownershipAdministration }),
   };

@@ -9,7 +9,7 @@ import { createContext, Err, Ok, ensure } from "effection";
 import type { Operation, Result } from "effection";
 import { API } from "@executablemd/runtime";
 import type { ProcessExecOptions, ProcessOutcome } from "@executablemd/runtime";
-import { parseJson } from "../json.ts";
+import { JsonParseError, parseJson } from "../json.ts";
 import type { Json } from "../types.ts";
 import { buildCommand } from "../modifiers.ts";
 import { INPUT_REPLACEMENT } from "./input-schema.ts";
@@ -365,6 +365,41 @@ export function inspectInputOwner(owner: SecretInputOwner): InputValues {
     throw new Error("Invalid protected-input owner.");
   }
   return inspect(false);
+}
+
+/**
+ * Project optional JSON observation through the supplied protected-input owner.
+ *
+ * Owned protected leaves and known input text use the owner's safe display
+ * projection; public JSON data is retained. Ordinary non-JSON values return
+ * Ok(undefined). Failure to project an owned protected value, a foreign protected value,
+ * or a disposed owner returns Err with no raw value. This never changes the
+ * live value, attaches an owner, or grants restore, exec or invocation access.
+ */
+export function projectInputValue(
+  owner: SecretInputOwner,
+  value: unknown,
+): Result<Json | undefined> {
+  try {
+    const inputs = inspectInputOwner(owner);
+    if (inputs.contains(value)) {
+      return inputs.display(value);
+    }
+    let json: Json;
+    try {
+      json = parseJson(value);
+    } catch (error) {
+      if (error instanceof JsonParseError) {
+        return Ok(undefined);
+      }
+      throw error;
+    }
+    return inputs.display(json);
+  } catch {
+    return Err(
+      new Error("Protected-input observation cannot be safely projected; its value is withheld."),
+    );
+  }
 }
 
 export function* validateLiveReturnValue(

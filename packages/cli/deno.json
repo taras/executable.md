@@ -2,7 +2,10 @@
   "name": "@executablemd/cli",
   "version": "0.14.0",
   "license": "MIT",
-  "exports": "./src/deno.ts",
+  "exports": {
+    ".": "./src/deno.ts",
+    "./api": "./api.ts"
+  },
   "imports": {
     "@bomb.sh/tty": "npm:@bomb.sh/tty@0.9.0",
     "@effectionx/stream-helpers": "npm:@effectionx/stream-helpers@0.8.3",

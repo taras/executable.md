@@ -1,3 +1,10 @@
+import { env } from "@executablemd/core";
+import { Plugin } from "@executablemd/core/api";
+import type { ReplPluginInstallation } from "../api.ts";
+import { createDurableOperation } from "@executablemd/durable-streams";
+import type { Contributions } from "./fixtures/repl/contributed-plugin.ts";
+import { usePluginProgram } from "./support/plugin-program.ts";
+import { contributedPlugin } from "./fixtures/repl/contributed-plugin.ts";
 import { SidekickOwnerError } from "../src/repl/sidekick/owner.ts";
 /**
  * Tier R5 — a message, a turn, and the reply that runs (#883, J1/J4/J10).
@@ -4730,6 +4737,366 @@ describe("993 mounted nested Output journeys", () => {
       expect(saved.model.entries).toEqual([]);
     });
   }
+});
+
+describe("Contributed Sidekick controls", () => {
+  it("keeps contributed entry-only Cwd authored while omitting generated selection and vocabulary", function* () {
+    let calls = 0;
+    const plugin = Plugin({
+      name: "entry-cwd",
+      *install(): Operation<ReplPluginInstallation> {
+        yield* sleep(0);
+        return {
+          repl: {
+            components: [
+              {
+                name: "Cwd",
+                origin: "test://entry-cwd",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                factory: () =>
+                  function* () {
+                    calls++;
+                    yield* sleep(0);
+                    return "authored-cwd";
+                  },
+              },
+            ],
+          },
+        };
+      },
+    });
+    const held = yield* usePluginProgram({ plugins: [plugin] });
+    const submitted = yield* held.root.session.submit(
+      '<Cwd as="custom" /><Syntax as="symbols" /><Output>{custom}\n{symbols}</Output>',
+    );
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    const joined = yield* submitted.value.join();
+    if (!joined.ok) {
+      throw joined.error;
+    }
+    const output = yield* submitted.value.output();
+    if (!output.ok) {
+      throw output.error;
+    }
+    expect(output.value.output).toContain("authored-cwd");
+    expect(output.value.output).toContain("<Cwd>");
+    expect(calls).toBe(1);
+    held.host.fake.script({ reply: "<Output>Hello</Output>" });
+    expect((yield* held.root.owner.message("Hello")).ok).toBe(true);
+    expect(
+      held.host.fake.prompts[0]?.split("\n").filter((line) => line.startsWith("- <Cwd")),
+    ).toEqual([]);
+    held.host.fake.script({
+      reply: '<Syntax as="response" /><REPL.Syntax as="entry" /><Output>{response}</Output>',
+    });
+    held.host.fake.script({ reply: "<Output>Described.</Output>" });
+    expect((yield* held.root.owner.message("Describe both vocabularies")).ok).toBe(true);
+    let saved = yield* records(yield* held.host.repository.open(held.root.execution));
+    const descriptions = saved.filter(
+      (record) => record.kind === "response" && record.output?.includes("Built-in components"),
+    );
+    expect(descriptions).toHaveLength(1);
+    expect(descriptions[0]).not.toMatchObject({ outcome: { status: "err" } });
+    if (descriptions[0]?.kind !== "response") {
+      throw new Error("Missing response Syntax output");
+    }
+    expect(descriptions[0].output).not.toContain("<Cwd>");
+    expect(held.host.fake.prompts[2]).toContain("<Cwd>");
+    held.host.fake.script({ reply: "<Cwd />" });
+    held.host.fake.script({ reply: "<Output>Entry-only Cwd was refused.</Output>" });
+    expect((yield* held.root.owner.message("Try generated Cwd")).ok).toBe(true);
+    expect(calls).toBe(1);
+    saved = yield* records(yield* held.host.repository.open(held.root.execution));
+    expect(
+      saved.filter((record) => record.kind === "control" && record.component === "Cwd"),
+    ).toHaveLength(0);
+    expect(saved.filter((record) => record.kind === "response")).toContainEqual(
+      expect.objectContaining({ outcome: expect.objectContaining({ status: "err" }) }),
+    );
+  });
+
+  it("offers only a contributed paired Cwd with its actual props, effect and feedback", function* () {
+    let calls = 0;
+    const plugin = Plugin({
+      name: "paired-cwd",
+      *install(): Operation<ReplPluginInstallation> {
+        yield* sleep(0);
+        return {
+          repl: {
+            components: [
+              {
+                name: "Cwd",
+                origin: "test://paired-cwd",
+                props: {
+                  type: "object",
+                  properties: { label: { type: "string" } },
+                  additionalProperties: false,
+                },
+                returns: { type: "string" },
+                generated: {
+                  paired: { identity: "https://executable.md/test/paired-cwd", effect: "write" },
+                },
+                factory: (claim) =>
+                  function* (_props, invocation) {
+                    yield* claim(invocation);
+                    calls++;
+                    return "paired-cwd";
+                  },
+              },
+            ],
+          },
+        };
+      },
+    });
+    const held = yield* usePluginProgram({ plugins: [plugin] });
+    held.host.fake.script({
+      reply:
+        '<Cwd label="selected" as="value">body</Cwd><Syntax as="symbols" /><Output>{value}\n{symbols}</Output>',
+    });
+    held.host.fake.script({ reply: "<Output>Paired Cwd completed.</Output>" });
+    expect((yield* held.root.owner.message("Use paired Cwd")).ok).toBe(true);
+    expect(calls).toBe(1);
+    expect(
+      held.host.fake.prompts[0]?.split("\n").filter((line) => line.startsWith("- <Cwd")),
+    ).toEqual(["- <Cwd>…</Cwd> — write. props: label"]);
+    expect(held.host.fake.prompts[1]).toContain("paired-cwd");
+    held.host.fake.script({ reply: '<Cwd as="refused" />' });
+    held.host.fake.script({ reply: "<Output>Self-closing Cwd was refused.</Output>" });
+    expect((yield* held.root.owner.message("Try the unoffered self-closing form")).ok).toBe(true);
+    expect(calls).toBe(1);
+    const saved = yield* records(yield* held.host.repository.open(held.root.execution));
+    const intents = saved.filter(
+      (record) => record.kind === "control" && record.component === "Cwd",
+    );
+    expect(intents).toHaveLength(1);
+    const outcomes = saved.filter((record) => record.kind === "control-outcome");
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ outcome: { status: "ok" }, observed: "paired-cwd" });
+    expect(saved.filter((record) => record.kind === "response")).toContainEqual(
+      expect.objectContaining({ outcome: expect.objectContaining({ status: "err" }) }),
+    );
+  });
+
+  it("records an elicited protected return as safe typed feedback while retaining its live schema", function* () {
+    let calls = 0;
+    const plugin = Plugin({
+      name: "protected-return-contribution",
+      *install(): Operation<ReplPluginInstallation> {
+        yield* sleep(0);
+        return {
+          repl: {
+            components: [
+              {
+                name: "ProtectedReturn",
+                origin: "test://protected-return",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                returns: {
+                  type: "object",
+                  properties: {
+                    code: { type: "string", pattern: "^[0-9]{6}$" },
+                    public: { type: "string" },
+                  },
+                  required: ["code", "public"],
+                  additionalProperties: false,
+                },
+                generated: {
+                  "self-closing": {
+                    identity: "https://executable.md/test/protected-return",
+                    effect: "read",
+                  },
+                },
+                factory: () =>
+                  function* () {
+                    calls++;
+                    const bindings = yield* env;
+                    if (bindings === undefined) {
+                      throw new Error("Missing live response bindings.");
+                    }
+                    return bindings.values.answer;
+                  },
+              },
+            ],
+          },
+        };
+      },
+    });
+    const held = yield* useHarness(undefined, { plugins: [plugin] });
+    held.fake.script({
+      reply:
+        '<Elicit schema={{type:"object",properties:{code:{type:"string",writeOnly:true},public:{type:"string"}},required:["code","public"],additionalProperties:false}} as="answer">Enter a code.</Elicit><ProtectedReturn as="returned" />',
+    });
+    held.fake.script({ reply: "<Output>Protected return received.</Output>" });
+    const running = yield* spawn(() => held.owner.message("Use a protected contributed return"));
+    yield* awaitedFact("the protected contributed question", function* () {
+      return held.owner.questions.pending !== undefined;
+    });
+    const question = held.owner.questions.pending;
+    if (question === undefined) {
+      throw new Error("No pending protected question.");
+    }
+    const secret = String(Math.floor(100000 + Math.random() * 900000));
+    expect(question.submit({ code: secret, public: "useful" })).toMatchObject({ kind: "answered" });
+    const answer = yield* running;
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(calls).toBe(1);
+    const saved = yield* records(held.execution);
+    const intents = saved.filter(
+      (record) => record.kind === "control" && record.component === "ProtectedReturn",
+    );
+    expect(intents).toHaveLength(1);
+    const intent = intents[0];
+    if (intent === undefined || intent.kind !== "control") {
+      throw new Error("Contributed intent was not acknowledged.");
+    }
+    const outcomes = saved.filter(
+      (record) =>
+        record.kind === "control-outcome" &&
+        record.conversation === intent.conversation &&
+        record.response === intent.response &&
+        record.order === intent.order,
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toEqual(
+      expect.objectContaining({
+        outcome: { status: "ok" },
+        observed: { code: "[redacted]", public: "useful" },
+      }),
+    );
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(held.fake.prompts[1]).toContain('"code": "[redacted]"');
+    expect(held.fake.prompts[1]).toContain('"public": "useful"');
+    expect(saved.filter((record) => record.kind === "response")).toEqual([
+      expect.objectContaining({ outcome: { status: "ok" } }),
+      expect.objectContaining({ outcome: { status: "ok" }, output: "Protected return received." }),
+    ]);
+    expect(JSON.stringify(saved).includes(secret)).toBe(false);
+    expect(held.fake.prompts.some((prompt) => prompt.includes(secret))).toBe(false);
+  });
+
+  it("records effect-only success without JSON observation and continues feedback", function* () {
+    let calls = 0;
+    const plugin = Plugin({
+      name: "effect-only-contribution",
+      *install(): Operation<ReplPluginInstallation> {
+        yield* sleep(0);
+        return {
+          repl: {
+            components: [
+              {
+                name: "EffectOnly",
+                origin: "test://effect-only",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                generated: {
+                  "self-closing": {
+                    identity: "https://executable.md/test/effect-only",
+                    effect: "write",
+                  },
+                },
+                factory: (claim) =>
+                  function* (_props, invocation) {
+                    const name = yield* claim(invocation);
+                    yield createDurableOperation({ type: "effect_only", name }, function* () {
+                      calls++;
+                      yield* sleep(0);
+                      return null;
+                    });
+                  },
+              },
+            ],
+          },
+        };
+      },
+    });
+    const held = yield* usePluginProgram({ plugins: [plugin] });
+    held.host.fake.script({ reply: "<EffectOnly />" });
+    held.host.fake.script({ reply: "<Output>Effect completed.</Output>" });
+    const answer = yield* held.root.owner.message("Perform the contributed effect");
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(calls).toBe(1);
+    const saved = yield* records(yield* held.host.repository.open(held.root.execution));
+    const intents = saved
+      .filter((record) => record.kind === "control")
+      .filter((record) => record.component === "EffectOnly");
+    expect(intents).toHaveLength(1);
+    const outcomes = saved.filter((record) => record.kind === "control-outcome");
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({
+      conversation: intents[0]?.conversation,
+      response: intents[0]?.response,
+      order: intents[0]?.order,
+      outcome: { status: "ok" },
+    });
+    expect(outcomes[0]).not.toHaveProperty("observed");
+    expect(held.host.fake.prompts).toHaveLength(2);
+    expect(held.host.fake.prompts[1]).toBe("null");
+    expect(held.host.fake.prompts[1]).not.toContain("Your response did not finish");
+    expect(saved.filter((record) => record.kind === "response")).toEqual([
+      expect.objectContaining({ outcome: { status: "ok" }, hasOutput: false }),
+      expect.objectContaining({ outcome: { status: "ok" }, output: "Effect completed." }),
+    ]);
+  });
+
+  it("R4f/R5: one declaration supplies both forms, documentation and real typed feedback", function* () {
+    const counts: Contributions = { initialized: 0, conversations: 0, closed: 0, calls: [] };
+    yield* scoped(function* () {
+      const held = yield* usePluginProgram({ plugins: [contributedPlugin(counts)] });
+      held.host.fake.script({
+        reply:
+          '<Contributed as="read" /><Contributed as="write">edit</Contributed><Output><Json value={[read,write]} /></Output>',
+      });
+      held.host.fake.script({ reply: "<Output>done</Output>" });
+      const answered = yield* held.root.owner.message("Use both contributed forms");
+      if (!answered.ok) {
+        throw answered.error;
+      }
+      expect(counts.initialized).toBe(1);
+      expect(counts.conversations).toBe(1);
+      expect(counts.calls).toEqual(["read", "write"]);
+      expect(held.host.fake.prompts[0]).toContain("<Contributed /> — read");
+      expect(held.host.fake.prompts[0]).toContain("<Contributed>…</Contributed> — write");
+      expect(held.host.fake.prompts[1]).toContain('"count": 1');
+      expect(held.host.fake.prompts[1]).toContain('"count": 2');
+      expect(held.host.fake.prompts[0]).toContain("contribution-conversation");
+      const execution = yield* held.host.repository.open(held.root.execution);
+      const saved = yield* records(execution);
+      const intents = saved.filter(
+        (one) => one.kind === "control" && one.component === "Contributed",
+      );
+      expect(intents).toHaveLength(2);
+      expect(saved.filter((one) => one.kind === "control-outcome")).toHaveLength(2);
+      held.host.fake.script({
+        reply:
+          '<Syntax names={["Contributed","Authored"]} as="response" /><REPL.Syntax names={["Contributed","Authored"]} as="entry" /><Output><Json value={[response,entry]} /></Output>',
+      });
+      held.host.fake.script({ reply: "<Output>described</Output>" });
+      expect((yield* held.root.owner.message("Describe both vocabularies")).ok).toBe(true);
+      expect(counts.calls).toHaveLength(2);
+      const described = yield* records(yield* held.host.repository.open(held.root.execution));
+      expect(JSON.stringify(described)).toContain("Authored");
+      expect(JSON.stringify(described)).toContain("Contributed");
+      held.host.fake.script({ reply: '<Authored as="refused" />' });
+      held.host.fake.script({ reply: "<Output>Authored is entry-only.</Output>" });
+      expect((yield* held.root.owner.message("Try the authored-only form")).ok).toBe(true);
+      expect(counts.calls).toHaveLength(2);
+      held.host.fake.script({ reply: "entry reply" });
+      const submitted = yield* held.root.session.submit(
+        '<Session><Prompt text="entry request" /></Session><Authored as="only" />',
+      );
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      expect((yield* submitted.value.join()).ok).toBe(true);
+      expect(held.host.fake.prompts.at(-1)).not.toContain("contribution-conversation");
+      expect(counts.conversations).toBe(1);
+    });
+    expect(counts.closed).toBe(1);
+  });
 });
 
 describe("protected Sidekick question feedback", () => {

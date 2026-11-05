@@ -8199,6 +8199,34 @@ the one recorded.
 Only a durability failure (§6.11) escapes this. It says the journal no longer
 describes the run, so it is never recorded as the run's own outcome.
 
+### Trusted host invocation observation
+
+`ExecutionInstallation.componentInvocations` on `@executablemd/core/host` observes
+only its declared identity implementations selected by canonical resolution.
+Core captures callbacks before install. `before(observation)` runs after input
+validation; `after(observation, outcome, cancelled)` runs after ordered invocation
+cleanup and declared return acceptance, before caller binding/rendering. Observation
+is a detached deeply frozen `{ component, props }` snapshot of validated ordinary
+inputs with defaults, excluding as, slot, captures and content. The same fresh
+object correlates both independently optional callbacks for that call.
+
+Before rejection prevents body work and still reaches after. After observes the
+selected Effection Result without replacing input, output or continuation. Its
+cleanup joins. Ordinary after failure fails success, or accompanies the existing
+ordinary failure without replacing it; fatal precedence remains unchanged. Nested
+callbacks enter outer to inner and unwind inner to outer even after inner failure.
+Completed effects are never repeated because a callback failed.
+
+`cancelled` is true only for owner-selected cancellation after successful owning
+cleanup. It accompanies Err containing `ComponentInvocationCancelled`, whose fixed
+message is `The component invocation was cancelled.` and whose name is
+`ComponentInvocationCancelled`. The Error carries no operation or cause payload.
+Ordinary thrown Errors, including that notification Error, and selected owning
+teardown failures supply false with their actual selected failure. Cancellation
+stays cancellation. Inspection and documentation invoke neither callback. No genuine
+invocation, return replacement or private host journal crosses this observation.
+Public Component.expand phases retain their existing Result<void> boundary.
+
 ### 6.10 Component return values: `returns` and `<Return>`
 
 A component has one return path. It either returns its rendered Markdown or
@@ -8602,6 +8630,8 @@ stops everything the content created — including daemons started inside it —
 before the directory is removed. No filesystem operation is fire-and-forget.
 
 ### 6.12 JSON in both directions: `<Json>`, `<Parse>` and `<SafeParse>`
+
+A trusted host observes a live return with `projectInputValue(owner, value)` from `@executablemd/core/host`. Its producing owner supplies the fixed protected replacement and preserves public JSON siblings and safe known input text. The original value remains live for controlled uses. Ordinary non-JSON yields `Ok(undefined)` so observation is omitted without losing successful settlement. Unsafe or foreign protected values and disposed owners yield a withheld `Err`. The owner remains live through joined provider and callback cleanup; keeping the projector does not extend that lifetime.
 
 A document moves between structured values and JSON text at boundaries it
 writes down. `<Let>` introduces a value (§6.5), `<Json>` renders one as text,
@@ -11202,6 +11232,45 @@ into. A load or install failure, or a cancellation, unwinds the Plugins already
 installed, reads no root and starts no document. An isolated nested
 `<Execution host="run">` inherits nothing and installs the same Plugin values
 again in its own scope, with command `run`.
+
+#### CLI REPL contributions
+
+The CLI extends `PluginInstallation` on `@executablemd/cli/api`; Core's Plugin
+interface imports no CLI types:
+
+```ts
+interface ReplPluginExtension {
+  initialize?(session: { readonly workspace: string }): Operation<void>;
+  readonly components?: readonly IdentityComponent[];
+  sidekick?(): Operation<void>;
+}
+interface ReplPluginInstallation extends PluginInstallation {
+  readonly repl?: ReplPluginExtension;
+}
+```
+
+Selected Plugins may return a CLI-owned `repl` contribution from
+`@executablemd/cli/api`. `initialize({ workspace })` runs once per live logical
+session after route and history validation; its resources end with that session.
+A child initializes independently in its own workspace. UI attachment, detachment
+and history inspection initialize nothing. Failure or cancellation joins prior
+setup before entry work, conversation work or attachment publication begins.
+
+`repl.components` declares identity components once. The ordinary entry vocabulary
+and eligible Sidekick forms derive from those declarations; absent generated
+metadata offers no generated form. Canonical identity, form dispatch and effect
+permissions still decide execution. `repl.sidekick()` runs once per live
+conversation after its provider is installed and before capture, sharing initialized
+session state. Its resources and provider decorations end with that conversation;
+entry Prompts inherit none of them. Command installation contributes package
+documentation through the existing documentation helpers and starts no session
+service. Documentation lookup grants no execution authority.
+The CLI exports `Repl` and `ReplApi` with an `initialize` operation using that
+same argument. The logical session owner applies selected callbacks through this
+operation in selection order. Extension objects and callbacks are retained before
+session work; malformed contributions refuse, and extension-only installations
+remain selected. The first selected initializer is outermost and cleanup unwinds
+in reverse order.
 
 #### The contextual APIs a Plugin composes through
 
@@ -14879,6 +14948,10 @@ Plugin is the run it always was.
 | PL15 | Selection by package | A bare specifier resolves in the invocation directory's package environment, and the Plugin's own name is what identifies it — not the package or module it came from |
 | PL16 | Cancellation | A command halted while a Plugin is still installing releases what the Plugins before it acquired, installs nothing after it, and stays a cancellation; a scope whose body and teardown both fail reports exactly what it reported before Plugins existed |
 | PL17 | One bundled Plugin, and nothing else by default | A command that names no `--plugin` installs exactly the bundled `@executablemd/git` where its profile carries it — `run`, `plan`, `syntax`, `repl` and workflow `start`/`resume`/`fork` — and nothing at all for `xmd test`, `upgrade` and a workflow management action; an unselected Plugin such as the review graph is absent from the symbols and from a run until it is named, and present in both once it is |
+| PL18 | REPL services | Selected `repl` contributions compose once per live logical session with independent child state; descriptive reads and UI attachment start no setup; failed or cancelled setup joins cleanup before operational work. |
+| PL19 | One declaration | REPL identity declarations supply entry syntax, eligible generated forms and documentation without granting extra execution authority; deselected contributions are absent. |
+| PL20 | Conversation composition | Sidekick setup shares session state, runs once per live conversation and ends with it; pre-capture provider decoration preserves the selected agent and exact checked Session without reaching entry Prompts. |
+
 | PL19 | The reserved selector | `--plugin git` names the bundled value rather than a module: it loads nothing, and writing it once or repeatedly leaves one `@executablemd/git` first in the active list. It cannot give a command a profile it does not have — `--plugin git` before a workflow management action or `xmd test` still installs none |
 | PL20 | The selector is not the name | `--plugin @executablemd/git` is an ordinary specifier: it loads, and a module claiming the bundled Plugin's name is refused as a duplicate like any other collision. Identity-based idempotence belongs to the host's own selector for its own value, and a nested run child prefixing the bundled value drops it by identity so an impostor still collides |
 | PL21 | Test isolation | The outer `xmd test` root carries no bundled Plugin and resolves none of its names; a nested `<Execution host="run">` child assembles the run profile in its own scope and resolves all of them, and does not inherit what its parent declined |

@@ -148,7 +148,7 @@ import {
 } from "@executablemd/durable-streams";
 import type { DurablePosition, Workflow } from "@executablemd/durable-streams";
 import { SourceOwner } from "./source-owner.ts";
-import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
+import { SchemaValidationError, validateProps } from "./validate.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments, splitTextFences } from "./scanner.ts";
@@ -3983,249 +3983,275 @@ function* expandFunctionComponent(
   };
 
   /** The invocation itself, and what a failure of it means. */
+  const hooks =
+    selected?.componentInvocations ??
+    (environment?.componentIdentity === undefined
+      ? environment?.componentRouting?.hooks(definition.fn)
+      : undefined);
+  const invocationObservation =
+    hooks === undefined
+      ? undefined
+      : {
+          hooks,
+          value: Object.freeze({
+            component: name,
+            props: deepFreeze(structuredClone(validatedProps)),
+          }),
+          accept: (value: unknown): Operation<unknown> =>
+            returns === undefined
+              ? unchangedReturn(value)
+              : validateLiveReturnValue(name, value, returns),
+        };
   const returnedSelection = new Set<string>();
   const invoke = function* (): Operation<Segment[]> {
     // Call the function component inside its invocation, with content middleware
     // in scope so it can render its invocation content through `yield* content()`.
     try {
-      const output: unknown = yield* withInvocation(function* (invocation) {
-        observed.active();
-        const enclosing = yield* ActiveProjection.get();
-        // Minted before the handle, because the handle is what raises it: an
-        // invocation names nothing while it is expanding its own content, and
-        // that is the whole of how a nested component is reached.
-        //
-        // The domain is this execution's own, for this authored name, from the
-        // state installation built before anything could observe it — never
-        // from a definition, a registry answer or a context, all of which a
-        // handler may keep from one attachment and hand back inside another.
-        // The frame is the one the body is about to run in, so an issuance
-        // routed into a concurrent invocation of the same component answers
-        // nothing there.
-        //
-        // The authored shape travels with it, taken from the scan the same way
-        // the contextual answer below is. Both report it; only this one is
-        // beyond reach of the chain that reports it, which is what a component
-        // choosing an effect from it needs.
-        const frame = yield* useScope();
-        // An authored import must still settle its selection frame, including
-        // refusing multiple delegations. Only a generated expansion has no such
-        // table and issues through its narrowed protected route instead.
-        const issued =
-          (environment?.componentIdentity === undefined
-            ? environment?.componentRouting?.issue(
-                definition.fn,
-                expansion.id,
-                name,
-                frame,
-                !selfClosing,
-                dispatcher,
-              )
-            : undefined) ??
-          issueInvocation(expansion.id, name, selected, frame, !selfClosing, dispatcher);
-        const dispatchBody = (body: Operation<unknown>) =>
-          environment?.invokeGeneratedComponent === undefined
-            ? body
-            : environment.invokeGeneratedComponent(definition.fn, issued.invocation, body);
-        const projectionState: ProjectionState = {
-          rendered: (segments, frame) => {
-            for (const source of selectionSources(frame, segments)) {
-              returnedSelection.add(source);
-            }
-          },
-          invocation,
-          projecting: issued.projecting,
-          enclosing,
-          children,
-          narrowedSyntax: undefined,
-          caller: {
-            sourceOwner,
-            env: undefined,
-            meta: callerMeta,
-            props: callerProps,
-            hideSet,
-          },
-          authored: {
-            sourceOwner,
-            env: undefined,
-            meta: callerMeta,
-            props: callerProps,
-            hideSet,
-          },
-          counter,
-          callerLoop: siteLoop,
-          callerReturn: siteReturn,
-          ownPath: path,
-          checkedFailures,
-          environment,
-          filesystem,
-          outputFrame,
-          imports,
-        };
-        // Only the ordinary handle is published. The richer projection a
-        // protected body may reach stays a closure at the dispatch below, so
-        // nothing that can read `ActiveProjection` — another loaded copy, a
-        // repository component, a registration, a declaration, middleware, a
-        // context — obtains or influences it.
-        const handle = createProjectionHandle(projectionState);
-        invocation.evalScope.scope.set(ActiveProjection, handle);
+      const output: unknown = yield* withInvocation(
+        function* (invocation) {
+          observed.active();
+          const enclosing = yield* ActiveProjection.get();
+          // Minted before the handle, because the handle is what raises it: an
+          // invocation names nothing while it is expanding its own content, and
+          // that is the whole of how a nested component is reached.
+          //
+          // The domain is this execution's own, for this authored name, from the
+          // state installation built before anything could observe it — never
+          // from a definition, a registry answer or a context, all of which a
+          // handler may keep from one attachment and hand back inside another.
+          // The frame is the one the body is about to run in, so an issuance
+          // routed into a concurrent invocation of the same component answers
+          // nothing there.
+          //
+          // The authored shape travels with it, taken from the scan the same way
+          // the contextual answer below is. Both report it; only this one is
+          // beyond reach of the chain that reports it, which is what a component
+          // choosing an effect from it needs.
+          const frame = yield* useScope();
+          // An authored import must still settle its selection frame, including
+          // refusing multiple delegations. Only a generated expansion has no such
+          // table and issues through its narrowed protected route instead.
+          const issued =
+            (environment?.componentIdentity === undefined
+              ? environment?.componentRouting?.issue(
+                  definition.fn,
+                  expansion.id,
+                  name,
+                  frame,
+                  !selfClosing,
+                  dispatcher,
+                )
+              : undefined) ??
+            issueInvocation(expansion.id, name, selected, frame, !selfClosing, dispatcher);
+          const dispatchBody = (body: Operation<unknown>) =>
+            environment?.invokeGeneratedComponent === undefined
+              ? body
+              : environment.invokeGeneratedComponent(definition.fn, issued.invocation, body);
+          const projectionState: ProjectionState = {
+            rendered: (segments, frame) => {
+              for (const source of selectionSources(frame, segments)) {
+                returnedSelection.add(source);
+              }
+            },
+            invocation,
+            projecting: issued.projecting,
+            enclosing,
+            children,
+            narrowedSyntax: undefined,
+            caller: {
+              sourceOwner,
+              env: undefined,
+              meta: callerMeta,
+              props: callerProps,
+              hideSet,
+            },
+            authored: {
+              sourceOwner,
+              env: undefined,
+              meta: callerMeta,
+              props: callerProps,
+              hideSet,
+            },
+            counter,
+            callerLoop: siteLoop,
+            callerReturn: siteReturn,
+            ownPath: path,
+            checkedFailures,
+            environment,
+            filesystem,
+            outputFrame,
+            imports,
+          };
+          // Only the ordinary handle is published. The richer projection a
+          // protected body may reach stays a closure at the dispatch below, so
+          // nothing that can read `ActiveProjection` — another loaded copy, a
+          // repository component, a registration, a declaration, middleware, a
+          // context — obtains or influences it.
+          const handle = createProjectionHandle(projectionState);
+          invocation.evalScope.scope.set(ActiveProjection, handle);
 
-        yield* ActiveLoop.set(undefined);
-        yield* publishExpansion(expansion);
-        yield* provideEvalScope(invocation.evalScope);
-        yield* provideRetain(siteEvalScope);
-        yield* Component.around(
-          {
-            content: ([slotName]) => projectSlot(handle, siteErrorMode, slotName),
-            // The element's shape, not its rendered result: content that renders
-            // an empty string is still content.
-            // deno-lint-ignore require-yield
-            *hasContent(_args, _next) {
-              return !selfClosing;
-            },
-            // The engine's own answer about the engine's own prop: `as` was
-            // validated and stripped above, and this reports whether it was
-            // there. Nothing else about the binding crosses — not its name, not
-            // the environment it will be written to.
-            // deno-lint-ignore require-yield
-            *hasBinding(_args, _next) {
-              return asBinding !== undefined;
-            },
-            // deno-lint-ignore require-yield
-            *hasCapture([captureName], _next) {
-              return captureName in literalCaptures || captureName in expressionCaptures;
-            },
-            *capture([captureName], _next) {
-              if (captureName in literalCaptures) {
-                return literalCaptures[captureName];
-              }
-              const expression = expressionCaptures[captureName];
-              if (expression === undefined) {
-                throw new Error(`<${name} /> was not written with a "${captureName}" prop.`);
-              }
-              // Evaluated here, not during prop resolution: the component asked
-              // for it, and owns whatever the expression does. Against the site
-              // environment resolved before the invocation began.
-              return yield* evaluateExpression(expression, name, captureName, {
-                values: captureEnv,
-              });
-            },
-            *tryContent([slotName], _next) {
-              const outcome = yield* handle.tryProject({
-                kind: "slot",
-                name: slotName,
-                mode: siteErrorMode,
-              });
-              // A documentation failure is presented in the public shape, as
-              // `content()` does, so a component recovering from one sees the
-              // same thing either way.
-              const failure =
-                outcome.failure instanceof DocumentationError
-                  ? new ContentExpansionFailure([outcome.failure.segment], outcome.failure)
-                  : outcome.failure;
-              return failure === undefined
-                ? { text: renderSegments(outcome.segments) }
-                : { text: renderSegments(outcome.segments), failure };
-            },
-          },
-          { at: "min" },
-        );
-        // Projection follows the same ordinary-binding layering as Markdown
-        // expansion while retaining the projected caller's props namespace.
-        if (projectedEnv) {
-          const siteEnv = yield* env;
-          const projectedSiteEnv = layerEnvironments(projectedEnv, siteEnv) ?? { values: {} };
+          yield* ActiveLoop.set(undefined);
+          yield* publishExpansion(expansion);
+          yield* provideEvalScope(invocation.evalScope);
+          yield* provideRetain(siteEvalScope);
           yield* Component.around(
             {
-              env: () => projectedSiteEnv,
+              content: ([slotName]) => projectSlot(handle, siteErrorMode, slotName),
+              // The element's shape, not its rendered result: content that renders
+              // an empty string is still content.
+              // deno-lint-ignore require-yield
+              *hasContent(_args, _next) {
+                return !selfClosing;
+              },
+              // The engine's own answer about the engine's own prop: `as` was
+              // validated and stripped above, and this reports whether it was
+              // there. Nothing else about the binding crosses — not its name, not
+              // the environment it will be written to.
+              // deno-lint-ignore require-yield
+              *hasBinding(_args, _next) {
+                return asBinding !== undefined;
+              },
+              // deno-lint-ignore require-yield
+              *hasCapture([captureName], _next) {
+                return captureName in literalCaptures || captureName in expressionCaptures;
+              },
+              *capture([captureName], _next) {
+                if (captureName in literalCaptures) {
+                  return literalCaptures[captureName];
+                }
+                const expression = expressionCaptures[captureName];
+                if (expression === undefined) {
+                  throw new Error(`<${name} /> was not written with a "${captureName}" prop.`);
+                }
+                // Evaluated here, not during prop resolution: the component asked
+                // for it, and owns whatever the expression does. Against the site
+                // environment resolved before the invocation began.
+                return yield* evaluateExpression(expression, name, captureName, {
+                  values: captureEnv,
+                });
+              },
+              *tryContent([slotName], _next) {
+                const outcome = yield* handle.tryProject({
+                  kind: "slot",
+                  name: slotName,
+                  mode: siteErrorMode,
+                });
+                // A documentation failure is presented in the public shape, as
+                // `content()` does, so a component recovering from one sees the
+                // same thing either way.
+                const failure =
+                  outcome.failure instanceof DocumentationError
+                    ? new ContentExpansionFailure([outcome.failure.segment], outcome.failure)
+                    : outcome.failure;
+                return failure === undefined
+                  ? { text: renderSegments(outcome.segments) }
+                  : { text: renderSegments(outcome.segments), failure };
+              },
             },
             { at: "min" },
           );
-        }
-        try {
-          if (TestHarnessComponentDefinition.own(definition.fn)) {
-            return yield* definition.fn.invoke(validatedProps, binding);
+          // Projection follows the same ordinary-binding layering as Markdown
+          // expansion while retaining the projected caller's props namespace.
+          if (projectedEnv) {
+            const siteEnv = yield* env;
+            const projectedSiteEnv = layerEnvironments(projectedEnv, siteEnv) ?? { values: {} };
+            yield* Component.around(
+              {
+                env: () => projectedSiteEnv,
+              },
+              { at: "min" },
+            );
           }
-          // A component canonical core protects reads one lexical fact — the
-          // syntax reference for this site — and the fact changes as expansion
-          // descends, so it cannot be closed over when the implementation is
-          // built. It is delivered here instead, by the copy of core performing
-          // the expansion, from the environment it is already holding.
-          const guarded = environment?.componentRouting?.body(definition.fn);
-          if (guarded !== undefined) {
-            // What to project, under which environment and in which scope stays
-            // here, where those things already are. How many times it may
-            // answer, and for how long, is the lease's
-            // (`protected-content.ts`).
-            const lease = selfClosing
-              ? undefined
-              : protectedContentLease(name, function* (syntax: SyntaxReference) {
-                  // The same state the ordinary handle was built from, with only
-                  // the reference replaced: the producer keeps its own imports,
-                  // declarations, closure, identities, bindings, providers,
-                  // directory, forms, exact-source tracking and error mode, and
-                  // sees a narrower vocabulary. This is a second handle over one
-                  // content scope, not a second expansion.
-                  const narrowed = createProjectionHandle({
-                    ...projectionState,
-                    narrowedSyntax: syntax,
-                    // Only the reference is replaced, and only where there is an
-                    // environment to replace it on: an expansion driven without
-                    // one narrows nothing because it admitted nothing.
-                    environment: environment === undefined ? undefined : { ...environment, syntax },
+          try {
+            if (TestHarnessComponentDefinition.own(definition.fn)) {
+              return yield* definition.fn.invoke(validatedProps, binding);
+            }
+            // A component canonical core protects reads one lexical fact — the
+            // syntax reference for this site — and the fact changes as expansion
+            // descends, so it cannot be closed over when the implementation is
+            // built. It is delivered here instead, by the copy of core performing
+            // the expansion, from the environment it is already holding.
+            const guarded = environment?.componentRouting?.body(definition.fn);
+            if (guarded !== undefined) {
+              // What to project, under which environment and in which scope stays
+              // here, where those things already are. How many times it may
+              // answer, and for how long, is the lease's
+              // (`protected-content.ts`).
+              const lease = selfClosing
+                ? undefined
+                : protectedContentLease(name, function* (syntax: SyntaxReference) {
+                    // The same state the ordinary handle was built from, with only
+                    // the reference replaced: the producer keeps its own imports,
+                    // declarations, closure, identities, bindings, providers,
+                    // directory, forms, exact-source tracking and error mode, and
+                    // sees a narrower vocabulary. This is a second handle over one
+                    // content scope, not a second expansion.
+                    const narrowed = createProjectionHandle({
+                      ...projectionState,
+                      narrowedSyntax: syntax,
+                      // Only the reference is replaced, and only where there is an
+                      // environment to replace it on: an expansion driven without
+                      // one narrows nothing because it admitted nothing.
+                      environment:
+                        environment === undefined ? undefined : { ...environment, syntax },
+                    });
+                    return yield* projectSlot(narrowed, siteErrorMode);
                   });
-                  return yield* projectSlot(narrowed, siteErrorMode);
-                });
-            let active = true;
+              let active = true;
+              try {
+                return yield* dispatchBody(
+                  guarded(validatedProps, issued.invocation, {
+                    filesystem,
+                    syntax: environment?.syntax,
+                    evaluationProfile: environment?.evaluationProfile,
+                    projectContent: lease?.project,
+                    narrowComponentRouting: (implementations: Iterable<unknown>) =>
+                      active ? environment?.componentRouting?.narrow(implementations) : undefined,
+                  }),
+                );
+              } finally {
+                // Closed in the same breath the issuance is: a projector a body
+                // kept authorizes nothing once that body has finished.
+                lease?.close();
+                active = false;
+                issued.close();
+              }
+            }
+            // Ended in the same breath the body is: an issuance a wrapper kept
+            // from a finished element authorizes nothing when it is routed here.
             try {
+              const fixed =
+                filesystem === undefined ? undefined : fixedFilesystemByFunction(dispatcher);
+              const direct =
+                fixed === undefined || filesystem === undefined
+                  ? undefined
+                  : invokeFixedFilesystem(fixed, validatedProps, issued.invocation, {
+                      filesystem,
+                      occurrence: expansion.id,
+                      project: function* (frame) {
+                        const projected = createProjectionHandle({
+                          ...projectionState,
+                          filesystem: { ...filesystem, frame },
+                        });
+                        return yield* projectSlot(projected, siteErrorMode);
+                      },
+                    });
               return yield* dispatchBody(
-                guarded(validatedProps, issued.invocation, {
-                  filesystem,
-                  syntax: environment?.syntax,
-                  evaluationProfile: environment?.evaluationProfile,
-                  projectContent: lease?.project,
-                  narrowComponentRouting: (implementations: Iterable<unknown>) =>
-                    active ? environment?.componentRouting?.narrow(implementations) : undefined,
-                }),
+                direct ?? definition.fn(validatedProps, issued.invocation),
               );
             } finally {
-              // Closed in the same breath the issuance is: a projector a body
-              // kept authorizes nothing once that body has finished.
-              lease?.close();
-              active = false;
               issued.close();
             }
+          } catch (error) {
+            if (error instanceof Error) {
+              throw error;
+            }
+            throw new ThrownValue(error);
           }
-          // Ended in the same breath the body is: an issuance a wrapper kept
-          // from a finished element authorizes nothing when it is routed here.
-          try {
-            const fixed =
-              filesystem === undefined ? undefined : fixedFilesystemByFunction(dispatcher);
-            const direct =
-              fixed === undefined || filesystem === undefined
-                ? undefined
-                : invokeFixedFilesystem(fixed, validatedProps, issued.invocation, {
-                    filesystem,
-                    occurrence: expansion.id,
-                    project: function* (frame) {
-                      const projected = createProjectionHandle({
-                        ...projectionState,
-                        filesystem: { ...filesystem, frame },
-                      });
-                      return yield* projectSlot(projected, siteErrorMode);
-                    },
-                  });
-            return yield* dispatchBody(direct ?? definition.fn(validatedProps, issued.invocation));
-          } finally {
-            issued.close();
-          }
-        } catch (error) {
-          if (error instanceof Error) {
-            throw error;
-          }
-          throw new ThrownValue(error);
-        }
-      }, observed.settled);
+        },
+        observed.settled,
+        invocationObservation,
+      );
       if (asBinding) {
         const parentEnv = yield* env;
         if (!parentEnv) {
@@ -4241,7 +4267,9 @@ function* expandFunctionComponent(
         // returned. `returns` is the opt-in that says this one is a validated
         // JSON record, and it is checked before binding.
         parentEnv.values[asBinding] =
-          returns === undefined ? output : yield* validateLiveReturnValue(name, output, returns);
+          returns === undefined || invocationObservation !== undefined
+            ? output
+            : yield* validateLiveReturnValue(name, output, returns);
         return [];
       }
       // Without `as` there is nowhere to bind, so only text can be observed:
@@ -5397,4 +5425,9 @@ function freezeJson(value: object): void {
       freezeJson(member);
     }
   }
+}
+
+// deno-lint-ignore require-yield
+function* unchangedReturn(value: unknown): Operation<unknown> {
+  return value;
 }

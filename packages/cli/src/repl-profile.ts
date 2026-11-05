@@ -1,3 +1,4 @@
+import type { ReplPluginExtension } from "./repl-api.ts";
 import { canonicalProject } from "./repl/startup.ts";
 import type { EntryPlacement } from "./repl/entry-placement.ts";
 import { sessionDirectories } from "./repl/session-directories.ts";
@@ -122,6 +123,7 @@ export interface ReplProfileAssembly {
 
 /** One finalized execution profile, shared by validation, descriptions and entries. */
 export interface ReplExecutionProfile {
+  readonly repl?: readonly ReplPluginExtension[];
   readonly access?: HostFilesAccess;
   readonly placement?: EntryPlacement;
   readonly children?: HeadlessChildren;
@@ -278,13 +280,17 @@ export function* assembleReplProfile(
         },
     },
     stack.sessions?.ownershipAdministration,
+    plugins.repl ?? [],
   );
   const context = planAgentContext(stack, facts.acp);
   const planWriterRoot = facts.planWriterRoot;
   const sessions = stack.sessions;
   const permissionMode = stack.permissionMode;
   const names = Object.freeze(plugins.plugins.map((plugin) => plugin.name));
-  const installations = Object.freeze([...plugins.installations]);
+  const installations = Object.freeze([
+    ...plugins.installations,
+    ...(plugins.repl ?? []).map((one) => ({ components: one.components ?? [] })),
+  ]);
   return Object.freeze({
     children,
     projectCwd,
@@ -334,6 +340,7 @@ export function* assembleReplProfile(
         }),
       ]);
       const profile = Object.freeze({
+        repl: plugins.repl ?? [],
         access,
         placement: {
           projectDirectory: projectCwd,
@@ -350,7 +357,7 @@ export function* assembleReplProfile(
         // changed.
         plugins: names,
         installations: entryInstallations,
-        generated: ordinaryGeneratedSelection(),
+        generated: replGeneratedSelection(plugins.repl ?? []),
         permissionMode,
         ...(entryInstallation === undefined ? {} : { entryInstallation }),
         // Settled here, with the stack and the Plugins, because it is a fact about
@@ -483,3 +490,24 @@ The file runs as a test document; do not submit it as an ordinary entry.
  */
 // deno-lint-ignore require-yield
 function* noElicitationOfItsOwn(): Operation<void> {}
+
+function replGeneratedSelection(extensions: readonly ReplPluginExtension[]): GeneratedSelection {
+  const selection = { ...ordinaryGeneratedSelection() };
+  for (const extension of extensions) {
+    for (const component of extension.components ?? []) {
+      delete selection[component.name];
+      const forms = component.generated;
+      if (forms !== undefined) {
+        selection[component.name] = [
+          ...(forms["self-closing"] === undefined
+            ? []
+            : (["self-closing"] satisfies import("@executablemd/core").InvocationForm[])),
+          ...(forms.paired === undefined
+            ? []
+            : (["paired"] satisfies import("@executablemd/core").InvocationForm[])),
+        ];
+      }
+    }
+  }
+  return Object.freeze(selection);
+}

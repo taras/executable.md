@@ -1,3 +1,5 @@
+import type { ReplPluginInstallation } from "../api.ts";
+import type { Operation } from "effection";
 import { workspaceMountInstallation } from "../src/repl/workspace-mount-installation.ts";
 import { validateProjectPlacement } from "../src/repl/startup.ts";
 import { ReplTerminal } from "../src/repl/terminal.ts";
@@ -13,7 +15,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readTextFile, writeTextFile, exists, rm, ensureDir } from "@effectionx/fs";
 import { API, cwd, Permissions } from "@executablemd/runtime";
-import { scoped, spawn, until, createContext, withResolvers, ensure } from "effection";
+import { scoped, spawn, until, createContext, withResolvers, ensure, sleep } from "effection";
 import { realpath, rename, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { prepareReplStartup, runReplProgram } from "../src/repl/program.ts";
@@ -460,20 +462,46 @@ describe("1113: project placement before live recovery", () => {
     if (!startup.ok) {
       throw startup.error;
     }
-    const profile = yield* held.host.profile.finalize(held.files.directory, held.host.root);
-    if (profile.access === undefined) {
-      throw new Error("missing host file roots");
-    }
-    const other = yield* useTemporary("1113-other-");
-    const terminal = recordingTerminal();
-    yield* terminal.install();
-    const result = yield* runReplProgram({
-      startup,
-      profile: { ...profile, access: { ...profile.access, project: other } },
+    yield* scoped(function* () {
+      let initialized = 0;
+      const selected = yield* useMountedHost({
+        projectCwd: held.project,
+        dataRoot: held.host.root,
+        hostFiles: true,
+        plugins: [
+          Plugin({
+            name: "startup-refusal-counter",
+            *install(): Operation<ReplPluginInstallation> {
+              yield* sleep(0);
+              return {
+                repl: {
+                  *initialize() {
+                    initialized++;
+                    yield* sleep(0);
+                  },
+                },
+              };
+            },
+          }),
+        ],
+      });
+      const profile = yield* selected.profile.finalize(held.files.directory, held.host.root);
+      expect(profile.repl).toHaveLength(1);
+      if (profile.access === undefined) {
+        throw new Error("missing host file roots");
+      }
+      const other = yield* useTemporary("1113-other-");
+      const terminal = recordingTerminal();
+      yield* terminal.install();
+      const result = yield* runReplProgram({
+        startup,
+        profile: { ...profile, access: { ...profile.access, project: other } },
+      });
+      expect(!result.ok && result.error.message).toContain("different file roots");
+      expect(initialized).toBe(0);
+      expect(yield* readTextFile(held.files.entries)).toBe(held.entries);
+      expect(yield* readTextFile(held.files.sidekick)).toBe(held.chat);
     });
-    expect(!result.ok && result.error.message).toContain("different file roots");
-    expect(yield* readTextFile(held.files.entries)).toBe(held.entries);
-    expect(yield* readTextFile(held.files.sidekick)).toBe(held.chat);
   });
 
   it("1113: a present placement is strict and never guesses a missing member", function* () {

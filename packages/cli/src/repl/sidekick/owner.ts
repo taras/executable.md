@@ -1,5 +1,8 @@
+import type { Json } from "@executablemd/core";
+import { DESIGNATED } from "./controls.ts";
+import type { ReplPluginExtension } from "../../repl-api.ts";
+import { projectInputValue, useSecretInputs } from "@executablemd/core/host";
 import { cwd } from "@executablemd/runtime";
-import { useSecretInputs } from "@executablemd/core/host";
 import { inspectRecoveryOwnership } from "./recovery-owner.ts";
 import { recoveryBlocked, uncertainRequests } from "./recovery-state.ts";
 import { bindRetainedPrefix } from "./history.ts";
@@ -158,6 +161,7 @@ export class SidekickOwnerError extends Error {
 
 /** What the Sidekick's own conversations run under. */
 export interface SidekickAssembly {
+  readonly repl?: readonly ReplPluginExtension[];
   readonly ownershipAdministration?: AgentSessionOwnershipAdministration;
   /** The agent a new conversation is opened with. */
   readonly agent: string;
@@ -592,6 +596,7 @@ export interface SidekickOwner {
 
 /** Which response this conversation's captured controls are answering for. */
 interface ServingResponse {
+  failed(error: Error): void;
   output(): ReplPrinting | undefined;
   readonly test?: ReplTesting;
   importAsset(source: string, destination: string): Operation<Result<string>>;
@@ -652,32 +657,42 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * owners and therefore two sets of controls, so a reply in one still
      * cannot reach the other one's root.
      */
-    const ceiling = sidekickResponseCeiling(
-      sidekickRequests(
-        root,
-        function* (): Operation<Result<SubmitReceipt>> {
-          return yield* servingNow().submit();
+    function responseCeiling(project?: (value: unknown) => Result<Json | undefined>) {
+      return sidekickResponseCeiling(
+        sidekickRequests(
+          root,
+          function* (): Operation<Result<SubmitReceipt>> {
+            return yield* servingNow().submit();
+          },
+          function* (path) {
+            const test = servingNow().test;
+            return test === undefined
+              ? Err(new Error("this REPL host has no test runner"))
+              : yield* test(path);
+          },
+          () => servingNow().output(),
+          (source, destination) => servingNow().importAsset(source, destination),
+        ),
+        {
+          *began(occurrence, reserved): Operation<number> {
+            return yield* servingNow().journal.began(occurrence, reserved);
+          },
+          *settled(order, outcome, observed): Operation<void> {
+            yield* servingNow().journal.settled(order, outcome, observed);
+          },
         },
-        function* (path) {
-          const test = servingNow().test;
-          return test === undefined
-            ? Err(new Error("this REPL host has no test runner"))
-            : yield* test(path);
-        },
-        () => servingNow().output(),
-        (source, destination) => servingNow().importAsset(source, destination),
-      ),
-      {
-        *began(occurrence, reserved): Operation<number> {
-          return yield* servingNow().journal.began(occurrence, reserved);
-        },
-        *settled(order, outcome, observed): Operation<void> {
-          yield* servingNow().journal.settled(order, outcome, observed);
-        },
-      },
-    );
-    /** How this conversation's execution captures those controls, once. */
-    const capturing = sidekickCeilingInstallation(ceiling);
+        assembly.repl ?? [],
+        (error) => servingNow().failed(error),
+        project,
+      );
+    }
+    const ceiling = responseCeiling();
+    const designated = new Set([
+      ...DESIGNATED,
+      ...(ceiling.components ?? [])
+        .filter((one) => one.generated !== undefined)
+        .map((one) => one.name),
+    ]);
     /**
      * Run one evaluation with this response named, and give the name back.
      *
@@ -1003,6 +1018,13 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       const ready = withResolvers<Result<AgentConversation>>();
       const task = mine.run(function* (): Operation<void> {
         const privacy = yield* useSecretInputs();
+        const owner = privacy.secretInputs;
+        if (owner === undefined) {
+          throw new Error("Sidekick conversation has no protected-input owner.");
+        }
+        const capturing = sidekickCeilingInstallation(
+          responseCeiling((value) => projectInputValue(owner, value)),
+        );
         const directory = input.projectCwd ?? (yield* cwd());
         if (directory !== undefined) {
           yield* API.Env.around(
@@ -2093,9 +2115,13 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
        * this is the whole of what is still this response's: its journal, and a
        * submission that records a refusal which produced no record.
        */
+      let contributedFailure: Error | undefined;
       let submitted: ReplPrinting | undefined;
       let submissionFailure: Error | undefined;
       const responding: ServingResponse = {
+        failed(error) {
+          contributedFailure ??= error;
+        },
         output: observation,
         journal,
         *importAsset(source, destination): Operation<Result<string>> {
@@ -2210,7 +2236,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             ? yield* unaccounted(paired, current.value, conversation)
             : undefined;
         const recovered =
-          held === undefined ? undefined : recoveredWork(yield* paired.writer.readAll(), held);
+          held === undefined
+            ? undefined
+            : recoveredWork(yield* paired.writer.readAll(), held, designated);
         request = turnRequest({
           context,
           recovered:
@@ -2452,6 +2480,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           }),
         ),
       );
+      if (contributedFailure !== undefined) {
+        throw contributedFailure;
+      }
       if (importFailure !== undefined) {
         throw importFailure;
       }
@@ -2494,7 +2525,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // the records it wrote. Plus its own failure when it had one a reply can
       // act on: an ordinary failure is a correction the agent can make, and
       // sending it is how the agent gets to make it.
-      const results = designatedResults(yield* paired.writer.readAll(), at, refused);
+      const results = designatedResults(yield* paired.writer.readAll(), at, refused, designated);
       let next = sealedFeedback(results, evaluated.ok ? undefined : evaluated.error.message);
       if (submitted !== undefined) {
         const round = finishedRound(root, submitted);

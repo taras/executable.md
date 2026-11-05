@@ -1,3 +1,4 @@
+import { Repl } from "../repl-api.ts";
 import { join } from "node:path";
 import { validateProjectPlacement, canonicalProject } from "./startup.ts";
 import { useReplElicitation } from "./elicitation.ts";
@@ -619,6 +620,26 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
     unresolved = cold.value;
     resumedWorkspaceEntry = placement.value;
   }
+
+  if (startup !== undefined) {
+    try {
+      yield* unchangedStartup(execution, startup.retained);
+    } catch (error) {
+      return Err(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+  for (const extension of profile.repl ?? []) {
+    const initialize = extension.initialize;
+    if (initialize !== undefined) {
+      yield* Repl.around({
+        *initialize([session], next) {
+          yield* initialize(session);
+          yield* next(session);
+        },
+      });
+    }
+  }
+  yield* Repl.operations.initialize({ workspace });
 
   if (startup !== undefined) {
     try {

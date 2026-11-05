@@ -1,3 +1,4 @@
+import type { ComponentInvocationHooks } from "./component-invocation-hooks.ts";
 import type { InputCommand } from "./secrets/inputs.ts";
 import { createInputOwner, attachInputOwner, inputValues } from "./secrets/inputs.ts";
 import type { SecretInputOwner } from "./secrets/inputs.ts";
@@ -2742,6 +2743,7 @@ function* assembleComponents(
   options: ExecuteOptions,
   bundles: readonly WorkflowComponentBundle[],
   identityComponents: readonly IdentityComponent[],
+  observations: ReadonlyMap<IdentityComponent, ComponentInvocationHooks>,
   installed: readonly RetainedInstallation[],
   documentation: readonly DocumentationContribution[],
   canonicalImports: CanonicalImports,
@@ -2795,6 +2797,7 @@ function* assembleComponents(
     // ordinary definitions this copy of core made once, so every execution
     // answers for them with that same object.
     FIXED_COMPONENTS.map((component) => component.definition),
+    observations,
   );
   yield* registerComponents(identity.registrations);
   identity.activate();
@@ -2874,7 +2877,7 @@ function* assembleComponents(
           selection,
           yield* resolveSelectedComponents([...selection.keys()], canonicalImports, {
             searchPaths: includes,
-            registry: startingRegistry,
+            registry: yield* Component.operations.registry,
             bundle,
             declared: installedComponents,
             catalog,
@@ -3644,6 +3647,8 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
  * `install` runs contextual behavior the document inherits.
  */
 export interface ExecutionInstallation {
+  /** Observe only this installation's canonically selected identity components. */
+  readonly componentInvocations?: ComponentInvocationHooks;
   readonly secretInputs?: SecretInputOwner;
   readonly filesystem?: FilesystemInstaller;
   /**
@@ -4371,10 +4376,27 @@ function* invoke(
   // the same reason as the rest: what may name durable work in this execution
   // is settled before anything can observe it, and the execution closes over
   // its own values rather than over an array a host still holds.
+  const observations = new Map<IdentityComponent, ComponentInvocationHooks>();
   const identityComponents = Object.freeze(
-    installations.flatMap((installation) =>
-      [...(installation.components ?? [])].map(retainedIdentityComponent),
-    ),
+    installations.flatMap((installation) => {
+      const container = installation.componentInvocations;
+      const before = container?.before;
+      const after = container?.after;
+      const hooks =
+        container === undefined
+          ? undefined
+          : Object.freeze({
+              ...(before === undefined ? {} : { before: before.bind(container) }),
+              ...(after === undefined ? {} : { after: after.bind(container) }),
+            });
+      return [...(installation.components ?? [])].map((input) => {
+        const component = retainedIdentityComponent(input);
+        if (hooks !== undefined) {
+          observations.set(component, hooks);
+        }
+        return component;
+      });
+    }),
   );
 
   // Read once and copied entry by entry, before any installation runs and for
@@ -4547,6 +4569,7 @@ function* invoke(
     options,
     bundles,
     identityComponents,
+    observations,
     installed,
     documentation,
     canonicalImports,

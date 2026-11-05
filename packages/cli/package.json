@@ -7,8 +7,11 @@
   },
   "type": "module",
   "exports": {
-    "bun": "./src/bun.ts",
-    "default": "./src/node.ts"
+    ".": {
+      "bun": "./src/bun.ts",
+      "default": "./src/node.ts"
+    },
+    "./api": "./api.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",

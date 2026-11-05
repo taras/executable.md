@@ -1,3 +1,10 @@
+import type {
+  ComponentInvocationHooks,
+  ComponentInvocationObservation,
+  IdentityComponent,
+} from "@executablemd/core/host";
+import type { ReplPluginExtension } from "../../repl-api.ts";
+import { fatalFailure } from "./testing.ts";
 /**
  * The ceiling a reply is evaluated under, and the description of it a reply reads.
  *
@@ -61,15 +68,15 @@
  * plugins in play, and a reply needs it only when it is about to write one.
  */
 
-import { Component, SYNTAX_COMPONENT } from "@executablemd/core";
-import type { GeneratedSelection, InvocationForm } from "@executablemd/core";
+import { Component, Execution, SYNTAX_COMPONENT } from "@executablemd/core";
+import type { GeneratedSelection, InvocationForm, Json } from "@executablemd/core";
 import type {
   ComponentAnswerInstallation,
   ComponentAnswerRegistrar,
   ExecutionInstallation,
 } from "@executablemd/core/host";
 import type { FunctionComponentDefinition } from "@executablemd/core";
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
 
 import { DESIGNATED, sidekickMutations, sidekickObservations } from "./controls.ts";
 import type { ControlJournal, SidekickControl, SidekickRequests } from "./controls.ts";
@@ -86,6 +93,9 @@ import type { ControlJournal, SidekickControl, SidekickRequests } from "./contro
 export interface ResponseCeiling {
   /** Every control this conversation owns, reads and writes alike. */
   readonly controls: readonly SidekickControl[];
+  readonly components?: readonly IdentityComponent[];
+  readonly componentInvocations?: ComponentInvocationHooks;
+  readonly extensions?: readonly ReplPluginExtension[];
   /** Both classes, always: a reply may read and may write the draft. */
   readonly allow: readonly ["read", "write"];
 }
@@ -101,11 +111,83 @@ export interface ResponseCeiling {
 export function sidekickResponseCeiling(
   requests: SidekickRequests,
   journal: ControlJournal,
+  extensions: readonly ReplPluginExtension[] = [],
+  failed: (error: Error) => void = () => {},
+  project?: (value: unknown) => Result<Json | undefined>,
 ): ResponseCeiling {
+  const components = Object.freeze(extensions.flatMap((one) => [...(one.components ?? [])]));
+  const builtin = [
+    ...sidekickObservations(requests, journal),
+    ...sidekickMutations(requests, journal),
+  ];
+  for (const component of components) {
+    if (builtin.some((control) => control.name === component.name)) {
+      throw new Error(`Contributed component ${component.name} conflicts with a Sidekick control`);
+    }
+  }
+  const orders = new WeakMap<ComponentInvocationObservation, number>();
   return {
+    components,
+    extensions,
+    componentInvocations: {
+      *before(observation) {
+        try {
+          const order = yield* journal.began({
+            component: observation.component,
+            arguments: observation.props,
+          });
+          orders.set(observation, order);
+        } catch (error) {
+          failed(error instanceof Error ? error : new Error(String(error)));
+          throw error;
+        }
+      },
+      *after(observation, outcome, cancelled) {
+        const order = orders.get(observation);
+        orders.delete(observation);
+        if (order === undefined || cancelled) {
+          return;
+        }
+        if (!outcome.ok) {
+          const fatal = fatalFailure(outcome.error);
+          if (fatal !== undefined) {
+            failed(fatal);
+            throw fatal;
+          }
+        }
+        let observed: Json | undefined;
+        if (outcome.ok && project !== undefined) {
+          const observation = project(outcome.value);
+          if (!observation.ok) {
+            throw observation.error;
+          }
+          observed = observation.value;
+        }
+        try {
+          yield* journal.settled(order, outcome, observed);
+        } catch (error) {
+          failed(error instanceof Error ? error : new Error(String(error)));
+          throw error;
+        }
+      },
+    },
     controls: Object.freeze([
-      ...sidekickObservations(requests, journal),
-      ...sidekickMutations(requests, journal),
+      ...builtin,
+      ...components.flatMap((component) => {
+        const controls: SidekickControl[] = [];
+        for (const form of ["self-closing", "paired"] satisfies InvocationForm[]) {
+          const generated = component.generated?.[form];
+          if (generated !== undefined) {
+            controls.push({
+              name: component.name,
+              form,
+              effect: generated.effect,
+              definition: { ...component, kind: "function", fn: descriptiveOnly },
+            });
+          }
+        }
+        return controls;
+      }),
     ]),
     allow: ["read", "write"] as const,
   };
@@ -121,9 +203,12 @@ export function sidekickResponseCeiling(
  * them grants.
  */
 export function sidekickSelection(ceiling: ResponseCeiling): GeneratedSelection {
-  const selection: Record<string, readonly InvocationForm[]> = { Cwd: ["self-closing"] };
+  const selection: Record<string, readonly InvocationForm[]> = {};
+  if (!(ceiling.components ?? []).some((component) => component.name === "Cwd")) {
+    selection.Cwd = ["self-closing"];
+  }
   for (const control of ceiling.controls) {
-    selection[control.name] = [control.form];
+    selection[control.name] = [...(selection[control.name] ?? []), control.form];
   }
   return Object.freeze(selection);
 }
@@ -147,7 +232,10 @@ export function sidekickCeilingInstallation(ceiling: ResponseCeiling): Execution
   /** The definition this CLI answers each owned name with. */
   const owned = new Map<string, FunctionComponentDefinition>();
   for (const control of ceiling.controls) {
-    if (control.definition !== undefined) {
+    if (
+      control.definition !== undefined &&
+      !(ceiling.components ?? []).some((one) => one.name === control.name)
+    ) {
       owned.set(control.name, control.definition);
     }
   }
@@ -189,8 +277,25 @@ export function sidekickCeilingInstallation(ceiling: ResponseCeiling): Execution
     },
   };
   return {
+    components: ceiling.components,
+    componentInvocations: ceiling.componentInvocations,
     componentAnswers: [answers],
     *install(): Operation<void> {
+      yield* Execution.around({
+        *execute([request], next) {
+          yield* Execution.around({
+            *document([document], nextDocument) {
+              for (const extension of ceiling.extensions ?? []) {
+                if (extension.sidekick !== undefined) {
+                  yield* extension.sidekick();
+                }
+              }
+              yield* nextDocument(document);
+            },
+          });
+          yield* next(request);
+        },
+      });
       yield* Component.around({ generated: () => selection });
     },
   };
@@ -227,20 +332,27 @@ export interface SurfaceEntry {
  * gaining a prop cannot leave this description behind.
  */
 export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry[] {
-  const entries: SurfaceEntry[] = [
-    { name: "Cwd", effect: "read", form: "self-closing", props: [], designated: false },
-    {
-      // Admitted by the execution that evaluates the root, not by this
-      // ceiling, so it is named here rather than read off the entries. It
-      // describes this response's own vocabulary, which is the one thing the
-      // derived list below cannot say about itself.
-      name: SYNTAX_COMPONENT,
+  const entries: SurfaceEntry[] = [];
+  if (!(ceiling.components ?? []).some((component) => component.name === "Cwd")) {
+    entries.push({
+      name: "Cwd",
       effect: "read",
       form: "self-closing",
-      props: ["names"],
+      props: [],
       designated: false,
-    },
-  ];
+    });
+  }
+  entries.push({
+    // Admitted by the execution that evaluates the root, not by this
+    // ceiling, so it is named here rather than read off the entries. It
+    // describes this response's own vocabulary, which is the one thing the
+    // derived list below cannot say about itself.
+    name: SYNTAX_COMPONENT,
+    effect: "read",
+    form: "self-closing",
+    props: ["names"],
+    designated: false,
+  });
   for (const control of ceiling.controls) {
     entries.push({
       name: control.name,
@@ -251,7 +363,9 @@ export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry
       // schema here to read, so it states the authored contract it was selected
       // for instead.
       props: control.definition === undefined ? (control.props ?? []) : propsOf(control.definition),
-      designated: DESIGNATED.has(control.name),
+      designated:
+        DESIGNATED.has(control.name) ||
+        (ceiling.components ?? []).some((one) => one.name === control.name),
     });
   }
   return Object.freeze(entries.map((entry) => Object.freeze(entry)));
@@ -308,4 +422,9 @@ export function describeSurface(entries: readonly SurfaceEntry[]): string {
     lines.push(`- ${spelling} — ${entry.effect}.${props}${ordinary}`);
   }
   return lines.join("\n");
+}
+
+// deno-lint-ignore require-yield
+function* descriptiveOnly(): Operation<never> {
+  throw new Error("A descriptive contribution is not an execution implementation.");
 }

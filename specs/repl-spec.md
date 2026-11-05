@@ -2496,6 +2496,32 @@ Malformed or slow observers detach safely; a subsequent exact read/follow
 obtains the owner's current facts. After owner-process loss joined completion
 is unavailable, rather than reconstructed from a saved preview or text.
 
+## Selected Plugin session services
+
+Selected Plugins may return a CLI-owned `repl` contribution from
+`@executablemd/cli/api`. `initialize({ workspace })` runs once per live logical
+session after route and history validation; its resources end with that session.
+A child initializes independently in its own workspace. UI attachment, detachment
+and history inspection initialize nothing. Failure or cancellation joins prior
+setup before entry work, conversation work or attachment publication begins.
+
+`repl.components` declares identity components once. The ordinary entry vocabulary
+and eligible Sidekick forms derive from those declarations; absent generated
+metadata offers no generated form. Canonical identity, form dispatch and effect
+permissions still decide execution. `repl.sidekick()` runs once per live
+conversation after its provider is installed and before capture, sharing initialized
+session state. Its resources and provider decorations end with that conversation;
+entry Prompts inherit none of them. Command installation contributes package
+documentation through the existing documentation helpers and starts no session
+service. Documentation lookup grants no execution authority.
+Contributed Sidekick invocations use host-owned intent/outcome recording. Intent
+acknowledgement precedes the body; accepted values reach designated feedback after
+component and callback cleanup join. Core supplies the per-call cancellation fact:
+a cancelled call leaves intent unmatched, while an ordinary failed call retains
+its known outcome. A response Stop does not classify every invocation as cancelled.
+The Plugin receives no private journal. Syntax, Submit, Elicit and builtin controls
+keep their existing feedback and recording ownership.
+
 ## Who owns what
 
 The host acquires one protected-input installation before each producing entry’s providers. It keeps that owner until those providers join, safely seals each independent output channel, and then disposes live input and pending text. Output received after disposal refuses instead of falling back to raw forwarding.
