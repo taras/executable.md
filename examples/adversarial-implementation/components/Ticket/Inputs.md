@@ -22,10 +22,19 @@ promotes it only after saving a successful raw reply.
 
 <Let as="received" value={props.record.deliveredInputs?.[props.call.session] ?? props.record.manifest.deliveredInputs?.[props.call.session] ?? []} />
 <Let as="references" value={[...new Set([...props.record.manifest.acceptedInputs.map(input => input.path),...(props.record.manifest.roleInputs?.[props.call.role] ?? []).map(input => input.path),...(props.call.assignment.handoffInputs ?? [])])].filter(path => !received.includes(path))} />
-<Ticket.Documents repository={props.call.assignment.repository} paths={references} documents={props.record.documents} as="documents" />
-<Let as="inputs" value={references.map(path => documents[path])} />
+<Ticket.Documents repository={props.call.assignment.repository} directory={props.record.manifest.directory} paths={references} documents={props.record.documents} as="documents" />
+<Let as="inputs" value={[]} />
+<Let as="index" value={0} />
+<If condition={references.length !== 0}>
+<Loop max={references.length}>
+<Let as="reference" value={references[index]} />
+<Ticket.Hydrate repository={props.call.assignment.repository} document={documents[reference]} as="hydrated" />
+<Let as="inputs" value={[...inputs,hydrated]} />
+<Let as="index" value={index + 1} />
+</Loop>
+</If>
 <Let as="mandatoryPaths" value={[...new Set([...props.record.manifest.acceptedInputs.map(input => input.path),...(props.record.manifest.roleInputs?.[props.call.role] ?? []).map(input => input.path)])].filter(path => !received.includes(path))} />
-<Let as="mandatory" value={mandatoryPaths.reduce((total,path) => total + documents[path].content.length,0)} />
+<Let as="mandatory" value={inputs.filter(input => mandatoryPaths.includes(input.path)).reduce((total,input) => total + input.content.length,0)} />
 <Let as="total" value={inputs.reduce((total,input) => total + input.content.length,0)} />
 <Let as="budget" value={{limit:64000,total,mandatory,remaining:64000-mandatory,excess:Math.max(0,total-64000),admitted:total<=64000}} />
 <If condition={!props.inspect && !budget.admitted}>

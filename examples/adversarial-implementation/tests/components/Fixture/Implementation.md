@@ -45,19 +45,21 @@ git rev-parse HEAD
 <If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
 <Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
 <If condition={work.status !== "feedback_ready"}><Fail message={JSON.stringify(work)} /></If>
-<AssertEquals actual={work.delivery.required} expected={["independent-review","required-ci","main-health"]} />
+<Ticket.Load record={work} as="saved" />
+<AssertEquals actual={work.remainingRequiredDeliveryWork} expected={["independent-review","required-ci","main-health"]} />
 <AssertEquals actual={work.delivery.status} expected="review_pending" />
-<Let as="implementationCalls" value={work.calls.filter(call => call.assignment.phase !== "discovery")} />
+<Let as="implementationCalls" value={saved.calls.filter(call => call.assignment.phase !== "discovery")} />
 <AssertEquals actual={implementationCalls.map(call => call.role)} expected={scenario.architecture ? ["implementor","architect","planner"] : ["implementor","planner"]} />
 <AssertEquals actual={implementationCalls.map(call => call.session)} expected={scenario.architecture ? ["original-implementor","conditional-architect","original-planner"] : ["original-implementor","original-planner"]} />
-<AssertEquals actual={Object.hasOwn(work.manifest,"api")} expected={false} />
-<AssertEquals actual={work.manifest.maxCorrections} expected={3} />
-<AssertEquals actual={work.manifest.maxApiRepairs} expected={3} />
-<AssertEquals actual={work.manifest.maxResponseCorrections} expected={0} />
-<AssertEquals actual={work.manifest.roles.planner.provider} expected={task.providers.planner} />
-<AssertEquals actual={work.calls.every(call => call.provider === task.providers[call.role])} expected={true} />
-<AssertEquals actual={work.calls[0].initialize} expected={true} />
-<AssertEquals actual={work.calls[0].inputs.find(input => input.path === evidence).content} expected="Evidence A: accepted format behavior and focused consumer checks." />
+<AssertEquals actual={Object.hasOwn(saved.manifest,"api")} expected={false} />
+<AssertEquals actual={saved.manifest.maxCorrections} expected={3} />
+<AssertEquals actual={saved.manifest.maxApiRepairs} expected={3} />
+<AssertEquals actual={saved.manifest.maxResponseCorrections} expected={0} />
+<AssertEquals actual={saved.manifest.roles.planner.provider} expected={task.providers.planner} />
+<AssertEquals actual={saved.calls.every(call => call.provider === task.providers[call.role])} expected={true} />
+<AssertEquals actual={saved.calls[0].initialize} expected={true} />
+<Ticket.Read path={saved.calls[0].attempt + "/called.json"} as="firstCalledText" /><Parse schema={{type:"object"}} as="firstCalled">{firstCalledText}</Parse>
+<AssertEquals actual={firstCalled.inputs.find(input => input.path === evidence).content} expected="Evidence A: accepted format behavior and focused consumer checks." />
 <AssertEquals actual={implementationCalls.slice(1).every(call => call.assignment.revision === work.revision)} expected={true} />
 <Ticket.Signature repository={fixture.repository} revision={work.revision} as="signature" />
 <AssertEquals actual={signature.exitCode} expected={0} />
@@ -85,11 +87,11 @@ git rev-parse HEAD
 <AssertEquals actual={plan.outcome} expected="complete" />
 <AssertEquals actual={Object.hasOwn(plan,"api")} expected={false} />
 <AssertEquals actual={implementationCalls[0].assignment.request} expected={plan.handoff} />
-<AssertEquals actual={implementationCalls[0].inputs.some(input => input.path === plan.handoffInputs[0] && input.content.includes("bash consumer.sh"))} expected={true} />
-<AssertEquals actual={work.checkpoint.initialized.planner} expected={true} />
-<AssertEquals actual={work.calls.at(-1).initialize} expected={false} />
-<AssertEquals actual={work.calls.at(-1).inputs.map(input => input.path)} expected={plan.handoffInputs} />
-<AssertEquals actual={work.deliveredInputs[task.sessions.planner].slice(0,2)} expected={[evidence,task.repository + "/.agents/planner.md"]} />
+<AssertEquals actual={implementor.inputs.some(input => input.path === plan.handoffInputs[0] && input.content.includes("bash consumer.sh"))} expected={true} />
+<AssertEquals actual={saved.checkpoint.initialized.planner} expected={true} />
+<AssertEquals actual={saved.calls.at(-1).initialize} expected={false} />
+<AssertEquals actual={saved.calls.at(-1).inputs.map(input => input.path)} expected={plan.handoffInputs} />
+<AssertEquals actual={saved.deliveredInputs[task.sessions.planner].slice(0,2)} expected={[evidence,task.repository + "/.agents/planner.md"]} />
 <Ticket.Text path={fixture.directory + "/attempts/0000/response-acceptance.json"} as="acceptance" />
 <AssertStringIncludes actual={acceptance} expected='"round": 0' />
 <Ticket.Text path={fixture.directory + "/attempts/0000/raw.txt"} as="raw" />
@@ -103,8 +105,8 @@ git rev-parse HEAD
 <Else>
 <Dir path={fixture.root}><Glob include={["**/planning/called.json"]} as="planningCalls" /></Dir>
 <AssertEquals actual={planningCalls} expected={[]} />
-<AssertEquals actual={work.manifest.roles.planner.initialized} expected={false} />
-<AssertEquals actual={work.calls.at(-1).initialize} expected={true} />
+<AssertEquals actual={saved.manifest.roles.planner.initialized} expected={false} />
+<AssertEquals actual={saved.calls.at(-1).initialize} expected={true} />
 </Else>
 </If>
 </TempDir>
@@ -211,11 +213,12 @@ git rev-parse HEAD
 <If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
 <Parse schema={{type:"object"}} as="held">{child.stdout}</Parse>
 <AssertEquals actual={held.status} expected="hold" />
-<AssertStringIncludes actual={held.hold.reason} expected="material choice" />
+<Ticket.Load record={held} as="heldState" />
+<AssertStringIncludes actual={heldState.checkpoint.hold.reason} expected="material choice" />
 <Ticket.Text path={fixture.directory + "/attempts/0000/result.json"} as="resultText" />
 <Parse schema={{type:"object"}} as="result">{resultText}</Parse>
 <AssertEquals actual={result.outcome} expected="needs_decision" />
-<AssertEquals actual={held.hold.reason} expected={result.handoff} />
+<AssertEquals actual={heldState.checkpoint.hold.reason} expected={result.handoff} />
 <Dir path={fixture.root}><Glob include={["**/called.json"]} as="calls" /></Dir>
 <AssertEquals actual={calls.length} expected={1} />
 <AssertStringIncludes actual={calls[0]} expected="attempts/0000/called.json" />

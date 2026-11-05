@@ -1,10 +1,14 @@
 import { runCli, shellQuote } from "@executablemd/test-support/launch";
 import { fileURLToPath } from "node:url";
+import { env } from "@executablemd/runtime";
 import { readTextFile } from "@effectionx/fs";
 
 const testedSuites = ["ProductionRole", "Preparation"];
 
 export function* runAdversarialJourney(suite: string) {
+  const retainedEvidence = suite.startsWith("ArtifactReturn")
+    ? yield* env("XMD_ARTIFACT_RETURN_EVIDENCE")
+    : undefined;
   const executableCommand = [
     "deno",
     "run",
@@ -49,6 +53,9 @@ export function* runAdversarialJourney(suite: string) {
       env: {
         XMD_EXAMPLE_COMMAND: workflowCommand,
         XMD_EXAMPLE_TEST_COMMAND: workflowTestCommand,
+        ...(retainedEvidence === undefined
+          ? {}
+          : { XMD_ARTIFACT_RETURN_EVIDENCE: retainedEvidence }),
       },
     },
   ).expect();

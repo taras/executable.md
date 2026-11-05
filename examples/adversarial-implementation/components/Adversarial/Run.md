@@ -26,7 +26,8 @@ mkdir -- {quoted}
 <If condition={reserved.exitCode !== 0}><Fail message="The work directory must be fresh. Resume its original XMD execution instead of starting another writer." /></If>
 <If condition={props.delivery !== undefined}><Dir path={task.directory + "/delivery"}><File path="requirements.json"><Json value={props.delivery} /></File></Dir></If>
 <If condition={props.documents === undefined}>
-<Ticket.Documents repository={task.repository} paths={task.inputs} documents={{}} as="documents" />
+<Ticket.Documents directory={task.directory + ".inputs"} repository={task.repository} paths={task.inputs} documents={{}} as="documents" />
+<Ticket.Selected repository={task.repository} documents={documents} as="documents" />
 <Else><Let as="documents" value={props.documents} /></Else>
 </If>
 <Let as="inputs" value={task.inputs.map(path => documents[path])} />
@@ -112,17 +113,28 @@ mkdir -- {quoted}
 <Dir path={attempt}><File path="migration.json"><Json value={migration} /></File></Dir>
 <Ticket.Run manifest={manifest} plannerCall={attempt + "/preparation-owner.json"} as="ticket" />
 <Dir path={task.directory}><File path={"migration-" + round + "-result.json"}><Json value={ticket} /></File></Dir>
-<Let as="initialized" value={ticket.checkpoint.initialized} />
-<Let as="deliveredInputs" value={ticket.deliveredInputs} />
+<Ticket.Load record={ticket} as="ticketState" />
+<Let as="initialized" value={ticketState.checkpoint.initialized} />
+<Let as="deliveredInputs" value={ticketState.deliveredInputs} />
 <Let as="history" value={[...history,{owner:"implementor",path:task.directory + "/migration-" + round + "-result.json",status:ticket.status}]} />
-<Let as="last" value={ticket.calls.at(-1)?.resultValue} />
+<Let as="last" value={null} />
+<If condition={ticketState.checkpoint.hold?.kind === "needs_discovery" && ticketState.calls.at(-1)?.result}>
+<Let as="lastPath" value={ticketState.calls.at(-1).result} />
+<Ticket.Capture as="retainedResult">
+<Ticket.Hydrate repository={task.repository} document={ticketState.documents[lastPath]} as="lastText" />
+<Parse schema={{type:"object"}} as="acceptedResult">{lastText.content}</Parse>
+<Json value={acceptedResult} />
+</Ticket.Capture>
+<If condition={retainedResult.status !== "completed"}><Return value={{status:"hold",reason:"The retained role result is unavailable. Preserve the confirmed ticket and original receipts before repair.",ticket,history}} /><Let as="finished" value={true} /><Break /></If>
+<Parse schema={{type:"object"}} as="last">{retainedResult.output}</Parse>
+</If>
 <If condition={ticket.status === "feedback_ready"}>
 <Ticket.Capture as="retired"><Adversarial.Retirement repository={task.repository} paths={api.migration.retirePaths} as="retired" /><Json value={retired} /></Ticket.Capture>
 <Dir path={task.directory}><File path="retirement.json"><Json value={retired} /></File></Dir>
 <Let as="finished" value={true} />
 <Return value={retired.status === "completed" ? {status:"feedback_ready",revision:ticket.revision,api,ticket,history} : {status:"hold",deliveredInputs,initialized,reason:retired.failure,ticket,history}} /><Break />
 </If>
-<If condition={ticket.checkpoint.hold?.kind !== "needs_discovery" || last?.apiConflict === undefined}><Return value={{status:"hold",deliveredInputs,initialized,reason:ticket.checkpoint.hold,ticket,history}} /><Let as="finished" value={true} /><Break /></If>
+<If condition={ticketState.checkpoint.hold?.kind !== "needs_discovery" || last?.apiConflict === undefined}><Return value={{status:"hold",deliveredInputs,initialized,reason:ticketState.checkpoint.hold,ticket,history}} /><Let as="finished" value={true} /><Break /></If>
 <Ticket.Checkout repository={task.repository} as="held" />
 <If condition={!held.clean || round >= task.maxApiRepairs}><Return value={{status:"hold",deliveredInputs,initialized,reason:!held.clean ? "Preserve the partial checkout and reconcile it before API repair." : "API repair bound reached; review whether this role split is still useful.",ticket,history}} /><Let as="finished" value={true} /><Break /></If>
 <Let as="conflict" value={{...last.apiConflict,artifacts:last.artifacts,evidence:last.evidence,request:last.handoff}} />

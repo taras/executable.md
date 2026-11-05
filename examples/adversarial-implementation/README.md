@@ -152,8 +152,8 @@ size does not select a route. A later material question holds under the existing
 phase contract; ordinary planning does not decide it.
 
 An initial refusal returns `status=hold`, an actionable reason and empty history,
-with no fabricated phase call or checkpoint. Simple and standard return the
-existing Ticket record; migration returns the existing Adversarial result.
+with no fabricated phase call or checkpoint. Simple and standard return a small Ticket envelope; migration returns its bounded
+Adversarial disposition and Ticket reference.
 Provider and persistence failures retain their existing handling. Preserve first
 failure output and partial effects before another attempt.
 
@@ -161,8 +161,8 @@ The ordinary Ticket starts before the first Planner call. A validated
 `needs_discovery` request reaches the original Architect and returns its answer
 to the same Planner. Only that Planner's complete handoff starts implementation.
 The initial journey runs at most those three discovery calls. Another discovery
-request returns `status=paused`, `dispatchable=true`, `hold=null` and the exact
-pending gate. Save the complete returned record and advance it with `continue.md
+request saves a dispatchable paused checkpoint and returns its confirmed
+continuation descriptor and next gate. Save the small returned envelope and advance it with `continue.md
 --props-record /absolute/path/to/ticket-record.json --props-steps 1`.
 Planning and discovery must leave source clean at the exact launch revision,
 including when a reply is rejected or absent. They require no signed feedback
@@ -409,13 +409,14 @@ deno task xmd run --allow-absolute examples/adversarial-implementation/phase.md 
   --include examples/adversarial-implementation/components --raw
 ```
 
-The command returns the canonical phase result. `Phase.Run` saves its assignment,
+The command returns status, revision and the saved canonical result path.
+`Phase.Run` saves its assignment,
 raw reply, result, status and acceptance receipt beneath the request's attempt.
 Source and role checks run before a prompt. Reusing an occupied attempt refuses;
 inspect its saved effects before selecting another attempt.
 
 Set `maxResponseCorrections` to zero to validate the reply without another model
-prompt. A valid reply still returns its canonical result. A rejected reply saves
+prompt. A valid reply saves its canonical result. A rejected reply saves
 the raw text, rejection and `response-disposition.json`, then fails without a
 canonical result or successor. Inspect those records before continuing; zero
 does not skip validation or retry an uncertain prompt. This limit controls
@@ -434,11 +435,11 @@ omitted. A direct REPL invocation uses the same option:
 ```
 
 Here `request` is the prepared phase request above and `documents` is the
-selected input map returned by `<Ticket.Documents>`. Keep the original session
+selected input map produced by `<Ticket.Selected>` from `<Ticket.Documents>` metadata. Keep the original session
 and reserved attempts when changing this limit at a completed phase boundary.
 
-To advance a saved ordinary `run.md`, `Ticket.Run` or `Ticket.Continue` record, pass that complete
-record rather than reconstructing its assignment or artifact paths:
+To advance a saved ordinary `run.md`, `Ticket.Run` or `Ticket.Continue` return,
+pass its complete small envelope:
 
 ```bash
 deno task xmd run --allow-absolute examples/adversarial-implementation/continue.md \
@@ -446,17 +447,52 @@ deno task xmd run --allow-absolute examples/adversarial-implementation/continue.
   --include examples/adversarial-implementation/components --raw
 ```
 
-The returned record preserves the original manifest, sessions, documents, calls
-and correction counts, including a pre-implementation planning checkpoint.
-Each explicit step executes at most one recorded role and joins settlement.
-A dispatchable pause names its next gate and continuation action. A genuine
-hold is nondispatchable and retains its pending assignment and reconciliation
-reason. Held and
-completed records return without a prompt. This entry does not clear a hold or
-retry an uncertain execution. Resolve the recorded cause before preparing a
-continuation, and preserve the original evidence. Capture the complete output
-under a new filename when retaining the next record; do not redirect it over
-the input file.
+The envelope names a confirmed continuation by path, UTF-8 byte length and SHA-256.
+The protected continuation retains the original manifest, sessions, call ordinals,
+delivered-input accounting and correction counts. Each explicit step runs at most
+one role and joins settlement and publication before the next step. A paused
+checkpoint names its next gate; held and completed tickets dispatch no role.
+Save each returned envelope under a new filename rather than redirecting over its
+input. A held publication preserves the previous confirmed descriptor and pending
+canonical/execution receipt paths. Even an existing matching file cannot confirm
+an uncertain write; preserve it for operator disposition without rewriting or
+repeating completed work.
+
+After the original host entry has joined, inspect its saved return without
+advancing the ticket:
+
+```bash
+deno task xmd run --allow-absolute examples/adversarial-implementation/return.md \
+  --props-record /absolute/path/to/ticket-record.json \
+  --include examples/adversarial-implementation/components --raw
+```
+
+This entry validates saved control metadata and its exact length/hash through
+current File permissions and enabled protection. It reads no unselected artifact
+body and invokes no role, source command, signature check or test. Canonical role
+completion, confirmed continuation publication and the host's joined outer
+outcome remain separate facts. A failed outer return does not undo a completed
+role or authorize a replay.
+
+Artifact references retain the first successfully accepted permitted File text,
+including unselected references. This observation intentionally differs from
+configured `cat` stdout preprocessing. Literal reference reuse restores its
+snapshot after the original changes or disappears; use a fresh reference for new
+evidence. Equal text at distinct references keeps distinct provenance. Selected
+hydration checks current permissions, protection and exact UTF-8 length/hash;
+missing or changed snapshots hold without consulting the original file. Snapshot
+and original receipt retention lasts through ticket completion. Calls carry
+metadata and receipt paths, not cached input, result or observation bodies.
+
+The native-host example bounds all outward representations together to 65,536
+UTF-8 bytes, complete continuation metadata to 1,048,576 bytes, and each exact
+text to 8,388,608 bytes, inclusively. JSON escaping, output and root duplicates
+count toward these bounds. The selected prompt allowance remains separately
+64,000 UTF-16 characters. Capacity saturation holds before another dispatch,
+retaining the prior confirmed state and canonical work; it truncates or evicts
+nothing. These guarantees cover the ordinary native File provider, with its
+existing permission, containment and stable-namespace limits. They establish no
+custom/workflow provider storage contract or migration of old inline records.
 
 External reviewer models and publication use their existing workflows. The
 phase entry retains the implementation workflow's role and model policy.
