@@ -7,6 +7,7 @@ props:
   type: object
   properties:
     manifest: {type: string, minLength: 1}
+    plannerCall: {type: [string, 'null'], default: null}
   required: [manifest]
   additionalProperties: false
 returns: {type: object}
@@ -28,6 +29,7 @@ pwd -P
 <Let as="manifest" value={{...manifest,directory:workspace.stdout.slice(0,-1) + "/handoffs/" + manifest.work}} />
 </If>
 <Ticket.Start manifest={manifest} as="checkpoint" />
+<Let as="checkpoint" value={{...checkpoint,plannerCall:props.plannerCall}} />
 <Let as="record" value={{manifest,checkpoint,calls:[],documents:Object.fromEntries([...manifest.acceptedInputs,...Object.values(manifest.roleInputs ?? {}).flat()].map(input => [input.path,input]))}} />
 <Let as="attemptsDirectory" value={"'" + (manifest.directory + "/attempts").replaceAll("'", "'\"'\"'") + "'"} />
 <Let as="callsDirectory" value={"'" + (manifest.directory + "/calls").replaceAll("'", "'\"'\"'") + "'"} />

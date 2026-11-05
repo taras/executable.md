@@ -182,6 +182,40 @@ describe("the one-file runner commands", () => {
       command: "bun",
       arguments: ["test", "--timeout=300000", "packages/core/tests/a.test.ts"],
     });
+    expect(oneFileCommand("bun", "packages/cli/tests/adversarial-preparation.test.ts")).toEqual({
+      command: "bun",
+      arguments: ["test", "--timeout=450000", "packages/cli/tests/adversarial-preparation.test.ts"],
+    });
+    for (const file of [
+      "packages/cli/tests/adversarial-implementation.test.ts",
+      "packages/cli/tests/adversarial-session-continuity.test.ts",
+      "packages/cli/tests/adversarial-artifact-return.test.ts",
+      "packages/cli/tests/adversarial-artifact-return-recovery.test.ts",
+    ]) {
+      expect(oneFileCommand("bun", file)).toEqual({
+        command: "bun",
+        arguments: ["test", "--timeout=300000", file],
+      });
+    }
+    expect(oneFileCommand("deno", "packages/cli/tests/adversarial-preparation.test.ts")).toEqual({
+      command: "deno",
+      arguments: [
+        "test",
+        "--allow-all",
+        "--frozen",
+        "packages/cli/tests/adversarial-preparation.test.ts",
+      ],
+    });
+    expect(oneFileCommand("node", "packages/cli/tests/adversarial-preparation.test.ts")).toEqual({
+      command: "tsx",
+      arguments: [
+        "--tsconfig",
+        "tsconfig.node.json",
+        "--test",
+        "--test-concurrency=1",
+        "packages/cli/tests/adversarial-preparation.test.ts",
+      ],
+    });
   });
 });
 
