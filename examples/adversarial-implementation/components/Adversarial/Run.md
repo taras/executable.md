@@ -26,10 +26,12 @@ mkdir -- {quoted}
 <If condition={reserved.exitCode !== 0}><Fail message="The work directory must be fresh. Resume its original XMD execution instead of starting another writer." /></If>
 <If condition={props.delivery !== undefined}><Dir path={task.directory + "/delivery"}><File path="requirements.json"><Json value={props.delivery} /></File></Dir></If>
 <If condition={props.documents === undefined}>
-<Ticket.Documents directory={task.directory + ".inputs"} repository={task.repository} paths={task.inputs} documents={{}} as="documents" />
-<Ticket.Selected repository={task.repository} documents={documents} as="documents" />
-<Else><Let as="documents" value={props.documents} /></Else>
+<Ticket.Documents directory={task.directory + ".inputs"} repository={task.repository} paths={task.inputs} documents={{}} as="retained" />
+<Else><Let as="retained" value={props.documents} /></Else>
 </If>
+<Ticket.Selected repository={task.repository} documents={Object.fromEntries(task.inputs.map(path => [path,retained[path]]))} as="documents" />
+<Ticket.Snapshot repository={task.repository} directory={task.directory + "/guides/planner"} path={props.plannerGuide.path} content={props.plannerGuide.content} as="plannerGuideRecord" />
+<Ticket.Snapshot repository={task.repository} directory={task.directory + "/guides/implementor"} path={props.implementorGuide.path} content={props.implementorGuide.content} as="implementorGuideRecord" />
 <Let as="inputs" value={task.inputs.map(path => documents[path])} />
 
 <Let as="deliveredInputs" value={{}} />
@@ -46,7 +48,7 @@ mkdir -- {quoted}
 <Ticket.Checkout repository={task.repository} as="checkout" />
 <Let as="attempt" value={task.directory + "/foundation-" + history.length} />
 <Let as="assignment" value={{work:task.work,repository:task.repository,revision:checkout.head,attempt,identityDirectory:task.directory + "/sessions",sessionEstablished:initialized.planner,session:task.sessions.planner,plannerProvider:task.providers.planner,maxResponseCorrections:task.maxResponseCorrections,initialize:!initialized.planner,request:task.request,inputs:[],guidePath:props.plannerGuide.path,api,conflict,contract,assessment}} />
-<Let as="preparationRecord" value={{manifest:{directory:task.directory,acceptedInputs:inputs,roleInputs:{planner:[props.plannerGuide],implementor:[props.implementorGuide]},roles:{planner:{session:task.sessions.planner,provider:task.providers.planner}}},documents:{...documents,...Object.fromEntries(inputs.map(input => [input.path,input])),[props.plannerGuide.path]:props.plannerGuide,[props.implementorGuide.path]:props.implementorGuide},calls:roleCalls,deliveredInputs}} />
+<Let as="preparationRecord" value={{manifest:{directory:task.directory,identityDirectory:task.directory + "/sessions",acceptedInputs:task.inputs.map(path => retained[path]),roleInputs:{planner:[plannerGuideRecord],implementor:[implementorGuideRecord]},roles:{planner:{session:task.sessions.planner,provider:task.providers.planner}}},documents:{...retained,[props.plannerGuide.path]:plannerGuideRecord,[props.implementorGuide.path]:implementorGuideRecord},calls:roleCalls,deliveredInputs}} />
 <Let as="call" value={{id:"foundation-" + history.length,role:"planner",session:task.sessions.planner,provider:task.providers.planner,attempt,assignment}} />
 <Ticket.Prepare record={preparationRecord} call={call} as="prepared" />
 <If condition={prepared.status !== "ready"}><Let as="finished" value={true} /><Return value={{status:"hold",deliveredInputs,initialized,reason:prepared.reason,preparation:prepared.receipt,history}} /><Break /></If>
@@ -85,11 +87,12 @@ mkdir -- {quoted}
 <Let as="apiPath" value={attempt + "/validated-api.json"} />
 <Json value={api} as="apiText" />
 <Dir path={attempt}><File path="validated-api.json">{apiText}</File></Dir>
-<Ticket.Text path={api.guide} as="usage" />
-<Let as="acceptedInputs" value={[...inputs,{path:apiPath,content:apiText},{path:api.guide,content:usage}]} />
+<Ticket.Documents directory={attempt} repository={task.repository} paths={[apiPath,api.guide]} documents={{}} as="apiDocuments" />
+<Ticket.Selected repository={task.repository} documents={apiDocuments} as="apiTexts" />
+<Let as="acceptedInputs" value={[...inputs,apiTexts[apiPath],apiTexts[api.guide]]} />
 <If condition={assessment.architecture}>
 <Ticket.ChangedPaths repository={task.repository} base={assignment.revision} head={api.revision} as="foundationChanges" />
-<Let as="reviewRecord" value={{...preparationRecord,deliveredInputs,calls:roleCalls,manifest:{...preparationRecord.manifest,acceptedInputs:inputs},documents:{...preparationRecord.documents,...Object.fromEntries(acceptedInputs.map(input => [input.path,input]))}}} />
+<Let as="reviewRecord" value={{...preparationRecord,deliveredInputs,calls:roleCalls,documents:{...preparationRecord.documents,...apiDocuments}}} />
 <Let as="reviewCall" value={{id:"foundation-review-" + history.length,role:"architect",session:task.sessions.architect,provider:"codex",attempt:task.directory + "/foundation-review-" + history.length,assignment:{...{identityDirectory:task.directory + "/sessions",sessionEstablished:initialized.architect,phase:"review",work:task.work,repository:task.repository,revision:api.revision,priorRevision:assignment.revision,request:"Review the committed API foundation's structural impact before consumer migration. Inspect its validated examples and changed paths against the accepted outcome: " + task.request,assessment,contract,artifacts:[foundation.path,apiPath],evidence:foundation.validated.checks,findings:[],changedPaths:foundationChanges.paths},handoffInputs:acceptedInputs.map(input => input.path)}}} />
 <Ticket.Prepare record={reviewRecord} call={reviewCall} as="reviewPrepared" />
 <If condition={reviewPrepared.status !== "ready"}><Let as="finished" value={true} /><Return value={{status:"hold",deliveredInputs,initialized,reason:reviewPrepared.reason,preparation:reviewPrepared.receipt,history}} /><Break /></If>

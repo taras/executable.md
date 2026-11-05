@@ -150,6 +150,30 @@ describe("the applicable corpus", () => {
    * Every runtime derives from one discovered set, so a file can only be missing
    * from a runtime by being named in that runtime's manifest.
    */
+  it("runs each adversarial workflow wrapper under every runtime", function* () {
+    const wrappers = [
+      "adversarial-artifact-return-recovery",
+      "adversarial-artifact-return",
+      "adversarial-delivery",
+      "adversarial-friction",
+      "adversarial-implementation",
+      "adversarial-launch-policy",
+      "adversarial-preparation",
+      "adversarial-production-role",
+      "adversarial-session-continuity",
+      "adversarial-workflow",
+    ].map((name) => `packages/cli/tests/${name}.test.ts`);
+    expect(
+      (yield* listTestFiles(ROOT)).filter((file) =>
+        file.startsWith("packages/cli/tests/adversarial-"),
+      ),
+    ).toEqual(wrappers);
+    for (const runtime of RUNTIMES) {
+      const applicable = yield* applicableTestFiles(runtime, ROOT);
+      expect(wrappers.filter((file) => !applicable.includes(file))).toEqual([]);
+    }
+  });
+
   it("drops a file from a runtime only through the manifest", function* () {
     const discovered = yield* listTestFiles(ROOT);
 

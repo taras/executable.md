@@ -9,11 +9,19 @@ pwd -P
 <Let as="accepted" value={[{path:"/seed",content:"s".repeat(30470)}]} />
 <Let as="guide" value={{path:"/guide",content:"g".repeat(11148)}} />
 <Let as="inputs" value={[...accepted,guide,{path:"plan.md",content:"p".repeat(22382)}]} />
-<Let as="record" value={{manifest:{directory,acceptedInputs:accepted,roleInputs:{implementor:[guide]},deliveredInputs:{recipient:["/seed","/guide"]}},documents:Object.fromEntries(inputs.map(input => [input.path,input])),deliveredInputs:{recipient:[]},calls:[]}} />
+<Let as="documents" value={{}} />
+<Let as="index" value={0} />
+<Loop max={inputs.length}>
+<Ticket.Snapshot repository={root} directory={directory + "/retained"} path={inputs[index].path} content={inputs[index].content} as="saved" />
+<Let as="documents" value={{...documents,[inputs[index].path]:saved}} />
+<Let as="index" value={index + 1} />
+</Loop>
+<Let as="record" value={{manifest:{directory,acceptedInputs:accepted.map(input => documents[input.path]),roleInputs:{implementor:[documents[guide.path]]},deliveredInputs:{recipient:["/seed","/guide"]}},documents,deliveredInputs:{recipient:[]},calls:[]}} />
 <Let as="call" value={{id:"fit",role:"implementor",provider:"codex",session:"recipient",assignment:{work:"fit",phase:"implementation",repository:root,revision:"a".repeat(40),handoffInputs:["plan.md","plan.md"]}}} />
 <Ticket.Inputs record={record} call={call} inspect={true} as="selected" />
 <AssertEquals actual={selected.budget} expected={{limit:64000,total:64000,mandatory:41618,remaining:22382,excess:0,admitted:true}} />
 <AssertEquals actual={JSON.stringify(selected.inputs) === JSON.stringify(inputs)} expected={true} />
+<AssertEquals actual={Object.values(selected.documents).every(document => document.content === undefined && document.snapshot.startsWith(directory))} expected={true} />
 <Ticket.Prepare record={record} call={call} as="prepared" />
 <AssertEquals actual={prepared.status} expected="ready" />
 <AssertEquals actual={JSON.stringify(prepared.inputs) === JSON.stringify(inputs)} expected={true} />
@@ -29,19 +37,22 @@ pwd -P
 <Ticket.Fingerprint inputs={[{path:"astral",content:"😀"}]} as="hash" />
 <AssertEquals actual={{characters:hash[0].characters,bytes:hash[0].bytes}} expected={{characters:2,bytes:4}} />
 <Dir path={directory}><File path="source.txt">original</File></Dir>
-<Ticket.Documents repository={directory} paths={["source.txt"]} as="original" />
+<Ticket.Documents repository={directory} directory={directory + "/captured"} paths={["source.txt"]} as="original" />
 <Dir path={directory}><File path="source.txt">changed</File></Dir>
-<Ticket.Documents repository={directory} paths={["source.txt"]} documents={original} as="historical" />
+<Ticket.Documents repository={directory} directory={directory + "/captured"} paths={["source.txt"]} documents={original} as="historical" />
 <AssertEquals actual={historical} expected={original} />
-<Ticket.Material inputs={[historical["source.txt"]]} directory={directory+"/windows"} as="material" />
+<Ticket.Hydrate repository={directory} document={historical["source.txt"]} as="retainedSource" />
+<Ticket.Material inputs={[retainedSource]} directory={directory+"/windows"} as="material" />
 <AssertEquals actual={material.total} expected={8} />
 <AssertEquals actual={material.inputs[0].content} expected="original" />
+<AssertEquals actual={Object.values(material.documents).map(document => [document.path,document.utf8Bytes,"content" in document])} expected={[[directory+"/windows/0000.txt",8,false]]} />
 </Test>
 
 <Test name="H: mandatory floor records its exact refusal without a reducer">
 <TempDir as="directory" />
 <Let as="seed" value={{path:"/seed",content:"s".repeat(64001)}} />
-<Let as="record" value={{manifest:{directory,acceptedInputs:[seed]},documents:{"/seed":seed},calls:[]}} />
+<Ticket.Snapshot repository={root} directory={directory + "/retained"} path={seed.path} content={seed.content} as="retainedSeed" />
+<Let as="record" value={{manifest:{directory,acceptedInputs:[retainedSeed]},documents:{"/seed":retainedSeed},calls:[]}} />
 <Ticket.Prepare record={record} call={{id:"floor",role:"implementor",session:"recipient",provider:"codex",assignment:{phase:"implementation",work:"floor",repository:root,revision:"a".repeat(40)}}} as="prepared" />
 <AssertEquals actual={prepared.status} expected="hold" />
 <AssertStringIncludes actual={prepared.reason} expected="exceeds 64000 by 1" />
@@ -54,7 +65,8 @@ pwd -P
 <TempDir as="directory" />
 <Let as="source" value={{path:"original.md",content:"x".repeat(size)}} />
 <Let as="impact" value={{mechanical:false,architecture:false,acceptance:true,risk:null,reason:"Preserve selected material.",evidence:["original.md"]}} />
-<Let as="record" value={{manifest:{directory,acceptedInputs:[],roles:{planner:{session:"original-planner",provider:"codex"}}},documents:{"original.md":source},calls:[{role:"planner",session:"original-planner",provider:"codex",delivery:"recorded-delivery.json",record:"recorded-planner",assignment:{assessment:impact}}]}} />
+<Ticket.Snapshot repository={root} directory={directory + "/retained"} path={source.path} content={source.content} as="retainedSource" />
+<Let as="record" value={{manifest:{directory,acceptedInputs:[],roles:{planner:{session:"original-planner",provider:"codex"}}},documents:{"original.md":retainedSource},calls:[{role:"planner",session:"original-planner",provider:"codex",delivery:"recorded-delivery.json",record:"recorded-planner",assignment:{assessment:impact}}]}} />
 <Ticket.Prepare record={record} call={{id:"bounded",role:"implementor",provider:"codex",session:"recipient",assignment:{work:"windows",phase:"implementation",repository:root,revision:"a".repeat(40),handoffInputs:["original.md"]}}} as="prepared" />
 <AssertEquals actual={prepared.status} expected="hold" />
 <Ticket.Text path={prepared.receipt} as="text" /><Parse schema={{type:"object"}} as="receipt">{text}</Parse>

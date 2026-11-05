@@ -7,10 +7,14 @@ const revision = z
   .regex(/^[0-9a-f]{40}$/)
   .nullable();
 const jsonObject = z.record(z.string(), z.json());
+const provider = z.enum(["codex", "claude"]);
+const profile = z
+  .object({ provider, model: z.string().min(1), effort: z.string().min(1) })
+  .strict();
 const identity = z
   .object({
     session: z.string().min(1),
-    provider: z.enum(["codex", "claude"]),
+    provider,
     initialized: z.boolean(),
   })
   .strict();
@@ -56,6 +60,7 @@ export const state = z
         schema: z.literal("ticket-workflow.v2"),
         work: z.string(),
         directory: z.string().startsWith("/"),
+        identityDirectory: z.string().startsWith("/").optional(),
         assignment: jsonObject,
         roles: z.object({ architect: identity, planner: identity, implementor: identity }).strict(),
         acceptedInputs: z.array(snapshot),
@@ -91,7 +96,11 @@ export const state = z
         initialized: z
           .object({ architect: z.boolean(), planner: z.boolean(), implementor: z.boolean() })
           .strict(),
-        hold: z.object({ kind: z.string(), reason: z.string() }).strict().nullable(),
+        hold: z
+          .object({ kind: z.string(), reason: z.string(), receipt: z.string().optional() })
+          .strict()
+          .nullable(),
+        plannerCall: z.string().startsWith("/").nullable().optional(),
         feedbackInputs: z.array(z.string()).optional(),
         discovery: z.array(jsonObject).optional(),
         exactApproval: z.json().optional(),
@@ -108,7 +117,7 @@ export const state = z
           round: z.number().int(),
           role,
           session: z.string(),
-          provider: z.enum(["codex", "claude"]),
+          provider,
           initialize: z.boolean(),
           assignment: jsonObject,
           inputs: z.array(snapshot),
@@ -120,6 +129,9 @@ export const state = z
           observation: z.string().optional(),
           validation: z.string().optional(),
           source: z.string().optional(),
+          preparation: z.string().optional(),
+          delivery: z.string().nullable().optional(),
+          profile: profile.nullable().optional(),
         })
         .strict(),
     ),
@@ -154,6 +166,14 @@ export function confirmLinks(saved: z.infer<typeof state>, selected: z.infer<typ
       call.execution !== call.record + "/execution.json" ||
       call.documentRecord !== call.record + "/documents.json" ||
       call.artifactDocumentRecord !== call.record + "/artifact-documents.json" ||
+      (call.preparation !== undefined &&
+        call.preparation !== saved.manifest.directory + "/preparations/" + id + "/receipt.json") ||
+      (call.delivery !== undefined &&
+        call.delivery !== null &&
+        call.delivery !== call.attempt + "/delivery.json") ||
+      (call.profile !== undefined &&
+        call.profile !== null &&
+        call.profile.provider !== call.provider) ||
       (call.result !== undefined &&
         call.result !== null &&
         call.result !== call.attempt + "/result.json") ||
@@ -163,6 +183,18 @@ export function confirmLinks(saved: z.infer<typeof state>, selected: z.infer<typ
     ) {
       throw new Error("Ticket call identity changed.");
     }
+  }
+  const receipt = saved.checkpoint.hold?.receipt;
+  if (
+    receipt !== undefined &&
+    (saved.checkpoint.hold?.kind !== "input_preparation" ||
+      receipt !==
+        saved.manifest.directory +
+          "/preparations/" +
+          String(saved.calls.length).padStart(4, "0") +
+          "/receipt.json")
+  ) {
+    throw new Error("Ticket preparation hold names another call.");
   }
   for (const [key, document] of Object.entries(saved.documents)) {
     if (key !== document.path) {

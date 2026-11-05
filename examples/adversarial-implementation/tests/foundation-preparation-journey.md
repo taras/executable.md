@@ -6,6 +6,12 @@ props:
     assessment: {type: object}
   required: [task, assessment]
 ---
-<Ticket.Documents repository={props.task.repository} paths={[...props.task.inputs,props.task.repository+"/.agents/planner.md",props.task.repository+"/.agents/implementor.md"]} as="documents" />
-<Adversarial.Run task={props.task} plannerGuide={documents[props.task.repository+"/.agents/planner.md"]} implementorGuide={documents[props.task.repository+"/.agents/implementor.md"]} documents={{...documents,incidental:{path:"incidental",content:"x".repeat(65000)}}} assessment={props.assessment} as="work" />
-<Output><Json value={work} /></Output>
+<Let as="plannerGuidePath" value={props.task.repository+"/.agents/planner.md"} />
+<Let as="implementorGuidePath" value={props.task.repository+"/.agents/implementor.md"} />
+<Ticket.Documents repository={props.task.repository} directory={props.task.directory + ".journey"} paths={[...props.task.inputs,plannerGuidePath,implementorGuidePath]} as="documents" />
+<Ticket.Selected repository={props.task.repository} documents={{[plannerGuidePath]:documents[plannerGuidePath],[implementorGuidePath]:documents[implementorGuidePath]}} as="guides" />
+<Ticket.Snapshot repository={props.task.repository} directory={props.task.directory + ".journey"} path="incidental" content={"x".repeat(65000)} as="incidental" />
+<Adversarial.Run task={props.task} plannerGuide={guides[plannerGuidePath]} implementorGuide={guides[implementorGuidePath]} documents={{...documents,incidental}} assessment={props.assessment} as="work" />
+<Let as="ticketState" value={null} />
+<If condition={work.ticket !== undefined}><Ticket.Load record={work.ticket} as="ticketState" /></If>
+<Output><Json value={{...work,ticketState}} /></Output>

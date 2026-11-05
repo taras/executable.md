@@ -10,7 +10,7 @@ import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { envelope, state } from "../../../components/Ticket/control.ts";
+import { confirmLinks, envelope, state } from "../../../components/Ticket/control.ts";
 import { describe, write } from "../../../components/Ticket/text-storage.ts";
 import { readFinite } from "../../../components/Ticket/native-node.ts";
 
@@ -140,10 +140,7 @@ export default function* ArtifactReturn(value: unknown) {
     );
     const refusal = yield* run("", { name: "continue", record: refusalPath });
     check(refusal.value.status === "hold", "continuation refusal did not hold");
-    check(
-      refusal.closeBytes <= 65_536,
-      "continuation refusal exceeded full outward capacity",
-    );
+    check(refusal.closeBytes <= 65_536, "continuation refusal exceeded full outward capacity");
     reports.push({
       case: "continuation-refusal",
       outwardBytes: refusal.closeBytes,
@@ -389,11 +386,87 @@ export default function* ArtifactReturn(value: unknown) {
     );
     const canonical = yield* readTextFile(root + "/recovery/attempts/0000/result.json");
     const firstHash = describe("result", canonical).sha256;
+    const firstCall = first.saved.calls[0];
+    const preparationReceipt = root + "/recovery/preparations/0000/receipt.json";
+    const deliveryReceipt = root + "/recovery/attempts/0000/delivery.json";
+    const plannerIdentity = root + "/recovery/sessions/original-planner.json";
+    check(
+      firstCall.preparation === preparationReceipt && firstCall.delivery === deliveryReceipt,
+      "recovery call lost its preparation or delivery reference",
+    );
+    const delivered = z
+      .object({ session: z.string(), provider: z.string(), profile: z.json() })
+      .passthrough()
+      .parse(JSON.parse(yield* readTextFile(deliveryReceipt)));
+    check(
+      delivered.session === "original-planner" &&
+        JSON.stringify(firstCall.profile) === JSON.stringify(delivered.profile) &&
+        first.saved.checkpoint.initialized.planner,
+      "recovery call lost its delivered profile or initialization",
+    );
+    const prepared = z
+      .object({ status: z.string(), attempts: z.array(z.json()) })
+      .passthrough()
+      .parse(JSON.parse(yield* readTextFile(preparationReceipt)));
+    check(
+      prepared.status === "ready" && prepared.attempts.length === 0,
+      "fitting recovery packet started preparation analysis",
+    );
+    const sessionReceipt = z
+      .object({ identity: z.object({ kind: z.string(), value: z.string() }) })
+      .passthrough()
+      .parse(JSON.parse(yield* readTextFile(plannerIdentity)));
+    check(
+      sessionReceipt.identity.value === "artifact-original-planner",
+      "recovery call did not pass the original session guard",
+    );
+    confirmLinks(first.saved, first.returned);
+    for (const [label, altered] of [
+      [
+        "hold receipt",
+        {
+          ...first.saved,
+          checkpoint: {
+            ...first.saved.checkpoint,
+            hold: {
+              kind: "input_preparation",
+              reason: "synthetic",
+              receipt: root + "/recovery/preparations/0000/receipt.json",
+            },
+          },
+        },
+      ],
+      [
+        "delivery",
+        {
+          ...first.saved,
+          calls: [{ ...firstCall, delivery: root + "/recovery/attempts/0001/delivery.json" }],
+        },
+      ],
+      [
+        "preparation",
+        {
+          ...first.saved,
+          calls: [{ ...firstCall, preparation: root + "/recovery/preparations/0001/receipt.json" }],
+        },
+      ],
+    ] as const) {
+      let linked = true;
+      try {
+        confirmLinks(state.parse(altered), first.returned);
+      } catch {
+        linked = false;
+      }
+      check(!linked, "strict continuation accepted a changed " + label + " link");
+    }
     const receiptHashes: Record<string, string> = {};
     for (const path of [
       root + "/recovery/attempts/0000/raw.txt",
       root + "/recovery/attempts/0000/result.json",
       root + "/recovery/calls/0000/source.json",
+      deliveryReceipt,
+      preparationReceipt,
+      plannerIdentity,
     ]) {
       receiptHashes[path] = describe(path, yield* readTextFile(path)).sha256;
     }
@@ -420,6 +493,10 @@ export default function* ArtifactReturn(value: unknown) {
       );
     });
     check(calls === 1 && commands === 0, "return repeated effects or validation commands");
+    check(
+      !(yield* exists(root + "/recovery/preparations/0001")),
+      "read-only return started another preparation",
+    );
     for (const [path, hash] of Object.entries(receiptHashes)) {
       check(
         describe(path, yield* readTextFile(path)).sha256 === hash,
@@ -602,6 +679,18 @@ export default function* ArtifactReturn(value: unknown) {
       (call) => call.assignment.work === "recovery" && call.role === "implementor",
     );
     check(successor?.session === "original-implementor", "successor identity changed");
+    check(
+      (yield* exists(root + "/recovery/preparations/0001/receipt.json")) &&
+        !(yield* exists(root + "/recovery/preparations/0002")) &&
+        (yield* exists(root + "/recovery/sessions/original-implementor.json")),
+      "explicit continue did not prepare and guard exactly the saved successor",
+    );
+    for (const [path, hash] of Object.entries(receiptHashes)) {
+      check(
+        describe(path, yield* readTextFile(path)).sha256 === hash,
+        "explicit continue changed an original receipt",
+      );
+    }
     check(
       successor?.inputs.find((input) => input.path === sourcePath)?.content === sourceText,
       "first File text was not delivered exactly",

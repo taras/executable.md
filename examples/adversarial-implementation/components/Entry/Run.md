@@ -79,9 +79,8 @@ test -f {referencePath} -a -r {referencePath}
 </Loop>
 <If condition={unreadable.length !== 0}><Let as="work" value={{status:"hold",reason:"Prepare readable selected evidence and role-guide texts before launch: " + unreadable.join(", "),history:[]}} /><Break /></If>
 <If condition={task.scope.decisions.openQuestions.length !== 0}><Let as="work" value={{status:"hold",reason:"Resolve these material questions before launch: " + task.scope.decisions.openQuestions.join("; ") + ". Evidence: " + task.scope.decisions.evidence.join(", ") + ". Record accepted answers under fresh references and prepare the task again.",history:[]}} /><Break /></If>
-<Ticket.Documents directory={task.directory + ".inputs"} repository={task.repository} paths={[...task.inputs,...guidePaths]} as="documents" />
-<Ticket.Selected repository={task.repository} documents={documents} as="selectedDocuments" />
-<Let as="documents" value={selectedDocuments} />
+<Ticket.Documents directory={task.directory + ".inputs"} repository={task.repository} paths={[...task.inputs,...guidePaths]} as="retained" />
+<Ticket.Selected repository={task.repository} documents={retained} as="documents" />
 <Let as="inputs" value={task.inputs.map(path => documents[path])} />
 <Ticket.Capture as="deliveryCheck"><Delivery.Prepare task={task} inputs={inputs} as="delivery" /><Json value={delivery} /></Ticket.Capture>
 <If condition={deliveryCheck.status !== "completed"}><Let as="work" value={{status:"hold",reason:deliveryCheck.failure,history:[]}} /><Break /></If>
@@ -89,7 +88,7 @@ test -f {referencePath} -a -r {referencePath}
 <Let as="plannerGuide" value={documents[guidePaths[0]]} />
 <Let as="implementorGuide" value={documents[guidePaths[1]]} />
 <If condition={task.scope.migration !== null}>
-<Adversarial.Run delivery={delivery} task={{work:task.work,repository:task.repository,directory:task.directory,request:task.request + "\n\nAccepted migration commitments: " + JSON.stringify(task.scope.migration),inputs:task.inputs,sessions:task.sessions,providers:task.providers,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections}} plannerGuide={plannerGuide} implementorGuide={implementorGuide} documents={Object.fromEntries(inputs.map(input => [input.path,input]))} assessment={task.assessment} as="work" />
+<Adversarial.Run delivery={delivery} task={{work:task.work,repository:task.repository,directory:task.directory,request:task.request + "\n\nAccepted migration commitments: " + JSON.stringify(task.scope.migration),inputs:task.inputs,sessions:task.sessions,providers:task.providers,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections}} plannerGuide={plannerGuide} implementorGuide={implementorGuide} documents={retained} assessment={task.assessment} as="work" />
 <Else>
 ```bash exec as="reserved"
 mkdir -- {directoryPath}
@@ -103,6 +102,10 @@ mkdir -- {directoryPath}
 <Let as="manifest" value={{schema:"ticket-workflow.v2",work:task.work,directory:task.directory,maxCorrections:task.maxCorrections,maxApiRepairs:task.maxApiRepairs,maxResponseCorrections:task.maxResponseCorrections,delivery,roles:{architect:{session:task.sessions.architect,provider:"codex",initialized:false},planner:{session:task.sessions.planner,provider:task.providers.planner,initialized:false},implementor:{session:task.sessions.implementor,provider:task.providers.implementor,initialized:false}},acceptedInputs:inputs,roleInputs:{planner:[plannerGuide],implementor:[implementorGuide]},assignment}} />
 <Dir path={task.directory}><File path="implementation.json"><Json value={manifest} /></File></Dir>
 <Ticket.Run manifest={task.directory + "/implementation.json"} as="work" />
+<If condition={work.status === "hold" && work.publication === "confirmed"}>
+<Ticket.Load record={work} as="launched" />
+<If condition={launched.calls.length === 0 && launched.checkpoint.hold?.kind === "input_preparation"}><Let as="work" value={{status:"hold",reason:launched.checkpoint.hold.reason,preparation:launched.checkpoint.hold.receipt,history:[],record:work}} /></If>
+</If>
 </Else>
 </If>
 </Loop>

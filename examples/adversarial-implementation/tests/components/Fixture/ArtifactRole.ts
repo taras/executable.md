@@ -20,7 +20,7 @@ const call = z
       .passthrough(),
   })
   .passthrough();
-export default function* Role(input: unknown) {
+export default function* ArtifactRole(input: unknown) {
   const selected = call.parse(input);
   if (!selected.assignment.request.startsWith("artifact-return:")) {
     throw new Error("Synthetic role accepts only its explicit fixture assignment.");

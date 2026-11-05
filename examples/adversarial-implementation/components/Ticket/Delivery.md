@@ -11,7 +11,7 @@ props:
   additionalProperties: false
 returns: {type: object}
 ---
-<Ticket.Capture as="captured"><Ticket.Text path={props.call.attempt + "/delivery.json"} as="text" /><Parse schema={{type:"object"}} as="value">{text}</Parse><Json value={value} /></Ticket.Capture>
+<Ticket.Capture as="captured"><Ticket.Read path={props.call.attempt + "/delivery.json"} limit={1048576} as="text" /><Parse schema={{type:"object"}} as="value">{text}</Parse><Json value={value} /></Ticket.Capture>
 <Let as="deliveredInputs" value={props.record.deliveredInputs ?? {}} />
 <Let as="delivery" value={null} />
 <Let as="profile" value={null} />
@@ -23,6 +23,6 @@ returns: {type: object}
 <Let as="profile" value={value.profile} />
 <Let as="deliveredInputs" value={props.proposal.deliveryProposal} />
 </If>
-<Ticket.Capture as="canonical"><Ticket.Text path={props.call.attempt+"/result.json"} as="text" /><Parse schema={{type:"object"}} as="result">{text}</Parse><Json value={result} /></Ticket.Capture>
+<Ticket.Capture as="canonical"><Ticket.Read path={props.call.attempt+"/result.json"} as="text" /><Parse schema={{type:"object"}} as="result">{text}</Parse><Json value={result} /></Ticket.Capture>
 <Dir path={props.proposal.receipt.slice(0,props.proposal.receipt.lastIndexOf("/"))}><File path="dispatch.json"><Json value={{recipient:{role:props.call.role,session:props.call.session,provider:props.call.provider},attempt:props.call.attempt,execution:props.execution,delivery,result:canonical.status === "completed" ? props.call.attempt+"/result.json" : null}} /></File></Dir>
 <Return value={{delivery,profile,deliveredInputs,initialized:delivery !== null}} />

@@ -5,11 +5,8 @@ props:
     manifest: {type: string}
   required: [manifest]
 ---
-<Ticket.Text path={props.manifest} as="text" />
-<Parse schema={{type:"object"}} as="manifest">{text}</Parse>
-<Ticket.Start manifest={manifest} as="checkpoint" />
-<Let as="record" value={{manifest,checkpoint,calls:[],documents:Object.fromEntries(manifest.acceptedInputs.map(input => [input.path,input])),deliveredInputs:manifest.deliveredInputs ?? {}}} />
-<Dir path={manifest.directory+"/calls"}><Let as="callsPrepared" value={true} /></Dir>
-<Ticket.Continue record={record} maxSteps={1} as="first" />
-<Ticket.Continue record={first} maxSteps={1} as="again" />
-<Output><Json value={{first,again}} /></Output>
+<Ticket.Run manifest={props.manifest} maxSteps={1} as="firstReturn" />
+<Ticket.Load record={firstReturn} as="first" />
+<Ticket.Continue record={firstReturn} maxSteps={1} as="againReturn" />
+<Ticket.Load record={againReturn} as="again" />
+<Output><Json value={{first,again,firstReturn,againReturn}} /></Output>

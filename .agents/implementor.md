@@ -8,7 +8,7 @@ through migration, corrections and API repairs.
 ## Applies to
 
 Repository implementation and migration assignments. The adversarial
-implementation workflow uses Sonnet for this role. Repository instructions and
+implementation workflow uses Claude Opus for this role. Repository instructions and
 accepted product decisions remain authoritative.
 
 The Sidekick running Codex authors and applies PR and issue titles and

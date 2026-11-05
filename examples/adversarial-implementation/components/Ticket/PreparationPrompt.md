@@ -1,5 +1,5 @@
 ---
-description: 'Ask the established Planner to prepare documents. Use <Ticket.PreparationPrompt owner={owner} stage="reduce" assignment={assignment} material={material} as="raw" />.'
+description: 'Ask the established Planner to prepare documents in its confirmed original conversation. Use <Ticket.PreparationPrompt owner={owner} stage="reduce" assignment={assignment} material={material} as="raw" />.'
 props:
   type: object
   properties:
@@ -36,4 +36,4 @@ Return exactly one JSON object satisfying:
 <Json value={props.schema} />
 </Let>
 <If condition={request.length > 256000}><Fail message="The complete preparation prompt exceeds 256000 characters; nothing was sent." /></If>
-<Output><Agent name={props.owner.profile.provider}><Session name={props.owner.session} model={props.owner.profile.model} effort={props.owner.profile.effort}><Prompt throwOnError={true}>{request}</Prompt></Session></Agent></Output>
+<Output><Dir path={props.assignment.repository}><Agent name={props.owner.profile.provider}><Session name={props.owner.session} model={props.owner.profile.model} effort={props.owner.profile.effort}><Phase.Session directory={props.owner.identityDirectory} name={props.owner.session} requireExisting={true}><Prompt throwOnError={true}>{request}</Prompt></Phase.Session></Session></Agent></Dir></Output>

@@ -510,12 +510,12 @@ determine the work's outcome.
 | Owner | Work | Model and effort |
 | --- | --- | --- |
 | Planner | Ordinary plan/evidence; on migration, implement the API, validate representative consumers and repair API conflicts | Selected Codex `gpt-6.1-sol` or Claude `opus`; ordinary planning uses medium, high for a concrete recorded risk; migration foundation design uses high |
-| Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Selected Codex `gpt-6.1-sol`, medium (high for a concrete recorded risk), or Claude `sonnet`, high |
+| Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Selected Codex `gpt-6.1-sol`, medium (high for a concrete recorded risk), or Claude `opus`, high |
 | Planner reviewer | Inspect the migration against the accepted outcome and evidence | Same selected provider and original Planner session, medium; high for a concrete recorded risk |
 | Architect | Answer a concrete structural question or review structural impact | Codex `gpt-6.1-sol`, medium; high for a concrete recorded risk |
 | Sidekick running Codex | Author and apply issue/PR titles and descriptions; own publication and delivery | Existing coordinating Sidekick |
 
-Aliases select the provider's available Opus and Sonnet models. Coding roles
+Aliases select the provider's available Opus model. Coding roles
 do not draft or edit issue/PR titles or descriptions. The phase runner
 refuses editorial assignments; technical handoffs and API documentation remain
 part of the roles' work.
@@ -665,7 +665,7 @@ benchmark or recurring automation.
 ## Common mistake
 
 Do not accept shorter selected examples while the promised fixture or legacy
-adapter remains. Do not ask Sonnet to validate a paper API by designing it from
+adapter remains. Do not ask the Implementor to validate a paper API by designing it from
 scratch. The first handoff contains working consumer code and passing evidence;
 the final handoff contains the finished retirement and review evidence.
 
@@ -687,8 +687,10 @@ session takes precedence over the manifest's earlier delivery list.
 
 A fitting packet keeps its paths, order and captured text and starts no analysis
 prompt. Preparation saves its inventory, hashes and remaining allowance under
-`preparations/<call.id>/receipt.json`. Oversize originals remain in `original.json`;
-a reduced candidate uses a fresh path and links to that receipt. The original
+`preparations/<call.id>/receipt.json`. `original.json` names the retained snapshot
+of every oversize original. Captured windows and a reduced candidate are retained
+as protected snapshot text; the candidate uses a fresh path and links to that
+receipt. Saved documents and call inputs carry only those snapshot descriptors. The original
 Planner prepares exact extracts and supporting references, then compares the
 candidate with the originals. The comparison is a recorded semantic judgment;
 hashes establish text identity, not completeness of requirement extraction.
@@ -710,7 +712,7 @@ link the exact selection to the original recipient, execution and result. The
 foundation passes its saved Planner call and factual delivery into migration;
 standalone preparation has no delivery ledger or replacement reducer.
 
-#1101's pending diagnostics and native identity work remain on their original
-branch. This component shares Inputs selection and leaves that later composition
-at the existing boundary. It does not repair or dispatch the live #1086 ticket,
-adopt a new pilot runtime, or change the storage and cache work in #999/#1108.
+Reduction and comparison prompts run in the original Planner's conversation from
+the same repository directory as its productive calls, behind the same
+`Phase.Session` identity guard: a changed or unconfirmed identity holds before
+the prompt and spends that preparation stage.

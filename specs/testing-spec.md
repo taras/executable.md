@@ -812,7 +812,9 @@ through that runtime's one-file command:
 
 - Deno — `deno test --allow-all --frozen <file>`
 - Node — `tsx --tsconfig tsconfig.node.json --test --test-concurrency=1 <file>`
-- Bun — `bun test --timeout=300000 <file>`
+- Bun — `bun test --timeout=300000 <file>`, except
+  `bun test --timeout=450000 packages/cli/tests/adversarial-preparation.test.ts`,
+  whose own enclosing deadline is 420 seconds
 
 A malformed runtime, index, or count is refused before any test process starts.
 

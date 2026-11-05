@@ -5,7 +5,7 @@ pwd -P
 <Let as="clause" value={'Keep the accepted scope. If validation fails, hold; except the named read-only case. Unresolved: preserve finding U. Run `deno task test focused.test.ts`. Review identity: exact-sha-123.\n'} />
 
 <Test name="R D H P: production preparation continues only the unstarted successor and bounds unsuccessful reduction" timeout="180s">
-<Each in={["success","validation","overage","missing","uncertain"]} let="variant">
+<Each in={["success","validation","overage","missing","uncertain","identity"]} let="variant">
 <TempDir>
 ```bash exec as="repositoryPrepared"
 set -eu
@@ -38,7 +38,7 @@ git rev-parse HEAD
 <File path="manifest.json"><Json value={manifest} /></File>
 <Let as="journeyText">
 <Dir path={fixture.repository}>
-<Execution host="run" target={root+"/examples/adversarial-implementation/tests/preparation-journey.md"} props={{manifest:fixture.root+"/manifest.json"}}>
+<Execution host="run" target={root+"/examples/adversarial-implementation/tests/preparation-journey.md"} props={{manifest:fixture.root+"/manifest.json",identity:variant === "identity"}}>
 <TestAgent>
 <TestAgent.Scenario agent="codex" session="preparation-planner" src="./agents/preparation-planner.md" models={{selected:"gpt-6.1-sol",options:[{id:"gpt-6.1-sol",efforts:{selected:"medium",options:["medium","high"]}}]}} />
 <TestAgent.Scenario agent="codex" session="preparation-architect" src="./agents/preparation-architect.md" models={{selected:"gpt-6.1-sol",options:[{id:"gpt-6.1-sol",efforts:{selected:"medium",options:["medium","high"]}}]}} />
@@ -63,11 +63,14 @@ git rev-parse HEAD
 <AssertEquals actual={receipt.before} expected={journey.firstHashes} />
 <AssertEquals actual={receipt.originalFailure.excess} expected={11724} />
 <AssertEquals actual={receipt.owner.profile} expected={{provider:"codex",model:"gpt-6.1-sol",effort:"medium"}} />
-<If condition={receipt.attempts.length !== (variant === "overage" ? 1 : 2)}>
+<AssertEquals actual={[...journey.removed].sort()} expected={sources.map(source => source.path).sort()} />
+<AssertEquals actual={JSON.stringify(continued).includes("Keep the accepted scope.")} expected={false} />
+<AssertEquals actual={Object.values(continued.documents).every(document => !("content" in document))} expected={true} />
+<If condition={receipt.attempts.length !== (variant === "overage" || variant === "identity" ? 1 : 2)}>
 <Ticket.Text path={fixture.directory+"/preparations/0003/reduce-execution.json"} as="failureText" /><Parse schema={{type:"object"}} as="failed">{failureText}</Parse>
 <Fail message={JSON.stringify({reason:receipt.reason,execution:failed})} />
 </If>
-<AssertEquals actual={receipt.attempts.length} expected={variant === "overage" ? 1 : 2} />
+<AssertEquals actual={receipt.attempts.length} expected={variant === "overage" || variant === "identity" ? 1 : 2} />
 <If condition={variant === "success" || variant === "validation"}>
 <AssertEquals actual={continued.calls.length} expected={4} />
 <AssertEquals actual={continued.calls[3].session} expected="preparation-implementor" />
@@ -77,33 +80,55 @@ git rev-parse HEAD
 <AssertEquals actual={dispatch.result} expected={variant === "validation" ? null : fixture.directory+"/attempts/0003/result.json"} />
 <If condition={variant === "success"}>
 <Ticket.Text path={dispatch.result} as="text" /><Parse schema={{type:"object"}} as="result">{text}</Parse>
-<AssertEquals actual={result} expected={continued.calls[3].resultValue} />
+<AssertEquals actual={continued.calls[3].result} expected={dispatch.result} />
+<AssertEquals actual={result.outcome} expected="needs_discovery" />
 </If>
-<AssertEquals actual={continued.calls[3].inputs.reduce((total,input) => total+input.content.length,0)<=64000} expected={true} />
+<AssertEquals actual={continued.calls[3].inputs.every(input => !("content" in input) && JSON.stringify(continued.documents[input.path]) === JSON.stringify(input))} expected={true} />
+<Ticket.Selected repository={fixture.repository} documents={Object.fromEntries(continued.calls[3].inputs.map(input => [input.path,input]))} as="sentTexts" />
+<Let as="sentInputs" value={continued.calls[3].inputs.map(input => sentTexts[input.path])} />
+<AssertEquals actual={sentInputs.reduce((total,input) => total+input.content.length,0)<=64000} expected={true} />
 <AssertEquals actual={receipt.status} expected="ready" />
-<AssertEquals actual={receipt.revalidated.total} expected={continued.calls[3].inputs.reduce((total,input) => total+input.content.length,0)} />
+<AssertEquals actual={receipt.revalidated.total} expected={sentInputs.reduce((total,input) => total+input.content.length,0)} />
+<AssertEquals actual={continued.calls[3].preparation} expected={receiptPath} />
+<AssertEquals actual={continued.calls[3].delivery} expected={fixture.directory+"/attempts/0003/delivery.json"} />
+<Ticket.Text path={continued.calls[3].delivery} as="deliveryText" /><Parse schema={{type:"object"}} as="delivered">{deliveryText}</Parse>
+<AssertEquals actual={delivered.inputs} expected={receipt.after} />
+<AssertEquals actual={continued.calls[3].profile} expected={delivered.profile} />
 <AssertEquals actual={receipt.attempts.every(attempt => attempt.material.every(window => window.characters <= 8000))} expected={true} />
 <Ticket.Text path={receipt.mapping} as="mappingText" />
 <AssertEquals actual={receipt.attempts.reduce((total,attempt) => total+attempt.acquired,0)} expected={68212+receipt.after.find(input => input.path === receipt.candidate).characters+mappingText.length} />
-<Ticket.Text path={receipt.candidate} as="candidate" />
-<AssertStringIncludes actual={candidate} expected={clause} />
-<Ticket.Fingerprint inputs={continued.calls[3].inputs} as="sent" />
+<Ticket.Hydrate repository={fixture.repository} document={continued.documents[receipt.candidate]} as="candidate" />
+<AssertStringIncludes actual={candidate.content} expected={clause} />
+<Ticket.Fingerprint inputs={sentInputs} as="sent" />
 <AssertEquals actual={receipt.after} expected={sent} />
-<AssertEquals actual={continued.deliveredInputs["preparation-implementor"]} expected={continued.calls[3].inputs.map(input => input.path)} />
+<AssertEquals actual={continued.deliveredInputs["preparation-implementor"]} expected={sentInputs.map(input => input.path)} />
 <Else>
 <AssertEquals actual={continued.calls.length} expected={3} />
 <AssertEquals actual={receipt.status} expected="hold" />
+<AssertEquals actual={continued.checkpoint.hold} expected={{kind:"input_preparation",reason:receipt.reason,receipt:receiptPath}} />
 <If condition={variant === "overage"}>
 <AssertStringIncludes actual={receipt.reason} expected="Reduced packet still exceeds" />
 <AssertEquals actual={receipt.revalidated.admitted} expected={false} />
+<Else>
+<If condition={variant === "identity"}>
+<AssertStringIncludes actual={receipt.reason} expected="Reduction failed" />
+<Ticket.Text path={fixture.directory+"/preparations/0003/reduce-execution.json"} as="refusalText" /><Parse schema={{type:"object"}} as="refusal">{refusalText}</Parse>
+<AssertStringIncludes actual={refusal.failure} expected="Workflow session identity changed" />
+<AssertEquals actual={journey.identityPreserved} expected={true} />
+<Ticket.Text path={journey.identityPath + ".mismatch.json"} as="mismatch" />
+<AssertStringIncludes actual={mismatch} expected="substituted." />
 <Else>
 <AssertEquals actual={receipt.comparison.sufficient} expected={false} />
 <AssertEquals actual={variant === "missing" ? receipt.comparison.missing.length : receipt.comparison.uncertain.length} expected={1} />
 </Else>
 </If>
+</Else>
+</If>
 <AssertEquals actual={continued.checkpoint.initialized.implementor} expected={false} />
-<Ticket.Continue record={continued} maxSteps={1} as="held" />
+<Ticket.Continue record={journey.continuedReturn} maxSteps={1} as="heldReturn" />
+<Ticket.Load record={heldReturn} as="held" />
 <AssertEquals actual={JSON.stringify(held.calls) === JSON.stringify(continued.calls)} expected={true} />
+<AssertEquals actual={JSON.stringify(held.checkpoint) === JSON.stringify(continued.checkpoint)} expected={true} />
 </Else>
 </If>
 </TempDir>
@@ -173,7 +198,7 @@ git rev-parse HEAD
 <AssertEquals actual={journey.first.deliveredInputs} expected={manifest.deliveredInputs} />
 <AssertEquals actual={journey.first.checkpoint.initialized.implementor} expected={variant === "uncertain"} />
 <AssertEquals actual={journey.first.calls[0].delivery} expected={null} />
-<If condition={variant === "preprompt"}><AssertStringIncludes actual={journey.first.hold.reason} expected="complete phase prompt exceeds 256000" /></If>
+<If condition={variant === "preprompt"}><AssertStringIncludes actual={journey.first.checkpoint.hold.reason} expected="complete phase prompt exceeds 256000" /></If>
 </Else>
 </If>
 </TempDir>

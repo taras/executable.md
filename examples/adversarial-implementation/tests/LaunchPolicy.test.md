@@ -166,9 +166,9 @@ cd -- {directory}
 <AssertEquals actual={foundation.before.filter(input => input.path === guidePath).length} expected={1} />
 <AssertEquals actual={foundation.budget.total} expected={foundation.before.reduce((total,input) => total+input.characters,0)} />
 <AssertEquals actual={delivery.initialize} expected={true} />
-<AssertEquals actual={work.ticket.manifest.deliveredInputs["original-planner"]} expected={expectedOrder} />
-<AssertEquals actual={work.ticket.checkpoint.initialized.planner} expected={true} />
-<AssertEquals actual={work.ticket.checkpoint.initialized.architect} expected={true} />
+<AssertEquals actual={work.ticketState.manifest.deliveredInputs["original-planner"]} expected={expectedOrder} />
+<AssertEquals actual={work.ticketState.checkpoint.initialized.planner} expected={true} />
+<AssertEquals actual={work.ticketState.checkpoint.initialized.architect} expected={true} />
 <Ticket.Text path={fixture.directory+"/foundation-0/called.json"} as="text" /><Parse schema={{type:"object"}} as="called">{text}</Parse>
 <AssertEquals actual={called.inputs.map(input => input.path)} expected={[evidence]} />
 <AssertEquals actual={foundation.attempts} expected={[]} />
@@ -180,8 +180,8 @@ cd -- {directory}
 <AssertEquals actual={architecture.attempts} expected={[]} />
 <Ticket.Text path={fixture.directory+"/preparations/foundation-1/receipt.json"} as="text" /><Parse schema={{type:"object"}} as="continued">{text}</Parse>
 <AssertEquals actual={continued.before} expected={[]} />
-<AssertEquals actual={work.ticket.checkpoint.plannerCall} expected={fixture.directory+"/foundation-1/preparation-owner.json"} />
-<AssertEquals actual={work.ticket.manifest.deliveredInputs["conditional-architect"]} expected={taskInputs} />
+<AssertEquals actual={work.ticketState.checkpoint.plannerCall} expected={fixture.directory+"/foundation-1/preparation-owner.json"} />
+<AssertEquals actual={work.ticketState.manifest.deliveredInputs["conditional-architect"]} expected={taskInputs} />
 </TempDir>
 </Each>
 </Test>
