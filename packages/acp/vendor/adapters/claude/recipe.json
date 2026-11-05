@@ -1,0 +1,168 @@
+{
+  "format": 1,
+  "source": {
+    "url": "https://codeload.github.com/agentclientprotocol/claude-agent-acp/tar.gz/8710ce1cbccf562cb04b4bcc30e053e960aee05f",
+    "sha256": "7b4ae9fe0ab5e6eaccf780e4df74cfa0a20026728123946090fe48b834ad12b5",
+    "bytes": 423468,
+    "matchedRegularFiles": 84,
+    "matchedSymlinks": 1
+  },
+  "upstreamCommit": "8710ce1cbccf562cb04b4bcc30e053e960aee05f",
+  "upstreamTree": "d52f6e7bc635aee961263ab688d4b50d680f4de0",
+  "reviewedProducer": "e3a6ceb7a50e1151fb49322ea83d331a4c8b74ca",
+  "sdk": {
+    "url": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.238.tgz",
+    "integrity": "sha512-ppRfbAflZuV7HPqr8BkHPEk8c7gih3PK+GHnZq6zP0Uo7bJHXAJwc4Za8LJRm4hXMixBNMjK1cU/VWfQ9fE2sg==",
+    "sha256": "ebe729856b7ca5ed15adebd3f5db94fef6631d0f1b8d077ef907ac84d5b72cb9",
+    "bytes": 1282030,
+    "gitHead": null
+  },
+  "sourceLockSha256": "520e156f7e46a2ea5b5d317d6b5d1d0609a6e44a10db032c1a501b0c9635cd41",
+  "compiler": {
+    "version": "6.0.3",
+    "resolved": "https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz",
+    "integrity": "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==",
+    "dev": true,
+    "license": "Apache-2.0",
+    "bin": {
+      "tsc": "bin/tsc",
+      "tsserver": "bin/tsserver"
+    },
+    "engines": {
+      "node": ">=14.17"
+    }
+  },
+  "patchSha256": "873f04c4549c05fcfd1c11d0efbcd3392c9d1e7702e29528c48d75a97316b94b",
+  "transformSha256": "d20ae1bc7335768bdf417831cdac359cb40cfd786adb6bfd78b3808253d8030b",
+  "preimages": {
+    "src/acp-agent.ts": "a52b723182828025341f5111109f4b902beaae22589b77d52f9236f279ef2a1c",
+    "src/claude-sdk.ts": null,
+    "src/file-change-audit.ts": "62e1b2d17798ec06d5c957801ff121a043a996e8d813594c79f57ba8e1b7fd21",
+    "src/index.ts": "99cf9f77bff2098c8d29a208c723eb692025d646355b5d6ced3be6ff09cf4339",
+    "src/session-failure-extension.ts": "3fa1ea7a9908837866203744614d7e55750f07120be36220976be82adecc39f2",
+    "src/session-start.ts": null,
+    "src/session-titles.ts": "75f180029f0f6c12f142830fe2b9a7c7e15408a4d9c0a0bb19c708c6524fcfd6",
+    "src/settings.ts": "cddfaf40d57227e9f0011fde131752cc3652371f14f688edea09c494f0c90f7c",
+    "src/tools.ts": "7f5affb80dc728e6c6ec6378871a4a67f284382c5b66b9a96fd30f453b7c3905"
+  },
+  "postimages": {
+    "src/acp-agent.ts": "ac7019cddbd7557ce74a6d93c64b94637162a462ef07a34bfebb7ca625dc9e71",
+    "src/claude-sdk.ts": "b80d272dea9583ecae6ca2c86477cae7f7f9186b8cefdbb1ad1fb6c05e3ddc9a",
+    "src/file-change-audit.ts": "14a9ad8488c5793cb49172ac86d7fd481cd2b23da6589b2275ff3a429eb9b324",
+    "src/index.ts": "c6f3d6074749e0ff466e10cc32e1798be8da0b271e8ba201a6ecb330badf1261",
+    "src/session-failure-extension.ts": "a90c272b2a6b66cf1a1a7834f1a947592a5ca3b3fc399d7bee14ac29a8fe7b66",
+    "src/session-start.ts": "672cc399fdb0bc9571023370c701c0dac39b7428a924542ae648f604027aab0a",
+    "src/session-titles.ts": "cd6c5bb736be943f9c25948100cb3c52733fc02f2ea2e2e9cce0b36fb9763d6a",
+    "src/settings.ts": "10d3a2ec43597b90827626152f4c266b5ceeba72c1e81e8d854af294729f0c29",
+    "src/tools.ts": "ff8c9d821ce82462a659bc5d5c85299f9419072daa14c52208fa31fed5945e7c"
+  },
+  "runtime": {
+    "dist/acp-agent.js": "5890b00c9e0ad1744cb0efe94d08d10469ef7db460c4133bb74a95044c7157be",
+    "dist/claude-sdk.js": "b80d272dea9583ecae6ca2c86477cae7f7f9186b8cefdbb1ad1fb6c05e3ddc9a",
+    "dist/clear-context-coordinator.js": "854e5fccdbb3343c57ddf158fb8a1dd5d34d7b13483032437c2fed6c898154a6",
+    "dist/permissions/effects.js": "f2d2ce76f2012b6062ad565b079c2078ae4dbf9282f505876ff38313c521745b",
+    "dist/elicitation.js": "d40be7d05a0ca9f65621a54fd61aa1a903875d5afcd95051c1f86b561abdd095",
+    "dist/exit-plan.js": "f1b5b74057bddc1196e9761f656dacdba0cfe84ae9dff51afda08ee68d788b81",
+    "dist/file-change-audit.js": "ff9ab5f1a9b2e616abec551edbfe17c05a94a17a51bf8481f4cfa7a582676459",
+    "dist/permissions/options/filesystem.js": "a4c5f1cb966ee9b370546eb87df3e7b6ce938758e608626cdf20e63357caf3f9",
+    "dist/goal-extension.js": "822a8e90ac4eaf4b7ffb866abd3de531498e9c9a5ad72ec582dc232e814cbb1a",
+    "dist/index.js": "d63052d6fcf32070effabe7365de1e3cdf8c6016598e48aac98f41aa77592a2c",
+    "dist/lib.js": "e189787d1c445c3842262bd9d98171a535127c6d36bbe698fff235cc14100792",
+    "dist/permissions/modes.js": "997ae65c5534b5415688ecc02d06e01365f76acec871436010eb3ecff939f3a1",
+    "dist/permissions/normalization.js": "52d8e1e4f84b5d565b4d68654b2d5380751bf986d5d76c3b5fea02e4da6a819b",
+    "dist/permissions/options.js": "f1b25280b0d8523342f2d8c2ab0cd180cfcf35f47db25736ab12890d812e6346",
+    "dist/permissions/presentation.js": "9db6fb03eb72cf0c333ddfc16c60a3d7038a53b00f28e16af6421ef7f50dbf53",
+    "dist/permissions/response.js": "c31060b84387cc7f1dc48985c75ffd72cf3662e78e457aca21ecb656edac8020",
+    "dist/session-config-ids.js": "24148e79435afabd7e3c6cf4f8bf5d3c16c7887b97f172cd507de60f19ec551d",
+    "dist/session-failure-extension.js": "8bee1ffeec311f346ff52ec607ab1931b6287651e95feae9d4e79edc1ea8c1e2",
+    "dist/session-mode.js": "0efc6f6fb78df0122145270f36d01aa7dc73d3f80b71065f830d9b41adcea0bc",
+    "dist/session-start.js": "40d6de34b7a2ad1036658b398d5730139950fec6645599b5fd1ba35cbd0dffa0",
+    "dist/session-titles.js": "a5ab1bce8f5614bfa8e5096692ee4ef1604bd701f2cc8601fb5b3fd3131a67a8",
+    "dist/settings.js": "f72d5f46960e9cf40a3cf6a24687c0cfe40eb4a41b623459652aa3205f751986",
+    "dist/permissions/options/shared.js": "f3268e6d7be80d1671759ab1151cac46db6a67a7561d23797a612d32fcf6c6bb",
+    "dist/permissions/options/shell.js": "102de11e31da0c21bbe7f9c69055c4181b8a0f56fd4a2b864e023b8fbac63fcc",
+    "dist/tool-result-meta.js": "2c3301104d4b4066244631a0c52cdd0f7e99b5d3189d2318762ee88110f6c0a9",
+    "dist/permissions/options/tools.js": "fa0736e38d932973d5c8543643425f25a844324fb0d1fbb00fed40a751b89cd1",
+    "dist/tools.js": "b571868f11e10b75f0542e7cbfaad17d96e297f8d017f4a784411951265bbe87",
+    "dist/utils.js": "e99a776cda7f84f00884fc6be8d754f545cd21346ba9a4d326aeea1dc422d8f2",
+    "dist/sdk/sdk.mjs": "76ac7b5abf2a819885ca05a18c3966bb29f2bd043466daed67e93ffd74d1ab62"
+  },
+  "sdkModuleSha256": "fa36c6862927f6f1d0c3bff35d524a1d8fa81f1746bebfc7aeddb6fbf4b572c8",
+  "sdkDeclarationsSha256": "544c4efabd6761a66110bf32b2e3749b77bbee4f958e2c929dd1045f52302653",
+  "noticeSha256": "f5d5628af39af461ec2811f1b9616aa3660890aa2e85971c77ca2ec1df067c31",
+  "files": [
+    "LICENSE",
+    "README.md",
+    "SDK-NOTICE.md",
+    "dist/acp-agent.js",
+    "dist/claude-sdk.js",
+    "dist/clear-context-coordinator.js",
+    "dist/elicitation.js",
+    "dist/exit-plan.js",
+    "dist/file-change-audit.js",
+    "dist/goal-extension.js",
+    "dist/index.js",
+    "dist/lib.js",
+    "dist/permissions/effects.js",
+    "dist/permissions/modes.js",
+    "dist/permissions/normalization.js",
+    "dist/permissions/options.js",
+    "dist/permissions/options/filesystem.js",
+    "dist/permissions/options/shared.js",
+    "dist/permissions/options/shell.js",
+    "dist/permissions/options/tools.js",
+    "dist/permissions/presentation.js",
+    "dist/permissions/response.js",
+    "dist/sdk/sdk.mjs",
+    "dist/session-config-ids.js",
+    "dist/session-failure-extension.js",
+    "dist/session-mode.js",
+    "dist/session-start.js",
+    "dist/session-titles.js",
+    "dist/settings.js",
+    "dist/tool-result-meta.js",
+    "dist/tools.js",
+    "dist/utils.js",
+    "package.json"
+  ],
+  "expected": {
+    "sha256": "773db68c6b94fcf34540d387017247d6893f42359337a167a42baf636eef2685",
+    "byteLength": 2004653,
+    "moduleSha256": "117a2bf6356bb7ec567fa6b3e35266db38dda095ac9f12252bc5ca88b3c39444"
+  },
+  "metadata": {
+    "name": "@agentclientprotocol/claude-agent-acp",
+    "version": "0.70.0",
+    "description": "An ACP-compatible coding agent powered by the Claude Agent SDK (TypeScript)",
+    "main": "dist/lib.js",
+    "bin": {
+      "claude-agent-acp": "dist/index.js"
+    },
+    "type": "module",
+    "exports": {
+      ".": {
+        "import": "./dist/lib.js"
+      },
+      "./*": "./*"
+    },
+    "keywords": ["claude", "acp", "agent", "anthropic", "typescript", "sdk", "code"],
+    "homepage": "https://github.com/agentclientprotocol/claude-agent-acp#readme",
+    "bugs": {
+      "url": "https://github.com/agentclientprotocol/claude-agent-acp/issues"
+    },
+    "repository": {
+      "type": "git",
+      "url": "git+https://github.com/agentclientprotocol/claude-agent-acp.git"
+    },
+    "author": "Zed Industries",
+    "license": "Apache-2.0",
+    "engines": {
+      "node": ">=22"
+    },
+    "dependencies": {
+      "@agentclientprotocol/sdk": "1.3.0",
+      "zod": "^3.25.0 || ^4.0.0"
+    }
+  },
+  "inputsSha256": "23cbd3e280c82dadb7b1bdc04f5ed84b9ef65ef6332d49ff84e79b64a61e15ae"
+}

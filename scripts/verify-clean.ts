@@ -60,6 +60,8 @@ import {
   preparedState,
 } from "./lib/prepared-state.ts";
 import type { PreparedState } from "./lib/prepared-state.ts";
+import { assertPrepared } from "./lib/preflight-deno.ts";
+import { pathToFileURL } from "node:url";
 import { trackedState } from "./lib/tracked-fingerprint.ts";
 import { movedOwned } from "./lib/verify.ts";
 import type { OwnedState } from "./lib/verify.ts";
@@ -203,7 +205,9 @@ function* ownedStateOf(target: string, label: string): Operation<OwnedState> {
 
 function* fingerprintOf(target: string, denoDir: string, label: string): Operation<PreparedState> {
   const started = performance.now();
+  assertPrepared(pathToFileURL(`${target}/`));
   const state = yield* preparedState(target, denoDir);
+  console.log(`  prepared Claude module verified after ${label}`);
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.log(
     `  fingerprint after ${label}: ${state.tree.entries.length} tree, ` +

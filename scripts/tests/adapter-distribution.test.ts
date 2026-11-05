@@ -20,17 +20,25 @@
  * inspects are Deno's own build outputs; the portable half of the contract is Tier
  * EA and Tier AM, which do run under all three.
  */
+import { z } from "zod";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, until } from "effection";
 import type { Operation } from "effection";
 import { Buffer } from "node:buffer";
+import { gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { copyFile, ensureDir, exists, writeTextFile } from "@effectionx/fs";
+import { dirname } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
+import { stripVTControlCharacters } from "node:util";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import { embeddedAdapterIdentities } from "@executablemd/acp/embedded-adapters";
+import { copyPreparedCandidate } from "./candidate-copy.ts";
 
 const VENDOR = "packages/acp/vendor/adapters";
 const GENERATED = `${VENDOR}/generated/snapshots.ts`;
@@ -57,6 +65,58 @@ function digests(): string[] {
   return embeddedAdapterIdentities().map((snapshot) => snapshot.sha256);
 }
 
+function acpPublishInventory(output: string, source: URL): URL[] {
+  const section = stripVTControlCharacters(output)
+    .split("Simulating publish of @executablemd/acp@")[1]
+    ?.split("Simulating publish of ")[0];
+  if (!section) {
+    throw new Error("No actual ACP publish inventory");
+  }
+  const urls = [...section.matchAll(/file:\/\/[^\n]+?(?= \()/g)].map((match) => new URL(match[0]));
+  for (const url of urls) {
+    if (!url.href.startsWith(source.href)) {
+      throw new Error(`ACP publish inventory escapes its candidate: ${url.href}`);
+    }
+  }
+  return urls;
+}
+
+describe("ACP publish inventory", () => {
+  const source = new URL("file:///tmp/xmd-jsr-candidate-oQPwf0/packages/acp/");
+  const coloured = [
+    "\u001b[0m\u001b[1m\u001b[32mSimulating publish\u001b[0m of \u001b[0m\u001b[38;5;245m@executablemd/acp@0.14.0\u001b[0m with files:",
+    "   file:///tmp/xmd-jsr-candidate-oQPwf0/packages/acp/embedded-adapters.ts (1.13KB)",
+    "   file:///tmp/xmd-jsr-candidate-oQPwf0/packages/acp/generated/claude-snapshot.ts (2.76MB)",
+    "\u001b[0m\u001b[1m\u001b[32mSimulating publish\u001b[0m of \u001b[0m\u001b[38;5;245m@executablemd/cli@0.14.0\u001b[0m with files:",
+    "   file:///tmp/xmd-jsr-candidate-oQPwf0/packages/cli/deno.json (410B)",
+  ].join("\n");
+  for (const { name, output } of [
+    { name: "plain", output: stripVTControlCharacters(coloured) },
+    { name: "coloured CI2443", output: coloured },
+  ]) {
+    it(`reads the ${name} ACP inventory and stops at the next package`, function* () {
+      expect(acpPublishInventory(output, source).map((url) => url.href)).toEqual([
+        new URL("embedded-adapters.ts", source).href,
+        new URL("generated/claude-snapshot.ts", source).href,
+      ]);
+    });
+  }
+  it("refuses output without an ACP inventory heading", function* () {
+    expect(() => acpPublishInventory("Success Dry run complete", source)).toThrow(
+      "No actual ACP publish inventory",
+    );
+  });
+  it("refuses a foreign file in the ACP inventory", function* () {
+    const output = stripVTControlCharacters(coloured).replace(
+      new URL("embedded-adapters.ts", source).href,
+      new URL("../cli/deno.json", source).href,
+    );
+    expect(() => acpPublishInventory(output, source)).toThrow(
+      "ACP publish inventory escapes its candidate",
+    );
+  });
+});
+
 describe("Tier ADD — embedded adapters across distributions", () => {
   it("ADD1: the source tree carries the manifest's exact bytes", function* () {
     for (const snapshot of embeddedAdapterIdentities()) {
@@ -65,6 +125,12 @@ describe("Tier ADD — embedded adapters across distributions", () => {
         provider: snapshot.provider,
         sha256: createHash("sha256").update(bytes).digest("hex"),
       }).toEqual({ provider: snapshot.provider, sha256: snapshot.sha256 });
+      if (snapshot.provider === "claude") {
+        const archive = gunzipSync(bytes).toString("utf8");
+        for (const member of ["dist/sdk/sdk.mjs", "SDK-NOTICE.md"]) {
+          expect(archive).toContain(`package/${member}`);
+        }
+      }
     }
     expect(digests()).toHaveLength(2);
   });
@@ -76,6 +142,7 @@ describe("Tier ADD — embedded adapters across distributions", () => {
     const graph = yield* moduleGraph(["--node-modules-dir=none"], "packages/cli/src/compiled.ts");
 
     expect(graph).toContain("vendor/adapters/generated/snapshots.ts");
+    expect(graph).toContain("generated/claude-snapshot.ts");
   });
 
   it("ADD3: the graph probe refuses a command that did not run", function* () {
@@ -100,6 +167,7 @@ describe("Tier ADD — embedded adapters across distributions", () => {
     const graph = yield* moduleGraph([], "packages/acp/embedded-adapters.ts");
 
     expect(graph).toContain("vendor/adapters/generated/snapshots.ts");
+    expect(graph).toContain("generated/claude-snapshot.ts");
   });
 
   it("ADD6: the compiled entrypoint keeps semver despite --exclude-unused-npm", function* () {
@@ -115,7 +183,9 @@ describe("Tier ADD — embedded adapters across distributions", () => {
   });
 
   it("ADD5: the generated module is the manifest's bytes, not a stale copy", function* () {
-    const source = yield* until(readFile(GENERATED, "utf8"));
+    const source =
+      (yield* until(readFile(GENERATED, "utf8"))) +
+      (yield* until(readFile("packages/acp/generated/claude-snapshot.ts", "utf8")));
     const manifest: unknown = JSON.parse(
       yield* until(readFile(join(VENDOR, "MANIFEST.json"), "utf8")),
     );
@@ -127,5 +197,77 @@ describe("Tier ADD — embedded adapters across distributions", () => {
       expect(source).toContain(snapshot.sha256);
       expect(source).toContain(snapshot.version);
     }
+  });
+  it("ADD7: JSR selects the ignored Claude module and its selected ACP layout resolves", function* () {
+    const directory = yield* useTempDirectory("xmd-jsr-candidate-");
+    const candidate = yield* until(realpath(directory));
+    yield* copyPreparedCandidate(candidate);
+    const config = JSON.parse(yield* until(readFile(join(candidate, "deno.json"), "utf8")));
+    // Deno 2.9.5 publish takes dependency modes from config, not command flags.
+    yield* writeTextFile(
+      join(candidate, "deno.json"),
+      JSON.stringify({ ...config, nodeModulesDir: "manual", lock: { frozen: true } }),
+    );
+    const published = yield* scoped(function* () {
+      yield* useQuietProcessOutput();
+      return yield* exec({
+        command: [process.execPath, "publish", "--dry-run", "--allow-dirty"],
+        cwd: candidate,
+      });
+    });
+    if (published.exitCode !== 0) {
+      throw new Error(`JSR dry run failed: ${published.stderr}`);
+    }
+    const source = pathToFileURL(`${candidate}/packages/acp/`);
+    const urls = acpPublishInventory(published.stdout + published.stderr, source);
+    const selected = urls.map((url) => decodeURIComponent(url.href.slice(source.href.length)));
+    expect(selected).toContain("generated/claude-snapshot.ts");
+    const root = yield* useTempDirectory("xmd-jsr-selected-");
+    for (const [index, path] of selected.entries()) {
+      const target = join(root, path);
+      yield* ensureDir(dirname(target));
+      yield* copyFile(urls[index]!, target);
+    }
+    const imports: Record<string, string> = { ...config.imports };
+    const { listWorkspacePaths } = yield* until(import("../lib/workspace.ts"));
+    const repo = new URL("../../", import.meta.url);
+    for (const member of yield* listWorkspacePaths(config.workspace, repo)) {
+      if (!(yield* exists(new URL(`${member}/deno.json`, repo)))) {
+        continue;
+      }
+      const parsed = z
+        .object({
+          name: z.string(),
+          exports: z.union([z.string(), z.record(z.string(), z.string())]),
+        })
+        .safeParse(
+          JSON.parse(yield* until(readFile(new URL(`${member}/deno.json`, repo), "utf8"))),
+        );
+      if (!parsed.success) {
+        continue;
+      }
+      const manifest = parsed.data;
+      const base =
+        member === "packages/acp" ? pathToFileURL(`${root}/`) : new URL(`${member}/`, repo);
+      const exports =
+        typeof manifest.exports === "string" ? { ".": manifest.exports } : manifest.exports;
+      for (const [path, value] of Object.entries(exports)) {
+        if (typeof value === "string") {
+          imports[manifest.name + (path === "." ? "" : path.slice(1))] = new URL(value, base).href;
+        }
+      }
+    }
+    yield* writeTextFile(join(root, "selected-imports.json"), JSON.stringify({ imports }));
+    const graph = yield* moduleGraph(
+      [
+        "--config",
+        fileURLToPath(new URL("../../deno.json", import.meta.url)),
+        "--import-map",
+        join(root, "selected-imports.json"),
+        "--node-modules-dir=none",
+      ],
+      join(root, "embedded-adapters.ts"),
+    );
+    expect(graph).toContain(join(root, "generated/claude-snapshot.ts"));
   });
 });

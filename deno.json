@@ -14,6 +14,7 @@
     "frozen": true
   },
   "imports": {
+    "tar-stream": "npm:tar-stream@3.2.0",
     "@types/node": "npm:@types/node@^24.5.2",
     "@durable-streams/client": "npm:@durable-streams/client@^0.2.2",
     "@durable-streams/server": "npm:@durable-streams/server@^0.3.8",
@@ -63,7 +64,7 @@
     "deps": "deno run --allow-all scripts/deps.ts",
     "deps:target": "deno run --allow-all scripts/deps-target.ts",
     "validate:docs": "deno run --allow-all scripts/validate-documentation.ts",
-    "build": "deno task validate:docs && deno task build:web && deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/compile.ts --output dist/xmd",
+    "build": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/validate-documentation.ts && deno task build:web && deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/compile.ts --output dist/xmd",
     "build:web": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/build-web-client.ts",
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/deno.ts run scripts/gen-publish-workflow.md",
     "bump": "deno run -A scripts/bump-version.ts",

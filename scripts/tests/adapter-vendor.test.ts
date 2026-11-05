@@ -21,6 +21,9 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Buffer } from "node:buffer";
 import { gunzipSync } from "node:zlib";
+import { AdapterManifest } from "../lib/adapter-manifest.ts";
+import { ClaudeRecipe } from "../lib/claude-recipe.ts";
+import { sha256 } from "../lib/claude-snapshot-module.ts";
 import { embeddedAdapterIdentities } from "@executablemd/acp/embedded-adapters";
 
 const VENDOR = "packages/acp/vendor/adapters";
@@ -33,7 +36,7 @@ const PINNED = {
   },
   claude: {
     upstreamBase: "8710ce1cbccf562cb04b4bcc30e053e960aee05f",
-    patchedCommit: "bea799c86d16ed2b1bf1cfe8d7fd6e22e6525b56",
+    patchedCommit: "e3a6ceb7a50e1151fb49322ea83d331a4c8b74ca",
   },
 } as const;
 
@@ -45,8 +48,12 @@ const PINNED = {
  * header blocks so the comparison is against the archive.
  */
 function archiveInventory(tarball: Uint8Array): string[] {
+  return [...archiveFiles(tarball).keys()].sort();
+}
+
+function archiveFiles(tarball: Uint8Array): Map<string, Buffer> {
   const raw = gunzipSync(tarball);
-  const names: string[] = [];
+  const files = new Map<string, Buffer>();
   for (let at = 0; at + 512 <= raw.length; ) {
     const header = raw.subarray(at, at + 512);
     // Two consecutive zero blocks end the archive.
@@ -62,49 +69,42 @@ function archiveInventory(tarball: Uint8Array): string[] {
     // '0' and '\0' are ordinary files; directories and metadata entries are not
     // what the manifest lists.
     if (type === "0" || type === "\0") {
-      names.push(name);
+      files.set(name, raw.subarray(at + 512, at + 512 + size));
     }
     at += 512 + Math.ceil((Number.isNaN(size) ? 0 : size) / 512) * 512;
   }
-  return names.sort();
+  return files;
 }
 
-interface ManifestSnapshot {
-  provider: string;
-  package: string;
-  version: string;
-  tarball: string;
-  sha256: string;
-  byteLength: number;
-  files: string[];
-  upstreamBase: string;
-  patchedCommit: string;
-  license: string;
-  buildCommand: string;
-  contract: string;
-  materializationContract: string;
-  identityContract?: string;
+function* manifest() {
+  return AdapterManifest.parse(
+    JSON.parse(yield* until(readFile(join(VENDOR, "MANIFEST.json"), "utf8"))),
+  ).snapshots;
 }
 
-function* manifest(): Operation<ManifestSnapshot[]> {
-  const raw: unknown = JSON.parse(yield* until(readFile(join(VENDOR, "MANIFEST.json"), "utf8")));
-  const snapshots = (raw as { snapshots?: unknown }).snapshots;
-  if (!Array.isArray(snapshots)) {
-    throw new Error("the adapter manifest declares no snapshots");
+function* snapshotBytes(snapshot: { provider: string; tarball?: string }): Operation<Uint8Array> {
+  if (snapshot.tarball) {
+    return yield* until(readFile(join(VENDOR, snapshot.tarball)));
   }
-  return snapshots as ManifestSnapshot[];
+  const embedded = embeddedAdapterIdentities().find(
+    (entry) => entry.provider === snapshot.provider,
+  );
+  if (!embedded) {
+    throw new Error(`Missing snapshot ${snapshot.provider}`);
+  }
+  return Buffer.from(embedded.base64, "base64");
 }
 
 describe("Tier AD — embedded ACP adapter snapshots", () => {
   it("AD1: every tarball matches its recorded digest and length", function* () {
     for (const snapshot of yield* manifest()) {
-      const bytes = yield* until(readFile(join(VENDOR, snapshot.tarball)));
+      const bytes = yield* snapshotBytes(snapshot);
       expect({
-        tarball: snapshot.tarball,
+        tarball: "tarball" in snapshot ? snapshot.tarball : snapshot.recipe,
         sha256: createHash("sha256").update(bytes).digest("hex"),
         byteLength: bytes.byteLength,
       }).toEqual({
-        tarball: snapshot.tarball,
+        tarball: "tarball" in snapshot ? snapshot.tarball : snapshot.recipe,
         sha256: snapshot.sha256,
         byteLength: snapshot.byteLength,
       });
@@ -137,7 +137,7 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
 
   it("AD3: each snapshot names the exact source commits", function* () {
     for (const snapshot of yield* manifest()) {
-      const reviewed = PINNED[snapshot.provider as keyof typeof PINNED];
+      const reviewed = snapshot.provider === "claude" ? PINNED.claude : PINNED.codex;
       // Pinned in this file as well as in the manifest: a snapshot rebuilt from
       // some other commit would otherwise rewrite the record of what it is and
       // still pass every byte check above.
@@ -147,19 +147,24 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
         patchedCommit: snapshot.patchedCommit,
       });
       expect(snapshot.license).toBe("Apache-2.0");
-      expect(snapshot.buildCommand).toBe("npm run build && npm pack");
+      expect(snapshot.buildCommand).toBe(
+        snapshot.provider === "claude" ? "deno task deps" : "npm run build && npm pack",
+      );
     }
   });
 
   it("AD4: the manifest inventory is exactly what the archive contains", function* () {
     for (const snapshot of yield* manifest()) {
-      const bytes = yield* until(readFile(join(VENDOR, snapshot.tarball)));
+      const bytes = yield* snapshotBytes(snapshot);
 
       // The archive's own answer, not the manifest compared with itself. A file
       // added to or dropped from the tarball has to show up here, because this
       // is the list a reviewer trusts instead of unpacking.
-      expect({ tarball: snapshot.tarball, files: archiveInventory(bytes) }).toEqual({
-        tarball: snapshot.tarball,
+      expect({
+        tarball: "tarball" in snapshot ? snapshot.tarball : snapshot.recipe,
+        files: archiveInventory(bytes),
+      }).toEqual({
+        tarball: "tarball" in snapshot ? snapshot.tarball : snapshot.recipe,
         files: [...snapshot.files].sort(),
       });
 
@@ -207,5 +212,43 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
         expect(snapshot.identityContract).toMatch(/^_meta\./);
       }
     }
+  });
+  it("AD7: Claude carries exactly the reviewed runtime, metadata and separate SDK terms", function* () {
+    const recipe = ClaudeRecipe.parse(
+      JSON.parse(yield* until(readFile(join(VENDOR, "claude/recipe.json"), "utf8"))),
+    );
+    const snapshot = embeddedAdapterIdentities().find((entry) => entry.provider === "claude");
+    if (!snapshot) {
+      throw new Error("Claude snapshot missing");
+    }
+    const files = archiveFiles(Buffer.from(snapshot.base64, "base64"));
+    expect([...files.keys()].sort()).toEqual(recipe.files.map((path) => `package/${path}`).sort());
+    for (const [path, expected] of Object.entries(recipe.runtime)) {
+      const bytes = files.get(`package/${path}`);
+      if (!bytes) {
+        throw new Error(`Missing executable ${path}`);
+      }
+      expect({ path, sha256: sha256(bytes) }).toEqual({ path, sha256: expected });
+    }
+    const pkg = JSON.parse(files.get("package/package.json")!.toString("utf8"));
+    expect(pkg.dependencies).toEqual({
+      "@agentclientprotocol/sdk": "1.3.0",
+      zod: "^3.25.0 || ^4.0.0",
+    });
+    expect(pkg.scripts).toBeUndefined();
+    expect(pkg.types).toBeUndefined();
+    expect(pkg.exports).toEqual({ ".": { import: "./dist/lib.js" }, "./*": "./*" });
+    expect(files.get("package/SDK-NOTICE.md")!.toString("utf8")).toContain(
+      "Commercial Terms of Service",
+    );
+    expect(files.get("package/dist/claude-sdk.js")!.toString("utf8")).toContain(
+      "../dist/sdk/sdk.mjs",
+    );
+    expect(sha256(yield* until(readFile(join(VENDOR, "claude/adapter.patch"))))).toBe(
+      recipe.patchSha256,
+    );
+    expect(sha256(yield* until(readFile(join(VENDOR, "claude/sdk-transform.mjs"))))).toBe(
+      recipe.transformSha256,
+    );
   });
 });

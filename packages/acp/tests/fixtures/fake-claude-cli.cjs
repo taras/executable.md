@@ -39,7 +39,15 @@ function emit(message) {
   process.stdout.write(JSON.stringify(message) + "\n");
 }
 
-log({ argv: process.argv.slice(2) });
+if (process.env.FAKE_CLAUDE_EXIT_STDERR) {
+  process.stderr.write("native-close-tail", () => process.exit(7));
+  return;
+}
+log({ executable: process.argv[1], argv: process.argv.slice(2) });
+if (process.argv.includes("--version")) {
+  console.log("Fake Claude Code 0.0.0");
+  return;
+}
 process.on("exit", () => log({ event: "exit", pid: process.pid }));
 
 emit({
@@ -58,6 +66,13 @@ emit({
 });
 
 const confirmation = process.env.FAKE_CLAUDE_CONFIRMATION ?? "success";
+if (process.env.FAKE_CLAUDE_CLOSE_GATE_PORT) {
+  spawn(process.execPath, [require("node:path").join(__dirname, "claude-stdout-holder.mjs")], {
+    env: process.env,
+    stdio: ["ignore", process.stdout, "ignore"],
+  }).unref();
+  process.stdin.on("end", () => process.exit(0));
+}
 if (confirmation === "held" && process.env.FAKE_CLAUDE_HELD_HELPER === "1") {
   let helper;
   const onEnd = () => helper.stdin.end();

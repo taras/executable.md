@@ -19,7 +19,7 @@ every `@executablemd/*` package to npm (primary) and JSR (secondary). npm publis
 per package; JSR publishes all workspace packages together. Binaries come
 first: `publish-packages.yml` publishes nothing until `release.yml` succeeds,
 so npm versions never exist without matching binaries. Both workflows build
-from the tag's commit.
+from the tag's commit. [Prepared Claude adapter](#11-prepared-claude-adapter) describes the generated input both distributions carry.
 
 ```mermaid
 sequenceDiagram
@@ -190,6 +190,8 @@ tarballs. Verify it on the emitted manifest: after a `scripts/build-npm.ts` run,
 
 ### Building a package
 
+The checkout includes the verified [prepared Claude adapter](#11-prepared-claude-adapter) before this builder walks its graph.
+
 One build serves both purposes, and it runs in two phases.
 
 **Phase 1 builds the local closure.** The requested package's internal
@@ -239,6 +241,8 @@ a package that declares one, naming the dependencies and leaving the output
 directory empty. Release workflows never set the variable.
 
 ### JSR publishing
+
+ACP explicitly includes its ignored [prepared Claude module](#11-prepared-claude-adapter) in the selected package files.
 
 `deno publish` runs once from the repo root and publishes every workspace member
 together. Members reference each other by bare name (`@executablemd/core`) with
@@ -723,6 +727,8 @@ inputs name it. A package that ships its *first* document adds one entry to
 
 ## 10. Canonical compile inputs
 
+The imported prepared Claude module travels through the canonical graph for every target; no whole producer tree or archive is included (§11).
+
 `deno compile` embeds what `--include` names and nothing else, and reports no
 omission: the binary compiles, runs, and fails at the moment a person asks it
 for the asset that was left out. Three sites compile the `xmd` entrypoint —
@@ -805,3 +811,18 @@ runnable `x86_64-unknown-linux-gnu` member — a cross-compiled binary cannot be
 run by the job that produced it — after the compile and **before** the
 attestation, so a build that cannot document its own components never becomes an
 attested subject and never reaches the artifact set `release` downloads.
+
+
+## 11. Prepared Claude adapter
+
+Claude's embedded snapshot is generated, not committed. Repository source carries exact public input pins, a readable adapter source patch, the SDK transformation, deterministic packaging code and expected output hashes. Complete Claude packages and pristine SDK source do not belong in tracked source.
+
+`deno task deps` downloads and verifies those inputs, builds in invocation-private scratch using the pinned dependency lock/compiler, and publishes one complete gitignored module under `packages/acp/generated/`. Generation precedes caching any graph that imports it. `deno task setup` keeps the existing Deno-then-pnpm preparation order. Builds and checks consume this output without fetching, patching or installing producer inputs. Missing or stale preparation names `deno task setup` and refuses.
+
+The payload contains the adapter runtime, one patched SDK runtime, truthful executable metadata and separate upstream notices. It omits pristine SDK source, build tools and the original SDK runtime dependency. Preparation verifies all input hashes and patch sites before publication. A changed input or missing/ambiguous patch site leaves prior complete output unchanged. Cancellation joins its tools and writes before removing invocation-owned scratch; publication uses staged atomic replacement. Readiness is recorded only after the complete preparation succeeds.
+
+ACP explicitly includes the generated module in JSR publication. The npm builder copies it with the member and emits its imported graph. Canonical compilation embeds it through that same graph for every release target, without including producer trees or input archives. `deps:target` retains its existing target-cache-only role. Each source, package or release caller prepares before its first graph consumer; no published distribution needs the producer checkout or a runtime build.
+
+Exact public source and SDK hashes, patch and compiler pins, deterministic file/container metadata, expected archive/module hashes and runtime correspondence are verified independently. Fresh preparation reproduces identical output. Distribution checks inspect JSR contents, execute the emitted npm package and exercise the host binary's prepared Claude path with a fake backend. `verify:clean` prepares a clone and proves the subsequent builds stay offline and leave dependency state and locks unchanged.
+
+Codex's existing bytes, digest and launch remain unchanged. Claude repacking uses the existing byte-digest identity; it does not migrate saved records or equate another snapshot identity.
