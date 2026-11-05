@@ -42,8 +42,9 @@ prepare.
   without repeating the work that already did.
 - Start a failed entry at its Journal. `<REPL.Entry.Journal entry={2} />`
   selects that entry's retained failure, prompt counts, saved records and host
-  execution observation under `value`. If the result exceeds the response bound, select the relevant records
-  or a command channel with `yq` as shown below.
+  execution observation under `value`. For an intact large diagnostic object,
+  use `maxBytes={8388608}` as shown below. If it still exceeds the budget, select
+  the relevant records or a command channel with `yq`.
 - Distinguish commands from agent turns and document output. An `exec` record's
   `.exec.exitCode` is the actual saved command exit; its protocol `status: "ok"`
   does not mean exit zero. `.exec.stdout` and `.exec.stderr` are independently
@@ -165,6 +166,18 @@ record, use its `prompt` number to read the saved turn:
 
 Journal applies `yq` to the complete permitted entry value before paging its
 result. You can search all records or all retained channel text in one query.
+For an intact large object, request an 8 MiB serialized response budget:
+
+```xmd
+<REPL.Entry.Journal entry={2} yq="." maxBytes={8388608} />
+```
+
+The budget counts the complete compact UTF-8 JSON `{value,next,prev,last}`,
+including escaping and navigation. It is a positive safe integer byte count.
+Omission keeps the default; nothing is truncated. An older pinned host that
+cannot honor the prop refuses it. Preserve that host and select a narrower
+query it supports; do not restart or reload it to make the read work.
+
 Small results keep their exact JSON type. A large object or indivisible array
 item refuses with a narrower-query direction; directly selected strings remain
 fully readable in 4096-code-point pages:
@@ -175,7 +188,10 @@ fully readable in 4096-code-point pages:
 ```
 
 For a continuation, copy the returned `next`, `prev` or `last` string into the
-`yq` prop and keep `entry={2}`. Within the same response, a returned next query
+`yq` prop and keep `entry={2}`. Navigation carries its byte budget; a later
+explicit `maxBytes` overrides it and governs the new navigation. Smaller budgets
+may shorten string pages, which still contain at most 4096 code points. Within
+the same response, a returned next query
 can be used directly:
 
 ```xmd

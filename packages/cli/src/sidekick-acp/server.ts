@@ -1,3 +1,4 @@
+import { resolveJournalMaxBytes } from "../repl/sidekick/journal-policy.ts";
 import {
   createSignal,
   ensure,
@@ -177,7 +178,11 @@ function* entry(
   request: Extract<Request, { method: "entry" }>,
 ) {
   if (request.view === "journal") {
-    const result = yield* root.reads.inspectJournal({ entry: request.entry, yq: request.yq });
+    const result = yield* root.reads.inspectJournal({
+      entry: request.entry,
+      yq: request.yq,
+      maxBytes: request.maxBytes,
+    });
     if (!result.ok) {
       throw result.error;
     }
@@ -873,7 +878,17 @@ export function* useSidekickAttachment(
                       );
                     }
                   }
-                  yield* wire.send({ id: envelope.id, kind: "value", value });
+                  let journalReply;
+                  if (request.method === "entry" && request.view === "journal") {
+                    const policy = resolveJournalMaxBytes(request.yq ?? ".", request.maxBytes);
+                    if (!policy.ok) {
+                      throw policy.error;
+                    }
+                    if (policy.value !== undefined) {
+                      journalReply = { id: envelope.id, maxBytes: policy.value };
+                    }
+                  }
+                  yield* wire.send({ id: envelope.id, kind: "value", value }, journalReply);
                 } catch (error) {
                   try {
                     yield* wire.send({

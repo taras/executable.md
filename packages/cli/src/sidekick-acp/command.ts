@@ -16,7 +16,8 @@ export const SIDEKICK_HELP = [
   "  xmd sidekick read --attach /absolute/private/attachment.json status",
   "  xmd sidekick read --attach FILE message MESSAGE_REF [--follow]",
   "  xmd sidekick read --attach FILE entry ENTRY source|prompt|output [--cursor CURSOR] [--prompt POSITIVE] [--field request|reply|error]",
-  "  xmd sidekick read --attach FILE entry ENTRY journal [--yq EXPRESSION]",
+  "  xmd sidekick read --attach FILE entry ENTRY journal [--yq EXPRESSION] [--max-bytes POSITIVE]",
+  "Journal --max-bytes counts the complete compact UTF-8 JSON page; navigation inherits it. Unsupported pinned hosts refuse it.",
   "Reads and follow are passive. EOF detaches observation; explicit ACP cancel/close joins only that attachment's exact exchange.",
   "No shared-draft takeover, question answering or provider configuration is granted. This is Sidekick-specific; it is independent of repository ACP.",
 ].join("\n");
@@ -59,7 +60,7 @@ export function* runSidekickCommand(args: readonly string[]): Operation<void> {
     }
     if (token.startsWith("--")) {
       if (
-        !["--attach", "--cursor", "--prompt", "--field", "--yq"].includes(token) ||
+        !["--attach", "--cursor", "--prompt", "--field", "--yq", "--max-bytes"].includes(token) ||
         flags.has(token)
       ) {
         throw new Error("Unknown or repeated Sidekick option.");
@@ -103,9 +104,11 @@ export function* runSidekickCommand(args: readonly string[]): Operation<void> {
     const view = z.enum(["source", "prompt", "output", "journal"]).parse(words[2]);
     if (
       (view === "journal" && flags.has("--cursor")) ||
-      (view !== "journal" && flags.has("--yq"))
+      (view !== "journal" && (flags.has("--yq") || flags.has("--max-bytes")))
     ) {
-      throw new Error("Journal accepts --yq; --cursor applies to source, prompt and output pages.");
+      throw new Error(
+        "Journal accepts --yq and --max-bytes; --cursor applies to source, prompt and output pages.",
+      );
     }
     if (view !== "prompt" && (flags.has("--prompt") || flags.has("--field"))) {
       throw new Error("Prompt selectors apply only to prompt pages.");
@@ -114,6 +117,7 @@ export function* runSidekickCommand(args: readonly string[]): Operation<void> {
       method: "entry",
       entry: positive.parse(words[1]),
       view,
+      ...(flags.has("--max-bytes") ? { maxBytes: positive.parse(flags.get("--max-bytes")) } : {}),
       ...(flags.has("--yq") ? { yq: flags.get("--yq") } : {}),
       ...(flags.has("--cursor") ? { cursor: flags.get("--cursor") } : {}),
       ...(flags.has("--prompt") ? { prompt: positive.parse(flags.get("--prompt")) } : {}),

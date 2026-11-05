@@ -1,3 +1,11 @@
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { retainedSource } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import {
+  sidekickResponseCeiling,
+  sidekickCeilingInstallation,
+} from "../src/repl/sidekick/profile.ts";
+import { runSidekickCommand } from "../src/sidekick-acp/command.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { cliCommand, cliShellCommand, shellQuote } from "@executablemd/test-support/launch";
@@ -25,13 +33,14 @@ import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { createConnection } from "node:net";
-import type { Socket } from "node:net";
+import { createConnection, createServer } from "node:net";
+import type { Socket, Server } from "node:net";
 import type { BigIntStats, Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { once } from "@effectionx/node/events";
 import { Writable } from "node:stream";
 import {
+  action,
   ensure,
   Ok,
   race,
@@ -55,7 +64,7 @@ import {
   records,
   AGENT,
 } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { rootReads } from "../src/repl/sidekick/requests.ts";
+import { rootReads, sidekickRequests } from "../src/repl/sidekick/requests.ts";
 import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sidekick/dispatch.ts";
 import { useSidekickAttachment } from "../src/sidekick-acp/server.ts";
 import { requestAttachment } from "../src/sidekick-acp/client.ts";
@@ -84,6 +93,8 @@ import {
   MAX_FRAME,
   SidekickTransport,
   referenceText,
+  JournalReplyAllowance,
+  journalReplyBound,
 } from "../src/sidekick-acp/protocol.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -332,8 +343,8 @@ function* countWaitRequests(
                 }
                 return value;
               },
-              *send(frame: unknown) {
-                yield* wire.send(frame);
+              *send(frame: unknown, journalReply?: JournalReplyAllowance) {
+                yield* wire.send(frame, journalReply);
                 const reply = Reply.parse(frame);
                 if (hello !== undefined && reply.id === hello.id && reply.kind === "value") {
                   const acceptedDescriptor = Descriptor.parse(reply.value);
@@ -693,6 +704,510 @@ describe("minimal live Sidekick ACP attachment", () => {
     expect(actual.stdout).toContain('"joined":true');
     expect(yield* records(one.held.execution)).toEqual(before);
     expect(one.held.fake.prompts).toHaveLength(one.baselineTurns + 3);
+  });
+
+  it("1077 J1-J5: actual CLI budgets, navigation and complete channel walks preserve the surviving owner", function* () {
+    const stdout = "x".repeat(2 * 1024 * 1024);
+    const channel = "🦊\u0000".repeat(210000);
+    const boundary = { text: '🦊é"\\\n\u0000' };
+    let launches = 0;
+    const one = yield* world({
+      entryInstallation: {
+        *install() {
+          yield* API.Process.around({
+            *exec() {
+              const index = launches++;
+              yield* Stdio.operations.stdout(
+                new TextEncoder().encode(index === 0 ? stdout : `record-${index}`),
+              );
+              if (index < 2) {
+                yield* Stdio.operations.stderr(
+                  new TextEncoder().encode(index === 0 ? channel : boundary.text),
+                );
+              }
+              return { exitCode: 0, stdout: undefined, stderr: undefined };
+            },
+          });
+        },
+      },
+    });
+    const submitted = yield* one.held.session.submit(
+      Array.from({ length: 46 }, () => "```bash silent exec\ncontrolled-record\n```").join("\n"),
+    );
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    expect((yield* submitted.value.join()).ok).toBe(true);
+    const session = one.held.session;
+    const descriptor = JSON.stringify(one.descriptor);
+    const before = yield* readTextFile(one.held.execution.stream.path);
+    const beforeChat = yield* records(one.held.execution);
+    const calls = one.held.fake.prompts.length;
+    const entryKeys = one.held.session.model.entries.map((entry) => entry.key);
+    const reads = rootReads(session, one.held.profile);
+    const pageSchema = z
+      .object({
+        value: z.json(),
+        next: z.string().nullable(),
+        prev: z.string().nullable(),
+        last: z.string().nullable(),
+      })
+      .strict();
+    type Page = z.infer<typeof pageSchema>;
+    function* command(yq: string, maxBytes?: number) {
+      const cli = cliCommand([
+        "sidekick",
+        "read",
+        "--attach",
+        one.path,
+        "entry",
+        "1",
+        "journal",
+        "--yq",
+        yq,
+        ...(maxBytes === undefined ? [] : ["--max-bytes", String(maxBytes)]),
+      ]);
+      return yield* scoped(function* () {
+        // exec().join() coerces each Buffer separately, which can split a UTF-8 character.
+        const out = new TextDecoder();
+        const err = new TextDecoder();
+        let stdout = "";
+        let stderr = "";
+        yield* Stdio.around({
+          *stdout([bytes]) {
+            stdout += out.decode(bytes, { stream: true });
+          },
+          *stderr([bytes]) {
+            stderr += err.decode(bytes, { stream: true });
+          },
+        });
+        const result = yield* exec(cli.command, {
+          arguments: cli.arguments,
+          cwd: one.held.workspace,
+          env: {
+            HOME: one.home,
+            PATH: process.env.PATH ?? "",
+            DENO_DIR: process.env.DENO_DIR ?? "",
+          },
+        }).join();
+        return { ...result, stdout: stdout + out.decode(), stderr: stderr + err.decode() };
+      });
+    }
+    function* componentPage(yq: string, maxBytes?: number): Operation<Page> {
+      return yield* scoped(function* () {
+        let observed: unknown;
+        const ceiling = sidekickResponseCeiling(
+          sidekickRequests(
+            {
+              ...reads,
+              *fill() {
+                throw new Error("A Journal read filled the draft.");
+              },
+            },
+            function* () {
+              throw new Error("A Journal read submitted work.");
+            },
+          ),
+          {
+            *began() {
+              return 0;
+            },
+            *settled(_order, outcome, value) {
+              if (!outcome.ok) {
+                throw outcome.error;
+              }
+              observed = value;
+            },
+          },
+        );
+        const ready = withResolvers<void>();
+        const release = withResolvers<void>();
+        const execution = yield* executeInstalled(
+          {
+            ...retainedSource("budget-component.md", "<BudgetHost />"),
+            stream: new InMemoryStream(),
+          },
+          [
+            sidekickCeilingInstallation(ceiling),
+            {
+              components: [
+                {
+                  name: "BudgetHost",
+                  origin: "test://budget-component",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  description: "Hold the authored Journal response execution.",
+                  factory: () =>
+                    function* () {
+                      ready.resolve();
+                      yield* release.operation;
+                      return "";
+                    },
+                },
+              ],
+            },
+          ],
+        );
+        const completion = yield* spawn(() => execution);
+        yield* ready.operation;
+        const response = yield* execution.evaluateGeneratedXmdRoot({
+          id: "budget-page",
+          allow: [...ceiling.allow],
+          source: `<REPL.Entry.Journal entry={1} yq={${JSON.stringify(yq)}}${maxBytes === undefined ? "" : ` maxBytes={${maxBytes}}`} />`,
+        });
+        if (!response.ok) {
+          throw response.error;
+        }
+        release.resolve();
+        const joined = yield* completion;
+        if (!joined.ok) {
+          throw joined.error;
+        }
+        return pageSchema.parse(observed);
+      });
+    }
+    function* page(yq: string, maxBytes?: number): Operation<Page> {
+      const actual = yield* command(yq, maxBytes);
+      if (actual.code !== 0) {
+        throw new Error(actual.stderr + actual.stdout);
+      }
+      const result = pageSchema.parse(JSON.parse(actual.stdout));
+      expect(result).toEqual(yield* componentPage(yq, maxBytes));
+      return result;
+    }
+    for (const maxBytes of [undefined, 16384]) {
+      const result = yield* command(".", maxBytes);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr + result.stdout).toContain("narrower yq selection");
+      expect(result.stdout.trim()).toBe("");
+    }
+    const complete = yield* page(".", 8388608);
+    expect(complete).toMatchObject({ value: { entry: 1 }, next: null, prev: null, last: null });
+    expect(
+      z.object({ records: z.array(z.object({ exec: z.unknown() })) }).parse(complete.value)
+        .records[1].exec,
+    ).toEqual({ exitCode: 0, stdout, stderr: channel });
+    const expected = { value: boundary, next: null, prev: null, last: null };
+    const budget = new TextEncoder().encode(JSON.stringify(expected)).length;
+    const boundaryQuery =
+      '{"text": .records[] | select(.type == "exec" and .exec.stdout == "record-1") | .exec.stderr}';
+    const exact = yield* page(boundaryQuery, budget);
+    expect(exact).toEqual(expected);
+    expect(new TextEncoder().encode(JSON.stringify(exact)).length).toBe(budget);
+    expect((yield* command(boundaryQuery, budget - 1)).code).not.toBe(0);
+    const query = '[.records[] | select(.type == "exec" and (.exec.stdout | length) < 100)]';
+    const matches = yield* page(query + ' | [.[] | select(.exec.stdout == "record-45")]', 8388608);
+    expect(z.array(z.json()).parse(matches.value)).toHaveLength(1);
+    const first = yield* page(query, 8388608);
+    expect(z.array(z.json()).parse(first.value)).toHaveLength(20);
+    const next = z.string().parse(first.next);
+    const second = yield* page(next);
+    expect(z.array(z.json()).parse(second.value)).toHaveLength(20);
+    expect(yield* page(z.string().parse(second.prev))).toEqual(first);
+    const last = yield* page(z.string().parse(second.last));
+    expect(z.array(z.json()).parse(last.value)).toHaveLength(5);
+    expect(last.next).toBe(null);
+    const independent = yield* selectJson(next, JSON.stringify(complete.value));
+    if (!independent.ok) {
+      throw independent.error;
+    }
+    expect(JSON.parse(independent.value)).toEqual(second.value);
+    const smaller = yield* page(next, 4096);
+    expect(new TextEncoder().encode(JSON.stringify(smaller)).length).toBeLessThanOrEqual(4096);
+    expect(z.array(z.json()).parse(smaller.value).length).toBeLessThan(20);
+    expect(z.array(z.json()).parse(smaller.value)[0]).toEqual(
+      z.array(z.json()).parse(second.value)[0],
+    );
+    for (const navigation of [smaller.next, smaller.prev, smaller.last]) {
+      if (navigation !== null) {
+        expect(
+          new TextEncoder().encode(JSON.stringify(yield* page(navigation))).length,
+        ).toBeLessThanOrEqual(4096);
+      }
+    }
+    expect((yield* page("false")).value).toBe(false);
+    for (const maxBytes of [16384, 8388608]) {
+      let yq: string | null = ".records[1].exec.stderr";
+      let joined = "";
+      let first = true;
+      let shortened = false;
+      let count = 0;
+      while (yq !== null) {
+        const actual: Page = yield* page(yq, first ? maxBytes : undefined);
+        const shared = yield* reads.inspectJournal({
+          entry: 1,
+          yq,
+          ...(first ? { maxBytes } : {}),
+        });
+        if (!shared.ok) {
+          throw shared.error;
+        }
+        expect(actual).toEqual(shared.value);
+        const text = z.string().parse(actual.value);
+        expect(new TextEncoder().encode(JSON.stringify(actual)).length).toBeLessThanOrEqual(
+          maxBytes,
+        );
+        expect([...text].length).toBeLessThanOrEqual(4096);
+        expect(text.length).toBeGreaterThan(0);
+        if (actual.next !== null && [...text].length < 4096) {
+          shortened = true;
+        }
+        joined += text;
+        count += 1;
+        yq = actual.next;
+        first = false;
+      }
+      expect(joined).toBe(channel);
+      expect(shortened).toBe(maxBytes === 16384);
+      console.log(
+        JSON.stringify({
+          kind: "1077-cli-channel-walk",
+          maxBytes,
+          pages: count,
+          originalBytes: new TextEncoder().encode(channel).length,
+        }),
+      );
+    }
+    expect(yield* readTextFile(one.held.execution.stream.path)).toBe(before);
+    expect(yield* records(one.held.execution)).toEqual(beforeChat);
+    expect(one.held.session).toBe(session);
+    expect(JSON.stringify(one.descriptor)).toBe(descriptor);
+    expect(one.held.session.model.entries.map((entry) => entry.key)).toEqual(entryKeys);
+    expect(launches).toBe(46);
+    expect(one.held.fake.prompts).toHaveLength(calls);
+  });
+
+  it("1077 J5: invalid and non-Journal CLI budgets refuse before connecting and an old strict peer rejects inherited policy", function* () {
+    yield* usePosixSidekickTransport(process.platform);
+    const host = yield* SidekickTransport.expect();
+    let connects = 0;
+    yield* SidekickTransport.set({
+      ...host,
+      *connect() {
+        connects += 1;
+        throw new Error("Unexpected connection");
+      },
+    });
+    for (const text of ["0", "-1", "1.5", "NaN", "Infinity", "9007199254740992", "01"]) {
+      yield* refused(
+        runSidekickCommand([
+          "read",
+          "--attach",
+          "/missing/attachment.json",
+          "entry",
+          "1",
+          "journal",
+          "--max-bytes",
+          text,
+        ]),
+      );
+    }
+    yield* refused(
+      runSidekickCommand([
+        "read",
+        "--attach",
+        "/missing/attachment.json",
+        "entry",
+        "1",
+        "source",
+        "--max-bytes",
+        "8388608",
+      ]),
+    );
+    yield* refused(
+      runSidekickCommand([
+        "read",
+        "--attach",
+        "/missing/attachment.json",
+        "entry",
+        "1",
+        "journal",
+        "--max-bytes",
+        "8388608",
+        "--max-bytes",
+        "8388608",
+      ]),
+    );
+    expect(connects).toBe(0);
+    for (const view of ["source", "prompt", "output"]) {
+      expect(
+        Request.safeParse({ method: "entry", entry: 1, view, maxBytes: 8388608 }).success,
+      ).toBe(false);
+    }
+    const oldEntry = z
+      .object({
+        method: z.literal("entry"),
+        entry: z.number().int().positive(),
+        view: z.enum(["source", "prompt", "output", "journal"]),
+        yq: z.string().min(1).optional(),
+        prompt: z.number().int().positive().optional(),
+        field: z.enum(["request", "reply", "error"]).optional(),
+        cursor: z.string().max(16384).optional(),
+      })
+      .strict()
+      .refine((request) =>
+        request.view === "journal"
+          ? request.cursor === undefined &&
+            request.prompt === undefined &&
+            request.field === undefined
+          : request.yq === undefined,
+      );
+    yield* SidekickTransport.set(host);
+    const home = yield* until(realpath(yield* useTemporary("xmd-old-budget-")));
+    yield* until(chmod(home, 0o700));
+    const path = join(home, "attachment.json");
+    const listener = yield* host.publish(path, {
+      owner: "old",
+      execution: "old",
+      conversation: "old",
+      cwd: home,
+    });
+    let inspections = 0;
+    const peer = yield* spawn(function* () {
+      const wire = yield* yield* listener.accept();
+      const hello = Envelope.parse(yield* wire.receive());
+      yield* wire.send({ id: hello.id, kind: "value", value: listener.descriptor });
+      const raw = z.object({ id: z.number(), request: z.unknown() }).parse(yield* wire.receive());
+      const accepted = oldEntry.safeParse(raw.request);
+      expect(accepted.success).toBe(false);
+      expect(z.object({ maxBytes: z.number() }).parse(raw.request).maxBytes).toBe(8388608);
+      if (accepted.success) {
+        inspections += 1;
+      }
+      yield* wire.send({
+        id: raw.id,
+        kind: "error",
+        error: "Old strict entry schema refused maxBytes.",
+      });
+    });
+    const query =
+      'select([1,".records",20,40,8388608] != null) |\nselect(.entry == 1) |\n(\n.records\n) | .[20:40]';
+    yield* refused(
+      requestAttachment(path, { method: "entry", entry: 1, view: "journal", yq: query }),
+    );
+    yield* peer;
+    expect(inspections).toBe(0);
+  });
+
+  it("1077 S1: POSIX Journal room is exact, fragment-gated and local to one value send", function* () {
+    expect(journalReplyBound({ id: 1, maxBytes: Number.MAX_SAFE_INTEGER })).toBe(9007199254741024n);
+    expect(journalReplyBound({ id: 1, maxBytes: 1 })).toBe(34n);
+    expect(journalReplyBound({ id: Number.MAX_SAFE_INTEGER, maxBytes: 1 })).toBe(49n);
+    yield* usePosixSidekickTransport(process.platform);
+    const host = yield* SidekickTransport.expect();
+    const home = yield* until(realpath(yield* useTemporary("xsk-fragments-")));
+    yield* until(chmod(home, 0o700));
+    const path = join(home, "attachment.json");
+    const socketPath = join(home, "s");
+    const connections = withResolvers<Socket>();
+    let peer: Socket | undefined;
+    let server: Server | undefined;
+    const connected = (socket: Socket) => {
+      peer = socket;
+      connections.resolve(socket);
+    };
+    yield* ensure(function* () {
+      if (peer !== undefined) {
+        const closed = once(peer, "close");
+        if (!peer.closed) {
+          peer.destroy();
+          yield* closed;
+        }
+      }
+      const held = server;
+      if (held !== undefined) {
+        yield* action<void>((resolve) => {
+          held.close(() => resolve());
+          return () => {};
+        });
+      }
+    });
+    server = createServer();
+    const listener = server;
+    try {
+      listener.on("connection", connected);
+      yield* action<void>((resolve, reject) => {
+        const failed = (error: Error) => reject(error);
+        listener.on("error", failed);
+        listener.listen(socketPath, () => resolve());
+        return () => listener.off("error", failed);
+      });
+      const descriptor = {
+        version: 1,
+        transport: "unix",
+        socket: socketPath,
+        owner: "fragments",
+        execution: "fragments",
+        conversation: "fragments",
+        cwd: home,
+      };
+      yield* writeTextFile(path, JSON.stringify(descriptor));
+      yield* until(chmod(path, 0o600));
+      const value = {
+        value: { text: "x".repeat(MAX_FRAME + 128) },
+        next: null,
+        prev: null,
+        last: null,
+      };
+      const frame = { id: 1, kind: "value", value };
+      yield* scoped(function* () {
+        const { wire } = yield* host.connect(path, { id: 1, maxBytes: 8388608 });
+        const socket = yield* connections.operation;
+        const text = Buffer.from(JSON.stringify(frame) + "\n");
+        const receiver = yield* spawn(() => wire.receive());
+        for (let at = 0; at < text.length; at += 65536) {
+          const part = text.subarray(at, at + 65536);
+          yield* action<void>((resolve, reject) => {
+            socket.write(part, (error) => (error ? reject(error) : resolve()));
+            return () => {};
+          });
+          yield* sleep(0);
+        }
+        expect(yield* receiver).toEqual(frame);
+      });
+      const wrong = withResolvers<Socket>();
+      const second = (socket: Socket) => {
+        peer = socket;
+        wrong.resolve(socket);
+      };
+      try {
+        listener.on("connection", second);
+        yield* scoped(function* () {
+          const { wire } = yield* host.connect(path, { id: 1, maxBytes: 8388608 });
+          const socket = yield* wrong.operation;
+          const receiver = yield* spawn(function* () {
+            yield* refused(wire.receive());
+          });
+          const text = Buffer.from('{"id":2,"kind":"value","value":"' + "x".repeat(MAX_FRAME));
+          for (let at = 0; at < text.length; at += 65536) {
+            const part = text.subarray(at, at + 65536);
+            yield* action<void>((resolve, reject) => {
+              socket.write(part, (error) => (error ? reject(error) : resolve()));
+              return () => {};
+            });
+            yield* sleep(0);
+          }
+          yield* race([receiver, deadline("Wrong-ID input borrowed Journal room")]);
+        });
+      } finally {
+        listener.off("connection", second);
+      }
+      const published = yield* host.publish(join(home, "send.json"), {
+        owner: "send",
+        execution: "send",
+        conversation: "send",
+        cwd: home,
+      });
+      yield* scoped(function* () {
+        const client = yield* host.connect(join(home, "send.json"), { id: 1, maxBytes: 8388608 });
+        const sender = yield* yield* published.accept();
+        const received = yield* spawn(() => client.wire.receive());
+        yield* sender.send(frame, { id: 1, maxBytes: 8388608 });
+        expect(yield* received).toEqual(frame);
+        yield* refused(sender.send(frame));
+      });
+    } finally {
+      listener.off("connection", connected);
+    }
   });
 
   it("1006 E3/E4/E7: passive Journal reads match component, attachment and CLI for shell pages and saved Prompt errors", function* () {
@@ -1514,7 +2029,7 @@ describe("minimal live Sidekick ACP attachment", () => {
               const wire = yield* incoming;
               return {
                 ...wire,
-                *send(frame: unknown) {
+                *send(frame: unknown, journalReply?: JournalReplyAllowance) {
                   if (
                     z.object({ kind: z.string() }).passthrough().safeParse(frame).data?.kind ===
                     "update"
@@ -1522,7 +2037,7 @@ describe("minimal live Sidekick ACP attachment", () => {
                     blocked.resolve();
                     yield* suspend();
                   }
-                  yield* wire.send(frame);
+                  yield* wire.send(frame, journalReply);
                 },
               };
             })();

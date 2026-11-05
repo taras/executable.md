@@ -6744,8 +6744,12 @@ descriptor publication and identity-checked cleanup. Shared attachment modules
 use that context and detached acknowledged reads. A descriptor binds its live
 owner/execution/conversation/cwd, and every connection handshakes that exact
 binding. Conversation selection changes invalidate it. Private protocol schemas
-bound both framing and the read surface; an observer that exceeds its mailbox
-cannot block the root producer.
+bound framing and the read surface. A Journal read may configure usable reply bytes
+for its matching value alone: the client copies the expected request ID and byte
+budget into its existing connection before input starts, and the server supplies
+that allowance on the exact request task's successful value send. Private framing
+receives its exact additional room automatically. Other frames retain their bounds;
+an observer that exceeds its mailbox cannot block the root producer.
 
 The bridge distinguishes three facts: accepted saved message, joined exchange
 completion and the product verdict inside evaluated Output. Provisional activity
@@ -8575,11 +8579,15 @@ and the complete Journal value. The root's `inspectJournal` operation takes one
 fresh acknowledged reading for both the response component and passive attachment.
 It builds `{entry,status,failure,prompts,records,execution}`, evaluates ordinary yq over
 that complete permitted value with the existing core evaluator, then pages the
-selected result. Every success is exactly `{value,next,prev,last}`. Small results
-keep their JSON type; selected strings use 4096-code-point windows and arrays use
-at most twenty items within the serialized response bound. Oversized objects or
-indivisible array items refuse with a narrower-query direction. Direct channel
-selection remains fully pageable. Source, Prompt and Output keep their existing
+selected result. Every success is exactly `{value,next,prev,last}`. Optional
+`maxBytes` is a positive safe integer, validated before the acknowledged reading.
+An explicit or inherited budget counts the complete compact UTF-8 JSON of those
+four fields, including escaping and navigation. Omission keeps the existing
+conservative response bound. Small results keep their JSON type; selected strings
+use at most 4096 code points and arrays at most twenty items, shortening pages
+when their complete serialized bytes require it. Oversized objects or indivisible
+array items refuse with a narrower-query direction, without truncation. Direct
+channel selection remains fully pageable. Source, Prompt and Output keep their existing
 contracts and exact live-output ownership.
 
 Journal keeps retained `status` and `failure` separate from `execution`, this
@@ -8610,8 +8618,10 @@ remains the only durable truth.
 
 The feature-local `sidekick/journal-query.ts` formats navigation as ordinary yq
 with an always-true literal JSON header, a resolved-positive-entry guard, the
-opaque original expression and a finite slice. It recognizes only that exact
-formatter output: parse the first line's strict JSON tuple, validate it and
+opaque original expression, a finite slice and any applicable byte budget. A
+later explicit `maxBytes` overrides inherited policy and governs regenerated
+navigation; a fresh ordinary query carries no inherited policy. It recognizes
+only that exact formatter output: parse the first line's strict JSON tuple, validate it and
 regenerate the whole expression for equality. No arbitrary yq syntax is parsed.
 The selected entry is checked independently, since a collecting expression can
 produce a value after an empty filter. Recognition supplies navigation context,
@@ -8629,7 +8639,10 @@ no command, provider call, entry admission, resumption or history rewrite.
 `controls.ts` retains the ordinary response-owned intent/outcome and designated
 feedback; the originating and consuming executions keep their disclosure and
 persistence gates. Passive attachments retain exact connection authentication
-and the existing frame bound, without Journal cursor wrapping or success decoration.
+and their existing frame bounds, with a Journal-only allowance for the matching
+configured value reply. Its exact private envelope and newline receive additional
+room beyond the usable page budget; no cursor wrapping or success decoration is
+added.
 
 The single output read these four replaced is retired from admission rather
 than from history. A response written now cannot name it — the capture seals

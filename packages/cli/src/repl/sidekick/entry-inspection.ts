@@ -1,3 +1,4 @@
+import { resolveJournalMaxBytes } from "./journal-policy.ts";
 /**
  * Read one entry's saved source, turn text, output and supported record facts.
  *
@@ -174,6 +175,7 @@ export type EntryJournalPage = {
 export interface EntryJournalRequest {
   readonly entry?: number;
   readonly yq?: string;
+  readonly maxBytes?: number;
 }
 
 /** What a Source or Output read asked for. */
@@ -327,24 +329,32 @@ export function* readEntryJournal(
   request: EntryJournalRequest,
   history: InspectedHistory,
 ): Operation<Result<EntryJournalPage>> {
+  const policy = resolveJournalMaxBytes(request.yq ?? ".", request.maxBytes);
+  if (!policy.ok) {
+    return policy;
+  }
   const found = resolveEntry(request.entry, history.entries);
   if (!found.ok) {
     return found;
   }
   const entry = found.value;
-  return yield* queryJournal(request.yq ?? ".", {
-    entry: entry.order,
-    status: statusOf(entry, history.printing),
-    failure: entry.terminal?.message ?? null,
-    execution: history.executions?.[entry.key] ?? { joined: null, outcome: null, error: null },
-    prompts: countPrompts(entry.turns),
-    records: entry.records.map((record) =>
-      pageRecord(
-        record,
-        entry.turns.find((turn) => turn.marker === record.marker),
+  return yield* queryJournal(
+    request.yq ?? ".",
+    {
+      entry: entry.order,
+      status: statusOf(entry, history.printing),
+      failure: entry.terminal?.message ?? null,
+      execution: history.executions?.[entry.key] ?? { joined: null, outcome: null, error: null },
+      prompts: countPrompts(entry.turns),
+      records: entry.records.map((record) =>
+        pageRecord(
+          record,
+          entry.turns.find((turn) => turn.marker === record.marker),
+        ),
       ),
-    ),
-  });
+    },
+    request.maxBytes,
+  );
 }
 
 /** One text page over an entry, with its continuations pinned to that entry. */
