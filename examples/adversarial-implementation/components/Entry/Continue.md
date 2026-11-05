@@ -16,7 +16,7 @@ returns: {type: object}
 <If condition={continued.status === "completed"}>
 <Parse schema={{type:"object"}} as="work">{continued.output}</Parse>
 <Ticket.Outward value={work} as="bounded" /><Return value={bounded} />
-<Else><Return value={{...envelope,status:"hold",publication:"held",hold:"Continuation was refused. Preserve original evidence and resolve the existing hold before dispatch."}} /></Else>
+<Else><Ticket.Outward value={{...envelope,status:"hold",publication:"held",hold:"Continuation was refused. Preserve original evidence and resolve the existing hold before dispatch."}} as="bounded" /><Return value={bounded} /></Else>
 </If>
 
 </Else></If>

@@ -122,6 +122,33 @@ export default function* ArtifactReturn(value: unknown) {
   }
   const reports: Array<Record<string, unknown>> = [];
   yield* useArtifactReturnHost(root, fixture.repository);
+  if (recovery) {
+    const refusalPath = root + "/refused-continuation.json";
+    yield* writeTextFile(
+      refusalPath,
+      JSON.stringify({
+        schema: "ticket-return.v1",
+        work: "w".repeat(30_000),
+        source: null,
+        revision: null,
+        status: "paused",
+        publication: "confirmed",
+        continuation: null,
+        pending: null,
+        hold: null,
+      }),
+    );
+    const refusal = yield* run("", { name: "continue", record: refusalPath });
+    check(refusal.value.status === "hold", "continuation refusal did not hold");
+    check(
+      refusal.closeBytes <= 65_536,
+      "continuation refusal exceeded full outward capacity",
+    );
+    reports.push({
+      case: "continuation-refusal",
+      outwardBytes: refusal.closeBytes,
+    });
+  }
   const checkout = yield* run(
     "<Ticket.Checkout repository=" +
       quoted(fixture.repository) +

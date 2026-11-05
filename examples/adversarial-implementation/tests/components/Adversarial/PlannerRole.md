@@ -9,7 +9,7 @@ props: {type: object, properties: {assignment: {type: object}, guide: {type: str
 <Json value={{...props.correction.established,summary:"The foundation is committed.",api:assignment.request === "response-tamper" ? {...props.correction.established.api,purpose:"A different substantive API."} : props.correction.established.api}} />
 <Else>
 <Let as="assessment" value={{...assignment.assessment,architecture:assignment.assessment.architecture || assignment.request.startsWith("structural")}} />
-<Dir path={assignment.attempt}><File path="called.json"><Json value={{session:assignment.session,initialize:assignment.initialize,role:"planner",phase:"foundation",plannerProvider:assignment.plannerProvider,maxResponseCorrections:assignment.maxResponseCorrections,revision:assignment.revision,request:assignment.request,inputPaths:assignment.inputs.map(input => input.path),inputs:assignment.inputs}} /></File></Dir>
+<Dir path={assignment.attempt}><File path="called.json"><Json value={{session:assignment.session,initialize:assignment.initialize,role:"planner",phase:"foundation",plannerProvider:assignment.plannerProvider,maxResponseCorrections:assignment.maxResponseCorrections,revision:assignment.revision,request:assignment.request,conflict:assignment.conflict,inputPaths:assignment.inputs.map(input => input.path),inputs:assignment.inputs}} /></File></Dir>
 <If condition={assignment.request === "blocked"}>
 <Json value={{outcome:"blocked",revision:assignment.revision,summary:"The test provider is unavailable.",handoff:"Wait for provider availability.",api:null,assessment:assignment.assessment,artifacts:[],evidence:[]}} />
 <Else>

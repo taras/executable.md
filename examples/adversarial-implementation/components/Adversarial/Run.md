@@ -87,7 +87,16 @@ mkdir -- {quoted}
 <Let as="deliveredInputs" value={ticketState.deliveredInputs} />
 <Let as="history" value={[...history,{owner:"implementor",path:task.directory + "/migration-" + round + "-result.json",status:ticket.status}]} />
 <Let as="last" value={null} />
-<If condition={ticketState.calls.at(-1)?.result}><Ticket.Read path={ticketState.calls.at(-1).result} as="lastText" /><Parse schema={{type:"object"}} as="last">{lastText}</Parse></If>
+<If condition={ticketState.checkpoint.hold?.kind === "needs_discovery" && ticketState.calls.at(-1)?.result}>
+<Let as="lastPath" value={ticketState.calls.at(-1).result} />
+<Ticket.Capture as="retainedResult">
+<Ticket.Hydrate repository={task.repository} document={ticketState.documents[lastPath]} as="lastText" />
+<Parse schema={{type:"object"}} as="acceptedResult">{lastText.content}</Parse>
+<Json value={acceptedResult} />
+</Ticket.Capture>
+<If condition={retainedResult.status !== "completed"}><Return value={{status:"hold",reason:"The retained role result is unavailable. Preserve the confirmed ticket and original receipts before repair.",ticket,history}} /><Let as="finished" value={true} /><Break /></If>
+<Parse schema={{type:"object"}} as="last">{retainedResult.output}</Parse>
+</If>
 <If condition={ticket.status === "feedback_ready"}>
 <Ticket.Capture as="retired"><Adversarial.Retirement repository={task.repository} paths={api.migration.retirePaths} as="retired" /><Json value={retired} /></Ticket.Capture>
 <Dir path={task.directory}><File path="retirement.json"><Json value={retired} /></File></Dir>

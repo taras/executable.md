@@ -296,7 +296,7 @@ git rev-parse HEAD
 <If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
 <Parse schema={{type:"object"}} as="work">{child.stdout}</Parse>
 <Let as="workReturn" value={work} /><Ticket.Load record={workReturn} as="work" />
-<AssertEquals actual={work.status} expected={limit === 0 ? "hold" : "feedback_ready"} />
+<AssertEquals actual={work.checkpoint.status} expected={limit === 0 ? "hold" : "feedback_ready"} />
 <If condition={limit === 0 && !String(work.checkpoint.hold?.reason ?? "").includes("response_correction_disabled")}><Fail message={JSON.stringify(work.checkpoint.hold)} /></If>
 <Let as="attempt" value={directory + "/attempts/0000"} />
 <Dir path={attempt}><Glob include={["response-corrections/**/called.json"]} as="repairs" /></Dir>
