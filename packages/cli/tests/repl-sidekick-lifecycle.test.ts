@@ -51,8 +51,11 @@ import {
   awaited,
   MOUNTED_AGENT,
   mountedExecution,
+  recordingTerminal,
   useMountedHost,
 } from "./support/mounted-repl.ts";
+import { runReplProgram } from "../src/repl/program.ts";
+import { ReplTerminal } from "../src/repl/terminal.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
@@ -1351,6 +1354,44 @@ describe("Control-C and newlines in the message box", () => {
     expect(repl.terminal.resets).toBe(restored + 1);
     expect(repl.terminal.readers).toBe(0);
     expect(repl.fake.prompts).toHaveLength(0);
+  });
+
+  it("C3: Control-C typed while the first frame is still being written leaves", function* () {
+    const host = yield* useMountedHost();
+    const recording = recordingTerminal();
+    yield* recording.install();
+    const reached = withResolvers<void>();
+    const release = withResolvers<void>();
+    let held = false;
+    yield* ensure(() => release.resolve());
+    yield* ReplTerminal.around({
+      *write([bytes], next) {
+        if (!held && new TextDecoder().decode(bytes).includes("XMD REPL")) {
+          held = true;
+          reached.resolve();
+          yield* release.operation;
+        }
+        yield* next(bytes);
+      },
+    });
+    let outcome: Result<unknown> | undefined;
+    yield* spawn(function* () {
+      outcome = yield* runReplProgram({ profile: host.profile });
+    });
+    yield* reached.operation;
+    const terminal = recording.terminal;
+    const restored = terminal.resets;
+    // Nothing is on the screen yet: the message box these keys would reach has
+    // not been presented to anybody.
+    expect(terminal.screen?.rows().join("").trim() ?? "").toBe("");
+    terminal.feed("\t\t\tfirst\x03");
+    yield* lingering();
+    release.resolve();
+    yield* awaited("the command returning", () => outcome !== undefined);
+    expect(outcome?.ok).toBe(true);
+    expect(host.fake.prompts).toHaveLength(0);
+    expect(terminal.resets).toBe(restored + 1);
+    expect(terminal.readers).toBe(0);
   });
 
   it("C3: a focused Draft holding text still leaves on Control-C", function* () {

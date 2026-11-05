@@ -2306,8 +2306,10 @@ function* drive(
       observedPass++;
       observePass("start");
     }
-    presented = true;
     const first = yield* draw();
+    // Only a frame that finished presenting can have put a message box in front
+    // of anybody; keys that arrived while it was being drawn still end here.
+    presented = first !== undefined;
     rendered = first?.rendered;
     presenting = first === undefined ? undefined : presentedDrawer(first.view);
     // The first frame has the same obligation as every other one: draw again
@@ -2604,6 +2606,7 @@ function* drive(
       if (painted === undefined) {
         continue;
       }
+      presented = true;
       rendered = painted.rendered;
       presenting = presentedDrawer(painted.view);
       // Focus is read against the view that was committed, which a resize may
