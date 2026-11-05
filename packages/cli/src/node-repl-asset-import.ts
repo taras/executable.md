@@ -81,31 +81,50 @@ function* vacant(path: string): Operation<void> {
   );
 }
 
+function destinationTarget(root: string, destination: string): string {
+  if (destination.length === 0 || isAbsolute(destination)) {
+    throw new ImportRefusal("Choose a session-relative import destination beneath assets/.");
+  }
+  const target = resolve(root, destination);
+  const assets = join(root, "assets");
+  if (target === assets || !inside(assets, target)) {
+    throw new ImportRefusal("Choose an import destination beneath this session's assets/.");
+  }
+  return target;
+}
+
 function* destinationPath(
   root: string,
   destination: string,
   native: typeof nativeOperations,
 ): Operation<string> {
-  if (destination.length === 0 || isAbsolute(destination)) {
-    throw new ImportRefusal("Choose a nonempty workspace-relative import destination.");
-  }
-  const target = resolve(root, destination);
-  if (target === root || !inside(root, target)) {
-    throw new ImportRefusal("Choose an import destination inside the session workspace.");
-  }
+  const target = destinationTarget(root, destination);
+  const assets = join(root, "assets");
   let parent = dirname(target);
   while (true) {
     try {
       const actual = yield* joined(() => native.realpath(parent));
-      if (!inside(root, actual)) {
+      if (parent === root ? actual !== root : !inside(assets, actual)) {
         throw new ImportRefusal(
-          "The import destination parent leaves the session workspace. Choose another destination.",
+          "The import destination parent leaves this session's assets/. Choose another destination.",
         );
       }
       break;
     } catch (error) {
       if (!code(error, "ENOENT")) {
         throw error;
+      }
+      let present = false;
+      try {
+        yield* lstat(parent);
+        present = true;
+      } catch (missing) {
+        if (!code(missing, "ENOENT")) {
+          throw missing;
+        }
+      }
+      if (present) {
+        throw new ImportRefusal("The import destination parent cannot be resolved inside assets/.");
       }
       const next = dirname(parent);
       if (next === parent) {
@@ -140,6 +159,7 @@ function importAsset(
         );
       }
       yield* allowed();
+      destinationTarget(resolve(workspace), destination);
       const current = yield* cwd();
       source = yield* joined(() => native.realpath(resolve(current, offeredSource)));
       if (!(yield* stat(source)).isFile()) {
@@ -159,7 +179,7 @@ function importAsset(
         required: ["decision"],
         additionalProperties: false,
       },
-      message: `Source: ${source}\nDestination: ${target}\nWorkspace path after import: ${destination}\nImport copies this file into your session workspace.`,
+      message: `Source: ${source}\nDestination: ${target}\nWorkspace path after import: ${destination}\nImport copies this file into your session assets folder.`,
     });
     if (!isJsonObject(answer) || answer.decision !== "Import") {
       return Err(new Error("Asset import declined. No file was copied."));
@@ -191,6 +211,7 @@ function importAsset(
       const payload = join(temporary, "payload");
       yield* joined(() => native.copyFile(source, payload));
       yield* allowed();
+      target = yield* destinationPath(root, destination, native);
       try {
         yield* joined(() => native.link(payload, target));
       } catch (error) {

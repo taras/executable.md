@@ -732,7 +732,7 @@ export function sidekickMutations(
         additionalProperties: false,
       },
       description:
-        'Import a non-repository asset after approval with `<REPL.ImportAsset source="/known/mock ü.html" destination="inputs/mock ü.html" />`. Reuse the returned relative path in later entries. An occupied destination needs another explicit path and new approval.',
+        'Import a non-repository asset after approval with `<REPL.ImportAsset source="/known/mock ü.html" destination="assets/mock ü.html" />`. Choose a destination beneath session assets/. Read the filename inside REPL.AssetDir, without the assets/ prefix. An occupied destination needs another explicit path and new approval.',
       *fn(props: Record<string, Json>): Operation<string> {
         const { source, destination } = props;
         if (typeof source !== "string" || typeof destination !== "string") {
