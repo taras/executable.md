@@ -1,0 +1,73 @@
+{
+  "sourceCommit": "f5538fa5c1c63e95cb05b624a12d4cfb6846d006",
+  "frictionSourceSha256": "1fe2c203d482b0c9a0af72638b2853da2adda3fd50afab26f6583ee12e269aab",
+  "sites": [
+    {
+      "name": "the phase entry carries source and selected documents and needs no SHA correction",
+      "evalLine": 12,
+      "evalOffset": 494,
+      "declaredTimeoutSeconds": 60
+    },
+    {
+      "name": "the phase response limit preserves valid replies and bounds repair prompts",
+      "evalLine": 42,
+      "evalOffset": 2489,
+      "declaredTimeoutSeconds": 60
+    },
+    {
+      "name": "invalid response limits refuse before reserving an attempt or calling a role",
+      "evalLine": 101,
+      "evalOffset": 6193,
+      "declaredTimeoutSeconds": 60
+    },
+    {
+      "name": "response correction freezes canonical evidence and still rejects substantive changes",
+      "evalLine": 121,
+      "evalOffset": 7294,
+      "declaredTimeoutSeconds": 60
+    },
+    {
+      "name": "missing, ambiguous and non-commit revisions hold without asking the role to invent evidence",
+      "evalLine": 145,
+      "evalOffset": 9458,
+      "declaredTimeoutSeconds": 60
+    },
+    {
+      "name": "prototype spellings reach revision schema rejection without crashing",
+      "evalLine": 168,
+      "evalOffset": 10486,
+      "declaredTimeoutSeconds": 60
+    },
+    {
+      "name": "the continuation entry preserves holds and consumed corrections",
+      "evalLine": 190,
+      "evalOffset": 11875,
+      "declaredTimeoutSeconds": 60
+    },
+    {
+      "name": "G10 continuation advances only the recorded next role and preserves correction standing",
+      "evalLine": 201,
+      "evalOffset": 12586,
+      "declaredTimeoutSeconds": 90
+    },
+    {
+      "name": "normal launch forwards explicit zero and nonzero response budgets",
+      "evalLine": 271,
+      "evalOffset": 18073,
+      "declaredTimeoutSeconds": 90
+    },
+    {
+      "name": "A3 initial planning boundaries continue original owners and pause repeated discovery",
+      "evalLine": 313,
+      "evalOffset": 21045,
+      "declaredTimeoutSeconds": 90
+    },
+    {
+      "name": "accepted plan survives distinct implementation handoffs and retained correction",
+      "evalLine": 374,
+      "evalOffset": 26470,
+      "declaredTimeoutSeconds": 90
+    }
+  ],
+  "featureHead": "e1d736245cd0d9855125fe99688a8a8e682a1690"
+}
