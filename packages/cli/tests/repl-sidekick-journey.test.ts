@@ -1,3 +1,4 @@
+import { env } from "@executablemd/core";
 import { Plugin } from "@executablemd/core/api";
 import type { ReplPluginInstallation } from "../api.ts";
 import { createDurableOperation } from "@executablemd/durable-streams";
@@ -4717,6 +4718,104 @@ describe("993 mounted nested Output journeys", () => {
 });
 
 describe("Contributed Sidekick controls", () => {
+  it("records an elicited protected return as safe typed feedback while retaining its live schema", function* () {
+    let calls = 0;
+    const plugin = Plugin({
+      name: "protected-return-contribution",
+      *install(): Operation<ReplPluginInstallation> {
+        yield* sleep(0);
+        return {
+          repl: {
+            components: [
+              {
+                name: "ProtectedReturn",
+                origin: "test://protected-return",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                returns: {
+                  type: "object",
+                  properties: {
+                    code: { type: "string", pattern: "^[0-9]{6}$" },
+                    public: { type: "string" },
+                  },
+                  required: ["code", "public"],
+                  additionalProperties: false,
+                },
+                generated: {
+                  "self-closing": {
+                    identity: "https://executable.md/test/protected-return",
+                    effect: "read",
+                  },
+                },
+                factory: () =>
+                  function* () {
+                    calls++;
+                    const bindings = yield* env;
+                    if (bindings === undefined) {
+                      throw new Error("Missing live response bindings.");
+                    }
+                    return bindings.values.answer;
+                  },
+              },
+            ],
+          },
+        };
+      },
+    });
+    const held = yield* useHarness(undefined, { plugins: [plugin] });
+    held.fake.script({
+      reply:
+        '<Elicit schema={{type:"object",properties:{code:{type:"string",writeOnly:true},public:{type:"string"}},required:["code","public"],additionalProperties:false}} as="answer">Enter a code.</Elicit><ProtectedReturn as="returned" />',
+    });
+    held.fake.script({ reply: "<Output>Protected return received.</Output>" });
+    const running = yield* spawn(() => held.owner.message("Use a protected contributed return"));
+    yield* awaitedFact("the protected contributed question", function* () {
+      return held.owner.questions.pending !== undefined;
+    });
+    const question = held.owner.questions.pending;
+    if (question === undefined) {
+      throw new Error("No pending protected question.");
+    }
+    const secret = String(Math.floor(100000 + Math.random() * 900000));
+    expect(question.submit({ code: secret, public: "useful" })).toMatchObject({ kind: "answered" });
+    const answer = yield* running;
+    if (!answer.ok) {
+      throw answer.error;
+    }
+    expect(calls).toBe(1);
+    const saved = yield* records(held.execution);
+    const intents = saved.filter(
+      (record) => record.kind === "control" && record.component === "ProtectedReturn",
+    );
+    expect(intents).toHaveLength(1);
+    const intent = intents[0];
+    if (intent === undefined || intent.kind !== "control") {
+      throw new Error("Contributed intent was not acknowledged.");
+    }
+    const outcomes = saved.filter(
+      (record) =>
+        record.kind === "control-outcome" &&
+        record.conversation === intent.conversation &&
+        record.response === intent.response &&
+        record.order === intent.order,
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toEqual(
+      expect.objectContaining({
+        outcome: { status: "ok" },
+        observed: { code: "[redacted]", public: "useful" },
+      }),
+    );
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(held.fake.prompts[1]).toContain('"code": "[redacted]"');
+    expect(held.fake.prompts[1]).toContain('"public": "useful"');
+    expect(saved.filter((record) => record.kind === "response")).toEqual([
+      expect.objectContaining({ outcome: { status: "ok" } }),
+      expect.objectContaining({ outcome: { status: "ok" }, output: "Protected return received." }),
+    ]);
+    expect(JSON.stringify(saved).includes(secret)).toBe(false);
+    expect(held.fake.prompts.some((prompt) => prompt.includes(secret))).toBe(false);
+  });
+
   it("records effect-only success without JSON observation and continues feedback", function* () {
     let calls = 0;
     const plugin = Plugin({

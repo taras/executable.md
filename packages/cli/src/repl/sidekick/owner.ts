@@ -1,6 +1,7 @@
+import type { Json } from "@executablemd/core";
 import { DESIGNATED } from "./controls.ts";
 import type { ReplPluginExtension } from "../../repl-api.ts";
-import { useSecretInputs } from "@executablemd/core/host";
+import { projectInputValue, useSecretInputs } from "@executablemd/core/host";
 import { inspectRecoveryOwnership } from "./recovery-owner.ts";
 import { recoveryBlocked, uncertainRequests } from "./recovery-state.ts";
 import { bindRetainedPrefix } from "./history.ts";
@@ -654,34 +655,36 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * owners and therefore two sets of controls, so a reply in one still
      * cannot reach the other one's root.
      */
-    const ceiling = sidekickResponseCeiling(
-      sidekickRequests(
-        root,
-        function* (): Operation<Result<SubmitReceipt>> {
-          return yield* servingNow().submit();
+    function responseCeiling(project?: (value: unknown) => Result<Json | undefined>) {
+      return sidekickResponseCeiling(
+        sidekickRequests(
+          root,
+          function* (): Operation<Result<SubmitReceipt>> {
+            return yield* servingNow().submit();
+          },
+          function* (path) {
+            const test = servingNow().test;
+            return test === undefined
+              ? Err(new Error("this REPL host has no test runner"))
+              : yield* test(path);
+          },
+          () => servingNow().output(),
+          (source, destination) => servingNow().importAsset(source, destination),
+        ),
+        {
+          *began(occurrence, reserved): Operation<number> {
+            return yield* servingNow().journal.began(occurrence, reserved);
+          },
+          *settled(order, outcome, observed): Operation<void> {
+            yield* servingNow().journal.settled(order, outcome, observed);
+          },
         },
-        function* (path) {
-          const test = servingNow().test;
-          return test === undefined
-            ? Err(new Error("this REPL host has no test runner"))
-            : yield* test(path);
-        },
-        () => servingNow().output(),
-        (source, destination) => servingNow().importAsset(source, destination),
-      ),
-      {
-        *began(occurrence, reserved): Operation<number> {
-          return yield* servingNow().journal.began(occurrence, reserved);
-        },
-        *settled(order, outcome, observed): Operation<void> {
-          yield* servingNow().journal.settled(order, outcome, observed);
-        },
-      },
-      assembly.repl ?? [],
-      (error) => servingNow().failed(error),
-    );
-    /** How this conversation's execution captures those controls, once. */
-    const capturing = sidekickCeilingInstallation(ceiling);
+        assembly.repl ?? [],
+        (error) => servingNow().failed(error),
+        project,
+      );
+    }
+    const ceiling = responseCeiling();
     const designated = new Set([
       ...DESIGNATED,
       ...(ceiling.components ?? [])
@@ -1013,6 +1016,13 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       const ready = withResolvers<Result<AgentConversation>>();
       const task = mine.run(function* (): Operation<void> {
         const privacy = yield* useSecretInputs();
+        const owner = privacy.secretInputs;
+        if (owner === undefined) {
+          throw new Error("Sidekick conversation has no protected-input owner.");
+        }
+        const capturing = sidekickCeilingInstallation(
+          responseCeiling((value) => projectInputValue(owner, value)),
+        );
         const directory = input.workspace;
         if (directory !== undefined) {
           yield* API.Env.around(

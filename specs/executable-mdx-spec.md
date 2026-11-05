@@ -8614,6 +8614,8 @@ before the directory is removed. No filesystem operation is fire-and-forget.
 
 ### 6.12 JSON in both directions: `<Json>`, `<Parse>` and `<SafeParse>`
 
+A trusted host observes a live return with `projectInputValue(owner, value)` from `@executablemd/core/host`. Its producing owner supplies the fixed protected replacement and preserves public JSON siblings and safe known input text. The original value remains live for controlled uses. Ordinary non-JSON yields `Ok(undefined)` so observation is omitted without losing successful settlement. Unsafe or foreign protected values and disposed owners yield a withheld `Err`. The owner remains live through joined provider and callback cleanup; keeping the projector does not extend that lifetime.
+
 A document moves between structured values and JSON text at boundaries it
 writes down. `<Let>` introduces a value (§6.5), `<Json>` renders one as text,
 and `<Parse>` turns text back into a validated value. All three are core's own

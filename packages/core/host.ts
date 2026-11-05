@@ -447,6 +447,7 @@ export type {
 } from "./src/component-invocation-hooks.ts";
 export { projectElicitationAnswer } from "./src/secrets/input-schema.ts";
 export { default as elicitComponent } from "./src/components/Elicit.ts";
+export { projectInputValue } from "./src/secrets/inputs.ts";
 export type { SecretInputOwner } from "./src/secrets/inputs.ts";
 
 export { useSecretInputs } from "./src/secrets/input-host.ts";

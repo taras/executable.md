@@ -1,4 +1,3 @@
-import { JsonParseError, parseJson } from "@executablemd/core";
 import type {
   ComponentInvocationHooks,
   ComponentInvocationObservation,
@@ -77,7 +76,7 @@ import type {
   ExecutionInstallation,
 } from "@executablemd/core/host";
 import type { FunctionComponentDefinition } from "@executablemd/core";
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
 
 import { DESIGNATED, sidekickMutations, sidekickObservations } from "./controls.ts";
 import type { ControlJournal, SidekickControl, SidekickRequests } from "./controls.ts";
@@ -114,6 +113,7 @@ export function sidekickResponseCeiling(
   journal: ControlJournal,
   extensions: readonly ReplPluginExtension[] = [],
   failed: (error: Error) => void = () => {},
+  project?: (value: unknown) => Result<Json | undefined>,
 ): ResponseCeiling {
   const components = Object.freeze(extensions.flatMap((one) => [...(one.components ?? [])]));
   const builtin = [
@@ -156,14 +156,12 @@ export function sidekickResponseCeiling(
           }
         }
         let observed: Json | undefined;
-        if (outcome.ok) {
-          try {
-            observed = parseJson(outcome.value);
-          } catch (error) {
-            if (!(error instanceof JsonParseError)) {
-              throw error;
-            }
+        if (outcome.ok && project !== undefined) {
+          const observation = project(outcome.value);
+          if (!observation.ok) {
+            throw observation.error;
           }
+          observed = observation.value;
         }
         try {
           yield* journal.settled(order, outcome, observed);

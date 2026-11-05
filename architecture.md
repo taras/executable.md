@@ -208,7 +208,7 @@ Determinism is two properties:
 
 ### State ownership
 
-A protected-input owner belongs to one producing execution. A host whose providers outlive Core acquires its installation before those providers, keeps it through their joined teardown, and disposes it afterwards. Root Close does not end that host lifetime. Each output channel holds its own undecided suffix and never flushes it unscreened.
+A protected-input owner belongs to one producing execution. A host whose providers outlive Core acquires its installation before those providers, keeps it through their joined teardown, and disposes it afterwards. Root Close does not end that host lifetime. The host-only `projectInputValue(owner, value)` uses that same owner to produce optional safe JSON observation without changing the live value. Ordinary non-JSON success omits observation; unsafe protected projection, foreign protected input and a disposed owner return a withheld failure. Each output channel holds its own undecided suffix and never flushes it unscreened.
 
 The parent REPL also owns each established headless XMD child. Registration follows
 readiness of the child's root, exact selected Sidekick conversation and private
@@ -1091,7 +1091,7 @@ excluding engine attributes, captures and projected content. Normal return proce
 a throw prevents body work. `after` receives that same observation, the selected
 Effection Result and a required `cancelled` boolean after ordered component cleanup
 and declared return acceptance. Both callbacks are independently optional and their
-work and cleanup are call-owned. Caller binding and rendering follow notification.
+work and cleanup are call-owned. Caller binding and rendering follow notification. A host recording a protected return projects only its separate observation through `projectInputValue`; the original selected Result and live binding remain intact. The Sidekick recorder receives this closure directly from its conversation-owned privacy installation, retained through joined teardown.
 
 The boolean is true only for actual cancellation selected after successful owning
 cleanup, accompanied by `Err(ComponentInvocationCancelled)`. The notification has
