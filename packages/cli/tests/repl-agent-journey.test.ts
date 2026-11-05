@@ -370,6 +370,10 @@ describe("C1 — the command line this REPL runs under", () => {
     expect(settled.installations[0]).toBe(settled.children?.installation);
     const own = settled.installations[1]!;
     expect((own.declarations ?? []).map((declaration) => declaration.name)).toEqual(["Plan"]);
+    // This assembly was handed NO_PLUGINS, and only a selected contribution
+    // admits its own generated forms — so the checklist's are absent here.
+    // Their presence under a real selection is `repl-plugin` and `run-profile`'s
+    // to prove, not this no-plugin row's.
     expect(settled.generated).toEqual({
       Cwd: ["self-closing"],
       File: ["self-closing", "paired"],
@@ -377,8 +381,8 @@ describe("C1 — the command line this REPL runs under", () => {
       Glob: ["self-closing"],
       Syntax: ["self-closing"],
       Elicit: ["paired"],
-      "Sidekick.Todo": ["self-closing", "paired"],
     });
+    expect(Object.keys(settled.generated ?? {})).not.toContain("Sidekick.Todo");
     expect(Object.isFrozen(settled)).toBe(true);
     expect(Object.isFrozen(settled.installations)).toBe(true);
     expect(Object.isFrozen(own)).toBe(true);

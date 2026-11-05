@@ -28,6 +28,7 @@ import { useReplPage } from "./support/repl-page.ts";
 import {
   sendMessage,
   saidBySidekick,
+  sidekickIdle,
   pasteDraft,
   entrySettles,
 } from "./support/screen-journeys.ts";
@@ -471,7 +472,51 @@ describe("1113: receipt-directed exact output paging", () => {
       const done = `1113 output page ${parts.length}`;
       page.repl.fake.script({ reply: `<Output>${done}</Output>` });
       yield* sendMessage(page, "read the next exact page");
-      yield* page.until(done, (reading) => saidBySidekick(reading, done));
+      // The persisted, attributed response rather than what the chat pane
+      // happens to be showing: a long page fills the viewport, so the marker
+      // being offscreen and the turn never completing look the same there.
+      //
+      // The screen's own rest is the cheap gate — this one message drives two
+      // turns, and the next page may not be asked for until both have ended.
+      // The history is then read once, where it says which turn answered: that
+      // the evaluated response of this page's own exchange was retained
+      // successfully, and that the control feedback carrying the page the case
+      // parses below was retained beside it.
+      // Both turns of this one message asked for, before rest is believed: the
+      // screen is already at rest when the message is sent, so an idle gate on
+      // its own would pass on the previous exchange's stillness. This counts
+      // requests only to order the wait — what completion means is the
+      // retained response read below, never a request having started.
+      // deno-lint-ignore require-yield
+      yield* awaitedFact(`page ${parts.length} asked for both turns`, function* () {
+        return page.repl.fake.prompts.length >= before + 2;
+      });
+      yield* page.until(`page ${parts.length} exchange at rest`, (one) => sidekickIdle(one));
+      // Read once, not polled: rest already says both turns of this exchange
+      // ended, and this history holds a whole paged output — re-reading and
+      // re-projecting it on a timer costs more than the observation is worth.
+      // `settledReading` waits out an append still in flight by itself.
+      const retained = yield* settledReading(page.repl);
+      const answered = retained.chat.find(
+        (one) => one.kind === "response" && one.hasOutput && one.output.includes(done),
+      );
+      if (answered === undefined || answered.kind !== "response") {
+        throw new Error(
+          `page ${parts.length} retained no completed response holding ${JSON.stringify(done)}. ` +
+            `kinds=${JSON.stringify(retained.chat.map((one) => one.kind))}`,
+        );
+      }
+      // Successful, and the control feedback that carried the page this case
+      // parses below is retained on the same conversation.
+      expect(answered.outcome.status).toBe("ok");
+      expect(
+        retained.chat.some(
+          (one) =>
+            one.kind === "feedback" &&
+            one.conversation === answered.conversation &&
+            one.text === page.repl.fake.prompts[before + 1],
+        ),
+      ).toBe(true);
       const read = outputPage.parse(JSON.parse(page.repl.fake.prompts[before + 1] ?? "null"));
       parts.push(read.text);
       next = read.next;

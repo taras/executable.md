@@ -200,14 +200,57 @@ describe("987 — mounted original recovery", () => {
       expect(after.model.entries).toEqual(before.model.entries);
     });
   }
+  /**
+   * Walk the keyboard from the composer to the Draft, and prove it arrived.
+   *
+   * The Draft's own value is the oracle, not a phrase somewhere on the screen:
+   * `Type here` is optional guidance that required recovery and placement
+   * advice can crowd out, so a traversal that waited for it would be waiting on
+   * the layout rather than on focus. One probe character is typed at each stop
+   * and erased again; the stop where it lands in the Draft's own rows, and not
+   * the composer's, is the one these keystrokes are reaching.
+   *
+   * The probe is polled rather than awaited, because a stop that is not a text
+   * field swallows the key and draws nothing — which is an answer about focus,
+   * not a reason to fail.
+   */
   function* draftFromComposer(page: ReplPage): Operation<void> {
     yield* intoComposer(page);
-    for (let index = 0; index < 24 && !page.screen().shows("Type here"); index++) {
+    // A token no part of this screen draws: a single letter would collide with
+    // ordinary labels like QUEUE and make every stop look like the Draft.
+    const probe = "zq7";
+    function* settles(holds: (one: ScreenReading) => boolean): Operation<boolean> {
+      for (let poll = 0; poll < 25; poll += 1) {
+        if (holds(page.screen())) {
+          return true;
+        }
+        yield* sleep(20);
+      }
+      return holds(page.screen());
+    }
+    const route: string[] = [];
+    for (let stop = 0; stop < 24; stop += 1) {
+      yield* page.type(probe);
+      const landed = yield* settles((one) => draftHolds(one, probe));
+      const anywhere = landed || (yield* settles((one) => one.shows(probe)));
+      if (anywhere) {
+        for (let erase = 0; erase < probe.length; erase += 1) {
+          yield* page.key("Backspace");
+        }
+        yield* settles((one) => !one.shows(probe));
+      }
+      if (landed) {
+        return;
+      }
+      route.push(anywhere ? "field" : "control");
       const before = page.screen().index;
       yield* page.key("Tab");
       yield* page.until("the next keyboard traversal", (one) => one.index > before);
     }
-    expect(page.screen().shows("Type here")).toBe(true);
+    throw new Error(
+      `the keyboard never reached the Draft from the composer. stops=${JSON.stringify(route)} ` +
+        `${page.describe()}`,
+    );
   }
 
   it("keeps recovery closed through healthy idle and running work, and removes the action on an exact completed match", function* () {
