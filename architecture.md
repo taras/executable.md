@@ -1848,6 +1848,11 @@ member value can.
 
 ### The workflow lifecycle
 
+`xmd workflow` is an experimental opt-in: an invocation runs it only when
+`XMD_EXPERIMENTAL_WORKFLOW` is exactly `1`, and otherwise refuses before any
+workflow host, store, definition or Plugin is reached
+([Workflow workspaces](specs/workflow-workspace-spec.md) §2.2).
+
 `xmd workflow start [--id=<run-id>] [--props-*=…] <definition>` and
 `xmd workflow resume <run-id>` are the two commands. Both run in the foreground,
 stream the document's own output to standard output, and report identity and

@@ -214,7 +214,12 @@ describe("Tier FT — a workflow run's Fetch", () => {
         const child = yield* exec(cli.command, {
           arguments: cli.arguments,
           cwd: fixture.repository,
-          env: { ...inherited(), HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+          env: {
+            ...inherited(),
+            HOME: fixture.home,
+            XMD_WORKFLOW_RUNS: fixture.runs,
+            XMD_EXPERIMENTAL_WORKFLOW: "1",
+          },
         });
         // Drain the child's streams so a full pipe cannot stall it.
         for (const stream of [child.stdout, child.stderr]) {
@@ -269,7 +274,11 @@ describe("Tier FT — a workflow run's Fetch", () => {
       yield* writeTextFile(fixture.gate, "open\n");
       const resumed = yield* runCli(["workflow", "resume", RUN_ID], {
         cwd: fixture.repository,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
         timeout: 120_000,
       }).join();
 

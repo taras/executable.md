@@ -107,7 +107,11 @@ describe("Tier FG — workflow retention", () => {
     yield* useFixture(function* (fixture) {
       const result = yield* runCli(["workflow", "start", `--id=${RUN_ID}`, "flows/prints.md"], {
         cwd: fixture.repository,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
       }).join();
 
       expect(result.code).toBe(0);
@@ -146,7 +150,7 @@ describe("Tier FG — retained source", () => {
   function* startRetained(fixture: Fixture, id: string, at: string): Operation<void> {
     const started = yield* runCli(["workflow", "start", `--id=${id}`, at], {
       cwd: fixture.repository,
-      env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+      env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs, XMD_EXPERIMENTAL_WORKFLOW: "1" },
     }).join();
     expect(started.code).toBe(0);
   }
@@ -154,7 +158,7 @@ describe("Tier FG — retained source", () => {
   function resume(fixture: Fixture, id: string) {
     return runCli(["workflow", "resume", id], {
       cwd: fixture.repository,
-      env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+      env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs, XMD_EXPERIMENTAL_WORKFLOW: "1" },
     }).join();
   }
 
@@ -248,7 +252,11 @@ describe("Tier FG — retained source", () => {
       yield* writeTextFile(join(fixture.repository, "flows/named.md"), RETAINED);
       yield* startRetained(fixture, "named-1", join(fixture.repository, "flows/named.md"));
 
-      const environment = { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs };
+      const environment = {
+        HOME: fixture.home,
+        XMD_WORKFLOW_RUNS: fixture.runs,
+        XMD_EXPERIMENTAL_WORKFLOW: "1",
+      };
 
       // The same bytes under a different logical name: a different definition,
       // because source positions and later relative references use the name.

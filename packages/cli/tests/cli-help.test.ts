@@ -536,3 +536,26 @@ describe("REPL keyboard help", () => {
     expect(stdout).toContain("Alt+Up/Down reaches local actions from a field");
   });
 });
+
+describe("Retained workflow help exposure", () => {
+  /** A general-help command row naming `workflow`. */
+  const WORKFLOW_ROW = /^\s+workflow\b/m;
+
+  it("CH16: program help lists workflow only under the exact opt-in", function* () {
+    for (const flag of ["--help", "-h"]) {
+      const disabled: Record<string, string>[] = [
+        {},
+        { XMD_EXPERIMENTAL_WORKFLOW: "0" },
+        { XMD_EXPERIMENTAL_WORKFLOW: "true" },
+      ];
+      for (const env of disabled) {
+        const { stdout } = yield* runCli([flag], { env }).expect();
+        expect(stdout).toContain("Usage: xmd <COMMAND> [OPTIONS]");
+        expect(stdout).toContain("repl");
+        expect(stdout).not.toMatch(WORKFLOW_ROW);
+      }
+      const enabled = yield* runCli([flag], { env: { XMD_EXPERIMENTAL_WORKFLOW: "1" } }).expect();
+      expect(enabled.stdout).toMatch(WORKFLOW_ROW);
+    }
+  });
+});

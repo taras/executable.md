@@ -128,7 +128,7 @@ function useFixture<T>(
 function xmd(fixture: Fixture, args: string[]) {
   return runCli(args, {
     cwd: fixture.repository,
-    env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+    env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs, XMD_EXPERIMENTAL_WORKFLOW: "1" },
   });
 }
 

@@ -255,6 +255,7 @@ function signalledRun(
         ...inherited(),
         HOME: fixture.home,
         XMD_WORKFLOW_RUNS: fixture.runs,
+        XMD_EXPERIMENTAL_WORKFLOW: "1",
       },
     });
 
@@ -330,7 +331,11 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
 
       const resumed = yield* runCli(["workflow", "resume", RUN_ID], {
         cwd: fixture.repository,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
         timeout: 180_000,
       }).join();
 
@@ -410,7 +415,11 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
       // far as running at all is a resume that found the run unowned.
       const resumed = yield* runCli(["workflow", "resume", RUN_ID], {
         cwd: fixture.repository,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
         timeout: 180_000,
       }).join();
 
@@ -452,7 +461,11 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
 
       const options = {
         cwd: fixture.repository,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
         timeout: 180_000,
       };
       // Launched together, not one after the other. Which process wins the lock
