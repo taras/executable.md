@@ -657,21 +657,29 @@ it probes no agent, creates no runtime, ensures no session, sends no turn and
 saves nothing, so a cold opening and a replay reach none of its four methods.
 A later selection cannot reach a conversation that is already open.
 
-Before capture, a trusted conversation installation may decorate the selected
-provider to compose prompt content and its cold stream. It retains the prior
-provider directly, forwards session setup and inspection unchanged, and sends
-composed content under the same selected agent and exact checked Session.
-Decorations belong to that conversation and preserve subscription-owned work
-and cleanup. A retained turn never dispatches the ordinary Agent routing chain;
-later provider selection cannot replace its captured behavior.
+A held turn's content and its cold stream are composed by outer `max`
+`Agent.prompt` middleware, and the turn then ends at a private turn-local `min`
+terminal bound to this captured provider, the selected agent and the exact
+checked Session. Ancestor `min` routing and default handlers are not dispatched
+in held mode, and there is no fallback to them. The terminal visibly refuses a
+changed or missing agent, exact Session or timeout before native prompt work —
+the timeout against the primitive copied before any handler saw the options,
+because a value middleware can change in place cannot be compared against
+itself. One subscription is one turn: entering that stream a second time is
+refused before a second input is retained, a second turn announced or the
+provider asked again. The native stream's own terminal outcome, settlement and
+returned text are read on that same forwarding path, so a composition that
+catches a native failure or ends early does not make a turn complete. Later
+provider selection cannot replace the captured behavior.
 
-`Agent` middleware is compositional on purpose, and that is what makes it the
-wrong channel for this: a handler that forwarded a request's descriptive name
-instead of the request opened an ordinary route, so the provider never reached
-the request's setup and the required configuration was never asked for; a prompt
-handler could replace `options.session` after another session had been checked.
-A conversation therefore does not route, and there is no fallback to routing — a
-provider that installs no object refuses the opening with an explicit
+Content is the only thing composition decides, and that is deliberate: a
+handler that forwarded a request's descriptive name instead of the request
+would open an ordinary route, so the provider would never reach the request's
+setup and the required configuration would never be asked for; a prompt handler
+that replaced `options.session` would send the turn to a conversation nothing
+checked. Neither is reachable — `agent`, `session` and `options` are not routed
+for a held conversation at all, and the prompt terminal validates what arrives.
+A provider that installs no object refuses the opening with an explicit
 unsupported-conversation error, before the conversation is bound, so no
 configuration record, prompt record or root terminal follows from the refusal.
 Ordinary `<Session>` and `<Prompt>` keep composing through `Agent` exactly as

@@ -111,6 +111,8 @@ interface Traffic {
 
 interface StubOptions {
   readonly freshSession?: boolean;
+  /** Throw from the provider's own final `next()`, after its terminal event. */
+  readonly failsAfterTerminal?: boolean;
   /** How the provider answers one turn. Default: completes, echoing the text. */
   readonly respond?: (content: string) => {
     status?: "completed" | "failed" | "cancelled";
@@ -467,6 +469,12 @@ function turn(
           }
           if (index < events.length) {
             return { done: false, value: events[index++]! };
+          }
+          if (options.failsAfterTerminal === true) {
+            // The provider's own settlement failing after it already forwarded
+            // its terminal event: everything a consumer saw was genuine, and
+            // the turn still did not finish.
+            throw new Error("native settlement failed");
           }
           return { done: true, value: response.returns ?? deltas.join("") };
         },
@@ -2958,7 +2966,7 @@ describe("Tier DP — a held turn composes above its own terminal", () => {
     expect(retained[0]!.type === "yield" && retained[0]!.description.input).toBe("asked");
   });
 
-  it("DP6: subscribing the composed stream twice starts no second native turn", function* () {
+  it("DP6: a real second subscription is refused and starts no second native turn", function* () {
     const stream = new InMemoryStream();
     const traffic = fresh();
 
@@ -2974,11 +2982,23 @@ describe("Tier DP — a held turn composes above its own terminal", () => {
           *install(): Operation<void> {
             yield* Agent.around({
               *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
-                // Obtained twice and consumed once: a cold stream obtained
-                // again is not a turn, and only subscription asks.
-                const first = yield* next(text, options);
-                yield* next(text, options);
-                return first;
+                const downstream = yield* next(text, options);
+                return {
+                  *[Symbol.iterator]() {
+                    // Subscribed and drained to its end in an owned child
+                    // scope, which is released before the second subscription:
+                    // a provider's own per-session concurrency guard cannot
+                    // supply this guarantee for sequential work.
+                    yield* scoped(function* () {
+                      const first = yield* downstream;
+                      while (!(yield* first.next()).done) {
+                        // Drain it, so this is a consumed turn rather than an
+                        // abandoned one.
+                      }
+                    });
+                    return yield* downstream;
+                  },
+                };
               },
             });
           },
@@ -2986,8 +3006,149 @@ describe("Tier DP — a held turn composes above its own terminal", () => {
       ],
     );
 
-    expect(replied(answered)).toBe("[asked]");
+    // One native turn under one canonical occurrence, and the second entry is
+    // this turn's failure rather than a quietly duplicated request.
     expect(traffic.prompts.map((one) => one.content)).toEqual(["asked"]);
+    expect(replied(answered)).toContain("subscribed to twice");
+    const retained = prompts(yield* stream.readAll());
+    expect(retained).toHaveLength(1);
+    expect(record(retained, "turn:1").status).toBe("failed");
+  });
+
+  it("DP6: a suppressed native settlement failure does not complete the turn", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic, { failsAfterTerminal: true }),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [
+        {
+          *install(): Operation<void> {
+            yield* Agent.around({
+              *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                const downstream = yield* next(text, options);
+                return {
+                  *[Symbol.iterator]() {
+                    const inner = yield* downstream;
+                    return {
+                      *next() {
+                        // Every event forwarded genuinely, and the provider's
+                        // own settlement failure swallowed into an ordinary
+                        // ending.
+                        try {
+                          return yield* inner.next();
+                        } catch {
+                          return { done: true, value: "[asked]" };
+                        }
+                      },
+                    };
+                  },
+                };
+              },
+            });
+          },
+        },
+      ],
+    );
+
+    // The provider was asked once and its events were real, so nothing here is
+    // a fabricated event — and the turn still did not complete.
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["asked"]);
+    expect(replied(answered)).toContain("failed after its events were forwarded");
+    expect(record(prompts(yield* stream.readAll()), "turn:1").status).toBe("failed");
+  });
+
+  it("DP6: a composition that ends before the provider does not complete the turn", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [
+        {
+          *install(): Operation<void> {
+            yield* Agent.around({
+              *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                const downstream = yield* next(text, options);
+                return {
+                  *[Symbol.iterator]() {
+                    const inner = yield* downstream;
+                    let ended = false;
+                    return {
+                      *next() {
+                        if (ended) {
+                          return { done: true, value: "[asked]" };
+                        }
+                        const event = yield* inner.next();
+                        // Ends as soon as the real terminal event has been
+                        // forwarded, without ever letting the provider's own
+                        // stream reach its end.
+                        if (!event.done && event.value.type === "terminal") {
+                          ended = true;
+                          return event;
+                        }
+                        return event;
+                      },
+                    };
+                  },
+                };
+              },
+            });
+          },
+        },
+      ],
+    );
+
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["asked"]);
+    expect(replied(answered)).toContain("ended before its own provider stream did");
+    expect(record(prompts(yield* stream.readAll()), "turn:1").status).toBe("failed");
+  });
+
+  it("DP6: a timeout introduced in place on the checked options is refused", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [
+        {
+          *install(): Operation<void> {
+            yield* Agent.around({
+              *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                // Mutated in place and forwarded as the same object, so a
+                // comparison against that object would compare the altered
+                // value against itself.
+                if (options !== undefined) {
+                  options.timeout = 1;
+                }
+                return yield* next(text, options);
+              },
+            });
+          },
+        },
+      ],
+    );
+
+    // Refused before anything native: a bound this turn never had cannot be
+    // introduced by the composition above it.
+    expect(traffic.prompts).toEqual([]);
+    expect(replied(answered)).toContain("a timeout of 1ms");
+    expect(record(prompts(yield* stream.readAll()), "turn:1").status).toBe("failed");
   });
 
   it("DP6: replaying a composed turn runs no composition and asks no provider", function* () {
