@@ -35,6 +35,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
+import { stripVTControlCharacters } from "node:util";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import { embeddedAdapterIdentities } from "@executablemd/acp/embedded-adapters";
 import { copyPreparedCandidate } from "./candidate-copy.ts";
@@ -63,6 +64,58 @@ function* moduleGraph(flags: string[], entry: string): Operation<string> {
 function digests(): string[] {
   return embeddedAdapterIdentities().map((snapshot) => snapshot.sha256);
 }
+
+function acpPublishInventory(output: string, source: URL): URL[] {
+  const section = stripVTControlCharacters(output)
+    .split("Simulating publish of @executablemd/acp@")[1]
+    ?.split("Simulating publish of ")[0];
+  if (!section) {
+    throw new Error("No actual ACP publish inventory");
+  }
+  const urls = [...section.matchAll(/file:\/\/[^\n]+?(?= \()/g)].map((match) => new URL(match[0]));
+  for (const url of urls) {
+    if (!url.href.startsWith(source.href)) {
+      throw new Error(`ACP publish inventory escapes its candidate: ${url.href}`);
+    }
+  }
+  return urls;
+}
+
+describe("ACP publish inventory", () => {
+  const source = new URL("file:///tmp/xmd-jsr-candidate-oQPwf0/packages/acp/");
+  const coloured = [
+    "\u001b[0m\u001b[1m\u001b[32mSimulating publish\u001b[0m of \u001b[0m\u001b[38;5;245m@executablemd/acp@0.14.0\u001b[0m with files:",
+    "   file:///tmp/xmd-jsr-candidate-oQPwf0/packages/acp/embedded-adapters.ts (1.13KB)",
+    "   file:///tmp/xmd-jsr-candidate-oQPwf0/packages/acp/generated/claude-snapshot.ts (2.76MB)",
+    "\u001b[0m\u001b[1m\u001b[32mSimulating publish\u001b[0m of \u001b[0m\u001b[38;5;245m@executablemd/cli@0.14.0\u001b[0m with files:",
+    "   file:///tmp/xmd-jsr-candidate-oQPwf0/packages/cli/deno.json (410B)",
+  ].join("\n");
+  for (const { name, output } of [
+    { name: "plain", output: stripVTControlCharacters(coloured) },
+    { name: "coloured CI2443", output: coloured },
+  ]) {
+    it(`reads the ${name} ACP inventory and stops at the next package`, function* () {
+      expect(acpPublishInventory(output, source).map((url) => url.href)).toEqual([
+        new URL("embedded-adapters.ts", source).href,
+        new URL("generated/claude-snapshot.ts", source).href,
+      ]);
+    });
+  }
+  it("refuses output without an ACP inventory heading", function* () {
+    expect(() => acpPublishInventory("Success Dry run complete", source)).toThrow(
+      "No actual ACP publish inventory",
+    );
+  });
+  it("refuses a foreign file in the ACP inventory", function* () {
+    const output = stripVTControlCharacters(coloured).replace(
+      new URL("embedded-adapters.ts", source).href,
+      new URL("../cli/deno.json", source).href,
+    );
+    expect(() => acpPublishInventory(output, source)).toThrow(
+      "ACP publish inventory escapes its candidate",
+    );
+  });
+});
 
 describe("Tier ADD — embedded adapters across distributions", () => {
   it("ADD1: the source tree carries the manifest's exact bytes", function* () {
@@ -165,23 +218,9 @@ describe("Tier ADD — embedded adapters across distributions", () => {
     if (published.exitCode !== 0) {
       throw new Error(`JSR dry run failed: ${published.stderr}`);
     }
-    const output = published.stdout + published.stderr;
-    const section = output
-      .split("Simulating publish of @executablemd/acp@")[1]
-      ?.split("Simulating publish of ")[0];
-    if (!section) {
-      throw new Error("No actual ACP publish inventory");
-    }
-    const urls = [...section.matchAll(/file:\/\/[^\n]+?(?= \()/g)].map(
-      (match) => new URL(match[0]),
-    );
     const source = pathToFileURL(`${candidate}/packages/acp/`);
-    const selected = urls.map((url) => {
-      if (!url.href.startsWith(source.href)) {
-        throw new Error(`ACP publish inventory escapes its candidate: ${url.href}`);
-      }
-      return decodeURIComponent(url.href.slice(source.href.length));
-    });
+    const urls = acpPublishInventory(published.stdout + published.stderr, source);
+    const selected = urls.map((url) => decodeURIComponent(url.href.slice(source.href.length)));
     expect(selected).toContain("generated/claude-snapshot.ts");
     const root = yield* useTempDirectory("xmd-jsr-selected-");
     for (const [index, path] of selected.entries()) {
