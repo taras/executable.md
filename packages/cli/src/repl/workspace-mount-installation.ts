@@ -17,7 +17,7 @@ import {
   retainedResultAhead,
   recordedLocalOperation,
 } from "./repositories/deno/local.ts";
-import { API } from "@executablemd/runtime";
+import { API, Permissions } from "@executablemd/runtime";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export interface MountFileEntry {
@@ -62,17 +62,31 @@ export function workspaceMountInstallation(
             if (yield* retainedResultAhead(name)) {
               return yield* recordedLocalOperation({ operation, request, perform });
             }
-            const reason = yield* hostFileAccessReason(
-              limits,
-              operation === "file-read"
-                ? "read"
-                : operation === "file-write"
-                  ? "write"
-                  : operation === "file-delete"
-                    ? "delete"
-                    : "ensure-directory",
-              request,
-            );
+            const roots = [
+              ...(ownedDirectory === undefined ? [] : [ownedDirectory]),
+              ...(limits === undefined ? [] : [limits.project, limits.assets, limits.components]),
+            ];
+            const permitted =
+              roots.length === 0 ||
+              ((yield* Permissions.operations.files(
+                operation === "file-read" ? "read" : "write",
+              )) &&
+                (operation !== "dir-ensure" ||
+                  !isAbsolute(request.path) ||
+                  (yield* Permissions.operations.files("absolute"))));
+            const reason = permitted
+              ? yield* hostFileAccessReason(
+                  limits,
+                  operation === "file-read"
+                    ? "read"
+                    : operation === "file-write"
+                      ? "write"
+                      : operation === "file-delete"
+                        ? "delete"
+                        : "ensure-directory",
+                  request,
+                )
+              : "permission-denied";
             if (reason !== undefined) {
               return Err(
                 operation === "file-write"
@@ -89,10 +103,6 @@ export function workspaceMountInstallation(
                     }),
               );
             }
-            const roots = [
-              ...(ownedDirectory === undefined ? [] : [ownedDirectory]),
-              ...(limits === undefined ? [] : [limits.project, limits.assets, limits.components]),
-            ];
             if (roots.length > 0) {
               const directory = (yield* API.Fs.operations.realpath(request.cwd)) ?? request.cwd;
               const target = isAbsolute(request.path)
