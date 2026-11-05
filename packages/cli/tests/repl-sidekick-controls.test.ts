@@ -416,10 +416,34 @@ function replyThrough(
   source: string,
   root: RootReading,
   asked: Asked,
+  oldJournal = false,
 ): Operation<Result<GeneratedXmdRootResult>> {
   return scoped(function* () {
     const journal = journalOf(asked);
-    const ceiling = sidekickResponseCeiling(sidekickRequests(root, noSubmission), journal);
+    const captured = sidekickResponseCeiling(sidekickRequests(root, noSubmission), journal);
+    const ceiling: ResponseCeiling = oldJournal
+      ? {
+          ...captured,
+          controls: captured.controls.map((control) =>
+            control.name === "REPL.Entry.Journal" && control.definition !== undefined
+              ? {
+                  ...control,
+                  definition: {
+                    ...control.definition,
+                    props: {
+                      type: "object",
+                      properties: {
+                        entry: { type: "number" },
+                        yq: { type: "string", minLength: 1 },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                }
+              : control,
+          ),
+        }
+      : captured;
     const gate = withResolvers<void>();
     const entered = withResolvers<void>();
     const execution = yield* executeInstalled(
@@ -717,6 +741,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
     expect(surface.find((entry) => entry.name === "REPL.Entry.Journal")?.props).toEqual([
       "entry",
       "yq",
+      "maxBytes",
     ]);
     expect(surface.find((entry) => entry.name === "REPL.Entry.Prompt")?.props).toEqual([
       "entry",
@@ -2971,6 +2996,178 @@ function respond(request) {
       last: z.string().nullable(),
     })
     .strict();
+
+  function* componentPage(
+    root: RootReading,
+    yq: string,
+    maxBytes?: number,
+  ): Operation<EntryJournalPage> {
+    const asked = fresh();
+    const answer = yield* replyThrough(
+      `<REPL.Entry.Journal entry={1} yq={${JSON.stringify(yq)}}${maxBytes === undefined ? "" : ` maxBytes={${maxBytes}}`} />`,
+      root,
+      asked,
+    );
+    answered(answer);
+    const result = asked.settled[0];
+    if (result?.ok !== true) {
+      throw new Error(JSON.stringify(result));
+    }
+    return journalPage.parse(observed(asked, 0));
+  }
+
+  it("1077 J1/J2: authored Journal budgets preserve large objects and count the exact serialized UTF-8 page", function* () {
+    const events = (yield* savedEvents()).slice(0, 1);
+    const stdout = "x".repeat(2 * 1024 * 1024);
+    const value = { text: '🦊é"\\\n\u0000' };
+    events.push(diagnosticEvent({ exitCode: 0, stdout, stderr: value.text }));
+    const before = JSON.stringify(events);
+    const root = cold(projectedOf(events));
+    const whole = yield* componentPage(root, ".", 8388608);
+    expect(Object.keys(whole)).toEqual(["value", "next", "prev", "last"]);
+    expect(whole).toMatchObject({
+      value: { records: [{}, { exec: { stdout } }] },
+      next: null,
+      prev: null,
+      last: null,
+    });
+    for (const maxBytes of [undefined, 16384]) {
+      const asked = fresh();
+      const answer = yield* replyThrough(
+        `<REPL.Entry.Journal entry={1}${maxBytes === undefined ? "" : ` maxBytes={${maxBytes}}`} />`,
+        root,
+        asked,
+      );
+      answered(answer);
+      expect(asked.settled[0]?.ok).toBe(false);
+    }
+    const expected = { value, next: null, prev: null, last: null };
+    const budget = new TextEncoder().encode(JSON.stringify(expected)).length;
+    expect(yield* componentPage(root, '{"text": .records[1].exec.stderr}', budget)).toEqual(
+      expected,
+    );
+    const asked = fresh();
+    answered(
+      yield* replyThrough(
+        `<REPL.Entry.Journal yq={${JSON.stringify('{"text": .records[1].exec.stderr}')}} maxBytes={${budget - 1}} />`,
+        root,
+        asked,
+      ),
+    );
+    expect(asked.settled[0]?.ok).toBe(false);
+    expect(JSON.stringify(events)).toBe(before);
+  });
+
+  it("1077 J3: authored navigation inherits policy, evaluates ordinary yq and accepts an explicit smaller override", function* () {
+    const events = (yield* savedEvents()).slice(0, 1);
+    for (let i = 0; i < 45; i += 1) {
+      events.push(
+        diagnosticEvent({ exitCode: i >= 40 ? 1 : 0, stdout: String(i) + "x".repeat(64) }),
+      );
+    }
+    const root = cold(projectedOf(events));
+    const query = '[.records[] | select(.type == "exec")]';
+    const matches = yield* componentPage(
+      root,
+      query + " | [.[] | select(.exec.exitCode == 1)]",
+      8388608,
+    );
+    expect(z.array(z.json()).parse(matches.value)).toHaveLength(5);
+    const first = yield* componentPage(root, query, 8388608);
+    expect(z.array(z.json()).parse(first.value)).toHaveLength(20);
+    const next = z.string().parse(first.next);
+    const second = yield* componentPage(root, next);
+    expect(z.array(z.json()).parse(second.value)).toHaveLength(20);
+    expect(yield* componentPage(root, z.string().parse(second.prev))).toEqual(first);
+    const last = yield* componentPage(root, z.string().parse(second.last));
+    expect(z.array(z.json()).parse(last.value)).toHaveLength(5);
+    expect(last.next).toBe(null);
+    const complete = answered(yield* root.inspectJournal({ entry: 1, maxBytes: 8388608 }));
+    expect(JSON.parse(answered(yield* selectJson(next, JSON.stringify(complete.value))))).toEqual(
+      second.value,
+    );
+    const small = yield* componentPage(root, next, 4096);
+    expect(new TextEncoder().encode(JSON.stringify(small)).length).toBeLessThanOrEqual(4096);
+    expect(z.array(z.json()).parse(small.value).length).toBeLessThan(20);
+    expect(z.array(z.json()).parse(small.value)[0]).toEqual(
+      z.array(z.json()).parse(second.value)[0],
+    );
+    for (const navigation of [small.next, small.prev, small.last]) {
+      if (navigation !== null) {
+        const page = yield* componentPage(root, navigation);
+        expect(new TextEncoder().encode(JSON.stringify(page)).length).toBeLessThanOrEqual(4096);
+      }
+    }
+    expect((yield* componentPage(root, "false")).value).toBe(false);
+  });
+
+  it("1077 J4: authored small and large channel walks preserve every Unicode code point and escaped byte", function* () {
+    const events = (yield* savedEvents()).slice(0, 1);
+    const text = "🦊\u0000".repeat(210000);
+    expect(new TextEncoder().encode(text).length).toBeGreaterThan(1024 * 1024);
+    events.push(diagnosticEvent({ exitCode: 0, stdout: text }));
+    const root = cold(projectedOf(events));
+    const before = JSON.stringify(events);
+    for (const budget of [16384, 8388608]) {
+      let yq: string | null = ".records[1].exec.stdout";
+      let complete = "";
+      let first = true;
+      let shortened = false;
+      while (yq !== null) {
+        const page: EntryJournalPage = yield* componentPage(root, yq, first ? budget : undefined);
+        const value = z.string().parse(page.value);
+        expect(new TextEncoder().encode(JSON.stringify(page)).length).toBeLessThanOrEqual(budget);
+        expect([...value].length).toBeLessThanOrEqual(4096);
+        expect(value.length).toBeGreaterThan(0);
+        if (page.next !== null && [...value].length < 4096) {
+          shortened = true;
+        }
+        complete += value;
+        yq = page.next;
+        first = false;
+      }
+      expect(complete).toBe(text);
+      expect(shortened).toBe(budget === 16384);
+    }
+    expect(JSON.stringify(events)).toBe(before);
+  });
+
+  it("1077 J5: invalid budgets and old captured declarations refuse before Journal inspection", function* () {
+    let readings = 0;
+    const session = yield* openReplSession({
+      execution: { id: "budget-validation", stream: new InMemoryStream() },
+    });
+    const live = answered(session);
+    const counted = { ...live, reading: live.reading.bind(live) };
+    counted.reading = (...args) => {
+      readings += 1;
+      return live.reading(...args);
+    };
+    const reads = rootReads(counted, READING_PROFILE);
+    for (const maxBytes of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect((yield* reads.inspectJournal({ maxBytes })).ok).toBe(false);
+    }
+    expect(readings).toBe(0);
+    const model = projectedOf(yield* savedEvents());
+    let calls = 0;
+    const root = {
+      ...cold(model),
+      *inspectJournal() {
+        calls += 1;
+        return Ok({ value: null, next: null, prev: null, last: null });
+      },
+    };
+    for (const source of [
+      "<REPL.Entry.Journal maxBytes={0} />",
+      "<REPL.Entry.Source maxBytes={8388608} />",
+    ]) {
+      expect((yield* replyThrough(source, root, fresh())).ok).toBe(false);
+    }
+    expect(
+      (yield* replyThrough("<REPL.Entry.Journal maxBytes={8388608} />", root, fresh(), true)).ok,
+    ).toBe(false);
+    expect(calls).toBe(0);
+  });
 
   it("1006 E2/E3/E6: queries complete saved records and channels before paging, preserving JSON and uncertainty", function* () {
     const events = (yield* savedEvents()).slice(0, 1);

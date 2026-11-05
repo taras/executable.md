@@ -1,3 +1,4 @@
+import { resolveJournalMaxBytes } from "./journal-policy.ts";
 import type { ReplTesting } from "./testing.ts";
 /**
  * What the root actually does when a reply asks, and where each answer comes from.
@@ -150,6 +151,10 @@ export function rootReads(
 ): RootReads {
   return {
     *inspectJournal(request: EntryJournalRequest): Operation<Result<EntryJournalPage>> {
+      const policy = resolveJournalMaxBytes(request.yq ?? ".", request.maxBytes);
+      if (!policy.ok) {
+        return policy;
+      }
       const read = session.reading(undefined);
       return read.ok
         ? yield* readEntryJournal(request, {

@@ -42,8 +42,8 @@ prepare.
   without repeating the work that already did.
 - Start a failed entry at its Journal. `<REPL.Entry.Journal entry={2} />`
   selects that entry's retained failure, prompt counts, saved records and host
-  execution observation under `value`. If the result exceeds the response bound, select the relevant records
-  or a command channel with `yq` as shown below.
+  execution observation under `value`. Select relevant records or a command
+  channel with `yq`, then follow the returned navigation to read more.
 - Distinguish commands from agent turns and document output. An `exec` record's
   `.exec.exitCode` is the actual saved command exit; its protocol `status: "ok"`
   does not mean exit zero. `.exec.stdout` and `.exec.stderr` are independently
@@ -165,6 +165,8 @@ record, use its `prompt` number to read the saved turn:
 
 Journal applies `yq` to the complete permitted entry value before paging its
 result. You can search all records or all retained channel text in one query.
+Use the default bounded reads and returned navigation for ordinary inspection.
+
 Small results keep their exact JSON type. A large object or indivisible array
 item refuses with a narrower-query direction; directly selected strings remain
 fully readable in 4096-code-point pages:
@@ -175,8 +177,9 @@ fully readable in 4096-code-point pages:
 ```
 
 For a continuation, copy the returned `next`, `prev` or `last` string into the
-`yq` prop and keep `entry={2}`. Within the same response, a returned next query
-can be used directly:
+`yq` prop and keep `entry={2}`. The host carries any applicable byte policy in
+that query; you need no separate budget argument to continue. Within the same
+response, a returned next query can be used directly:
 
 ```xmd
 <REPL.Entry.Journal entry={2} yq=".records[1].exec.stderr" as="first" />
@@ -193,6 +196,24 @@ or negative entry resolves at each read, so reuse the receipt's positive entry
 number after another entry has been admitted. Generated windows refuse another
 entry rather than following it. Each response starts with empty bindings; a
 query string received as feedback is data to copy into the next response.
+
+For an unusually large diagnostic object that you need intact, the optional
+`maxBytes` prop provides an advanced escape hatch. This example requests an
+8 MiB serialized response budget:
+
+```xmd
+<REPL.Entry.Journal entry={2} yq="." maxBytes={8388608} />
+```
+
+The budget counts the complete compact UTF-8 JSON `{value,next,prev,last}`,
+including escaping and navigation. It is a positive safe integer byte count.
+Omission keeps the default; nothing is truncated. An older pinned host that
+cannot honor the prop refuses it. Preserve that host and select a narrower
+query it supports; do not restart or reload it to make the read work.
+
+Navigation carries the applicable budget automatically. An explicit
+`maxBytes` on a later read overrides it and governs the new navigation. Smaller
+budgets may shorten string pages, which still contain at most 4096 code points.
 
 Source, Prompt and Output keep `previous` and `next` argument objects. Text
 windows default to 4096 code points; copy their exact entry, prompt, field,

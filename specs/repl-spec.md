@@ -2466,7 +2466,7 @@ Closed passive reads are:
 xmd sidekick read --attach FILE status
 xmd sidekick read --attach FILE message MESSAGE_REF [--follow]
 xmd sidekick read --attach FILE entry ENTRY source|prompt|output [--cursor CURSOR]
-xmd sidekick read --attach FILE entry ENTRY journal [--yq EXPRESSION]
+xmd sidekick read --attach FILE entry ENTRY journal [--yq EXPRESSION] [--max-bytes POSITIVE]
 ```
 
 Prompt pages additionally accept `--prompt POSITIVE` and
@@ -2479,8 +2479,16 @@ and binds the execution, conversation and view; a newer entry cannot retarget
 it. Journal instead accepts ordinary `--yq` and returns exactly `value`, `next`,
 `prev` and `last`, with the same complete-input query meaning and pagination as
 REPL.Entry.Journal. Reuse navigation as `--yq` with the same positive entry;
-`--cursor` is refused for Journal and `--yq` is refused for other views.
-Reads accept no file path, source, write operation or limit override.
+`--cursor` is refused for Journal; `--yq` and `--max-bytes` are refused for other
+views. Journal's optional `--max-bytes` is a positive safe integer byte count for
+the complete compact UTF-8 JSON `{value,next,prev,last}`, including escaping and
+navigation. The private envelope and newline receive additional room automatically.
+Navigation carries the applicable budget, and a later explicit argument overrides
+it. The client forwards inherited policy as `maxBytes` too, so an older pinned
+host whose closed schema cannot honor the argument refuses instead of silently
+using its fixed limit. No host is replaced, restarted or reloaded. Omission keeps
+the existing default. Reads accept no file path, source or write operation, and
+no other view gains a limit override.
 
 A new authenticated connection to the same surviving root reads that exact
 entry's session-owned `execution` observation alongside its retained Journal.
@@ -2491,7 +2499,10 @@ entry outcome: a live entry can be awaiting Elicit while `busy` is false.
 
 The private versioned framed protocol bounds Sidekick message text and each
 direct source part at 64 KiB, descriptors at
-16 KiB and frames at 1 MiB. Each observer has at most 64 pending public updates.
+16 KiB and ordinary frames at 1 MiB. Only a matching configured Journal value
+reply may exceed that frame bound, within its usable page budget plus exact private
+framing room. The receive allowance is established before input; each send carries
+its own allowance. Each observer has at most 64 pending public updates.
 Malformed or slow observers detach safely; a subsequent exact read/follow
 obtains the owner's current facts. After owner-process loss joined completion
 is unavailable, rather than reconstructed from a saved preview or text.
@@ -3055,7 +3066,15 @@ Source is the exact source that entry was admitted with. Prompt is one saved
 agent turn's reply, request or complete failure message. Output is what the
 entry printed. Journal queries the complete permitted value
 `{entry,status,failure,prompts,records,execution}` before paging the query result. Its
-optional `yq` defaults to `.`. Each record carries `marker`, `type`, nullable
+optional `yq` defaults to `.`. Optional `maxBytes` is a positive safe integer byte
+count, validated before Journal inspection. For example, request an intact large
+diagnostic object with an 8 MiB response budget:
+
+```xmd
+<REPL.Entry.Journal entry={22} yq="." maxBytes={8388608} />
+```
+
+Each record carries `marker`, `type`, nullable
 `name`, `position`, `prompt` and `agent`, its `status`, `exec` and required nullable `promptError`. A supported
 settled exec has `{exitCode,stdout?,stderr?}`; other records have `exec: null`.
 Missing channels are absent members, retained empty channels are empty strings,
@@ -3152,10 +3171,14 @@ xmd sidekick read --attach /absolute/private/attachment.json entry 22 journal --
 ```
 
 Every successful Journal read has exactly `{value,next,prev,last}`. The value
-may be any JSON type. Small complete results have null navigation. Strings use
-4096-code-point windows; arrays use at most twenty items per page and the
-serialized response bound. Objects and indivisible items that exceed that bound
-refuse clearly and direct a narrower yq selection, such as a record's
+may be any JSON type. Small complete results have null navigation. Explicit or
+inherited `maxBytes` counts the complete compact UTF-8 JSON response, including
+keys, punctuation, escaping and navigation. Private attachment framing consumes
+none of that usable budget. Omission preserves the existing conservative bound.
+Strings use at most 4096 code points; arrays use at most twenty items per page.
+Smaller byte budgets shorten pages while those code-point and item maxima stay
+separate units. Objects and indivisible items that exceed the applicable bound
+refuse clearly without truncation and direct a narrower yq selection, such as a record's
 `.exec.stdout`, `.exec.stderr` or `.promptError.diagnostic.acp.details`. No text
 or record is cut before the query.
 Zero or multiple top-level results, invalid expressions and non-JSON results
@@ -3164,8 +3187,12 @@ refuse through the existing query engine; null and false are valid answers.
 Returned navigation is ordinary yq. Reuse it with the same positive entry
 number. Each request recomputes current retained data and host observation; growth can shift pages.
 Generated windows preserve the original query and finite range so later requests
-can offer next, prev and last without retained inspection state. The exact
-formatter shape is recognized through strict JSON and complete formatter equality;
+can offer next, prev and last without retained inspection state. Navigation also
+carries the applicable byte budget, so following it needs no repeated `maxBytes`.
+An explicit later budget overrides inherited policy and governs all regenerated
+navigation. A smaller override repages from the selected window's start when its
+old slice no longer fits. Fresh ordinary queries keep the default when no budget
+is supplied. The exact formatter shape is recognized through strict JSON and complete formatter equality;
 edited or noncanonical queries keep ordinary evaluator semantics. A generated
 window for another entry refuses. Journal takes no `offset` or `limit` props.
 
