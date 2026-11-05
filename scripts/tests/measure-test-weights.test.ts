@@ -104,6 +104,31 @@ function parseJob(id: string, value: unknown): Job {
   };
 }
 
+function commonNodeVersion(workflows: Record<string, Record<string, unknown>>): string {
+  const versions: string[] = [];
+  for (const [label, workflow] of Object.entries(workflows)) {
+    const selected = Object.entries(object(workflow.jobs, `${label}.jobs`)).flatMap(([id, job]) =>
+      parseJob(id, job).steps.filter((step) => step.uses?.startsWith("actions/setup-node@")),
+    );
+    if (selected.length === 0) {
+      throw new Error(`${label} has no actions/setup-node step`);
+    }
+    for (const step of selected) {
+      const version = step.with["node-version"];
+      if (!/^\d+\.\d+\.\d+$/.test(version ?? "")) {
+        throw new Error(`${label} node-version must be numeric major.minor.patch; got ${version}`);
+      }
+      versions.push(version);
+    }
+  }
+  const unique = [...new Set(versions)];
+  const [version] = unique;
+  if (version === undefined || unique.length !== 1) {
+    throw new Error(`setup-node versions must agree across workflows: ${unique.join(", ")}`);
+  }
+  return version;
+}
+
 /** The workflow, and its first job: the one that measures. */
 function* measurement(): Operation<{ workflow: Record<string, unknown>; job: Job }> {
   const workflow = yield* document(WORKFLOW);
@@ -339,6 +364,9 @@ describe("the measurement workflow", () => {
         pinned: true,
       });
       for (const [key, value] of Object.entries(step.with)) {
+        if (step.uses?.startsWith("actions/setup-node@") && key === "node-version") {
+          continue;
+        }
         expect({
           key,
           value,
@@ -346,6 +374,15 @@ describe("the measurement workflow", () => {
         }).toEqual({ key, value, agrees: true });
       }
     }
+  });
+
+  it("pins every setup-node step to one common numeric patch", function* () {
+    expect(
+      commonNodeVersion({
+        ci: yield* document(CI_WORKFLOW),
+        measurement: yield* document(WORKFLOW),
+      }),
+    ).toEqual("22.23.4");
   });
 
   it("uploads the file it produced", function* () {
