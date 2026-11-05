@@ -14,8 +14,8 @@
  * part of. None of them asks for anything special to make that so.
  */
 
-import { scoped } from "effection";
-import type { Operation } from "effection";
+import { scoped, spawn, suspend, withResolvers } from "effection";
+import type { Operation, Task } from "effection";
 import { content, hasContent, raise } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
 
@@ -71,7 +71,7 @@ import type {
   AgentPromptPublisher,
 } from "./publication.ts";
 import { clearsLiveOutput, secretPolicy, scanSecrets } from "../secrets/policy.ts";
-import type { Stream } from "effection";
+import type { Stream, Subscription } from "effection";
 import type { AgentPromptEvent } from "./agent-api.ts";
 
 export const AGENT_PROVIDER_PROPS: PropsSchema = {
@@ -494,10 +494,46 @@ interface HeldPromptTurn {
   failure?: Error;
   /** The text the native subscription itself returned. */
   text?: string;
+  /**
+   * The task holding this turn's native acquisition, subscription and cleanup.
+   *
+   * Spawned in the turn's own scope rather than wherever the composition above
+   * happened to subscribe from. A provider registers its per-turn teardown in
+   * the scope that subscribes to its stream, so acquiring there would put that
+   * teardown inside a wrapper's child scope — where unwinding it is the
+   * wrapper's event to catch. Held here, the turn owns it.
+   */
+  holder?: Task<void>;
+  /** This turn's native cleanup ran and came down without failing. */
+  cleaned: boolean;
+  /** What this turn's native cleanup failed with, if it did. */
+  cleanup?: Error;
 }
 
 function heldPromptTurn(options: PromptOptions): HeldPromptTurn {
-  return { timeout: options.timeout, admitted: false, settled: false };
+  return { timeout: options.timeout, admitted: false, settled: false, cleaned: false };
+}
+
+/**
+ * Bring this turn's native work down, and keep what that cost.
+ *
+ * Called at the end of the turn's own body, so the provider's teardown runs
+ * where the turn can see it rather than during an unwind a composition is
+ * catching. `halt()` raises whatever the teardown raised, which is the one
+ * place that outcome is observable at all.
+ */
+function* joinHeldNative(turn: HeldPromptTurn): Operation<void> {
+  const holder = turn.holder;
+  if (holder === undefined) {
+    return;
+  }
+  turn.holder = undefined;
+  try {
+    yield* holder.halt();
+    turn.cleaned = true;
+  } catch (error) {
+    turn.cleanup = error instanceof Error ? error : new Error(String(error));
+  }
 }
 
 /**
@@ -517,6 +553,15 @@ function heldSettlementFailure(turn: HeldPromptTurn): string | undefined {
     return (
       "this held turn's composition ended before its own provider stream did, so nothing " +
       "observed the turn finish"
+    );
+  }
+  if (turn.cleanup !== undefined) {
+    return `this held turn's own provider cleanup failed after it finished: ${turn.cleanup.message}`;
+  }
+  if (!turn.cleaned) {
+    return (
+      "this held turn's own provider cleanup did not come down, so nothing observed its work " +
+      "released"
     );
   }
   return undefined;
@@ -539,12 +584,42 @@ function heldSettlementFailure(turn: HeldPromptTurn): string | undefined {
  * any of that. The refusal is this turn's failure, which is what a composition
  * that consumed its own turn and then asked for another has produced.
  */
-function installHeldPromptTerminal(
+function* installHeldPromptTerminal(
   direct: DirectPromptTurn,
   checked: HeldPromptTurn,
   carried: Carried,
 ): Operation<void> {
-  return Agent.around(
+  // What the terminal asks for, and what it waits to be handed. Acquisition
+  // happens in the holder below rather than in the terminal's own body,
+  // because the terminal's body runs wherever the composition above subscribed
+  // from — and a provider's per-turn teardown belongs to that scope. The turn
+  // owns the holder, so the turn owns the teardown.
+  const asked = withResolvers<{
+    content: string;
+    options: PromptOptions & { agent: string; session: Session };
+  }>();
+  const ready = withResolvers<Subscription<AgentPromptEvent, string>>();
+  checked.holder = yield* spawn(function* (): Operation<void> {
+    const request = yield* asked.operation;
+    try {
+      const audited = yield* auditedPromptStream(
+        yield* direct.provider.prompt(request.content, request.options),
+      );
+      // Held out so the audit names the native stream rather than whatever
+      // transparent wrapper the composition above returned.
+      checked.stream = audited;
+      ready.resolve(yield* audited);
+    } catch (error) {
+      // Answered to the terminal rather than raised here, so one failure
+      // reaches the turn by the one path the turn already reads.
+      ready.reject(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    // Held open for the turn, which is what keeps the provider's own cleanup
+    // attached here until the turn brings it down.
+    yield* suspend();
+  });
+  yield* Agent.around(
     {
       // deno-lint-ignore require-yield
       *prompt([content, forwarded]): Operation<Stream<AgentPromptEvent, string>> {
@@ -572,17 +647,11 @@ function installHeldPromptTerminal(
             if (publisher?.begin !== undefined) {
               carried.begun = yield* publisher.begin(content);
             }
-            const audited = yield* auditedPromptStream(
-              yield* direct.provider.prompt(content, {
-                ...forwarded,
-                agent: direct.agent,
-                session: direct.session,
-              }),
-            );
-            // Held out so the audit names the native stream rather than
-            // whatever transparent wrapper the composition above returned.
-            checked.stream = audited;
-            const subscription = yield* audited;
+            asked.resolve({
+              content,
+              options: { ...forwarded, agent: direct.agent, session: direct.session },
+            });
+            const subscription = yield* ready.operation;
             // Read on the way through, on this same forwarding path: what the
             // provider's own stream did is recorded here, where a wrapper above
             // cannot suppress it by catching a failure or ending early.
@@ -859,6 +928,12 @@ export function* runPrompt(
       // is the stream's own return, untouched by any of this.
       if (watching !== undefined) {
         yield* watching.returned(result.text);
+      }
+      // Brought down here, inside the turn's own body: the provider's teardown
+      // runs where this turn reads its outcome rather than during an unwind a
+      // composition above could be catching.
+      if (held !== undefined) {
+        yield* joinHeldNative(held);
       }
       return result;
     });

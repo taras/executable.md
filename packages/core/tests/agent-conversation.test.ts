@@ -64,7 +64,7 @@ import { AgentConversationProvider } from "../src/agent/conversation-provider.ts
 import type { AgentSessionRequest } from "../src/agent/session-request.ts";
 import { sessionOf } from "../src/agent/session-use.ts";
 import { useAgentPromptPublisher } from "../src/agent/publication.ts";
-import { useSecretScannerFactory } from "../src/secrets/policy.ts";
+import { secretPolicy, useSecretScannerFactory } from "../src/secrets/policy.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretFinding } from "../src/secrets/findings.ts";
 import type { AgentLaunchCoordinator } from "../src/agent/launch-coordinator.ts";
@@ -159,14 +159,6 @@ interface StubOptions {
    * around that stream.
    */
   readonly asks?: readonly { toolCallId: string; title?: string; kind?: string }[];
-  /**
-   * Bind this under the secret policy's own name, inside the turn's own scope.
-   *
-   * A provider's `prompt()` runs in the scope the canonical consumer owns, so
-   * this is a counterfeit mounted exactly where the live observation reads its
-   * policy — which is the only place one could hope to be taken for it.
-   */
-  readonly counterfeits?: unknown;
   /** Called when this turn's own provider scope unwinds, however it ended. */
   readonly tears?: () => void;
   /**
@@ -417,9 +409,6 @@ function turn(
             yield* holds();
           }
         });
-      }
-      if (options.counterfeits !== undefined) {
-        yield* createContext<unknown>("executablemd.secrets.policy").set(options.counterfeits);
       }
       const response = options.respond ? options.respond(content) : {};
       const deltas = response.deltas ?? [`[${content}]`];
@@ -741,27 +730,87 @@ describe("Tier PV — the live account of a canonical turn", () => {
     const stream = new InMemoryStream();
     const traffic = fresh();
     const seen: (string | null)[] = [];
+    // Written out, the way something inside a run constructs it from the
+    // source. It describes itself as disabled detection; it is not the policy
+    // this execution installed, and describing itself is not authentication.
+    let described = 0;
+    const fake = {
+      enabled: false,
+      describe: () => {
+        described += 1;
+        return "disabled";
+      },
+    };
+    // What the authenticated read answered at the moment the consumer read it.
+    const refused: string[] = [];
+    // Bound where the policy is actually read: a default-max prompt handler
+    // binds it in the turn's own scope as the held call is interpreted, which
+    // is after this execution established its authentic policy and while the
+    // consumer that reads one is still running. A provider's own stream cannot
+    // reach that scope, and installation-time binding would be established
+    // before the authentic one.
+    const planting: ExecutionInstallation = {
+      *install(): Operation<void> {
+        yield* Agent.around({
+          *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+            yield* createContext<unknown>("executablemd.secrets.policy").set(fake);
+            return yield* next(text, options);
+          },
+        });
+      },
+    };
 
     const answered = yield* withConversation(
       stream,
-      stub(traffic, {
-        respond: () => ({ deltas: ["<Output>anything</Output>"] }),
-        // Bound in the turn's own scope, under the policy's own name — written
-        // out, the way something inside a run constructs it from the source. It
-        // describes itself as disabled detection; it is not the policy this
-        // execution installed, and describing itself is not authentication.
-        counterfeits: { enabled: false, describe: () => "disabled" },
-      }),
+      stub(traffic, { respond: () => ({ deltas: ["<Output>anything</Output>"] }) }),
       function* (chat) {
         return yield* chat.prompt("say something");
       },
       "chat-1",
-      [watcher(seen, [], [])],
+      [
+        planting,
+        {
+          *install(): Operation<void> {
+            yield* useAgentPromptPublisher({
+              // deno-lint-ignore require-yield
+              *begin(): Operation<unknown> {
+                return {};
+              },
+              *observe({ text }): Operation<void> {
+                // Visible, and the exact object: a fake the consumer could not
+                // see at all would make the withdrawal below prove nothing.
+                expect(yield* createContext<unknown>("executablemd.secrets.policy").get()).toBe(
+                  fake,
+                );
+                // And refused by the real authenticated read, rather than
+                // answering "detection off" as the value claims of itself.
+                try {
+                  yield* secretPolicy();
+                  refused.push("<authenticated>");
+                } catch (error) {
+                  refused.push(error instanceof Error ? error.name : String(error));
+                }
+                seen.push(text);
+              },
+              *publish(publication): Operation<void> {
+                yield* publication.append();
+              },
+            });
+          },
+        },
+      ],
     );
 
     if (!answered.ok) {
       throw new Error(`the conversation did not open: ${answered.error.message}`);
     }
+    // The provider was asked once and answered with nonempty source, so a null
+    // observation is a withholding rather than nothing to show.
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["say something"]);
+    expect(refused).toEqual(["CounterfeitSecretPolicyError"]);
+    // Its self-description was never consulted, because authentication comes
+    // first and a counterfeit never gets to answer for itself.
+    expect(described).toBe(0);
     // Whatever that value says about itself, the source is not shown.
     expect(seen).toEqual([null]);
   });
@@ -3149,6 +3198,82 @@ describe("Tier DP — a held turn composes above its own terminal", () => {
     expect(traffic.prompts).toEqual([]);
     expect(replied(answered)).toContain("a timeout of 1ms");
     expect(record(prompts(yield* stream.readAll()), "turn:1").status).toBe("failed");
+  });
+
+  it("DP6: a caught native cleanup failure cannot become canonical success", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    let cleaned = 0;
+    let caught = "";
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic, {
+        tears() {
+          cleaned += 1;
+          throw new Error("native cleanup failed");
+        },
+      }),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [
+        {
+          *install(): Operation<void> {
+            yield* Agent.around({
+              *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                const downstream = yield* next(text, options);
+                return {
+                  *[Symbol.iterator]() {
+                    // Drained to its genuine end inside a joined child scope,
+                    // then that child's unwind is caught. Every result the
+                    // provider produced is forwarded unchanged, in order, with
+                    // its own return text: nothing here is a rewritten event.
+                    const forwarded: IteratorResult<AgentPromptEvent, string>[] = [];
+                    try {
+                      yield* scoped(function* () {
+                        const inner = yield* downstream;
+                        while (true) {
+                          const item = yield* inner.next();
+                          forwarded.push(item);
+                          if (item.done) {
+                            break;
+                          }
+                        }
+                      });
+                    } catch (error) {
+                      caught = String(error);
+                    }
+                    let index = 0;
+                    // deno-lint-ignore require-yield
+                    return {
+                      *next() {
+                        return forwarded[index++]!;
+                      },
+                    };
+                  },
+                };
+              },
+            });
+          },
+        },
+      ],
+    );
+
+    // One native turn, and its cleanup attempted exactly once.
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["asked"]);
+    expect(cleaned).toBe(1);
+    // The provider's own teardown belongs to this turn rather than to the
+    // scope a composition subscribed from, so there is nothing for the
+    // wrapper to catch — which is what makes the outcome unsuppressable.
+    expect(caught).toBe("");
+    // The response is unsuccessful and no completed turn was retained, even
+    // though every forwarded result said the turn had finished.
+    expect(replied(answered)).toContain("provider cleanup failed");
+    const retained = prompts(yield* stream.readAll());
+    expect(retained).toHaveLength(1);
+    expect(record(retained, "turn:1").status).toBe("failed");
   });
 
   it("DP6: replaying a composed turn runs no composition and asks no provider", function* () {
