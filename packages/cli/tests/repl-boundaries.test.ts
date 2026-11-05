@@ -1,3 +1,4 @@
+import { ReplTerminal } from "../src/repl/terminal.ts";
 /**
  * The REPL's source boundaries (#848 S1).
  *
@@ -802,6 +803,14 @@ function* invoke(args: readonly string[]): Operation<Invocation> {
           },
           install: function* (): Operation<void> {
             installed += 1;
+            yield* ReplTerminal.around(
+              {
+                *interactive() {
+                  return true;
+                },
+              },
+              { at: "min" },
+            );
           },
         },
       );
@@ -843,7 +852,7 @@ describe("REPL command: what runs before the host is reached", () => {
   it("S1: only a REPL command line asks this host what its entries run with", function* () {
     // A command line that really opens the REPL asks once, before the profile
     // it assembles captures the answer, and fails afterwards only because this
-    // host has no terminal to give it.
+    // host has no data directory to give it.
     const opening = yield* invoke(["repl"]);
     expect(opening.selected).toBe(1);
     expect(opening.installed).toBe(1);

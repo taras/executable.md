@@ -91,7 +91,8 @@ import type {
 } from "@executablemd/core";
 import { useAcpxProvider } from "@executablemd/acp";
 import { API, command as hostCommand, cwd, Permissions } from "@executablemd/runtime";
-import { runReplProgram, prepareReplStartup } from "./repl/program.ts";
+import { runReplProgram, prepareReplStartup, refuseReplStartup } from "./repl/program.ts";
+import { ReplTerminal } from "./repl/terminal.ts";
 import { decodeLocation } from "./repl/route.ts";
 import { renderAgentOptions, renderAgentOptionsJson, scanAgentArgs } from "./agent-options.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
@@ -3776,10 +3777,18 @@ function* runCommand(
         return;
       }
       yield* replHost.install();
+      if (!(yield* ReplTerminal.operations.interactive())) {
+        console.error(
+          "xmd repl: the REPL runs where a terminal is: it is not available over a pipe.",
+        );
+        yield* exit(1);
+        return;
+      }
       if (selected.config.location !== undefined) {
         startup = yield* prepareReplStartup(selected.config.location);
         if (!startup.ok) {
-          console.error(startup.error.message);
+          yield* refuseReplStartup(selected.config.location, startup.error.message);
+          console.error("xmd repl: " + startup.error.message);
           yield* exit(1);
           return;
         }

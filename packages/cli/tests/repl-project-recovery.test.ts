@@ -1,12 +1,10 @@
+import { workspaceMountInstallation } from "../src/repl/workspace-mount-installation.ts";
 import { validateProjectPlacement } from "../src/repl/startup.ts";
 import { ReplTerminal } from "../src/repl/terminal.ts";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import { PLACEMENT } from "../src/repl/entry-placement.ts";
-import { runGit } from "./support/fixture-git.ts";
 import { ReplEntryHost } from "../src/repl-entry-installation.ts";
 import type { ReplEntryInstallation } from "../src/repl-entry-installation.ts";
-import { replRepositoryInstallation } from "../src/repl/repositories/deno/provider.ts";
-import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import { runXmd } from "../src/cli.ts";
 import { Elicitation } from "@executablemd/core";
 import { Plugin } from "@executablemd/core/api";
@@ -49,15 +47,14 @@ function columnOf(cells: readonly string[], label: string): number {
 
 function* saved(sidekick = false) {
   const project = yield* useTemporary("1113-original-");
-  yield* runGit(project, ["init", "-b", "main"], { home: project });
-  yield* writeTextFile(join(project, "seed"), "seed");
-  yield* runGit(project, ["add", "seed"], { home: project });
-  yield* runGit(project, ["commit", "-m", "seed"], { home: project });
-  const entryHost: ReplEntryInstallation = (owner, placement) =>
-    replRepositoryInstallation(owner, {
-      ...placement,
-      operations: useDenoRepositoryOperations,
-    });
+  const entryHost: ReplEntryInstallation = function* (_owner, placement) {
+    return workspaceMountInstallation(
+      placement?.mounts ?? [],
+      undefined,
+      placement?.access,
+      placement?.projectCwd,
+    );
+  };
   const host = yield* useMountedHost({
     projectCwd: project,
     hostFiles: true,

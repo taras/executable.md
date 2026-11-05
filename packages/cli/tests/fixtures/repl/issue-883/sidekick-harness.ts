@@ -1,3 +1,4 @@
+import { useNodeReplProjectAccess } from "../../../../src/node-repl-project-access.ts";
 import { testForSidekick } from "../../../../src/repl/sidekick/admission.ts";
 import { pairedLocation } from "../../../../src/repl/sidekick/history.ts";
 /**
@@ -135,6 +136,7 @@ export function* useHarness(
   // these rows is about.
   yield* useTempFileCompiler();
   const dataRoot = yield* useTemporary("xmd-sidekick-journey-");
+  yield* useNodeReplProjectAccess();
   yield* installReplHost({
     dataRoot: () => dataRoot,
     // The facts a runtime entrypoint states, so `<REPL.Environment />` answers

@@ -1985,6 +1985,7 @@ function* start(
                   options.mounts ?? [],
                   undefined,
                   workspace !== undefined ? options.access : undefined,
+                  workspace === true ? options.workspace : options.projectCwd,
                 ),
               ]
             : [

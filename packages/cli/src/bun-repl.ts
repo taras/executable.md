@@ -1,3 +1,4 @@
+import { useNodeReplProjectAccess } from "./node-repl-project-access.ts";
 import { useNodeReplAssetImport } from "./node-repl-asset-import.ts";
 /**
  * The REPL's host on Bun.
@@ -21,6 +22,7 @@ import { useBunReplTerminal } from "./bun-repl-terminal.ts";
 
 export function* useBunRepl(): Operation<void> {
   yield* useNodeReplAssetImport();
+  yield* useNodeReplProjectAccess();
   yield* installReplHost({
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
     // What this process is, stated here because this is where it is known.

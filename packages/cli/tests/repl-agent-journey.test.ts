@@ -370,6 +370,7 @@ describe("C1 — the command line this REPL runs under", () => {
     const own = settled.installations[1]!;
     expect((own.declarations ?? []).map((declaration) => declaration.name)).toEqual(["Plan"]);
     expect(settled.generated).toEqual({
+      Cwd: ["self-closing"],
       File: ["self-closing", "paired"],
       "File.Delete": ["self-closing"],
       Glob: ["self-closing"],

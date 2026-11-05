@@ -51,6 +51,8 @@ export interface AssetImportRequest {
 }
 
 export interface ReplHostApi {
+  /** Refuse a project directory this process cannot read and search. */
+  checkProjectAccess(directory: string): Operation<void>;
   importAsset(request: AssetImportRequest): Operation<Result<string>>;
   /**
    * What this process is standing on, stated rather than detected.
@@ -89,6 +91,9 @@ export interface ReplHostApi {
 }
 
 export const ReplHost: Api<ReplHostApi> = createApi<ReplHostApi>("ReplHost", {
+  *checkProjectAccess(_directory: string): Operation<void> {
+    throw new ReplHostError("checking project directory access");
+  },
   *importAsset(_request: AssetImportRequest): Operation<Result<string>> {
     return Err(new Error("This REPL host has no asset importer."));
   },

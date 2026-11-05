@@ -49,7 +49,7 @@ import { createMountPolicy } from "../../mount-files.ts";
  */
 
 import type { Operation, Result } from "effection";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
 import { Err, until } from "effection";
 import { filesFailure, Permissions } from "@executablemd/runtime";
@@ -213,9 +213,13 @@ function* routed(
   }
   const checkout = yield* recorder.selection();
   if (checkout === undefined || !inside(checkout.checkoutRoot, target)) {
-    if (workspace !== undefined) {
-      const root = yield* canonical(workspace);
-      const lexical = resolve(workspace);
+    const roots = [
+      ...(workspace === undefined ? [] : [workspace]),
+      ...(access === undefined ? [] : [access.project, access.assets, access.components]),
+    ];
+    for (const directory of roots) {
+      const root = yield* canonical(directory);
+      const lexical = resolve(directory);
       const resolvedTarget =
         target === lexical || inside(lexical, target)
           ? resolve(root, relative(lexical, target))
@@ -273,7 +277,9 @@ function covering(
  * Where this request points.
  *
  * An absolute path names a place on its own, and the working directory is no
- * part of where it points — which is how a captured checkout path reaches a
+ * part of where it points. Its parent is canonicalized without following the
+ * final link, so routing and deletion agree on the entry being named. This is
+ * how a captured checkout path reaches a
  * `<Dir>`. Joining the two would have routed `/managed/…/checkout` as
  * `/ambient/managed/…/checkout`, a place inside no placement at all, so a
  * completed ensure was never retained and a new one took no ownership of the
@@ -289,7 +295,7 @@ function covering(
  */
 function* targetOf(request: ReplLocalRequest): Operation<string> {
   if (isAbsolute(request.path)) {
-    return resolve(request.path);
+    return resolve(yield* canonical(dirname(request.path)), basename(request.path));
   }
   return resolve(join(yield* canonical(request.cwd), request.path));
 }
