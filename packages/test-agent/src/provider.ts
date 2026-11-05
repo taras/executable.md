@@ -144,6 +144,20 @@ export const TEST_AGENT_CLIENT_NATIVE_ADAPTER: NativeAdapter = {
   resume: (nativeSessionId) => ["xmd-test-agent-ui", "--resume", nativeSessionId],
 };
 
+/**
+ * The agent command a partition's registry answers with while `route` is
+ * pinned, which is also the agent a construction route made under it names.
+ */
+export function workerAgentCommand(workerCommand: readonly string[], route: string): string {
+  return [...workerCommand.map(quoteSegment), "--connect", route].join(" ");
+}
+
+// ACPX tokenizes the command on whitespace with quote support, so command
+// segments containing spaces (e.g. a binary path) are quoted.
+function quoteSegment(segment: string): string {
+  return /\s/.test(segment) ? `"${segment}"` : segment;
+}
+
 export function* useTestAgentProvider(
   options: TestAgentProviderOptions,
 ): Operation<TestAgentPartition> {
@@ -151,13 +165,9 @@ export function* useTestAgentProvider(
   const routeSlot = yield* useRouteSlot();
   const planConfiguration = options.planConfiguration;
 
-  // ACPX tokenizes the command on whitespace with quote support, so
-  // command segments containing spaces (e.g. a binary path) are quoted.
-  const quote = (segment: string) => (/\s/.test(segment) ? `"${segment}"` : segment);
   const registry: AcpAgentRegistry = {
     resolve() {
-      const route = pendingRoute ?? options.probeRoute;
-      return [...options.workerCommand.map(quote), "--connect", route].join(" ");
+      return workerAgentCommand(options.workerCommand, pendingRoute ?? options.probeRoute);
     },
     list() {
       return options.agents;

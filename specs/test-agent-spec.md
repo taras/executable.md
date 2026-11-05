@@ -409,6 +409,24 @@ stdin and stdout. It supports the successful ACP lifecycle used by ACPX:
 - prompt;
 - cancel.
 
+Each scenario owns one conversation with two names, allocated once when the
+scenario is registered and handed to every worker with its configuration: an ACP
+session handle and a provider-native identity, which are never the same string.
+`session/new` returns the handle as `sessionId` and reports the native identity
+as `_meta.agentSessionId`. `session/load` accepts either name of that
+conversation and reports the same native identity; the requested id is a loading
+target and is never reported back as native metadata. A load naming anything
+else — another scenario's handle or identity, an unrelated value, or an empty
+one — is refused with ACP invalid-params before a session is established or
+reported, so it consumes no stage and changes no configuration.
+
+For `test-agent-client-native`, XMD chooses the native identity before any
+worker exists. When the partition accepts that session's client-native
+construction route, the scenario serving the same session adopts the route's
+identity, and its workers report and accept it from then on. A scenario whose
+worker already reported a conversation keeps it, and a route that would rename
+it is refused.
+
 Session creation and loading advertise ordinary ACP `configOptions` when a
 catalog exists: `model` has category `model`, and the selected model's `effort`
 has category `thought_level`. The worker waits for the controller's
@@ -474,7 +492,9 @@ identity, record shape and captures.
 Restart recovery covers crashes between completed turns; a crash inside a
 turn's final delivery window is outside the supported guarantee. When a
 worker restarts or ACPX resumes its session, the controller supplies the
-same behavior document and journal. Replay restores captures and advances
+same behavior document, journal and session identities, so a load through the
+handle creation returned reports the identity the conversation started with.
+Replay restores captures and advances
 execution to the active `<WhenPrompt>` without requiring mutable state in the
 worker.
 

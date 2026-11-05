@@ -171,6 +171,9 @@ describe("Tier TC — controller", () => {
       if (config.t === "config" && config.mode === "scenario") {
         expect(config.doc.path).toBe("review.md");
         expect(config.journal).toEqual([]);
+        expect(config.acpSessionId).toBe(scenario.acpSessionId);
+        expect(config.nativeSessionId).toBe(scenario.nativeSessionId);
+        expect(config.acpSessionId).not.toBe(config.nativeSessionId);
       }
 
       client.send({

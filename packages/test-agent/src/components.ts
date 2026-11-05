@@ -30,18 +30,28 @@ import {
 } from "@executablemd/core";
 import type { ErrorSegment, Json, PropsSchema, Segment } from "@executablemd/core";
 import { createMemorySessionRouteStore, createPartitionedAcpxProvider } from "@executablemd/acp";
-import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
+import type {
+  AcpxProvider,
+  AgentSessionRoute,
+  AgentSessionRouteStore,
+  SessionRouteContext,
+} from "@executablemd/acp";
 import { command, installControlledLauncher, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
 import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
-import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
+import type { ScenarioHandle, ScenarioRecord, TestAgentControllerInternals } from "./controller.ts";
 import { createControlledExecutableObserver } from "./executable-observer.ts";
 import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { normalizeModels, MODELS_PROPS } from "./configuration.ts";
 import type { ScenarioModels } from "@executablemd/testing";
 import { duplicateScenario, missingScenario } from "./child-configuration.ts";
-import { TEST_AGENT_CLIENT_NATIVE, TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
+import {
+  TEST_AGENT_CLIENT_NATIVE,
+  TEST_AGENT_PROVIDER,
+  useTestAgentProvider,
+  workerAgentCommand,
+} from "./provider.ts";
 import type { SessionRouting } from "./provider.ts";
 
 /** The agent a `<TestAgent>` answers for when the element names none. */
@@ -60,7 +70,7 @@ export interface ScenarioDeclaration {
 /** A resolved session, with the agent that created it. */
 interface PinnedSession {
   agent: string;
-  scenario: ScenarioHandle;
+  scenario: ScenarioRecord;
 }
 
 export interface BoundaryState {
@@ -164,8 +174,8 @@ export function* provisionPartition(options: {
   planConfiguration?: { readonly dependencies: AcpxProviderDependencies };
 }): Operation<BoundaryState> {
   const { defaultAgent, controller, declarations, workerCommand, planConfiguration } = options;
-  const scenarios = new Map<string, ScenarioHandle>();
-  const pending = new Map<string, Operation<ScenarioHandle>>();
+  const scenarios = new Map<string, ScenarioRecord>();
+  const pending = new Map<string, Operation<ScenarioRecord>>();
   const bySessionKey = new Map<string, PinnedSession>();
   const boundaryScope = yield* useScope();
 
@@ -173,7 +183,7 @@ export function* provisionPartition(options: {
     agentName: string,
     sessionName: string | undefined,
     dir: string,
-  ): Operation<ScenarioHandle> {
+  ): Operation<ScenarioRecord> {
     const declared = declarations.get(declarationKey(agentName, sessionName ?? ""));
     if (!declared) {
       throw new Error(missingScenario(agentName, sessionName ?? ""));
@@ -192,10 +202,10 @@ export function* provisionPartition(options: {
     }
     // Publish the shared future before acquiring so concurrent
     // callers await this acquisition instead of starting their own.
-    const ready = withResolvers<ScenarioHandle>();
+    const ready = withResolvers<ScenarioRecord>();
     pending.set(key, ready.operation);
     yield* boundaryScope.spawn(function* () {
-      let scenario: ScenarioHandle;
+      let scenario: ScenarioRecord;
       try {
         scenario = yield* controller.useScenario({
           document: declared.document,
@@ -245,6 +255,46 @@ export function* provisionPartition(options: {
     };
   }
 
+  /**
+   * Tell the scenario behind a client-native session the name XMD chose for it.
+   *
+   * That name exists before any worker does, and a load that later asks for it
+   * is a request, not evidence — so the scenario learns it here, from the
+   * route this partition accepted, and its workers answer with it from then
+   * on. A scenario whose worker already confirmed a conversation keeps it: a
+   * route is never a reason to rename one.
+   */
+  function adopt<T extends AgentSessionRoute | undefined>(route: T): T {
+    if (route?.route !== "client-native") {
+      return route;
+    }
+    const pinned = bySessionKey.get(route.sessionKey);
+    if (!pinned || route.agent !== workerAgentCommand(workerCommand, pinned.scenario.route)) {
+      return route;
+    }
+    const scenario = pinned.scenario;
+    if (scenario.nativeSessionId === route.nativeSessionId) {
+      return route;
+    }
+    if (scenario.sessions.length > 0) {
+      throw new Error(
+        `session "${route.sessionKey}" already belongs to a conversation its agent confirmed`,
+      );
+    }
+    scenario.nativeSessionId = route.nativeSessionId;
+    return route;
+  }
+
+  const accepted = createMemorySessionRouteStore();
+  const routeStore: AgentSessionRouteStore = {
+    *read(key) {
+      return adopt(yield* accepted.read(key));
+    },
+    *publish(candidate) {
+      return adopt(yield* accepted.publish(candidate));
+    },
+  };
+
   const partition = yield* useTestAgentProvider({
     defaultAgent,
     // Two agents, because the two construction routes are two contracts:
@@ -261,7 +311,7 @@ export function* provisionPartition(options: {
     // And its own build, so a client-allocated session in one boundary is
     // bound to a build the next does not share.
     executableObserver: createControlledExecutableObserver().observer,
-    routeStore: createMemorySessionRouteStore(),
+    routeStore,
     ...(planConfiguration === undefined ? {} : { planConfiguration }),
   });
   return {

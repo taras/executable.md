@@ -3,12 +3,11 @@
  * §Controller and worker). stdout carries only JSON-RPC lines; all
  * logging goes to stderr. The worker is stateless but advertises and
  * serves session/load: all state loads from the controller, so a load
- * simply reuses the prior session id over the rehydrated document.
+ * reopens the scenario's one conversation over the rehydrated document.
  */
 
 import { ensure, Err, Ok, resource, until, useScope } from "effection";
 import type { Operation, Result } from "effection";
-import { randomUUID } from "node:crypto";
 import process from "node:process";
 import * as acp from "@agentclientprotocol/sdk";
 import type { ContentBlock, PromptResponse } from "@agentclientprotocol/sdk";
@@ -26,16 +25,22 @@ export interface WorkerAgent {
   /** Resolves once the behavior document reached its first matcher. */
   ready(): Operation<void>;
   /**
-   * Materialize the provider-native session, under the instruction layer the
-   * client attached, and assert the identity that names it.
+   * The two names of the one conversation this worker serves, known before any
+   * session exists: the handle `session/new` returns and `session/load`
+   * accepts, and the provider-native identity the agent asserts for it.
    *
-   * The returned id is deliberately not the ACP session id. A native id is
-   * something an agent asserts about its own durable state; a client that
-   * guessed one from the ACP id would be inferring an identity the provider
-   * never asserted, and a test agent that returned the same string for both
-   * would make that mistake untestable.
+   * They are deliberately different strings. A native id is something an agent
+   * asserts about its own durable state; a client that guessed one from the ACP
+   * id would be inferring an identity the provider never asserted, and a test
+   * agent that returned the same string for both would make that mistake
+   * untestable.
    */
-  startSession(instructions: string | undefined): Operation<string>;
+  identity(): { acpSessionId: string; nativeSessionId: string };
+  /**
+   * Materialize the provider-native session under the instruction layer the
+   * client attached.
+   */
+  startSession(instructions: string | undefined): Operation<void>;
   runTurn(text: string): Operation<TurnResult>;
   configuration?(): Operation<acp.SessionConfigOption[] | undefined>;
   setConfiguration?(configId: string, value: string): Operation<acp.SessionConfigOption[]>;
@@ -130,29 +135,37 @@ function useAcpConnection(
       .onRequest("session/new", (ctx) =>
         handle(function* () {
           yield* worker.ready();
-          const nativeSessionId = yield* worker.startSession(systemPromptOf(ctx.params._meta));
+          const identity = worker.identity();
+          yield* worker.startSession(systemPromptOf(ctx.params._meta));
           const configOptions =
             worker.configuration === undefined ? [] : ((yield* worker.configuration()) ?? []);
           return {
-            sessionId: randomUUID(),
-            _meta: { agentSessionId: nativeSessionId },
+            sessionId: identity.acpSessionId,
+            _meta: { agentSessionId: identity.nativeSessionId },
             ...(configOptions.length === 0 ? {} : { configOptions }),
           };
         }),
       )
       .onRequest("session/load", (ctx) =>
         handle(function* () {
+          // The requested id is a loading target, not evidence of identity: it
+          // may be the ACP handle or the native name of this one conversation.
+          // Anything else names a conversation this agent does not hold, and is
+          // refused before a session is established or reported.
+          const identity = worker.identity();
+          const target = ctx.params.sessionId;
+          if (target !== identity.acpSessionId && target !== identity.nativeSessionId) {
+            throw new acp.RequestError(
+              -32602,
+              `Session "${target}" is not a conversation this agent holds.`,
+            );
+          }
           yield* worker.ready();
-          const nativeSessionId = yield* worker.startSession(systemPromptOf(ctx.params._meta));
-          // A load reports the session it loaded. Answering with an identity of
-          // this agent's own would be claiming to have opened a different
-          // conversation than the one that was named — which is exactly what
-          // attaching by name exists to rule out. The scenario's own identity
-          // stands in only when nothing was named.
+          yield* worker.startSession(systemPromptOf(ctx.params._meta));
           const configOptions =
             worker.configuration === undefined ? [] : ((yield* worker.configuration()) ?? []);
           return {
-            _meta: { agentSessionId: ctx.params.sessionId ?? nativeSessionId },
+            _meta: { agentSessionId: identity.nativeSessionId },
             ...(configOptions.length === 0 ? {} : { configOptions }),
           };
         }),
