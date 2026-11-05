@@ -1,5 +1,5 @@
-import { isJsonObject, parseJson } from "@executablemd/core";
-import { AgentConversationProvider, Plugin } from "@executablemd/core/api";
+import { Agent, isJsonObject, parseJson } from "@executablemd/core";
+import { Plugin } from "@executablemd/core/api";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, spawn, withResolvers } from "effection";
@@ -15,49 +15,66 @@ import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sideki
 import type { SidekickDispatch, SidekickExchange } from "../src/repl/sidekick/dispatch.ts";
 import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 
+/** What one composing layer did, so a case can say it did it exactly once. */
+interface Layer {
+  /** Each text this layer delegated onward, in order. */
+  readonly delegated: string[];
+  /** How many times a subscription acquired this layer's own resource. */
+  subscriptions: number;
+}
+
+function layer(): Layer {
+  return { delegated: [], subscriptions: 0 };
+}
+
 /**
- * One contributed conversation decoration, composed where a retained turn is.
+ * One contributed content layer, where a held turn's composition belongs.
  *
- * A retained turn dispatches its captured provider directly, so a selected
- * Plugin reaches its content through `repl.sidekick()` rather than through
- * ordinary `Agent` routing. `compose` enriches the delegated text; `bracket`
- * holds one resource open around the composed stream, which is what a case
- * about joined cleanup needs.
+ * A held turn ends at its own terminal, and everything above that terminal is
+ * ordinary `Agent.prompt` middleware — so a selected Plugin reaches a held
+ * turn's content by registering at the default `max` from `repl.sidekick()`,
+ * exactly as it would for a document. `compose` enriches the delegated text;
+ * `bracket` holds one resource open around the composed stream, which is what
+ * a case about joined cleanup needs.
+ *
+ * Registration order is the library's: within one scope the earlier `max`
+ * registration is the outermost, so the first Plugin installed sees the
+ * person's own text and the last one sees what every layer above it added.
  */
 function composing(
   name: string,
   compose: (text: string) => string,
+  record: Layer = layer(),
   bracket?: () => Operation<void>,
-): Plugin {
-  return Plugin({
-    name,
-    *install(): Operation<ReplPluginInstallation> {
-      return {
-        repl: {
-          *sidekick(): Operation<void> {
-            const retained = yield* AgentConversationProvider.expect();
-            if (retained === undefined) {
-              throw new Error(`${name} found no conversation provider to compose`);
-            }
-            yield* AgentConversationProvider.set({
-              agent: retained.agent.bind(retained),
-              session: retained.session.bind(retained),
-              options: retained.options.bind(retained),
-              // deno-lint-ignore require-yield
-              *prompt(text, options): Operation<Stream<AgentPromptEvent, string>> {
-                return resource<Subscription<AgentPromptEvent, string>>(function* (provide) {
-                  if (bracket !== undefined) {
-                    yield* ensure(bracket);
-                  }
-                  yield* provide(yield* yield* retained.prompt(compose(text), options));
-                });
-              },
-            });
+): Plugin & { readonly layer: Layer } {
+  return Object.assign(
+    Plugin({
+      name,
+      *install(): Operation<ReplPluginInstallation> {
+        return {
+          repl: {
+            *sidekick(): Operation<void> {
+              yield* Agent.around({
+                // deno-lint-ignore require-yield
+                *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                  return resource<Subscription<AgentPromptEvent, string>>(function* (provide) {
+                    record.subscriptions += 1;
+                    if (bracket !== undefined) {
+                      yield* ensure(bracket);
+                    }
+                    const composed = compose(text);
+                    record.delegated.push(composed);
+                    yield* provide(yield* yield* next(composed, options));
+                  });
+                },
+              });
+            },
           },
-        },
-      };
-    },
-  });
+        };
+      },
+    }),
+    { layer: record },
+  );
 }
 
 function* setup(extra: readonly Plugin[] = []) {
@@ -74,6 +91,24 @@ function* setup(extra: readonly Plugin[] = []) {
   });
   return { host, todo, dispatch };
 }
+/** The input each canonical `agent_prompt` description retained, in order. */
+function canonicalInputs(saved: readonly { kind: string; event?: string }[]): unknown[] {
+  return saved.flatMap((one) => {
+    if (one.kind !== "event" || one.event === undefined) {
+      return [];
+    }
+    const event = parseJson(JSON.parse(one.event));
+    if (
+      !isJsonObject(event) ||
+      !isJsonObject(event.description) ||
+      event.description.type !== "agent_prompt"
+    ) {
+      return [];
+    }
+    return [event.description.input];
+  });
+}
+
 function* send(dispatch: SidekickDispatch, text: string): Operation<SidekickExchange> {
   const result = yield* dispatch.send(text);
   if (!result.ok) {
@@ -174,6 +209,10 @@ describe("TODO context on independently admitted prompts", () => {
     expect((yield* ordinary.completion).ok).toBe(true);
     expect(host.fake.prompts[3]).not.toContain("TODO checklist");
     expect(host.fake.prompts[3]).not.toContain("Committed TODO changes");
+    // Every turn here — the two failures, the recovery and the ordinary one —
+    // retained exactly the text it delegated, so the fresh full current state
+    // a recovery sends is the state the journal says was sent.
+    expect(canonicalInputs(yield* records(host.execution))).toEqual(host.fake.prompts);
   });
 
   it("keeps edits outside all sixteen queue slots and retains them after Stop", function* () {
@@ -237,6 +276,7 @@ describe("TODO context on independently admitted prompts", () => {
             composing(
               "owned-cleanup",
               (text) => text,
+              layer(),
               function* () {
                 entered.resolve();
                 yield* release.operation;
@@ -276,16 +316,39 @@ describe("TODO context on independently admitted prompts", () => {
   });
 
   it("uses selected Plugin prompt middleware and retains identical final canonical and feedback input", function* () {
-    const { host, todo, dispatch } = yield* setup([
-      composing("todo-context-example", (text) => text + "\nSelected Plugin context."),
-    ]);
+    // Two contributed layers beside TODO's own, each adding text only it could
+    // have added: a constant-only witness could not say which layer ran, in
+    // what order, or how many times.
+    const first = composing("todo-context-first", (text) => text + "\nfirst layer.");
+    const second = composing("todo-context-second", (text) => text + "\nsecond layer.");
+    const { host, todo, dispatch } = yield* setup([first, second]);
     yield* todo.save("", "- [ ] shared\n");
     host.fake.script({ reply: '<Sidekick.Todo as="items" />' });
     host.fake.script({ reply: "<Output>done</Output>" });
     const sent = yield* send(dispatch, "original person source");
     expect((yield* sent.completion).ok).toBe(true);
     expect(host.fake.prompts).toHaveLength(2);
-    expect(host.fake.prompts[1]).toContain("Selected Plugin context.");
+    expect(host.fake.prompts[1]).toContain("first layer.");
+    expect(host.fake.prompts[1]).toContain("second layer.");
+
+    // One selection and one delegation per layer per turn, and no layer
+    // subscribed twice: a second subscription would be a second native turn.
+    expect(first.layer.delegated).toHaveLength(2);
+    expect(second.layer.delegated).toHaveLength(2);
+    expect(first.layer.subscriptions).toBe(2);
+    expect(second.layer.subscriptions).toBe(2);
+
+    // The documented order, read off what each layer was handed rather than
+    // asserted about the library: the earlier `max` registration in one scope
+    // is the outermost, so the first contribution saw text without the
+    // second's line and the second saw the first's.
+    expect(first.layer.delegated[0]).not.toContain("second layer.");
+    expect(second.layer.delegated[0]).toContain("first layer.");
+    // TODO registers from its own `repl.sidekick()` before either of these
+    // contributions, so its committed-change text is already present by the
+    // time the first one composes.
+    expect(first.layer.delegated[0]).toContain("Committed TODO changes");
+
     const saved = yield* records(host.execution);
     const original = saved.find((one) => one.kind === "message");
     expect(original?.kind === "message" && original.text).toBe("original person source");
@@ -294,20 +357,12 @@ describe("TODO context on independently admitted prompts", () => {
     for (const one of feedback) {
       expect(one.kind === "feedback" && one.text).toBe(host.fake.prompts[1]);
     }
-    const canonical = saved.flatMap((one) => {
-      if (one.kind !== "event") {
-        return [];
-      }
-      const event = parseJson(JSON.parse(one.event));
-      if (
-        !isJsonObject(event) ||
-        !isJsonObject(event.description) ||
-        event.description.type !== "agent_prompt"
-      ) {
-        return [];
-      }
-      return [event.description.input];
-    });
+    const canonical = canonicalInputs(saved);
+    // Exact equality, not substring presence: the text the provider received,
+    // the text the journal retained and the text the host acknowledged are one
+    // text, and the person's own message stays separately original.
     expect(canonical).toEqual(host.fake.prompts);
+    expect(canonical[1]).toBe(second.layer.delegated[1]);
+    expect(canonical.every((input) => input !== "original person source")).toBe(true);
   });
 });

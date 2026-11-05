@@ -1108,12 +1108,21 @@ function conversationTurn(
         // `function-components.ts` either way — one definition of what a turn
         // is, reached by a document's `<Prompt>` through the public chain and
         // by this conversation directly.
-        const direct: DirectPromptTurn = { provider, agent, session };
         const sequence = yield* AgentInternal.operations.nextPromptSequence();
         const carried: Carried = {};
         const record = yield* persistPrompt(
           { name: turnName(order), input: job.input },
-          () => runPrompt(job.input, options, sequence, false, carried, direct),
+          // The composition this conversation installed runs above the turn's
+          // own terminal, so the text it finally delegates is settled inside
+          // the live runner. `retain` is the journal's own; nothing the
+          // composition can reach carries it.
+          (retain) =>
+            runPrompt(job.input, options, sequence, false, carried, {
+              provider,
+              agent,
+              session,
+              retain,
+            } satisfies DirectPromptTurn),
           () => carried.association,
           () => carried.begun,
         );

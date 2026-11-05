@@ -350,10 +350,14 @@ appropriately. Read Sidekick.Todo if you need the current checklist.
 
 The checklist is one selected Plugin's `repl` contribution: the service one live
 logical session owns, the single `Sidekick.Todo` declaration both surfaces read
-it through, and the conversation-local provider decoration that carries
-committed changes into a held turn's content. A profile without that value has
-no checklist service, declaration or documentation, and leaves other
-contributions untouched. [Selected Plugin session
+it through, and the default-max `Agent.prompt` content and resource middleware
+that carries committed changes into a held turn's content. That middleware is
+not a feature-owned provider rewrite: a held turn's own terminal keeps the
+captured provider, the selected agent and the exact checked Session, and the
+composed text it delegates is the text canonical publication and the matching
+feedback acknowledgement retain. A profile without that value has no checklist
+service, declaration or documentation, and leaves other contributions
+untouched. [Selected Plugin session
 services](#selected-plugin-session-services) owns when each part runs.
 
 ## Testing session components
@@ -2611,7 +2615,10 @@ and eligible Sidekick forms derive from those declarations; absent generated
 metadata offers no generated form. Canonical identity, form dispatch and effect
 permissions still decide execution. `repl.sidekick()` runs once per live
 conversation after its provider is installed and before capture, sharing initialized
-session state. Its resources and provider decorations end with that conversation;
+session state. A contribution composes a held turn by installing ordinary
+default-max `Agent.prompt` content and resource middleware there, which changes
+the delegated text and the stream above that turn's own terminal and nothing
+else. Its resources and middleware end with that conversation;
 entry Prompts inherit none of them. Command installation contributes package
 documentation through the existing documentation helpers and starts no session
 service. Documentation lookup grants no execution authority.

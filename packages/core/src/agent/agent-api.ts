@@ -233,6 +233,32 @@ export interface AgentApi {
    * other than the current one, because effort choices belong to a model.
    */
   options(agent?: string, request?: AgentOptionsRequest): Operation<AgentOptions>;
+  /**
+   * Obtain a cold agent reply stream.
+   *
+   * Ordinary document calls compose routing through the installed provider
+   * chain. A canonical held-conversation call uses outer max prompt middleware
+   * for content and transparent stream composition, then a turn-local min
+   * terminal bound to its captured provider, selected agent and exact checked
+   * Session. Ancestor min routing and default handlers are not dispatched in
+   * held mode.
+   *
+   * In held mode, forward checked options unchanged. The terminal visibly
+   * refuses a changed or missing selected agent, exact Session or timeout
+   * before native prompt work; it never silently repairs routing or falls back
+   * to an ordinary provider terminal. An originally absent timeout remains
+   * absent.
+   *
+   * Select per-turn content inside the returned stream's subscription and
+   * delegate once. Wrappers may observe incoming events and own cleanup while
+   * forwarding events, order and returned text unchanged.
+   *
+   * Core fixes final composed input and acknowledges matching feedback intent
+   * before native prompt subscription. Canonical completion requires the actual
+   * provider outcome, publication and joined cleanup. Middleware answers and
+   * stream.done alone establish no canonical completion or retry authority.
+   * Constructing the stream starts no native turn.
+   */
   prompt(content: string, options?: PromptOptions): Operation<Stream<AgentPromptEvent, string>>;
   /**
    * Route one launch request.

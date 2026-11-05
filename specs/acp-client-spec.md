@@ -56,6 +56,17 @@ interface SessionLaunchResult {
 callers supply instructions and receive a result, while public Agent middleware
 routes an opaque request and cannot manufacture that result.
 
+`prompt()` has one signature and two dispatches. An ordinary document call
+composes routing through the installed provider chain, unchanged. A canonical
+held-conversation call uses outer max prompt middleware for content and
+transparent stream composition, then a turn-local min terminal bound to its
+captured provider, selected agent and exact checked Session; ancestor min
+routing and default handlers are not dispatched. A held handler forwards checked
+options unchanged, selects per-turn content inside the returned stream's
+subscription, and delegates once. A wrapper may observe events and own cleanup
+while forwarding events, order and returned text unchanged; its return value and
+`stream.done` establish no canonical completion.
+
 - `Agent` is a resolvable agent name (a string). `Session` is
   `{ sessionKey; cwd; agentSessionId?; readonly identity? }`. `PromptOptions` is
   `{ agent?; session?: string | Session; timeout? }`.
@@ -299,13 +310,16 @@ flag, configuration approval, history mapping or completion receipt: it is
 trusted behavior a conversation selects, and everything it is held to stays with
 Core.
 
-Before capture, a trusted conversation installation may decorate the selected
-provider to compose prompt content and its cold stream. It retains the prior
-provider directly, forwards session setup and inspection unchanged, and sends
-composed content under the same selected agent and exact checked Session.
-Decorations belong to that conversation and preserve subscription-owned work
-and cleanup. A retained turn never dispatches the ordinary Agent routing chain;
-later provider selection cannot replace its captured behavior.
+A held turn composes content and its cold stream through outer max
+`Agent.prompt` middleware, then ends at a private turn-local min terminal bound
+to this captured provider, the selected agent and the exact checked Session.
+Ancestor min routing and default handlers are not dispatched in held mode, and
+there is no fallback to an ordinary provider terminal. The terminal visibly
+refuses a changed or missing selected agent, exact Session or timeout before
+native prompt work, rather than silently repairing routing; an originally absent
+timeout remains absent. Composition belongs to that conversation and preserves
+subscription-owned work and cleanup. Ordinary document routing is unchanged, and
+later provider selection cannot replace the captured behavior.
 
 Each of the four operations takes explicitly what the public chain supplied
 implicitly. `agent` resolves through this provider rather than through
@@ -894,6 +908,15 @@ and retains none. A prompt that starts and later fails or is cancelled retains
 the configuration it ran under. An unconfigured prompt omits it. A `sequence`
 records execution order explicitly, and per-location
 ordinals keep durable identities stable across `<Each>` loops.
+
+For a held conversation the retained `input` is the final composed text the
+turn actually delegated: the turn's own terminal fixes it in the pending
+description and acknowledges matching feedback intent before native prompt
+subscription, so canonical publication and that acknowledgement hold one text.
+A turn that failed before reaching that boundary retains the input it attempted,
+which is not evidence that anything was sent. Completed replay restores the
+retained composed input and result without running composition, reaching a
+provider, calling `begin()` or reconstructing current state.
 
 ### Saved Prompt failure details
 

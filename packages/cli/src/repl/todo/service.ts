@@ -23,7 +23,7 @@ import { applyTodoDiff, parseTodo, todoDiff, TodoEditError } from "./document.ts
 import type { TodoDocument, TodoItem } from "./document.ts";
 import { captureTodoSource } from "./source.ts";
 import { TodoSourceError } from "./source.ts";
-import { AgentConversationProvider } from "@executablemd/core/api";
+import { Agent } from "@executablemd/core";
 import type { AgentPromptEvent } from "@executablemd/core";
 
 interface TodoObservation {
@@ -218,26 +218,16 @@ export function* useTodo(workspace: string): Operation<TodoService> {
         prompting = undefined;
       },
       *installPrompt(): Operation<void> {
-        // The conversation's own provider, retained by value: a retained turn
-        // dispatches this object directly, so composing its content is the only
-        // place TODO can reach one. Setup and inspection forward untouched,
-        // with their receiver, so the session this turn is held to is still the
-        // one core settled and checked.
-        const retained = yield* AgentConversationProvider.expect();
-        if (retained === undefined) {
-          throw new TodoEditError(
-            "a Sidekick conversation serving TODO changes needs an installed conversation " +
-              "provider; this one offers none, so there is no turn to compose content for.",
-          );
-        }
-        yield* AgentConversationProvider.set({
-          agent: retained.agent.bind(retained),
-          session: retained.session.bind(retained),
-          options: retained.options.bind(retained),
+        // Content, through the ordinary middleware a conversation composes
+        // with. A held turn ends at its own terminal, which is what holds the
+        // captured provider, the selected agent and the exact checked Session;
+        // this layer changes the text and the stream above that terminal and
+        // nothing else, so the options it forwards are the ones it received.
+        yield* Agent.around({
           // deno-lint-ignore require-yield
-          *prompt(text, options): Operation<Stream<AgentPromptEvent, string>> {
-            // Cold, like the provider this composes: obtaining the stream
-            // selects nothing and sends nothing. The resource is acquired by
+          *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+            // Cold, like the terminal below it: obtaining the stream selects
+            // no pending state and sends nothing. The resource is acquired by
             // the subscription that begins the turn, which is what owns the
             // selected observations, the delegated request and their cleanup.
             return resource<Subscription<AgentPromptEvent, string>>(function* (provide) {
@@ -256,10 +246,7 @@ export function* useTodo(workspace: string): Operation<TodoService> {
                   ? ""
                   : "Committed TODO changes (in commit order):\n" +
                     JSON.stringify(selected.map(({ origin, diff }) => ({ origin, diff })));
-              const stream = yield* retained.prompt(
-                context === "" ? text : text + "\n\n" + context,
-                options,
-              );
+              const stream = yield* next(context === "" ? text : text + "\n\n" + context, options);
               const subscription = yield* stream;
               yield* provide({
                 *next() {
