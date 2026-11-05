@@ -8,14 +8,15 @@
  * broker is another and the Git-host login command is the third, so the
  * discipline lives here and each of them says only what it is running.
  *
- * ## Two captures, one discipline
+ * ## Three captures, one discipline
  *
  * `runProcess` decodes standard output as UTF-8 with replacement, which is what
  * every existing caller is written against. `runProcessBytes` keeps the bytes
  * instead, because a path listing is NUL-framed and a blob may not be text at
  * all: a replacement character substituted during capture would make a
  * malformed file indistinguishable from one holding U+FFFD, and the read has to
- * be able to tell those apart. Everything else — the built environment, the
+ * be able to tell those apart. `runProcessChannels` keeps both channels as
+ * bytes, for a receipt whose standard error is itself the evidence. Everything else — the built environment, the
  * detached group, the `close` wait, the listener removal and the cancellation
  * that joins rather than signals — is the one implementation below.
  */
@@ -69,6 +70,13 @@ export interface ProcessBytes {
   readonly stderr: string;
 }
 
+/** What one invocation reported, with both channels kept as bytes. */
+export interface ProcessChannels {
+  readonly code: number;
+  readonly stdout: Uint8Array;
+  readonly stderr: Uint8Array;
+}
+
 /** Run this command and decode its standard output as UTF-8 with replacement. */
 export function* runProcess(invocation: ProcessInvocation): Operation<ProcessOutcome> {
   const captured = yield* run(invocation, "text");
@@ -81,16 +89,37 @@ export function* runProcessBytes(invocation: ProcessInvocation): Operation<Proce
   return { code: captured.code, stdout: captured.bytes, stderr: captured.stderr };
 }
 
+/** Run this command and keep both of its channels as the bytes it wrote. */
+export function* runProcessChannels(invocation: ProcessInvocation): Operation<ProcessChannels> {
+  const captured = yield* run(invocation, "channels");
+  return { code: captured.code, stdout: captured.bytes, stderr: captured.errorBytes };
+}
+
 interface Captured {
   readonly code: number;
   readonly text: string;
   readonly bytes: Uint8Array;
   readonly stderr: string;
+  readonly errorBytes: Uint8Array;
+}
+
+function joined(chunks: readonly Uint8Array[]): Uint8Array {
+  let length = 0;
+  for (const chunk of chunks) {
+    length += chunk.length;
+  }
+  const whole = new Uint8Array(length);
+  let at = 0;
+  for (const chunk of chunks) {
+    whole.set(chunk, at);
+    at += chunk.length;
+  }
+  return whole;
 }
 
 function* run(
   { command, args, cwd, env, input, observe }: ProcessInvocation,
-  capture: "text" | "bytes",
+  capture: "text" | "bytes" | "channels",
 ): Operation<Captured> {
   // `node:child_process` rather than the runtime's own global: this adapter is
   // selected by the host, not written against one, and `spawn` replaces the
@@ -121,26 +150,15 @@ function* run(
   let stdout = "";
   const chunks: Uint8Array[] = [];
   let stderr = "";
+  const errorChunks: Uint8Array[] = [];
   // Joined only once the command has closed, so a partial multi-byte character
   // at a chunk boundary is never decoded as two.
-  const bytes = (): Uint8Array => {
-    let length = 0;
-    for (const chunk of chunks) {
-      length += chunk.length;
-    }
-    const joined = new Uint8Array(length);
-    let at = 0;
-    for (const chunk of chunks) {
-      joined.set(chunk, at);
-      at += chunk.length;
-    }
-    return joined;
-  };
+  const bytes = (): Uint8Array => joined(chunks);
   // Declared after what it reads, so an observer may call it at once rather
   // than only from a later turn.
   const captured = () => ({
     stdout: capture === "text" ? stdout : new TextDecoder().decode(bytes()),
-    stderr,
+    stderr: capture === "channels" ? new TextDecoder().decode(joined(errorChunks)) : stderr,
   });
 
   const outcome = withResolvers<Captured>();
@@ -160,15 +178,25 @@ function* run(
     }
     chunks.push(chunk);
   };
-  const onStderr = (chunk: string): void => {
-    stderr += chunk;
+  const onStderr = (chunk: string | Uint8Array): void => {
+    if (typeof chunk === "string") {
+      stderr += chunk;
+      return;
+    }
+    errorChunks.push(chunk);
   };
   // `close` rather than `exit`: it is the event that fires once both pipes have
   // ended, so what is read here is everything the command wrote rather than
   // whatever had arrived when it stopped.
   const onExit = (code: number | null): void => {
     closed = true;
-    outcome.resolve({ code: code ?? -1, text: stdout, bytes: bytes(), stderr });
+    outcome.resolve({
+      code: code ?? -1,
+      text: stdout,
+      bytes: bytes(),
+      stderr,
+      errorBytes: joined(errorChunks),
+    });
   };
   const onFailure = (error: Error): void => {
     outcome.reject(error);
@@ -248,7 +276,9 @@ function* run(
   if (capture === "text") {
     child.stdout.setEncoding("utf8");
   }
-  child.stderr.setEncoding("utf8");
+  if (capture !== "channels") {
+    child.stderr.setEncoding("utf8");
+  }
   child.on("close", onExit);
   child.on("error", onFailure);
   child.stdout.on("data", onStdout);

@@ -1,5 +1,5 @@
 /**
- * The native side of the four local Git observations: fixed reads, in a view
+ * The native side of the five local Git observations: fixed reads, in a view
  * this observation owns, that change nothing.
  *
  * Never the selected checkout's own Git administration. A checkout carries a
@@ -36,6 +36,14 @@
  * `--end-of-options` and `^{commit}`, so a revision that looks like a flag is
  * not read as one and a tag pointing at anything else is refused — and only
  * full object ids are used in the isolated view afterwards.
+ *
+ * ## The one read that consults the checkout's configuration
+ *
+ * A `<Git.Commit ref verify={true}>` read takes its metadata from this same
+ * contained view, and then asks the host's trusted verifier to run the
+ * checkout's own configured signature verification for the resolved id
+ * (`run-composition/verification.ts`). Nothing else any read does consults the
+ * checkout's configuration.
  */
 
 import { scoped, until } from "effection";
@@ -54,6 +62,8 @@ import {
   type GitChangeStatus,
   type GitChangesRequest,
   type GitChangesResult,
+  type GitCommitPage,
+  type GitCommitReadRequest,
   type GitComparison,
   type GitComparisonRequest,
   type GitDiffRequest,
@@ -82,6 +92,12 @@ import {
 import { gitSession } from "./git.ts";
 import { objectSourceAt } from "./object-source.ts";
 import type { RepositoryHost } from "./host.ts";
+import { observeCommit } from "./commit-read.ts";
+import type { CommitObjectReads } from "./commit-read.ts";
+import type { CommitVerifier } from "../run-composition/verification.ts";
+
+/** The four reads answered by `performGitObservation`; a commit read has its own performer. */
+type WindowedRequest = Exclude<GitObservationRequest, GitCommitReadRequest>;
 
 /** Where one observation reads, as the provider authenticated it. */
 export interface ObservationPlace {
@@ -631,7 +647,7 @@ function* continuedPosition(
   view: IsolatedView,
   place: ObservationPlace,
   kind: GitPagedKind,
-  request: GitObservationRequest,
+  request: WindowedRequest,
   comparison: GitComparison | null,
   observation: string,
   cursor: string | null,
@@ -660,7 +676,7 @@ function* continuedPosition(
 function* cursorFor(
   place: ObservationPlace,
   kind: GitPagedKind,
-  request: GitObservationRequest,
+  request: WindowedRequest,
   comparison: GitComparison | null,
   observation: string,
   position: number,
@@ -911,6 +927,40 @@ function* observeFile(
   });
 }
 
+/** The contained-view reads a commit read asks this observation for. */
+function commitReads(view: IsolatedView): CommitObjectReads {
+  return {
+    resolve: (revision: string) => resolveRevision(view, revision),
+    *objectType(revision: string): Operation<string | undefined> {
+      const named = yield* view.host.git({
+        args: [
+          ...READ_OPTIONS,
+          "rev-parse",
+          "--verify",
+          "--quiet",
+          "--end-of-options",
+          `${revision}^{object}`,
+        ],
+        cwd: view.worktree,
+        home: view.scratch,
+        variables: READ_VARIABLES,
+      });
+      const object = named.stdout.trim();
+      if (named.code !== 0 || object === "") {
+        return undefined;
+      }
+      const typed = yield* readText(view, ["cat-file", "-t", object]);
+      const type = typed.stdout.trim();
+      return typed.code === 0 && type !== "" ? type : unreadable(view, `the type of ${object}`);
+    },
+    *commitBytes(commit: string): Operation<Uint8Array> {
+      const read = yield* readBytes(view, ["cat-file", "commit", commit]);
+      return read.code === 0 ? read.stdout : unreadable(view, `commit ${commit}`);
+    },
+    unreadable: (what: string) => unreadable(view, what),
+  };
+}
+
 /** What the commit holds at the exact path a read asked for. */
 type TreeEntry =
   /** The entry at that path, with the object and type Git reported for it. */
@@ -965,9 +1015,55 @@ function treeEntry(output: string, path: string): TreeEntry {
 export function performGitObservation(
   host: RepositoryHost,
   element: string,
-  request: GitObservationRequest,
+  request: WindowedRequest,
   place: ObservationPlace,
 ): Operation<GitObservationValue> {
+  return withIsolatedView(host, element, place, function* (view) {
+    if (request.kind === "files") {
+      return yield* observeFiles(view, request, place);
+    }
+    if (request.kind === "changes") {
+      return yield* observeChangesPage(view, request, place);
+    }
+    if (request.kind === "diff") {
+      return yield* observeDiffPage(view, request, place);
+    }
+    return yield* observeFile(view, request, place);
+  });
+}
+
+/**
+ * Read one commit, verify it when asked, and answer with the selected page.
+ *
+ * The same scoped ownership as every other read: the scratch directory, the
+ * control repository, every native child — the verifier's included — and the
+ * verifier's own teardown are finished before the page exists.
+ */
+export function performGitCommitRead(
+  host: RepositoryHost,
+  element: string,
+  request: GitCommitReadRequest,
+  place: ObservationPlace,
+  verifier: CommitVerifier,
+): Operation<GitCommitPage> {
+  return withIsolatedView(host, element, place, (view) =>
+    observeCommit(
+      commitReads(view),
+      element,
+      request,
+      place.root,
+      place.repository.objectFormat,
+      verifier,
+    ),
+  );
+}
+
+function withIsolatedView<T>(
+  host: RepositoryHost,
+  element: string,
+  place: ObservationPlace,
+  body: (view: IsolatedView) => Operation<T>,
+): Operation<T> {
   return scoped(function* () {
     const format = place.repository.objectFormat;
     const scratch = yield* host.useDirectory();
@@ -991,15 +1087,6 @@ export function performGitObservation(
         return index;
       },
     };
-    if (request.kind === "files") {
-      return yield* observeFiles(view, request, place);
-    }
-    if (request.kind === "changes") {
-      return yield* observeChangesPage(view, request, place);
-    }
-    if (request.kind === "diff") {
-      return yield* observeDiffPage(view, request, place);
-    }
-    return yield* observeFile(view, request, place);
+    return yield* body(view);
   });
 }

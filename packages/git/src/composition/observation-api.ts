@@ -1,12 +1,15 @@
 /**
- * The four local Git observations: what a document asks for, and what comes
+ * The five local Git observations: what a document asks for, and what comes
  * back.
  *
- * `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>` and `<Git.File>` are read-only
- * questions about one selected checkout, and every one of them binds JSON. The
- * types here are the whole contract: a normalized request, a bounded page, and
- * a `next` object holding the complete arguments of the follow-up read. There
- * is no handle, no live cursor object and no field a provider may add.
+ * `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>`, `<Git.File>` and the read form
+ * of `<Git.Commit>` are read-only questions about one selected checkout, and
+ * every one of them binds JSON. For the first four the types here are the whole
+ * contract: a normalized request, a bounded page, and a `next` object holding
+ * the complete arguments of the follow-up read. A commit read answers the
+ * standard selected-value page instead: `{value, next, prev, last}`, where each
+ * navigation member is a yq string. There is no handle, no live cursor object
+ * and no field a provider may add.
  *
  * ## A page is bounded, and the bound is the caller's
  *
@@ -35,7 +38,7 @@ import { GitObservationError } from "./errors.ts";
 import { wellFormedText } from "./parse.ts";
 
 /** Which observation a request, a record and a cursor are about. */
-export type GitObservationKind = "files" | "changes" | "diff" | "file";
+export type GitObservationKind = "files" | "changes" | "diff" | "file" | "commit";
 
 /** The records a list answers with when the caller names no limit. */
 export const DEFAULT_RECORD_LIMIT = 100;
@@ -124,11 +127,25 @@ export interface GitFileRequest {
   readonly limit: number;
 }
 
+/** What one `<Git.Commit ref>` read asks for, normalized. */
+export interface GitCommitReadRequest {
+  readonly kind: "commit";
+  /** The revision the caller wrote, which every live read resolves again. */
+  readonly ref: string;
+  /** Whether the selected checkout's configured verifier runs. */
+  readonly verify: boolean;
+  /** The yq expression, `.` when the caller wrote none. */
+  readonly yq: string;
+  /** The explicit page byte budget, or `null` when the caller set none. */
+  readonly maxBytes: number | null;
+}
+
 export type GitObservationRequest =
   | GitFilesRequest
   | GitChangesRequest
   | GitDiffRequest
-  | GitFileRequest;
+  | GitFileRequest
+  | GitCommitReadRequest;
 
 /** The complete arguments of one follow-up `<Git.Files>` read. */
 export interface GitFilesNext {
@@ -202,7 +219,25 @@ export interface GitFileResult {
   readonly next: GitFileNext | null;
 }
 
-export type GitObservationValue = GitFilesResult | GitChangesResult | GitDiffResult | GitFileResult;
+/**
+ * One page of what a commit read selected.
+ *
+ * Each navigation member is the yq string that reads that neighbouring page,
+ * or `null`.
+ */
+export interface GitCommitPage {
+  readonly value: Json;
+  readonly next: string | null;
+  readonly prev: string | null;
+  readonly last: string | null;
+}
+
+export type GitObservationValue =
+  | GitFilesResult
+  | GitChangesResult
+  | GitDiffResult
+  | GitFileResult
+  | GitCommitPage;
 
 export interface GitFilesInvocation extends GitInvocationPlace {
   readonly request: GitFilesRequest;
@@ -220,11 +255,16 @@ export interface GitFileInvocation extends GitInvocationPlace {
   readonly request: GitFileRequest;
 }
 
+export interface GitCommitReadInvocation extends GitInvocationPlace {
+  readonly request: GitCommitReadRequest;
+}
+
 export type GitObservationInvocation =
   | GitFilesInvocation
   | GitChangesInvocation
   | GitDiffInvocation
-  | GitFileInvocation;
+  | GitFileInvocation
+  | GitCommitReadInvocation;
 
 function closed(properties: JsonObject): JsonObject {
   return {
@@ -663,6 +703,52 @@ export function admitFileRequest(
 }
 
 /**
+ * The `<Git.Commit>` read these props ask for, copied and frozen.
+ *
+ * `ref` selects the read; creation props are refused by the component before
+ * this is reached. The yq text is kept as written, because a navigation string
+ * is recognized only when it is exactly the text this host formatted.
+ */
+export function admitCommitReadRequest(
+  element: string,
+  props: Record<string, Json | undefined>,
+): GitCommitReadRequest {
+  const ref = props.ref;
+  if (typeof ref !== "string" || ref === "") {
+    return invalid(element, "needs ref to name the commit to read.");
+  }
+  if (!wellFormedText(ref) || holdsNul(ref)) {
+    return invalid(
+      element,
+      "needs ref to be well-formed text with no NUL character, which is what this host can " +
+        "hand to Git as written.",
+    );
+  }
+  const verify = props.verify;
+  if (verify !== undefined && typeof verify !== "boolean") {
+    return invalid(element, "needs verify to be true or false.");
+  }
+  const yq = props.yq;
+  if (yq !== undefined && (typeof yq !== "string" || !wellFormedText(yq))) {
+    return invalid(element, "needs yq to be a yq expression written as well-formed text.");
+  }
+  const maxBytes = props.maxBytes;
+  if (
+    maxBytes !== undefined &&
+    (typeof maxBytes !== "number" || !Number.isSafeInteger(maxBytes) || maxBytes < 1)
+  ) {
+    return invalid(element, "needs maxBytes to be a positive safe integer byte count.");
+  }
+  return Object.freeze({
+    kind: "commit" as const,
+    ref,
+    verify: verify === true,
+    yq: yq ?? ".",
+    maxBytes: maxBytes ?? null,
+  });
+}
+
+/**
  * Whether this filter selects this path.
  *
  * Literal, and by whole segments: a selector matches the path it spells, and
@@ -755,6 +841,18 @@ export function admitFileInvocation(element: string, request: GitFileRequest): G
     path: request.path,
     offset: request.offset,
     limit: request.limit,
+  });
+}
+
+export function admitCommitReadInvocation(
+  element: string,
+  request: GitCommitReadRequest,
+): GitCommitReadRequest {
+  return admitCommitReadRequest(element, {
+    ref: request.ref,
+    verify: request.verify,
+    yq: request.yq,
+    ...(request.maxBytes === null ? {} : { maxBytes: request.maxBytes }),
   });
 }
 

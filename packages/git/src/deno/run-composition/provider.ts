@@ -3,7 +3,7 @@
  * and inside the compiled binary.
  *
  * It answers the same Apis the workflow provider answers, so a document writes
- * the same repository vocabulary either way — the four selected-checkout reads
+ * the same repository vocabulary either way — the five selected-checkout reads
  * included. What differs is everything about lifetime and ownership.
  *
  * A workflow run's checkouts are rows in its own database, restored from
@@ -50,6 +50,7 @@ import { Git } from "../../composition/git-api.ts";
 import { GitQuery } from "../../git.ts";
 import {
   admitChangesInvocation,
+  admitCommitReadInvocation,
   admitDiffInvocation,
   admitFileInvocation,
   admitFilesInvocation,
@@ -57,6 +58,8 @@ import {
 import type {
   GitChangesInvocation,
   GitChangesResult,
+  GitCommitPage,
+  GitCommitReadInvocation,
   GitDiffInvocation,
   GitDiffResult,
   GitFileInvocation,
@@ -70,7 +73,7 @@ import {
   FILE_ELEMENT,
   FILES_ELEMENT,
 } from "../../composition/components/GitReads.ts";
-import { performGitObservation } from "../composition/observations.ts";
+import { performGitCommitRead, performGitObservation } from "../composition/observations.ts";
 import type { ObservationPlace } from "../composition/observations.ts";
 import type {
   GitAddInvocation,
@@ -90,7 +93,7 @@ import type {
 } from "../../composition/git-records.ts";
 import { destinationRefFor, type GitPushOutcome } from "../../composition/git-push-records.ts";
 import { admitPathspecs } from "../../composition/components/GitAdd.ts";
-import { admitCommitMessage } from "../../composition/components/GitCommit.ts";
+import { admitCommitMessage, COMMIT } from "../../composition/components/GitCommit.ts";
 import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import {
@@ -131,6 +134,7 @@ import { selectionRegistry } from "../selections.ts";
 import { discoverAmbientRepository, type AmbientRepository } from "./ambient.ts";
 import type { Leases } from "./leases.ts";
 import { captureCommitIdentity, denoIdentityReader, type IdentityReader } from "./identity.ts";
+import { denoCommitVerifier, type CommitVerifier } from "./verification.ts";
 import type { GitCommitIdentity } from "./identity.ts";
 import { selectManagedRepository, selectManagedWorktree } from "./checkouts.ts";
 import { NoAmbientRepositoryError } from "./errors.ts";
@@ -178,6 +182,15 @@ export interface RunCompositionOptions {
    * this host knows — including that it knows nothing.
    */
   readonly identity?: IdentityReader;
+  /**
+   * How this host runs a checkout's configured signature verification for a
+   * `<Git.Commit ref verify={true}>` read.
+   *
+   * Absent uses native Git with the caller's own environment, which is the
+   * whole question. A suite substitutes it to count or hold verification.
+   * Nothing a document, a prop or a Context value holds can select or replace it.
+   */
+  readonly verifier?: CommitVerifier;
   /** What GitHub issue handling this host installs, and what it may reach. */
   readonly gitHubIssues?: GitHubIssuesOptions;
   /** The pull-request destinations this host allows a document to read. */
@@ -246,6 +259,10 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
   // From the trusted host: the four strings a commit records about who made it.
   // A host that cannot say is remembered as not saying, and only `<Git.Commit>`
   // refuses — so the read happens when a commit needs it, not before.
+  // From the trusted host as well: how a `verify={true}` commit read runs the
+  // checkout's own configured verification. Choosing one starts nothing.
+  const verifier = options.verifier ?? denoCommitVerifier();
+
   const useIdentity = lazily(owner, function* (): Operation<GitCommitIdentity | undefined> {
     return yield* captureCommitIdentity(options.identity ?? denoIdentityReader(options.cwd));
   });
@@ -475,7 +492,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
     { at: "min" },
   );
 
-  // The four reads, at the implementation slot where the four transitions
+  // The five reads, at the implementation slot where the four transitions
   // install their own. Each admits the request it received before it suspends,
   // routes through the registry above, and performs one contained observation
   // that changes nothing in the checkout it read.
@@ -551,6 +568,17 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
           throw answered(FILE_ELEMENT);
         }
         return value;
+      },
+
+      *commit([invocation_]: [GitCommitReadInvocation]): Operation<GitCommitPage> {
+        const request = admitCommitReadInvocation(COMMIT, invocation_.request);
+        return yield* performGitCommitRead(
+          host,
+          COMMIT,
+          request,
+          yield* observationPlace(invocation_.repository, invocation_.workingDirectory, COMMIT),
+          verifier,
+        );
       },
     },
     { at: "min" },

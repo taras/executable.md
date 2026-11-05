@@ -5761,10 +5761,10 @@ through the Git-host reconciliation beneath it, each read as policy on
 Api instead of owning a boundary over it, so under a workflow run those four ask
 their Api directly as any other component does. A REPL entry does own a boundary
 over all six, because each of its records is named after the occurrence that
-asked for it. A REPL entry retains the four Git reads
-differently — `GitQuery` middleware at its own implementation slot — which is
-what lets those four stay ordinary registrations under a host that retains
-every page they answer with. That is what makes an ordinary run, a workflow run, a
+asked for it. A REPL entry retains the five Git reads, the read form of
+`Git.Commit` included, differently — `GitQuery` middleware at its own
+implementation slot — which is what lets them stay ordinary registrations under
+a host that retains every page they answer with. That is what makes an ordinary run, a workflow run, a
 provider-absent runtime and a REPL entry four policies rather than four
 components.
 
