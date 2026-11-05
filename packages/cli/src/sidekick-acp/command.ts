@@ -2,9 +2,10 @@ import { env } from "@executablemd/runtime";
 import { childAddressPath } from "../headless/host.ts";
 import { runChildProbe } from "../headless/probe.ts";
 import { z } from "zod";
+import { scoped, until } from "effection";
 import type { Operation } from "effection";
 import { isAbsolute } from "node:path";
-import { messageReference } from "./protocol.ts";
+import { messageReference, SidekickTransport } from "./protocol.ts";
 import { requestAttachment } from "./client.ts";
 import { runSidekickBridge } from "./bridge.ts";
 
@@ -97,7 +98,7 @@ export function* runSidekickCommand(args: readonly string[]): Operation<void> {
       path,
       { method: "message", reference: messageReference(words[1] ?? ""), follow },
       function* (update) {
-        console.log(JSON.stringify(update));
+        yield* writeValue(update);
       },
     );
   } else if (words.length === 3 && words[0] === "entry" && !follow) {
@@ -128,5 +129,17 @@ export function* runSidekickCommand(args: readonly string[]): Operation<void> {
   } else {
     throw new Error("Sidekick reads accept only status, exact message or bounded entry evidence.");
   }
-  console.log(JSON.stringify(value));
+  yield* writeValue(value);
+}
+
+function* writeValue(value: unknown): Operation<void> {
+  yield* scoped(function* () {
+    const { output } = yield* (yield* SidekickTransport.expect()).stdio();
+    const writer = output.getWriter();
+    try {
+      yield* until(writer.write(new TextEncoder().encode(JSON.stringify(value) + "\n")));
+    } finally {
+      writer.releaseLock();
+    }
+  });
 }

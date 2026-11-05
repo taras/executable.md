@@ -708,7 +708,7 @@ describe("minimal live Sidekick ACP attachment", () => {
 
   it("1077 J1-J5: actual CLI budgets, navigation and complete channel walks preserve the surviving owner", function* () {
     const stdout = "x".repeat(2 * 1024 * 1024);
-    const channel = "🦊\u0000".repeat(210000);
+    const channel = "🦊".repeat(262144) + '"\\\n\u0000';
     const boundary = { text: '🦊é"\\\n\u0000' };
     let launches = 0;
     const one = yield* world({
@@ -718,11 +718,13 @@ describe("minimal live Sidekick ACP attachment", () => {
             *exec() {
               const index = launches++;
               yield* Stdio.operations.stdout(
-                new TextEncoder().encode(index === 0 ? stdout : `record-${index}`),
+                new TextEncoder().encode(
+                  index === 0 ? stdout : index === 46 ? "" : `record-${index}`,
+                ),
               );
-              if (index < 2) {
+              if (index < 2 || index === 46) {
                 yield* Stdio.operations.stderr(
-                  new TextEncoder().encode(index === 0 ? channel : boundary.text),
+                  new TextEncoder().encode(index === 46 ? channel : boundary.text),
                 );
               }
               return { exitCode: 0, stdout: undefined, stderr: undefined };
@@ -738,6 +740,14 @@ describe("minimal live Sidekick ACP attachment", () => {
       throw submitted.error;
     }
     expect((yield* submitted.value.join()).ok).toBe(true);
+    const channelEntry = yield* one.held.session.submit(
+      "```bash silent exec\ncontrolled-channel\n```",
+    );
+    if (!channelEntry.ok) {
+      throw channelEntry.error;
+    }
+    expect((yield* channelEntry.value.join()).ok).toBe(true);
+    expect(new TextEncoder().encode(channel).length).toBeGreaterThan(MAX_FRAME);
     const session = one.held.session;
     const descriptor = JSON.stringify(one.descriptor);
     const before = yield* readTextFile(one.held.execution.stream.path);
@@ -754,14 +764,14 @@ describe("minimal live Sidekick ACP attachment", () => {
       })
       .strict();
     type Page = z.infer<typeof pageSchema>;
-    function* command(yq: string, maxBytes?: number) {
+    function* command(yq: string, maxBytes?: number, entry = 1) {
       const cli = cliCommand([
         "sidekick",
         "read",
         "--attach",
         one.path,
         "entry",
-        "1",
+        String(entry),
         "journal",
         "--yq",
         yq,
@@ -793,7 +803,7 @@ describe("minimal live Sidekick ACP attachment", () => {
         return { ...result, stdout: stdout + out.decode(), stderr: stderr + err.decode() };
       });
     }
-    function* componentPage(yq: string, maxBytes?: number): Operation<Page> {
+    function* componentPage(yq: string, maxBytes?: number, entry = 1): Operation<Page> {
       return yield* scoped(function* () {
         let observed: unknown;
         const ceiling = sidekickResponseCeiling(
@@ -852,7 +862,7 @@ describe("minimal live Sidekick ACP attachment", () => {
         const response = yield* execution.evaluateGeneratedXmdRoot({
           id: "budget-page",
           allow: [...ceiling.allow],
-          source: `<REPL.Entry.Journal entry={1} yq={${JSON.stringify(yq)}}${maxBytes === undefined ? "" : ` maxBytes={${maxBytes}}`} />`,
+          source: `<REPL.Entry.Journal entry={${entry}} yq={${JSON.stringify(yq)}}${maxBytes === undefined ? "" : ` maxBytes={${maxBytes}}`} />`,
         });
         if (!response.ok) {
           throw response.error;
@@ -865,13 +875,13 @@ describe("minimal live Sidekick ACP attachment", () => {
         return pageSchema.parse(observed);
       });
     }
-    function* page(yq: string, maxBytes?: number): Operation<Page> {
-      const actual = yield* command(yq, maxBytes);
+    function* page(yq: string, maxBytes?: number, entry = 1): Operation<Page> {
+      const actual = yield* command(yq, maxBytes, entry);
       if (actual.code !== 0) {
         throw new Error(actual.stderr + actual.stdout);
       }
       const result = pageSchema.parse(JSON.parse(actual.stdout));
-      expect(result).toEqual(yield* componentPage(yq, maxBytes));
+      expect(result).toEqual(yield* componentPage(yq, maxBytes, entry));
       return result;
     }
     for (const maxBytes of [undefined, 16384]) {
@@ -885,7 +895,7 @@ describe("minimal live Sidekick ACP attachment", () => {
     expect(
       z.object({ records: z.array(z.object({ exec: z.unknown() })) }).parse(complete.value)
         .records[1].exec,
-    ).toEqual({ exitCode: 0, stdout, stderr: channel });
+    ).toEqual({ exitCode: 0, stdout, stderr: boundary.text });
     const expected = { value: boundary, next: null, prev: null, last: null };
     const budget = new TextEncoder().encode(JSON.stringify(expected)).length;
     const boundaryQuery =
@@ -925,6 +935,63 @@ describe("minimal live Sidekick ACP attachment", () => {
       }
     }
     expect((yield* page("false")).value).toBe(false);
+    yield* scoped(function* () {
+      const host = yield* SidekickTransport.expect();
+      const writing = withResolvers<void>();
+      const finished = withResolvers<void>();
+      let acknowledge = () => {};
+      let written = "";
+      let completed = false;
+      const output = new WritableStream<Uint8Array>({
+        write(bytes) {
+          written += new TextDecoder().decode(bytes);
+          return new Promise<void>((resolve) => {
+            acknowledge = resolve;
+            writing.resolve();
+          });
+        },
+      });
+      yield* SidekickTransport.set({
+        ...host,
+        *stdio() {
+          return { input: new ReadableStream<Uint8Array>(), output };
+        },
+      });
+      const command = yield* spawn(function* () {
+        yield* runSidekickCommand([
+          "read",
+          "--attach",
+          one.path,
+          "entry",
+          "1",
+          "journal",
+          "--yq",
+          "false",
+        ]);
+        completed = true;
+        finished.resolve();
+      });
+      try {
+        const state = yield* race([
+          (function* () {
+            yield* writing.operation;
+            return "writing";
+          })(),
+          (function* () {
+            yield* finished.operation;
+            return "finished";
+          })(),
+        ]);
+        expect(state).toBe("writing");
+        expect(completed).toBe(false);
+        expect(JSON.parse(written)).toEqual({ value: false, next: null, prev: null, last: null });
+      } finally {
+        acknowledge();
+      }
+      yield* command;
+      expect(completed).toBe(true);
+      expect(output.locked).toBe(false);
+    });
     for (const maxBytes of [16384, 8388608]) {
       let yq: string | null = ".records[1].exec.stderr";
       let joined = "";
@@ -932,9 +999,9 @@ describe("minimal live Sidekick ACP attachment", () => {
       let shortened = false;
       let count = 0;
       while (yq !== null) {
-        const actual: Page = yield* page(yq, first ? maxBytes : undefined);
+        const actual: Page = yield* page(yq, first ? maxBytes : undefined, 2);
         const shared = yield* reads.inspectJournal({
-          entry: 1,
+          entry: 2,
           yq,
           ...(first ? { maxBytes } : {}),
         });
@@ -972,7 +1039,7 @@ describe("minimal live Sidekick ACP attachment", () => {
     expect(one.held.session).toBe(session);
     expect(JSON.stringify(one.descriptor)).toBe(descriptor);
     expect(one.held.session.model.entries.map((entry) => entry.key)).toEqual(entryKeys);
-    expect(launches).toBe(46);
+    expect(launches).toBe(47);
     expect(one.held.fake.prompts).toHaveLength(calls);
   });
 
