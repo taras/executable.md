@@ -1,3 +1,4 @@
+import type { HostFilesAccess } from "@executablemd/runtime";
 /**
  * The trusted host profile a Markdown test runs a nested execution under.
  *
@@ -88,6 +89,7 @@ export interface ChildPlanDeclaration {
 
 /** What the entrypoint already decided, and a child must not decide again. */
 export interface TestingHostSettings {
+  readonly fileAccess?: HostFilesAccess;
   readonly componentModuleLoader?: ComponentModuleLoader;
   /** The component search path this run resolves names through. */
   readonly includes: string[];
@@ -384,7 +386,7 @@ function* runProfileChild(
   // the child runs in an isolated scope, so the child's assembly must restate
   // it — `API.Files` has no host default, and a child without one refuses
   // every document filesystem operation.
-  yield* useHostFiles();
+  yield* useHostFiles({ access: settings.fileAccess, temporaryRoot: settings.fileAccess?.project });
   // Attaching a native service belongs only to document execution, here as in the
   // command that owns it.
   yield* settings.installService();

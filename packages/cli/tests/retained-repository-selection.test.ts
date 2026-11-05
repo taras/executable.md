@@ -1188,7 +1188,7 @@ function* slotBytes(path: string): Operation<unknown> {
   return bytes;
 }
 
-describe("1051 — repositories in the existing Sidekick workspace", () => {
+describe("1113: repositories use the selected project and configured managed root", () => {
   it("acquires, reads, reopens and reuses saved source with different repository inputs", function* () {
     const fixture = yield* useFixture();
     const chapter = yield* readGuideChapter("Entries");
@@ -1330,13 +1330,13 @@ describe("1051 — repositories in the existing Sidekick workspace", () => {
           }
           checkout = yield* until(realpath(bound.checkout));
           const canonicalWorkspace = yield* until(realpath(workspace));
-          address = relative(canonicalWorkspace, checkout);
+          address = relative(fixture.root, checkout);
           expect(isAbsolute(address)).toBe(false);
           expect(address.startsWith("..")).toBe(false);
-          expect(address.startsWith("repositories/")).toBe(true);
+          expect(address.startsWith(`${relative(fixture.root, fixture.managed)}/`)).toBe(true);
           expect(yield* runGit(checkout, ["remote", "get-url", "origin"])).toBe(origin);
           expect(yield* runGit(checkout, ["rev-parse", "HEAD"])).toBe(base);
-          expect(yield* exists(fixture.managed)).toBe(false);
+          expect(yield* exists(fixture.managed)).toBe(true);
           yield* readCurrent(page, `${address}/README.md`, marker);
           observations.push({
             row: "W1/W7",
@@ -1357,7 +1357,7 @@ describe("1051 — repositories in the existing Sidekick workspace", () => {
           yield* runGit(checkout, ["add", "README.md"]);
           yield* writeTextFile(join(checkout, "README.md"), `DIRTY_${number}\n`);
           yield* writeTextFile(join(checkout, "sentinel"), "untracked");
-          const slot = repositorySlot(join(workspace, "repositories"), origin, "project");
+          const slot = repositorySlot(fixture.managed, origin, "project");
           const beforeReuse = yield* slotBytes(slot);
           const reused = yield* exchange(page, acquire);
           expect(reused.checkout).toBe(checkout);
@@ -1492,27 +1492,26 @@ describe("1051 — repositories in the existing Sidekick workspace", () => {
           if (typeof other.checkout !== "string") {
             throw new Error("second session bound no checkout");
           }
-          expect(other.checkout).not.toBe(checkout);
+          expect(other.checkout).toBe(checkout);
           const otherWorkspace = pairedLocation(
             independent.root,
             (yield* settledReading(page.repl)).execution,
           ).directory;
           expect(
-            relative(
-              yield* until(realpath(otherWorkspace)),
-              yield* until(realpath(other.checkout)),
-            ).startsWith("repositories/"),
+            relative(fixture.root, other.checkout).startsWith(
+              `${relative(fixture.root, fixture.managed)}/`,
+            ),
           ).toBe(true);
-          expect(yield* runGit(other.checkout, ["rev-parse", "HEAD"])).toBe(base);
-          expect(yield* readTextFile(join(other.checkout, "README.md"))).toBe(marker);
+          expect(yield* runGit(other.checkout, ["rev-parse", "HEAD"])).toBe(advanced);
+          expect(yield* readTextFile(join(other.checkout, "README.md"))).toBe(`COLD_${number}\n`);
           yield* writeTextFile(join(other.checkout, "README.md"), "SECOND SESSION");
-          expect(yield* readTextFile(join(checkout, "README.md"))).toBe(`COLD_${number}\n`);
+          expect(yield* readTextFile(join(checkout, "README.md"))).toBe("SECOND SESSION");
           observations.push({
             row: "W3",
             number,
             workspace: otherWorkspace,
             checkout: other.checkout,
-            independent: true,
+            configuredRootReused: true,
           });
           yield* close(page);
         });

@@ -45,13 +45,23 @@ inheriting what an entry runs under: no tools, no MCP servers, every native
 request denied without asking, and no customization of the agent's own system
 prompt. There is no data directory or second provider to select.
 
+Cold startup settles an unfinished entry's recorded project before loading any
+plugin or finalizing the profile. An available original directory with a different
+canonical root is offered explicitly without a default answer. Acceptance binds
+its retained spelling for relative plugins, includes and mount sources; decline,
+cancellation, EOF or a failed presentation starts no live session and appends
+nothing. Unavailable, inaccessible, non-directory or canonically changed originals
+refuse without a replacement-path prompt. Matching roots require no question.
+A host unable to answer refuses a required switch. A finalized profile with
+incompatible roots refuses rather than being reinstalled.
+
 Use `--include` to select existing component directories, as with `xmd run` and
 `xmd test`. Both `--include <directory>` and `--include=<directory>` accept a
 value. Repetition preserves occurrence order, and the first directory defining
 an ordinary component wins. Explicit values replace the default search list
 `["components", "."]`; omitting the option keeps both defaults. Relative paths
 resolve from the invocation's contextual working directory, and absolute paths
-stay absolute. The command captures them before workspace placement changes.
+stay absolute. The command captures them after startup selects the project.
 After the execution id is known, its session/components directory is appended
 once. This effective list serves execution, validation, entry Syntax and the
 packaged Plan's draft check. Configured definitions win over session definitions;
@@ -118,38 +128,32 @@ one.
 
 ## The session workspace
 
-Sidekick responses and entries submitted through `<REPL.Submit />` start in the
-existing paired session directory, beside `entries.jsonl` and `sidekick.jsonl`.
-A manually submitted entry starts in the invocation's project directory. Writing
-`notes.md` through a Sidekick entry puts it beside the journals; writing
-`components/Greeting.md` makes that component discoverable by a later entry
-without a new include option or restart. Writing a definition invokes none of it.
+Responses, manual entries and Sidekick submissions start in the selected launch
+project. Ordinary `File path="notes.md"` writes there. Session storage remains
+separate: `<REPL.ComponentDir><File path="Greeting.md">Hello</File></REPL.ComponentDir>`
+writes session/components/Greeting.md without invoking it, and later invocation
+uses the caller's cwd. AssetDir selects read-only session/assets. Other private
+session storage grants no document file access even when stored beneath the project.
 
 Fresh publication and legacy first-message publication ensure components before
 the pair is ready. An existing directory and its files survive; a non-directory
 refuses without replacement. Cold reading ensures nothing: an older pair missing
 components remains unchanged, and a later authorized File write creates its
-parents. Exit preserves the workspace; a second session has a different one.
+parents. Exit preserves storage; a second session has its own components and assets.
 Journal layout and legacy publication remain unchanged.
 
-On Deno and compiled hosts, fresh Repository selections in Sidekick-submitted
-entries use `repositories/` beneath this existing workspace. Worktrees follow
-the same managed root. Manual entries and unmarked historical Submit intents
-keep the configured host root; acknowledged placements keep their recorded paths.
+New Repository selections use the configured host managed root. Existing
+`workspace: true` entries retain their session-relative placement and managed root;
+acknowledged paths and results remain unchanged. Current permissions and fixed
+file limits still govern new operations in those continuations.
 
 The host binds cwd on the actual response, validation and entry owners through
-ordinary Env middleware at min. Nested Dir content uses its selected directory;
-later siblings return to the workspace. Success, failure and cancellation leave
-caller and sibling scopes at their own cwd. This grants no permission or native
-tool, changes no source bytes and selects no Repository.
-
-The original project cwd remains the basis for ambient repository discovery,
-ordinary commit identity and invocation-relative options. For non-repository
-project input, Sidekick requests an approved asset import and reads the returned
-workspace-relative path. Native Git likewise needs
-a valid selected checkout at its authored cwd; it has no hidden project fallback.
-The Sidekick's native conversation keeps project placement, or an explicitly
-supplied agentCwd dependency, and its recorded native identity and configuration.
+ordinary Env middleware at min. Nested contexts restore the enclosing directory
+on every exit. This grants no permission or native tool, changes no source bytes
+and selects no Repository. The selected project remains the basis for ambient
+Git discovery and invocation-relative options. Authenticated Git reads retain
+their owner; a Repository value grants no File access outside the fixed roots.
+The Sidekick's native conversation keeps its recorded identity and configuration.
 
 Read `<Guide.Environment />` and `<Guide.Entries />` for the component-writing,
 discovery, later submission and output-reading journey. Current
@@ -178,18 +182,20 @@ stays with its provider and grants no absolute permission.
 Import a non-repository file directly in a Sidekick response:
 
 ```xmd
-<REPL.ImportAsset source="/known/external/mock ü.html" destination="inputs/mock ü.html" />
+<REPL.ImportAsset source="/known/external/mock ü.html" destination="assets/mock ü.html" />
 ```
 
 Both nonempty string props are required. The control accepts only this
-self-closing form and these two props. Propose `inputs/<original filename>`,
+self-closing form and these two props. Propose `assets/<original filename>`,
 preserving its spelling. Repository inputs follow repository acquisition.
 The root supplies the existing session workspace; response cwd cannot select
-another destination root. Missing workspace or host importer refuses.
+another destination root. New destinations must name a file beneath this session's
+assets/ subtree. Other session paths refuse before approval or destination work.
+Missing workspace or host importer refuses.
 
 The question shows the exact resolved source, absolute destination and returned
 workspace-relative path, then states: `Import copies this file into your session
-workspace.` It offers Import and Decline, with neither selected. An untouched
+assets folder.` It offers Import and Decline, with neither selected. An untouched
 or invalid answer leaves the same question pending. Closing hides the form and
 leaves it unanswered. Stop withdraws this question and joins its response while
 an entry's independent question stays waiting.
@@ -200,10 +206,9 @@ cancellation during approval produce none of those effects. Effective read and
 write restrictions apply before metadata and again after approval; publication
 rechecks write permission. Approval grants no native Agent tool or ordinary
 Files permission. Absolute denial does not prevent this separately approved
-import, and approval never installs an absolute allowance. A destination in a
-managed checkout is derived from the actual session workspace and returned
-checkout path; the copy must reach that exact checkout beneath the workspace.
-An arbitrary host repository outside that root is unsupported.
+import, and approval never installs an absolute allowance. Canonical destination
+checks before approval, after approval and immediately before publication keep assets-root and parent links inside that subtree.
+Existing copies and acknowledged outcomes at older paths remain unchanged.
 
 Import preserves exact source bytes, including binary data, and leaves the
 source unchanged. Absolute or escaping destinations and observed outward parent
@@ -220,10 +225,34 @@ may remain. Cleanup preserves them. An uncertain publication, cleanup failure or
 failed outcome append stops the exchange without successful feedback or automatic
 retry. The retained intent stays unfinished.
 
-Later ordinary entries use the relative workspace copy, including after the
-external source changes or disappears and after cold reopen. Passive inspection
+Later ordinary entries read the session copy through AssetDir, including after
+the external source changes or disappears and after cold reopen. The project's
+assets path is an independent ordinary path. Passive inspection
 imports nothing and asks nothing. History retains operands and outcomes, never
 asset bytes, and supplies no crash recovery or destination adoption.
+
+## Project and session file contexts
+
+New responses and all ordinary entries start in the launch project. Sidekick
+XMD Files access reaches that fixed project, read-only session/assets and this
+session's components, excluding other private session storage even beneath the
+project. A cwd, mount, absolute opt-in or Repository value grants no additional
+file authority. Terminal host operations enforce canonical effective destinations
+after transformations and effective permissions before target I/O. Acknowledged
+composed answers restore before current live checks. This is an XMD boundary,
+not an operating-system sandbox for shell or trusted native code.
+
+`<REPL.AssetDir><File path="mock.html" /></REPL.AssetDir>` reads the session
+copy of `assets/mock.html`. It also supports ordinary Glob capture with relative
+patterns. Entering it creates nothing; writes, delete, ensures and temporary
+allocation remain denied even through nested projected scopes.
+
+`<REPL.ComponentDir><File path="Greeting.md">Hello</File></REPL.ComponentDir>`
+publishes session source without invoking it. Both paired components take no
+root/session prop, project once, return ordinary rendered text with optional
+`as`, and restore enclosing cwd and permissions. Configured components still
+win; invoking a definition needs no preliminary source read. Outside these
+scopes, File operands are ordinary project paths. Testing remains session-owned.
 
 ## Testing session components
 
@@ -1865,12 +1894,12 @@ standing in:
 ```
 
 `<Repository name=".." url={..}>` selects a persistent checkout beneath
-the session workspace's `repositories/` for a Sidekick-submitted entry, or
-`~/.xmd/repositories` for a manual entry, creating it the first time and reusing
-it afterwards. The returned checkout path is absolute on this host. Derive a
-workspace-relative address from that actual path and the observed workspace;
-do not guess the managed slot layout. A later entry can read that relative path
-without another acquisition, including after reopening.
+the configured host managed root for new entries, creating it the first time and reusing
+it afterwards. The returned checkout path is absolute on this host. For a checkout
+inside the launch project, derive its project-relative address from the returned
+path; a later File read needs no acquisition. An outside checkout is unavailable
+to Sidekick File work even with absolute opt-in. Authenticated Git reads retain
+their separate owner and lexical Repository/Worktree selection.
 
 `base` names the requested creation base, not a promise about current HEAD.
 If a compatible owned checkout advances from creation base A to B, a fresh
@@ -2588,12 +2617,14 @@ Submit intent therefore binds what it took: the entry id it claimed, the exact
 source, the draft revision that source came from, how many entries preceded the
 slot, and — separately from that count — the entry journal the slot was counted
 in, as a record count with the byte count and digest of exactly those records.
-New Sidekick intents additionally carry only optional `workspace: true` inside
-that existing submit object. Its outcome is written once the entry has one.
-A present marker other than true refuses. Absent markers retain project cwd,
-including older Sidekick entries; a manual entry has no Submit marker. An older
-binary that rejects unknown members refuses new marked histories rather than
-silently downgrading them.
+New root admissions carry the strict normalized absolute project pair
+`executablemd.repl-placement: { projectDirectory, canonicalProjectRoot }`.
+New Submit intents carry the identical pair in `submit.placement`, beside their
+existing reservation binding. Unknown members, malformed pairs and mismatched
+intent/admission pairs refuse. Existing `workspace: true` is mutually exclusive
+with project placement and preserves its session cwd and managed-root meaning.
+Completed placement-less history remains inspectable; unfinished placement-less
+history refuses live continuation. No record is rewritten or upgraded.
 
 The count and the journal binding are different facts. A count of earlier
 entries names a slot; it cannot say which records preceded that slot, so a

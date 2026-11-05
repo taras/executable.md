@@ -12,8 +12,8 @@
  *     Specifier not found in cache ..., --cached-only is specified.
  *
  * An assertion inside the build is therefore unreachable exactly when it is
- * needed. This file runs instead, and it can, because it imports nothing but a
- * relative source file: no npm, no JSR, no https, nothing a cold cache lacks.
+ * needed. This file runs instead, and it can, because it imports only local
+ * source and built-ins: no npm, no JSR, no https, nothing a cold cache lacks.
  * Effection is a dependency like any other, so this file works with the host
  * directly and stays synchronous throughout — `outputSync` runs the build with
  * inherited stdio and hands back its status without a promise.
@@ -22,40 +22,10 @@
  * diagnostic is the same whichever half is missing.
  */
 
-import { PREPARED_INPUTS, PREPARED_MARKER, recordedCopy } from "./lib/prepared.ts";
+import { unprepared } from "./lib/preflight-deno.ts";
 
 const repoRoot = new URL("../", import.meta.url);
-
 const SETUP = "deno task setup";
-
-function read(path: string): string | undefined {
-  try {
-    // Synchronous because this file may import nothing: an Effection operation
-    // would need `effection` in the cache, and a cold cache is the condition
-    // this check exists to report on.
-    // oxlint-disable-next-line local/no-sync-filesystem
-    return Deno.readTextFileSync(new URL(path, repoRoot));
-  } catch {
-    return undefined;
-  }
-}
-
-function unprepared(): string | undefined {
-  for (const input of PREPARED_INPUTS) {
-    const recorded = read(recordedCopy(input));
-    if (recorded === undefined) {
-      return `${PREPARED_MARKER} has no record of ${input}`;
-    }
-    const current = read(input);
-    if (current === undefined) {
-      return `${input} is missing`;
-    }
-    if (current !== recorded) {
-      return `${input} changed since dependencies were installed`;
-    }
-  }
-  return undefined;
-}
 
 const [script, ...args] = Deno.args;
 if (!script) {
@@ -63,7 +33,7 @@ if (!script) {
   Deno.exit(1);
 }
 
-const missing = unprepared();
+const missing = unprepared(repoRoot);
 if (missing) {
   console.error(`${missing} — run \`${SETUP}\``);
   Deno.exit(1);

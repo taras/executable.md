@@ -28,6 +28,7 @@ import Elicit, {
   props as elicitProps,
   returns as elicitReturns,
 } from "./Elicit.ts";
+import Cwd, { props as cwdProps, generated as cwdGenerated } from "./Cwd.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import { form as failForm, props as failProps } from "./Fail.ts";
 import Fetch, { generated as fetchGenerated, props as fetchProps } from "./Fetch.ts";
@@ -184,6 +185,18 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       returns: parseJsonObject(elicitReturns),
       generated: elicitGenerated,
     },
+  ),
+  core(
+    "Cwd",
+    Cwd,
+    parseJsonObject(cwdProps),
+    {
+      description:
+        "Read the working directory. `<Cwd />` renders its path without adding a newline.",
+      as: "Optional. Captures the directory path instead of emitting it.",
+      context: null,
+    },
+    { forms: ["self-closing"], generated: cwdGenerated },
   ),
   core("TempDir", TempDir, parseJsonObject(tempDirProps), {
     description:

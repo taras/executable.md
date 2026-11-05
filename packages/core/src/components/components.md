@@ -446,3 +446,8 @@ document — the tests are inert until something asks for them.
 A failing command or assertion inside the case fails that case rather than the
 whole run, which is what lets one run report every failure rather than only the
 first.
+
+## Cwd
+
+Read the working directory with `<Cwd />`. It renders the current path with no
+added newline and requires no filesystem permission.

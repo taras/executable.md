@@ -3449,7 +3449,7 @@ describe("975 — the shipped session component journey", () => {
       );
       const read = yield* settledReading(repl);
       expect(read.model.entries.map((entry) => entry.source)).toEqual([
-        '<File path="components/Greeting.md">Hello from this session.</File>',
+        '<REPL.ComponentDir><File path="Greeting.md">Hello from this session.</File></REPL.ComponentDir>',
         "<Greeting />",
       ]);
       expect(read.model.entries[0]?.terminal?.output).toBe("");
@@ -3457,7 +3457,7 @@ describe("975 — the shipped session component journey", () => {
       expect(yield* until(readFile(join(workspace, "components", "Greeting.md"), "utf8"))).toBe(
         "Hello from this session.",
       );
-      expect(repl.fake.prompts[1]).toContain(`- working directory: ${workspace}`);
+      expect(repl.fake.prompts[1]).toContain(`- working directory: ${project}`);
       expect(repl.fake.prompts[1]).toContain("# Environment");
       expect(repl.fake.prompts[1]).toContain(chapter.value);
       expect(repl.fake.prompts[2]).toContain("Entry entry-1 completed.");
@@ -3473,11 +3473,11 @@ describe("975 — the shipped session component journey", () => {
       repl.fake.script({ reply: "<Output>Copied and wrote.</Output>" });
       yield* sendMessage(page, "copy the known project input and write notes");
       yield* page.until("the workspace copy", (one) => saidBySidekick(one, "Copied and wrote."));
-      expect(yield* until(readFile(join(workspace, "inputs", "request.md"), "utf8"))).toBe(
+      expect(yield* until(readFile(join(project, "inputs", "request.md"), "utf8"))).toBe(
         "project input",
       );
-      expect(yield* until(readFile(join(workspace, "nested", "inside.md"), "utf8"))).toBe("nested");
-      expect(yield* until(readFile(join(workspace, "notes.md"), "utf8"))).toBe("workspace sibling");
+      expect(yield* until(readFile(join(project, "nested", "inside.md"), "utf8"))).toBe("nested");
+      expect(yield* until(readFile(join(project, "notes.md"), "utf8"))).toBe("workspace sibling");
       expect(yield* cwd()).toBe(project);
       const sibling = yield* spawn(() => cwd());
       expect(yield* sibling).toBe(project);
@@ -3505,8 +3505,25 @@ describe("975 — the shipped session component journey", () => {
       yield* awaited("the first command to exit", () => repl.outcome() !== undefined);
     });
     const calls = host.fake.prompts.length;
-    yield* until(writeFile(join(workspace, "notes.md"), "external edit"));
+    yield* until(writeFile(join(project, "notes.md"), "external edit"));
+    yield* rm(join(workspace, "components", "Greeting.md"));
     yield* scoped(function* () {
+      let sources = 0;
+      let compiles = 0;
+      yield* API.Fs.around({
+        *readTextFile([path], next) {
+          if (path.endsWith("Greeting.md")) {
+            sources += 1;
+          }
+          return yield* next(path);
+        },
+      });
+      yield* API.Env.around({
+        *compile(args, next) {
+          compiles += 1;
+          return yield* next(...args);
+        },
+      });
       const page = yield* useReplPage({
         host,
         location: encodeLocation(initialState(execution).route),
@@ -3519,10 +3536,10 @@ describe("975 — the shipped session component journey", () => {
       expect(yield* until(readFile(pairedLocation(host.root, execution).sidekick, "utf8"))).toBe(
         beforeChat,
       );
-      expect(yield* until(readFile(join(workspace, "notes.md"), "utf8"))).toBe("external edit");
-      expect(yield* until(readFile(join(workspace, "components", "Greeting.md"), "utf8"))).toBe(
-        "Hello from this session.",
-      );
+      expect(yield* until(readFile(join(project, "notes.md"), "utf8"))).toBe("external edit");
+      expect(yield* exists(join(workspace, "components", "Greeting.md"))).toBe(false);
+      expect(sources).toBe(0);
+      expect(compiles).toBe(0);
       repl.terminal.end();
       yield* awaited("the cold command to exit", () => repl.outcome() !== undefined);
     });
@@ -4353,10 +4370,15 @@ describe("REPL syntax matches ordinary entry execution (#1053)", () => {
     });
     yield* useHostFiles();
     let writesRequested = 0;
+    yield* API.Files.around({
+      *checkFilePath(args, next) {
+        writesRequested += 1;
+        return yield* next(...args);
+      },
+    });
     yield* Permissions.around({
       files: ([operation], next) => {
         if (operation === "write") {
-          writesRequested += 1;
           return false;
         }
         return next(operation);

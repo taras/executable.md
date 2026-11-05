@@ -573,3 +573,35 @@ describe("client assets", () => {
     expect((yield* git(["ls-files", "--", GENERATED_MODULE])).stdout).toBe("");
   });
 });
+
+describe("prepared Claude preflight", () => {
+  it("refuses missing, altered and stale output before graph consumption", function* () {
+    const { unprepared, assertPrepared } = yield* until(import("../lib/preflight-deno.ts"));
+    const { PREPARED_INPUTS, recordedCopy } = yield* until(import("../lib/prepared.ts"));
+    const { ensureDir, copyFile, rm } = yield* until(import("@effectionx/fs"));
+    const { dirname } = yield* until(import("node:path"));
+    const base = yield* scratchDirectory("claude-preflight-");
+    const root = pathToFileURL(`${base}/`);
+    for (const input of PREPARED_INPUTS) {
+      for (const relative of [input, recordedCopy(input)]) {
+        yield* ensureDir(dirname(fileURLToPath(new URL(relative, root))));
+        yield* copyFile(new URL(input, REPO_ROOT), new URL(relative, root));
+      }
+    }
+    const path = "packages/acp/generated/claude-snapshot.ts";
+    expect(unprepared(root)).toContain(`${path} is missing`);
+    expect(() => assertPrepared(root)).toThrow("deno task setup");
+    yield* ensureDir(new URL("packages/acp/generated/", root));
+    yield* copyFile(new URL(path, REPO_ROOT), new URL(path, root));
+    expect(unprepared(root)).toBeUndefined();
+    yield* writeTextFile(new URL(path, root), "altered");
+    expect(unprepared(root)).toContain("does not match");
+    expect(() => assertPrepared(root)).toThrow("deno task setup");
+    yield* copyFile(new URL(path, REPO_ROOT), new URL(path, root));
+    const recipe = new URL("packages/acp/vendor/adapters/claude/recipe.json", root);
+    yield* writeTextFile(recipe, (yield* readTextFile(recipe)) + "\n");
+    expect(unprepared(root)).toContain("changed since dependencies were installed");
+    expect(() => assertPrepared(root)).toThrow("deno task setup");
+    yield* rm(new URL(path, root));
+  });
+});

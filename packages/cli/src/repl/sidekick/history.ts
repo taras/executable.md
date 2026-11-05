@@ -1,3 +1,5 @@
+import { parseEntryPlacement } from "../entry-placement.ts";
+import type { EntryPlacement } from "../entry-placement.ts";
 /**
  * One execution's Sidekick history, beside the entry history it belongs to.
  *
@@ -310,6 +312,7 @@ export interface ControlRecord {
     readonly source: string;
     readonly revision: number;
     readonly workspace?: true;
+    readonly placement?: EntryPlacement;
     /** The exact entry journal this reservation was taken against. */
     readonly retained: RetainedPrefix;
   };
@@ -719,7 +722,11 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
   if (Object.hasOwn(value, "submit")) {
     if (
       !plain(value.submit) ||
-      !exactly(value.submit, ["ordinal", "entry", "source", "revision", "retained"], ["workspace"])
+      !exactly(
+        value.submit,
+        ["ordinal", "entry", "source", "revision", "retained"],
+        ["workspace", "placement"],
+      )
     ) {
       return undefined;
     }
@@ -728,6 +735,12 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
     const source = str(value.submit.source);
     const revision = whole(value.submit.revision);
     if (Object.hasOwn(value.submit, "workspace") && value.submit.workspace !== true) {
+      return undefined;
+    }
+    const placement = Object.hasOwn(value.submit, "placement")
+      ? parseEntryPlacement(value.submit.placement)
+      : undefined;
+    if (placement !== undefined && (!placement.ok || value.submit.workspace === true)) {
       return undefined;
     }
     // Required, not optional. A Submit without it cannot be reconciled against
@@ -751,6 +764,7 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
       revision,
       retained,
       ...(value.submit.workspace === true ? { workspace: true } : {}),
+      ...(placement?.ok ? { placement: placement.value } : {}),
     };
   }
   return {

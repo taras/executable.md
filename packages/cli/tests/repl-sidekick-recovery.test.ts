@@ -1,3 +1,4 @@
+import { PLACEMENT } from "../src/repl/entry-placement.ts";
 import { useSidekickOwner } from "../src/repl/sidekick/owner.ts";
 import { rootReads } from "../src/repl/sidekick/requests.ts";
 import { attachChildUi } from "../src/headless/ui.ts";
@@ -2672,7 +2673,7 @@ describe("Tier IN5 — a saved EntryOutput result keeps its own renderer", () =>
 
 describe("975 — placement survives cold Submit reconciliation", () => {
   for (const marked of [true, false]) {
-    it(`975: ${marked ? "marked" : "legacy unmarked"} entry resumes in its owned directory`, function* () {
+    it(`975: ${marked ? "legacy workspace-marked" : "project-placed"} entry resumes in its owned directory`, function* () {
       const project = yield* useTemporary("xmd-placement-project-");
       const host = yield* useMountedHost({
         projectCwd: project,
@@ -2690,7 +2691,11 @@ describe("975 — placement survives cold Submit reconciliation", () => {
       });
       let execution = "";
       const source =
-        '<Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">Continue?</Elicit>\n<File path="suffix.md">continued</File>';
+        '<Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">Continue?</Elicit>\n' +
+        (marked
+          ? '<AssertThrows message="outside the working directory"><File path="entries.jsonl" as="privateBytes" />{privateBytes}</AssertThrows>\n'
+          : "") +
+        '<File path="components/fixtures/suffix.md">continued</File>';
       yield* scoped(function* () {
         const page = yield* useReplPage({ host });
         const repl = page.repl;
@@ -2708,14 +2713,27 @@ describe("975 — placement survives cold Submit reconciliation", () => {
         expect(read.model.entries[0]?.settled).toBe(false);
       });
       const location = pairedLocation(host.root, execution);
-      if (!marked) {
+      if (marked) {
+        const opened = yield* host.repository.open(execution);
+        const events = (yield* opened.stream.readAll()).map((event) => {
+          if (
+            event.type !== "yield" ||
+            event.description.type !== "import_component" ||
+            event.description.name !== ROOT_IMPORT
+          ) {
+            return event;
+          }
+          const { [PLACEMENT]: _placement, ...description } = event.description;
+          return { ...event, description };
+        });
+        yield* until(writeFile(location.entries, events.map(serializeDurableEvent).join("")));
         const records = yield* readSidekickRecords(location.sidekick);
         const legacy = records.map((record): SidekickRecord => {
           if (record.kind !== "control" || record.submit === undefined) {
             return record;
           }
-          const { workspace: _workspace, ...submit } = record.submit;
-          return { ...record, submit };
+          const { placement: _placement, ...submit } = record.submit;
+          return { ...record, submit: { ...submit, workspace: true } };
         });
         yield* until(writeFile(location.sidekick, legacy.map(serializeSidekickRecord).join("")));
       }
@@ -2756,7 +2774,9 @@ describe("975 — placement survives cold Submit reconciliation", () => {
         // nobody opened in this reading.
         yield* entrySettles(page, 1, "ok");
         expect(observed.at(-1)).toBe(where);
-        expect(yield* until(readFile(join(where, "suffix.md"), "utf8"))).toBe("continued");
+        expect(yield* until(readFile(join(where, "components/fixtures/suffix.md"), "utf8"))).toBe(
+          "continued",
+        );
         expect(yield* cwd()).toBe(project);
         const read = yield* settledReading(repl);
         expect(read.model.entries[0]?.source).toBe(source);
@@ -3362,7 +3382,9 @@ describe("987 — actual child reference recording faults", () => {
           messages.push(cause.message);
           cause = cause.cause;
         }
-        expect(messages.some((one) => one.includes(failure.message))).toBe(true);
+        expect(messages).toEqual(
+          expect.arrayContaining([expect.stringContaining(failure.message)]),
+        );
       }
       expect(asserted).toBe(true);
     });

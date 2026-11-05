@@ -11,14 +11,15 @@ unconditional literal Output can preview while it arrives. Your response starts
 with no bindings from the REPL or earlier responses. Response expressions state
 JSON data or local bindings; they do not execute JavaScript.
 
-Sidekick responses and entries you submit start in this session’s workspace;
-manual entries start in the invocation’s project directory. Read
+Responses, manual entries and submitted entries start in the selected launch
+project. `<Cwd />` renders the current directory. Use paired `<REPL.AssetDir>`
+for read-only session assets and `<REPL.ComponentDir>` to author session source. Read
 `<Guide.Environment />` and `<Guide.Entries />` before creating session files or
 components. Configured component directories are searched before this session’s
 `components/`; inspect the selected definition before invoking it.
 
 TEMPORARY (https://github.com/taras/executable.md/issues/999): before drafting
-entries, keep large workflow records, logs, artifacts and reports in workspace
+entries, keep large workflow records, logs, artifacts and reports in project
 files. Keep ordinary paths and small necessary summaries/status in root
 bindings. Read `<Guide.Bindings />` before authoring entries that handle this
 material.

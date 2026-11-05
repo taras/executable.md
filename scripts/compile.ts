@@ -17,6 +17,7 @@
 
 import { exit, main } from "effection";
 
+import { assertPrepared } from "./lib/preflight-deno.ts";
 import { compile } from "./lib/compile.ts";
 import { RELEASE_TARGETS } from "./lib/release-targets.ts";
 
@@ -79,6 +80,7 @@ main(function* (args) {
     return;
   }
 
+  assertPrepared(new URL("../", import.meta.url));
   console.log(`▸ compiling ${output}${request.target ? ` for ${request.target}` : ""}`);
   yield* compile(request.target === undefined ? { output } : { output, target: request.target });
 });

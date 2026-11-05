@@ -1,10 +1,24 @@
+import { testHarnessInstallation } from "@executablemd/testing";
+import { testingExecutionHost } from "../src/testing-host.ts";
+import { planComponentDescription } from "../src/plan-component.ts";
+import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 import { DurablePersistenceError } from "@executablemd/durable-streams";
 import { submitForSidekick } from "../src/repl/sidekick/admission.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { allSettled, ensure, Ok, scoped, spawn, suspend, until, withResolvers } from "effection";
+import {
+  allSettled,
+  ensure,
+  Err,
+  Ok,
+  scoped,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
 import type { Operation } from "effection";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,7 +101,8 @@ function submit(source: string): string {
   return `<Let as="code" value={${JSON.stringify(source)}} />\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />`;
 }
 function write(path: string, text: string): string {
-  return `<Let as="file" value={${JSON.stringify(text)}} />\n<File path=${JSON.stringify(path)}>{file}</File>`;
+  const file = `<Let as="file" value={${JSON.stringify(text)}} />\n<File path=${JSON.stringify(path.startsWith("components/") ? path.slice(11) : path)}>{file}</File>`;
+  return path.startsWith("components/") ? `<REPL.ComponentDir>${file}</REPL.ComponentDir>` : file;
 }
 function* mounted(
   includes?: readonly string[],
@@ -156,8 +171,7 @@ describe("REPL.Test accepted journeys", () => {
     ) {
       throw new Error("incomplete shipped testing examples");
     }
-    const greeting =
-      '<File path="greeting.txt">Hello from this session.</File>Hello from this session.';
+    const greeting = "Hello from this session.";
     yield* exchange(page, [create, "<REPL.Entry.Output entry={1} />"]);
     expect(yield* exists(join(workspace, "greeting.txt"))).toBe(false);
     expect(yield* reports(repl)).toEqual([]);
@@ -165,7 +179,7 @@ describe("REPL.Test accepted journeys", () => {
     expect(yield* readTextFile(join(workspace, "components/Greeting.md"))).toBe(greeting);
     yield* exchange(page, [single]);
     expect((yield* reports(repl)).at(-1)?.status).toBe("passed");
-    expect(yield* readTextFile(join(workspace, "greeting.txt"))).toBe("Hello from this session.");
+    expect(yield* exists(join(workspace, "greeting.txt"))).toBe(false);
     yield* exchange(page, [fail]);
     const failed = (yield* reports(repl)).at(-1);
     expect(failed?.status).toBe("failed");
@@ -400,11 +414,11 @@ describe("REPL.Test selection, display and isolation", () => {
       (yield* settledReading(repl)).chat.filter((record) => record.kind === "response").at(-2)
         ?.hasOutput,
     ).toBe(false);
-    yield* writeTextFile(join(workspace, "protected.txt"), "canonical file");
+    yield* writeTextFile(join(workspace, "components/protected.txt"), "canonical file");
     yield* writeTextFile(join(workspace, "components/File.md"), "unprotected spoof");
     yield* writeTextFile(
       join(workspace, "components/protected.test.md"),
-      '<Test name="protected"><File path="protected.txt" as="actual" /><AssertEquals actual={actual} expected="canonical file" /></Test>',
+      '<Test name="protected"><File path="components/protected.txt" as="actual" /><AssertEquals actual={actual} expected="canonical file" /></Test>',
     );
     yield* exchange(page, ['<REPL.Test path="components/protected.test.md" />']);
     expect((yield* reports(repl)).at(-1)?.status).toBe("passed");
@@ -864,4 +878,60 @@ describe("REPL.Test retained and fatal outcomes", () => {
       }
     });
   }
+});
+
+describe("1113: session tests use bounded fixtures", () => {
+  it("1113: keeps test cwd at S and permits components fixtures while refusing private session bytes", function* () {
+    yield* useComponentModuleLoader();
+    const host = yield* useMountedHost({
+      projectCwd: yield* useTemporary("1113-test-project-"),
+      hostFiles: true,
+      *testingHarness(includes, access) {
+        return testHarnessInstallation(
+          testingExecutionHost({
+            fileAccess: access,
+            includes: [...includes],
+            plugins: [],
+            pluginArgs: [],
+            secretDetection: true,
+            installService: function* () {},
+            bundledPlugin: BUNDLED_PLUGIN,
+            testAgentWorker: Err(new Error("no scripted child agent")),
+            planDeclaration: () => planComponentDescription(),
+          }),
+        );
+      },
+    });
+    const page = yield* useReplPage({ host });
+    const repl = page.repl;
+    const workspace = pairedLocation(host.root, yield* mountedExecution(repl)).directory;
+    yield* writeTextFile(join(workspace, "private-canary"), "private bytes");
+    yield* ensureDir(join(workspace, "components/fixtures"));
+    const source = `<Test name="session files"><Cwd as="directory" /><AssertEquals actual={directory} expected=${JSON.stringify(workspace)} /><File path="components/fixtures/note">fixture</File><File path="components/fixtures/note" as="note" /><AssertEquals actual={note} expected="fixture" /><AssertThrows message="outside the working directory"><File path="private-canary" as="forbidden" />{forbidden}</AssertThrows></Test>`;
+    const nested =
+      '<File path="components/fixtures/nested">nested fixture</File><File path="private-canary" as="forbidden" /><Output>{forbidden}</Output>';
+    const program =
+      source +
+      `<Test name="nested private refusal"><Execution host="run" source={${JSON.stringify(nested)}} as="child"><AssertEquals actual={child.result.ok} expected={false} /><AssertStringIncludes actual={child.result.error.message} expected="outside the working directory" /></Execution></Test>`;
+    yield* writeTextFile(join(workspace, "components/files.test.md"), program);
+    yield* exchange(page, ['<REPL.Test path="components/files.test.md" />']);
+    expect((yield* reports(repl)).at(-1)?.documents[0]?.tests[0]?.error).toBeUndefined();
+    expect((yield* reports(repl)).at(-1)).toMatchObject({
+      status: "passed",
+      documents: [
+        {
+          path: "components/files.test.md",
+          tests: [
+            { name: "session files", status: "pass" },
+            { name: "nested private refusal", status: "pass" },
+          ],
+        },
+      ],
+    });
+    expect(yield* readTextFile(join(workspace, "components/fixtures/note"))).toBe("fixture");
+    expect(yield* readTextFile(join(workspace, "components/fixtures/nested"))).toBe(
+      "nested fixture",
+    );
+    expect(yield* readTextFile(join(workspace, "private-canary"))).toBe("private bytes");
+  });
 });

@@ -123,8 +123,9 @@ describe("Tier FE — the ordinary selection is middleware, and it delegates", (
    * value: a selection assembled by calling the thing under test would prove
    * only that it equals itself.
    */
-  it("FE24: the ordinary selection is exactly File, File.Delete, Glob, Syntax and Elicit", function* () {
+  it("FE24: the ordinary selection is exactly Cwd, File, File.Delete, Glob, Syntax and Elicit", function* () {
     expect(ordinaryGeneratedSelection()).toEqual({
+      Cwd: ["self-closing"],
       File: ["self-closing", "paired"],
       "File.Delete": ["self-closing"],
       Glob: ["self-closing"],

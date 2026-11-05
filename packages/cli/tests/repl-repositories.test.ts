@@ -958,7 +958,7 @@ import { useNormalizedOutput } from "@executablemd/core";
 import { readGuideChapter } from "../src/repl/sidekick/guide.ts";
 import { spawn } from "effection";
 
-describe("1075 approved import into the actual managed checkout", () => {
+describe("1075 approved session asset beside a managed checkout", () => {
   it("denied direct Dir, approved copy and normalized relative guide use preserve their distinct policies", function* () {
     const fixture = yield* useFixture();
     const origin = yield* useOrigin(fixture);
@@ -1004,27 +1004,33 @@ describe("1075 approved import into the actual managed checkout", () => {
     expect(isAbsolute(address)).toBe(false);
     expect(address.startsWith("..")).toBe(false);
     expect(checkout).not.toBe(join(fixture.root, "repositories"));
-    const destination = join(address, "inputs", "mock ü.html").replaceAll("\\", "/");
+    const outsideAssets = join(address, "inputs", "mock ü.html").replaceAll("\\", "/");
+    held.fake.script({
+      reply: `<REPL.ImportAsset source={${JSON.stringify(source)}} destination={${JSON.stringify(outsideAssets)}} />`,
+    });
+    held.fake.script({ reply: "<Output>Refused.</Output>" });
+    yield* held.owner.message("Import into the selected checkout");
+    expect(held.owner.questions.asked).toBe(0);
+    expect(yield* exists(join(checkout, "inputs", "mock ü.html"))).toBe(false);
+    const destination = "assets/mock ü.html";
     held.fake.script({
       reply: `<REPL.ImportAsset source={${JSON.stringify(source)}} destination={${JSON.stringify(destination)}} />`,
     });
     held.fake.script({ reply: "<Output>Imported.</Output>" });
     const sending = yield* spawn(() =>
-      held.owner.message("Copy this asset into the selected checkout"),
+      held.owner.message("Copy this asset into the session assets folder"),
     );
     const changes = yield* held.owner.questions.changes;
     while (held.owner.questions.pending === undefined) {
       yield* changes.next();
     }
-    expect(held.owner.questions.pending.message).toContain(join(checkout, "inputs", "mock ü.html"));
+    expect(held.owner.questions.pending.message).toContain(join(workspace, destination));
     expect(held.owner.questions.pending.submit({ decision: "Import" }).kind).toBe("answered");
     const sent = yield* sending;
     if (!sent.ok) {
       throw sent.error;
     }
-    expect(yield* readTextFile(join(checkout, "inputs", "mock ü.html"))).toBe(
-      "managed import bytes\n",
-    );
+    expect(yield* readTextFile(join(workspace, destination))).toBe("managed import bytes\n");
     expect(yield* readTextFile(source)).toBe("managed import bytes\n");
     const saved = yield* records(held.execution);
     const imported = saved.find(
@@ -1035,9 +1041,8 @@ describe("1075 approved import into the actual managed checkout", () => {
     if (!guide.ok) {
       throw guide.error;
     }
-    const example =
-      '<Dir path="inputs">\n<File path="mock ü.html" as="mock" />\n<Output>{mock}</Output>\n</Dir>';
-    expect(guide.value).toContain(example);
+    const example = '<File path="mock ü.html" as="mock" />\n<Output>{mock}</Output>';
+    expect(guide.value).toContain("<REPL.AssetDir>");
     const places: string[] = [];
     yield* API.Files.around({
       *readTextFile([input], next) {
@@ -1046,15 +1051,15 @@ describe("1075 approved import into the actual managed checkout", () => {
       },
     });
     const journey = yield* run(
-      `<Dir path=${JSON.stringify(address.replaceAll("\\", "/"))}>${example}</Dir><File path=${JSON.stringify(destination)} as="restored" />`,
+      `<REPL.AssetDir>${example}<File path="mock ü.html" as="restored" /></REPL.AssetDir>`,
     );
     if (!journey.result.ok) {
       throw journey.result.error;
     }
     expect(journey.output.trim()).toBe("managed import bytes");
     expect(places.map((path) => path.replaceAll("\\", "/"))).toEqual([
-      join(held.workspace, address, "inputs").replaceAll("\\", "/"),
-      held.workspace.replaceAll("\\", "/"),
+      join(held.workspace, "assets").replaceAll("\\", "/"),
+      join(held.workspace, "assets").replaceAll("\\", "/"),
     ]);
     expect((yield* run(direct)).result.ok).toBe(false);
     expect(yield* Permissions.operations.files("absolute")).toBe(false);

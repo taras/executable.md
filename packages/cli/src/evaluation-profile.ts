@@ -72,6 +72,7 @@ export function ordinaryGeneratedSelection(): GeneratedSelection {
     File: ["self-closing", "paired"],
     "File.Delete": ["self-closing"],
     Glob: ["self-closing"],
+    Cwd: ["self-closing"],
     Syntax: ["self-closing"],
     Elicit: ["paired"],
   };

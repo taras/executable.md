@@ -1,3 +1,4 @@
+import type { HostFilesAccess } from "@executablemd/runtime";
 import type { WorkspaceMountTable } from "./workspace-mounts.ts";
 /**
  * The entry capability this host carries, as inert code.
@@ -48,6 +49,7 @@ export type ReplEntryInstallation = (
   owner: string,
   placement?: {
     readonly projectCwd?: string;
+    readonly access?: HostFilesAccess;
     readonly workspace?: string;
     readonly mounts?: WorkspaceMountTable;
   },

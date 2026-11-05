@@ -37,10 +37,13 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { until } from "effection";
-import {
-  EMBEDDED_ADAPTER_SNAPSHOTS,
-  type EmbeddedAdapterSnapshot,
-} from "../vendor/adapters/generated/snapshots.ts";
+import { EMBEDDED_ADAPTER_SNAPSHOTS as CODEX_SNAPSHOTS } from "../vendor/adapters/generated/snapshots.ts";
+import { CLAUDE_SNAPSHOT } from "../generated/claude-snapshot.ts";
+import type { EmbeddedAdapterSnapshot } from "./adapter-snapshot-type.ts";
+const EMBEDDED_ADAPTER_SNAPSHOTS: readonly EmbeddedAdapterSnapshot[] = Object.freeze([
+  ...CODEX_SNAPSHOTS,
+  CLAUDE_SNAPSHOT,
+]);
 
 /** A snapshot this host will not run, and why. */
 export class AdapterSnapshotError extends Error {

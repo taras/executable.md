@@ -72,7 +72,8 @@
     "oxfmt": "^0.41.0",
     "oxlint": "1.74.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "tar-stream": "3.2.0"
   },
   "scripts": {
     "test:node": "tsx scripts/runtime-tests.ts node",

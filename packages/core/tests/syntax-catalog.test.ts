@@ -1646,3 +1646,22 @@ function compareByCodePoint(left: string, right: string): number {
   }
   return a.length - b.length;
 }
+
+describe("1113: cwd syntax", () => {
+  it("1113: describes the installed zero-prop self-closing definition", function* () {
+    const catalog = yield* catalogFor({}, []);
+    const entry = find(builtIn(catalog), "Cwd");
+    expect(entry.props).toMatchObject({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    });
+    expect(entry.forms).toEqual(["self-closing"]);
+    expect(entry.returnMode).toBe("text");
+    expect(entry.origin).toEqual({
+      kind: "registered",
+      origin: "@executablemd/core",
+      reserved: false,
+    });
+  });
+});

@@ -564,6 +564,7 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
       const live = yield* useAdapter("claude", {
         ...CLAUDE_ENV,
         FAKE_CLAUDE_CONFIRMATION: "held",
+        FAKE_CLAUDE_HELD_HELPER: "1",
       });
       adapter = live;
       yield* initialize(live);
@@ -584,6 +585,11 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
       }
       yield* opening.halt();
       expect(acceptances(live)).toEqual([]);
+      live.child.stdin?.end();
+      yield* live.closed;
+      expect(yield* readTextFile(live.log)).toContain(
+        '"event":"helper-close","code":0,"signal":null',
+      );
     });
     if (adapter === undefined) {
       throw new Error("the adapter never started");
@@ -627,10 +633,53 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     const result = yield* done.operation;
     expect(result.error).toBeUndefined();
     const observation = JSON.parse(result.stdout);
+    console.log("startup disposal observations", JSON.stringify(observation));
+    expect(observation.cleanupAtReturn.openingSettled).toBe(true);
+    expect(observation.cleanupAtReturn.settingsDisposed).toBeGreaterThan(0);
+    expect(observation.cleanupAtReturn.endedInputs).toBeGreaterThanOrEqual(2);
     expect(observation.events).toEqual(["dispose-start", "backend-close", "dispose-return"]);
     expect(observation.closedWhenDisposeReturned).toBe(true);
     expect(observation.outcome).toEqual({ code: 0, signal: null });
     expect(observation.helperClosed).toBe(true);
+    expect(observation.result.status).toBe("refused");
+    expect(observation.updates).toEqual([]);
+    expect(observation.userMessages).toBe(0);
+    expect(observation.remainingSessions).toBe(0);
+  });
+
+  it("HC Claude disposal waits for held native stdout after backend exit", function* () {
+    const root = yield* until(mkdtemp(join(tmpdir(), "xmd disposal ")));
+    yield* ensure(() => rm(root, { recursive: true, force: true }));
+    const adapters = createEmbeddedAdapters(join(root, "adapters"));
+    yield* adapters.materialize("claude");
+    const done = withResolvers<{ error: string | undefined; stdout: string; stderr: string }>();
+    let observer: ChildProcess | undefined;
+    yield* ensure(function* () {
+      if (observer) {
+        observer.kill();
+        yield* done.operation;
+      }
+    });
+    observer = execFile(
+      "node",
+      [
+        join(FIXTURES, "claude-startup-disposal.mjs"),
+        adapters.executablePath("claude"),
+        root,
+        "gated",
+      ],
+      {
+        env: { ...process.env, CLAUDE_CODE_EXECUTABLE: FAKE_CLAUDE },
+      },
+      (error, stdout, stderr) => done.resolve({ error: error?.message, stdout, stderr }),
+    );
+    const result = yield* done.operation;
+    expect(result.error).toBeUndefined();
+    const observation = JSON.parse(result.stdout);
+    expect(observation.events).toEqual(["dispose-start", "backend-close", "dispose-return"]);
+    expect(observation.closedWhenDisposeReturned).toBe(true);
+    expect(observation.outcome).toEqual({ code: 0, signal: null });
+    expect(observation.returnedWhileHeld).toBe(false);
     expect(observation.result.status).toBe("refused");
     expect(observation.updates).toEqual([]);
     expect(observation.userMessages).toBe(0);

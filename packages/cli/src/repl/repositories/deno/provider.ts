@@ -1,3 +1,4 @@
+import type { HostFilesAccess } from "@executablemd/runtime";
 import { workspaceMountInstallation } from "../../workspace-mount-installation.ts";
 import type { MountFileEntry } from "../../workspace-mount-installation.ts";
 import type { WorkspaceMountTable } from "../../../workspace-mounts.ts";
@@ -104,6 +105,7 @@ import type { ReplPlacementRegistration, ReplSelectionEntry } from "./selections
 
 /** What a caller may state about one entry's recording. */
 export interface ReplRecordingOptions {
+  readonly access?: HostFilesAccess;
   readonly mounts?: WorkspaceMountTable;
   readonly projectCwd?: string;
   readonly workspace?: string;
@@ -383,6 +385,7 @@ function* initializeReplRepository(
     options.workspace,
     options.mounts ?? [],
     entryDirectory,
+    options.access,
   );
   deliverFiles?.(files);
 

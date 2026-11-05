@@ -1317,6 +1317,8 @@ what the first put there. An embedded agent never falls through to the published
 adapter ACPX's own table pins: a snapshot that cannot be verified or materialized
 refuses that agent.
 
+Claude's snapshot is generated during `deno task deps` from exact public adapter source, pinned SDK input and readable source patches. `deno task setup` includes that preparation. A source build consumes the complete prepared module and refuses missing or stale preparation; it does not fetch source, apply patches or compile the adapter at runtime. JSR, npm and compiled distributions carry that same generated snapshot. The installed Claude payload contains one patched SDK runtime and no original SDK dependency or platform executable. Its host executable selection, identity confirmation, first-turn acceptance and cleanup behavior retain their existing contracts. Codex retains its existing snapshot and every other provider retains ordinary registry resolution.
+
 ### The `xmd plan` Plan writer profile
 
 Host Claude selection and adapter preparation run in the command's owning scope

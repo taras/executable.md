@@ -1,5 +1,5 @@
 import type { Plugin } from "@executablemd/core/api";
-import { installPlugins } from "../../src/plugin-host.ts";
+import { useNodeReplProjectAccess } from "../../src/node-repl-project-access.ts";
 /**
  * The real REPL command, run on a terminal this test owns.
  *
@@ -25,9 +25,9 @@ import type { ReplTerminalSize } from "../../src/repl/terminal.ts";
 import { runReplProgram } from "../../src/repl/program.ts";
 import type { ReplOutcome } from "../../src/repl/program.ts";
 import { assembleReplProfile } from "../../src/repl-profile.ts";
-import type { ReplProfileAssembly } from "../../src/repl-profile.ts";
+import type { ReplProfileAssembly, ReplProfileFacts } from "../../src/repl-profile.ts";
 import { resolveAgentStack } from "../../src/agent-stack.ts";
-import { NO_PLUGINS } from "../../src/plugin-host.ts";
+import { NO_PLUGINS, installPlugins } from "../../src/plugin-host.ts";
 import { pairedReplRepository } from "../../src/repl/sidekick/repository.ts";
 import { PAIRED_DIRECTORY } from "../../src/repl/sidekick/history.ts";
 import type { SidekickRecord } from "../../src/repl/sidekick/history.ts";
@@ -692,7 +692,6 @@ export const OTHER_MOUNTED_AGENT = "scrivener";
 export function* useMountedHost(
   options: {
     /** A gate over the host's appends, for a case that holds a real record. */
-    readonly plugins?: readonly Plugin[];
     readonly gate?: AppendGate;
     /**
      * A gate over the *operation* each append is, for a case about cancelling.
@@ -721,6 +720,8 @@ export function* useMountedHost(
      */
     readonly defaultAgent?: string;
     readonly sidekickAgent?: string;
+    readonly testingHarness?: ReplProfileFacts["testingHarness"];
+    readonly plugins?: readonly Plugin[];
     readonly projectCwd?: string;
     readonly includes?: readonly string[];
     readonly entryInstallation?: ReplEntryInstallation;
@@ -751,6 +752,7 @@ export function* useMountedHost(
   // harness without it would run entries that fail for a reason no row is about.
   yield* useTempFileCompiler();
   const dataRoot = options.dataRoot ?? (yield* useTemporary("xmd-repl-mounted-"));
+  yield* useNodeReplProjectAccess();
   yield* installReplHost({
     dataRoot: () => dataRoot,
     environment: () => [
@@ -795,6 +797,7 @@ export function* useMountedHost(
       ? NO_PLUGINS
       : yield* installPlugins(options.plugins, { command: "repl", args: [] }),
     {
+      ...(options.testingHarness === undefined ? {} : { testingHarness: options.testingHarness }),
       ...(options.includes === undefined ? {} : { includes: options.includes }),
       acp: {
         ...(options.agentCwd === undefined ? {} : { agentCwd: options.agentCwd }),

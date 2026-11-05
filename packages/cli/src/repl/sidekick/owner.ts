@@ -2,6 +2,7 @@ import type { Json } from "@executablemd/core";
 import { DESIGNATED } from "./controls.ts";
 import type { ReplPluginExtension } from "../../repl-api.ts";
 import { projectInputValue, useSecretInputs } from "@executablemd/core/host";
+import { cwd } from "@executablemd/runtime";
 import { inspectRecoveryOwnership } from "./recovery-owner.ts";
 import { recoveryBlocked, uncertainRequests } from "./recovery-state.ts";
 import { bindRetainedPrefix } from "./history.ts";
@@ -388,6 +389,7 @@ export interface SidekickLiveTurn {
 
 /** What the owner needs, and nothing it could reach the rest of the root with. */
 export interface SidekickOwnerInput {
+  readonly projectCwd?: string;
   readonly test?: ReplTesting;
   follow?(): boolean;
   readonly workspace?: string;
@@ -1023,7 +1025,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         const capturing = sidekickCeilingInstallation(
           responseCeiling((value) => projectInputValue(owner, value)),
         );
-        const directory = input.workspace;
+        const directory = input.projectCwd ?? (yield* cwd());
         if (directory !== undefined) {
           yield* API.Env.around(
             {

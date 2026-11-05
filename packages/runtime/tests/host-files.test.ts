@@ -36,10 +36,15 @@ import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
 import { renameSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import process from "node:process";
 import { API } from "../apis.ts";
-import { hostFilesHandler, useHostFiles } from "../host-files.ts";
+import {
+  captureHostFilesAccess,
+  hostFileAccessReason,
+  hostFilesHandler,
+  useHostFiles,
+} from "../host-files.ts";
 import { Permissions } from "../permissions.ts";
 import type { HostFilesEvent } from "../host-files.ts";
 import {
@@ -1583,5 +1588,162 @@ describe("host Files — permission", () => {
 
     expect(yield* exists(acquired)).toBe(false);
     expect((yield* entries(root)).filter((entry) => entry.startsWith("xmd-tempdir-"))).toEqual([]);
+  });
+});
+
+describe("1113: fixed host roots", () => {
+  it("1113: permits project and owned scopes while excluding private storage and outward links", function* () {
+    const fixture = yield* useFixture();
+    const storage = join(fixture.workspace, "private");
+    const session = join(storage, "session");
+    yield* until(mkdir(join(session, "assets"), { recursive: true }));
+    yield* until(mkdir(join(session, "components")));
+    yield* writeTextFile(join(storage, "canary"), "private");
+    yield* writeTextFile(join(fixture.outside, "canary"), "outside");
+    yield* writeTextFile(join(session, "assets", "mock.html"), "asset");
+    const access = yield* captureHostFilesAccess({
+      project: fixture.workspace,
+      private: storage,
+      assets: join(session, "assets"),
+      components: join(session, "components"),
+    });
+    const provider = hostFilesHandler({ access });
+    expect(
+      (yield* provider.writeTextFile({ cwd: fixture.workspace, path: "note", content: "project" }))
+        .ok,
+    ).toBe(true);
+    expect(value(yield* provider.readTextFile({ cwd: access.assets, path: "mock.html" }))).toBe(
+      "asset",
+    );
+    expect(
+      (yield* provider.writeTextFile({ cwd: access.assets, path: "mock.html", content: "changed" }))
+        .ok,
+    ).toBe(false);
+    expect(
+      (yield* provider.writeTextFile({
+        cwd: access.components,
+        path: "Greeting.md",
+        content: "Hello",
+      })).ok,
+    ).toBe(true);
+    expect((yield* provider.readTextFile({ cwd: storage, path: "canary" })).ok).toBe(false);
+    yield* linkDirectory(storage, join(fixture.workspace, "private-alias"));
+    expect(
+      (yield* provider.readTextFile({ cwd: fixture.workspace, path: "private-alias/canary" })).ok,
+    ).toBe(false);
+    yield* until(symlink(join(fixture.outside, "canary"), join(session, "assets", "outward")));
+    expect((yield* provider.readTextFile({ cwd: access.assets, path: "outward" })).ok).toBe(false);
+    for (const patterns of [
+      { include: ["../outside/*"], exclude: [] },
+      { include: ["**/*"], exclude: ["../outside/*"] },
+      { include: [fixture.outside + "/*"], exclude: [] },
+    ]) {
+      expect((yield* provider.globFiles({ cwd: fixture.workspace, ...patterns })).ok).toBe(false);
+    }
+
+    expect(
+      value(yield* provider.globFiles({ cwd: fixture.workspace, include: ["**/*"], exclude: [] })),
+    ).toEqual(["note"]);
+    yield* linkDirectory(fixture.outside, join(fixture.workspace, "outward"));
+    yield* until(symlink(join(fixture.outside, "canary"), join(fixture.workspace, "link")));
+    expect(
+      (yield* provider.readTextFile({ cwd: fixture.workspace, path: "outward/canary" })).ok,
+    ).toBe(false);
+    expect((yield* provider.readTextFile({ cwd: fixture.workspace, path: "link" })).ok).toBe(false);
+    expect((yield* provider.deleteFile({ cwd: fixture.workspace, path: "link" })).ok).toBe(true);
+    expect(yield* readTextFile(join(fixture.outside, "canary"))).toBe("outside");
+    expect(yield* entries(fixture.outside)).toEqual(["canary"]);
+    yield* Permissions.around({
+      files: ([operation], next) => (operation === "absolute" ? true : next(operation)),
+    });
+    expect(
+      (yield* provider.ensureDirectory({ cwd: fixture.workspace, path: fixture.outside })).ok,
+    ).toBe(false);
+    expect(
+      (yield* provider.ensureDirectory({
+        cwd: fixture.workspace,
+        path: join(fixture.workspace, "nested"),
+      })).ok,
+    ).toBe(true);
+  });
+
+  it("1113: current denial precedes every target observation; effective outside requests still refuse when allowed", function* () {
+    const fixture = yield* useFixture();
+    const access = yield* captureHostFilesAccess({
+      project: fixture.workspace,
+      private: join(fixture.root, "storage"),
+      assets: join(fixture.root, "storage/session/assets"),
+      components: join(fixture.root, "storage/session/components"),
+    });
+    const events: HostFilesEvent[] = [];
+    const provider = hostFilesHandler({ access, observe: (event) => events.push(event) });
+    yield* writeTextFile(join(fixture.outside, "canary"), "outside");
+    yield* scoped(function* () {
+      yield* Permissions.around({ files: () => false });
+      expect(
+        yield* hostFileAccessReason(access, "read", { cwd: fixture.outside, path: "canary" }),
+      ).toBe("permission-denied");
+      expect((yield* provider.readTextFile({ cwd: fixture.outside, path: "canary" })).ok).toBe(
+        false,
+      );
+      expect(
+        (yield* provider.writeTextFile({ cwd: fixture.outside, path: "canary", content: "wrong" }))
+          .ok,
+      ).toBe(false);
+      expect(events).toEqual([]);
+    });
+    expect((yield* provider.readTextFile({ cwd: fixture.outside, path: "canary" })).ok).toBe(false);
+    expect(events).toEqual([]);
+    expect(yield* readTextFile(join(fixture.outside, "canary"))).toBe("outside");
+    expect(yield* entries(fixture.outside)).toEqual(["canary"]);
+  });
+});
+
+describe("1113: bounded temporary allocation", () => {
+  it("1113: owns a project descendant until cancellation and joins its removal", function* () {
+    const fixture = yield* useFixture();
+    const access = yield* captureHostFilesAccess({
+      project: fixture.workspace,
+      private: join(fixture.root, "storage"),
+      assets: join(fixture.root, "storage/session/assets"),
+      components: join(fixture.root, "storage/session/components"),
+    });
+    const provider = hostFilesHandler({ access });
+    const entered = withResolvers<string>();
+    const owner = yield* spawn(function* () {
+      const allocated = value(yield* provider.temporaryDirectory());
+      entered.resolve(allocated);
+      yield* suspend();
+    });
+    const allocated = yield* entered.operation;
+    expect(allocated.startsWith(fixture.workspace + sep)).toBe(true);
+    expect(yield* exists(allocated)).toBe(true);
+    yield* owner.halt();
+    expect(yield* exists(allocated)).toBe(false);
+  });
+});
+
+describe("1113: outward session roots", () => {
+  it("1113: refuses an asset root that already resolves outside its session", function* () {
+    const fixture = yield* useFixture();
+    const storage = join(fixture.workspace, "private");
+    const session = join(storage, "session");
+    yield* until(mkdir(session, { recursive: true }));
+    yield* writeTextFile(join(fixture.outside, "canary"), "outside");
+    yield* linkDirectory(fixture.outside, join(session, "assets"));
+    let failure = "";
+    try {
+      yield* captureHostFilesAccess({
+        project: fixture.workspace,
+        private: storage,
+        assets: join(session, "assets"),
+        components: join(session, "components"),
+      });
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    expect(failure).toContain("outside their session subtree");
+    expect(yield* readTextFile(join(fixture.outside, "canary"))).toBe("outside");
+    expect(yield* entries(fixture.outside)).toEqual(["canary"]);
   });
 });

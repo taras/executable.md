@@ -1,3 +1,4 @@
+import type { EntryPlacement } from "./entry-placement.ts";
 /**
  * The REPL's view of one execution, projected from its Journal and nothing else.
  *
@@ -358,6 +359,7 @@ export type ReplRow =
  * retained is a value a cold reopen would not have.
  */
 export interface ReplEntry {
+  readonly placement?: EntryPlacement;
   /** Its admission-order key: `entry-1`, `entry-2`, and so on. */
   readonly key: string;
   /** Its admission order, counting from one, which is also its display order. */
@@ -645,6 +647,7 @@ function build(
     inherited = bindings;
     entries.push(
       freeze({
+        placement: segment.placement,
         key: segment.key,
         order: segment.order,
         source: reading.scope.source,

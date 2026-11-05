@@ -1,3 +1,4 @@
+import type { ReplStartup } from "./repl/program.ts";
 import { useSecretInputs } from "@executablemd/core/host";
 import { runSessionOwnership } from "./session-ownership.ts";
 import { attachChildUi } from "./headless/ui.ts";
@@ -89,8 +90,9 @@ import type {
   RootDocumentSource,
 } from "@executablemd/core";
 import { useAcpxProvider } from "@executablemd/acp";
-import { command as hostCommand, cwd, Permissions } from "@executablemd/runtime";
-import { runReplProgram } from "./repl/program.ts";
+import { API, command as hostCommand, cwd, Permissions } from "@executablemd/runtime";
+import { runReplProgram, prepareReplStartup, refuseReplStartup } from "./repl/program.ts";
+import { ReplTerminal } from "./repl/terminal.ts";
 import { decodeLocation } from "./repl/route.ts";
 import { renderAgentOptions, renderAgentOptionsJson, scanAgentArgs } from "./agent-options.ts";
 import type { MachineSessionAssembly } from "./session-coordinator.ts";
@@ -2829,6 +2831,7 @@ function* dispatch(
    * run host — reads it rather than installing a second time.
    */
   plugins: CommandPlugins,
+  startup?: Result<ReplStartup>,
 ): Operation<void> {
   // Before the props phase, and before the help short-circuit below. `--help`
   // is lifted out of argv early enough that a command's own grammar never sees
@@ -3037,12 +3040,6 @@ function* dispatch(
       // before a history file is created or opened, and before the terminal's
       // modes are touched. A refusal that had already taken the terminal would
       // print into an alternate screen nobody is looking at.
-      const stray = replGrammarError(helpRequest.args, command.config.location);
-      if (stray !== undefined) {
-        console.error(stray);
-        yield* exit(1);
-        break;
-      }
       if (
         command.config.sidekickAcp !== undefined &&
         !(yield* SidekickTransport.get())?.supported()
@@ -3117,11 +3114,12 @@ function* dispatch(
       const testAgentWorker = yield* readWorkerCommand();
       const bundledPlugin = yield* BundledRunPlugin.expect();
       const profile = yield* assembleReplProfile(replStack, plugins, {
-        *testingHarness(includes) {
+        *testingHarness(includes, access) {
           return testHarnessInstallation(
             testingExecutionHost({
               componentModuleLoader: moduleLoader,
               includes: [...includes],
+              fileAccess: access,
               plugins: plugins.plugins,
               pluginArgs: plugins.args,
               secretDetection: true,
@@ -3150,9 +3148,9 @@ function* dispatch(
           ? {}
           : { sidekickAgent: command.config.sidekickAgent }),
       });
-      yield* replHost.install();
       const ran = yield* runReplProgram({
         profile,
+        startup,
         ...(command.config.sidekickAcp === undefined
           ? {}
           : { sidekickAcp: command.config.sidekickAcp }),
@@ -3701,6 +3699,11 @@ function* runCommand(
   // lifecycle, which is why the timeout options are read only for the two that
   // end in one.
   const provisional = xmd.parse({ args: helpRequest.args });
+  if (selection.command === "repl" && !provisional.ok && !helpRequest.requested) {
+    console.error(provisional.error.message);
+    yield* exit(1);
+    return;
+  }
   const selected = provisional.ok ? provisional.value.config : undefined;
   // The two commands a `--timeout` bounds. `xmd plan`'s deadline encloses
   // something different from a run's — the symbols, the assistant session,
@@ -3720,6 +3723,88 @@ function* runCommand(
   // code, and describing a command line is not a reason to run any.
   const selectedPlugins = selection.loads ? selection : undefined;
 
+  let startup: Result<ReplStartup> | undefined;
+  if (selected?.name === "repl" && !helpRequest.requested && !selected.help) {
+    if (
+      selected.config.sidekickAcp !== undefined &&
+      !(yield* SidekickTransport.get())?.supported()
+    ) {
+      console.error("xmd repl: Sidekick ACP requires a same-user POSIX Unix socket.");
+      yield* exit(1);
+      return;
+    }
+    if (
+      selected.config.attach !== undefined &&
+      (selected.config.location !== undefined || selected.config.sidekickAcp !== undefined)
+    ) {
+      console.error(
+        "--attach selects a live child and accepts no cold location or --sidekick-acp.",
+      );
+      yield* exit(1);
+      return;
+    }
+    const stray = replGrammarError(helpRequest.args, selected.config.location);
+    if (stray !== undefined) {
+      console.error(stray);
+      yield* exit(1);
+      return;
+    }
+    const syntax = parseWorkspaceMounts(selected.config.mount, "/", {
+      resolve: (_base, path) => path,
+    });
+    if (!syntax.ok) {
+      console.error(syntax.error.message);
+      yield* exit(1);
+      return;
+    }
+    const stack = yield* settleAgentStack(
+      {
+        agentProvider: selected.config.agentProvider,
+        defaultAgent: selected.config.defaultAgent,
+        approveAll: selected.config.approveAll,
+        approveReads: selected.config.approveReads,
+        denyAll: selected.config.denyAll,
+      },
+      sessions,
+    );
+    if (stack === undefined) {
+      return;
+    }
+    if (selected.config.attach === undefined) {
+      if (replHost === undefined) {
+        console.error("This host provides no interactive REPL.");
+        yield* exit(1);
+        return;
+      }
+      yield* replHost.install();
+      if (!(yield* ReplTerminal.operations.interactive())) {
+        console.error(
+          "xmd repl: the REPL runs where a terminal is: it is not available over a pipe.",
+        );
+        yield* exit(1);
+        return;
+      }
+      if (selected.config.location !== undefined) {
+        startup = yield* prepareReplStartup(selected.config.location);
+        if (!startup.ok) {
+          yield* refuseReplStartup(selected.config.location, startup.error.message);
+          console.error("xmd repl: " + startup.error.message);
+          yield* exit(1);
+          return;
+        }
+        const selectedDirectory = startup.value.projectCwd;
+        yield* API.Env.around(
+          {
+            *cwd() {
+              return selectedDirectory;
+            },
+          },
+          { at: "min" },
+        );
+      }
+    }
+  }
+
   const run = (plugins: CommandPlugins): Operation<void> =>
     dispatch(
       evalFlags,
@@ -3731,6 +3816,7 @@ function* runCommand(
       sessions,
       replHost,
       plugins,
+      startup,
     );
 
   // The typed configuration this command line settled, then the Plugins — so a

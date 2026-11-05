@@ -1,3 +1,4 @@
+import { captureHostFilesAccess } from "@executablemd/runtime";
 /**
  * The trusted host profile a Markdown test runs a nested execution under
  * (issue #454).
@@ -18,7 +19,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, ensure, resource, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, readdir, rm, writeTextFile } from "@effectionx/fs";
+import { readTextFile, ensureDir, readdir, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { until } from "effection";
 import { join } from "node:path";
@@ -1172,5 +1173,55 @@ describe("L4 — current source host installation", () => {
     expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
     expect(result.stdout).toContain("host-typed-component");
     expect(result.stdout).toContain("AssertEquals** passed");
+  });
+});
+
+describe("1113: clean run child filesystem roots", () => {
+  it("1113: restates fixed limits independently of its cwd and parent middleware", function* () {
+    const project = yield* useProject({
+      "storage/session/private-canary": "private bytes",
+      "storage/session/components/fixtures/note": "fixture",
+    });
+    const storage = join(project, "storage");
+    const session = join(storage, "session");
+    const fileAccess = yield* captureHostFilesAccess({
+      project,
+      private: storage,
+      assets: join(session, "assets"),
+      components: join(session, "components"),
+    });
+    const host = testingExecutionHost({
+      fileAccess,
+      includes: [],
+      plugins: [],
+      pluginArgs: [],
+      secretDetection: true,
+      installService: function* () {},
+      bundledPlugin: BUNDLED_PLUGIN,
+      testAgentWorker: Err(new Error("no scripted agent")),
+      planDeclaration: () => planComponentDescription(),
+    });
+    const child = yield* host.runChild({
+      request: {
+        host: "run",
+        source:
+          '<File path="components/fixtures/created">allowed child</File><File path="private-canary" as="canary" /><Output>{canary}</Output>',
+        props: {},
+        journal: "transient",
+        collectJournal: false,
+        configuration: [],
+      },
+      cwd: session,
+      run: undefined,
+      *chunk() {},
+    });
+    expect(child.outcome).toMatchObject({ kind: "settled", result: { ok: false } });
+    expect(
+      child.outcome.kind === "settled" &&
+        !child.outcome.result.ok &&
+        child.outcome.result.error.message,
+    ).toContain("outside the working directory");
+    expect(yield* readTextFile(join(session, "components/fixtures/created"))).toBe("allowed child");
+    expect(yield* readTextFile(join(session, "private-canary"))).toBe("private bytes");
   });
 });
