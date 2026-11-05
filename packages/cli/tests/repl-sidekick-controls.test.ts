@@ -3446,11 +3446,11 @@ function retexted(events: readonly DurableEvent[], ordinal: number, text: string
 describe("ImportAsset captured response admission", () => {
   it("A1: validates both operands and refuses paired and extra props before work", function* () {
     for (const source of [
-      '<REPL.ImportAsset destination="inputs/a" />',
+      '<REPL.ImportAsset destination="assets/a" />',
       '<REPL.ImportAsset source="/a" />',
-      '<REPL.ImportAsset source="" destination="inputs/a" />',
-      '<REPL.ImportAsset source="/a" destination="inputs/a" replace={true} />',
-      '<REPL.ImportAsset source="/a" destination="inputs/a">body</REPL.ImportAsset>',
+      '<REPL.ImportAsset source="" destination="assets/a" />',
+      '<REPL.ImportAsset source="/a" destination="assets/a" replace={true} />',
+      '<REPL.ImportAsset source="/a" destination="assets/a">body</REPL.ImportAsset>',
     ]) {
       const asked = fresh();
       expect((yield* reply(source, asked)).ok).toBe(false);
@@ -3458,13 +3458,13 @@ describe("ImportAsset captured response admission", () => {
     }
     const asked = fresh();
     expect(
-      (yield* reply('<REPL.ImportAsset source="/a ü" destination="inputs/a ü" />', asked)).ok,
+      (yield* reply('<REPL.ImportAsset source="/a ü" destination="assets/a ü" />', asked)).ok,
     ).toBe(true);
     expect(asked.requests).toEqual(["importAsset"]);
     expect(asked.began).toEqual([
-      { component: "REPL.ImportAsset", arguments: { source: "/a ü", destination: "inputs/a ü" } },
+      { component: "REPL.ImportAsset", arguments: { source: "/a ü", destination: "assets/a ü" } },
     ]);
-    expect(asked.settled[0]?.observed).toBe("inputs/a ü");
+    expect(asked.settled[0]?.observed).toBe("assets/a ü");
     const surface = responseSurface(ceilingFor(fresh())).find(
       (one) => one.name === "REPL.ImportAsset",
     );

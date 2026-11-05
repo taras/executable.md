@@ -14,7 +14,7 @@ import {
   rm,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { allSettled, Ok, ensure, scoped, spawn, until, withResolvers } from "effection";
+import { allSettled, Ok, ensure, scoped, spawn, until, withResolvers, race } from "effection";
 import type { Operation } from "effection";
 import { Permissions } from "@executablemd/runtime/api";
 import { FsApi } from "@effectionx/fs";
@@ -112,7 +112,7 @@ function* importThroughOwner(bytes: Uint8Array, destination: string, deniedAbsol
   const sending = yield* spawn(() => held.owner.message("Import this asset"));
   const asking = yield* question(held.owner.questions);
   expect(asking.message).toBe(
-    `Source: ${source.source}\nDestination: ${join(yield* until(realpath(held.workspace)), destination)}\nWorkspace path after import: ${destination}\nImport copies this file into your session workspace.`,
+    `Source: ${source.source}\nDestination: ${join(yield* until(realpath(held.workspace)), destination)}\nWorkspace path after import: ${destination}\nImport copies this file into your session assets folder.`,
   );
   expect(asking.form.fields[0]?.choices).toEqual(["Import", "Decline"]);
   expect(io.reads).toBe(0);
@@ -141,11 +141,11 @@ function* importThroughOwner(bytes: Uint8Array, destination: string, deniedAbsol
 describe("approved Sidekick asset import", () => {
   it("A2/A3: actual captured approval copies text and two independently known binary inputs", function* () {
     yield* scoped(() =>
-      importThroughOwner(new TextEncoder().encode("mock text ü\n"), "inputs/mock ü name.html"),
+      importThroughOwner(new TextEncoder().encode("mock text ü\n"), "assets/mock ü name.html"),
     );
-    yield* scoped(() => importThroughOwner(BINARY, "inputs/mock ü name.bin"));
+    yield* scoped(() => importThroughOwner(BINARY, "assets/mock ü name.bin"));
     yield* scoped(() =>
-      importThroughOwner(new Uint8Array([255, 0, 1, 194, 66]), "inputs/changed.bin"),
+      importThroughOwner(new Uint8Array([255, 0, 1, 194, 66]), "assets/changed.bin"),
     );
   });
 
@@ -157,7 +157,7 @@ describe("approved Sidekick asset import", () => {
     yield* useNormalizedOutput();
     const { held, source } = yield* importThroughOwner(
       new TextEncoder().encode("copied text"),
-      "inputs/mock ü.html",
+      "assets/mock ü.html",
       true,
     );
     const direct = yield* hostFilesHandler().ensureDirectory({
@@ -167,7 +167,7 @@ describe("approved Sidekick asset import", () => {
     expect(direct.ok).toBe(false);
     const read = yield* hostFilesHandler().readTextFile({
       cwd: held.workspace,
-      path: "inputs/mock ü.html",
+      path: "assets/mock ü.html",
     });
     expect(read).toEqual(Ok("copied text"));
     expect(
@@ -183,7 +183,7 @@ describe("approved Sidekick asset import", () => {
         const { source } = yield* fixture();
         const io = yield* instrument();
         const held = yield* useHarness();
-        scripted(held, source, "inputs/declined.bin");
+        scripted(held, source, "assets/declined.bin");
         const sending = yield* spawn(() => held.owner.message("Import"));
         const asking = yield* question(held.owner.questions);
         if (decision === "Decline") {
@@ -210,7 +210,7 @@ describe("approved Sidekick asset import", () => {
         const result = yield* ReplHost.operations.importAsset({
           workspace: "/unread",
           source: "/unread/source",
-          destination: "input",
+          destination: "assets/input",
         });
         expect(result.ok).toBe(false);
         expect(io).toEqual({ metadata: 0, reads: 0, writes: 0 });
@@ -221,7 +221,7 @@ describe("approved Sidekick asset import", () => {
     let permit = true;
     yield* Permissions.around({ files: ([operation], next) => (permit ? next(operation) : false) });
     const held = yield* useHarness();
-    scripted(held, source, "inputs/policy.bin");
+    scripted(held, source, "assets/policy.bin");
     const sending = yield* spawn(() => held.owner.message("Import"));
     const asking = yield* question(held.owner.questions);
     permit = false;
@@ -234,26 +234,27 @@ describe("approved Sidekick asset import", () => {
   it("A5/A6: containment and all occupied final kinds refuse without writes", function* () {
     const { source } = yield* fixture();
     const workspace = yield* useTemporary("xmd-asset-dest-");
-    yield* until(writeFile(join(workspace, "file"), "KEEP"));
-    yield* until(mkdir(join(workspace, "directory")));
-    yield* until(symlink("absent", join(workspace, "dangling")));
-    yield* until(symlink("/", join(workspace, "outside")));
+    yield* until(mkdir(join(workspace, "assets")));
+    yield* until(writeFile(join(workspace, "assets/file"), "KEEP"));
+    yield* until(mkdir(join(workspace, "assets/directory")));
+    yield* until(symlink("absent", join(workspace, "assets/dangling")));
+    yield* until(symlink("/", join(workspace, "assets/outside")));
     const io = yield* instrument();
     for (const destination of [
-      "file",
-      "directory",
-      "dangling",
+      "assets/file",
+      "assets/directory",
+      "assets/dangling",
       "../escape",
       "/absolute",
-      "outside/tmp/escape",
+      "assets/outside/tmp/escape",
     ]) {
       const result = yield* ReplHost.operations.importAsset({ workspace, source, destination });
       expect(result.ok).toBe(false);
     }
     expect(io.reads).toBe(0);
     expect(io.writes).toBe(0);
-    expect((yield* until(lstat(join(workspace, "dangling")))).isSymbolicLink()).toBe(true);
-    expect(yield* until(readFile(join(workspace, "file"), "utf8"))).toBe("KEEP");
+    expect((yield* until(lstat(join(workspace, "assets/dangling")))).isSymbolicLink()).toBe(true);
+    expect(yield* until(readFile(join(workspace, "assets/file"), "utf8"))).toBe("KEEP");
   });
 
   it("A6: a late collision survives native no-replace publication", function* () {
@@ -265,25 +266,27 @@ describe("approved Sidekick asset import", () => {
       mkdtemp,
       realpath,
       link: (payload, destination) =>
-        typeof destination === "string" && destination.endsWith("late.bin")
+        typeof destination === "string" && destination.endsWith("assets/late.bin")
           ? writeFile(destination, "LATE").then(() => link(payload, destination))
           : link(payload, destination),
     });
-    scripted(held, source, "late.bin");
+    scripted(held, source, "assets/late.bin");
     const sending = yield* spawn(() => held.owner.message("Import"));
     (yield* question(held.owner.questions)).submit({ decision: "Import" });
     yield* sending;
-    expect(yield* until(readFile(join(held.workspace, "late.bin"), "utf8"))).toBe("LATE");
+    expect(yield* until(readFile(join(held.workspace, "assets/late.bin"), "utf8"))).toBe("LATE");
     expect(
-      (yield* until(readdir(held.workspace))).filter((path) => path.startsWith(".xmd-import-")),
+      (yield* until(readdir(join(held.workspace, "assets")))).filter((path) =>
+        path.startsWith(".xmd-import-"),
+      ),
     ).toEqual([]);
-    scripted(held, source, "chosen-new.bin");
+    scripted(held, source, "assets/chosen-new.bin");
     const retry = yield* spawn(() => held.owner.message("Choose this explicit new destination"));
     const fresh = yield* question(held.owner.questions);
-    expect(fresh.message).toContain("Workspace path after import: chosen-new.bin");
+    expect(fresh.message).toContain("Workspace path after import: assets/chosen-new.bin");
     fresh.submit({ decision: "Import" });
     yield* retry;
-    expect([...(yield* until(readFile(join(held.workspace, "chosen-new.bin"))))]).toEqual([
+    expect([...(yield* until(readFile(join(held.workspace, "assets/chosen-new.bin"))))]).toEqual([
       ...BINARY,
     ]);
     expect(held.owner.questions.asked).toBe(2);
@@ -425,7 +428,7 @@ describe("mounted asset import", () => {
       });
       const page = yield* useReplPage();
       const repl = page.repl;
-      repl.fake.script({ reply: invocation(source, "held.bin") });
+      repl.fake.script({ reply: invocation(source, "assets/held.bin") });
       yield* sendMessage(page, "Import");
       yield* page.until("approval pending", (one) => one.shows("[answer sidekick]"));
       yield* openQuestion(page);
@@ -460,7 +463,9 @@ describe("mounted asset import", () => {
       ).toBe(true);
       const saved = yield* settledReading(repl);
       expect(
-        saved.chat.filter((one) => one.kind === "control-outcome" && one.observed === "held.bin"),
+        saved.chat.filter(
+          (one) => one.kind === "control-outcome" && one.observed === "assets/held.bin",
+        ),
       ).toEqual([]);
     });
   }
@@ -504,7 +509,7 @@ describe("native import ownership and uncertain completion", () => {
           return yield* next(path, options);
         },
       });
-      scripted(held, source, "cancelled.bin");
+      scripted(held, source, "assets/cancelled.bin");
       const sending = yield* spawn(() => held.owner.message("Import"));
       (yield* question(held.owner.questions)).submit({ decision: "Import" });
       yield* entered.operation;
@@ -523,13 +528,13 @@ describe("native import ownership and uncertain completion", () => {
         ),
       ).toBe(true);
       if (phase === "publication") {
-        expect([...(yield* until(readFile(join(held.workspace, "cancelled.bin"))))]).toEqual([
-          ...BINARY,
-        ]);
+        expect([...(yield* until(readFile(join(held.workspace, "assets/cancelled.bin"))))]).toEqual(
+          [...BINARY],
+        );
       } else {
         expect(
           yield* until(
-            lstat(join(held.workspace, "cancelled.bin")).then(
+            lstat(join(held.workspace, "assets/cancelled.bin")).then(
               () => false,
               () => true,
             ),
@@ -537,7 +542,7 @@ describe("native import ownership and uncertain completion", () => {
         ).toBe(true);
       }
       const saved = yield* records(held.execution);
-      expect(JSON.stringify(saved)).not.toContain('"observed":"cancelled.bin"');
+      expect(JSON.stringify(saved)).not.toContain('"observed":"assets/cancelled.bin"');
     });
   }
 
@@ -552,16 +557,18 @@ describe("native import ownership and uncertain completion", () => {
       mkdtemp,
       realpath,
     });
-    scripted(held, source, "failed.bin");
+    scripted(held, source, "assets/failed.bin");
     const sending = yield* spawn(() => held.owner.message("Import"));
     (yield* question(held.owner.questions)).submit({ decision: "Import" });
     yield* sending;
     expect(
-      (yield* until(readdir(held.workspace))).filter((path) => path.startsWith(".xmd-import-")),
+      (yield* until(readdir(join(held.workspace, "assets")))).filter((path) =>
+        path.startsWith(".xmd-import-"),
+      ),
     ).toEqual([]);
     expect(
       yield* until(
-        lstat(join(held.workspace, "failed.bin")).then(
+        lstat(join(held.workspace, "assets/failed.bin")).then(
           () => false,
           () => true,
         ),
@@ -588,17 +595,17 @@ describe("native import ownership and uncertain completion", () => {
         return yield* next(path, options);
       },
     });
-    scripted(held, source, "published.bin");
+    scripted(held, source, "assets/published.bin");
     const sending = yield* spawn(() => allSettled([scoped(() => held.owner.message("Import"))]));
     (yield* question(held.owner.questions)).submit({ decision: "Import" });
     const [result] = yield* sending;
     expect(result?.ok).toBe(false);
     expect(held.fake.prompts).toHaveLength(1);
-    expect([...(yield* until(readFile(join(held.workspace, "published.bin"))))]).toEqual([
+    expect([...(yield* until(readFile(join(held.workspace, "assets/published.bin"))))]).toEqual([
       ...BINARY,
     ]);
     expect(JSON.stringify(yield* records(held.execution))).not.toContain(
-      '"observed":"published.bin"',
+      '"observed":"assets/published.bin"',
     );
   });
 });
@@ -622,13 +629,15 @@ describe("asset import acknowledgement and independent owners", () => {
         return yield* next(path, line);
       },
     });
-    scripted(held, source, "append.bin");
+    scripted(held, source, "assets/append.bin");
     const sending = yield* spawn(() => allSettled([scoped(() => held.owner.message("Import"))]));
     (yield* question(held.owner.questions)).submit({ decision: "Import" });
     const [result] = yield* sending;
     expect(result?.ok).toBe(false);
     expect(held.fake.prompts).toHaveLength(1);
-    expect([...(yield* until(readFile(join(held.workspace, "append.bin"))))]).toEqual([...BINARY]);
+    expect([...(yield* until(readFile(join(held.workspace, "assets/append.bin"))))]).toEqual([
+      ...BINARY,
+    ]);
     const before = { ...io };
     const cold = yield* held.repository.open(held.execution.id);
     if (cold.chat.form !== "paired") {
@@ -652,9 +661,9 @@ describe("asset import acknowledgement and independent owners", () => {
         return elsewhere;
       },
     });
-    const { held } = yield* importThroughOwner(BINARY, "root-wins.bin");
+    const { held } = yield* importThroughOwner(BINARY, "assets/root-wins.bin");
     expect(yield* until(readdir(elsewhere))).toEqual([]);
-    expect([...(yield* until(readFile(join(held.workspace, "root-wins.bin"))))]).toEqual([
+    expect([...(yield* until(readFile(join(held.workspace, "assets/root-wins.bin"))))]).toEqual([
       ...BINARY,
     ]);
   });
@@ -669,7 +678,7 @@ describe("asset import acknowledgement and independent owners", () => {
     );
     yield* page.key("Enter");
     yield* page.until("entry question", (one) => one.shows("[answer]"));
-    page.repl.fake.script({ reply: invocation(source, "never.bin") });
+    page.repl.fake.script({ reply: invocation(source, "assets/never.bin") });
     yield* sendMessage(page, "Import");
     yield* page.until("import question", (one) => one.shows("[answer sidekick]"));
     yield* openQuestion(page);
@@ -698,7 +707,7 @@ describe("unavailable import owner", () => {
     const io = yield* instrument();
     const held = yield* useHarness(undefined, { workspace: false });
     const before = { ...io };
-    scripted(held, source, "inputs/missing.bin");
+    scripted(held, source, "assets/missing.bin");
     const result = yield* held.owner.message("Import");
     expect(result.ok).toBe(true);
     expect(held.owner.questions.asked).toBe(0);
@@ -710,11 +719,149 @@ describe("unavailable import owner", () => {
     const result = yield* ReplHost.operations.importAsset({
       workspace: "/not-touched",
       source: "/not-touched/input",
-      destination: "inputs/file",
+      destination: "assets/file",
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.message).toContain("no asset importer");
     }
+  });
+});
+
+describe("1113: asset publication boundary", () => {
+  it("1113 F1: a fresh non-assets request refuses through the actual owner without approval or staging", function* () {
+    const { source } = yield* fixture();
+    const io = yield* instrument();
+    const held = yield* useHarness();
+    const before = yield* until(readdir(held.workspace));
+    for (const destination of [
+      "inputs/new.bin",
+      "components/new.bin",
+      "root.bin",
+      "assets/../private/new.bin",
+    ]) {
+      scripted(held, source, destination);
+      const sending = yield* spawn(() => held.owner.message("Import outside assets"));
+      const outcome = yield* race([
+        (function* () {
+          yield* sending;
+          return "settled";
+        })(),
+        (function* () {
+          yield* question(held.owner.questions);
+          return "asked";
+        })(),
+      ]);
+      if (outcome === "asked") {
+        yield* held.owner.stop();
+        yield* sending;
+      }
+      expect(outcome).toBe("settled");
+      expect(held.owner.questions.asked).toBe(0);
+      expect(held.fake.prompts.at(-1)).toContain("beneath this session's assets/");
+    }
+    expect(io.reads).toBe(0);
+    expect(io.writes).toBe(0);
+    expect(yield* until(readdir(held.workspace))).toEqual(before);
+  });
+
+  for (const kind of ["assets-root-sibling", "assets-root-outside", "assets-parent-outside"]) {
+    it(`1113 F1: ${kind} refuses before approval and preserves outside bytes`, function* () {
+      const { source } = yield* fixture();
+      const io = yield* instrument();
+      const held = yield* useHarness();
+      const outside = yield* useTemporary("1113-import-outside-");
+      yield* until(writeFile(join(outside, "canary"), BINARY));
+      const sibling = join(held.workspace, "components");
+      if (kind === "assets-parent-outside") {
+        yield* until(mkdir(join(held.workspace, "assets")));
+        yield* until(symlink(outside, join(held.workspace, "assets/nested")));
+      } else {
+        yield* until(
+          symlink(
+            kind === "assets-root-sibling" ? sibling : outside,
+            join(held.workspace, "assets"),
+          ),
+        );
+      }
+      scripted(held, source, "assets/nested/new.bin");
+      yield* held.owner.message("Import through a linked parent");
+      expect(held.owner.questions.asked).toBe(0);
+      expect(io.reads).toBe(0);
+      expect(io.writes).toBe(0);
+      expect(yield* until(readdir(outside))).toEqual(["canary"]);
+      expect([...(yield* until(readFile(join(outside, "canary"))))]).toEqual([...BINARY]);
+      expect(yield* until(readdir(sibling))).toEqual([]);
+    });
+  }
+
+  it("1113 F1: rechecks the canonical destination after the staged copy before publication", function* () {
+    const { source } = yield* fixture();
+    const held = yield* useHarness();
+    const outside = yield* useTemporary("1113-import-final-prefix-");
+    const assets = join(yield* until(realpath(held.workspace)), "assets");
+    let copied = false;
+    let published = 0;
+    yield* useNodeReplAssetImport({
+      copyFile: (from, to, mode) =>
+        copyFile(from, to, mode).then(() => {
+          copied = true;
+        }),
+      mkdir,
+      mkdtemp,
+      realpath: (path) => (copied && path === assets ? Promise.resolve(outside) : realpath(path)),
+      link: (from, to) => {
+        published += 1;
+        return link(from, to);
+      },
+    });
+    scripted(held, source, "assets/final.bin");
+    const sending = yield* spawn(() => held.owner.message("Import with a changed observed parent"));
+    (yield* question(held.owner.questions)).submit({ decision: "Import" });
+    yield* sending;
+    expect(copied).toBe(true);
+    expect(published).toBe(0);
+    expect(yield* until(readdir(assets))).toEqual([]);
+    expect(yield* until(readdir(outside))).toEqual([]);
+    expect(held.fake.prompts.at(-1)).toContain("parent leaves this session's assets/");
+  });
+
+  it("1113 F1: an acknowledged historical inputs result remains passive and byte-identical", function* () {
+    const destination = "inputs/old.bin";
+    let fixtureImports = 0;
+    // Build a historical acknowledgement fixture without issuing a new native import.
+    yield* ReplHost.around({
+      *importAsset() {
+        fixtureImports += 1;
+        return Ok(destination);
+      },
+    });
+    const held = yield* useHarness();
+    yield* until(mkdir(join(held.workspace, "inputs")));
+    yield* until(writeFile(join(held.workspace, destination), BINARY));
+    scripted(held, "/historical/source.bin", destination);
+    yield* held.owner.message("Recorded historical import");
+    expect(fixtureImports).toBe(1);
+    if (held.execution.chat.form !== "paired") {
+      throw new Error("Historical import needs paired storage");
+    }
+    const before = yield* until(readFile(held.execution.chat.location.sidekick, "utf8"));
+    const io = yield* instrument();
+    const cold = yield* held.repository.open(held.execution.id);
+    if (cold.chat.form !== "paired") {
+      throw new Error("Historical import lost its paired history");
+    }
+    expect(projectSidekick(cold.chat.records).ok).toBe(true);
+    expect(yield* until(readFile(cold.chat.location.sidekick, "utf8"))).toBe(before);
+    expect(
+      cold.chat.records.some(
+        (record) => record.kind === "control-outcome" && record.observed === destination,
+      ),
+    ).toBe(true);
+    expect(io.reads).toBe(0);
+    expect(io.writes).toBe(0);
+    expect(fixtureImports).toBe(1);
+    expect([...(yield* until(readFile(join(held.workspace, destination))))]).toEqual([...BINARY]);
+    expect((yield* until(readdir(held.workspace))).includes("assets")).toBe(false);
   });
 });

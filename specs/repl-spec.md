@@ -189,11 +189,13 @@ Both nonempty string props are required. The control accepts only this
 self-closing form and these two props. Propose `assets/<original filename>`,
 preserving its spelling. Repository inputs follow repository acquisition.
 The root supplies the existing session workspace; response cwd cannot select
-another destination root. Missing workspace or host importer refuses.
+another destination root. New destinations must name a file beneath this session's
+assets/ subtree. Other session paths refuse before approval or destination work.
+Missing workspace or host importer refuses.
 
 The question shows the exact resolved source, absolute destination and returned
 workspace-relative path, then states: `Import copies this file into your session
-workspace.` It offers Import and Decline, with neither selected. An untouched
+assets folder.` It offers Import and Decline, with neither selected. An untouched
 or invalid answer leaves the same question pending. Closing hides the form and
 leaves it unanswered. Stop withdraws this question and joins its response while
 an entry's independent question stays waiting.
@@ -204,10 +206,9 @@ cancellation during approval produce none of those effects. Effective read and
 write restrictions apply before metadata and again after approval; publication
 rechecks write permission. Approval grants no native Agent tool or ordinary
 Files permission. Absolute denial does not prevent this separately approved
-import, and approval never installs an absolute allowance. A destination in a
-managed checkout is derived from the actual session workspace and returned
-checkout path; the copy must reach that exact checkout beneath the workspace.
-An arbitrary host repository outside that root is unsupported.
+import, and approval never installs an absolute allowance. Canonical destination
+checks before approval, after approval and immediately before publication keep assets-root and parent links inside that subtree.
+Existing copies and acknowledged outcomes at older paths remain unchanged.
 
 Import preserves exact source bytes, including binary data, and leaves the
 source unchanged. Absolute or escaping destinations and observed outward parent

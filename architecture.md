@@ -6862,16 +6862,17 @@ The implementation owners are explicit:
 
 The captured CLI-private `<REPL.ImportAsset source="/known/mock ü.html"
 destination="assets/mock ü.html" />` control imports one non-repository regular
-file into the existing session workspace. The root passes that directory directly;
-response cwd and props cannot retarget it. Missing workspace or importer refuses.
+file beneath assets/ in the existing session workspace. The root passes the session
+directory directly; response cwd and props cannot retarget it. Missing workspace or importer refuses.
 The native adapter checks effective read/write restrictions before metadata I/O,
 after approval and before publication. Ordinary Files and repository acquisition
 keep their existing owners. This separately approved operation remains eligible
 with ordinary absolute access denied: it requires effective read and write,
 not absolute permission, and approval installs no general absolute allowance.
-A destination in a managed checkout is derived from the actual workspace and
-returned checkout beneath it. An arbitrary host repository outside that root
-is unsupported; the importer never broadens its destination root.
+A new destination outside assets/ refuses before approval or destination work.
+Canonical checks before approval, after approval and immediately before publication
+keep assets-root and parent links inside that subtree. Existing copies and
+acknowledged outcomes at older paths remain unchanged.
 
 Preparation resolves metadata and retains one exact source/destination pair.
 Core elicitation presents that pair and the workspace-relative result with exact
