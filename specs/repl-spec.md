@@ -908,7 +908,10 @@ visual column; Home/End reaches that row's boundaries. Plain arrows stay in the
 field. Alt+Up/Down reaches its local actions, and Tab leaves its region. Each
 value keeps its own caret through focus departure, modal coverage and resize;
 an explicitly replaced value or a new question starts at its end. Enter keeps
-each field's submission or Apply meaning, and Control-J inserts a newline.
+each field's submission or Apply meaning. Control-J, a shifted Enter and
+Terminal.app's Shift+Return insert a newline; releasing a key inserts nothing.
+Control-C in a focused Message that holds text clears it, as described under
+Message below.
 
 While the screen is open it enables bracketed paste. A framed paste inserts one
 text value at the caret, preserving blank lines, indentation, tabs and Unicode.
@@ -1120,6 +1123,13 @@ message, entry or provider work. One deliberate Enter or `[send]` submits the
 complete value once, including text inserted at a middle caret. Pasting while a
 turn is running leaves that draft unsent when the turn finishes.
 
+Control-C while Message has focus and holds any text, whitespace or several lines
+included, clears it: the value is empty, its caret is at the start and Message
+keeps the focus, so typing goes on there. Clearing is a Message edit and nothing
+else. The Draft and its takeover, a question's answer, the queue, the Sidekick's
+exchange and any admitted entry stay as they were. On an empty Message, Control-C
+leaves as it does everywhere else.
+
 While the Sidekick is working the box stays editable, because composing the next
 question while a reply comes back is the ordinary case — and what was typed then
 is not sent by the cycle finishing. `[send]` offers nothing to activate while a
@@ -1245,19 +1255,25 @@ interrupted leaves no record, because a record for it would be a record of
 something that did not happen. What was already appended stays readable, and is
 what a cold process shows.
 
-One chord ends it, and it is the only one: Control-C, wherever it is pressed.
-Raw mode clears `ISIG`, so no signal reaches this process and the byte is the
-whole of the notice — which is why dropping it with the other chords left the
-reflex every terminal program answers doing nothing, and saying nothing about why.
-Every other Control or Alt combination is still dropped whole.
+One chord ends it, and it is the only one: Control-C. Raw mode clears `ISIG`, so
+no signal reaches this process and the byte is the whole of the notice — which is
+why dropping it with the other chords left the reflex every terminal program
+answers doing nothing, and saying nothing about why. Every other Control or Alt
+combination is still dropped whole.
 
-The command answers that key itself, where it answers end of input, rather than a
-mounted control answering it: ending is a lifecycle outcome its owner decides, and
-a key resolved by whichever row happened to have focus would stop meaning the same
-thing from one screen to the next. It therefore leaves both screens a running
-command can be sitting on, and they are not the same screen: the refusal below the
-minimum size, which places no control at all and offers Escape besides; and the
-one shown for a location this command cannot show, which does place a control.
+The one place Control-C means something else is a focused Message that holds
+text, where it clears the message and the command goes on. Everywhere else no
+mounted control handles the key, and the command answers it as leaving: ending is
+a lifecycle outcome its owner decides. That includes a Message holding text behind
+a drawer or on a reading that is not shown, because it does not have the focus, and
+an attached child UI, where leaving detaches it as `[detach]` does. A burst that
+clears and then leaves acts on nothing after the leaving keystroke.
+
+Control-C therefore leaves both screens a running command can be sitting on, and
+they are not the same screen: the refusal below the minimum size, which places no
+control at all and offers Escape besides; and the one shown for a location this
+command cannot show, which does place a control. Before the first frame is
+presented there is no focused Message, and Control-C leaves.
 
 Leaving that second one is still a refusal. The reason is reported, the status is
 non-zero and no reopen command is printed, because a history that could not be
@@ -2563,8 +2579,12 @@ position and never an action. Text is its own event and goes to whichever field
 has focus, and to nothing at all when a control has it rather than a field — so a
 keystroke never edits a field nobody is looking at, and the row above the surface
 says how to get back to the draft while that is the case. A Control or Alt chord is dropped whole rather than typed as its letter.
-The decoder names navigation keys, including Alt+Up/Down, separately. Control-J
-is text containing a newline, and Control-C ends the command. A pointer is resolved against the exact frame that produced
+The decoder names navigation keys, including Alt+Up/Down, separately. Control-J,
+Enter carrying only Shift, and Enter carrying both Control and Alt — how
+Terminal.app sends Shift+Return as `ESC CR` — are text containing a newline on a
+press or repeat, and a release is nothing. Plain Enter stays Enter. Control-C is
+named as an interrupt rather than decided here: the focused Message clears with
+it, and anywhere else the command leaves. A pointer is resolved against the exact frame that produced
 its coordinates, so a stale frame, a node that has gone and a target behind a
 drawer all reach nothing — and activating a control with a pointer produces the
 same action as pressing Enter on it.

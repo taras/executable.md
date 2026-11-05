@@ -99,6 +99,14 @@ export type ReplAction =
    */
   | { readonly kind: "send-message" }
   /**
+   * Control-C in the focused message box.
+   *
+   * Clears what the box holds, or leaves when it holds nothing. The root
+   * decides which from the message it holds now, because a description drawn
+   * before the rest of a burst can still show text the person already cleared.
+   */
+  | { readonly kind: "interrupt-message" }
+  /**
    * Stop whatever the Sidekick is doing.
    *
    * Only the Sidekick. An entry it already admitted belongs to the session and

@@ -117,6 +117,25 @@ const ALT_KEYS: ReadonlyMap<string, ReplKey> = new Map([
 const NEWLINE_CHORD = "j";
 
 /**
+ * Whether this press is an Enter a terminal sent to mean a newline.
+ *
+ * Terminal.app sends Shift+Return as `ESC CR`, which the decoder reports as
+ * Enter with both Alt and Control held, so Control+Alt+Enter is the same
+ * newline wherever a terminal can send it. Under progressive keyboard input a
+ * shifted Enter arrives as Enter carrying only a shift. Plain Enter stays the
+ * submission key.
+ */
+function newlineEnter(event: Extract<InputEvent, { type: "keydown" | "keyrepeat" }>): boolean {
+  if (event.code !== "Enter") {
+    return false;
+  }
+  if (event.alt === true && event.ctrl === true) {
+    return event.shift !== true;
+  }
+  return event.shift === true && event.alt !== true && event.ctrl !== true;
+}
+
+/**
  * The physical key an interrupt arrives as.
  *
  * Raw mode clears `ISIG`, so Control-C raises no signal and the byte is the only
@@ -125,8 +144,8 @@ const NEWLINE_CHORD = "j";
  * all, with nothing on screen saying why.
  *
  * It is named as a key rather than decided here, because what a keystroke means
- * is not this module's to say. `Interrupt` is what was pressed; ending is what
- * the program does about it.
+ * is not this module's to say. `Interrupt` is what was pressed; the focused
+ * Message clears with it, and anywhere else the program leaves.
  */
 const INTERRUPT_CHORD = "c";
 
@@ -160,14 +179,18 @@ function backward(event: Extract<InputEvent, { type: "keydown" | "keyrepeat" }>)
  * the code would type the letter somebody pressed Control with, which is how an
  * editor ends up inserting a `c` when a person asked it to stop.
  *
- * Four chords are named before the rest are dropped, and they are the only
- * four: Control-J, which is the newline inside a paste, Control-C, which is an
- * interrupt, and Alt+Up and Alt+Down, which reach a field's neighbours. Every
- * other Control or Alt combination is dropped whole.
+ * Five chords are named before the rest are dropped, and they are the only
+ * five: Control-J, which is the newline inside a paste, Control+Alt+Enter,
+ * which is Terminal.app's Shift+Return, Control-C, which is an interrupt, and
+ * Alt+Up and Alt+Down, which reach a field's neighbours. Every other Control or
+ * Alt combination is dropped whole.
  */
 export function normalize(event: InputEvent): ReplNormalized {
   if (event.type === "keydown" || event.type === "keyrepeat") {
-    if (event.ctrl === true && event.alt !== true && event.code === NEWLINE_CHORD) {
+    if (
+      (event.ctrl === true && event.alt !== true && event.code === NEWLINE_CHORD) ||
+      newlineEnter(event)
+    ) {
       return { event: Object.freeze({ kind: "text", text: "\n" }), at: undefined };
     }
     if (event.ctrl === true && event.alt !== true && event.code === INTERRUPT_CHORD) {

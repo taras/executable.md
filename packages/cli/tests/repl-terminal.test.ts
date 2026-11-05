@@ -2098,6 +2098,54 @@ describe("REPL bracketed paste", () => {
   });
 });
 
+/** Every two-read split of these bytes, and then one read per byte. */
+function partitions(bytes: Uint8Array): Uint8Array[][] {
+  const all: Uint8Array[][] = [];
+  for (let split = 0; split <= bytes.length; split += 1) {
+    all.push([bytes.slice(0, split), bytes.slice(split)]);
+  }
+  all.push(Array.from(bytes, (byte) => Uint8Array.of(byte)));
+  return all;
+}
+
+describe("REPL newline keys, from recorded terminal bytes", () => {
+  const NEWLINE: ReplInputEvent = { kind: "text", text: "\n" };
+  const SENTINEL: ReplInputEvent = { kind: "text", text: "z" };
+
+  it("N1: Terminal.app Shift+Return (ESC CR) is one newline at every split", function* () {
+    const bytes = BYTES.encode("\x1b\rz");
+    for (const chunks of partitions(bytes)) {
+      expect(yield* decoded(chunks)).toEqual([NEWLINE, SENTINEL]);
+    }
+  });
+
+  it("N1: LF and CSI-u Control-J stay newlines, and CR stays Enter", function* () {
+    expect(yield* decoded([BYTES.encode("\nz")])).toEqual([NEWLINE, SENTINEL]);
+    for (const chunks of partitions(BYTES.encode("\x1b[106;5uz"))) {
+      expect(yield* decoded(chunks)).toEqual([NEWLINE, SENTINEL]);
+    }
+    expect(yield* decoded([BYTES.encode("\rz")])).toEqual([
+      { kind: "key", key: "Enter" },
+      SENTINEL,
+    ]);
+  });
+
+  it("N1: a CSI-u shifted Enter press and repeat are newlines, and its release is nothing", function* () {
+    for (const chunks of partitions(BYTES.encode("\x1b[13;2uz"))) {
+      expect(yield* decoded(chunks)).toEqual([NEWLINE, SENTINEL]);
+    }
+    for (const chunks of partitions(BYTES.encode("\x1b[13;2:2uz"))) {
+      expect(yield* decoded(chunks)).toEqual([NEWLINE, SENTINEL]);
+    }
+    expect(yield* decoded([BYTES.encode("\x1b[13;2:3uz")])).toEqual([SENTINEL]);
+    // Unshifted under the same protocol, Enter still submits.
+    expect(yield* decoded([BYTES.encode("\x1b[13uz")])).toEqual([
+      { kind: "key", key: "Enter" },
+      SENTINEL,
+    ]);
+  });
+});
+
 describe("REPL terminal: what the host normalizes, and what it refuses to guess", () => {
   it("I1: a key becomes a normalized event and a mouse press becomes a position", function* () {
     const terminal = recordingTerminal();

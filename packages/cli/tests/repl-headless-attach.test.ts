@@ -11,7 +11,7 @@ import { Reply, SidekickTransport } from "../src/sidekick-acp/protocol.ts";
 import { applied, physical, presentation } from "../src/headless/ui-schema.ts";
 import { attachmentDescriptor, requestAttachment } from "../src/sidekick-acp/client.ts";
 import { useHeadlessFixture, START_CHILD, promptChild } from "./support/headless-repl.ts";
-import { recordingTerminal } from "./support/mounted-repl.ts";
+import { awaited, recordingTerminal } from "./support/mounted-repl.ts";
 import type { Terminal } from "./support/mounted-repl.ts";
 import { z } from "zod";
 import { useTerminalScreen } from "./support/terminal-screen.ts";
@@ -375,6 +375,22 @@ function visible(terminal: Terminal, text: string, appliedFrames?: AppliedFrames
   ]);
 }
 
+function gone(terminal: Terminal, text: string): Operation<void> {
+  return race([
+    (function* () {
+      while (terminal.screen?.rows().join("\n").includes(text)) {
+        yield* terminal.after(terminal.drawn);
+      }
+    })(),
+    (function* (): Operation<never> {
+      yield* sleep(10000);
+      throw new Error(
+        `The attached screen still showed ${JSON.stringify(text)}: ${terminal.screen?.rows().join("\n")}`,
+      );
+    })(),
+  ]);
+}
+
 function* locate(
   terminal: Terminal,
   label: string,
@@ -486,6 +502,117 @@ describe("headless renderer lifetime", () => {
 });
 
 describe("headless live UI", () => {
+  it("C3: Control-C typed while the attached first frame is still being written detaches", function* () {
+    const held = yield* useHeadlessFixture();
+    const prompts = held.host.fake.prompts.length;
+    const recording = recordingTerminal();
+    const terminal = recording.terminal;
+    const reached = withResolvers<void>();
+    const release = withResolvers<void>();
+    yield* ensure(() => {
+      release.resolve();
+    });
+    let gated = false;
+    let detached = false;
+    const ui = yield* spawn(function* () {
+      yield* recording.install();
+      yield* ReplTerminal.around({
+        *write([bytes], next) {
+          if (!gated && new TextDecoder().decode(bytes).includes("XMD REPL")) {
+            gated = true;
+            reached.resolve();
+            yield* release.operation;
+          }
+          yield* next(bytes);
+        },
+      });
+      yield* attachChildUi(held.reference.sessionId);
+      detached = true;
+    });
+    yield* reached.operation;
+    // Reaching the held write says nothing about the input subscription, which
+    // the UI takes on its own schedule; wait for it while the write stays held.
+    yield* awaited("the attached UI reading its terminal", () => terminal.readers > 0);
+    // Nothing is on the screen yet, so no message box is in front of anybody.
+    expect(terminal.screen?.rows().join("").trim() ?? "").toBe("");
+    expect(terminal.readers).toBe(1);
+    terminal.feed("\t\t\tfirst\x03");
+    yield* sleep(100);
+    release.resolve();
+    yield* race([
+      ui,
+      (function* (): Operation<never> {
+        yield* sleep(10000);
+        throw new Error(`The attached UI did not detach: ${terminal.screen?.rows().join("\n")}`);
+      })(),
+    ]);
+    expect(detached).toBe(true);
+    expect(held.host.fake.prompts).toHaveLength(prompts);
+    expect(terminal.resets).toBe(1);
+    expect(terminal.readers).toBe(0);
+    expect(terminal.listeners).toBe(0);
+    // The child kept running, and the next attachment can use it.
+    const second = recordingTerminal();
+    const reattached = yield* spawn(function* () {
+      yield* second.install();
+      yield* attachChildUi(held.reference.sessionId);
+    });
+    yield* visible(second.terminal, "[detach]");
+    second.terminal.feed("usable");
+    yield* visible(second.terminal, "usable");
+    second.terminal.end();
+    yield* reattached;
+    yield* held.task.halt();
+  });
+
+  it("C3: Control-C clears the attached message box, and detaches only from an empty one", function* () {
+    const held = yield* useHeadlessFixture();
+    const frames: AppliedFrames = new WeakMap();
+    const prompts = held.host.fake.prompts.length;
+    const first = recordingTerminal();
+    const terminal = first.terminal;
+    const click = function* (label: string) {
+      yield* held.input.ready(terminal);
+      const at = yield* locate(terminal, label, frames);
+      yield* held.input.input(terminal, `\x1b[<0;${at.column + 1};${at.row + 1}M`);
+    };
+    const ui = yield* spawn(function* () {
+      yield* first.install();
+      yield* observeAppliedFrames(terminal, frames);
+      yield* attachChildUi(held.reference.sessionId);
+    });
+    yield* visible(terminal, "[detach]", frames);
+    yield* click("BINDINGS");
+    yield* gone(terminal, "message the sidekick");
+    yield* click("SIDEKICK");
+    yield* visible(terminal, "message the sidekick", frames);
+    yield* held.input.input(terminal, "child message");
+    yield* visible(terminal, "child message", frames);
+    yield* held.input.input(terminal, "\x03");
+    yield* gone(terminal, "child message");
+    // Still attached, and the box still takes the keystrokes.
+    yield* held.input.input(terminal, "still attached");
+    yield* visible(terminal, "still attached", frames);
+    expect(terminal.readers).toBe(1);
+    yield* held.input.input(terminal, "\x03");
+    yield* gone(terminal, "still attached");
+    terminal.feed("\x03");
+    yield* ui;
+    expect(terminal.readers).toBe(0);
+    expect(terminal.listeners).toBe(0);
+    expect(held.host.fake.prompts).toHaveLength(prompts);
+    // Detaching left the child running, and it accepts the next attachment.
+    const second = recordingTerminal();
+    const reattached = yield* spawn(function* () {
+      yield* second.install();
+      yield* attachChildUi(held.reference.sessionId);
+    });
+    yield* visible(second.terminal, "[detach]");
+    second.terminal.end();
+    yield* reattached;
+    yield* held.task.halt();
+  });
+
   it("H4/H5/J3: attached UI and capable ACP share the actual conditional question and permission owners", function* () {
     const appliedFrames = new WeakMap<Terminal, () => Operation<void>>();
     const conditional = {

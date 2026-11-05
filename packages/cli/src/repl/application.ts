@@ -2228,6 +2228,17 @@ export function reduceRepl(
         },
       };
     }
+    case "interrupt-message": {
+      // An empty box has nothing to clear, so Control-C means what it means
+      // everywhere else.
+      if (state.message.length === 0) {
+        return {
+          state: Object.freeze({ ...state, refusal: undefined }),
+          intent: { kind: "exit" },
+        };
+      }
+      return settled({ ...messaging(state, "").state, messageCaret: { value: "", offset: 0 } });
+    }
     case "remove-sidekick-message":
     case "resume-sidekick-queue":
     case "toggle-follow":

@@ -39,6 +39,10 @@ import type { SidekickTurn } from "../src/repl/sidekick/owner.ts";
 import type { ReplModel } from "../src/repl/model.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplElicitations, ReplQuestion } from "../src/repl/elicitation.ts";
+import { initialState, NO_AGENT, reduceRepl } from "../src/repl/application.ts";
+import type { ReplLive, ReplState } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
+import { journalModel } from "./fixtures/repl/journals.ts";
 import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import {
@@ -47,8 +51,11 @@ import {
   awaited,
   MOUNTED_AGENT,
   mountedExecution,
+  recordingTerminal,
   useMountedHost,
 } from "./support/mounted-repl.ts";
+import { runReplProgram } from "../src/repl/program.ts";
+import { ReplTerminal } from "../src/repl/terminal.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
@@ -56,9 +63,11 @@ import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import {
   answerField,
   chooseOffer,
+  COMPOSER,
   composerHolds,
   DRAFT,
   draftHolds,
+  draftShows,
   draftText,
   formOpen,
   intoComposer,
@@ -1171,7 +1180,7 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
    * One command with an entry running and a Sidekick turn accepted, left by
    * whichever of the two ways out this row is about.
    */
-  function* leaving(leave: (page: ReplPage) => Operation<void>): Operation<void> {
+  function* leaving(leave: (page: ReplPage) => Operation<void>, draft?: string): Operation<void> {
     const page = yield* useReplPage();
     const repl = page.repl;
     repl.fake.script({ held: true, reply: "<Output>Never said.</Output>\n" });
@@ -1180,6 +1189,11 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
     yield* pasteDraft(page, SUSPENDS);
     yield* page.key("Enter");
     yield* page.until("the entry being admitted", (one) => one.shows("Entry 1"));
+    if (draft !== undefined) {
+      // Admitted rather than offered: an edit before admission would withdraw it.
+      yield* page.until("the entry running", (one) => one.shows("Entries › Entry 1"));
+      yield* draftText(page, draft);
+    }
 
     // And a Sidekick turn the agent has accepted and not answered.
     yield* sendMessage(page, "hold on");
@@ -1222,6 +1236,235 @@ describe("Tier R6 — leaving, with Sidekick work in flight", () => {
     yield* leaving(function* (page: ReplPage): Operation<void> {
       page.repl.terminal.feed("\x03");
     });
+  });
+
+  it("M8: Control-C clears a next message first, and only an empty box joins that work", function* () {
+    yield* leaving(function* (page: ReplPage): Operation<void> {
+      const repl = page.repl;
+      // Away and back, because the composer is already drawn while the Draft
+      // holds the keystrokes.
+      yield* selectPane(page, "bindings");
+      yield* selectPane(page, "sidekick");
+      const before = page.screen();
+      const queue = before.rows.find((row) => row.includes("QUEUE"));
+      yield* typed(page, "next question");
+      expect(page.screen().shows("kept draftnext")).toBe(false);
+      repl.terminal.feed("\x03");
+      const cleared = yield* page.until(
+        "the message box cleared",
+        (one) => one.shows(COMPOSER) && !composerHolds(one, "next question"),
+      );
+      // Nothing else moved: the Draft, the running entry, the queue and the one
+      // request the agent accepted are exactly as they were.
+      expect(draftShows(cleared, "kept draft")).toBe(true);
+      expect(cleared.shows("Entries › Entry 1")).toBe(true);
+      expect(cleared.rows.find((row) => row.includes("QUEUE"))).toBe(queue);
+      expect(repl.fake.prompts).toHaveLength(1);
+      expect(repl.outcome()).toBe(undefined);
+      // Still the message box's keystrokes, and still a running command.
+      yield* typed(page, "again");
+      expect(composerHolds(page.screen(), "again")).toBe(true);
+      repl.terminal.feed("\x03");
+      yield* page.until("the message box cleared again", (one) => !composerHolds(one, "again"));
+      expect(repl.fake.prompts).toHaveLength(1);
+      repl.terminal.feed("\x03");
+    }, "kept draft");
+  });
+});
+
+/**
+ * Control-C in the Sidekick's message box.
+ *
+ * A focused box that holds anything is cleared and keeps the keystrokes; an
+ * empty one leaves, as Control-C does everywhere else. The newline keys a
+ * terminal sends are text there, and only a plain Enter sends.
+ */
+describe("Control-C and newlines in the message box", () => {
+  function* composing(text: string): Operation<ReplPage> {
+    const page = yield* useReplPage();
+    yield* intoComposer(page);
+    yield* typed(page, text);
+    return page;
+  }
+
+  /** Move the caret one place left, and wait for the frame that draws it there. */
+  function* left(page: ReplPage, times: number): Operation<void> {
+    for (let step = 0; step < times; step += 1) {
+      const before = page.screen().index;
+      yield* page.key("ArrowLeft");
+      yield* page.until("the caret moving left", (one) => one.index > before);
+    }
+  }
+
+  function cleared(page: ReplPage, text: string): Operation<ScreenReading> {
+    return page.until(
+      `the message box no longer holding ${JSON.stringify(text)}`,
+      (one) => one.shows(COMPOSER) && !composerHolds(one, text),
+    );
+  }
+
+  it("C1: clears a message from the middle of its caret, and the box keeps typing", function* () {
+    const page = yield* composing("alpha beta");
+    yield* left(page, 3);
+    page.repl.terminal.feed("\x03");
+    yield* cleared(page, "alpha");
+    expect(page.repl.outcome()).toBe(undefined);
+    yield* typed(page, "gamma");
+    const after = page.screen();
+    expect(composerHolds(after, "gamma")).toBe(true);
+    expect(composerHolds(after, "alpha")).toBe(false);
+    expect(page.repl.fake.prompts).toHaveLength(0);
+  });
+
+  it("C1: clears whitespace and a multi-line Unicode paste, leaving nothing to send", function* () {
+    const page = yield* composing("   ");
+    page.repl.terminal.feed("\x03");
+    yield* lingering();
+    page.repl.terminal.feed("\x1b[200~é界🙂 first\r\nsecond 🙂\x1b[201~");
+    yield* page.until("the pasted message", (one) => composerHolds(one, "second 🙂"));
+    page.repl.terminal.feed("\x03");
+    yield* cleared(page, "second");
+    expect(composerHolds(page.screen(), "é界🙂")).toBe(false);
+    // Enter in an empty box sends nothing, so a box that kept the spaces or
+    // the paste would have asked the agent here.
+    yield* page.key("Enter");
+    yield* lingering();
+    expect(page.repl.fake.prompts).toHaveLength(0);
+    expect(page.repl.outcome()).toBe(undefined);
+  });
+
+  it("C4: one burst of text, Control-C and text keeps only the text after it", function* () {
+    const page = yield* composing("ready");
+    page.repl.terminal.feed("\x03");
+    yield* cleared(page, "ready");
+    page.repl.terminal.feed("first\x03second");
+    const after = yield* page.until("the second text", (one) => composerHolds(one, "second"));
+    expect(composerHolds(after, "first")).toBe(false);
+    expect(page.repl.outcome()).toBe(undefined);
+    expect(page.repl.fake.prompts).toHaveLength(0);
+  });
+
+  it("C4: one burst of text, Control-C, Control-C and Enter clears, leaves and sends nothing", function* () {
+    const page = yield* composing("ready");
+    const repl = page.repl;
+    const restored = repl.terminal.resets;
+    repl.terminal.feed("third\x03\x03\r");
+    yield* awaited("the command returning", () => repl.outcome() !== undefined);
+    expect(repl.outcome()?.ok).toBe(true);
+    expect(repl.terminal.resets).toBe(restored + 1);
+    expect(repl.terminal.readers).toBe(0);
+    expect(repl.fake.prompts).toHaveLength(0);
+  });
+
+  it("C3: Control-C typed while the first frame is still being written leaves", function* () {
+    const host = yield* useMountedHost();
+    const recording = recordingTerminal();
+    yield* recording.install();
+    const reached = withResolvers<void>();
+    const release = withResolvers<void>();
+    let held = false;
+    yield* ensure(() => release.resolve());
+    yield* ReplTerminal.around({
+      *write([bytes], next) {
+        if (!held && new TextDecoder().decode(bytes).includes("XMD REPL")) {
+          held = true;
+          reached.resolve();
+          yield* release.operation;
+        }
+        yield* next(bytes);
+      },
+    });
+    let outcome: Result<unknown> | undefined;
+    yield* spawn(function* () {
+      outcome = yield* runReplProgram({ profile: host.profile });
+    });
+    yield* reached.operation;
+    const terminal = recording.terminal;
+    const restored = terminal.resets;
+    // Nothing is on the screen yet: the message box these keys would reach has
+    // not been presented to anybody.
+    expect(terminal.screen?.rows().join("").trim() ?? "").toBe("");
+    terminal.feed("\t\t\tfirst\x03");
+    yield* lingering();
+    release.resolve();
+    yield* awaited("the command returning", () => outcome !== undefined);
+    expect(outcome?.ok).toBe(true);
+    expect(host.fake.prompts).toHaveLength(0);
+    expect(terminal.resets).toBe(restored + 1);
+    expect(terminal.readers).toBe(0);
+  });
+
+  it("C3: a focused Draft holding text still leaves on Control-C", function* () {
+    const page = yield* useReplPage();
+    yield* draftText(page, "draft text");
+    page.repl.terminal.feed("\x03");
+    yield* awaited("the command returning", () => page.repl.outcome() !== undefined);
+    expect(page.repl.outcome()?.ok).toBe(true);
+  });
+
+  it("N2: recorded newline keys and a pasted CRLF are text at a middle caret, and Enter sends once", function* () {
+    const page = yield* composing("onefour");
+    const repl = page.repl;
+    repl.fake.script({ reply: "<Output>Received.</Output>\n" });
+    yield* left(page, 4);
+    // Terminal.app's Shift+Return, then LF, then iTerm2's CSI-u Control-J.
+    repl.terminal.feed("\x1b\r");
+    yield* typed(page, "two");
+    repl.terminal.feed("\n");
+    yield* typed(page, "three");
+    repl.terminal.feed("\x1b[106;5u");
+    repl.terminal.feed("\x1b[200~é界🙂\r\nfive\r\n\x1b[201~");
+    const composed = yield* page.until("the pasted lines", (one) => composerHolds(one, "five"));
+    expect(composerHolds(composed, "onetwo")).toBe(false);
+    expect(composerHolds(composed, "threefour")).toBe(false);
+    yield* lingering();
+    expect(repl.fake.prompts).toHaveLength(0);
+
+    yield* page.key("Enter");
+    yield* awaited("the message being sent", () => repl.fake.prompts.length > 0);
+    yield* lingering();
+    expect(repl.fake.prompts).toHaveLength(1);
+    expect(repl.fake.prompts[0]).toContain("one\ntwo\nthree\né界🙂\nfive\nfour");
+  });
+
+  it("C1: the reduction empties the value, puts its caret at zero and advances only its revision", function* () {
+    const model = yield* journalModel([]);
+    const live: ReplLive = {
+      output: "",
+      question: undefined,
+      expansion: "playing",
+      pausable: false,
+      running: false,
+      agent: NO_AGENT,
+      lifecycle: NO_LIFECYCLE,
+    };
+    for (const message of ["alpha beta", "   ", "é界🙂\nsecond line"]) {
+      const before: ReplState = {
+        ...initialState("cleared"),
+        draft: "draft-kept",
+        draftCaret: { value: "draft-kept", offset: 2 },
+        message,
+        messageCaret: { value: message, offset: 2 },
+      };
+      const { state, intent } = reduceRepl(before, { kind: "interrupt-message" }, model, live);
+      expect(intent).toEqual({ kind: "none" });
+      expect(state.message).toBe("");
+      expect(state.messageCaret).toEqual({ value: "", offset: 0 });
+      expect(state.revisions.message).toBe(before.revisions.message + 1);
+      expect(state.revisions.draft).toBe(before.revisions.draft);
+      expect(state.draft).toBe("draft-kept");
+      expect(state.draftCaret).toEqual(before.draftCaret);
+      expect(state.takenOver).toBe(before.takenOver);
+      expect(state.route).toEqual(before.route);
+    }
+    const empty = reduceRepl(
+      { ...initialState("cleared"), draft: "draft-kept" },
+      { kind: "interrupt-message" },
+      model,
+      live,
+    );
+    expect(empty.intent).toEqual({ kind: "exit" });
+    expect(empty.state.draft).toBe("draft-kept");
   });
 });
 
@@ -1676,6 +1919,21 @@ describe("Tier MQ — leaving with questions pending, and the cold reopen after"
 
   it("MQ5: Control-C does the same, without another key", function* () {
     yield* leavingWithQuestions(function* (page: ReplPage): Operation<void> {
+      page.repl.terminal.feed("\x03");
+    });
+  });
+
+  it("MQ5: Control-C over the form leaves, even with a message typed behind it", function* () {
+    yield* leavingWithQuestions(function* (page: ReplPage): Operation<void> {
+      yield* page.press("[close]");
+      yield* page.until("the form closing", (one) => !formOpen(one));
+      yield* intoComposer(page);
+      yield* typed(page, "behind the form");
+      expect(composerHolds(page.screen(), "behind the form")).toBe(true);
+      // The form covers the message box, so the box holds text nobody can see
+      // or reach while the form is open.
+      yield* page.press("[answer sidekick]");
+      yield* page.until("the form over the typed message", (one) => formOpen(one));
       page.repl.terminal.feed("\x03");
     });
   });
