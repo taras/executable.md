@@ -1,3 +1,4 @@
+import { API, cwd } from "@executablemd/runtime";
 import { inputValues, validateLiveReturnValue } from "./secrets/inputs.ts";
 import type { ProtectedInput } from "./secrets/inputs.ts";
 /**
@@ -581,6 +582,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     owner?: Segment[];
     path: string;
     outputFrame?: OutputFrame;
+    filesystem: FilesystemExpansion | undefined;
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
       // Every projection this invocation performs funnels through here —
@@ -596,6 +598,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     });
 
     function* project(): Operation<Segment[]> {
+      const directory = yield* cwd();
       const contentScope = yield* state.invocation.useContentScope();
       // The projection's failure travels back to the caller rather than into
       // the content scope. Raising it there would poison the scope, and the
@@ -609,6 +612,14 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       const renderedFrom = rendered.length;
       const task = contentScope.scope.run(function* () {
         try {
+          yield* API.Env.around(
+            {
+              *cwd() {
+                return directory;
+              },
+            },
+            { at: "min" },
+          );
           yield* ErrorMode.set(options.mode);
           yield* SourceOwner.set(options.sourceOwner);
           if (state.narrowedSyntax !== undefined) {
@@ -637,7 +648,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             state.environment,
             state.imports,
             options.returnFrame,
-            state.filesystem,
+            options.filesystem,
             options.outputFrame,
           );
           rendered.splice(
@@ -800,6 +811,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       owner: Segment[],
       elementPath: string,
       current?: OutputFrame,
+      filesystem?: FilesystemExpansion,
     ): Operation<Segment[]> {
       // Slots were resolved during substitution. The projected content keeps
       // the caller frame; only the resource scope moves.
@@ -808,6 +820,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       const mode = (yield* ErrorMode.get()) ?? "print";
       return yield* runInContentScope({
         segments: element.children,
+        filesystem,
         mode,
         env: layerProjectedContentEnvironment(state.caller.env, state.authored.env),
         meta: state.caller.meta,
@@ -1162,7 +1175,7 @@ function* expandListSegments(
           // the ambient error mode, so they are appended as they are.
           const projection = yield* ActiveProjection.get();
           if (projection && projection.claims(segment)) {
-            yield* projection.expandClaimed(segment, result, elementPath, outputFrame);
+            yield* projection.expandClaimed(segment, result, elementPath, outputFrame, filesystem);
             break;
           }
         }

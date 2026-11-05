@@ -32,7 +32,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
+import { Ok, ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API, cwd, Files, useHostFiles } from "@executablemd/runtime";
@@ -146,6 +146,9 @@ function observeEnclosingCwd(
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
+    expect(yield* Files.operations.readTextFile({ cwd: yield* cwd(), path: "outside.md" })).toEqual(
+      Ok("outside"),
+    );
     return { failure, enclosing: yield* cwd() };
   });
 }
@@ -681,31 +684,35 @@ describe("Tier FX — the dispatcher authenticates its own invocation", () => {
 });
 
 describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
-  it("FX5: the enclosing directory is restored in its owner after the body fails", function* () {
-    const fixture = yield* useFixture();
+  for (const tag of ["Dir", "InDirectory"]) {
+    it(`FX5: ${tag} restores the enclosing directory in its owner after failure`, function* () {
+      const fixture = yield* useFixture();
+      yield* writeTextFile(join(fixture.workspace, "outside.md"), "outside");
+      yield* writeTextFile(join(fixture.workspace, "InDirectory.md"), DIRECTORY_WRAPPER);
 
-    // `<Fail>` rather than a filesystem refusal: a File failure is a printed
-    // error this component owns, and what this case is about is the directory
-    // ownership surviving a body that ends the run.
-    const { failure, enclosing } = yield* observeEnclosingCwd(
-      fixture,
-      [
-        '<Dir path="notes">',
-        '<File path="inside.md">in</File>',
-        '<Fail message="stop inside the directory" />',
-        "</Dir>",
-      ].join("\n"),
-    );
+      // `<Fail>` rather than a filesystem refusal: a File failure is a printed
+      // error this component owns, and what this case is about is the directory
+      // ownership surviving a body that ends the run.
+      const { failure, enclosing } = yield* observeEnclosingCwd(
+        fixture,
+        [
+          `<${tag} path="notes">`,
+          '<File path="inside.md">in</File>',
+          '<Fail message="stop inside the directory" />',
+          `</${tag}>`,
+        ].join("\n"),
+      );
 
-    expect(failure).toContain("stop inside the directory");
-    // Read in the owner that installed it, so a stale cwd would show here.
-    expect(enclosing).toBe(fixture.workspace);
+      expect(failure).toContain("stop inside the directory");
+      // Read in the owner that installed it, so a stale cwd would show here.
+      expect(enclosing).toBe(fixture.workspace);
 
-    // The directory the failed body ran in survives. There is no teardown
-    // deletion and no rollback.
-    expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
-    expect(yield* exists(join(fixture.workspace, "notes", "inside.md"))).toBe(true);
-  });
+      // The directory the failed body ran in survives. There is no teardown
+      // deletion and no rollback.
+      expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
+      expect(yield* exists(join(fixture.workspace, "notes", "inside.md"))).toBe(true);
+    });
+  }
 
   it("FX5b: a refused ensure begins no content and binds no directory", function* () {
     const fixture = yield* useFixture();
@@ -748,53 +755,71 @@ describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
     expect(yield* readTextFile(join(fixture.workspace, "notes", "kept.md"))).toBe("kept\n");
   });
 
-  it("FX5d: joined cancellation restores the directory in its owner", function* () {
-    const fixture = yield* useFixture();
-    const inside = withResolvers<void>();
-    const outcome: string[] = [];
-    let enclosing = "";
+  for (const tag of ["Dir", "InDirectory"]) {
+    it(`FX5d: ${tag} restores the directory after joined cancellation`, function* () {
+      const fixture = yield* useFixture();
+      yield* writeTextFile(join(fixture.workspace, "outside.md"), "outside");
+      yield* writeTextFile(join(fixture.workspace, "InDirectory.md"), DIRECTORY_WRAPPER);
+      const inside = withResolvers<void>();
+      const outcome: string[] = [];
+      let enclosing = "";
 
-    yield* scoped(function* () {
-      const path = join(fixture.workspace, "doc.md");
-      yield* writeTextFile(
-        path,
-        ['<Dir path="notes">', '<File path="held.md">held</File>', "</Dir>"].join("\n"),
-      );
-      // Installed by *this* scope, which is the owner restoration has to be
-      // observed in. The execution runs in a child task, so halting it unwinds
-      // the Dir invocation while this scope is still live to be read.
-      yield* useWorkspaceCwd(fixture);
-      yield* Files.around({
-        *writeTextFile([input], next) {
-          const result = yield* next(input);
-          inside.resolve();
-          yield* suspend();
-          return result;
-        },
-      });
-
-      const task = yield* spawn(function* () {
-        const output = yield* collect(
-          yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
+      yield* scoped(function* () {
+        const path = join(fixture.workspace, "doc.md");
+        yield* writeTextFile(
+          path,
+          [`<${tag} path="notes">`, '<File path="held.md">held</File>', `</${tag}>`].join("\n"),
         );
-        outcome.push(String(output));
+        // Installed by *this* scope, which is the owner restoration has to be
+        // observed in. The execution runs in a child task, so halting it unwinds
+        // the Dir invocation while this scope is still live to be read.
+        yield* useWorkspaceCwd(fixture);
+        yield* Files.around({
+          *writeTextFile([input], next) {
+            const result = yield* next(input);
+            inside.resolve();
+            yield* suspend();
+            return result;
+          },
+        });
+
+        const task = yield* spawn(function* () {
+          const output = yield* collect(
+            yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
+          );
+          outcome.push(String(output));
+        });
+
+        // Halted exactly here: the directory exists, the working directory is
+        // installed and the write inside it has completed. Synchronized through
+        // the operation rather than timed, and joined before anything is read.
+        yield* inside.operation;
+        yield* task.halt();
+        enclosing = yield* cwd();
+        expect(
+          yield* Files.operations.readTextFile({ cwd: enclosing, path: "outside.md" }),
+        ).toEqual(Ok("outside"));
       });
 
-      // Halted exactly here: the directory exists, the working directory is
-      // installed and the write inside it has completed. Synchronized through
-      // the operation rather than timed, and joined before anything is read.
-      yield* inside.operation;
-      yield* task.halt();
-      enclosing = yield* cwd();
+      // Nothing settled, and the enclosing directory is the one this scope
+      // installed rather than the directory the cancelled body entered.
+      expect(outcome).toEqual([]);
+      expect(enclosing).toBe(fixture.workspace);
+
+      // The directory the cancelled body entered is still there: a restored
+      // working directory is not a deletion.
+      expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
     });
-
-    // Nothing settled, and the enclosing directory is the one this scope
-    // installed rather than the directory the cancelled body entered.
-    expect(outcome).toEqual([]);
-    expect(enclosing).toBe(fixture.workspace);
-
-    // The directory the cancelled body entered is still there: a restored
-    // working directory is not a deletion.
-    expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
-  });
+  }
 });
+
+const DIRECTORY_WRAPPER = `---
+props:
+  type: object
+  properties:
+    path: {type: string}
+  required: [path]
+---
+<Dir path={props.path}>
+  <Content />
+</Dir>`;
