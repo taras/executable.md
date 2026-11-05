@@ -1691,7 +1691,10 @@ describe("marked workflow input in the foreground CLI assembly", () => {
       "<Json value={otp} />",
     ].join("\n\n");
     const fixture = yield* useCheckpointFixture(source);
-    const options = { cwd: fixture.repository, env: { XMD_WORKFLOW_RUNS: store } };
+    const options = {
+      cwd: fixture.repository,
+      env: { XMD_WORKFLOW_RUNS: store, XMD_EXPERIMENTAL_WORKFLOW: "1" },
+    };
     const started = yield* runCli(
       ["workflow", "start", "workflow.md", "--id=protected-run", "--plugin", provider],
       options,

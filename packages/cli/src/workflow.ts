@@ -10,7 +10,12 @@
  * rather than from the beginning. The rest read that run back or control it,
  * and never execute anything.
  *
+ * The command family is experimental. `cli.ts` refuses every action, before
+ * this module is reached, unless the invocation's environment sets
+ * `XMD_EXPERIMENTAL_WORKFLOW` to exactly `1`.
+ *
  * ```sh
+ * export XMD_EXPERIMENTAL_WORKFLOW=1
  * xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
  * xmd workflow resume <run-id>
  * xmd workflow fork <source-run-id> --at=<event-id> [--id=<run-id>] <definition> [--props-*=…]

@@ -45,12 +45,17 @@ Pull request: {pullRequest}
 ```
 
 ```sh
+export XMD_EXPERIMENTAL_WORKFLOW=1
 xmd workflow start prepare-release.md
 ```
 
 The host creates a WorkflowRun, gives it an implicit Workspace, streams the
 rendered document output and retains enough state to continue after the process
 exits.
+
+`xmd workflow` is experimental. An invocation enables it only when its operator
+environment sets `XMD_EXPERIMENTAL_WORKFLOW` to exactly `1`; §2.2 states what
+every other invocation does.
 
 ## 2. Three execution environments
 
@@ -110,6 +115,29 @@ on every runtime.
 
 `xmd workflow` executes supported operations against a retained constrained
 environment.
+
+The whole command family is an experimental opt-in. Each invocation reads
+`XMD_EXPERIMENTAL_WORKFLOW` from its own contextual environment, and only the
+exact value `1` enables it — not `true`, not `01`, not `1 ` with a space. Any
+other value, or none, disables every action: `start`, `resume`, `fork`,
+`answer`, `status`, `list`, `history`, `cancel`, `delete` and `export`, with or
+without `--artifact`. A disabled invocation writes
+
+```text
+xmd workflow is experimental. Set XMD_EXPERIMENTAL_WORKFLOW=1 to enable it.
+```
+
+to standard error and exits 1. It refuses before a workflow host is installed,
+a run store is opened, a definition or artifact is read, a selected Plugin is
+loaded or anything executes, so a saved run, an exported artifact or a run id
+grants nothing: the same command succeeds again once the variable is set. A
+disabled `xmd workflow --help`, in any help position before `--`, prints that
+sentence to standard output and exits 0. Program help lists `workflow` only for
+an enabled invocation, and enabled `xmd workflow --help` repeats the sentence
+beneath the grammar. The opt-in selects a product surface; it grants no
+permission and changes no host capability, so Node and Bun still refuse an
+enabled invocation with their own sentence. `xmd run`, `xmd repl` and every
+other command need no opt-in.
 
 - Every run owns an implicit root Workspace.
 - The Workspace supplies contextual filesystem, repository, process and
@@ -658,8 +686,8 @@ run database.
 
 The lifecycle above is the whole design, including §3.7's rule that a status
 line is published only once its atomic lifecycle transition has persisted. What a
-caller can run today is `start`, `resume` and `fork`, the three inspections, and
-the two control actions:
+caller can run today, under the opt-in of §2.2, is `start`, `resume` and
+`fork`, the three inspections, and the two control actions:
 
 ```sh
 xmd workflow start [--id=<run-id>] [--props-*=…] <definition>

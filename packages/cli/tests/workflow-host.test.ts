@@ -81,7 +81,11 @@ describe("Tier WFH — workflow host boundary", () => {
     yield* useFixture(function* (fixture) {
       const result = yield* runCli(["workflow", "start", "flow.md"], {
         cwd: fixture.dir,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
       }).join();
 
       if (cliRuntime() === "deno") {
@@ -106,7 +110,11 @@ describe("Tier WFH — workflow host boundary", () => {
     yield* useFixture(function* (fixture) {
       const help = yield* runCli(["workflow", "--help"], {
         cwd: fixture.dir,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
       }).join();
 
       expect(help.code).toBe(0);
@@ -121,7 +129,11 @@ describe("Tier WFH — workflow host boundary", () => {
         ["workflow", "answer", "any-run", "any-wait", '{"approved":true}'],
         {
           cwd: fixture.dir,
-          env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+          env: {
+            HOME: fixture.home,
+            XMD_WORKFLOW_RUNS: fixture.runs,
+            XMD_EXPERIMENTAL_WORKFLOW: "1",
+          },
         },
       ).join();
 
@@ -145,7 +157,11 @@ describe("Tier WFH — workflow host boundary", () => {
     yield* useFixture(function* (fixture) {
       const result = yield* runCli(["workflow", "resume", "any-run"], {
         cwd: fixture.dir,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
       }).join();
 
       expect(result.code).toBe(1);
@@ -477,7 +493,11 @@ describe("Tier WFH — the credential helper is host assembly", () => {
     yield* useFixture(function* (fixture) {
       const help = yield* runCli(["--help"], {
         cwd: fixture.dir,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
       }).join();
       expect(help.code).toBe(0);
       expect(help.stdout).not.toContain(HELPER_MODE);
@@ -487,7 +507,11 @@ describe("Tier WFH — the credential helper is host assembly", () => {
 
       const workflow = yield* runCli(["workflow", "--help"], {
         cwd: fixture.dir,
-        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        env: {
+          HOME: fixture.home,
+          XMD_WORKFLOW_RUNS: fixture.runs,
+          XMD_EXPERIMENTAL_WORKFLOW: "1",
+        },
       }).join();
       expect(workflow.stdout).not.toContain(HELPER_MODE);
       expect(workflow.stdout).not.toContain("credential-helper");

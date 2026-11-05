@@ -64,7 +64,8 @@ export default define.page(function GettingStarted({ url }) {
             Runs a document in a retained Workspace, so an interrupted workflow
             resumes from its journal frontier instead of starting again.
             Unsupported operations fail explicitly instead of falling back to
-            the host. Available through the Deno entrypoint and the compiled
+            the host. Experimental: set <code>XMD_EXPERIMENTAL_WORKFLOW=1</code>
+            to enable it. Available through the Deno entrypoint and the compiled
             binary.
           </span>
         </div>

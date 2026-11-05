@@ -329,7 +329,7 @@ describe(
         const document = path.join(dir, "release.md");
         yield* writeTextFile(document, "# Release\n\nretained by the run\n");
 
-        const environment = { HOME: home, XMD_WORKFLOW_RUNS: runs };
+        const environment = { HOME: home, XMD_WORKFLOW_RUNS: runs, XMD_EXPERIMENTAL_WORKFLOW: "1" };
         const started = yield* timebox<ProcessResult>(TIMEOUT, function* () {
           return yield* exec(BINARY, {
             arguments: ["workflow", "start", "--id=compiled-1", document],

@@ -106,7 +106,7 @@ function useFixture<T>(
 function xmd(fixture: Fixture, args: string[]) {
   return runCli(args, {
     cwd: fixture.repository,
-    env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+    env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs, XMD_EXPERIMENTAL_WORKFLOW: "1" },
   });
 }
 
@@ -901,7 +901,7 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
       const detached = (args: string[]) =>
         runCli(args, {
           cwd: away,
-          env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: emptyRuns },
+          env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: emptyRuns, XMD_EXPERIMENTAL_WORKFLOW: "1" },
         });
 
       const before = yield* fingerprint(run.artifact);
