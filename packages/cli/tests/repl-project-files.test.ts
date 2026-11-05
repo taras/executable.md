@@ -16,13 +16,14 @@ import {
   Permissions,
   useHostFiles,
   captureHostFilesAccess,
+  parseFileWriteFailure,
   parseFilesFailure,
 } from "@executablemd/runtime";
 import { scoped, until } from "effection";
 import { readdir, symlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { useMountedHost, mountedExecution, awaited } from "./support/mounted-repl.ts";
+import { useMountedHost, mountedExecution, awaited, awaitedFact } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import {
   sendMessage,
@@ -314,6 +315,83 @@ describe("1113: executable capture teaching", () => {
 });
 
 describe("1113: session scopes retain their restrictions", () => {
+  it("1113 M1: outer Content keeps AssetDir write denial after middleware redirects into P", function* () {
+    const project = yield* useTemporary("1113-asset-redirect-project-");
+    const redirects: {
+      receivedCwd: string;
+      effectiveCwd: string;
+      effectivePath: string;
+      writeAllowed: boolean;
+      reason: string | undefined;
+    }[] = [];
+    const siblings: { writeAllowed: boolean; ok: boolean }[] = [];
+    yield* API.Files.around({
+      *writeTextFile([input], next) {
+        if (input.path === "asset-canary") {
+          const effective = { ...input, cwd: project, path: "project-canary" };
+          const writeAllowed = yield* Permissions.operations.files("write");
+          const result = yield* next(effective);
+          redirects.push({
+            receivedCwd: input.cwd,
+            effectiveCwd: effective.cwd,
+            effectivePath: effective.path,
+            writeAllowed,
+            reason: result.ok ? undefined : parseFileWriteFailure(result.error)?.reason,
+          });
+          return result;
+        }
+        if (input.path === "sibling-canary") {
+          const writeAllowed = yield* Permissions.operations.files("write");
+          const result = yield* next(input);
+          siblings.push({ writeAllowed, ok: result.ok });
+          return result;
+        }
+        return yield* next(input);
+      },
+    });
+    const page = yield* useReplPage({ projectCwd: project, hostFiles: true });
+    const session = pairedLocation(page.repl.root, yield* mountedExecution(page.repl)).directory;
+    const assets = join(session, "assets");
+    yield* ensureDir(assets);
+    yield* writeTextFile(join(project, "project-canary"), "project bytes");
+    yield* writeTextFile(join(project, "sibling-canary"), "before sibling");
+    yield* writeTextFile(join(assets, "asset-canary"), "asset bytes");
+    yield* writeTextFile(
+      join(session, "components/ReadAssets.md"),
+      "<REPL.AssetDir><Content /></REPL.AssetDir>",
+    );
+    const projectInventory = (yield* until(readdir(project))).toSorted();
+    const assetInventory = (yield* until(readdir(assets))).toSorted();
+    yield* pasteDraft(
+      page,
+      '<ReadAssets><File path="asset-canary">wrong</File></ReadAssets><File path="sibling-canary">allowed</File>',
+    );
+    yield* page.key("Enter");
+    yield* awaitedFact("manual redirected write entry settles", function* () {
+      return (yield* settledReading(page.repl)).model.entries[0]?.settled === true;
+    });
+    expect(redirects).toEqual([
+      {
+        receivedCwd: assets,
+        effectiveCwd: project,
+        effectivePath: "project-canary",
+        writeAllowed: false,
+        reason: "permission-denied",
+      },
+    ]);
+    expect(siblings).toEqual([{ writeAllowed: true, ok: true }]);
+    expect(yield* readTextFile(join(project, "project-canary"))).toBe("project bytes");
+    expect(yield* readTextFile(join(assets, "asset-canary"))).toBe("asset bytes");
+    expect(yield* readTextFile(join(project, "sibling-canary"))).toBe("allowed");
+    expect((yield* until(readdir(project))).toSorted()).toEqual(projectInventory);
+    expect((yield* until(readdir(assets))).toSorted()).toEqual(assetInventory);
+    expect((yield* settledReading(page.repl)).model.entries[0]?.terminal?.output).toContain(
+      "permission denied",
+    );
+    page.repl.terminal.end();
+    yield* awaited("command exit", () => page.repl.outcome() !== undefined);
+  });
+
   it("1113: entering absent assets does not allocate and projected content cannot write through it", function* () {
     const project = yield* useTemporary("1113-read-only-project-");
     const page = yield* useReplPage({ projectCwd: project, hostFiles: true });
