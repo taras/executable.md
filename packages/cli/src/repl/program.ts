@@ -1047,6 +1047,9 @@ function* drive(
     const wakes = queued();
     const shutdown = withResolvers<void>();
     let ending = false;
+    // Until a frame is presented, Control-C has no focused message box to clear
+    // and ends here. After that the loop decides, through the tree.
+    let presented = false;
 
     yield* spawn(function* reading(): Operation<void> {
       while (true) {
@@ -1061,7 +1064,8 @@ function* drive(
           next.value.kind === "eof" ||
           (next.value.kind === "input" &&
             next.value.event?.kind === "key" &&
-            next.value.event.key === "Interrupt")
+            next.value.event.key === "Interrupt" &&
+            !presented)
         ) {
           if (liveScreen === undefined) {
             ending = true;
@@ -1858,7 +1862,8 @@ function* drive(
           state = { ...state, restore: undefined };
           focused = keyOfFocus(tree);
         }
-        return false;
+        // Control-C that no focused control handled is leaving.
+        return event.kind === "key" && event.key === "Interrupt";
       }
       // Measured for the size and the reading this action is being answered at,
       // before the action runs. A scroll moves from the clamp the screen is
@@ -2301,6 +2306,7 @@ function* drive(
       observedPass++;
       observePass("start");
     }
+    presented = true;
     const first = yield* draw();
     rendered = first?.rendered;
     presenting = first === undefined ? undefined : presentedDrawer(first.view);
@@ -2395,12 +2401,22 @@ function* drive(
           if (delivered === undefined) {
             continue;
           }
-          // Control-C, from wherever it was pressed. Taken here rather than
-          // through the tree because no node claims it: ending is this owner's
-          // outcome, and a key answered by whichever row happened to have focus
-          // would stop meaning the same thing from one screen to the next.
+          // Control-C through the tree, where only the focused message box
+          // handles it. Anything else leaves, and so does a screen too small to
+          // draw that box or one the reader already chose to end before it was
+          // presented.
           if (delivered.kind === "key" && delivered.key === "Interrupt") {
-            departing = true;
+            if (
+              ending ||
+              profileFor(yield* screen.size()) === "too-small" ||
+              (yield* act(delivered))
+            ) {
+              if (liveScreen === undefined) {
+                ending = true;
+                shutdown.resolve();
+              }
+              departing = true;
+            }
             continue;
           }
           // A window too small to draw in shows a refusal and places no cell, so
