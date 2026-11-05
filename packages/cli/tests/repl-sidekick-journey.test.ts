@@ -4740,6 +4740,145 @@ describe("993 mounted nested Output journeys", () => {
 });
 
 describe("Contributed Sidekick controls", () => {
+  it("keeps contributed entry-only Cwd authored while omitting generated selection and vocabulary", function* () {
+    let calls = 0;
+    const plugin = Plugin({
+      name: "entry-cwd",
+      *install(): Operation<ReplPluginInstallation> {
+        yield* sleep(0);
+        return {
+          repl: {
+            components: [
+              {
+                name: "Cwd",
+                origin: "test://entry-cwd",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                factory: () =>
+                  function* () {
+                    calls++;
+                    yield* sleep(0);
+                    return "authored-cwd";
+                  },
+              },
+            ],
+          },
+        };
+      },
+    });
+    const held = yield* usePluginProgram({ plugins: [plugin] });
+    const submitted = yield* held.root.session.submit(
+      '<Cwd as="custom" /><Syntax as="symbols" /><Output>{custom}\n{symbols}</Output>',
+    );
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    const joined = yield* submitted.value.join();
+    if (!joined.ok) {
+      throw joined.error;
+    }
+    const output = yield* submitted.value.output();
+    if (!output.ok) {
+      throw output.error;
+    }
+    expect(output.value.output).toContain("authored-cwd");
+    expect(output.value.output).toContain("<Cwd>");
+    expect(calls).toBe(1);
+    held.host.fake.script({ reply: "<Output>Hello</Output>" });
+    expect((yield* held.root.owner.message("Hello")).ok).toBe(true);
+    expect(
+      held.host.fake.prompts[0]?.split("\n").filter((line) => line.startsWith("- <Cwd")),
+    ).toEqual([]);
+    held.host.fake.script({
+      reply: '<Syntax as="response" /><REPL.Syntax as="entry" /><Output>{response}</Output>',
+    });
+    held.host.fake.script({ reply: "<Output>Described.</Output>" });
+    expect((yield* held.root.owner.message("Describe both vocabularies")).ok).toBe(true);
+    let saved = yield* records(yield* held.host.repository.open(held.root.execution));
+    const descriptions = saved.filter(
+      (record) => record.kind === "response" && record.output?.includes("Built-in components"),
+    );
+    expect(descriptions).toHaveLength(1);
+    expect(descriptions[0]).not.toMatchObject({ outcome: { status: "err" } });
+    if (descriptions[0]?.kind !== "response") {
+      throw new Error("Missing response Syntax output");
+    }
+    expect(descriptions[0].output).not.toContain("<Cwd>");
+    expect(held.host.fake.prompts[2]).toContain("<Cwd>");
+    held.host.fake.script({ reply: "<Cwd />" });
+    held.host.fake.script({ reply: "<Output>Entry-only Cwd was refused.</Output>" });
+    expect((yield* held.root.owner.message("Try generated Cwd")).ok).toBe(true);
+    expect(calls).toBe(1);
+    saved = yield* records(yield* held.host.repository.open(held.root.execution));
+    expect(
+      saved.filter((record) => record.kind === "control" && record.component === "Cwd"),
+    ).toHaveLength(0);
+    expect(saved.filter((record) => record.kind === "response")).toContainEqual(
+      expect.objectContaining({ outcome: expect.objectContaining({ status: "err" }) }),
+    );
+  });
+
+  it("offers only a contributed paired Cwd with its actual props, effect and feedback", function* () {
+    let calls = 0;
+    const plugin = Plugin({
+      name: "paired-cwd",
+      *install(): Operation<ReplPluginInstallation> {
+        yield* sleep(0);
+        return {
+          repl: {
+            components: [
+              {
+                name: "Cwd",
+                origin: "test://paired-cwd",
+                props: {
+                  type: "object",
+                  properties: { label: { type: "string" } },
+                  additionalProperties: false,
+                },
+                returns: { type: "string" },
+                generated: {
+                  paired: { identity: "https://executable.md/test/paired-cwd", effect: "write" },
+                },
+                factory: (claim) =>
+                  function* (_props, invocation) {
+                    yield* claim(invocation);
+                    calls++;
+                    return "paired-cwd";
+                  },
+              },
+            ],
+          },
+        };
+      },
+    });
+    const held = yield* usePluginProgram({ plugins: [plugin] });
+    held.host.fake.script({
+      reply:
+        '<Cwd label="selected" as="value">body</Cwd><Syntax as="symbols" /><Output>{value}\n{symbols}</Output>',
+    });
+    held.host.fake.script({ reply: "<Output>Paired Cwd completed.</Output>" });
+    expect((yield* held.root.owner.message("Use paired Cwd")).ok).toBe(true);
+    expect(calls).toBe(1);
+    expect(
+      held.host.fake.prompts[0]?.split("\n").filter((line) => line.startsWith("- <Cwd")),
+    ).toEqual(["- <Cwd>…</Cwd> — write. props: label"]);
+    expect(held.host.fake.prompts[1]).toContain("paired-cwd");
+    held.host.fake.script({ reply: '<Cwd as="refused" />' });
+    held.host.fake.script({ reply: "<Output>Self-closing Cwd was refused.</Output>" });
+    expect((yield* held.root.owner.message("Try the unoffered self-closing form")).ok).toBe(true);
+    expect(calls).toBe(1);
+    const saved = yield* records(yield* held.host.repository.open(held.root.execution));
+    const intents = saved.filter(
+      (record) => record.kind === "control" && record.component === "Cwd",
+    );
+    expect(intents).toHaveLength(1);
+    const outcomes = saved.filter((record) => record.kind === "control-outcome");
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ outcome: { status: "ok" }, observed: "paired-cwd" });
+    expect(saved.filter((record) => record.kind === "response")).toContainEqual(
+      expect.objectContaining({ outcome: expect.objectContaining({ status: "err" }) }),
+    );
+  });
+
   it("records an elicited protected return as safe typed feedback while retaining its live schema", function* () {
     let calls = 0;
     const plugin = Plugin({

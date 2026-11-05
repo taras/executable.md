@@ -203,7 +203,10 @@ export function sidekickResponseCeiling(
  * them grants.
  */
 export function sidekickSelection(ceiling: ResponseCeiling): GeneratedSelection {
-  const selection: Record<string, readonly InvocationForm[]> = { Cwd: ["self-closing"] };
+  const selection: Record<string, readonly InvocationForm[]> = {};
+  if (!(ceiling.components ?? []).some((component) => component.name === "Cwd")) {
+    selection.Cwd = ["self-closing"];
+  }
   for (const control of ceiling.controls) {
     selection[control.name] = [...(selection[control.name] ?? []), control.form];
   }
@@ -329,20 +332,27 @@ export interface SurfaceEntry {
  * gaining a prop cannot leave this description behind.
  */
 export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry[] {
-  const entries: SurfaceEntry[] = [
-    { name: "Cwd", effect: "read", form: "self-closing", props: [], designated: false },
-    {
-      // Admitted by the execution that evaluates the root, not by this
-      // ceiling, so it is named here rather than read off the entries. It
-      // describes this response's own vocabulary, which is the one thing the
-      // derived list below cannot say about itself.
-      name: SYNTAX_COMPONENT,
+  const entries: SurfaceEntry[] = [];
+  if (!(ceiling.components ?? []).some((component) => component.name === "Cwd")) {
+    entries.push({
+      name: "Cwd",
       effect: "read",
       form: "self-closing",
-      props: ["names"],
+      props: [],
       designated: false,
-    },
-  ];
+    });
+  }
+  entries.push({
+    // Admitted by the execution that evaluates the root, not by this
+    // ceiling, so it is named here rather than read off the entries. It
+    // describes this response's own vocabulary, which is the one thing the
+    // derived list below cannot say about itself.
+    name: SYNTAX_COMPONENT,
+    effect: "read",
+    form: "self-closing",
+    props: ["names"],
+    designated: false,
+  });
   for (const control of ceiling.controls) {
     entries.push({
       name: control.name,

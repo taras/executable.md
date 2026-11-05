@@ -495,6 +495,7 @@ function replGeneratedSelection(extensions: readonly ReplPluginExtension[]): Gen
   const selection = { ...ordinaryGeneratedSelection() };
   for (const extension of extensions) {
     for (const component of extension.components ?? []) {
+      delete selection[component.name];
       const forms = component.generated;
       if (forms !== undefined) {
         selection[component.name] = [
