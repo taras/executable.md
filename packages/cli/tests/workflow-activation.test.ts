@@ -36,9 +36,6 @@ const ACTIVATION = "xmd workflow is experimental. Set XMD_EXPERIMENTAL_WORKFLOW=
 const UNSUPPORTED =
   "xmd workflow is available only through the Deno entrypoint or compiled xmd binary";
 
-/** A general-help command row naming `workflow`. */
-const WORKFLOW_ROW = /^\s+workflow\b/m;
-
 const DOCUMENT = ["# Flow", "", "flow-output", ""].join("\n");
 
 const RELEASE = [
@@ -461,7 +458,7 @@ function zero(): Counts {
   return { workflowHost: 0, service: 0, standardInput: 0, plugins: 0, repl: 0 };
 }
 
-/** Make the host environment claim the opposite of what the contextual Env says. */
+/** Set the host environment to the opposite of what the contextual Env answers. */
 function* nativeVariable(value: string | undefined): Operation<void> {
   const previous = process.env[VARIABLE];
   yield* ensure(() => {
@@ -480,57 +477,53 @@ function* nativeVariable(value: string | undefined): Operation<void> {
 
 describe("Tier WFA — activation is read from the invocation's contextual environment", () => {
   it("WFA7: disabled refusal and help reach no host capability, whatever the host says", function* () {
-    yield* scoped(function* () {
-      yield* nativeVariable("1");
-      for (const args of [
-        ["workflow", "start", "flow.md"],
-        ["workflow", "start", "-"],
-        ["--plugin", "./must-not-load.mjs", "workflow", "start", "flow.md"],
-        ["workflow", "status", "--artifact=damaged.xmd"],
-        ["workflow", "answer", "release-1", "wait-1", "{}"],
-      ]) {
-        const counts = zero();
-        const refused = yield* invoke(args, undefined, counts);
-        expect({ args, status: refused.status, stderr: said(refused.stderr) }).toEqual({
-          args,
-          status: 1,
-          stderr: ACTIVATION,
-        });
-        expect(counts).toEqual(zero());
-      }
+    yield* nativeVariable("1");
+    for (const args of [
+      ["workflow", "start", "flow.md"],
+      ["workflow", "start", "-"],
+      ["--plugin", "./must-not-load.mjs", "workflow", "start", "flow.md"],
+      ["workflow", "status", "--artifact=damaged.xmd"],
+      ["workflow", "answer", "release-1", "wait-1", "{}"],
+    ]) {
+      const counts = zero();
+      const refused = yield* invoke(args, undefined, counts);
+      expect({ args, status: refused.status, stderr: said(refused.stderr) }).toEqual({
+        args,
+        status: 1,
+        stderr: ACTIVATION,
+      });
+      expect(counts).toEqual(zero());
+    }
 
-      for (const args of [
-        ["workflow", "--help"],
-        ["workflow", "start", "missing.md", "-h"],
-      ]) {
-        const counts = zero();
-        const help = yield* invoke(args, "0", counts);
-        expect({ args, status: help.status, stdout: help.stdout.trim() }).toEqual({
-          args,
-          status: 0,
-          stdout: ACTIVATION,
-        });
-        expect(counts).toEqual(zero());
-      }
-    });
+    for (const args of [
+      ["workflow", "--help"],
+      ["workflow", "start", "missing.md", "-h"],
+    ]) {
+      const counts = zero();
+      const help = yield* invoke(args, "0", counts);
+      expect({ args, status: help.status, stdout: help.stdout.trim() }).toEqual({
+        args,
+        status: 0,
+        stdout: ACTIVATION,
+      });
+      expect(counts).toEqual(zero());
+    }
   });
 
   it("WFA8: a contextual 1 enables help and reaches the workflow host", function* () {
-    yield* scoped(function* () {
-      yield* nativeVariable(undefined);
-      const helpCounts = zero();
-      const help = yield* invoke(["workflow", "--help"], "1", helpCounts);
-      expect(help.status).toBe(0);
-      expect(help.stdout).toContain("--id");
-      expect(help.stdout).toContain(ACTIVATION);
-      expect(helpCounts).toEqual(zero());
+    yield* nativeVariable(undefined);
+    const helpCounts = zero();
+    const help = yield* invoke(["workflow", "--help"], "1", helpCounts);
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("--id");
+    expect(help.stdout).toContain(ACTIVATION);
+    expect(helpCounts).toEqual(zero());
 
-      const counts = zero();
-      const started = yield* invoke(["workflow", "start", "flow.md"], "1", counts);
-      expect(started.status).toBe(1);
-      expect(started.stderr).toContain(HOST_REACHED);
-      expect(counts).toEqual({ ...zero(), workflowHost: 1 });
-    });
+    const counts = zero();
+    const started = yield* invoke(["workflow", "start", "flow.md"], "1", counts);
+    expect(started.status).toBe(1);
+    expect(started.stderr).toContain(HOST_REACHED);
+    expect(counts).toEqual({ ...zero(), workflowHost: 1 });
   });
 
   it("WFA9: each invocation in one process reads its own answer", function* () {
