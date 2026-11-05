@@ -151,8 +151,18 @@ export type {
   NativeLaunchOutcome,
   NativeLaunchRequest,
 } from "./launcher.ts";
-export { hostFilesHandler, useHostFiles } from "./host-files.ts";
-export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host-files.ts";
+export {
+  hostFilesHandler,
+  useHostFiles,
+  captureHostFilesAccess,
+  hostFileAccessReason,
+} from "./host-files.ts";
+export type {
+  HostFilesEvent,
+  HostFilesObserver,
+  HostFilesOptions,
+  HostFilesAccess,
+} from "./host-files.ts";
 export {
   AgentSessionBusy,
   agentSessionKeyDigest,

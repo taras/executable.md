@@ -3171,8 +3171,7 @@ succeeds, content expands with the target as cwd and the component's scope
 restores the enclosing cwd on success, failure and cancellation; restoration
 never deletes the directory. The Repository selection in scope is unchanged —
 Dir places content in a directory and selects no Repository. The REPL host uses
-this same scoped Env mechanism for Sidekick workspace placement; its captured
-project repository remains separate.
+this same scoped Env mechanism for launch-project placement.
 
 The mandatory `API.Files.deleteFile` operation owns removal.
 
@@ -6797,45 +6796,72 @@ the reader and connection through exact Stop settlement. Exit status follows
 
 ### Session workspace placement
 
-A Sidekick response and an entry submitted through its controls start in the
-paired session directory. A manual entry starts in the command's captured
-project directory. The host installs ordinary `API.Env` cwd middleware at `min`
-on the held response task, the isolated preflight scope and the executing entry
-task. Nested Dir content shadows it; caller and sibling scopes keep their own
-cwd on success, failure and cancellation. Placement changes no submitted source,
-import coordinate, permission or Repository selection, and never changes the
-process cwd.
+Ordinary runs, fresh Sidekick responses, manual entries and Sidekick submissions
+start in the captured launch project. The host binds `API.Env` cwd on the held
+response, preflight and executing entry owners. Nested contexts restore on every
+exit without changing process cwd. Component storage does not determine its
+invocation cwd. Git ambient discovery uses the same selected project; lexical
+Repository and Worktree selection retain precedence and their authenticated owner.
 
-New Sidekick Submit intents retain optional `workspace: true` in their existing
-submit object. Absence preserves project placement for old histories. A present
-value other than true refuses. Before session opening can resume work, the host
-matches the original intent against the whole acknowledged entry history using
-ordinal, entry key, exact source and original prefix bytes. A conflicting binding
-refuses before initialization or append; absent admission submits nothing. Only
-the exact unfinished final entry uses that placement. Settling its control does
-not discard the original intent, so a later continuation derives the same cwd.
-Completed entries remain projections. Old bytes are never rewritten, and an
-older reader that rejects unknown members refuses a marked history.
+New root admissions retain one strict `executablemd.repl-placement` declaration
+with `projectDirectory` and `canonicalProjectRoot`, both normalized absolute
+paths. Matching Submit intents retain that same pair as `submit.placement`.
+The former is the effective spelling and the latter the observed canonical root.
+Exact source, ordinal, entry key and acknowledged prefix bytes still bind the
+reservation. Malformed, unknown or disagreeing placement members refuse. The
+current record format changes in place, without a version or conversion path.
 
-The workspace root is passed directly from the entry owner into the CLI-private
-recorder, only for marked entries. Fresh selections in those entries use
-`<workspace>/repositories` as their managed root, including linked Worktrees.
-Unmarked entries keep the configured host root. A nested Dir cannot retarget
-that root. Acknowledged placements retain their recorded paths without moving
-checkouts or validating current HEAD on replay. The captured project cwd is a
-separate direct input for lazy ambient discovery and ordinary commit identity. Native Git still
-requires an operation to name a valid selected checkout; a workspace cwd supplies
-no project fallback. The Sidekick's native provider keeps the captured project
-`agentCwd`, or the caller's explicit dependency, and its existing identity and
-configuration. Provider-owned Repository/Worktree placement grants no absolute
-permission. A later authored `Dir path={checkout}` needs opt-in; a contained
-relative address derived from the actual workspace and returned checkout does not.
-Session placement and TempDir grant no absolute permission either.
+Before plugin loading, profile finalization or live continuation, cold startup
+reads the retained pair. Completed history remains passive. An unfinished entry
+without a placement refuses continuation rather than inferring a project. An
+existing `workspace: true` intent keeps its original session cwd and managed
+repository root. Its marker cannot coexist with project placement.
+
+For an unfinished project entry, the recorded directory must exist, be accessible,
+be a directory and still resolve to its recorded canonical root. A different
+launch root requires an explicit original-directory offer without an initial
+answer. Acceptance selects the retained effective spelling before assembly;
+decline, interruption, EOF and presentation failure leave history unchanged.
+A noninteractive host refuses a required switch. Matching canonical roots need
+no offer. Native conversation identity and configuration remain unchanged.
+
+The host captures fixed canonical project, private storage, session/assets and
+session/components roots independently of replaceable Context observations.
+Sidekick XMD Files operations reach the project, read-only assets and components;
+all other private storage is excluded even beneath the project. Current effective
+permissions precede target I/O and final canonical containment follows middleware,
+mount and selection transforms. Raw outside requests refuse before coverage
+routing; an earlier authorized project routing observation need not predict a
+later transformation. Acknowledged composed answers restore before live policy.
+Shell, Git providers and trusted native extensions keep their own boundaries.
+
+`REPL.AssetDir` projects once in session/assets with write denied, creates nothing
+on entry, and fails ordinary reads of an absent assets directory without creating
+it. `REPL.ComponentDir` projects once in session/components for definition, test
+and fixture authoring. Both return ordinary rendered text, support `as`, and
+restore enclosing cwd and restrictions. Configured includes precede session
+components; a malformed selected winner never falls through. Source publication
+invokes none of it and source reading is no prerequisite to invocation.
+
+Sidekick temporary directories are allocated below the fixed project and cleanup
+joins their owner. Ordinary manual and run temporary placement remains unchanged.
+Test targets, report paths and child cwd remain session-relative; their clean
+host assembly receives the same fixed file limits, including nested executions.
+
+The implementation owners are explicit:
+
+| Owner | Responsibility |
+| --- | --- |
+| `repl/entry-placement.ts`, `repl/entries.ts` | Parse the strict project pair and retain it on root admission. |
+| `repl/program.ts`, `repl/startup.ts`, `cli.ts` | Inspect cold history, own the original-directory offer, validate its roots and select cwd before assembly. |
+| `runtime/host-files.ts` | Capture fixed roots and enforce canonical effective Files destinations. |
+| `repl/session-directories.ts` | Declare AssetDir and ComponentDir from the host's session paths. |
+| `core/src/expand.ts` | Carry projection cwd and the intersected Files restrictions into the content owner. |
 
 ### Approved host asset import
 
 The captured CLI-private `<REPL.ImportAsset source="/known/mock ü.html"
-destination="inputs/mock ü.html" />` control imports one non-repository regular
+destination="assets/mock ü.html" />` control imports one non-repository regular
 file into the existing session workspace. The root passes that directory directly;
 response cwd and props cannot retarget it. Missing workspace or importer refuses.
 The native adapter checks effective read/write restrictions before metadata I/O,
@@ -6870,7 +6896,8 @@ The existing control intent retains both operands before work. Only a joined
 ordinary Result receives an outcome; only success designates the relative path.
 An append failure supplies no success. Unfinished imports remain unknown: passive
 cold inspection reads no source, restarts no question and copies nothing. Later
-ordinary entries read the workspace copy, independently of the external source.
+ordinary entries read the session copy in AssetDir, independently of the external
+source and any project file at the same relative assets path.
 There is no crash reconciliation, automatic retry, adoption or atomic host-file
 and journal transaction.
 

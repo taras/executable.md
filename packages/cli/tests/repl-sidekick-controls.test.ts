@@ -656,6 +656,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         // Core's own, installed by the root evaluator rather than by this
         // ceiling, and described here because a reply has to know it may ask.
         "Syntax",
+        "Cwd",
         // Core's own too, admitted by this ceiling rather than installed
         // beside it: the canonical question, under its own name.
         "Elicit",
@@ -3473,5 +3474,50 @@ describe("ImportAsset captured response admission", () => {
       props: ["source", "destination"],
       designated: true,
     });
+  });
+});
+
+describe("1113: response admission stays bounded", () => {
+  for (const source of [
+    '<File path="sentinel">wrong</File>',
+    '<Glob include={["**/*"]} as="paths" />',
+    '<REPL.AssetDir><File path="mock.html" /></REPL.AssetDir>',
+    '<REPL.ComponentDir><File path="Greeting.md">wrong</File></REPL.ComponentDir>',
+    "```sh exec\nprintf wrong\n```",
+    "```js eval\nconst wrong = true;\n```",
+  ]) {
+    it(`1113: refuses direct response source ${JSON.stringify(source)} before controls`, function* () {
+      const asked = fresh();
+      const result = yield* reply(
+        "<REPL.EntryInput>must not fill</REPL.EntryInput>\n" + source,
+        asked,
+      );
+      expect(refusal(result).length).toBeGreaterThan(0);
+      expect(asked.requests).toEqual([]);
+      expect(asked.began).toEqual([]);
+    });
+  }
+});
+
+describe("1113: response Cwd is ordinary text", () => {
+  it("1113: renders and captures without becoming designated feedback", function* () {
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return "/selected/project";
+        },
+      },
+      { at: "min" },
+    );
+    yield* Permissions.around({ files: () => false });
+    const asked = fresh();
+    expect(
+      rendered(yield* reply('<Cwd as="directory" /><Output>{directory}|<Cwd /></Output>', asked)),
+    ).toBe("/selected/project|/selected/project");
+    expect(asked.requests).toEqual([]);
+    expect(asked.began).toEqual([]);
+    expect(
+      responseSurface(ceilingFor(asked)).find((entry) => entry.name === "Cwd")?.designated,
+    ).toBe(false);
   });
 });

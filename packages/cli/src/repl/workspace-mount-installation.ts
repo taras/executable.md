@@ -1,3 +1,6 @@
+import { hostFileAccessReason, filesFailure, fileWriteFailure } from "@executablemd/runtime";
+import type { HostFilesAccess } from "@executablemd/runtime";
+import { Err } from "effection";
 import { admitReplRepositoryHistory } from "./repositories/admission.ts";
 import { cwd } from "@executablemd/runtime";
 import type { Operation, Result } from "effection";
@@ -17,6 +20,7 @@ export interface MountFileEntry {
 export function workspaceMountInstallation(
   mounts: WorkspaceMountTable,
   access?: () => MountFileEntry,
+  limits?: HostFilesAccess,
 ): ExecutionInstallation {
   mounts = Object.freeze(mounts.map((pair) => Object.freeze({ ...pair })));
   let entry: MountFileEntry | undefined;
@@ -38,13 +42,40 @@ export function workspaceMountInstallation(
         const directory = yield* cwd();
         const policy = yield* createMountPolicy(mounts, directory);
         const files = yield* useEntryFileRecorder(
-          function* (_operation, request, perform, authored): Operation<Result<ReplLocalValue>> {
+          function* (operation, request, perform, authored): Operation<Result<ReplLocalValue>> {
             yield* policy.guard();
             if (authored !== undefined) {
               const replay = yield* policy.replay(authored, request);
               if (replay !== undefined) {
                 return yield* replay;
               }
+            }
+            const reason = yield* hostFileAccessReason(
+              limits,
+              operation === "file-read"
+                ? "read"
+                : operation === "file-write"
+                  ? "write"
+                  : operation === "file-delete"
+                    ? "delete"
+                    : "ensure-directory",
+              request,
+            );
+            if (reason !== undefined) {
+              return Err(
+                operation === "file-write"
+                  ? fileWriteFailure({ phase: "resolution", reason })
+                  : filesFailure({
+                      operation:
+                        operation === "file-read"
+                          ? "read"
+                          : operation === "file-delete"
+                            ? "delete"
+                            : "ensure-directory",
+                      phase: "resolution",
+                      reason,
+                    }),
+              );
             }
             if (authored !== undefined) {
               return yield* policy.record(authored, request, perform, {

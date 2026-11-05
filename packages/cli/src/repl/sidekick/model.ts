@@ -1,3 +1,4 @@
+import type { EntryPlacement } from "../entry-placement.ts";
 import { projectRecovery, recoveryBlocked } from "./recovery-state.ts";
 import type { RecoveryDisposition } from "./recovery-state.ts";
 /**
@@ -328,6 +329,7 @@ export interface SidekickOperation {
 /** A Submit whose reservation the entry journal still has to be asked about. */
 export interface SidekickSubmitIntent {
   readonly workspace?: true;
+  readonly placement?: EntryPlacement;
   readonly conversation: string;
   readonly response: string;
   readonly order: number;

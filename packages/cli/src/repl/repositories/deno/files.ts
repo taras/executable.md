@@ -1,3 +1,5 @@
+import { hostFileAccessReason, fileWriteFailure } from "@executablemd/runtime";
+import type { HostFilesAccess } from "@executablemd/runtime";
 import type { AwaitedMountPolicy } from "../../mount-files.ts";
 import { useEntryFileRecorder } from "../../file-recorder.ts";
 import type { MountFileEntry } from "../../workspace-mount-installation.ts";
@@ -126,6 +128,7 @@ function* routed(
   workspace: string | undefined,
   authored?: AuthoredFileOperation,
   mounts?: AwaitedMountPolicy,
+  access?: HostFilesAccess,
 ): Operation<Result<ReplLocalValue>> {
   if (mounts !== undefined) {
     yield* mounts.guard();
@@ -156,6 +159,34 @@ function* routed(
         phase: "resolution",
         reason: "permission-denied",
       }),
+    );
+  }
+
+  const reason = yield* hostFileAccessReason(
+    access,
+    operation === "file-read"
+      ? "read"
+      : operation === "file-write"
+        ? "write"
+        : operation === "file-delete"
+          ? "delete"
+          : "ensure-directory",
+    request,
+  );
+  if (reason !== undefined) {
+    return Err(
+      operation === "file-write"
+        ? fileWriteFailure({ phase: "resolution", reason })
+        : filesFailure({
+            operation:
+              operation === "file-read"
+                ? "read"
+                : operation === "file-delete"
+                  ? "delete"
+                  : "ensure-directory",
+            phase: "resolution",
+            reason,
+          }),
     );
   }
 
@@ -287,10 +318,11 @@ export function* useReplFileRecorder(
   workspace: string | undefined,
   mounts: WorkspaceMountTable,
   directory: string,
+  access?: HostFilesAccess,
 ): Operation<MountFileEntry> {
   const policy = yield* createMountPolicy(mounts, directory);
   const files = yield* useEntryFileRecorder((operation, request, perform, authored) =>
-    routed(recorder, operation, request, perform, workspace, authored, policy),
+    routed(recorder, operation, request, perform, workspace, authored, policy, access),
   );
   return { files, policy };
 }

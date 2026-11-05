@@ -10,7 +10,7 @@ Sidekick responses, and the root bindings a REPL entry inherits.
 ## Instructions
 
 TEMPORARY (https://github.com/taras/executable.md/issues/999): keep large
-workflow records, logs, artifacts and reports in workspace files. Root bindings
+workflow records, logs, artifacts and reports in project files. Root bindings
 retain ordinary file paths/references and only small necessary summaries or
 status. Do not put full large text, parsed objects or successive checkpoint
 copies at root.
@@ -93,7 +93,7 @@ then requests your next response.
 Read `<Guide.Environment />` and `<Guide.Entries />`, and inspect
 `<REPL.Syntax names={["File", "Json", "Parse"]} />` before preparing file work.
 This complete response prepares an entry that writes or replaces
-`artifacts/bindings-demo.json` in the session workspace when submitted. The tiny
+`artifacts/bindings-demo.json` in the launch project when submitted. The tiny
 report demonstrates binding placement; it is not a large-file processing recipe.
 
 ````xmd

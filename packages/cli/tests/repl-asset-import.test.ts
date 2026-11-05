@@ -308,9 +308,12 @@ describe("mounted asset import", () => {
   it("A1/A2/A4: the form begins empty, closes unanswered, and approves the actual workspace", function* () {
     const { source, bytes } = yield* fixture(new TextEncoder().encode("mounted ü text"));
     const io = yield* instrument();
-    const page = yield* useReplPage();
+    const project = yield* useTemporary("1113-import-project-");
+    yield* until(mkdir(join(project, "assets")));
+    yield* until(writeFile(join(project, "assets/mock.html"), "independent project asset"));
+    const page = yield* useReplPage({ projectCwd: project, hostFiles: true });
     const repl = page.repl;
-    repl.fake.script({ reply: invocation(source, "inputs/mock ü.html") });
+    repl.fake.script({ reply: invocation(source, "assets/mock.html") });
     repl.fake.script({ reply: "<Output>Imported.</Output>" });
     yield* sendMessage(page, "Import this file");
     yield* page.until("the import question", (one) => one.shows("[answer sidekick]"));
@@ -333,7 +336,7 @@ describe("mounted asset import", () => {
     yield* submitForm(page);
     yield* page.until("joined import", (one) => one.shows("Imported.") && sidekickIdle(one));
     const execution = yield* mountedExecution(repl);
-    const target = join(repl.root, "v1", execution, "inputs/mock ü.html");
+    const target = join(repl.root, "v1", execution, "assets/mock.html");
     expect([...(yield* until(readFile(target)))]).toEqual([...bytes]);
     const history = yield* settledReading(repl);
     expect(history.model.entries).toHaveLength(0);
@@ -342,13 +345,34 @@ describe("mounted asset import", () => {
     );
     expect(intent?.kind === "control" ? intent.arguments : undefined).toEqual({
       source,
-      destination: "inputs/mock ü.html",
+      destination: "assets/mock.html",
     });
     const results = history.chat.filter((one) => one.kind === "control-outcome");
-    expect(results.filter((one) => one.observed === "inputs/mock ü.html")).toHaveLength(1);
+    expect(results.filter((one) => one.observed === "assets/mock.html")).toHaveLength(1);
     expect(
       results.filter((one) => JSON.stringify(one.observed) === '{"decision":"Import"}'),
     ).toHaveLength(1);
+    const entry =
+      '<REPL.AssetDir as="asset"><Cwd /><File path="mock.html" /><Glob include={["*.html"]} as="paths" /><Json value={paths} /></REPL.AssetDir><Output>{asset}|<File path="assets/mock.html" /></Output>';
+    repl.fake.script({
+      reply: `<Let as="code" value={${JSON.stringify(entry)}} /><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />`,
+    });
+    repl.fake.script({ reply: "<REPL.Entry.Output entry={1} />" });
+    repl.fake.script({ reply: "<Output>1113 imported asset inspected</Output>" });
+    yield* sendMessage(page, "inspect the approved asset in an entry");
+    yield* page.until(
+      "asset output",
+      (one) => one.shows("1113 imported asset inspected") && sidekickIdle(one),
+    );
+    const inspected = yield* settledReading(repl);
+    expect(inspected.model.entries[0]?.source).toBe(entry);
+    expect(inspected.model.entries[0]?.terminal?.output).toContain("mounted ü text");
+    expect(inspected.model.entries[0]?.terminal?.output).toContain('"mock.html"');
+    expect(inspected.model.entries[0]?.terminal?.output).toContain("independent project asset");
+    expect(inspected.model.entries[0]?.terminal?.output).toContain(
+      join(repl.root, "v1", execution, "assets"),
+    );
+    expect(repl.fake.prompts.some((prompt) => prompt.includes("mounted ü text"))).toBe(true);
   });
 
   for (const origin of ["Stop", "Exit"]) {

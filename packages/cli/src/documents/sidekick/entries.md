@@ -87,6 +87,46 @@ printf '%s\n' {message}
 This fills the draft with the Let and exec block as source. Explicit submission
 runs that entry, where `{message}` resolves to `hello`.
 
+### Capture command and component results
+
+Use `exec as="commandResult"` to capture exitCode, stdout and stderr separately.
+A nonzero captured exitCode is data. A command that cannot start, times out or
+is cancelled still fails and binds no result. A component's `as` captures its
+rendered text. Submit this complete response in a fresh session:
+
+`````xmd
+<Let as="code" select="code">
+````xmd
+```sh exec as="commandResult"
+printf out
+printf err >&2
+exit 7
+```
+<File path="capture-demo.txt">component text</File>
+<File path="capture-demo.txt" as="componentOutput" />
+<Output><Json value={{exitCode: commandResult.exitCode, stdout: commandResult.stdout, stderr: commandResult.stderr, componentOutput}} /></Output>
+````
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+`````
+
+Follow the actual receipt's read instruction. In this fresh session it names:
+
+```xmd
+<REPL.Entry.Output entry={1} offset={0} />
+```
+
+The page text has exitCode=7, stdout="out", stderr="err" and
+componentOutput="component text". A Submit receipt contains no entry output.
+Use `offset={0}` to read complete output from its beginning. When the page
+returns `next`, pass those exact arguments to the next read and
+concatenate its text. Use the actual receipt's entry in an existing session.
+
+`<Cwd />` renders the current directory with no newline. `<Cwd as="directory" />`
+captures the same text without rendering it at that position. These reads require
+no filesystem permission. A definition invoked later observes its caller's cwd.
+
 ### Create and use a session component across responses
 
 Read `<Guide.Environment />`, `<Guide.Entries />`, `<REPL.Environment />` and
@@ -96,7 +136,7 @@ submit its file definition in one response:
 ````xmd
 <Let as="code" select="code">
 ```xmd
-<File path="components/Greeting.md">Hello from this session.</File>
+<REPL.ComponentDir><File path="Greeting.md">Hello from this session.</File></REPL.ComponentDir>
 ```
 </Let>
 <REPL.EntryInput>{code}</REPL.EntryInput>
@@ -145,10 +185,10 @@ remain local to their response; the later response does not inherit `code`.
 
 An entry can ask a selected checkout four questions. Read their exact forms
 with `<REPL.Syntax names={["Git.Files", "Git.Changes", "Git.Diff", "Git.File"]} />`
-first. Enter the selected checkout before asking Git; the workspace is not a
-hidden route back to the project. Acquire the repository as shown below when it
-is not already available in the workspace. Replace `RELATIVE_CHECKOUT` below
-with its observed path relative to the current working directory:
+first. Ambient Git reads start in the selected launch project. A lexical
+Repository or Worktree selects its own checkout. For another checkout inside
+your project, replace `RELATIVE_CHECKOUT` below with its observed project-relative
+path. Absolute Dir still requires opt-in and effective write permission:
 
 ````xmd
 <Let as="code" select="code">
@@ -189,15 +229,15 @@ locator and creation base below with the selected repository and resolved commit
 
 Follow the receipt's read instruction and inspect the actual outcome and checkout
 binding. An entry can print a refusal; status alone proves no acquisition.
-Derive a relative checkout path from the returned absolute path and the workspace
-reported by `<REPL.Environment />`. A later authored absolute Dir needs
-`--allow-absolute` and effective write permission; paired Repository/Worktree
-placement grants no such permission. Use the contained relative address when
-absolute is denied. An approved non-repository asset can target
-`RELATIVE_CHECKOUT/inputs/<filename>` beneath that same session workspace; derive
-that destination from the returned facts. A host repository outside the session
-root is unsupported by import. Replace `RELATIVE_CHECKOUT` below with that
-observed address, preserving the rest of this later response:
+Repository and Worktree selection have their own authenticated Git owner.
+Sidekick File work remains confined to the selected launch project and the two
+session scopes. A checkout outside those roots cannot be read through File;
+selection alone grants no file authority. Git reads keep their existing owner.
+An acknowledged old read answers with its historical text without fresh Git work.
+
+For a returned checkout inside your launch project, derive its project-relative
+address and replace `RELATIVE_CHECKOUT` below. This later response reads its
+current working file without acquiring again:
 
 ````xmd
 <Let as="code" select="code">
@@ -210,27 +250,24 @@ observed address, preserving the rest of this later response:
 <REPL.Submit />
 ````
 
-Read that entry's output. This new read uses the current checkout and needs no
-new Repository selection, including after reopening the session. An acknowledged
-old read still answers with its historical text. Inspect actual Git origin and
-HEAD when revision identity matters: the requested `base` is the creation base,
-while a compatible checkout may since have advanced. Fresh same-base acquisition
-preserves that current HEAD and local changes. An incompatible repository or
-creation base refuses; do not reset work to force reuse.
+For an outside checkout, use authenticated Git reads in its lexical Repository
+scope. It is unavailable to ordinary Sidekick File work. Current HEAD and local
+changes survive compatible re-selection; `base` is the creation base. A different
+origin or creation base refuses without resetting the checkout.
 
 ### Test, fix and reuse a session component
 
 When asked to create and test a component, write its definition and a companion
-Markdown test through an ordinary entry. This Greeting writes `greeting.txt`
-when invoked and returns its greeting. Authoring its file performs neither:
+Markdown test through ComponentDir in an ordinary entry. Greeting returns its
+greeting when invoked. Authoring its file invokes neither Greeting nor Test:
 
 ````xmd
 <Let as="code" select="code">
 ```xmd
-<Let as="definition" value={"<File path=\"greeting.txt\">Hello from this session.</File>Hello from this session."} />
-<File path="components/Greeting.md">{definition}</File>
+<Let as="definition" value="Hello from this session." />
+<REPL.ComponentDir><File path="Greeting.md">{definition}</File></REPL.ComponentDir>
 <Let as="test" value={"<Test name=\"greeting\"><Greeting as=\"actual\" /><AssertEquals actual={actual} expected=\"Hello from this session.\" /></Test>"} />
-<File path="components/Greeting.test.md">{test}</File>
+<REPL.ComponentDir><File path="Greeting.test.md">{test}</File></REPL.ComponentDir>
 ```
 </Let>
 <REPL.EntryInput>{code}</REPL.EntryInput>
@@ -238,8 +275,8 @@ when invoked and returns its greeting. Authoring its file performs neither:
 ````
 
 Follow the receipt's read instruction and check the actual File outcomes. A
-completed entry alone does not prove either write succeeded. `greeting.txt`
-does not exist yet, and authoring the test has run no assertion.
+completed entry alone does not prove either write succeeded. Authoring the test
+has run no assertion.
 
 After successful writes, request the document explicitly:
 
@@ -247,9 +284,9 @@ After successful writes, request the document explicitly:
 <REPL.Test path="components/Greeting.test.md" />
 ````
 
-Feedback contains a passed document and its named assertion. Invocation created
-`greeting.txt`. Testing executes authored effects under the command's ordinary
-permissions; it does not append an entry or consume the draft.
+Feedback contains a passed document and its named assertion. Tests start in
+the session directory. File fixtures belong under `components/fixtures`; other
+private session files remain unavailable. Testing uses the command's permissions; it does not append an entry or consume the draft.
 
 To see a real failure, replace the expectation through another ordinary entry,
 then request the directory suite:
@@ -258,7 +295,7 @@ then request the directory suite:
 <Let as="code" select="code">
 ```xmd
 <Let as="test" value={"<Test name=\"greeting\"><Greeting as=\"actual\" /><AssertEquals actual={actual} expected=\"wrong\" /></Test>"} />
-<File path="components/Greeting.test.md">{test}</File>
+<REPL.ComponentDir><File path="Greeting.test.md">{test}</File></REPL.ComponentDir>
 ```
 </Let>
 <REPL.EntryInput>{code}</REPL.EntryInput>
@@ -274,7 +311,7 @@ request a fresh suite:
 <Let as="code" select="code">
 ```xmd
 <Let as="test" value={"<Test name=\"greeting\"><Greeting as=\"actual\" /><AssertEquals actual={actual} expected=\"Hello from this session.\" /></Test>"} />
-<File path="components/Greeting.test.md">{test}</File>
+<REPL.ComponentDir><File path="Greeting.test.md">{test}</File></REPL.ComponentDir>
 ```
 </Let>
 <REPL.EntryInput>{code}</REPL.EntryInput>

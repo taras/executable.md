@@ -1,3 +1,5 @@
+import { useHostFiles } from "@executablemd/runtime";
+import type { HostFilesAccess } from "@executablemd/runtime";
 import { allSettled, ensure, Err, Ok, scoped, spawn } from "effection";
 import type { Operation, Result, Scope, Task } from "effection";
 import { Stdio } from "@effectionx/process";
@@ -54,7 +56,10 @@ export function replTesting(
   host: Scope,
   profile: ReplExecutionProfile,
   workspace: string | undefined,
-  harness?: (includes: readonly string[]) => Operation<ExecutionInstallation>,
+  harness?: (
+    includes: readonly string[],
+    access?: HostFilesAccess,
+  ) => Operation<ExecutionInstallation>,
 ): ReplTesting {
   return (path) =>
     owned(host, function* () {
@@ -98,6 +103,7 @@ export function replTesting(
                 return workspace;
               },
             });
+            yield* useHostFiles({ access: profile.access, temporaryRoot: profile.access?.project });
             yield* useNormalizedOutput();
             let nativeOutput = "";
             const stdout = new TextDecoder();
@@ -138,7 +144,9 @@ export function replTesting(
             yield* installAgentComponents();
             const installations = [
               ...profile.installations,
-              harness === undefined ? testHarnessInstallation() : yield* harness(profile.includes),
+              harness === undefined
+                ? testHarnessInstallation()
+                : yield* harness(profile.includes, profile.access),
             ];
             yield* Component.around({ generated: (_args, next) => next() ?? profile.generated });
             const execution = yield* executeInstalled(

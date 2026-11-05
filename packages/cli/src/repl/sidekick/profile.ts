@@ -121,7 +121,7 @@ export function sidekickResponseCeiling(
  * them grants.
  */
 export function sidekickSelection(ceiling: ResponseCeiling): GeneratedSelection {
-  const selection: Record<string, readonly InvocationForm[]> = {};
+  const selection: Record<string, readonly InvocationForm[]> = { Cwd: ["self-closing"] };
   for (const control of ceiling.controls) {
     selection[control.name] = [control.form];
   }
@@ -228,6 +228,7 @@ export interface SurfaceEntry {
  */
 export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry[] {
   const entries: SurfaceEntry[] = [
+    { name: "Cwd", effect: "read", form: "self-closing", props: [], designated: false },
     {
       // Admitted by the execution that evaluates the root, not by this
       // ceiling, so it is named here rather than read off the entries. It

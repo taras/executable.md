@@ -1,3 +1,8 @@
+import { join } from "node:path";
+import { validateProjectPlacement, canonicalProject } from "./startup.ts";
+import { useReplElicitation } from "./elicitation.ts";
+import { Elicitation } from "@executablemd/core";
+import { replRoot } from "./storage.ts";
 import type { ReplChatPreparationStore } from "./application.ts";
 import { recoveryReference } from "./sidekick/recovery-record.ts";
 import type { ReplRecovering } from "./application.ts";
@@ -160,8 +165,9 @@ import type { RootReading } from "./sidekick/requests.ts";
 import type { SubmitReceipt } from "./sidekick/controls.ts";
 import { pairedReplRepository } from "./sidekick/repository.ts";
 import type { SidekickWriter } from "./sidekick/history.ts";
-import { pairedLocation } from "./sidekick/history.ts";
-import { cwd } from "@executablemd/runtime";
+import { pairedLocation, bindRetainedPrefix } from "./sidekick/history.ts";
+import type { RetainedPrefix } from "./sidekick/history.ts";
+import { cwd, captureHostFilesAccess } from "@executablemd/runtime";
 import type {
   PairedChatStorage,
   PairedReplExecution,
@@ -262,6 +268,7 @@ export interface HeadlessReplRoot {
  * run under different rules from the first.
  */
 export interface ReplProgramOptions {
+  readonly startup?: Result<ReplStartup>;
   readonly headless?: HeadlessReplRoot;
   readonly sidekickAcp?: string;
   /** The location to reopen, or none to start a fresh execution. */
@@ -278,6 +285,222 @@ export interface ReplOutcome {
   readonly location: string;
   /** Why it ended without a session, when that is what happened. */
   readonly refusal: string | undefined;
+}
+
+export interface ReplStartup {
+  readonly root: string;
+  readonly execution: PairedReplExecution;
+  readonly state: ReplState;
+  readonly projectCwd: string;
+  readonly retained: { readonly entries: RetainedPrefix; readonly chat?: RetainedPrefix };
+  readonly resumedProjectEntry?: string;
+}
+
+export function* prepareReplStartup(
+  location: string,
+  root?: string,
+  offer = true,
+): Operation<Result<ReplStartup>> {
+  try {
+    const decoded = decodeLocation(location);
+    if (!decoded.ok) {
+      return decoded;
+    }
+    const state = yield* stateOf(location);
+    const directory = root ?? (yield* replRoot());
+    const execution = yield* pairedReplRepository(directory).open(decoded.value.execution);
+    const retained = {
+      entries: yield* bindRetainedPrefix(execution.stream.path),
+      ...(execution.chat.form === "paired"
+        ? { chat: yield* bindRetainedPrefix(execution.chat.location.sidekick) }
+        : {}),
+    };
+    const reachable = yield* resolvable(execution, state);
+    if (!reachable.ok) {
+      return reachable;
+    }
+    const projected = projectRepl(yield* execution.stream.readAll());
+    if (!projected.ok) {
+      return projected;
+    }
+    const entries = projected.value.entries;
+    let workspaceEntry: string | undefined;
+    if (execution.chat.form === "paired") {
+      const cold = yield* coldReservations(
+        execution.chat.records,
+        entries,
+        execution.chat.location.entries,
+      );
+      if (!cold.ok) {
+        return cold;
+      }
+      const workspace = yield* coldWorkspaceEntry(
+        execution.chat.records,
+        entries,
+        execution.chat.location.entries,
+      );
+      if (!workspace.ok) {
+        return workspace;
+      }
+      workspaceEntry = workspace.value;
+    }
+    const launch = yield* cwd();
+    const final = entries.at(-1);
+    if (final === undefined || final.settled || workspaceEntry === final.key) {
+      return Ok({ root: directory, execution, state, retained, projectCwd: launch });
+    }
+    const placement = final.placement;
+    if (placement === undefined) {
+      return Err(
+        new Error(
+          "This unfinished entry has no recorded project placement. Its history remains available, but it cannot safely continue in another directory.",
+        ),
+      );
+    }
+    yield* validateProjectPlacement(placement);
+    if ((yield* canonicalProject(launch)) !== placement.canonicalProjectRoot) {
+      if (!offer || !(yield* ReplTerminal.operations.interactive())) {
+        return Err(
+          new Error(
+            `This unfinished entry requires the recorded project ${placement.projectDirectory}. Reopen there with an interactive terminal.`,
+          ),
+        );
+      }
+      if (!(yield* offerProject(placement.projectDirectory, launch, execution.id))) {
+        return Err(new Error("The entry was left unfinished. No session was started."));
+      }
+      yield* validateProjectPlacement(placement);
+    }
+    const sidekick =
+      execution.chat.form === "paired" ? projectSidekick(execution.chat.records) : undefined;
+    const restricted =
+      sidekick?.ok &&
+      sidekick.value.submits.some(
+        (intent) => intent.entry === final.key && intent.placement !== undefined,
+      );
+    yield* unchangedStartup(execution, retained);
+    return Ok({
+      root: directory,
+      execution,
+      state,
+      retained,
+      projectCwd: placement.projectDirectory,
+      ...(restricted ? { resumedProjectEntry: final.key } : {}),
+    });
+  } catch (error) {
+    return Err(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+function* unchangedStartup(
+  execution: PairedReplExecution,
+  retained: ReplStartup["retained"],
+): Operation<void> {
+  const entries = yield* bindRetainedPrefix(execution.stream.path);
+  const chat =
+    execution.chat.form === "paired"
+      ? yield* bindRetainedPrefix(execution.chat.location.sidekick)
+      : undefined;
+  if (
+    entries.records !== retained.entries.records ||
+    entries.bytes !== retained.entries.bytes ||
+    entries.sha256 !== retained.entries.sha256 ||
+    chat?.records !== retained.chat?.records ||
+    chat?.bytes !== retained.chat?.bytes ||
+    chat?.sha256 !== retained.chat?.sha256
+  ) {
+    throw new Error(
+      "This execution's retained history changed during startup. Reopen its location to inspect the current history.",
+    );
+  }
+}
+
+function offerProject(original: string, launch: string, execution: string): Operation<boolean> {
+  return scoped(function* () {
+    const questions = yield* useReplElicitation();
+    const changes = yield* questions.changes;
+    const accepted = `Return to ${original}`;
+    const asking = yield* spawn(() =>
+      Elicitation.operations.elicit({
+        message: `This unfinished entry started in ${original}. Return this session to ${original} to continue it?\nYou launched from ${launch}.`,
+        schema: {
+          type: "object",
+          properties: { choice: { type: "string", enum: [accepted, "Leave unfinished"] } },
+          required: ["choice"],
+          additionalProperties: false,
+        },
+      }),
+    );
+    yield* changes.next();
+    const question = questions.pending;
+    if (question === undefined) {
+      return false;
+    }
+    const screen = yield* useReplScreen();
+    const events = yield* screen.events();
+    const tree = yield* useReplTree<ReplAction>();
+    const frames = yield* useReplFrames();
+    const size = yield* screen.size();
+    const renderer = yield* useReplRenderer(size);
+    let state: ReplState = {
+      ...initialState(execution),
+      route: { ...initialState(execution).route, drawers: [{ kind: "live-elicit" }] },
+    };
+    const compose: ReplCompose = function* (at) {
+      const base = refusedView(state, "", at, keyOfFocus(tree));
+      return {
+        ...base,
+        refusal: undefined,
+        selection: { ...base.selection, drawers: [{ kind: "live-elicit" }] },
+        live: { ...base.live, question },
+      };
+    };
+    while (true) {
+      const shown = yield* paint(frames, tree, renderer, screen, compose);
+      const next = yield* events.next();
+      if (next.done || next.value.kind === "eof") {
+        return false;
+      }
+      if (next.value.kind === "resize") {
+        continue;
+      }
+      const input =
+        next.value.kind === "pointer"
+          ? resolvePointer(shown.rendered, next.value.at)
+          : next.value.kind === "input"
+            ? next.value.event
+            : undefined;
+      if (input === undefined) {
+        continue;
+      }
+      if (input.kind === "key" && (input.key === "Escape" || input.key === "Interrupt")) {
+        return false;
+      }
+      const dispatched = yield* tree.dispatch(input);
+      if (!dispatched.ok || dispatched.value.outcome !== "action") {
+        continue;
+      }
+      const transition = reduceRepl(
+        state,
+        dispatched.value.action,
+        shown.view.model,
+        shown.view.live,
+        shown.admission,
+        { kind: "entry-question", question },
+      );
+      state = transition.state;
+      if (transition.intent.kind === "exit" || transition.state.route.drawers.length === 0) {
+        return false;
+      }
+      if (transition.intent.kind === "answer") {
+        const answer = question.submit(transition.intent.values);
+        if (answer.kind === "answered") {
+          yield* asking;
+          return transition.intent.values.choice === accepted;
+        }
+      }
+    }
+  });
 }
 
 /**
@@ -298,23 +521,16 @@ export function runReplProgram(options: ReplProgramOptions): Operation<Result<Re
 }
 
 function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOutcome>> {
-  // Before a path is formed, a file is opened or a terminal is touched: what the
-  // caller named has to be a location this grammar defines.
-  if (options.location !== undefined) {
-    const decoded = decodeLocation(options.location);
-    if (!decoded.ok) {
-      return decoded;
-    }
+  const prepared =
+    options.startup ??
+    (options.location === undefined
+      ? undefined
+      : yield* prepareReplStartup(options.location, options.root, false));
+  if (prepared !== undefined && !prepared.ok) {
+    return prepared;
   }
-
-  let state: ReplState =
-    options.location === undefined ? initialState("pending") : yield* stateOf(options.location);
-
-  // A terminal, before a directory is formed or a file exists. Raw mode is the
-  // first thing that fails over a pipe, and it fails several steps after this
-  // command has already created an execution — leaving an empty history behind
-  // for a session that was never going to open. Asked here, "there is no
-  // terminal" is a refusal instead of wreckage.
+  const startup = prepared?.value;
+  let state = startup?.state ?? initialState("pending");
   if (options.headless === undefined && !(yield* ReplTerminal.operations.interactive())) {
     return Err(
       new ReplRefusedError(
@@ -323,57 +539,50 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
       ),
     );
   }
-
-  const root = options.root ?? (yield* useReplRoot());
-  // Paired, so a new execution publishes its chat history beside its entries
-  // from the start and an older single-file one opens exactly as it is. Which
-  // shape this execution is in travels on it as `chat`, for the Sidekick owner
-  // to read; nothing here starts a conversation or writes a chat record.
+  const root = startup?.root ?? options.root ?? (yield* useReplRoot());
   const repository = pairedReplRepository(root);
-
-  // Opening a retained history reads and validates the whole file, and a file
-  // that is not one raises. That is a location this command cannot show rather
-  // than a failure of the command, so it becomes the refusal screen — with no
-  // session, no provider and no observer ever created.
-  let execution: PairedReplExecution;
-  try {
-    execution =
-      options.location === undefined
-        ? yield* repository.create()
-        : yield* repository.open(requireExecution(options.location));
-  } catch (error) {
-    if (options.headless !== undefined) {
-      throw error;
-    }
-    return yield* refuse(state, error instanceof Error ? error.message : String(error));
-  }
-  if (options.location === undefined) {
+  const execution = startup?.execution ?? (yield* repository.create());
+  if (startup === undefined) {
     state = initialState(execution.id);
   }
-
-  // The route, against what the file already holds — *before* anything replays.
-  //
-  // Opening a session starts or resumes the execution, and replay that gets
-  // past the retained prefix appends. A location naming a scope this history
-  // never had is a typo, and discovering it after replay has run means the typo
-  // grew the file: the run happened, records landed, and the answer the person
-  // gets is still that their URL was wrong. Everything the route names comes
-  // from records that are already on disk, so the question has an answer here,
-  // where the only cost of the wrong URL is being told so.
-  if (options.location !== undefined) {
-    const reachable = yield* resolvable(execution, state);
-    if (!reachable.ok) {
-      if (options.headless !== undefined) {
-        return reachable;
-      }
-      return yield* refuse(state, reachable.error.message);
-    }
-  }
-
   const workspace = pairedLocation(root, execution.id).directory;
   const profile =
-    "finalize" in options.profile ? yield* options.profile.finalize(workspace) : options.profile;
+    "finalize" in options.profile
+      ? yield* options.profile.finalize(workspace, root)
+      : options.profile;
   const projectCwd = profile.projectCwd ?? (yield* cwd());
+  if (
+    startup !== undefined &&
+    (yield* canonicalProject(projectCwd)) !== (yield* canonicalProject(startup.projectCwd))
+  ) {
+    return Err(
+      new ReplRefusedError(
+        "This profile was finalized for a different project. Reopen through the command line to select the recorded project before assembly.",
+        encodeLocation(state.route),
+      ),
+    );
+  }
+  if (startup !== undefined && profile.access !== undefined) {
+    const expected = yield* captureHostFilesAccess({
+      project: startup.projectCwd,
+      private: root,
+      assets: join(workspace, "assets"),
+      components: join(workspace, "components"),
+    });
+    if (
+      profile.access.project !== expected.project ||
+      profile.access.private !== expected.private ||
+      profile.access.assets !== expected.assets ||
+      profile.access.components !== expected.components
+    ) {
+      return Err(
+        new ReplRefusedError(
+          "This finalized profile has different file roots from the selected project and session.",
+          encodeLocation(state.route),
+        ),
+      );
+    }
+  }
   let unresolved: readonly ColdReservation[] = [];
   let resumedWorkspaceEntry: string | undefined;
   if (execution.chat.form === "paired") {
@@ -401,11 +610,23 @@ function* openReplProgram(options: ReplProgramOptions): Operation<Result<ReplOut
     resumedWorkspaceEntry = placement.value;
   }
 
+  if (startup !== undefined) {
+    try {
+      yield* unchangedStartup(execution, startup.retained);
+    } catch (error) {
+      return Err(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
   const opened = yield* openReplSession({
     execution,
     projectCwd,
+    access: profile.access,
+    placement: profile.placement,
     workspace,
     ...(resumedWorkspaceEntry === undefined ? {} : { resumedWorkspaceEntry }),
+    ...(startup?.resumedProjectEntry === undefined
+      ? {}
+      : { resumedProjectEntry: startup.resumedProjectEntry }),
     includes: profile.includes,
     mounts: profile.mounts,
     installations: profile.installations,
@@ -1160,6 +1381,7 @@ function* drive(
     const sidekick: SidekickOwner = yield* useSidekickOwner({
       follow: () => follow,
       assembly: options.profile.sidekickAssembly,
+      projectCwd: options.profile.projectCwd,
       workspace,
       chat: execution.chat,
       *establish(): Operation<Result<PairedChatStorage>> {
@@ -1202,6 +1424,7 @@ function* drive(
         }),
       submit(at, journal, observed): Operation<Result<SubmitReceipt>> {
         return submitForSidekick(at, {
+          placement: options.profile.placement,
           observed,
           session: {
             // The whole acknowledged history, read at the moment the
@@ -1219,6 +1442,7 @@ function* drive(
                 read.value.model.entries.map((entry) => ({
                   key: entry.key,
                   source: entry.source,
+                  placement: entry.placement,
                   ...(entry.terminal === undefined ? {} : { terminal: entry.terminal }),
                 })),
               );
@@ -1228,7 +1452,7 @@ function* drive(
             // thing that knows when this entry actually starts: it asks after
             // the preflight, and a reply's submission is held to the same terms
             // there as a person's Run.
-            submit: (source, starting) => current.submit(source, undefined, starting, true),
+            submit: (source, starting) => current.submit(source, undefined, starting, "project"),
           },
           // Asked rather than carried: a reply's submission is reserved against
           // the draft as it stands when it asks — the same moment a person's

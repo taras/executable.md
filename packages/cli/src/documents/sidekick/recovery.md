@@ -11,6 +11,12 @@ prepare.
 
 ## Instructions
 
+- Reopening an unfinished entry can offer its recorded original project before
+  loading plugins or continuing work. Only an explicit Return to that directory
+  continues. Leave unfinished, Escape or loss of input preserves history. An
+  unavailable or changed original refuses; restore it before reopening. Completed
+  history needs no directory switch. A history without reliable placement can
+  still be inspected but cannot be guessed into live continuation.
 - When the person chooses recovery, treat the supplied new instruction as a
   distinct request in the original conversation. Earlier feedback acceptance
   remains unknown. Do not resend that feedback, re-evaluate its response, or
