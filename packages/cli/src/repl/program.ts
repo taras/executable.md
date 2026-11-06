@@ -207,7 +207,7 @@ import { readingLines } from "./source-reading.ts";
 import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
-import type { ReplAdmission } from "./layout-admission.ts";
+import type { ReplAdmission, ReplWindow } from "./layout-admission.ts";
 import { resolveWheel, resolvePointer, useReplRenderer } from "./renderer.ts";
 import type { ReplDrawnBox, ReplMeasured, ReplRendered, ReplRenderer } from "./renderer.ts";
 import { useReplScreen } from "./screen.ts";
@@ -1921,8 +1921,49 @@ function* drive(
      * loop's to do — it owns the scope — so this reports it rather than performing
      * it.
      */
+    // SCRATCH DIAGNOSTIC (#1125) — temporary observation only, not a retained
+    // change. Every record is emitted synchronously from the owner that already
+    // holds the fact, numbered by one loop-owned counter so an input, its
+    // dispatch, the geometry it was answered at and the frame that followed are
+    // one correlated sequence. Nothing here waits, yields or alters a decision.
+    let traceSeq = 0;
+    let traceInput: { readonly seq: number; readonly window: string | undefined } | undefined;
+    const trace = (fields: unknown): void => {
+      console.log(`XMDFLAKE ${JSON.stringify(fields)}`);
+    };
+    const tracedWindow = (held: ReplWindow | undefined): unknown =>
+      held === undefined ? null : {
+        from: held.from,
+        count: held.count,
+        capacity: held.capacity,
+        total: held.total,
+        focus: held.focus === undefined ? null : { from: held.focus.from, to: held.focus.to },
+      };
+
     function* act(event: ReplInputEvent): Operation<boolean> {
       const dispatched = yield* tree.dispatch(event);
+      const tracing = traceInput;
+      if (tracing !== undefined) {
+        trace({
+          what: "dispatch",
+          seq: tracing.seq,
+          ok: dispatched.ok,
+          outcome: dispatched.ok ? dispatched.value.outcome : null,
+          reason: dispatched.ok && dispatched.value.outcome === "dropped"
+            ? dispatched.value.reason
+            : null,
+          action: dispatched.ok && dispatched.value.outcome === "action"
+            ? JSON.stringify(dispatched.value.action).slice(0, 240)
+            : null,
+          focusAfter: keyOfFocus(tree) ?? null,
+        });
+        if (dispatched.ok && dispatched.value.outcome === "action") {
+          const acted = dispatched.value.action;
+          if (acted.kind === "viewport-wheel") {
+            traceInput = { seq: tracing.seq, window: acted.window };
+          }
+        }
+      }
       if (!dispatched.ok || dispatched.value.outcome !== "action") {
         // A traversal has already moved focus in the tree. Taking it now means
         // the frame below is composed with the focus that is actually held —
@@ -1971,6 +2012,15 @@ function* drive(
         }
         geometry = ready.value.admission;
       }
+      const answering = traceInput;
+      if (answering !== undefined && answering.window !== undefined) {
+        trace({
+          what: "geometry",
+          seq: answering.seq,
+          window: answering.window,
+          admitted: tracedWindow(geometry.windows.get(answering.window)),
+        });
+      }
       const transition = reduceRepl(
         state,
         dispatched.value.action,
@@ -1980,6 +2030,15 @@ function* drive(
         presenting,
       );
       state = transition.state;
+      if (answering !== undefined) {
+        trace({
+          what: "reduced",
+          seq: answering.seq,
+          window: answering.window ?? null,
+          todoOffset: state.todoOffset ?? null,
+          viewports: state.viewports,
+        });
+      }
       const performed = yield* perform(
         transition.intent,
         current,
@@ -2499,6 +2558,22 @@ function* drive(
               : wake.event.kind === "wheel"
                 ? resolveWheel(rendered, wake.event.at, wake.event.direction)
                 : resolvePointer(rendered, wake.event.at);
+          traceSeq += 1;
+          traceInput = { seq: traceSeq, window: undefined };
+          trace({
+            what: "input",
+            seq: traceSeq,
+            kind: wake.event.kind,
+            direction: wake.event.kind === "wheel" ? wake.event.direction : null,
+            at: wake.event.at,
+            valid,
+            renderedSize: rendered === undefined ? null : rendered.size,
+            renderedTree: rendered === undefined ? null : rendered.tree,
+            target: aimed === undefined ? null : aimed.target,
+            targetKey: aimed === undefined ? null : (tree.keyOf(aimed.target) ?? null),
+            frame: aimed === undefined ? null : aimed.frame,
+            focusBefore: keyOfFocus(tree) ?? null,
+          });
           if (aimed !== undefined) {
             if (yield* act(aimed)) {
               departing = true;
@@ -2541,6 +2616,15 @@ function* drive(
             departing = true;
             continue;
           }
+          traceSeq += 1;
+          traceInput = { seq: traceSeq, window: undefined };
+          trace({
+            what: "input",
+            seq: traceSeq,
+            kind: delivered.kind,
+            key: delivered.kind === "key" ? delivered.key : null,
+            focusBefore: keyOfFocus(tree) ?? null,
+          });
           if (yield* act(delivered)) {
             departing = true;
           }
@@ -2728,6 +2812,22 @@ function* drive(
       // satisfied it: what the tree answers is the only thing that says whether
       // the control a claim named actually took it.
       state = focusSettled(view, settledFocus, painted.admission);
+      if (traceInput !== undefined) {
+        trace({
+          what: "frame",
+          pass: "first",
+          seq: traceInput.seq,
+          tree: painted.rendered.tree,
+          size: painted.rendered.size,
+          focus: settledFocus ?? null,
+          window: traceInput.window ?? null,
+          admitted: tracedWindow(
+            traceInput.window === undefined
+              ? undefined
+              : painted.admission.windows.get(traceInput.window),
+          ),
+        });
+      }
       if (settledFocus !== focused) {
         focused = settledFocus;
         const again = yield* draw();
@@ -2739,7 +2839,24 @@ function* drive(
         settledFocus = keyOfFocus(tree);
         state = focusSettled(again.view, settledFocus, again.admission);
         focused = settledFocus;
+        if (traceInput !== undefined) {
+          trace({
+            what: "frame",
+            pass: "second",
+            seq: traceInput.seq,
+            tree: again.rendered.tree,
+            size: again.rendered.size,
+            focus: settledFocus ?? null,
+            window: traceInput.window ?? null,
+            admitted: tracedWindow(
+              traceInput.window === undefined
+                ? undefined
+                : again.admission.windows.get(traceInput.window),
+            ),
+          });
+        }
       }
+      traceInput = undefined;
       if (observer !== undefined && rendered !== undefined && liveScreen?.connected) {
         observePass("complete");
       }

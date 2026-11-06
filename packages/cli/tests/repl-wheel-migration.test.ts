@@ -14,10 +14,47 @@ import {
 import { awaitedFact, OTHER_MOUNTED_AGENT } from "./support/mounted-repl.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 
+/**
+ * SCRATCH DIAGNOSTIC (#1125) — the reading each existing wait accepted.
+ *
+ * Observation only. Every call sits after a wait that is unchanged, so this
+ * reports what that wait took and alters no wait, deadline, assertion or helper
+ * decision. `ordinal` is this file's own input counter and runs in the same
+ * order as the production `seq` of the session's other `XMDFLAKE` records, which
+ * is how a test-side acceptance is paired with the frame that produced it.
+ *
+ * The predicates are the exact ones these cases assert on — the focused Choice
+ * cue and the History admitted-marker rows — and nothing else is stringified.
+ */
+let tracedInputs = 0;
+function tracedInput(page: ReplPage, input: unknown, before: number): void {
+  tracedInputs += 1;
+  const one = page.screen();
+  console.log(
+    `XMDFLAKE ${
+      JSON.stringify({
+        what: "testInput",
+        ordinal: tracedInputs,
+        input,
+        indexBefore: before,
+        indexAfter: one.index,
+        size: one.size,
+        choice00: one.shows("> [Choice 00]"),
+        choice39: one.shows("> [Choice 39]"),
+        cues: one.rows.filter((row) => row.includes("> ")).length,
+        admitted: one.rows
+          .flatMap((row) => row.match(/\d+ · Entry \d+ admitted/) ?? [])
+          .slice(0, 8),
+      })
+    }`,
+  );
+}
+
 function* key(page: ReplPage, name: PageKey): Operation<void> {
   const before = page.screen().index;
   yield* page.key(name);
   yield* page.until(`write after ${name}`, (one) => one.index > before);
+  tracedInput(page, { helper: "key", key: name }, before);
   yield* sleep(30);
 }
 
@@ -35,10 +72,12 @@ function choiceLabel(order: number): string {
  * answer, so each step states where focus has to be and waits for that.
  */
 function* steppedTo(page: ReplPage, name: PageKey, order: number): Operation<void> {
+  const before = page.screen().index;
   yield* page.key(name);
   yield* page.until(`focus on ${choiceLabel(order)} after ${name}`, (one) =>
     one.shows(`> ${choiceLabel(order)}`),
   );
+  tracedInput(page, { helper: "steppedTo", key: name, order }, before);
 }
 
 /**
@@ -51,6 +90,7 @@ function* steppedTo(page: ReplPage, name: PageKey, order: number): Operation<voi
  * then allows.
  */
 function* heldStepTo(page: ReplPage, name: PageKey, order: number): Operation<void> {
+  const held = page.screen().index;
   page.repl.terminal.holdNextPresent();
   yield* page.key(name);
   yield* awaitedFact(`the frame carrying ${name} held`, function* () {
@@ -61,11 +101,13 @@ function* heldStepTo(page: ReplPage, name: PageKey, order: number): Operation<vo
   yield* page.until(`focus on ${choiceLabel(order)} after the released ${name}`, (one) =>
     one.shows(`> ${choiceLabel(order)}`),
   );
+  tracedInput(page, { helper: "heldStepTo", key: name, order }, held);
 }
 function* wheel(page: ReplPage, direction: "up" | "down", at: ScreenCell): Operation<void> {
   const before = page.screen().index;
   yield* page.wheel(direction, at);
   yield* page.until(`write after ${direction}`, (one) => one.index > before);
+  tracedInput(page, { helper: "wheel", direction, at }, before);
   yield* sleep(30);
 }
 function* ticks(

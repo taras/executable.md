@@ -24,7 +24,13 @@ import { scoped, until } from "effection";
 import { readdir, symlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
-import { useMountedHost, mountedExecution, awaited, awaitedFact } from "./support/mounted-repl.ts";
+import {
+  appendGate,
+  awaited,
+  awaitedFact,
+  mountedExecution,
+  useMountedHost,
+} from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import {
   sendMessage,
@@ -40,7 +46,7 @@ import {
 import type { Operation } from "effection";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { settledReading } from "./support/mounted-history.ts";
-import { pairedLocation } from "../src/repl/sidekick/history.ts";
+import { pairedLocation, SIDEKICK_FILE } from "../src/repl/sidekick/history.ts";
 
 function submit(source: string): string {
   return `<Let as="code" value={${JSON.stringify(source)}} /><REPL.EntryInput>{code}</REPL.EntryInput><REPL.Submit />`;
@@ -615,15 +621,71 @@ function* reportPagingFailure(
 describe("1113: receipt-directed exact output paging", () => {
   it("1113: follows the receipt's entry and each returned next argument until exact output is complete", function* () {
     const project = yield* useTemporary("1113-output-");
-    const page = yield* useReplPage({ projectCwd: project, hostFiles: true });
+    // SCRATCH DIAGNOSTIC (#1140) — the host's own append seam, so this case can
+    // stand inside the interval the setup gate is about. Nothing else about the
+    // mounted command changes.
+    const gate = appendGate();
+    const page = yield* useReplPage({ projectCwd: project, hostFiles: true, gate });
     const expected = "LONG-" + "🙂abc".repeat(2500) + "-END";
     yield* writeTextFile(join(project, "long-output.txt"), expected);
     page.repl.fake.script({
       reply: submit('<File path="long-output.txt" as="long" /><Output>{long}</Output>'),
     });
     page.repl.fake.script({ reply: "<Output>1113 submission ready</Output>" });
+    // Held before the message goes, so the record this holds is the setup
+    // response and nothing behind it: `holdNext` takes the next append its
+    // predicate accepts and lets every other one through. The predicate names
+    // the chat file, the response record kind and this setup's own marker, so
+    // the first turn's response is not it.
+    const heldSetup = gate.holdNext(
+      (path, record) =>
+        path.endsWith(SIDEKICK_FILE) &&
+        record.includes('"kind":"response"') &&
+        record.includes("1113 submission ready"),
+    );
     yield* sendMessage(page, "submit the long exact output");
     yield* page.until("the receipt", (reading) => saidBySidekick(reading, "1113 submission ready"));
+    // The interval itself. The owner streams the evaluated root's Output through
+    // its publisher and appends the response record afterwards, so with that
+    // append held the marker is on the screen while the record the setup gate
+    // requires does not exist yet. This is the state the gate used to walk
+    // past.
+    yield* heldSetup.started();
+    expect(heldSetup.inFlight).toBe(true);
+    expect(saidBySidekick(page.screen(), "1113 submission ready")).toBe(true);
+    const during = yield* settledReading(page.repl);
+    expect(
+      during.chat.some(
+        (one) =>
+          one.kind === "response" && one.hasOutput && one.output.includes("1113 submission ready"),
+      ),
+    ).toBe(false);
+    const held = projectSidekick(during.chat);
+    if (!held.ok) {
+      throw held.error;
+    }
+    // Page zero has not been constructed or sent: the provider has been asked
+    // only the setup message and the receipt that answered it.
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    expect(page.repl.fake.prompts.some((one) => one.includes("read exact page 0"))).toBe(false);
+    console.log(
+      `XMDFLAKE ${
+        JSON.stringify({
+          what: "setupHeld",
+          asked: page.repl.fake.prompts.length,
+          responses: during.chat.filter((one) => one.kind === "response").length,
+          conversations: held.value.conversations.map((one) => ({
+            id: one.id,
+            completed: one.completed,
+          })),
+          delivered: held.value.delivered,
+          unestablished: held.value.unestablished,
+        })
+      }`,
+    );
+    // Released once. Everything below is the original gate and the original
+    // pages, unchanged.
+    heldSetup.release();
     // That marker is streamed: a generated Output can be shown before its turn
     // has settled and its evaluated response has been published, so the text
     // alone does not say the setup exchange finished. Neither does a request
