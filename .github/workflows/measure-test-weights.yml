@@ -1,4 +1,4 @@
-name: TODO flake diagnostic episode 1
+name: TODO paging diagnostic completion 1
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   diagnostic:
-    name: bounded wheel and paging diagnostics
+    name: bounded paging completion
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -63,7 +63,7 @@ jobs:
               "runnerOS": pathlib.Path("/etc/os-release").read_text(),
               "uname": read(["uname", "-a"]),
               "versions": versions,
-              "purpose": "One scratch diagnostic episode; no weights measurement or product source correction.",
+              "purpose": "One separately approved scratch paging completion; typecheck then unfinished Deno and Node paging only, no repeated wheel selections or product source correction.",
           }
           patch = subprocess.check_output(["git", "diff", "--binary", base, "HEAD"])
           (directory / "base-to-diagnostic.patch").write_bytes(patch)
@@ -77,15 +77,11 @@ jobs:
           wrapper = r'''
           import datetime, json, os, pathlib, subprocess, sys
           directory = pathlib.Path(os.environ["RUNNER_TEMP"]) / "todo-flake-diagnostic"
-          permission = "permission pages from a control-only window to its explanation and final choice"
-          history = "History alone scrolls above a held question and restores its caret"
-          file = "packages/cli/tests/repl-wheel-migration.test.ts"
           paging = "packages/cli/tests/repl-project-files.test.ts"
           commands = {
               "setup": [("setup", ["deno", "task", "setup"])],
               "selectors": [
-                  ("node-permission", ["node", "node_modules/tsx/dist/cli.mjs", "--tsconfig", "tsconfig.node.json", "--test", "--test-concurrency=1", "--test-name-pattern", permission, file]),
-                  ("bun-permission-history", ["bun", "test", "--timeout=300000", "-t", permission + "|" + history, file]),
+                  ("deno-check-project-files", ["deno", "check", paging]),
                   ("deno-project-files", ["deno", "task", "test", paging]),
                   ("node-project-files", ["pnpm", "exec", "tsx", "--tsconfig", "tsconfig.node.json", "--test", "--test-concurrency=1", paging]),
               ],
@@ -120,7 +116,7 @@ jobs:
       - name: Prepare the checkout once
         run: python3 "$RUNNER_TEMP/todo-flake-diagnostic/run.py" setup
 
-      - name: Run each approved selector once and stop at first failure
+      - name: Typecheck then run unfinished paging selections once; stop at first failure
         run: python3 "$RUNNER_TEMP/todo-flake-diagnostic/run.py" selectors
 
       - name: Retain checkout state after execution
@@ -144,6 +140,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: todo-flake-diagnostic-attempt-${{ github.run_attempt }}
+          name: todo-paging-completion-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/todo-flake-diagnostic
           if-no-files-found: warn

@@ -20,7 +20,7 @@ import {
   parseFileWriteFailure,
   parseFilesFailure,
 } from "@executablemd/runtime";
-import { scoped, until } from "effection";
+import { ensure, race, scoped, spawn, until, withResolvers } from "effection";
 import { readdir, symlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
@@ -618,114 +618,44 @@ function* reportPagingFailure(
   );
 }
 
-describe("1113: receipt-directed exact output paging", () => {
-  it("1113: follows the receipt's entry and each returned next argument until exact output is complete", function* () {
-    const project = yield* useTemporary("1113-output-");
-    // SCRATCH DIAGNOSTIC (#1140) — the host's own append seam, so this case can
-    // stand inside the interval the setup gate is about. Nothing else about the
-    // mounted command changes.
-    const gate = appendGate();
-    const page = yield* useReplPage({ projectCwd: project, hostFiles: true, gate });
-    const expected = "LONG-" + "🙂abc".repeat(2500) + "-END";
-    yield* writeTextFile(join(project, "long-output.txt"), expected);
-    page.repl.fake.script({
-      reply: submit('<File path="long-output.txt" as="long" /><Output>{long}</Output>'),
-    });
-    page.repl.fake.script({ reply: "<Output>1113 submission ready</Output>" });
-    // Held before the message goes, so the record this holds is the setup
-    // response and nothing behind it: `holdNext` takes the next append its
-    // predicate accepts and lets every other one through. The predicate names
-    // the chat file, the response record kind and this setup's own marker, so
-    // the first turn's response is not it.
-    const heldSetup = gate.holdNext(
-      (path, record) =>
-        path.endsWith(SIDEKICK_FILE) &&
-        record.includes('"kind":"response"') &&
-        record.includes("1113 submission ready"),
-    );
-    yield* sendMessage(page, "submit the long exact output");
-    yield* page.until("the receipt", (reading) => saidBySidekick(reading, "1113 submission ready"));
-    // The interval itself. The owner streams the evaluated root's Output through
-    // its publisher and appends the response record afterwards, so with that
-    // append held the marker is on the screen while the record the setup gate
-    // requires does not exist yet. This is the state the gate used to walk
-    // past.
-    yield* heldSetup.started();
-    expect(heldSetup.inFlight).toBe(true);
-    expect(saidBySidekick(page.screen(), "1113 submission ready")).toBe(true);
-    const during = yield* settledReading(page.repl);
-    expect(
-      during.chat.some(
-        (one) =>
-          one.kind === "response" && one.hasOutput && one.output.includes("1113 submission ready"),
-      ),
-    ).toBe(false);
-    const held = projectSidekick(during.chat);
-    if (!held.ok) {
-      throw held.error;
-    }
-    // Page zero has not been constructed or sent: the provider has been asked
-    // only the setup message and the receipt that answered it.
-    expect(page.repl.fake.prompts).toHaveLength(2);
-    expect(page.repl.fake.prompts.some((one) => one.includes("read exact page 0"))).toBe(false);
-    console.log(
-      `XMDFLAKE ${
-        JSON.stringify({
-          what: "setupHeld",
-          asked: page.repl.fake.prompts.length,
-          responses: during.chat.filter((one) => one.kind === "response").length,
-          conversations: held.value.conversations.map((one) => ({
-            id: one.id,
-            completed: one.completed,
-          })),
-          delivered: held.value.delivered,
-          unestablished: held.value.unestablished,
-        })
-      }`,
-    );
-    // Released once. Everything below is the original gate and the original
-    // pages, unchanged.
-    heldSetup.release();
-    // That marker is streamed: a generated Output can be shown before its turn
-    // has settled and its evaluated response has been published, so the text
-    // alone does not say the setup exchange finished. Neither does a request
-    // count, and neither does Send — this pane contributes Send whenever its
-    // composer is available, adding Stop while it is busy rather than taking
-    // Send away.
-    //
-    // So the pane is required at rest, and then the one retained reading is
-    // asked twice over. First as the records this host wrote: its own
-    // evaluated response, successful, with the acknowledgement that carried
-    // the receipt against that same conversation and turn and carrying exactly
-    // the input the provider was asked. That is this reader's whole answer —
-    // `mountedReading` parses the chat record shapes and projects the *entry*
-    // stream; it does not reconcile Sidekick turns, so those records on their
-    // own say what this host meant rather than what the provider accepted.
-    //
-    // Then as the canonical reading, through the projector dispatch itself
-    // consults, over that same snapshot: a turn is completed only from Core's
-    // own saved records, and a delivery is established only by a completed
-    // turn whose retained input actually carried that text. Both halves matter
-    // — raw equality catches a receipt the host never sent, and the projection
-    // catches one it sent into a turn that carried something else or is still
-    // unresolved. A contradiction, an unresolved delivery or a history that
-    // cannot be read is a failure here; none of them is a reason to send
-    // anything again.
-    yield* page.until("the setup exchange at rest", (one) => sidekickIdle(one));
-    const settled = yield* settledReading(page.repl);
-    const prepared = settled.chat.find(
+/**
+ * SCRATCH DIAGNOSTIC (#1140) — the setup gate itself, extracted so one case can
+ * run exactly these checks while the setup response's append is held.
+ *
+ * Nothing about them changed: the pane at rest through the existing idle
+ * discipline, one read of the retained history, that reading's own evaluated
+ * response with an ok outcome and the acknowledgement carrying the receipt
+ * against its conversation and turn, and then the same snapshot through the
+ * canonical projector. File-local, exported nowhere, and used by the case and
+ * its continuation so what runs is the gate rather than a second hand-written
+ * copy of it.
+ */
+function* settleSetupExchange(
+  page: ReplPage,
+  observe: (permits: boolean) => void,
+): Operation<void> {
+  // The hook sits on this real predicate's own evaluation and records the
+  // verdict it returns. It changes no decision: the value observed is the value
+  // returned.
+  yield* page.until("the setup exchange at rest", (one) => {
+  const permits = sidekickIdle(one);
+  observe(permits);
+  return permits;
+  });
+  const settled = yield* settledReading(page.repl);
+  const prepared = settled.chat.find(
       (one) =>
         one.kind === "response" && one.hasOutput && one.output.includes("1113 submission ready"),
-    );
-    if (prepared === undefined || prepared.kind !== "response") {
+  );
+  if (prepared === undefined || prepared.kind !== "response") {
       throw new Error(
         "the setup retained no evaluated response holding its own marker. " +
           `kinds=${JSON.stringify(settled.chat.map((one) => one.kind))}`,
       );
-    }
-    expect(prepared.outcome.status).toBe("ok");
-    const receipt = page.repl.fake.prompts[1] ?? "";
-    expect(
+  }
+  expect(prepared.outcome.status).toBe("ok");
+  const receipt = page.repl.fake.prompts[1] ?? "";
+  expect(
       settled.chat.some(
         (one) =>
           one.kind === "feedback" &&
@@ -733,39 +663,51 @@ describe("1113: receipt-directed exact output paging", () => {
           one.turn === prepared.turn &&
           one.text === receipt,
       ),
-    ).toBe(true);
-    const canonical = projectSidekick(settled.chat);
-    if (!canonical.ok) {
+  ).toBe(true);
+  const canonical = projectSidekick(settled.chat);
+  if (!canonical.ok) {
       throw canonical.error;
-    }
-    const held = canonical.value.conversations.find((one) => one.id === prepared.conversation);
-    if (held === undefined) {
+  }
+  const held = canonical.value.conversations.find((one) => one.id === prepared.conversation);
+  if (held === undefined) {
       throw new Error(
         "the setup's own conversation is absent from the canonical reading. " +
           `ids=${JSON.stringify(canonical.value.conversations.map((one) => one.id))}`,
       );
-    }
-    expect(held.completed).toContain(prepared.turn);
-    expect(
+  }
+  expect(held.completed).toContain(prepared.turn);
+  expect(
       canonical.value.delivered.some(
         (one) => one.conversation === prepared.conversation && one.turn === prepared.turn,
       ),
-    ).toBe(true);
-    expect(
+  ).toBe(true);
+  expect(
       canonical.value.unestablished.filter((one) => one.conversation === prepared.conversation),
-    ).toEqual([]);
-    const initial = receipt.match(/<REPL.Entry.Output entry=\{(\d+)\} \/>/);
-    expect(initial).not.toBeNull();
-    const navigation = z.object({
+  ).toEqual([]);
+}
+
+/**
+ * SCRATCH DIAGNOSTIC (#1140) — the page-zero continuation, at its own boundary.
+ *
+ * Everything the case did after the gate, unchanged: the receipt-derived entry,
+ * each returned next argument, the typed parsing, the finite count greater than
+ * one and the exact full Unicode text. Separated so reaching it is an event the
+ * control can observe rather than something inferred from a request count.
+ */
+function* readExactPages(page: ReplPage, expected: string): Operation<void> {
+  const receipt = page.repl.fake.prompts[1] ?? "";
+  const initial = receipt.match(/<REPL.Entry.Output entry=\{(\d+)\} \/>/);
+  expect(initial).not.toBeNull();
+  const navigation = z.object({
       entry: z.number(),
       offset: z.number().optional(),
       limit: z.number().optional(),
-    });
-    const outputPage = z.object({ text: z.string(), next: navigation.nullable() });
-    let next: z.infer<typeof navigation> | null =
+  });
+  const outputPage = z.object({ text: z.string(), next: navigation.nullable() });
+  let next: z.infer<typeof navigation> | null =
       initial === null ? null : { entry: Number(initial[1]), offset: 0 };
-    const parts: string[] = [];
-    while (next !== null) {
+  const parts: string[] = [];
+  while (next !== null) {
       expect(parts.length).toBeLessThan(10);
       const before = page.repl.fake.prompts.length;
       page.repl.fake.script({
@@ -834,9 +776,170 @@ describe("1113: receipt-directed exact output paging", () => {
         yield* reportPagingFailure(page, { phase, instruction, before }, failure);
         throw failure;
       }
+  }
+  expect(parts.length).toBeGreaterThan(1);
+  expect(parts.join("")).toBe(expected);
+}
+
+describe("1113: receipt-directed exact output paging", () => {
+  it("1113: follows the receipt's entry and each returned next argument until exact output is complete", function* () {
+    const project = yield* useTemporary("1113-output-");
+    // SCRATCH DIAGNOSTIC (#1140) — the host's own append seam, so this case can
+    // stand inside the interval the setup gate is about. Nothing else about the
+    // mounted command changes.
+    const gate = appendGate();
+    const page = yield* useReplPage({ projectCwd: project, hostFiles: true, gate });
+    const expected = "LONG-" + "🙂abc".repeat(2500) + "-END";
+    yield* writeTextFile(join(project, "long-output.txt"), expected);
+    page.repl.fake.script({
+      reply: submit('<File path="long-output.txt" as="long" /><Output>{long}</Output>'),
+    });
+    page.repl.fake.script({ reply: "<Output>1113 submission ready</Output>" });
+    // Held before the message goes, so the record this holds is the setup
+    // response and nothing behind it: `holdNext` takes the next append its
+    // predicate accepts and lets every other one through. The predicate names
+    // the chat file, the response record kind and this setup's own marker, so
+    // the first turn's response is not it.
+    const heldSetup = gate.holdNext(
+      (path, record) =>
+        path.endsWith(SIDEKICK_FILE) &&
+        record.includes('"kind":"response"') &&
+        record.includes("1113 submission ready"),
+    );
+    // Registered before any setup work is issued, so no exit path can leave the
+    // owner waiting on a held append. Released exactly once wherever it is
+    // reached first.
+    let releases = 0;
+    const releaseOnce = (): void => {
+      if (releases === 0) {
+        releases += 1;
+        heldSetup.release();
+      }
+    };
+    yield* ensure(releaseOnce);
+    yield* sendMessage(page, "submit the long exact output");
+    yield* page.until("the receipt", (reading) => saidBySidekick(reading, "1113 submission ready"));
+    // The interval itself. The owner streams the evaluated root's Output through
+    // its publisher and appends the response record afterwards, so with that
+    // append held the marker is on the screen while the record the setup gate
+    // requires does not exist.
+    yield* heldSetup.started();
+    expect(heldSetup.inFlight).toBe(true);
+    // One bounded reading of the canonical side at this instant — not polling,
+    // and not the gate's own read. The evaluated response is absent, which is
+    // why the gate below cannot permit anything yet.
+    const during = yield* settledReading(page.repl);
+    expect(
+      during.chat.some(
+        (one) =>
+          one.kind === "response" && one.hasOutput && one.output.includes("1113 submission ready"),
+      ),
+    ).toBe(false);
+    const duringCanonical = projectSidekick(during.chat);
+    if (!duringCanonical.ok) {
+      throw duringCanonical.error;
     }
-    expect(parts.length).toBeGreaterThan(1);
-    expect(parts.join("")).toBe(expected);
+    console.log(
+      `XMDFLAKE ${
+        JSON.stringify({
+          what: "setupHeld",
+          asked: page.repl.fake.prompts.length,
+          responses: during.chat.filter((one) => one.kind === "response").length,
+          conversations: duringCanonical.value.conversations.map((one) => ({
+            id: one.id,
+            completed: one.completed,
+          })),
+          delivered: duringCanonical.value.delivered,
+          unestablished: duringCanonical.value.unestablished,
+        })
+      }`,
+    );
+    // The real gate and the real page-zero continuation, running concurrently
+    // with the hold rather than after it. This is what makes the control about
+    // the gate: it is entered while the response append is held, so what it
+    // decides there is the gate's own decision, and the continuation behind it
+    // is reachable the moment that decision permits.
+    let evaluations = 0;
+    let refusedAt: number | undefined;
+    let permittedAt: number | undefined;
+    let reachedPages = 0;
+    let outcome: { readonly settled: "returned" | "threw"; readonly error?: string } | undefined;
+    const refused = withResolvers<void>();
+    const finished = withResolvers<void>();
+    const gateTask = yield* spawn(function* () {
+      try {
+        yield* settleSetupExchange(page, (permits) => {
+          evaluations += 1;
+          if (permits) {
+            permittedAt = permittedAt ?? evaluations;
+            return;
+          }
+          if (refusedAt === undefined) {
+            refusedAt = evaluations;
+            refused.resolve();
+          }
+        });
+        reachedPages += 1;
+        yield* readExactPages(page, expected);
+        outcome = { settled: "returned" };
+      } catch (error) {
+        outcome = {
+          settled: "threw",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        finished.resolve();
+      }
+    });
+    // Joined on every exit, so a failing assertion below cannot leave this task
+    // waiting on the held append.
+    yield* ensure(function* () {
+      yield* gateTask.halt();
+    });
+    // The two outcomes raced, and neither side destroys the other: both are
+    // resolvers, so losing one is not cancelling the gate. No interval elapses
+    // and nothing sleeps — what settles this is the gate's own evaluation or
+    // the gate's own completion, whichever happens.
+    yield* race([refused.operation, finished.operation]);
+    if (refusedAt === undefined) {
+      throw new Error(
+        "the setup gate did not evaluate a non-permitting condition while its own " +
+          `response append was held. evaluations=${evaluations} ` +
+          `permittedAt=${String(permittedAt)} outcome=${JSON.stringify(outcome)}`,
+      );
+    }
+    // It refused, it has not finished, and the continuation behind it has not
+    // been entered. A gate that was deleted or bypassed would have settled or
+    // reached the pages here instead; one whose acceptance were the streamed
+    // marker would have permitted, because that marker is already true —
+    // which is exactly the counterexample this asserts beside it.
+    expect(outcome).toBe(undefined);
+    expect(reachedPages).toBe(0);
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    expect(page.repl.fake.prompts.some((one) => one.includes("read exact page 0"))).toBe(false);
+    expect(saidBySidekick(page.screen(), "1113 submission ready")).toBe(true);
+    console.log(
+      `XMDFLAKE ${
+        JSON.stringify({
+          what: "setupGateHeld",
+          evaluations,
+          refusedAt,
+          permittedAt: permittedAt ?? null,
+          reachedPages,
+          asked: page.repl.fake.prompts.length,
+        })
+      }`,
+    );
+    // Released exactly once, then the same task is joined: its own run carries
+    // the raw and canonical snapshot and every original paging assertion.
+    releaseOnce();
+    yield* gateTask;
+    if (outcome === undefined || outcome.settled !== "returned") {
+      throw new Error(
+        `the setup gate and its pages did not complete after one release. ${JSON.stringify(outcome)}`,
+      );
+    }
+    expect(reachedPages).toBe(1);
     page.repl.terminal.end();
     yield* awaited("command exit", () => page.repl.outcome() !== undefined);
   });
