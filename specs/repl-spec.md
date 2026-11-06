@@ -644,6 +644,49 @@ This comes from the file and from nothing else, so a later entry begins from the
 same values whether the earlier ones ran a moment ago in this process or were
 read back cold from the journal.
 
+### Reading what an entry started with and what it handed on
+
+Select an entry, open the Bindings tab, and the pane shows that entry's
+**Input**: the ordinary root values it was started with. Choose **Output** above
+the rows to see the complete root data its successful result carried — every
+name, including the ones it inherited and never touched, not only the ones it
+changed. The heading names the entry and the view, so `entry-1 Output` and
+`entry-2 Input` are never mistaken for one another, and each row opens its whole
+value in a drawer of its own.
+
+```text
+Input   Output
+entry-2 Input
+count = 1
+config = {"mode":"draft"}
+kept = "same"
+```
+
+An entry that changes a value it received changes its own copy. Selecting the
+earlier entry again shows its Input and Output exactly as they were, and the
+later entry's Input still shows what it was given.
+
+Output says what the entry did rather than inventing a result:
+
+- **Running** while the entry has not closed — and at any history position
+  before its close, even when the file now holds its result;
+- **Failed:** with the failure's message, and no rows, for an entry that failed;
+- **Stopped**, and no rows, for an entry Entry Stop ended;
+- **Output unavailable for this older entry** for a successful result written
+  before results carried root data;
+- `(no bindings)` for an Input or Output that is really empty.
+
+Output is not always what the next entry receives. A failed or stopped entry
+shows no Output, yet the values it had retained still reach its successor as
+described above, and a name bound only to an entry-local value is absent from
+Output while its earlier value still crosses.
+
+The view you choose stays as you select other entries and history positions,
+and an entry finishing never changes it or moves focus. It is not part of the
+location. A nested component scope keeps showing the values it published. Both
+views read the records the file already holds: nothing re-runs, and no snapshot
+is written.
+
 ## One cold journey
 
 The command prints what reopens where it ended: a line saying so, and under it

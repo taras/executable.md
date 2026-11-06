@@ -141,6 +141,7 @@ import type { Instruction, Reservation, Revisions, Submitter } from "./sidekick/
 import type { ReplTerminalSize } from "./terminal.ts";
 import { decodeLocation, encodeLocation, resolveLocation, surfaceForDrawer } from "./route.ts";
 import type {
+  ReplBindingsView,
   ReplDrawerRef,
   ReplLiveAvailability,
   ReplRoute,
@@ -148,10 +149,13 @@ import type {
   ReplSidekickAvailability,
   ReplSurface,
 } from "./route.ts";
+import { entryInputBindings, entryOutput } from "./model.ts";
 import type {
   ReplAgentPermission,
   ReplAgentTurn,
+  ReplBinding,
   ReplEntry,
+  ReplEntryOutput,
   ReplModel,
   ReplRow,
   ReplScope,
@@ -1164,6 +1168,14 @@ export interface ReplState {
    * changes a destination is activating a row in it.
    */
   readonly catalog: boolean;
+  /**
+   * Whether the Bindings pane reads the selected entry's Input or its Output.
+   *
+   * Process-local and absent from the location, like the catalog. It is a way
+   * of reading every entry, so selecting another entry or history position
+   * keeps it, and an entry finishing never changes it.
+   */
+  readonly bindingsView: ReplBindingsView;
 }
 
 /** What the root must perform, because a component cannot. */
@@ -1742,6 +1754,7 @@ export function initialState(execution: string): ReplState {
     takenOver: false,
     filtering: false,
     catalog: false,
+    bindingsView: "input",
   });
 }
 
@@ -1781,6 +1794,7 @@ export function stateFor(location: string): Result<ReplState> {
       // And closed for the same reason again: a location names where somebody
       // got to, never the overlay they opened on the way.
       catalog: false,
+      bindingsView: "input",
     }),
   );
 }
@@ -2310,6 +2324,8 @@ export function reduceRepl(
         ? settled({ ...moved.state, restore: { kind: "message" } })
         : moved;
     }
+    case "select-bindings-view":
+      return settled(Object.freeze({ ...state, bindingsView: action.view }));
     case "select-scope": {
       const chosen = navigate(
         state,
@@ -5781,8 +5797,27 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // and a pointer target inside a reading nobody asked for, in a column that is
   // showing something else.
   const scope = inspectable && !narrow && !showSidekick ? selection.scope : undefined;
+  // The entry itself, rather than a component inside it, reads as what it was
+  // started with and what its result carried. A nested scope keeps the values it
+  // published, because that is all a component has.
+  const boundary =
+    scope !== undefined && scope === selection.entry
+      ? model.entries.find((one) => one.key === scope.key)
+      : undefined;
+  if (boundary !== undefined) {
+    items.push(
+      ...entryBindingRows(
+        boundary,
+        entryInputBindings(model, boundary),
+        state.bindingsView,
+        context,
+        view.focused,
+        inspected,
+      ),
+    );
+  }
   if (scope !== undefined) {
-    for (const binding of scope.bindings) {
+    for (const binding of boundary === undefined ? scope.bindings : []) {
       items.push(
         row(
           `binding:${binding.name}`,
@@ -5826,7 +5861,12 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   if (
     !narrow &&
     !showSidekick &&
-    !items.some((one) => one.key.startsWith("binding:") || one.key.startsWith("elicit:"))
+    !items.some(
+      (one) =>
+        one.key.startsWith("binding:") ||
+        one.key.startsWith("elicit:") ||
+        one.key.startsWith("bindings-view:"),
+    )
   ) {
     items.push(
       ...anchored(
@@ -6046,6 +6086,106 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // they are collected here: a box built for one of them has to be able to ask
   // what that row meant.
   return { items, rows: [...items, ...drawer.rows] };
+}
+
+const BINDINGS_VIEWS: readonly ReplBindingsView[] = ["input", "output"];
+
+function bindingsViewName(view: ReplBindingsView): string {
+  return view === "input" ? "Input" : "Output";
+}
+
+/** What an entry's Output says in place of rows, when it has none to show. */
+function outputStatus(output: Exclude<ReplEntryOutput, { readonly state: "ok" }>): {
+  readonly text: string;
+  readonly role: ReplPresentationRole;
+} {
+  if (output.state === "running") {
+    return { text: "Running", role: "waiting" };
+  }
+  if (output.state === "failed") {
+    return {
+      text: output.message === undefined ? "Failed" : `Failed: ${output.message}`,
+      role: "failed-outcome",
+    };
+  }
+  if (output.state === "cancelled") {
+    return { text: "Stopped", role: "interrupted-outcome" };
+  }
+  return { text: "Output unavailable for this older entry", role: "metadata" };
+}
+
+/**
+ * The selected entry's Input or Output, as the Bindings pane draws it.
+ *
+ * Both choices first, then which entry and which view the rows belong to, so
+ * two entries holding the same name never read as one value. Output is drawn
+ * only from a successful result this prefix holds; any other state says what it
+ * is instead of showing rows.
+ */
+function entryBindingRows(
+  entry: ReplEntry,
+  input: readonly ReplBinding[],
+  chosen: ReplBindingsView,
+  context: ReplPresentationContext,
+  focused: string | undefined,
+  inspected: boolean,
+): readonly Described[] {
+  const rows: Described[] = BINDINGS_VIEWS.map((one) =>
+    row(
+      `bindings-view:${one}`,
+      bindingsViewName(one),
+      { select: "bindings-view", view: one },
+      styleOf(one === chosen ? "pane-heading" : "metadata"),
+      { here: focused },
+    ),
+  );
+  rows.push(
+    line(
+      "bindings-view:heading",
+      fitControl(
+        [
+          { text: entry.key, elide: true },
+          { text: ` ${bindingsViewName(chosen)}`, keep: true },
+        ],
+        context.widths?.inspection,
+      ),
+      styleOf("field-label", { inspected }),
+    ),
+  );
+  let bindings = input;
+  if (chosen === "output") {
+    const output = entryOutput(entry);
+    if (output.state !== "ok") {
+      const said = outputStatus(output);
+      rows.push(
+        line(
+          "bindings-view:state",
+          fitControl([{ text: said.text, elide: true }], context.widths?.inspection),
+          styleOf(said.role, { inspected }),
+        ),
+      );
+      return rows;
+    }
+    bindings = output.bindings;
+  }
+  if (bindings.length === 0) {
+    rows.push(line("bindings-view:state", "(no bindings)", styleOf("metadata", { inspected })));
+  }
+  for (const binding of bindings) {
+    rows.push(
+      row(
+        `${chosen}:${binding.name}`,
+        fitControl(
+          [{ text: `${binding.name} = ` }, { text: summarize(binding.value), elide: true }],
+          context.widths?.inspection,
+        ),
+        { select: "entry-value", view: chosen, name: binding.name },
+        styleOf("field-value", { inspected }),
+        { here: focused },
+      ),
+    );
+  }
+  return rows;
 }
 
 function anchored(
@@ -7441,6 +7581,15 @@ function drawerContent(
     content.push(
       ...detailRows("drawer:value", open.binding.value, width, styleOf("field-value"), details),
     );
+  } else if (open.kind === "entry-value") {
+    title = drawerTitle(
+      `${view.state.route.scopes[0] ?? ""} ${bindingsViewName(open.view)}`,
+      open.name,
+      width,
+    );
+    content.push(
+      ...detailRows("drawer:value", open.binding.value, width, styleOf("field-value"), details),
+    );
   } else if (open.kind === "recorded-elicit") {
     title = drawerTitle("Recorded answer", open.elicitation.location, width);
     // The whole of what was asked and the whole of what was answered. A drawer is
@@ -8699,7 +8848,7 @@ function detailLines(key: string, value: Json, style: ReplRowStyle) {
 
 export function retainedDetailsOf(view: ReplView) {
   const open = view.selection.drawers.at(-1);
-  if (open?.kind === "binding") {
+  if (open?.kind === "binding" || open?.kind === "entry-value") {
     return detailLines("drawer:value", open.binding.value, styleOf("field-value"));
   }
   if (open?.kind === "recorded-elicit") {
@@ -9331,6 +9480,9 @@ export function readingKeyOf(state: ReplState, open: ReplDrawerRef): string | un
   if (open.kind === "binding") {
     return `binding:${execution}:${at}:${state.route.scopes.join("/")}:${open.name}`;
   }
+  if (open.kind === "entry-value") {
+    return `${open.view}:${execution}:${at}:${state.route.scopes[0] ?? ""}:${open.name}`;
+  }
   if (open.kind === "recorded-elicit") {
     return `elicit:${execution}:${at}:${open.marker}`;
   }
@@ -9513,7 +9665,14 @@ function slotOf(key: string): ReplSlot | undefined {
   ) {
     return "inspection-below";
   }
-  if (key.startsWith("binding:") || key.startsWith("elicit:") || key.startsWith("sidekick:")) {
+  if (
+    key.startsWith("binding:") ||
+    key.startsWith("bindings-view:") ||
+    key.startsWith("input:") ||
+    key.startsWith("output:") ||
+    key.startsWith("elicit:") ||
+    key.startsWith("sidekick:")
+  ) {
     return "inspection";
   }
   if (key === "guidance" || key.startsWith("guidance:row:")) {

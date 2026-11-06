@@ -31,7 +31,11 @@ import {
 import { RootMetadata } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import {
+  InMemoryStream,
+  parseDurableEvent,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import {
@@ -54,8 +58,13 @@ import { EntrySegmentStream, partitionEntrySegments, ROOT_IMPORT } from "../src/
 import type { EntrySegment } from "../src/repl/entries.ts";
 import type { ReplQuestion } from "../src/repl/elicitation.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
-import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
-import type { ReplModel } from "../src/repl/model.ts";
+import {
+  entryInitialBindings,
+  entryInputBindings,
+  entryOutput,
+  projectRepl,
+} from "../src/repl/model.ts";
+import type { ReplBinding, ReplEntry, ReplModel } from "../src/repl/model.ts";
 import {
   lifecycleRefusal,
   markLifecycleRefusal,
@@ -75,6 +84,8 @@ import {
   readsGeometry,
   reduceRepl,
   presentationFor,
+  readingKeyOf,
+  retainedDetailsOf,
   viewFor,
   withoutAbsentEntry,
 } from "../src/repl/application.ts";
@@ -4983,17 +4994,18 @@ describe("REPL entries: what the Bindings reading shows at each position (#939)"
       // Bindings explicitly: a scope's own rows belong to that reading, and
       // the command's right pane defaults to the Sidekick — so this asks for
       // the pane the way a person does rather than relying on a default.
-      const selected = Object.freeze({
+      const selected: ReplState = Object.freeze({
         ...selecting(initialState(EXECUTION), scope),
         route: Object.freeze({
           ...selecting(initialState(EXECUTION), scope).route,
           right: "bindings" as const,
         }),
+        bindingsView: "output",
       });
       const state = frozenAt(selected, marker);
       const view = reading(state, projected(events, marker), NOTHING_LIVE, WIDE);
       return (yield* describedBy(view))
-        .filter((one) => one.key.startsWith("binding:"))
+        .filter((one) => one.key.startsWith("output:"))
         .map((one) => one.label.trim());
     };
 
@@ -5339,5 +5351,469 @@ describe("REPL entries: the explicit Stop, and what it is not (#971 B2)", () => 
       yield* asking(session);
       expect(started(yield* resumed.stream.readAll())).toBe(1);
     });
+  });
+});
+
+/** One entry that starts a scalar, a nested value and one that nothing changes. */
+const BOUNDARY_FIRST = [
+  "```js eval",
+  "const count = 1;",
+  'const config = { mode: "draft" };',
+  'const kept = "same";',
+  "```",
+  "",
+  "One: {count}/{config.mode}",
+  "",
+].join("\n");
+
+/** The entry after it: a new scalar, an edited nested member, and one name left alone. */
+const BOUNDARY_SECOND = [
+  "```js eval",
+  'config.mode = "final";',
+  "```",
+  "",
+  '<Let as="count" value={2} />',
+  "",
+  "Two: {count}/{config.mode}/{kept}",
+  "",
+].join("\n");
+
+/** These bindings as one record, so a comparison is about values rather than order. */
+function recordOf(bindings: readonly ReplBinding[]): Record<string, Json> {
+  return Object.fromEntries(bindings.map((binding) => [binding.name, binding.value]));
+}
+
+/** The bindings one entry's successful result carried, or a failure naming its state. */
+function okOutput(entry: ReplEntry | undefined): readonly ReplBinding[] {
+  if (entry === undefined) {
+    throw new Error("this prefix holds no such entry");
+  }
+  const output = entryOutput(entry);
+  if (output.state !== "ok") {
+    throw new Error(`${entry.key}'s Output is ${output.state}`);
+  }
+  return output.bindings;
+}
+
+/** The entry at one admission order, or a failure saying the prefix has none. */
+function entryAt(model: ReplModel, order: number): ReplEntry {
+  const entry = model.entries[order - 1];
+  if (entry === undefined) {
+    throw new Error(`this prefix admitted ${model.entries.length} entries`);
+  }
+  return entry;
+}
+
+/** The journal through its own text form, so no earlier reading is reused. */
+function cold(events: readonly DurableEvent[]): DurableEvent[] {
+  return events.map((event) => {
+    const parsed = parseDurableEvent(serializeDurableEvent(event));
+    if (!parsed.ok) {
+      throw parsed.error;
+    }
+    return parsed.value;
+  });
+}
+
+/** Both readings of every entry, as plain records, so two projections compare. */
+function boundaries(model: ReplModel) {
+  return model.entries.map((entry) => ({
+    input: recordOf(entryInputBindings(model, entry)),
+    output: entryOutput(entry),
+  }));
+}
+
+/** The Bindings pane, chosen explicitly, with one view of the entry selected. */
+function inBindings(state: ReplState, view: "input" | "output" = "input"): ReplState {
+  return Object.freeze({
+    ...state,
+    route: Object.freeze({ ...state.route, right: "bindings" as const }),
+    bindingsView: view,
+  });
+}
+
+/** What the entry boundary rows of the pane say, as a reader reads them. */
+function* paneOf(view: ReplView): Operation<string[]> {
+  return (yield* describedBy(view))
+    .filter(
+      (one) =>
+        one.key.startsWith("bindings-view:") ||
+        one.key.startsWith("input:") ||
+        one.key.startsWith("output:"),
+    )
+    .map((one) => one.label.trim());
+}
+
+describe("REPL entries: an entry's Input and Output bindings (#982)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("EI1: B starts from A's Output, changes it, and leaves both Inputs as they were", function* () {
+    const { execution, session } = yield* capturing(BOUNDARY_FIRST);
+    expect((yield* session.join()).ok).toBe(true);
+    const beforeB = projected(yield* execution.stream.readAll());
+    expect((yield* following(session, BOUNDARY_SECOND)).ok).toBe(true);
+    const head = projected(yield* execution.stream.readAll());
+    const a = entryAt(head, 1);
+    const b = entryAt(head, 2);
+    expect(b.terminal?.output).toContain("Two: 2/final/same");
+
+    // A is the first entry, so it really started from nothing.
+    expect(entryInputBindings(head, a)).toEqual([]);
+    expect(recordOf(okOutput(a))).toEqual({
+      count: 1,
+      config: { mode: "draft" },
+      kept: "same",
+    });
+    // B starts from exactly what A's result handed on — the same frozen values
+    // its execution was initialized with, not a second copy of them.
+    expect(recordOf(entryInputBindings(head, b))).toEqual(recordOf(okOutput(a)));
+    expect(recordOf(entryInputBindings(head, b))).toEqual(entryInitialBindings(head, b));
+    expect(entryInputBindings(head, b)).toBe(a.bindings);
+    // B's Output is complete: the scalar and the nested member it changed, and
+    // the name it never touched, carried through.
+    expect(recordOf(okOutput(b))).toEqual({
+      count: 2,
+      config: { mode: "final" },
+      kept: "same",
+    });
+    // Nothing B did reached back: A's Input and Output and B's own Input still
+    // hold the nested member as it was before B edited its copy.
+    expect(recordOf(entryInputBindings(head, a))).toEqual(
+      recordOf(entryInputBindings(beforeB, entryAt(beforeB, 1))),
+    );
+    expect(recordOf(okOutput(a))).toEqual(recordOf(okOutput(entryAt(beforeB, 1))));
+    expect(value(entryInputBindings(head, b), "config")).toEqual({ mode: "draft" });
+  });
+
+  it("EI2: selecting A after B shows A's own Input and Output, and keeps the view chosen", function* () {
+    const { execution, session } = yield* capturing(BOUNDARY_FIRST);
+    expect((yield* session.join()).ok).toBe(true);
+    expect((yield* following(session, BOUNDARY_SECOND)).ok).toBe(true);
+    const model = projected(yield* execution.stream.readAll());
+    const tree = yield* useReplTree<ReplAction>();
+    const draft = "the next entry";
+    const caret = { value: draft, offset: 4 };
+    let state: ReplState = Object.freeze({
+      ...inBindings(drafting(selecting(initialState(EXECUTION), "entry-2"), draft)),
+      draftCaret: caret,
+    });
+    const view = (focused?: string) => reading(state, model, NOTHING_LIVE, WIDE, focused);
+
+    // Input is what a person sees first.
+    expect(yield* paneOf(view())).toEqual([
+      "Input",
+      "Output",
+      "entry-2 Input",
+      "count = 1",
+      'config = {"mode":"draft"}',
+      'kept = "same"',
+    ]);
+
+    // Output, chosen through the real control: reached from the keyboard and pressed.
+    let frame = yield* drawn(tree, view(), WIDE);
+    expect(frame.targetable("bindings-view:output")).toBe(true);
+    // Tab reaches the pane's reading region, and the arrow moves within it.
+    for (let press = 0; press < 20 && keyedBy(tree) !== "bindings-view:input"; press += 1) {
+      yield* tree.dispatch({ kind: "key", key: "Tab" });
+    }
+    expect(keyedBy(tree)).toBe("bindings-view:input");
+    yield* tree.dispatch({ kind: "key", key: "ArrowDown" });
+    expect(keyedBy(tree)).toBe("bindings-view:output");
+    const pressed = yield* activated(tree);
+    expect(pressed).toEqual({ kind: "select-bindings-view", view: "output" });
+    expect(yield* pointed(tree, frame, "bindings-view:output")).toEqual(pressed);
+    const chose = reduceRepl(state, pressed, model, NOTHING_LIVE);
+    // Choosing a view moves no text, no caret and no focus.
+    expect(chose.state.draft).toBe(draft);
+    expect(chose.state.route.draft).toBe(draft);
+    expect(chose.state.draftCaret).toEqual(caret);
+    expect(chose.state.restore).toBeUndefined();
+    state = chose.state;
+    frame = yield* drawn(tree, view(keyedBy(tree)), WIDE);
+    expect(keyedBy(tree)).toBe("bindings-view:output");
+    expect(focusClaim(view(keyedBy(tree)))).toBeUndefined();
+    expect(yield* paneOf(view())).toEqual([
+      "Input",
+      "Output",
+      "entry-2 Output",
+      "count = 2",
+      'config = {"mode":"final"}',
+      'kept = "same"',
+    ]);
+
+    // Selecting A through its catalog row keeps Output, and shows A's own.
+    const toA = yield* pointed(tree, frame, "entry:entry-1");
+    state = reduceRepl(state, toA, model, NOTHING_LIVE).state;
+    expect(state.route.scopes).toEqual(["entry-1"]);
+    expect(state.bindingsView).toBe("output");
+    expect(state.draft).toBe(draft);
+    expect(state.draftCaret).toEqual(caret);
+    frame = yield* drawn(tree, view(keyedBy(tree)), WIDE);
+    expect(yield* paneOf(view())).toEqual([
+      "Input",
+      "Output",
+      "entry-1 Output",
+      "count = 1",
+      'config = {"mode":"draft"}',
+      'kept = "same"',
+    ]);
+
+    // Its value drawer is A's Output value, under an identity no other entry or
+    // view shares.
+    const opening = yield* pointed(tree, frame, "output:config");
+    expect(opening).toEqual({
+      kind: "open-drawer",
+      drawer: { kind: "entry-value", view: "output", name: "config" },
+    });
+    const opened = reduceRepl(state, opening, model, NOTHING_LIVE).state;
+    expect(opened.refusal).toBeUndefined();
+    const details = retainedDetailsOf(reading(opened, model, NOTHING_LIVE, WIDE));
+    expect(details.map((one) => one.text).join("\n")).toBe(
+      JSON.stringify({ mode: "draft" }, undefined, 2),
+    );
+    const identities = [
+      readingKeyOf(opened, { kind: "entry-value", view: "output", name: "config" }),
+      readingKeyOf(opened, { kind: "entry-value", view: "input", name: "config" }),
+      readingKeyOf(selecting(opened, "entry-2"), {
+        kind: "entry-value",
+        view: "output",
+        name: "config",
+      }),
+      readingKeyOf(opened, { kind: "binding", name: "config" }),
+    ];
+    expect(new Set(identities).size).toBe(identities.length);
+    expect(opened.draft).toBe(draft);
+    expect(opened.draftCaret).toEqual(caret);
+
+    // And Input, chosen again, is A's real start: nothing.
+    state = reduceRepl(
+      state,
+      { kind: "select-bindings-view", view: "input" },
+      model,
+      NOTHING_LIVE,
+    ).state;
+    expect(yield* paneOf(view())).toEqual(["Input", "Output", "entry-1 Input", "(no bindings)"]);
+  });
+
+  it("EI3: a held entry has its Input, and its Output is Running at every position before its close", function* () {
+    const performed = yield* countPerformed();
+    const { execution, session } = yield* capturing('<Let as="kept" value="one" />\n\nOne.\n');
+    expect((yield* session.join()).ok).toBe(true);
+    accepted(yield* session.submit(STOPS));
+    const question = yield* asking(session);
+
+    const held = session.model;
+    const running = entryAt(held, 2);
+    expect(recordOf(entryInputBindings(held, running))).toEqual({ kept: "one" });
+    expect(entryOutput(running)).toEqual({ state: "running" });
+    const selected = selecting(initialState(EXECUTION), "entry-2");
+    expect(yield* paneOf(reading(inBindings(selected), held, NOTHING_LIVE, WIDE))).toEqual([
+      "Input",
+      "Output",
+      "entry-2 Input",
+      'kept = "one"',
+    ]);
+    const output = inBindings(selected, "output");
+    const tree = yield* useReplTree<ReplAction>();
+    yield* drawn(tree, reading(output, held, NOTHING_LIVE, WIDE), WIDE);
+    expect(yield* paneOf(reading(output, held, NOTHING_LIVE, WIDE))).toEqual([
+      "Input",
+      "Output",
+      "entry-2 Output",
+      "Running",
+    ]);
+    // Focus is wherever a person left it, and the entry finishing does not move it.
+    for (let press = 0; press < 20 && keyedBy(tree) !== "bindings-view:input"; press += 1) {
+      yield* tree.dispatch({ kind: "key", key: "Tab" });
+    }
+    const focused = keyedBy(tree);
+    expect(focused).toBe("bindings-view:input");
+
+    question.submit({ decision: "go" });
+    expect((yield* session.join()).ok).toBe(true);
+    const events = yield* execution.stream.readAll();
+    const head = projected(events);
+    // Completion is a new model under the same state: the view stays Output,
+    // nothing requests focus, and the focused control is the one it was.
+    const finished = reading(output, head, NOTHING_LIVE, WIDE, focused);
+    expect(focusClaim(finished)).toBeUndefined();
+    yield* drawn(tree, finished, WIDE);
+    expect(keyedBy(tree)).toBe(focused);
+    expect(yield* paneOf(finished)).toEqual([
+      "Input",
+      "Output",
+      "entry-2 Output",
+      'kept = "one"',
+      'token = "held"',
+      'schema = {"type":"object","p…',
+      'answer = {"decision":"go"}',
+    ]);
+
+    // Standing before B's close shows B as it was there — Running — although
+    // the file now holds its result.
+    const b = entryAt(head, 2);
+    const beforeClose = b.checkpoints[b.checkpoints.length - 2]?.marker;
+    const beforeAdmission = entryAt(head, 1).checkpoints.at(-1)?.marker;
+    if (beforeClose === undefined || beforeAdmission === undefined) {
+      throw new Error("the history holds a position before B's close and before B");
+    }
+    const atClose = projected(events, beforeClose);
+    expect(entryOutput(entryAt(atClose, 2))).toEqual({ state: "running" });
+    expect(recordOf(entryInputBindings(atClose, entryAt(atClose, 2)))).toEqual({ kept: "one" });
+    expect(
+      yield* paneOf(reading(frozenAt(output, beforeClose), atClose, NOTHING_LIVE, WIDE)),
+    ).toEqual(["Input", "Output", "entry-2 Output", "Running"]);
+    // Before B was admitted there is no B: the selection clears as it always
+    // has, the chosen view stays, and no row of B's appears.
+    const atA = projected(events, beforeAdmission);
+    const cleared = withoutAbsentEntry(frozenAt(output, beforeAdmission), atA);
+    expect(cleared?.route.scopes).toEqual([]);
+    expect(cleared?.bindingsView).toBe("output");
+    if (cleared === undefined) {
+      throw new Error("a selection the prefix does not hold is cleared");
+    }
+    expect(yield* paneOf(reading(cleared, atA, NOTHING_LIVE, WIDE))).toEqual([]);
+
+    // Reading performed nothing and appended nothing, and a cold reading of the
+    // same file is the same reading.
+    const compiles = performed.compiles;
+    const reads = performed.reads.length;
+    yield* paneOf(reading(output, projected(events), NOTHING_LIVE, WIDE));
+    expect(boundaries(projected(cold(events)))).toEqual(boundaries(head));
+    expect(boundaries(projected(cold(events), beforeClose))).toEqual(boundaries(atClose));
+    expect(performed.compiles).toBe(compiles);
+    expect(performed.reads.length).toBe(reads);
+    expect(yield* execution.stream.readAll()).toEqual(events);
+  });
+
+  it("EI4: a failed, a stopped and an older entry show their outcome rather than a result", function* () {
+    const performed = yield* countPerformed();
+    const pane = (model: ReplModel, entry: string) =>
+      paneOf(
+        reading(
+          inBindings(selecting(initialState(EXECUTION), entry), "output"),
+          model,
+          NOTHING_LIVE,
+          WIDE,
+        ),
+      );
+
+    // Failed: its result still carries root data, and that data still reaches
+    // the next entry exactly as before — but it is not shown as a result.
+    const failing = yield* capturing(PUBLISHES_THEN_FAILS);
+    expect((yield* failing.session.join()).ok).toBe(false);
+    expect((yield* following(failing.session, "Two: {kept}\n")).ok).toBe(true);
+    const failedEvents = yield* failing.execution.stream.readAll();
+    const failed = projected(failedEvents);
+    expect(settledNames(failed, 1)).toEqual(["kept"]);
+    const reason = entryAt(failed, 1).terminal?.message;
+    expect(entryOutput(entryAt(failed, 1))).toEqual({ state: "failed", message: reason });
+    expect(yield* pane(failed, "entry-1")).toEqual([
+      "Input",
+      "Output",
+      "entry-1 Output",
+      `Failed: ${reason}`,
+    ]);
+    expect(recordOf(entryInputBindings(failed, entryAt(failed, 2)))).toEqual({ kept: "one" });
+    expect(recordOf(entryInputBindings(failed, entryAt(failed, 2)))).toEqual(
+      entryInitialBindings(failed, entryAt(failed, 2)),
+    );
+
+    // Stopped: the recorded cancellation P5 reads, and the entry after it.
+    const execution = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution, source: PUBLISHES_THEN_ASKS }));
+      yield* asking(session);
+    });
+    const holder = replExecution(cancelledAfter(yield* execution.stream.readAll()));
+    yield* scoped(function* () {
+      const reopened = opened(yield* openReplSession({ execution: holder }));
+      accepted(yield* reopened.submit(PLAIN));
+      yield* reopened.join();
+    });
+    const stoppedEvents = yield* holder.stream.readAll();
+    const stopped = projected(stoppedEvents);
+    expect(entryOutput(entryAt(stopped, 1))).toEqual({ state: "cancelled", message: undefined });
+    expect(yield* pane(stopped, "entry-1")).toEqual([
+      "Input",
+      "Output",
+      "entry-1 Output",
+      "Stopped",
+    ]);
+    expect(names(entryInputBindings(stopped, entryAt(stopped, 2)))).toEqual(["schema"]);
+
+    // Older: a successful result written before results carried root data.
+    // Unavailable, not empty — and the next entry still inherits its export.
+    const legacy = projected((yield* legacyHistory()).slice(0, 5));
+    expect(entryOutput(entryAt(legacy, 1))).toEqual({ state: "unavailable" });
+    expect(yield* pane(legacy, "entry-1")).toEqual([
+      "Input",
+      "Output",
+      "entry-1 Output",
+      "Output unavailable for this older entry",
+    ]);
+    expect(names(entryAt(legacy, 1).bindings)).toEqual(["legacyEval"]);
+
+    // None of this ran anything, and each reading is the cold reading.
+    const compiles = performed.compiles;
+    const reads = performed.reads.length;
+    for (const events of [failedEvents, stoppedEvents]) {
+      expect(boundaries(projected(cold(events)))).toEqual(boundaries(projected(events)));
+    }
+    expect(performed.compiles).toBe(compiles);
+    expect(performed.reads.length).toBe(reads);
+    expect(yield* holder.stream.readAll()).toEqual(stoppedEvents);
+  });
+
+  it("EI5: a protected answer is never shown raw in Input, Output or a value drawer", function* () {
+    const secret = `code-${Math.floor(100000 + Math.random() * 900000)}`;
+    const { execution, session } = yield* capturing(
+      [
+        '<Elicit schema={{type:"object",properties:{code:{type:"string",writeOnly:true}},required:["code"],additionalProperties:false}} as="answer">Code?</Elicit>',
+        "",
+        "Asked.",
+        "",
+      ].join("\n"),
+    );
+    const question = yield* asking(session);
+    question.submit({ code: secret });
+    yield* session.join();
+    expect((yield* following(session, "Two.\n")).ok).toBe(true);
+    const events = yield* execution.stream.readAll();
+    const model = projected(events);
+    // The control: the retained record already holds no raw value to leak.
+    expect(JSON.stringify(events).includes(secret)).toBe(false);
+
+    const said: string[] = [];
+    for (const [entry, view, name] of [
+      ["entry-1", "output", "answer"],
+      ["entry-2", "input", "answer"],
+      ["entry-2", "output", "answer"],
+    ] as const) {
+      const state = inBindings(selecting(initialState(EXECUTION), entry), view);
+      said.push(...(yield* paneOf(reading(state, model, NOTHING_LIVE, WIDE))));
+      const opened = reduceRepl(
+        state,
+        { kind: "open-drawer", drawer: { kind: "entry-value", view, name } },
+        model,
+        NOTHING_LIVE,
+      ).state;
+      expect(opened.refusal).toBeUndefined();
+      said.push(
+        ...retainedDetailsOf(reading(opened, model, NOTHING_LIVE, WIDE)).map((one) => one.text),
+      );
+    }
+    expect(said.some((one) => one.startsWith("answer = "))).toBe(true);
+    expect(said.join("\n").includes(secret)).toBe(false);
+    // The value B starts from is the safe value A's result retained.
+    expect(value(entryInputBindings(model, entryAt(model, 2)), "answer")).toEqual(
+      value(okOutput(entryAt(model, 1)), "answer"),
+    );
+
+    // Retained data this version cannot read still refuses the whole reading
+    // rather than showing a smaller Input or Output.
+    expect(refusal(withSettledBindings(events, { props: {} }))).toContain(
+      "cannot be read by this version",
+    );
   });
 });
