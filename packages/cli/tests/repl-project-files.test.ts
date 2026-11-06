@@ -3,6 +3,7 @@ import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 import { z } from "zod";
 import { readGuideChapter } from "../src/repl/sidekick/guide.ts";
 import { useDenoRepositoryOperations } from "@executablemd/git/deno";
+import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
@@ -628,12 +629,26 @@ describe("1113: receipt-directed exact output paging", () => {
     // alone does not say the setup exchange finished. Neither does a request
     // count, and neither does Send — this pane contributes Send whenever its
     // composer is available, adding Stop while it is busy rather than taking
-    // Send away. So the pane is required at rest, and then one retained
-    // reading has to hold the setup's own evaluated response, successful, with
-    // the control feedback that carried the receipt recorded against that same
-    // conversation and turn and carrying exactly the input the provider was
-    // asked. A contradiction or a history that cannot be read is a failure
-    // here; it is never a reason to send anything again.
+    // Send away.
+    //
+    // So the pane is required at rest, and then the one retained reading is
+    // asked twice over. First as the records this host wrote: its own
+    // evaluated response, successful, with the acknowledgement that carried
+    // the receipt against that same conversation and turn and carrying exactly
+    // the input the provider was asked. That is this reader's whole answer —
+    // `mountedReading` parses the chat record shapes and projects the *entry*
+    // stream; it does not reconcile Sidekick turns, so those records on their
+    // own say what this host meant rather than what the provider accepted.
+    //
+    // Then as the canonical reading, through the projector dispatch itself
+    // consults, over that same snapshot: a turn is completed only from Core's
+    // own saved records, and a delivery is established only by a completed
+    // turn whose retained input actually carried that text. Both halves matter
+    // — raw equality catches a receipt the host never sent, and the projection
+    // catches one it sent into a turn that carried something else or is still
+    // unresolved. A contradiction, an unresolved delivery or a history that
+    // cannot be read is a failure here; none of them is a reason to send
+    // anything again.
     yield* page.until("the setup exchange at rest", (one) => sidekickIdle(one));
     const settled = yield* settledReading(page.repl);
     const prepared = settled.chat.find(
@@ -657,6 +672,26 @@ describe("1113: receipt-directed exact output paging", () => {
           one.text === receipt,
       ),
     ).toBe(true);
+    const canonical = projectSidekick(settled.chat);
+    if (!canonical.ok) {
+      throw canonical.error;
+    }
+    const held = canonical.value.conversations.find((one) => one.id === prepared.conversation);
+    if (held === undefined) {
+      throw new Error(
+        "the setup's own conversation is absent from the canonical reading. " +
+          `ids=${JSON.stringify(canonical.value.conversations.map((one) => one.id))}`,
+      );
+    }
+    expect(held.completed).toContain(prepared.turn);
+    expect(
+      canonical.value.delivered.some(
+        (one) => one.conversation === prepared.conversation && one.turn === prepared.turn,
+      ),
+    ).toBe(true);
+    expect(
+      canonical.value.unestablished.filter((one) => one.conversation === prepared.conversation),
+    ).toEqual([]);
     const initial = receipt.match(/<REPL.Entry.Output entry=\{(\d+)\} \/>/);
     expect(initial).not.toBeNull();
     const navigation = z.object({
