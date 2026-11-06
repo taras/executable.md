@@ -7,6 +7,53 @@ const revision = z
   .regex(/^[0-9a-f]{40}$/)
   .nullable();
 const jsonObject = z.record(z.string(), z.json());
+const commit = z.string().regex(/^[0-9a-f]{40}$/);
+export const programFile = z
+  .object({
+    path: z.string().min(1),
+    utf8Bytes: z.number().int().nonnegative(),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+export const selection = z
+  .object({
+    root: z.string().startsWith("/"),
+    entry: z.string().min(1),
+    revision: commit.nullable(),
+    files: z.array(programFile).min(1),
+  })
+  .strict();
+const runIdentity = z
+  .object({
+    commit,
+    runUrl: z.string().min(1),
+    attempt: z.number().int().positive(),
+    runner: z.string().min(1),
+  })
+  .strict();
+export const measurement = z
+  .object({
+    run: runIdentity,
+    records: z.object({ deno: descriptor, node: descriptor, bun: descriptor }).strict(),
+    artifact: descriptor,
+    acquisition: descriptor,
+  })
+  .strict();
+export const amendment = z
+  .object({
+    schema: z.literal("delivery-amendment.v1"),
+    reservation: z.string().startsWith("/"),
+    request: descriptor,
+    disposition: z.string().startsWith("/"),
+    base: commit,
+    calls: z.number().int().nonnegative(),
+    predecessor: descriptor,
+    feedback: descriptor,
+    weights: descriptor.extend({ path: z.literal("test-weights.json") }).strict(),
+    measurement,
+    workflow: selection,
+  })
+  .strict();
 const provider = z.enum(["codex", "claude"]);
 const profile = z
   .object({ provider, model: z.string().min(1), effort: z.string().min(1) })
@@ -105,6 +152,7 @@ export const state = z
         discovery: z.array(jsonObject).optional(),
         exactApproval: z.json().optional(),
         exactReview: z.json().optional(),
+        amendment: amendment.optional(),
       })
       .strict(),
     calls: z.array(

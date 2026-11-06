@@ -170,3 +170,13 @@ pwd -P
 <AssertEquals actual={preserved} expected={firstFailure} />
 </TempDir>
 </Test>
+
+<Test name="F1 F2 F8 a measured-weights amendment reaches final-head delivery without rewriting earlier feedback" timeout="120s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.Entry entry="amendment-journey" value={{fixture,runner,root}} repository={fixture.repository} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="journey">{child.stdout}</Parse>
+<AssertEquals actual={journey.amended === journey.original} expected={false} />
+</TempDir>
+</Test>

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { confirmLinks, envelope, state } from "./control.ts";
 import { describe, read, stateLimit } from "./text-storage.ts";
+import { confirmAdmission } from "./admission.ts";
 
 export const props = {
   type: "object",
@@ -25,5 +26,6 @@ export default function* LoadState(value: unknown) {
   }
   const saved = state.parse(JSON.parse(text));
   confirmLinks(saved, selected);
+  yield* confirmAdmission(saved);
   return saved;
 }

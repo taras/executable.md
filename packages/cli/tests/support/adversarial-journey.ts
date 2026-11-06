@@ -54,7 +54,9 @@ export function* runAdversarialJourney(suite: string) {
           ? preparationTimeout
           : suite === "Friction" || suite === "Implementation"
             ? 180_000
-            : 120_000,
+            : suite === "Workflow"
+              ? 300_000
+              : 120_000,
       env: {
         XMD_EXAMPLE_COMMAND: workflowCommand,
         XMD_EXAMPLE_TEST_COMMAND: workflowTestCommand,

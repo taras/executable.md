@@ -67,6 +67,8 @@ implementation, selected feedback reviews and foundation replies, including
 repairs by their original owner. It authorizes no transport retry or repetition
 of uncertain productive work. Continuing a Ticket keeps its consumed source
 correction count and recorded allocation; it does not restart a failed attempt.
+A confirmed [delivery amendment](#finish-delivery-after-required-measured-weights)
+spends one remaining source-correction slot; it never adds an allowance.
 
 ## Prepare scope and impact
 
@@ -320,6 +322,104 @@ Use the command for a current answer. Local records are trusted workflow
 artifacts, not signatures or remotely verifiable attestations. GitHub does not
 read them, and this gate does not prevent an arbitrary chat message or a person
 from claiming readiness or merging independently.
+
+## Finish delivery after required measured weights
+
+Use this when a ticket already reached `feedback_ready` at commit A and the
+required runner measurement then produced a new `test-weights.json`. The final
+branch needs that metadata commit reviewed and checked, while A's feedback,
+replies, reviews and correction history stay exactly as they were. Ordinary
+`continue.md` keeps returning a completed ticket unchanged; only this explicit
+entry reopens it, once, for the original Implementor.
+
+```text
+completed at A --amend-delivery.md--> admitted (one slot spent, no role started)
+                                        |
+                                   continue.md
+                                        v
+          original Implementor imports test-weights.json as signed child B of A
+                                        |
+               impact-selected original reviewer -> final feedback for B
+                                        |
+               delivery.md: independent review, required CI, main health for B
+```
+
+First print the workflow sources this admission will run, from the workflow
+repository and include directory you will use for every later step:
+
+```bash
+xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-implementation/amend-delivery.md \
+  --props-action select \
+  --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
+```
+
+Then write the protected `delivery-amendment-authorization.v1` record. Every
+document it names is a `{path, utf8Bytes, sha256}` descriptor whose bytes are
+checked when read:
+
+| Field | Supplies |
+| --- | --- |
+| `work`, `repository`, `revision` | The ticket's work slug, its source checkout and A. |
+| `predecessor` | The completed envelope's confirmed `continuation` descriptor. |
+| `feedback` | The original `delivery/feedback.json`, which must name A. |
+| `purpose`, `delta` | `"measured-test-weights"` and `["test-weights.json"]`. |
+| `authority` | The `kind` (`delegated-coordinator-selection` or `direct-human-approval`) and the document recording that selection. |
+| `measurement` | The hosted `run` (commit A, run URL, attempt, runner), the three retained `test-weights-<runtime>-attempt-<n>.json` records, the downloaded `test-weights` artifact and a `weights-acquisition.v1` document naming that run and the digests of the records and artifact. |
+| `workflow.old` | A retained `workflow-launch.v1` document for this ticket: its work, directory, launch workflow revision and the selected files with digests. |
+| `workflow.new` | The `select` output above, unchanged. |
+
+Admit it from the source checkout, then continue the returned envelope:
+
+```bash
+xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-implementation/amend-delivery.md \
+  --props-record /absolute/path/to/completed-ticket-record.json \
+  --props-grant /absolute/path/to/authorization.json \
+  --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw \
+  > /absolute/path/to/admitted-ticket-record.json
+xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-implementation/continue.md \
+  --props-record /absolute/path/to/admitted-ticket-record.json --props-steps 1 \
+  --include /absolute/path/to/workflow/examples/adversarial-implementation/components --raw
+```
+
+Admission validates everything before it reserves anything. It refuses, naming
+the gap and spending nothing, when the record is not the clean unchanged
+terminal state at A, the next call slot holds work, the authorization or its
+source is missing or names another ticket, predecessor or feedback, source has
+moved or changed, the allowance has no remaining slot, the records do not
+assemble through the repository's weights assembly into exactly the retained
+artifact for the corpus at A, the acquisition evidence names another run or
+digest, the old launch evidence lacks digests or disagrees with the ticket's
+preparation receipts, the running sources differ from `workflow.new`, protected
+text fails secret scanning, or the successor would exceed continuation capacity.
+History that cannot show which workflow bytes launched a ticket refuses that
+ticket's admission; it is never reconstructed from current files.
+
+A valid admission reserves `delivery/amendment`, keyed by the original feedback,
+writes `request.json`, publishes a successor with one more consumed correction
+round and the original sessions, calls, inputs and budgets, and then writes
+`disposition.json`. It starts no role. Repeating the command, with any envelope
+or authorization for the same feedback, returns that first disposition. A
+reservation without a valid disposition holds for operator reconciliation: no
+successor is published again, and a successor envelope saved before a failed
+disposition write cannot be continued.
+
+Continuation checks the disposition and the selected sources again before the
+Implementor's prompt. Settlement accepts the import only when B is a signed
+single-parent child of A, the cumulative change since A is exactly
+`test-weights.json`, and its bytes equal the artifact the records assemble into;
+otherwise it holds with the canonical reply preserved. Changing CI shard counts
+is outside this operation: it refuses here and needs the separately scoped
+qualification described in the repository instructions. A genuine later
+correction follows the ordinary review loop and spends the next ordinary slot.
+
+When the reviews pass B, the final feedback is written beside the reservation as
+`delivery/amendment/feedback.json`, linked to the request, disposition and
+confirmed continuation. The original `feedback.json` is never rewritten.
+`delivery.md` then reports `amendment_hold` for an incomplete or inconsistent
+reservation, `feedback_pending` while the admitted ticket has no final feedback,
+and otherwise the usual gates for B. A's earlier independent review never
+counts for B. The amendment records are trusted local workflow artifacts, as the
+security model describes; they do not prove that a hosted run happened.
 
 ## Prepare requests without metadata repair turns
 

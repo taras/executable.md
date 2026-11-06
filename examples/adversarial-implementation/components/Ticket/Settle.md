@@ -15,7 +15,9 @@ Provider failures without a canonical result hold without creating a verdict.
 Replies are checked through the same phase contract on live execution and replay.
 Every discovery disposition retains a source observation before any successor.
 Discovery requires clean unchanged launch source; implementation feedback retains
-its signed commit and focused evidence requirements.
+its signed commit and focused evidence requirements. An admitted delivery
+amendment additionally rechecks its selected workflow sources, the import's
+parentage, its cumulative weights-only delta and the exact measured bytes.
 
 <Let as="pending" value={props.pending} />
 <Loop max={1}>
@@ -87,6 +89,22 @@ git merge-base --is-ancestor {pending.manifest.assignment.revision} {revision}
     <If condition={signature.exitCode !== 0}>
     <Fail message={"Feedback signature verification failed; inspect " + pending.call.record + "/signature.json"} />
     </If>
+  </If>
+  <If condition={pending.checkpoint.amendment !== undefined}>
+  <Ticket.AmendmentSources amendment={pending.checkpoint.amendment} as="amendmentSources" />
+  <If condition={completed && pending.call.role === "implementor"}>
+  <Dir path={pending.call.assignment.repository}>
+```bash exec as="amendedParents"
+git rev-list --parents -n 1 {revision}
+```
+```bash exec as="amendedAncestry"
+git merge-base --is-ancestor {pending.checkpoint.revision} {revision}
+```
+  </Dir>
+  <Ticket.ChangedPaths repository={pending.call.assignment.repository} base={pending.checkpoint.amendment.base} head={revision} as="amendedChanges" />
+  <Ticket.AmendmentSettle amendment={pending.checkpoint.amendment} repository={pending.call.assignment.repository} revision={revision} previous={pending.checkpoint.revision} parents={amendedParents.stdout} descends={amendedAncestry.exitCode === 0} paths={amendedChanges.paths} as="amendmentReceipt" />
+  <Dir path={pending.call.record}><File path="amendment.json"><Json value={amendmentReceipt} /></File></Dir>
+  </If>
   </If>
   <If condition={completed && pending.call.role === "implementor" && pending.checkpoint.exactApproval}>
 <ExactCorrection.Verify repository={pending.call.assignment.repository} approval={pending.checkpoint.exactApproval} revision={result.revision} as="exactReceipt" />

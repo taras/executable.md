@@ -21,6 +21,38 @@ props:
 <Parse schema={{type:"object"}} as="reply">{original.json}</Parse>
 <Json value={{...reply,summary:props.assignment.request === "uncorrectable-summary" ? reply.summary : "The saved checks passed.",handoff:"Inspect the saved evidence."}} />
 <Else>
+<Let as="amendmentRequest" value={assignment.request.startsWith("Delivery amendment:") || ["amendment-review","amendment-corrected","amendment-correct"].includes(assignment.request)} />
+<If condition={amendmentRequest}>
+<Let as="receipt" value={assignment.artifactDirectory + "/focused.json"} />
+<Let as="revision" value={assignment.revision} />
+<Dir path={assignment.artifactDirectory}><File path="called.json"><Json value={{session:props.session,role:props.role,initialize:props.initialize,revision,request:assignment.request,phase:assignment.phase,inputPaths:props.inputs.map(input => input.path)}} /></File></Dir>
+<If condition={props.role === "implementor"}>
+<If condition={assignment.work === "amend-sources"}><Dir path={assignment.repository.slice(0,assignment.repository.lastIndexOf("/"))}><File path="sources-changed.flag">The selected sources change after dispatch.</File></Dir></If>
+<Let as="artifact" value={assignment.request.includes("\nArtifact: ") ? assignment.request.split("\nArtifact: ")[1].split(" ")[0] : ""} />
+<Let as="quotedArtifact" value={"'" + artifact.replaceAll("'","'\"'\"'") + "'"} />
+<Let as="mode" value={assignment.request === "amendment-correct" ? "correct" : assignment.work} />
+```bash exec as="imported"
+set -eu
+case '{mode}' in
+  correct) git commit -q --allow-empty -m 'record the measured weights import again' ;;
+  amend-ci) cp {quotedArtifact} test-weights.json; mkdir -p .github; printf 'shards: 7\n' > .github/ci.yml; git add test-weights.json .github/ci.yml; git commit -qm 'import weights and change shards' ;;
+  amend-parent) printf 'partial\n' > test-weights.json; git add test-weights.json; git commit -qm 'intermediate weights'; cp {quotedArtifact} test-weights.json; git add test-weights.json; git commit -qm 'import weights' ;;
+  amend-unsigned) cp {quotedArtifact} test-weights.json; git add test-weights.json; git -c commit.gpgsign=false commit -qm 'unsigned import' ;;
+  amend-bytes) cp {quotedArtifact} test-weights.json; printf '\n' >> test-weights.json; git add test-weights.json; git commit -qm 'changed import' ;;
+  *) cp {quotedArtifact} test-weights.json; git add test-weights.json; git commit -qm 'import measured test weights' ;;
+esac
+git rev-parse HEAD
+```
+<If condition={imported.exitCode !== 0}><Fail message={imported.stderr} /></If>
+<Let as="revision" value={imported.stdout.trim()} />
+<Dir path={assignment.artifactDirectory}><File path="focused.json"><Json value={{revision,command:"git show --stat HEAD",exitCode:0}} /></File></Dir>
+<Json value={{schema:"phase-result.v2",phase:assignment.phase,work:assignment.work,revision,outcome:"complete",summary:"The fixture imported the measured weights artifact.",handoff:assignment.request === "amendment-correct" ? "amendment-corrected" : "amendment-review",artifacts:[receipt],evidence:[{revision,command:"inspect the imported weights",outcome:"passed",artifact:receipt}],findings:[],assessment:assignment.assessment,discoveryRequests:[],discoveryGaps:[],next:assignment.continuation}} />
+<Else>
+<Let as="outcome" value={assignment.work === "amend-correction" && assignment.request === "amendment-review" ? "changes_required" : "pass"} />
+<Dir path={assignment.artifactDirectory}><File path="focused.json"><Json value={{revision,command:"inspect the imported weights",exitCode:0}} /></File></Dir>
+<Json value={{schema:"phase-result.v2",phase:assignment.phase,work:assignment.work,revision,outcome,summary:"The fixture reviewed the measured weights import.",handoff:outcome === "changes_required" ? "amendment-correct" : "Original owner: the measured weights import is accepted.",artifacts:[receipt],evidence:[{revision,command:"inspect the imported weights",outcome:"passed",artifact:receipt}],findings:outcome === "changes_required" ? ["Record the import again as a signed descendant."] : [],assessment:assignment.assessment,discoveryRequests:[],discoveryGaps:[],next:outcome === "changes_required" ? {phase:"implementation",role:"implementor"} : assignment.continuation}} />
+</Else></If>
+<Else>
 <Let as="receipt" value={assignment.artifactDirectory + "/focused.json"} />
 <Let as="revision" value={assignment.revision} />
 <Let as="conflict" value={props.role === "implementor" && assignment.request === "first-consumer"} />
@@ -115,5 +147,6 @@ git rev-parse HEAD
 <Json value={{schema:"phase-result.v2",...(assignment.request === "omitted-metadata" ? {} : {phase:assignment.phase,work:assignment.work,revision}),outcome,summary:["oversized-summary","uncorrectable-summary"].includes(assignment.request) ? "x".repeat(1201) : "The fake role ran the assigned consumer.",handoff:handoffCase ? props.role === "implementor" ? assignment.request === "handoff-retention correct" ? "handoff-retention corrected-review" : "handoff-retention review" : outcome === "changes_required" ? "handoff-retention correct" : assignment.request : conflict ? "Planner: add and validate resize for the remaining consumer." : "Original owner: inspect the completed consumer migration.",artifacts:selectedHandoff ? [receipt,handoffPath] : [receipt],evidence:[{revision:assignment.request === "short-revision" ? revision.slice(0,8) : revision,command:conflict ? "resize narrow" : "inspect the assigned commit",outcome:conflict ? "failed" : "passed",artifact:receipt}],findings:[],assessment:assignment.assessment,...(selectedHandoff ? {handoffInputs:[handoffPath,...(assignment.request === "handoff-retention correct" ? assignment.handoffInputs ?? [] : [])]} : assignment.request.includes("#1084:") ? {handoffInputs:assignment.handoffInputs ?? []} : {}),discoveryRequests:[],discoveryGaps:[],...(assignment.request === "omitted-metadata" ? {} : {next:conflict ? {phase:"discovery",role:"planner"} : outcome === "changes_required" ? {phase:"implementation",role:"implementor"} : assignment.continuation}),...(conflict ? {apiConflict:{expected:"The API can resize a remaining consumer.",observed:"resize is unavailable.",reproducer:"Source api.sh and run resize narrow.",artifact:receipt}} : {})}} />
 </Else>
 </If>
+</Else></If>
 </Else>
 </If>

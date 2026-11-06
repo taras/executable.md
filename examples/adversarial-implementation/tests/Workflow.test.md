@@ -264,3 +264,49 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <AssertStringIncludes actual={work.reason} expected="promised to retire" />
 </TempDir>
 </Test>
+
+<Test name="F3 F6 F7 F9 a measured-weights amendment refuses incoherent authority, source and evidence before reserving" timeout="90s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.Entry entry="amendment-case" value={{scenario:"refusals",fixture,runner,root:suiteRoot}} repository={fixture.repository} command={runner} root={suiteRoot} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="ran">{child.stdout}</Parse>
+<AssertEquals actual={ran.scenario} expected="refusals" />
+</TempDir>
+</Test>
+
+<Test name="F4 F9 uncertain amendment publication and an unbound successor dispatch nothing" timeout="90s">
+<Each in={["publication","disposition"]} let="scenario">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.Entry entry="amendment-case" value={{scenario,fixture,runner,root:suiteRoot}} repository={fixture.repository} command={runner} root={suiteRoot} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={scenario + ": " + (child.stderr || child.stdout)} /></If>
+<Parse schema={{type:"object"}} as="ran">{child.stdout}</Parse>
+<AssertEquals actual={ran.scenario} expected={scenario} />
+</TempDir>
+</Each>
+</Test>
+
+<Test name="F5 amendment settlement rechecks parentage, signature, weights-only delta and exact bytes" timeout="150s">
+<Each in={["amend-ci","amend-parent","amend-unsigned","amend-bytes"]} let="scenario">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.Entry entry="amendment-case" value={{scenario,fixture,runner,root:suiteRoot}} repository={fixture.repository} command={runner} root={suiteRoot} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={scenario + ": " + (child.stderr || child.stdout)} /></If>
+<Parse schema={{type:"object"}} as="ran">{child.stdout}</Parse>
+<AssertEquals actual={ran.scenario} expected={scenario} />
+</TempDir>
+</Each>
+</Test>
+
+<Test name="F7 F10 amendment sources are rechecked and a genuine correction spends the next ordinary slot" timeout="150s">
+<Each in={["sources","correction","exhausted"]} let="scenario">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.Entry entry="amendment-case" value={{scenario,fixture,runner,root:suiteRoot}} repository={fixture.repository} command={runner} root={suiteRoot} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={scenario + ": " + (child.stderr || child.stdout)} /></If>
+<Parse schema={{type:"object"}} as="ran">{child.stdout}</Parse>
+<AssertEquals actual={ran.scenario} expected={scenario} />
+</TempDir>
+</Each>
+</Test>

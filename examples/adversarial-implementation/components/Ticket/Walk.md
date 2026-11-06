@@ -18,6 +18,9 @@ A held or completed checkpoint returns unchanged. Each Step joins before another
 Step starts. Omitting maxSteps runs at most the initial Planner, Architect and
 returned Planner journey, then the implementation loop. Further discovery pauses
 with its prepared assignment. An explicit maxSteps bounds outstanding role calls.
+An admitted delivery amendment publishes its final feedback beside its
+reservation after the confirmed feedback_ready continuation; the original
+`feedback.json` is never rewritten.
 
 <Let as="record" value={props.record} />
 <Let as="confirmed" value={props.confirmed} />
@@ -52,8 +55,11 @@ with its prepared assignment. An explicit maxSteps bounds outstanding role calls
 </If>
 <If condition={!stopped && record.checkpoint.dispatchable}><Let as="record" value={{...record,checkpoint:{...record.checkpoint,status:"paused",hold:null}}} /></If>
 <If condition={stopped}><Return value={confirmed} /><Else>
-<If condition={record.manifest.delivery !== undefined && record.checkpoint.status === "feedback_ready" && props.record.checkpoint.status !== "feedback_ready"}>
+<If condition={record.manifest.delivery !== undefined && record.checkpoint.amendment === undefined && record.checkpoint.status === "feedback_ready" && props.record.checkpoint.status !== "feedback_ready"}>
 <Dir path={record.manifest.delivery.directory}><File path="feedback.json"><Json value={{status:record.checkpoint.status,revision:record.checkpoint.revision}} /></File></Dir>
 </If>
-<If condition={record.checkpoint.status === confirmed.status}><Return value={confirmed} /><Else><Ticket.Publish record={record} previous={confirmed} as="published" /><Return value={published} /></Else></If>
+<Let as="final" value={confirmed} />
+<If condition={record.checkpoint.status !== confirmed.status}><Ticket.Publish record={record} previous={confirmed} as="final" /></If>
+<If condition={record.checkpoint.amendment !== undefined && record.checkpoint.status === "feedback_ready" && final.publication === "confirmed"}><Ticket.AmendmentFeedback record={record} confirmed={final} as="finalFeedback" /></If>
+<Return value={final} />
 </Else></If>
