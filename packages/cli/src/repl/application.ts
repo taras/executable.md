@@ -141,6 +141,7 @@ import type { Instruction, Reservation, Revisions, Submitter } from "./sidekick/
 import type { ReplTerminalSize } from "./terminal.ts";
 import { decodeLocation, encodeLocation, resolveLocation, surfaceForDrawer } from "./route.ts";
 import type {
+  ReplBindingsView,
   ReplDrawerRef,
   ReplLiveAvailability,
   ReplRoute,
@@ -148,10 +149,13 @@ import type {
   ReplSidekickAvailability,
   ReplSurface,
 } from "./route.ts";
+import { entryInputBindings, entryOutput } from "./model.ts";
 import type {
   ReplAgentPermission,
   ReplAgentTurn,
+  ReplBinding,
   ReplEntry,
+  ReplEntryOutput,
   ReplModel,
   ReplRow,
   ReplScope,
@@ -1164,6 +1168,14 @@ export interface ReplState {
    * changes a destination is activating a row in it.
    */
   readonly catalog: boolean;
+  /**
+   * Whether the Bindings pane reads the selected entry's Input or its Output.
+   *
+   * Process-local and absent from the location, like the catalog. It is a way
+   * of reading every entry, so selecting another entry or history position
+   * keeps it, and an entry finishing never changes it.
+   */
+  readonly bindingsView: ReplBindingsView;
 }
 
 /** What the root must perform, because a component cannot. */
@@ -1742,6 +1754,7 @@ export function initialState(execution: string): ReplState {
     takenOver: false,
     filtering: false,
     catalog: false,
+    bindingsView: "input",
   });
 }
 
@@ -1781,6 +1794,7 @@ export function stateFor(location: string): Result<ReplState> {
       // And closed for the same reason again: a location names where somebody
       // got to, never the overlay they opened on the way.
       catalog: false,
+      bindingsView: "input",
     }),
   );
 }
@@ -1971,7 +1985,8 @@ export function readsGeometry(action: ReplAction): boolean {
     action.kind === "scroll-recovery" ||
     action.kind === "scroll-sessions" ||
     action.kind === "scroll-entries" ||
-    action.kind === "scroll-reading"
+    action.kind === "scroll-reading" ||
+    action.kind === "scroll-bindings"
   );
 }
 
@@ -2119,17 +2134,19 @@ export function reduceRepl(
               ? "scroll-entries"
               : action.window === READING_WINDOW
                 ? "scroll-reading"
-                : action.window === DRAWER_WINDOW
-                  ? presented?.kind === "recovery"
-                    ? "scroll-recovery"
-                    : presented?.kind === "configure"
-                      ? "scroll-configure"
-                      : asking !== undefined
-                        ? "scroll-sidekick-question"
-                        : state.catalog
-                          ? "scroll-entries"
-                          : "scroll"
-                  : undefined;
+                : action.window === BINDINGS_WINDOW
+                  ? "scroll-bindings"
+                  : action.window === DRAWER_WINDOW
+                    ? presented?.kind === "recovery"
+                      ? "scroll-recovery"
+                      : presented?.kind === "configure"
+                        ? "scroll-configure"
+                        : asking !== undefined
+                          ? "scroll-sidekick-question"
+                          : state.catalog
+                            ? "scroll-entries"
+                            : "scroll"
+                    : undefined;
       return kind === undefined
         ? settled(given)
         : reduceRepl(state, { kind, delta: next - window.from }, model, live, admission, presented);
@@ -2310,6 +2327,8 @@ export function reduceRepl(
         ? settled({ ...moved.state, restore: { kind: "message" } })
         : moved;
     }
+    case "select-bindings-view":
+      return settled(Object.freeze({ ...state, bindingsView: action.view }));
     case "select-scope": {
       const chosen = navigate(
         state,
@@ -2636,6 +2655,25 @@ export function reduceRepl(
           readings: Object.freeze({
             ...state.viewports.readings,
             [key]: scrolled(window, action.delta),
+          }),
+        }),
+        refusal: undefined,
+      });
+    }
+    case "scroll-bindings": {
+      // The same rule over the Bindings pane's measured window, held for the
+      // scope and view it is showing.
+      const window = admission.windows.get(BINDINGS_WINDOW);
+      if (window === undefined) {
+        return settled({ ...state, refusal: undefined });
+      }
+      return settled({
+        ...state,
+        viewports: Object.freeze({
+          ...state.viewports,
+          readings: Object.freeze({
+            ...state.viewports.readings,
+            [bindingsReadingKeyOf(state)]: scrolled(window, action.delta),
           }),
         }),
         refusal: undefined,
@@ -4779,10 +4817,19 @@ export function focusSettled(
     claim.startsWith("entry:") || claim.startsWith("scope:")
       ? admission?.windows.get(presentedCatalog(view) ? DRAWER_WINDOW : ENTRIES_WINDOW)?.from
       : undefined;
-  const viewports =
+  const entries =
     revealed === undefined || revealed === state.viewports.entries
       ? state.viewports
       : Object.freeze({ ...state.viewports, entries: revealed });
+  const moved =
+    slotOf(claim) === "bindings" ? admission?.windows.get(BINDINGS_WINDOW)?.from : undefined;
+  const viewports =
+    moved === undefined
+      ? entries
+      : Object.freeze({
+          ...entries,
+          readings: Object.freeze({ ...entries.readings, [bindingsReadingKeyOf(state)]: moved }),
+        });
   if (state.restore.kind === "reveal" && admission !== undefined) {
     if (claim.startsWith("queue:")) {
       return Object.freeze({
@@ -5780,53 +5827,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // two readings: a binding row described beside the chat would be a focus stop
   // and a pointer target inside a reading nobody asked for, in a column that is
   // showing something else.
-  const scope = inspectable && !narrow && !showSidekick ? selection.scope : undefined;
-  if (scope !== undefined) {
-    for (const binding of scope.bindings) {
-      items.push(
-        row(
-          `binding:${binding.name}`,
-          fitControl(
-            [{ text: `${binding.name} = ` }, { text: summarize(binding.value), elide: true }],
-            context.widths?.inspection,
-          ),
-          {
-            select: "binding",
-            name: binding.name,
-          },
-          // A binding row is a name and the value bound to it, so it reads as the
-          // value: the whole reason the column is there is to say what the run
-          // produced.
-          styleOf("field-value", { inspected }),
-          { here: view.focused },
-        ),
-      );
-    }
-    for (const elicitation of scope.elicitations) {
-      items.push(
-        row(
-          `elicit:${elicitation.marker}`,
-          fitControl(
-            [{ text: "answered " }, { text: elicitation.location, elide: true }],
-            context.widths?.inspection,
-          ),
-          {
-            select: "recorded-elicit",
-            marker: elicitation.marker,
-          },
-          // Where the answer was given, not the answer itself: the value is in the
-          // drawer this row opens.
-          styleOf("field-hint", { inspected }),
-          { here: view.focused, claim },
-        ),
-      );
-    }
+  const pane = bindingsPane(view, context.widths?.inspection);
+  if (pane !== undefined) {
+    items.push(...pane.fixed, ...shownBindings(pane.body, context));
   }
 
   if (
     !narrow &&
     !showSidekick &&
-    !items.some((one) => one.key.startsWith("binding:") || one.key.startsWith("elicit:"))
+    (pane === undefined || (pane.fixed.length === 0 && pane.body.length === 0))
   ) {
     items.push(
       ...anchored(
@@ -6046,6 +6055,220 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // they are collected here: a box built for one of them has to be able to ask
   // what that row meant.
   return { items, rows: [...items, ...drawer.rows] };
+}
+
+const BINDINGS_VIEWS: readonly ReplBindingsView[] = ["input", "output"];
+
+function bindingsViewName(view: ReplBindingsView): string {
+  return view === "input" ? "Input" : "Output";
+}
+
+/** What an entry's Output says in place of rows, when it has none to show. */
+function outputStatus(output: Exclude<ReplEntryOutput, { readonly state: "ok" }>): {
+  readonly text: string;
+  readonly role: ReplPresentationRole;
+} {
+  if (output.state === "running") {
+    return { text: "Running", role: "waiting" };
+  }
+  if (output.state === "failed") {
+    return {
+      text: output.message === undefined ? "Failed" : `Failed: ${output.message}`,
+      role: "failed-outcome",
+    };
+  }
+  if (output.state === "cancelled") {
+    return { text: "Stopped", role: "interrupted-outcome" };
+  }
+  return { text: "Output unavailable for this older entry", role: "metadata" };
+}
+
+/** The Bindings pane: the rows that stay above its window, and the rows the window moves over. */
+interface ReplBindingsPane {
+  readonly fixed: readonly Described[];
+  readonly body: readonly Described[];
+}
+
+/**
+ * Whether this frame draws the Bindings pane over a selected scope.
+ *
+ * Wide and medium only, and only while Bindings rather than the Sidekick is the
+ * pane's reading: a narrow frame has no inspection region to place a row in.
+ */
+function bindingsShown(view: ReplView): boolean {
+  return (
+    profileFor(view.size) !== "too-small" &&
+    profileFor(view.size) !== "narrow" &&
+    view.refusal === undefined &&
+    !showingSidekick(view) &&
+    view.selection.scope !== undefined
+  );
+}
+
+/**
+ * What the Bindings pane holds for the selected scope, before any window.
+ *
+ * Built by the frame's description and by its admission alike, so the window a
+ * frame measures counts exactly the rows it draws. The entry itself, rather than
+ * a component inside it, reads as what it was started with and what its result
+ * carried; a nested scope keeps the values it published, because that is all a
+ * component has. Recorded answers follow either.
+ */
+function bindingsPane(view: ReplView, width: number | undefined): ReplBindingsPane | undefined {
+  const scope = view.selection.scope;
+  if (!bindingsShown(view) || scope === undefined) {
+    return undefined;
+  }
+  const { model, state } = view;
+  const inspected = state.route.at !== undefined;
+  const boundary =
+    scope === view.selection.entry ? model.entries.find((one) => one.key === scope.key) : undefined;
+  const pane =
+    boundary === undefined
+      ? {
+          fixed: [],
+          body: scope.bindings.map((binding) =>
+            row(
+              `binding:${binding.name}`,
+              fitControl(
+                [{ text: `${binding.name} = ` }, { text: summarize(binding.value), elide: true }],
+                width,
+              ),
+              {
+                select: "binding",
+                name: binding.name,
+              },
+              // A binding row is a name and the value bound to it, so it reads as
+              // the value: the whole reason the column is there is to say what
+              // the run produced.
+              styleOf("field-value", { inspected }),
+              { here: view.focused },
+            ),
+          ),
+        }
+      : entryBindingRows(
+          boundary,
+          entryInputBindings(model, boundary),
+          state.bindingsView,
+          width,
+          view.focused,
+          inspected,
+        );
+  const claim = focusClaim(view);
+  const answers = scope.elicitations.map((elicitation) =>
+    row(
+      `elicit:${elicitation.marker}`,
+      fitControl([{ text: "answered " }, { text: elicitation.location, elide: true }], width),
+      {
+        select: "recorded-elicit",
+        marker: elicitation.marker,
+      },
+      // Where the answer was given, not the answer itself: the value is in the
+      // drawer this row opens.
+      styleOf("field-hint", { inspected }),
+      { here: view.focused, claim },
+    ),
+  );
+  return { fixed: pane.fixed, body: [...pane.body, ...answers] };
+}
+
+/**
+ * The rows of the Bindings pane its measured window shows.
+ *
+ * Nothing while the frame is being measured, because the window is what that
+ * pass is asking about. A row at the window's edge is told which neighbour lies
+ * beyond it, so an arrow key brings that row into view instead of stopping.
+ */
+function shownBindings(
+  body: readonly Described[],
+  context: ReplPresentationContext,
+): readonly Described[] {
+  const held = context.measuring ? undefined : context.admission.windows.get(BINDINGS_WINDOW);
+  if (held === undefined) {
+    return [];
+  }
+  const beyond = flatReveals(body, held.from, held.count);
+  return body.slice(held.from, held.from + held.count).map((one) => {
+    const reveal = beyond.get(one.key);
+    return reveal === undefined ? one : revealing(one, reveal);
+  });
+}
+
+/**
+ * The selected entry's Input or Output, as the Bindings pane draws it.
+ *
+ * Both choices and the heading stay above the values, so two entries holding the
+ * same name never read as one value and the way between the views does not
+ * scroll away. Output is drawn only from a successful result this prefix holds;
+ * any other state says what it is instead of showing rows.
+ */
+function entryBindingRows(
+  entry: ReplEntry,
+  input: readonly ReplBinding[],
+  chosen: ReplBindingsView,
+  width: number | undefined,
+  focused: string | undefined,
+  inspected: boolean,
+): ReplBindingsPane {
+  const fixed: Described[] = BINDINGS_VIEWS.map((one) =>
+    row(
+      `bindings-view:${one}`,
+      bindingsViewName(one),
+      { select: "bindings-view", view: one },
+      styleOf(one === chosen ? "pane-heading" : "metadata"),
+      { here: focused },
+    ),
+  );
+  fixed.push(
+    line(
+      "bindings-view:heading",
+      fitControl(
+        [
+          { text: entry.key, elide: true },
+          { text: ` ${bindingsViewName(chosen)}`, keep: true },
+        ],
+        width,
+      ),
+      styleOf("field-label", { inspected }),
+    ),
+  );
+  let bindings = input;
+  if (chosen === "output") {
+    const output = entryOutput(entry);
+    if (output.state !== "ok") {
+      const said = outputStatus(output);
+      return {
+        fixed,
+        body: [
+          line(
+            "bindings-view:state",
+            fitControl([{ text: said.text, elide: true }], width),
+            styleOf(said.role, { inspected }),
+          ),
+        ],
+      };
+    }
+    bindings = output.bindings;
+  }
+  const body: Described[] =
+    bindings.length === 0
+      ? [line("bindings-view:state", "(no bindings)", styleOf("metadata", { inspected }))]
+      : [];
+  for (const binding of bindings) {
+    body.push(
+      row(
+        `${chosen}:${binding.name}`,
+        fitControl(
+          [{ text: `${binding.name} = ` }, { text: summarize(binding.value), elide: true }],
+          width,
+        ),
+        { select: "entry-value", view: chosen, name: binding.name },
+        styleOf("field-value", { inspected }),
+        { here: focused },
+      ),
+    );
+  }
+  return { fixed, body };
 }
 
 function anchored(
@@ -7441,6 +7664,13 @@ function drawerContent(
     content.push(
       ...detailRows("drawer:value", open.binding.value, width, styleOf("field-value"), details),
     );
+  } else if (open.kind === "entry-value") {
+    // The title every binding drawer has had: which entry and view the value
+    // came from is the pane's heading behind it and the drawer's own identity.
+    title = drawerTitle("Binding", open.name, width);
+    content.push(
+      ...detailRows("drawer:value", open.binding.value, width, styleOf("field-value"), details),
+    );
   } else if (open.kind === "recorded-elicit") {
     title = drawerTitle("Recorded answer", open.elicitation.location, width);
     // The whole of what was asked and the whole of what was answered. A drawer is
@@ -8699,7 +8929,7 @@ function detailLines(key: string, value: Json, style: ReplRowStyle) {
 
 export function retainedDetailsOf(view: ReplView) {
   const open = view.selection.drawers.at(-1);
-  if (open?.kind === "binding") {
+  if (open?.kind === "binding" || open?.kind === "entry-value") {
     return detailLines("drawer:value", open.binding.value, styleOf("field-value"));
   }
   if (open?.kind === "recorded-elicit") {
@@ -8961,6 +9191,8 @@ export const DRAWER_WINDOW = "drawer";
 export const QUEUE_WINDOW = "queue";
 /** The entry reading's window: output and source together, in the transcript. */
 export const READING_WINDOW = "reading";
+/** The Bindings pane's window, over the selected scope's values and answers. */
+const BINDINGS_WINDOW = "bindings";
 /** The action row's own structural id, which admission measures against. */
 export const ACTION_ROW = "box:footer:actions";
 /** The right pane's tab row, which is also that column's header. */
@@ -9320,6 +9552,19 @@ export function entryReadingKeyOf(state: ReplState): string {
   return `reading:${state.route.execution}:${state.route.at ?? "head"}:${entry}`;
 }
 
+/**
+ * The key the Bindings pane's own offset is stored under.
+ *
+ * The execution, the prefix, the selected scope and — for an entry — which of
+ * its two views is shown, so each reading keeps its own position and a reading
+ * not yet visited starts at its first value.
+ */
+function bindingsReadingKeyOf(state: ReplState): string {
+  const scopes = state.route.scopes;
+  const view = scopes.length === 1 ? `:${state.bindingsView}` : "";
+  return `bindings:${state.route.execution}:${state.route.at ?? "head"}:${scopes.join("/")}${view}`;
+}
+
 export function readingKeyOf(state: ReplState, open: ReplDrawerRef): string | undefined {
   // The prefix being read is part of the identity: the same binding at two
   // history positions is two readings of two different files.
@@ -9330,6 +9575,9 @@ export function readingKeyOf(state: ReplState, open: ReplDrawerRef): string | un
   }
   if (open.kind === "binding") {
     return `binding:${execution}:${at}:${state.route.scopes.join("/")}:${open.name}`;
+  }
+  if (open.kind === "entry-value") {
+    return `${open.view}:${execution}:${at}:${state.route.scopes[0] ?? ""}:${open.name}`;
   }
   if (open.kind === "recorded-elicit") {
     return `elicit:${execution}:${at}:${open.marker}`;
@@ -9422,6 +9670,10 @@ type ReplSlot =
   | "reading"
   | "transcript"
   | "inspection"
+  /** The Bindings pane's view controls and heading, which stay above its window. */
+  | "bindings-fixed"
+  /** The Bindings pane's values and answers, which its window moves over. */
+  | "bindings"
   | "drawer-actions"
   | "drawer"
   | "drawer-title"
@@ -9515,7 +9767,24 @@ function slotOf(key: string): ReplSlot | undefined {
   ) {
     return "inspection-below";
   }
-  if (key.startsWith("binding:") || key.startsWith("elicit:") || key.startsWith("sidekick:")) {
+  if (
+    key === "bindings-view:input" ||
+    key === "bindings-view:output" ||
+    key === "bindings-view:heading"
+  ) {
+    return "bindings-fixed";
+  }
+  if (
+    key !== "binding:anchor" &&
+    (key.startsWith("binding:") ||
+      key.startsWith("bindings-view:") ||
+      key.startsWith("input:") ||
+      key.startsWith("output:") ||
+      key.startsWith("elicit:"))
+  ) {
+    return "bindings";
+  }
+  if (key.startsWith("binding:") || key.startsWith("sidekick:")) {
     return "inspection";
   }
   if (key === "guidance" || key.startsWith("guidance:row:")) {
@@ -9877,6 +10146,20 @@ export function presentationFor(
       }),
     );
   }
+  // The Bindings window's owner takes the wheel and nothing else. Its rows stay
+  // where the pane has always described them, at the top level, so a reader of
+  // the description finds them where it always did; the layout places them in
+  // the window by slot, not by parent.
+  if (bindingsShown(view)) {
+    composed.push(
+      describeNode<ReplAction>({
+        key: `viewport:${BINDINGS_WINDOW}`,
+        component: VIEWPORT,
+        input: { window: BINDINGS_WINDOW },
+        children: [],
+      }),
+    );
+  }
   // Placed only where the tree will hold them: a measuring pass mounts nothing.
   const placedDescriptions = context.measuring
     ? composed
@@ -10055,8 +10338,8 @@ export function presentationFor(
    *
    * Registered only while the Sidekick is the pane being drawn, because the
    * slot it windows is the pane's body and the other reading in it — Bindings —
-   * has no offset of its own and must not acquire one. A form covering the
-   * pane describes no body either, so there is nothing to window then.
+   * has a window and an offset of its own. A form covering the pane describes
+   * no body either, so there is nothing to window then.
    */
   /**
    * How wide the Sidekick's own body is, which is its pane less the gutter.
@@ -10074,6 +10357,31 @@ export function presentationFor(
       presentedAsking(view) === undefined &&
       view.refusal === undefined &&
       view.live.sidekick !== undefined;
+    if (!windowed && bindingsShown(view)) {
+      // Bindings: its view controls and heading above, and its values in the
+      // window, so a value the pane has no row for is scrolled to rather than
+      // placed below the column.
+      viewports.push(
+        Object.freeze({
+          id,
+          region,
+          window: BINDINGS_WINDOW,
+          owner: `viewport:${BINDINGS_WINDOW}`,
+        }),
+      );
+      return [
+        ...of("bindings-fixed").map((candidate) => rowBox(candidate, region, bodyWidth())),
+        box({
+          id,
+          region,
+          props: viewportProps(),
+          children: [
+            ...of("bindings").map((candidate) => rowBox(candidate, region, bodyWidth())),
+            ...rows,
+          ],
+        }),
+      ];
+    }
     if (!windowed) {
       return [box({ id, region, props: viewportProps(), children: rows })];
     }
@@ -10603,6 +10911,10 @@ export function admissionFor(input: {
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
+    if (slot.window === BINDINGS_WINDOW) {
+      windows.set(slot.window, bindingsWindow(view, widths, capacity));
+      continue;
+    }
     // The count first, because a window that follows its newest rows needs to
     // know where they end before it can say where it is.
     const total = totalOf(
@@ -10672,6 +10984,29 @@ export function admissionFor(input: {
   }
   const row = admitActions({ row: boundsOf(actions.id), controls: actions.controls, boundsOf });
   return Object.freeze({ windows, actions: row.admitted, shortened: row.shortened });
+}
+
+/**
+ * The Bindings pane's window over the rows this frame describes.
+ *
+ * The stored offset, moved only as far as it takes to show a row this frame
+ * requests focus for, and holding the focused row so the wheel cannot scroll it
+ * away.
+ */
+function bindingsWindow(view: ReplView, widths: ReplMeasuredWidths, capacity: number): ReplWindow {
+  const body = bindingsPane(view, widths.inspection)?.body ?? [];
+  const held = offsetOf(view, BINDINGS_WINDOW);
+  const target = view.state.restore?.kind === "reveal" ? view.state.restore.key : focusClaim(view);
+  const at = target === undefined ? -1 : body.findIndex((one) => one.key === target);
+  const focused = body.findIndex((one) => one.key === view.focused);
+  return {
+    ...admitRows({
+      offset: at >= 0 && capacity > 0 ? Math.min(Math.max(held, at - capacity + 1), at) : held,
+      total: body.length,
+      capacity,
+    }),
+    ...(focused < 0 ? {} : { focus: { from: focused, to: focused + 1 } }),
+  };
 }
 
 /**
@@ -10830,6 +11165,9 @@ function offsetOf(view: ReplView, window: string): number {
   }
   if (window === READING_WINDOW) {
     return view.state.viewports.readings[entryReadingKeyOf(view.state)] ?? 0;
+  }
+  if (window === BINDINGS_WINDOW) {
+    return view.state.viewports.readings[bindingsReadingKeyOf(view.state)] ?? 0;
   }
   if (window === ENTRIES_WINDOW) {
     return view.state.viewports.entries;

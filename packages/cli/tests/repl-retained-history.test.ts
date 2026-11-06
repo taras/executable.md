@@ -671,7 +671,7 @@ describe("#992 — a long value is summarized without being written out", () => 
     // Sidekick, so this asks for the pane the way a person does.
     const route: ReplRoute = { ...opening.route, scopes: ["entry-1"], right: "bindings" };
     const view = viewFor(
-      Object.freeze({ ...opening, route }),
+      Object.freeze({ ...opening, route, bindingsView: "output" }),
       projected.value,
       NOTHING_LIVE,
       SCREEN,
@@ -684,7 +684,7 @@ describe("#992 — a long value is summarized without being written out", () => 
     for (const description of describeApplication(view.value, context)) {
       const read = readDescription(description);
       const label = fields(read.input)?.["label"];
-      if (read.key.startsWith("binding:") && typeof label === "string") {
+      if (read.key.startsWith("output:") && typeof label === "string") {
         rows.push(label.trim());
       }
     }

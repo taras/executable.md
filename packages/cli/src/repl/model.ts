@@ -561,6 +561,52 @@ export function entryInitialBindings(
 }
 
 /**
+ * The ordinary root bindings one entry was started with.
+ *
+ * The frozen `bindings` of the entry admitted before it, by reference: the same
+ * values {@link entryInitialBindings} hands its execution, fixed before the
+ * entry published anything, so neither it nor a later entry can change them.
+ */
+export function entryInputBindings(model: ReplModel, entry: ReplEntry): readonly ReplBinding[] {
+  return model.entries[entry.order - 2]?.bindings ?? NO_BINDINGS;
+}
+
+const NO_BINDINGS: readonly ReplBinding[] = Object.freeze([]);
+
+/** What one entry's result says its root held, as far as this prefix shows it. */
+export type ReplEntryOutput =
+  | { readonly state: "running" }
+  | { readonly state: "failed"; readonly message: string | undefined }
+  | { readonly state: "cancelled"; readonly message: string | undefined }
+  | { readonly state: "unavailable" }
+  | { readonly state: "ok"; readonly bindings: readonly ReplBinding[] };
+
+/**
+ * The complete root bindings one entry's successful result carried.
+ *
+ * Only a successful result has an Output. A failure may still carry root data,
+ * and that data still reaches the next entry, but it is not a result and is not
+ * shown as one. A successful result older than the `bindings` member says
+ * nothing about its root, which is different from saying the root was empty.
+ */
+export function entryOutput(entry: ReplEntry): ReplEntryOutput {
+  const terminal = entry.terminal;
+  if (terminal === undefined) {
+    return { state: "running" };
+  }
+  if (terminal.status === "err") {
+    return { state: "failed", message: terminal.message };
+  }
+  if (terminal.status === "cancelled") {
+    return { state: "cancelled", message: terminal.message };
+  }
+  if (terminal.bindings === undefined) {
+    return { state: "unavailable" };
+  }
+  return { state: "ok", bindings: terminal.bindings };
+}
+
+/**
  * Every event's marker, in append order, spelled as the whole history spells it.
  *
  * Ordinals are counted inside the segment that holds the event, because that is

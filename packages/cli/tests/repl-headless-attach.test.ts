@@ -419,6 +419,29 @@ function* press(terminal: Terminal, label: string, appliedFrames: AppliedFrames)
   pressAt(terminal, yield* locate(terminal, label, appliedFrames));
 }
 
+/** Press the one label inside the Bindings pane, at or right of its tab. */
+function* pressInBindings(
+  terminal: Terminal,
+  label: string,
+  appliedFrames: AppliedFrames,
+): Operation<void> {
+  const applied = appliedFrames.get(terminal);
+  if (applied !== undefined) {
+    yield* applied();
+  }
+  const rows = terminal.screen?.rows() ?? [];
+  const header = rows.findIndex((text) => text.includes("BINDINGS"));
+  const floor = header < 0 ? -1 : rows[header].indexOf("BINDINGS");
+  const matches = rows.flatMap((text, row) => {
+    const column = row > header && floor >= 0 ? text.indexOf(label, floor) : -1;
+    return column < 0 ? [] : [{ row, column }];
+  });
+  if (matches.length !== 1 || matches[0] === undefined) {
+    throw new Error(`Expected one ${label} in the Bindings pane: ${rows.join("\n")}`);
+  }
+  pressAt(terminal, matches[0]);
+}
+
 describe("headless renderer lifetime", () => {
   it("releases every detached renderer scope while the exact child remains live", function* () {
     const live = new Set<Scope>();
@@ -774,6 +797,9 @@ describe("headless live UI", () => {
     const switching = terminal.terminal.drawn;
     yield* press(terminal.terminal, "BINDINGS", appliedFrames);
     yield* terminal.terminal.after(switching);
+    // The entry's own result is its Output; the pane opens on its Input.
+    yield* visible(terminal.terminal, "entry-1 Input", appliedFrames);
+    yield* pressInBindings(terminal.terminal, "Output", appliedFrames);
     yield* visible(terminal.terminal, "sharedToken =", appliedFrames);
     yield* visible(terminal.terminal, "same-live-child-binding", appliedFrames);
     yield* press(terminal.terminal, "SIDEKICK", appliedFrames);

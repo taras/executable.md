@@ -225,6 +225,19 @@ function activation(input: ReplViewData): ReplAction | undefined {
       ? { kind: "open-drawer", drawer: { kind: "binding", name } }
       : undefined;
   }
+  if (select === "entry-value") {
+    const view = named["view"];
+    const name = named["name"];
+    return (view === "input" || view === "output") && typeof name === "string"
+      ? { kind: "open-drawer", drawer: { kind: "entry-value", view, name } }
+      : undefined;
+  }
+  if (select === "bindings-view") {
+    const view = named["view"];
+    return view === "input" || view === "output"
+      ? { kind: "select-bindings-view", view }
+      : undefined;
+  }
   if (select === "recorded-elicit") {
     const marker = named["marker"];
     return typeof marker === "string"

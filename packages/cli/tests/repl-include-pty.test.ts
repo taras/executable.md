@@ -356,6 +356,20 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
       yield* pty.type(`\x1b[<0;${target.column + 1};${target.row + 1}m`);
       yield* sleep(150);
     }
+    /** Activate a label inside the Bindings pane, at or right of its tab. */
+    function* activateInBindings(pty: Pty, label: string): Operation<void> {
+      const screen = yield* pty.shows();
+      const header = screen.findIndex((line) => line.includes("BINDINGS"));
+      const floor = header < 0 ? -1 : screen[header].indexOf("BINDINGS");
+      const row = screen.findIndex((line, at) => at > header && line.indexOf(label, floor) >= 0);
+      if (floor < 0 || row < 0) {
+        throw new Error(`nothing in the Bindings pane names ${label}`);
+      }
+      const column = screen[row].indexOf(label, floor);
+      yield* pty.type(`\x1b[<0;${column + 1};${row + 1}M`);
+      yield* pty.type(`\x1b[<0;${column + 1};${row + 1}m`);
+      yield* sleep(150);
+    }
     /** Open the Entries catalog, which is a drawer over the reading. */
     function* openCatalog(pty: Pty): Operation<void> {
       yield* activateLabel(pty, "Entries");
@@ -379,8 +393,12 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
       yield* openCatalog(pty);
       yield* activateLabel(pty, "1. [ok]");
       yield* showing(pty, "first/second", ACT_MS);
+      // The entry's own result is its Output; the pane opens on its Input.
+      yield* showing(pty, "entry-1 Input", ACT_MS);
+      yield* activateInBindings(pty, "Output");
+      yield* showing(pty, "entry-1 Output", ACT_MS);
       for (const name of ["first", "second"]) {
-        yield* activateLabel(pty, name);
+        yield* activateInBindings(pty, name);
         yield* showing(pty, "[close]", ACT_MS);
         yield* showing(pty, JSON.stringify(name), ACT_MS);
         yield* pty.type("\x1b");

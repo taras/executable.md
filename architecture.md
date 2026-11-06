@@ -7143,6 +7143,16 @@ a caller that cannot say refuses. The overlay's
 output is announced on its own stream, because it is the one thing a frame shows
 that leaves no record for anything else to observe.
 
+The Bindings pane reads an entry's two boundaries from those same records. An
+entry's Input is the frozen inherited bindings of the entry admitted before it,
+held by reference — the record `entryInitialBindings` hands its execution — and
+its Output is the root data its own successful result carried, read from the
+retained close. Neither is a snapshot of its own: nothing new is journaled,
+captured at run time or read from a live environment, so a history prefix shows
+only the boundaries that prefix holds. Output is not inheritance. A failed or
+stopped entry shows its outcome instead of the data its result may still have
+handed on, and inheritance keeps every retained value regardless.
+
 `specs/repl-spec.md` describes the product this assembles. The runtime-named
 `{deno,node,bun,compiled}-repl.ts` modules state their own platform's data
 directory, identifier and filesystem operations; nothing under `repl/` names a
