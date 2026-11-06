@@ -1703,7 +1703,14 @@ describe("Transcript ownership and immutable older chat readings", () => {
   it("SS1: a turn that renders nothing is announced at begin and keeps its row", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "<Output>First answer.</Output>\n<REPL.Bindings />\n" });
-    page.repl.fake.script({ held: true, reply: "<REPL.Bindings />\n" });
+    // The first reply's read is what owes this exchange its one automatic
+    // follow-up. That follow-up renders ordinary body text and selects no
+    // Output, which is the case's own subject: a turn that says nothing to a
+    // person. It reads nothing either, so it owes no further feedback — a
+    // second designated read here would be answered by another automatic turn,
+    // and a completed row beside a second pending one is not the duplicate
+    // identity this case is about.
+    page.repl.fake.script({ held: true, reply: "Silent internal working.\n" });
     yield* sendMessage(page, "read it");
     yield* page.until("the first reply", (one) => sidekickShows(one, "First answer."));
     yield* page.repl.fake.holdingTurns(1);
@@ -1727,6 +1734,67 @@ describe("Transcript ownership and immutable older chat readings", () => {
       transcriptLines(page.screen()).filter((row) => row.includes("Automatic feed")),
     ).toHaveLength(1);
     expect(transcriptLines(page.screen()).filter((row) => row.includes("read it"))).toHaveLength(1);
+    // Two turns and two requests, and the second one answered: the row this
+    // case is about is a turn that ran and said nothing, not one that failed
+    // or never happened. Its body text stays out of the chat, which is what
+    // "renders nothing" means here, and it produced no further feedback — so
+    // there is no third turn this exchange still owes.
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    const read = yield* settledReading(page.repl);
+    const responses = read.chat.flatMap((one) => (one.kind === "response" ? [one] : []));
+    expect(responses).toHaveLength(2);
+    expect(responses.map((one) => one.outcome.status)).toEqual(["ok", "ok"]);
+    expect(responses.map((one) => one.hasOutput)).toEqual([true, false]);
+    expect(responses[1]?.output).toBe("");
+    expect(
+      read.chat.some((one) => one.kind === "feedback" && one.response === responses[1]?.response),
+    ).toBe(false);
+    expect(sidekickShows(page.screen(), "Silent internal working.")).toBe(false);
+    const projected = projectSidekick(read.chat);
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    // One row per identity, from the facts this exchange actually saved: a
+    // saved turn addressed by a live slot of its own is the same row rather
+    // than a second one beside it, and a live turn with a response of its own
+    // is a row of its own. Asked of the projection directly, because what the
+    // screen shows is downstream of this answer.
+    const saved = projected.value.turns.at(-1);
+    if (saved?.reply === undefined) {
+      throw new Error("this exchange saved no replied turn to address");
+    }
+    const slot = {
+      conversation: saved.conversation,
+      agent: saved.agent,
+      // The saved turn's own kind where it recorded one. It reaches the live
+      // row's label and not its key, which is what these two calls are about.
+      asked: saved.asked ?? "automatic",
+      title: saved.title,
+      phase: "evaluating",
+      sessionKey: saved.sessionKey,
+      turn: saved.turn,
+      output: "",
+      incomplete: false,
+    } as const;
+    const addressed = sidekickTurnRows(projected.value, {
+      ...slot,
+      response: saved.reply.response,
+    });
+    expect(addressed).toHaveLength(projected.value.turns.length);
+    expect(new Set(addressed.map((one) => one.key)).size).toBe(addressed.length);
+    expect(addressed.map((one) => one.key)).toContain(
+      `sidekick:${saved.conversation}:${saved.reply.response}`,
+    );
+    const separate = sidekickTurnRows(projected.value, {
+      ...slot,
+      response: `${saved.reply.response}:later`,
+      turn: null,
+    });
+    expect(separate).toHaveLength(projected.value.turns.length + 1);
+    expect(new Set(separate.map((one) => one.key)).size).toBe(separate.length);
+    expect(separate.at(-1)?.key).toBe(
+      `sidekick:${saved.conversation}:${saved.reply.response}:later`,
+    );
   });
 
   it("SS7: a fresh Transcript says nothing is retained, and an unreadable chat history is refused with its reason", function* () {

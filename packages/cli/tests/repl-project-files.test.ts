@@ -540,6 +540,23 @@ function* reportPagingFailure(
   detail: { readonly phase: string; readonly instruction: string; readonly before: number },
   failure: unknown,
 ): Operation<void> {
+  // Copied before anything here suspends. The command keeps running while the
+  // history read below yields and waits out an append in flight, so another
+  // request or another presentation can arrive first — and read afterwards, a
+  // wait that timed out on one request would be reported beside two later ones
+  // and a later screen, losing the one boundary this exists to distinguish.
+  const atFailure = Object.freeze({
+    reading: page.describe(),
+    askedSince: Object.freeze(
+      page.repl.fake.prompts.slice(detail.before).map((one) =>
+        Object.freeze({
+          length: one.length,
+          opening: one.slice(0, 200),
+          holdsInstruction: one.includes(detail.instruction),
+        }),
+      ),
+    ),
+  });
   let retained: unknown;
   try {
     const read = yield* settledReading(page.repl);
@@ -585,13 +602,11 @@ function* reportPagingFailure(
       pagingFailure: detail.phase,
       instruction: detail.instruction,
       error: failure instanceof Error ? failure.message : String(failure),
-      reading: page.describe(),
-      askedSince: page.repl.fake.prompts.slice(detail.before).map((one) => ({
-        length: one.length,
-        opening: one.slice(0, 200),
-        holdsInstruction: one.includes(detail.instruction),
-      })),
-      retained,
+      atFailure,
+      // Named for when it was obtained: afterwards, not with the snapshot
+      // above, so it describes the history at the end of the read rather than
+      // the state the failed wait saw.
+      retainedAfterwards: retained,
     }),
   );
 }
@@ -608,7 +623,40 @@ describe("1113: receipt-directed exact output paging", () => {
     page.repl.fake.script({ reply: "<Output>1113 submission ready</Output>" });
     yield* sendMessage(page, "submit the long exact output");
     yield* page.until("the receipt", (reading) => saidBySidekick(reading, "1113 submission ready"));
+    // That marker is streamed: a generated Output can be shown before its turn
+    // has settled and its evaluated response has been published, so the text
+    // alone does not say the setup exchange finished. Neither does a request
+    // count, and neither does Send — this pane contributes Send whenever its
+    // composer is available, adding Stop while it is busy rather than taking
+    // Send away. So the pane is required at rest, and then one retained
+    // reading has to hold the setup's own evaluated response, successful, with
+    // the control feedback that carried the receipt recorded against that same
+    // conversation and turn and carrying exactly the input the provider was
+    // asked. A contradiction or a history that cannot be read is a failure
+    // here; it is never a reason to send anything again.
+    yield* page.until("the setup exchange at rest", (one) => sidekickIdle(one));
+    const settled = yield* settledReading(page.repl);
+    const prepared = settled.chat.find(
+      (one) =>
+        one.kind === "response" && one.hasOutput && one.output.includes("1113 submission ready"),
+    );
+    if (prepared === undefined || prepared.kind !== "response") {
+      throw new Error(
+        "the setup retained no evaluated response holding its own marker. " +
+          `kinds=${JSON.stringify(settled.chat.map((one) => one.kind))}`,
+      );
+    }
+    expect(prepared.outcome.status).toBe("ok");
     const receipt = page.repl.fake.prompts[1] ?? "";
+    expect(
+      settled.chat.some(
+        (one) =>
+          one.kind === "feedback" &&
+          one.conversation === prepared.conversation &&
+          one.turn === prepared.turn &&
+          one.text === receipt,
+      ),
+    ).toBe(true);
     const initial = receipt.match(/<REPL.Entry.Output entry=\{(\d+)\} \/>/);
     expect(initial).not.toBeNull();
     const navigation = z.object({
