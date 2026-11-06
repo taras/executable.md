@@ -1,0 +1,13 @@
+{
+  "capturedFrom": {
+    "commit": "c62de20e0a9551e04e3c0c2dd1ecd920d5b6437d",
+    "describedAs": "before <Parse> failed its document (#922), when its own printing declaration printed invalid content and the entry continued"
+  },
+  "command": "deno run --allow-all --frozen --cached-only --node-modules-dir=manual --config deno.json capture-parse-history.ts <outDir>",
+  "captureScriptSha256": "198b7727051da87f793295c25ecedd076cf9bad3d08eab4af4b4a3909dc80c00",
+  "execution": "parse922history",
+  "journalSha256": "37bfaad74a41655cf39f9f458c1d5ef33b34e5f4a088b842610f390aecbf9e44",
+  "events": 5,
+  "recordedOutcome": "ok",
+  "recordedCommands": ["bash -c echo BEFORE_EFFECT\n", "bash -c echo LATER_EFFECT\n"]
+}

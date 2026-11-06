@@ -8771,7 +8771,7 @@ runs — so a document never does work whose result an unusable schema would the
 refuse to judge.
 
 Only references contained within the supplied schema resolve. An external file
-or HTTP(S) `$ref` fails at compilation with a printed error naming the limit;
+or HTTP(S) `$ref` fails at compilation with an error naming the limit;
 resolving them is issue #192.
 
 #### What each one binds
@@ -8779,6 +8779,15 @@ resolving them is issue #192.
 `<Parse>` binds the validated JSON value directly — any JSON value, including an
 object, an array, a scalar, and `null`. Malformed JSON and content the schema
 rejects both fail, naming the component and carrying the normalized issues.
+
+That failure is an ordinary function-component failure (§6.8.1). `<Parse>`
+declares no recovery of its own, so where the document's author wrote none the
+execution fails: nothing is bound, no later sibling starts, and what the
+document rendered before it is kept with the failed outcome. A `<PrintErrors>`
+region around it prints the failure instead and continues, still with nothing
+bound. A completed root replays its recorded outcome, so a history that
+recorded a printed `<Parse>` failure as a successful outcome reopens as that
+success.
 
 `<SafeParse>` binds one of two shapes:
 
@@ -12742,10 +12751,13 @@ journeys without adding acceptance permutations.
 | PC7 | Ordering | With an unusable schema, an `exec` child of `<Parse>` never runs |
 | PC8 | Ordering under SafeParse | The same holds for `<SafeParse>` — an unusable schema is not a safe failure |
 | PC9 | Child failures propagate | A failing child of `<SafeParse>` fails the document; no result is bound |
-| PC10 | Failure printed errors | A `<Parse>` schema failure names the component and carries its normalized issues |
-| PC11 | Malformed JSON | Content that is not JSON fails `<Parse>` as a parse failure |
+| PC10 | Schema failure | A `<Parse>` schema failure names the component and carries its normalized issues; at a plain text root the execution fails with an `err` outcome that keeps the earlier output, binds nothing, and starts no later block |
+| PC11 | Malformed JSON | Content that is not JSON fails `<Parse>` as a parse failure, with the same document outcome as PC10 |
+| PC11a | Joined failure | The failed execution keeps its live earlier output and settles only after cleanup the execution owns has finished |
+| PC11b | SafeParse branching | Both `<SafeParse>` failure kinds bind an inspectable result that an `<If>` branches on, and the document succeeds |
+| PC11c | Authored recovery | Inside `<PrintErrors>` the `<Parse>` failure is printed, nothing is bound, and the later block runs |
 | PC12 | No rendered output | Neither component contributes to the rendering |
-| PC13 | External reference | An external `$ref` fails with a printed error naming the #192 limit |
+| PC13 | External reference | An external `$ref` fails with an error naming the #192 limit |
 | PC14 | Capture and replay | A replay reproduces the bound value and appends no journal entry |
 | PC15 | Colocated documents | `xmd test packages/core/src/components` runs `Parse.test.md` and `SafeParse.test.md` beside `TempDir.test.md`, with no search path and no JavaScript: both schema forms, every JSON result kind, a local `$ref`, both `<SafeParse>` variants, the preserved input, and the three non-transformation guarantees |
 
