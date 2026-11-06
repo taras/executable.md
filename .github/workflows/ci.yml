@@ -613,11 +613,11 @@ jobs:
         working-directory: site
 
   test-node:
-    name: test-node (${{ matrix.shard }}/17)
+    name: test-node (${{ matrix.shard }}/18)
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -655,7 +655,7 @@ jobs:
         run: pnpm exec tsc --project tsconfig.node.json --noEmit
 
       - name: Test
-        run: pnpm test:node ${{ matrix.shard }}/17
+        run: pnpm test:node ${{ matrix.shard }}/18
 
   test-bun:
     name: test-bun (${{ matrix.shard }}/10)
