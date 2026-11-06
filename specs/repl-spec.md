@@ -2552,6 +2552,10 @@ Ordinary `xmd run` retains its existing foreground forwarding.
 
 When feedback has no exact completed canonical input, `[review recovery]` shows
 the original request, saved failure, established entries and unfinished controls.
+The action sits with the conversation's fixed controls, directly above the tray
+and outside the scrolling chat, so neither a long conversation nor its scroll
+position hides it at any supported size. It belongs to the Message keyboard
+region, where Alt+Up from Message reaches it.
 Inspection, closing and resizing send nothing and record no decision. The person
 enters a distinct New instruction, then chooses `[continue with new instruction]`.
 The shared admission owner holds dispatch, joins the captured Sidekick exchange

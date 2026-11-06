@@ -34,7 +34,7 @@ import type { MountedHost } from "./support/mounted-repl.ts";
 import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { awaitedFact } from "./support/mounted-repl.ts";
 import { settledReading } from "./support/mounted-history.ts";
-import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
+import type { ReplPage, ScreenCell, ScreenReading } from "./support/repl-page.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import type { Operation } from "effection";
 import { expect } from "@executablemd/test-support/expect";
@@ -3481,4 +3481,136 @@ describe("Follow: the running command owns the mounted control", () => {
     expect(cold.screen().shows("[x] Follow")).toBe(true);
     expect(host.fake.prompts).toHaveLength(before);
   });
+});
+
+describe("1137 — recovery stays among the fixed conversation controls", () => {
+  const LONG = Array.from(
+    { length: 60 },
+    (_, at) => `LONG${String(at + 1).padStart(2, "0")} retained reply row`,
+  );
+  const RECOVERY = "[review recovery]";
+  const UNFINISHED = "(unfinished): Internal error";
+  /** The send refusal's opening words, which a narrow frame wraps after. */
+  const REFUSED = "This conversation holds feedback whose acceptance";
+
+  /** The Sidekick's own reading, which a narrow frame routes as the whole screen. */
+  function chatShows(reading: ScreenReading, text: string): boolean {
+    return reading.shows(SIDEKICK) ? sidekickShows(reading, text) : reading.shows(text);
+  }
+
+  /** Retain a long conversation whose automatic feedback was interrupted, and leave. */
+  function* retainedRecovery(
+    dataRoot: string,
+  ): Operation<{ readonly root: string; readonly execution: string; readonly location: string }> {
+    return yield* scoped(function* () {
+      const host = yield* useMountedHost({ dataRoot });
+      const page = yield* useReplPage({ host, size: WIDE });
+      host.fake.script({ reply: `<Output>${LONG.join("\n")}</Output>` });
+      yield* sendMessage(page, "A long retained reply.");
+      yield* page.until(
+        "the long reply at rest",
+        (one) => sidekickIdle(one) && sidekickShows(one, "LONG60"),
+      );
+      expect(page.screen().shows(RECOVERY)).toBe(false);
+      host.fake.script({ reply: "<REPL.Bindings />" });
+      host.fake.script({ reply: "", failure: "Internal error" });
+      yield* sendMessage(page, "Inspect established work.");
+      yield* page.until(
+        "the interrupted automatic feedback",
+        (one) => one.shows("Automatic feedback · failed") && sidekickShows(one, UNFINISHED),
+      );
+      expect(host.fake.prompts).toHaveLength(3);
+      const execution = yield* mountedExecution(page.repl);
+      yield* page.press("[exit]");
+      yield* awaited("the first command returning", () => page.repl.outcome() !== undefined);
+      const outcome = page.repl.outcome();
+      if (outcome === undefined || !outcome.ok) {
+        throw new Error("the first command did not return its location");
+      }
+      return { root: host.root, execution, location: outcome.value.location };
+    });
+  }
+
+  /**
+   * The recovery action, drawn once on the row directly above the tray.
+   *
+   * Above the tray rather than at a fixed screen row: a narrow frame's guidance
+   * grows by several rows when focus enters the reading, and every fixed
+   * control of the outlet moves up with it.
+   */
+  function fixedRecovery(reading: ScreenReading): ScreenCell {
+    expect(reading.occurrences(RECOVERY)).toBe(1);
+    const at = reading.locate(RECOVERY);
+    expect(reading.locate("TODO").row).toBe(at.row + 1);
+    expect(reading.locate(COMPOSER).row).toBeGreaterThan(at.row);
+    return at;
+  }
+
+  for (const [size, other] of [
+    [WIDE, NARROW],
+    [NARROW, WIDE],
+  ] as const) {
+    it(`keeps [review recovery] visible and keyboard-reachable in a long retained chat at ${size.columns}x${size.rows}`, function* () {
+      const dataRoot = yield* useTemporary("xmd-1137-recovery-");
+      const retained = yield* retainedRecovery(dataRoot);
+      const before = yield* pairBytes(retained.root, retained.execution);
+      const cold = yield* useMountedHost({ dataRoot });
+      const page = yield* useReplPage({ host: cold, location: retained.location, size });
+      yield* page.until("the retained chat tail", (one) => chatShows(one, UNFINISHED));
+      yield* page.until("the retained recovery action", (one) => one.shows(RECOVERY));
+      expect(chatShows(page.screen(), "LONG01")).toBe(false);
+      expect(fixedRecovery(page.screen()).row).toBeGreaterThan(
+        page.screen().locate(UNFINISHED).row,
+      );
+
+      for (let tick = 0; tick < 40 && !chatShows(page.screen(), "LONG01"); tick++) {
+        const at = page.screen().index;
+        const control = fixedRecovery(page.screen());
+        yield* page.wheel("up", { column: control.column + 2, row: control.row - 3 });
+        yield* page.until("the chat scrolling back", (one) => one.index > at);
+      }
+      expect(chatShows(page.screen(), "LONG01")).toBe(true);
+      expect(chatShows(page.screen(), UNFINISHED)).toBe(false);
+      fixedRecovery(page.screen());
+
+      for (let step = 0; step < 10 && !page.screen().shows(`> › ${COMPOSER}`); step++) {
+        yield* completedKey(page, "Tab");
+      }
+      yield* typed(page, "A held message.");
+      for (let step = 0; step < 8 && !page.screen().shows(`> ${RECOVERY}`); step++) {
+        yield* completedKey(page, "Alt+ArrowUp");
+      }
+      expect(page.screen().shows(`> ${RECOVERY}`)).toBe(true);
+      fixedRecovery(page.screen());
+
+      yield* completedKey(page, "Enter");
+      yield* page.until("the existing recovery account", (one) =>
+        one.shows("Earlier feedback acceptance remains unknown."),
+      );
+      yield* page.key("Escape");
+      yield* page.until("the closed account", (one) => !one.shows("Review recovery"));
+      yield* page.until("focus returning to its opener", (one) => one.shows(`> ${RECOVERY}`));
+      expect(chatShows(page.screen(), "A long retained reply.")).toBe(true);
+      expect(page.screen().shows("A held message.")).toBe(true);
+
+      for (const next of [other, size]) {
+        yield* page.resize(next);
+        yield* page.until(`the recovery action at ${next.columns}x${next.rows}`, (one) =>
+          one.shows(RECOVERY),
+        );
+        fixedRecovery(page.screen());
+        expect(page.screen().shows(`> ${RECOVERY}`)).toBe(true);
+      }
+
+      for (let step = 0; step < 10 && !page.screen().shows(`> › ${COMPOSER}`); step++) {
+        yield* completedKey(page, "Tab");
+      }
+      yield* completedKey(page, "Enter");
+      yield* page.until("the intentional send refusal", (one) => one.shows(REFUSED));
+      expect(page.screen().shows("A held message.")).toBe(true);
+      fixedRecovery(page.screen());
+      expect(cold.fake.prompts).toHaveLength(0);
+      expect(yield* pairBytes(retained.root, retained.execution)).toEqual(before);
+    });
+  }
 });
