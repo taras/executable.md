@@ -662,6 +662,11 @@ config = {"mode":"draft"}
 kept = "same"
 ```
 
+When there are more values than the pane has rows, the choices and the heading
+stay where they are and the values scroll beneath them, like any other list
+here: the arrow keys bring the next value into view, the wheel moves them, and a
+value that is not shown is not a pointer target.
+
 An entry that changes a value it received changes its own copy. Selecting the
 earlier entry again shows its Input and Output exactly as they were, and the
 later entry's Input still shows what it was given.

@@ -24,6 +24,7 @@ import { expect } from "@executablemd/test-support/expect";
 import {
   collect,
   Execution,
+  INLINE_SOURCE_PATH,
   inlineSource,
   isJsonObject,
   useTempFileCompiler,
@@ -64,7 +65,7 @@ import {
   entryOutput,
   projectRepl,
 } from "../src/repl/model.ts";
-import type { ReplBinding, ReplEntry, ReplModel } from "../src/repl/model.ts";
+import type { ReplBinding, ReplEntry, ReplModel, ReplScope } from "../src/repl/model.ts";
 import {
   lifecycleRefusal,
   markLifecycleRefusal,
@@ -96,9 +97,9 @@ import type { ReplBounds, ReplRegion } from "../src/repl/layout.ts";
 import type { ReplPresentationContext } from "../src/repl/application.ts";
 import { commitReplFrame } from "../src/repl/program.ts";
 import type { ReplCommitted } from "../src/repl/program.ts";
-import { useReplRenderer } from "../src/repl/renderer.ts";
+import { resolveWheel, useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
-import { committedContext } from "./fixtures/repl/presentation.ts";
+import { committedContext, useGrid } from "./fixtures/repl/presentation.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import {
@@ -5815,5 +5816,256 @@ describe("REPL entries: an entry's Input and Output bindings (#982)", () => {
     expect(refusal(withSettledBindings(events, { props: {} }))).toContain(
       "cannot be read by this version",
     );
+  });
+});
+
+/** One settled entry whose result carried this root data, as a run records one. */
+function settledWith(bindings: { [name: string]: Json }): DurableEvent[] {
+  return [
+    {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "import_component", name: ROOT_IMPORT },
+      result: {
+        status: "ok",
+        value: { kind: "repository", path: INLINE_SOURCE_PATH, content: "Entry.\n" },
+      },
+    },
+    {
+      type: "close",
+      coroutineId: "root",
+      result: { status: "ok", value: { status: "ok", output: "", value: "", bindings } },
+    },
+  ];
+}
+
+/** Twenty-five numeric values: exactly what fills the pane with no rows above them. */
+const MANY: { [name: string]: Json } = Object.fromEntries(
+  Array.from({ length: 25 }, (_, at) => [`v${at}`, at]),
+);
+
+/** The same model with one completed component under the first entry, publishing `MANY`. */
+function withNested(model: ReplModel): ReplModel {
+  const first = entryAt(model, 1);
+  const nested: ReplScope = {
+    ...first.scope,
+    key: "Shape-1",
+    kind: "component",
+    name: "Shape",
+    elicitations: [],
+    generated: [],
+    scopes: [],
+  };
+  const scope = { ...first.scope, scopes: [nested] };
+  return { ...model, entries: [{ ...first, scope }, ...model.entries.slice(1)] };
+}
+
+/** The screen one committed frame painted, read from a terminal fed its bytes. */
+function* paintedRows(frame: Frame, size: ReplTerminalSize): Operation<readonly string[]> {
+  return yield* scoped(function* () {
+    const grid = yield* useGrid(size);
+    grid.apply(frame.committed.rendered.output);
+    return grid.rows();
+  });
+}
+
+/**
+ * Every placed row of one pane prefix is inside the column and painted there.
+ *
+ * Inside meaning its whole box: a row whose target lands below the column is a
+ * pointer target over the footer with nothing of its own painted under it.
+ */
+function* placedInside(frame: Frame, size: ReplTerminalSize, prefix: string) {
+  const column = frame.region("inspection");
+  if (column === undefined) {
+    throw new Error("this frame has no inspection column");
+  }
+  const rows = yield* paintedRows(frame, size);
+  const placed = frame.keys.filter((key) => key.startsWith(prefix));
+  const outside: string[] = [];
+  for (const key of placed) {
+    const bounds = frame.bounds(key);
+    const name = key.slice(prefix.length);
+    const painted =
+      bounds === undefined
+        ? ""
+        : (rows[bounds.y] ?? "").slice(bounds.x, bounds.x + Math.max(bounds.width, 1));
+    if (
+      bounds === undefined ||
+      bounds.y < column.y ||
+      bounds.y + bounds.height > column.y + column.height ||
+      !painted.includes(`${name} = `)
+    ) {
+      outside.push(`${key}@${bounds?.y}:${JSON.stringify(painted)}`);
+    }
+  }
+  return { placed, outside };
+}
+
+/** Walk the pane with the keyboard until `last` holds focus, the way the program does. */
+function* reachedByKeyboard(
+  tree: ReplTree<ReplAction>,
+  start: ReplState,
+  model: ReplModel,
+  size: ReplTerminalSize,
+  prefix: string,
+  last: string,
+): Operation<{ state: ReplState; frame: Frame }> {
+  let state = start;
+  let frame = yield* drawn(tree, reading(state, model, NOTHING_LIVE, size), size);
+  for (
+    let press = 0;
+    press < 20 &&
+    !(keyedBy(tree)?.startsWith(prefix) === true || keyedBy(tree)?.startsWith("bindings-view:"));
+    press += 1
+  ) {
+    yield* tree.dispatch({ kind: "key", key: "Tab" });
+  }
+  for (let press = 0; press < 60 && keyedBy(tree) !== last; press += 1) {
+    const pressed = yield* tree.dispatch({ kind: "key", key: "ArrowDown" });
+    if (pressed.ok && pressed.value.outcome === "action") {
+      state = reduceRepl(
+        state,
+        pressed.value.action,
+        model,
+        NOTHING_LIVE,
+        frame.committed.admission,
+      ).state;
+    }
+    const view = reading(state, model, NOTHING_LIVE, size, keyedBy(tree));
+    frame = yield* drawn(tree, view, size);
+    state = focusSettled(view, keyedBy(tree), frame.committed.admission);
+  }
+  return { state, frame };
+}
+
+describe("REPL entries: a long Input or Output stays reachable (#982)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
+  const model = projected([...settledWith(MANY), ...settledWith({})]);
+
+  it("EI6: every value is painted inside the pane, reached by keyboard and pointer, and opened", function* () {
+    const draft = "still typing";
+    for (const [size, entry, view] of [
+      [WIDE, "entry-1", "output"],
+      [WIDE, "entry-2", "input"],
+      [MEDIUM, "entry-1", "output"],
+    ] as const) {
+      const where = `${size.columns}x${size.rows} ${entry} ${view}`;
+      const prefix = `${view}:`;
+      const tree = yield* useReplTree<ReplAction>();
+      const start = inBindings(drafting(selecting(initialState(EXECUTION), entry), draft), view);
+      const first = yield* drawn(tree, reading(start, model, NOTHING_LIVE, size), size);
+      // What the frame places is inside the pane and painted there, and nothing
+      // it cannot show is a target anywhere else.
+      const top = yield* placedInside(first, size, prefix);
+      expect([where, top.outside]).toEqual([where, []]);
+      expect([where, top.placed.length > 0]).toEqual([where, true]);
+
+      // The last value, reached from the keyboard and then painted.
+      const last = `${prefix}v24`;
+      const reached = yield* reachedByKeyboard(tree, start, model, size, prefix, last);
+      expect([where, keyedBy(tree)]).toEqual([where, last]);
+      const bottom = yield* placedInside(reached.frame, size, prefix);
+      expect([where, bottom.outside]).toEqual([where, []]);
+      expect([where, bottom.placed.includes(last)]).toEqual([where, true]);
+      // A pointer reaches it, and it opens the value it names.
+      const opening = yield* pointed(tree, reached.frame, last);
+      expect([where, opening]).toEqual([
+        where,
+        { kind: "open-drawer", drawer: { kind: "entry-value", view, name: "v24" } },
+      ]);
+      const opened = reduceRepl(reached.state, opening, model, NOTHING_LIVE).state;
+      expect([where, opened.refusal]).toEqual([where, undefined]);
+      expect([
+        where,
+        retainedDetailsOf(reading(opened, model, NOTHING_LIVE, size)).map((one) => one.text),
+      ]).toEqual([where, ["24"]]);
+      // Nothing about the view, the selection or the draft moved.
+      expect([where, reached.state.bindingsView, reached.state.route.scopes]).toEqual([
+        where,
+        view,
+        [entry],
+      ]);
+      expect([where, reached.state.draft, reached.state.route.draft]).toEqual([
+        where,
+        draft,
+        draft,
+      ]);
+    }
+  });
+
+  it("EI6: the wheel moves the pane's own window, and narrow mounts none of it", function* () {
+    const start = inBindings(selecting(initialState(EXECUTION), "entry-1"), "output");
+    // A wheel over a painted value reaches the pane's window owner.
+    const wheelTree = yield* useReplTree<ReplAction>();
+    const shown = yield* drawn(wheelTree, reading(start, model, NOTHING_LIVE, WIDE), WIDE);
+    const over = shown.bounds("output:v5");
+    if (over === undefined) {
+      throw new Error("the first window draws v5");
+    }
+    const event = resolveWheel(
+      shown.committed.rendered,
+      { column: over.x + 1, row: over.y },
+      "down",
+    );
+    if (event === undefined) {
+      throw new Error("a painted value has no wheel owner");
+    }
+    const dispatched = yield* wheelTree.dispatch(event);
+    expect(
+      dispatched.ok && dispatched.value.outcome === "action" ? dispatched.value.action : undefined,
+    ).toEqual({
+      kind: "viewport-wheel",
+      window: "bindings",
+      direction: "down",
+    });
+    const wheeled = yield* acted(
+      start,
+      { kind: "viewport-wheel", window: "bindings", direction: "down" },
+      model,
+      NOTHING_LIVE,
+      WIDE,
+    );
+    const tree = yield* useReplTree<ReplAction>();
+    const before = (yield* drawn(tree, reading(start, model, NOTHING_LIVE, WIDE), WIDE)).keys;
+    const after = yield* drawn(tree, reading(wheeled, model, NOTHING_LIVE, WIDE), WIDE);
+    expect(after.keys.includes("output:v24")).toBe(true);
+    expect(before.includes("output:v24")).toBe(false);
+    expect((yield* placedInside(after, WIDE, "output:")).outside).toEqual([]);
+    // The view controls stay where they are while the values move.
+    expect(after.targetable("bindings-view:output")).toBe(true);
+
+    const narrow = yield* keysOf(reading(start, model, NOTHING_LIVE, NARROW));
+    expect(
+      narrow.filter(
+        (key) => /^(bindings-view|input|output|binding):/.test(key) && key !== "binding:anchor",
+      ),
+    ).toEqual([]);
+  });
+
+  it("EI6: a completed component keeps its own rows and binding drawer", function* () {
+    const nested = withNested(model);
+    const tree = yield* useReplTree<ReplAction>();
+    const start = Object.freeze({
+      ...selecting(initialState(EXECUTION), "entry-1", "Shape-1"),
+      route: Object.freeze({
+        ...selecting(initialState(EXECUTION), "entry-1", "Shape-1").route,
+        right: "bindings" as const,
+      }),
+    });
+    const first = yield* drawn(tree, reading(start, nested, NOTHING_LIVE, WIDE), WIDE);
+    expect(first.keys.filter((key) => key.startsWith("bindings-view:"))).toEqual([]);
+    expect((yield* placedInside(first, WIDE, "binding:")).outside).toEqual([]);
+    const reached = yield* reachedByKeyboard(tree, start, nested, WIDE, "binding:", "binding:v24");
+    expect(keyedBy(tree)).toBe("binding:v24");
+    expect((yield* placedInside(reached.frame, WIDE, "binding:")).outside).toEqual([]);
+    const opening = yield* pointed(tree, reached.frame, "binding:v24");
+    expect(opening).toEqual({ kind: "open-drawer", drawer: { kind: "binding", name: "v24" } });
+    const opened = reduceRepl(reached.state, opening, nested, NOTHING_LIVE).state;
+    expect(
+      retainedDetailsOf(reading(opened, nested, NOTHING_LIVE, WIDE)).map((one) => one.text),
+    ).toEqual(["24"]);
   });
 });

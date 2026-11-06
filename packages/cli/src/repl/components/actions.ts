@@ -275,6 +275,8 @@ export type ReplAction =
    * reader was not pointing at.
    */
   | { readonly kind: "scroll-reading"; readonly delta: number }
+  /** Move the Bindings pane's window over the selected scope's values. */
+  | { readonly kind: "scroll-bindings"; readonly delta: number }
   /**
    * Open the chat that holds this saved Sidekick turn, and bring it into view.
    *
