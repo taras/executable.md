@@ -26,7 +26,7 @@ import { appendFile, mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { ensure, race, sleep, spawn, until, withResolvers } from "effection";
+import { ensure, Ok, race, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -34,6 +34,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { ReplHost } from "../src/repl/host.ts";
 import { readRecords } from "../src/repl/journal.ts";
 import {
+  bindRetainedPrefix,
   ENTRIES_FILE,
   PAIRED_DIRECTORY,
   parseSidekickRecord,
@@ -1140,4 +1141,66 @@ describe("987 — closed recovery reference linkage", () => {
       expect(projectRecovery(records, requests.value).ok).toBe(false);
     }
   });
+});
+
+describe("1151 — a bound recovery-fact append beside a preference save", () => {
+  function preference(model: string): SidekickRecord {
+    return { kind: "preferences", conversation: "conversation-one", model, effort: null };
+  }
+  for (const order of ["before", "during"] as const) {
+    it(`A5: a preference saved ${order} Stop-prefix preparation stays outside its bound prefix`, function* () {
+      yield* useRoot();
+      yield* useGatedHost(`bound-${order}`, fresh());
+      const path = join(root, `bound-${order}.jsonl`);
+      const writer = new SidekickWriter(path);
+      yield* writer.append({ kind: "owner", version: 1, execution: "exec" });
+      yield* writer.append({ kind: "ready" });
+      if (order === "before") {
+        yield* writer.append(preference("before"));
+      }
+      const preparing = withResolvers<void>();
+      const release = withResolvers<void>();
+      yield* ensure(() => release.resolve());
+      const stop = yield* spawn(() =>
+        writer.appendPrepared(function* (records) {
+          preparing.resolve();
+          yield* release.operation;
+          return Ok({
+            kind: "human-stop",
+            conversation: "conversation-one",
+            retained: yield* bindRetainedPrefix(path),
+            requests: [records.length - 1],
+            controls: [],
+          });
+        }),
+      );
+      yield* preparing.operation;
+      const saving =
+        order === "during" ? yield* spawn(() => writer.append(preference("during"))) : undefined;
+      const queued = yield* text(path);
+      release.resolve();
+      const appended = yield* stop;
+      if (saving !== undefined) {
+        yield* saving;
+      }
+      expect(appended.ok && appended.value?.kind).toBe("human-stop");
+      expect(queued.includes('"model":"during"')).toBe(false);
+      const read = yield* readSidekickRecords(path);
+      expect(read).toEqual(yield* writer.readAll());
+      const at = read.findIndex((one) => one.kind === "human-stop");
+      const bound = read[at];
+      if (bound?.kind !== "human-stop") {
+        throw new Error("Expected the bound record.");
+      }
+      expect(bound.retained.records).toBe(at);
+      expect(bound.retained.bytes).toBe(
+        new TextEncoder().encode(read.slice(0, at).map(serializeSidekickRecord).join("")).length,
+      );
+      expect(read.map((one) => (one.kind === "preferences" ? one.model : one.kind))).toEqual(
+        order === "before"
+          ? ["owner", "ready", "before", "human-stop"]
+          : ["owner", "ready", "human-stop", "during"],
+      );
+    });
+  }
 });

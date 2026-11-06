@@ -1537,12 +1537,44 @@ function* drive(
       },
     });
 
+    /**
+     * Settle the entry writer and retain every finding of the complete
+     * unresolved Submit set, before a recovery decision is bound.
+     */
+    function* reconcileSubmits(): Operation<Result<readonly ColdReservation[]>> {
+      if (execution.chat.form !== "paired") {
+        throw new Error("Recovery requires its acknowledged paired history.");
+      }
+      yield* execution.stream.settled();
+      const entries = session.reading(undefined);
+      if (!entries.ok) {
+        throw entries.error;
+      }
+      const findings = yield* coldReservations(
+        yield* execution.chat.writer.readAll(),
+        entries.value.model.entries,
+        execution.chat.location.entries,
+      );
+      if (!findings.ok) {
+        return findings;
+      }
+      for (const finding of findings.value) {
+        yield* retainResolution(execution.chat.writer, finding);
+      }
+      unresolved = [];
+      return findings;
+    }
+
     const dispatch = yield* useSidekickDispatch({
       owner: sidekick,
       admission: admissions,
       execution: execution.id,
       workspace,
       changed: () => wakes.send({ kind: "session" }),
+      *reconcile() {
+        const findings = yield* reconcileSubmits();
+        return findings.ok ? Ok(undefined) : findings;
+      },
     });
     const direct: DirectRepl = {
       submit(source, onAdmitted) {
@@ -2015,27 +2047,11 @@ function* drive(
               if (exchange !== undefined) {
                 yield* exchange.cancel();
               }
-              if (execution.chat.form !== "paired") {
-                throw new Error("Recovery requires its acknowledged paired history.");
-              }
-              yield* execution.stream.settled();
-              const entries = session.reading(undefined);
-              if (!entries.ok) {
-                throw entries.error;
-              }
-              const findings = yield* coldReservations(
-                yield* execution.chat.writer.readAll(),
-                entries.value.model.entries,
-                execution.chat.location.entries,
-              );
+              const findings = yield* reconcileSubmits();
               if (!findings.ok) {
                 reportRecovery(findings.error.message);
                 return;
               }
-              for (const finding of findings.value) {
-                yield* retainResolution(execution.chat.writer, finding);
-              }
-              unresolved = [];
               const reconciled = yield* sidekick.reviewRecovery();
               if (!reconciled.ok) {
                 reportRecovery(reconciled.error.message);
@@ -3695,7 +3711,7 @@ function* perform(
       }
       yield* spawn(function* (): Operation<void> {
         if (exchange !== undefined) {
-          yield* exchange.cancel();
+          yield* exchange.cancel("human");
         }
         wakes.send({ kind: "session" });
       });
