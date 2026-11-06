@@ -102,26 +102,38 @@ function environment(): Record<string, string> {
   return { ...inherited, ...STATED };
 }
 
-/** The program Git would run to verify this format, as configuration names it. */
+/**
+ * The program Git would run to verify this format, as configuration names it.
+ *
+ * `gpg.program` and `gpg.openpgp.program` are aliases, and Git keeps whichever
+ * one it reads last, across every scope and include. So both are read together,
+ * in Git's own reading order, and the last one wins, rather than preferring one
+ * name.
+ */
 function* configuredProgram(
   root: string,
   env: Record<string, string>,
   format: CommitSignatureFormat,
 ): Operation<string> {
   const { keys, fallback } = PROGRAMS[format];
-  for (const key of keys) {
-    const answered = yield* runProcess({
-      command: "git",
-      args: [...OPTIONS, "config", "--get", key],
-      cwd: root,
-      env,
-    });
-    const value = answered.stdout.replace(/\n$/, "");
-    if (answered.code === 0 && value !== "") {
-      return value;
+  const pattern = `^(${keys.map((key) => key.replaceAll(".", "\\.")).join("|")})$`;
+  const answered = yield* runProcess({
+    command: "git",
+    args: [...OPTIONS, "config", "--null", "--get-regexp", pattern],
+    cwd: root,
+    env,
+  });
+  if (answered.code !== 0) {
+    return fallback;
+  }
+  let program = fallback;
+  for (const entry of answered.stdout.split("\0")) {
+    const newline = entry.indexOf("\n");
+    if (newline >= 0 && newline < entry.length - 1) {
+      program = entry.slice(newline + 1);
     }
   }
-  return fallback;
+  return program;
 }
 
 function* executableFile(path: string): Operation<boolean> {

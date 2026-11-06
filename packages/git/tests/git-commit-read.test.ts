@@ -428,6 +428,87 @@ describe("GCR2 — configured verification (A2)", () => {
   );
 });
 
+/**
+ * A commit carrying an OpenPGP signature header, written directly into the
+ * object store.
+ *
+ * Its signature is not valid, and does not need to be: what these cases ask is
+ * which configured program Git runs for it, and whether that program exists.
+ */
+function* craftOpenPgpCommit(fixture: CommitFixture): Operation<string> {
+  const tree = fixture.run(["rev-parse", `${fixture.r}^{tree}`]);
+  const object = join(fixture.home, "openpgp-commit");
+  yield* until(
+    writeFile(
+      object,
+      [
+        `tree ${tree}`,
+        "author Fixture <fixture@example.invalid> 1700000000 +0000",
+        "committer Fixture <fixture@example.invalid> 1700000000 +0000",
+        "gpgsig -----BEGIN PGP SIGNATURE-----",
+        " ",
+        " iQEzBAABCAAdFiEE",
+        " -----END PGP SIGNATURE-----",
+        "",
+        "openpgp signed",
+        "",
+      ].join("\n"),
+    ),
+  );
+  return fixture.run(["hash-object", "-t", "commit", "-w", object]);
+}
+
+describe("GCR8 — the OpenPGP program Git actually runs decides availability (A2)", () => {
+  it("follows Git's last-read value across gpg.program, gpg.openpgp.program and includes", function* () {
+    const fixture = yield* useCommitFixture();
+    const signed = yield* craftOpenPgpCommit(fixture);
+    const present = join(fixture.home, "present-verifier");
+    yield* until(writeFile(present, "#!/bin/sh\nexit 1\n", { mode: 0o755 }));
+    const config = join(fixture.root, ".git", "config");
+    const original = yield* until(readFile(config, "utf8"));
+    const presentSection = `[gpg "openpgp"]\n\tprogram = ${present}\n`;
+    const missingSection = "[gpg]\n\tprogram = ./missing-verifier\n";
+    const included = join(fixture.root, ".git", "alias.config");
+    yield* until(writeFile(included, missingSection));
+    const including = "[include]\n\tpath = alias.config\n";
+
+    const layouts: { name: string; text: string; unavailable: boolean }[] = [
+      {
+        name: "openpgp then gpg.program",
+        text: presentSection + missingSection,
+        unavailable: true,
+      },
+      {
+        name: "gpg.program then openpgp",
+        text: missingSection + presentSection,
+        unavailable: false,
+      },
+      { name: "openpgp then include", text: presentSection + including, unavailable: true },
+      { name: "include then openpgp", text: including + presentSection, unavailable: false },
+    ];
+    for (const layout of layouts) {
+      yield* until(writeFile(config, original + layout.text));
+      const direct = directVerification(fixture.root, signed);
+      // Git's own diagnostic names the program it tried to start, so the native
+      // command is the oracle for which alias won.
+      expect(`${layout.name}: ${direct.stderr.includes("missing-verifier")}`).toBe(
+        `${layout.name}: ${layout.unavailable}`,
+      );
+      const page = yield* readPage(
+        fixture,
+        `ref="${signed}" verify={true} yq=".git_verify_commit_result"`,
+      );
+      expect({ layout: layout.name, ...objectOf(page.value) }).toEqual({
+        layout: layout.name,
+        signed: true,
+        verifier_unavailable: layout.unavailable,
+        ...receiptOf(direct),
+      });
+      expect(direct.exitCode).not.toBe(0);
+    }
+  });
+});
+
 function receiptOf(direct: ReturnType<typeof directVerification>): Record<string, Json> {
   return { exitCode: direct.exitCode, stdout: direct.stdout, stderr: direct.stderr };
 }
