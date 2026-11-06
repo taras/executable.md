@@ -12,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      DIAGNOSTIC_DIRECTORY: ${{ runner.temp }}/todo-flake-diagnostic
       DIAGNOSTIC_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       DIAGNOSTIC_ATTEMPT: ${{ github.run_attempt }}
       DIAGNOSTIC_COMMIT: ${{ github.sha }}
@@ -41,7 +40,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess, textwrap
-          directory = pathlib.Path(os.environ["DIAGNOSTIC_DIRECTORY"])
+          directory = pathlib.Path(os.environ["RUNNER_TEMP"]) / "todo-flake-diagnostic"
           directory.mkdir(parents=True, exist_ok=False)
           def read(argv):
               return subprocess.check_output(argv, text=True).strip()
@@ -77,7 +76,7 @@ jobs:
           assert versions["bun"] == "1.4.0", "Bun differs from approved pin"
           wrapper = r'''
           import datetime, json, os, pathlib, subprocess, sys
-          directory = pathlib.Path(os.environ["DIAGNOSTIC_DIRECTORY"])
+          directory = pathlib.Path(os.environ["RUNNER_TEMP"]) / "todo-flake-diagnostic"
           permission = "permission pages from a control-only window to its explanation and final choice"
           history = "History alone scrolls above a held question and restores its caret"
           file = "packages/cli/tests/repl-wheel-migration.test.ts"
@@ -119,17 +118,17 @@ jobs:
           PY
 
       - name: Prepare the checkout once
-        run: python3 "$DIAGNOSTIC_DIRECTORY/run.py" setup
+        run: python3 "$RUNNER_TEMP/todo-flake-diagnostic/run.py" setup
 
       - name: Run each approved selector once and stop at first failure
-        run: python3 "$DIAGNOSTIC_DIRECTORY/run.py" selectors
+        run: python3 "$RUNNER_TEMP/todo-flake-diagnostic/run.py" selectors
 
       - name: Retain checkout state after execution
         if: always()
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess
-          directory = pathlib.Path(os.environ["DIAGNOSTIC_DIRECTORY"])
+          directory = pathlib.Path(os.environ["RUNNER_TEMP"]) / "todo-flake-diagnostic"
           directory.mkdir(parents=True, exist_ok=True)
           status = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], text=True)
           patch = subprocess.check_output(["git", "diff", "--binary", "HEAD"])
