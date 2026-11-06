@@ -1,7 +1,9 @@
 import { sleep } from "effection";
+import type { Operation } from "effection";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { API } from "@executablemd/runtime";
 import { useReplPage } from "./support/repl-page.ts";
 import { intoComposer, sidekickIdle } from "./support/screen-journeys.ts";
 import { settledReading } from "./support/mounted-history.ts";
@@ -43,6 +45,24 @@ function inertTextBelowFocus(one: ScreenReading): boolean {
   const next = one.rows.slice(marker + 1).findIndex((row) => /[☐☑]/.test(row));
   const mine = next < 0 ? own : one.rows.slice(marker, marker + 1 + next).join("\n");
   return mine.includes("<Sidekick.Tod") && mine.includes("{inert}") && mine.includes("\\u{1b}");
+}
+
+/**
+ * Replace todo.md the way an outside change actually replaces it.
+ *
+ * Through a sibling and a rename, which is what this product's own Files
+ * boundary does and what an editor does. A writer that truncated the file in
+ * place and refilled it would leave it momentarily empty or cut off mid-line,
+ * and a reader polling it would then see a checklist this file was never
+ * supposed to hold — a task that is gone is gone, so the row goes with it and
+ * focus goes to its survivor. That is a different stimulus from the one the
+ * checklist promises to survive, and asserting against it would be asserting
+ * that a task outlives its own removal.
+ */
+function* replaceOutside(file: string, text: string): Operation<void> {
+  const staging = `${file}.outside`;
+  yield* writeTextFile(staging, text);
+  yield* API.Fs.operations.rename(staging, file);
 }
 
 function capture(page: ReplPage, name: string, timings: readonly number[] = []) {
@@ -140,7 +160,7 @@ for (const size of [
           (_, index) =>
             `- [${index === 0 ? "x" : " "}] task-${index} ${"wrapped label ".repeat(6)}`,
         ).join("\n") + "\n- [ ] <Sidekick.Todo> {inert} \u001b[31m\n";
-      yield* writeTextFile(file, source);
+      yield* replaceOutside(file, source);
       yield* page.until("external task rows", (one) => one.shows("task-0"));
       expect(page.repl.fake.prompts).toHaveLength(0);
       capture(page, "overflow-wrapped");
@@ -162,7 +182,7 @@ for (const size of [
       yield* page.until("editor cancelled", (one) => !one.shows("Task:"));
       yield* page.press("▾ TODO");
       yield* page.until("collapsed", (one) => !one.shows("task-0"));
-      yield* writeTextFile(file, source.replace("task-0", "background-0"));
+      yield* replaceOutside(file, source.replace("task-0", "background-0"));
       const before = page.screen().index;
       yield* page.until("collapsed refresh", (one) => one.index > before);
       expect(page.screen().shows("background-0")).toBe(false);
@@ -236,23 +256,15 @@ for (const size of [
           continue;
         }
         const started = performance.now();
-        // The emulator changes its own screen size as soon as the resize is
-        // requested, so a write tagged with the new geometry is not this
-        // application having run its resize pass. The size read is: production
-        // reads the terminal's size from inside its own listener, and that
-        // counter only advances when it did. Waiting for the read, the geometry
-        // and this task's focus together ties the accepted reading to a pass
-        // that actually saw the new size.
-        // A write tagged with the new geometry is not this application having
-        // settled: the emulator changes its own screen size the moment a resize
-        // is requested, and production may draw once before it reads the
-        // committed tree's focus and draws the settled marker. So the geometry
-        // is driven through the harness's own drag, where production itself
-        // drains the size reads — `churning()` reaching zero is that drain
-        // finishing, on production's side of the boundary, which also outruns
-        // the frame the way a real drag does. Only then is the settled frame at
-        // this geometry asked for, with this task still focused and its own
-        // continuation rows still carrying its text.
+        // A drag rather than one step, because a window being dragged outruns
+        // the frame being prepared for it: every read answers with the size
+        // that was there and leaves a different one behind. Draining those
+        // reads says the drag is over and nothing more — the frame that saw
+        // the last of them may still be on its way. So what is accepted is a
+        // drawn frame at this geometry with the marker on this task: the
+        // marker is drawn from the focus the committed tree answered with, so
+        // a frame carrying both is this application's own answer about where
+        // focus is at this size, rather than the emulator's about its screen.
         page.repl.terminal.churnSize(12, resized);
         page.repl.terminal.resized(resized);
         yield* awaitedFact(`the drag to ${resized.columns}x${resized.rows} draining`, function* () {
@@ -286,7 +298,7 @@ for (const size of [
         .replace("task-0", "background-0")
         .replace("task-1 ", "background-1 ")
         .replace("- [ ] <Sidekick.Todo>", "- [x] <Sidekick.Todo>");
-      yield* writeTextFile(file, changed);
+      yield* replaceOutside(file, changed);
       // One observation for all three: the service adopted the changed source,
       // the pass that carried it has drawn, and the same task is still the
       // focused one — now completed, with its inert text still escaped.
@@ -525,7 +537,7 @@ describe("TODO background task focus", () => {
     const read = yield* settledReading(page.repl);
     const file = pairedLocation(page.repl.root, read.execution).directory + "/todo.md";
     const source = "- [ ] first\n- [ ] target\n- [ ] last\n";
-    yield* writeTextFile(file, source);
+    yield* replaceOutside(file, source);
     yield* page.until("initial tasks", (one) => one.shows("☐ target"));
     yield* page.key("Backtab");
     yield* page.until("TODO header focus", (one) => one.shows("> ▾ TODO"));
@@ -548,7 +560,7 @@ describe("TODO background task focus", () => {
       );
     }
     console.log(JSON.stringify({ correctionCapture: "before-prepend", rows: page.screen().rows }));
-    yield* writeTextFile(file, "- [ ] inserted-before\n" + source);
+    yield* replaceOutside(file, "- [ ] inserted-before\n" + source);
     yield* page.until("real outside refresh", (one) => one.shows("☐ inserted-before"));
     expect(page.screen().rows.some((row) => row.includes("☐ target") && row.includes("> x"))).toBe(
       true,

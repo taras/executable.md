@@ -17,6 +17,8 @@ import {
 import type { ReplLive, ReplState } from "../src/repl/application.ts";
 import type { ReplKey } from "../src/repl/description.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
+import { todoTaskKeys } from "../src/repl/application.ts";
+import { parseTodo } from "../src/repl/todo/document.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { usePresenter, windowOf } from "./fixtures/repl/presentation.ts";
 import type { Presenter } from "./fixtures/repl/presentation.ts";
@@ -668,5 +670,96 @@ describe("REPL focus regions: Sidekick reading keys", () => {
     expect(page.screen().shows("draft kept")).toBe(true);
     expect(page.screen().shows("No entry yet")).toBe(true);
     expect(page.repl.fake.prompts).toHaveLength(1);
+  });
+});
+
+/**
+ * The thirteen-task checklist this witness drives, with its inert last item.
+ *
+ * The same source the TODO journey uses: twelve wrapping labels, the first
+ * completed, and a last task whose text is markup and an escape sequence, which
+ * is the task whose focus this transition is about.
+ */
+const THIRTEEN_TASKS =
+  Array.from(
+    { length: 12 },
+    (_, index) => `- [${index === 0 ? "x" : " "}] task-${index} ${"wrapped label ".repeat(6)}`,
+  ).join("\n") + "\n- [ ] <Sidekick.Todo> {inert} \u001b[31m\n";
+
+describe("REPL focus regions: one committed TODO replacement", () => {
+  it("PV6: the focused task keeps its node, its parent and its local actions across the commit", function* () {
+    const model = yield* journalModel([]);
+    const presenter = yield* usePresenter(NARROW);
+    let source = THIRTEEN_TASKS;
+    let state: ReplState = reduceRepl(
+      initialState("owned"),
+      { kind: "select-pane", pane: "sidekick" },
+      model,
+      IDLE,
+    ).state;
+    function* commit() {
+      const resolved = viewFor(state, model, IDLE, NARROW, focused(presenter));
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      const view = withWorkspace(resolved.value, {
+        ...workspaceOf(model),
+        todo: { document: parseTodo(source) },
+      });
+      const shown = yield* presenter.commit(view);
+      state = focusSettled(view, focused(presenter), shown.committed.admission);
+      return shown;
+    }
+    function* send(name: ReplKey) {
+      const next = yield* dispatched(presenter, name);
+      if (next.outcome === "action") {
+        state = reduceRepl(
+          state,
+          next.action,
+          model,
+          IDLE,
+          presenter.last()?.committed.admission,
+        ).state;
+      }
+      return yield* commit();
+    }
+    const target = todoTaskKeys(parseTodo(source)).at(-1);
+    if (target === undefined) {
+      throw new Error("the thirteen-task checklist named no last task");
+    }
+    yield* commit();
+    for (let step = 0; step < 12 && focused(presenter) !== "todo:header"; step += 1) {
+      yield* send("Tab");
+    }
+    expect(focused(presenter)).toBe("todo:header");
+    for (let step = 0; step < 20 && focused(presenter) !== target; step += 1) {
+      yield* send("ArrowDown");
+    }
+    // Focus arrived by ordinary traversal, and the request that each step made
+    // is spent: nothing standing is waiting to put focus anywhere, so what the
+    // commit below does with it is the commit's own answer.
+    expect(focused(presenter)).toBe(target);
+    expect(state.restore).toBeUndefined();
+    const before = yield* commit();
+    const parent = before.nodeOf("viewport:todo");
+    const node = before.nodeOf(target);
+    expect(node).toBeDefined();
+    expect(parent).toBeDefined();
+    expect(before.keys).toContain(`${target}:action:remove`);
+    expect(presenter.tree.focused()).toBe(node);
+    // One replacement, at this geometry, through the same tree: the same task
+    // completed and two offscreen labels renamed. Its text and occurrence are
+    // untouched, so this is the same task under the same key.
+    source = source
+      .replace("task-0", "background-0")
+      .replace("task-1 ", "background-1 ")
+      .replace("- [ ] <Sidekick.Todo>", "- [x] <Sidekick.Todo>");
+    const after = yield* commit();
+    expect(after.nodeOf(target)).toBe(node);
+    expect(after.nodeOf("viewport:todo")).toBe(parent);
+    expect(focused(presenter)).toBe(target);
+    expect(presenter.tree.focused()).toBe(node);
+    expect(after.keys).toContain(`${target}:action:remove`);
+    expect(presenter.grid.rows().some((row) => row.includes("☑ <Sidekick.Todo>"))).toBe(true);
   });
 });
