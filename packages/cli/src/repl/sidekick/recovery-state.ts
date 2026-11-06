@@ -6,6 +6,13 @@ import type { SidekickRecord } from "./history.ts";
 import type { SidekickRequest } from "./model.ts";
 import type { RecoveryDecisionRecord, RecoveryReferenceRecord } from "./recovery-record.ts";
 
+export interface HumanStopFact {
+  readonly at: number;
+  readonly conversation: string;
+  readonly requests: readonly number[];
+  readonly controls: readonly { readonly response: string; readonly order: number }[];
+}
+
 export interface RecoveryDisposition {
   readonly decision: RecoveryDecisionRecord;
   readonly used: boolean;
@@ -67,7 +74,19 @@ export function projectRecovery(
   records: readonly SidekickRecord[],
   requests: readonly SidekickRequest[],
 ): Result<readonly RecoveryDisposition[]> {
+  const facts = recoveryFacts(records, requests);
+  return facts.ok ? Ok(facts.value.dispositions) : facts;
+}
+
+export function recoveryFacts(
+  records: readonly SidekickRecord[],
+  requests: readonly SidekickRequest[],
+): Result<{
+  readonly dispositions: readonly RecoveryDisposition[];
+  readonly stops: readonly HumanStopFact[];
+}> {
   const decisions = new Map<string, RecoveryDisposition>();
+  const stops: HumanStopFact[] = [];
   const messages = new Set<string>();
   const retired = new Set<number>();
   function refused(): Result<never> {
@@ -77,45 +96,67 @@ export function projectRecovery(
       ),
     );
   }
+  function open(index: number, conversation: string): readonly number[] {
+    return uncertainRequests(
+      records.slice(0, index),
+      requests.filter((one) => one.at < index),
+      conversation,
+    ).filter((at) => !retired.has(at));
+  }
+  function unfinished(index: number, conversation: string) {
+    const prefix = records.slice(0, index);
+    const previouslyRetired = new Set(
+      [...decisions.values()]
+        .filter((one) => one.used)
+        .flatMap((one) =>
+          one.decision.controls.map((control) => `${control.response}\0${control.order}`),
+        ),
+    );
+    return prefix.flatMap((one) =>
+      one.kind === "control" &&
+      one.conversation === conversation &&
+      !previouslyRetired.has(`${one.response}\0${one.order}`) &&
+      !prefix.some(
+        (outcome) =>
+          outcome.kind === "control-outcome" &&
+          outcome.conversation === one.conversation &&
+          outcome.response === one.response &&
+          outcome.order === one.order,
+      )
+        ? [{ response: one.response, order: one.order }]
+        : [],
+    );
+  }
   for (const [index, record] of records.entries()) {
-    if (record.kind === "recovery-decision") {
-      const open = uncertainRequests(
-        records.slice(0, index),
-        requests.filter((one) => one.at < index),
-        record.conversation,
-      ).filter((at) => !retired.has(at));
+    if (record.kind === "human-stop") {
+      if (
+        record.retained.records !== index ||
+        JSON.stringify(open(index, record.conversation)) !== JSON.stringify(record.requests) ||
+        JSON.stringify(unfinished(index, record.conversation)) !==
+          JSON.stringify(record.controls) ||
+        !record.requests.some((at) => records[at]?.kind === "feedback")
+      ) {
+        return refused();
+      }
+      stops.push({
+        at: index,
+        conversation: record.conversation,
+        requests: record.requests,
+        controls: record.controls,
+      });
+    } else if (record.kind === "recovery-decision") {
       if (
         decisions.has(record.id) ||
         messages.has(record.message) ||
         record.retained.records !== index ||
-        JSON.stringify(open) !== JSON.stringify(record.requests)
+        JSON.stringify(open(index, record.conversation)) !== JSON.stringify(record.requests)
       ) {
         return refused();
       }
       const controls = new Set<string>();
-      const prefix = records.slice(0, index);
-      const previouslyRetired = new Set(
-        [...decisions.values()]
-          .filter((one) => one.used)
-          .flatMap((one) =>
-            one.decision.controls.map((control) => `${control.response}\0${control.order}`),
-          ),
-      );
-      const unfinished = prefix.flatMap((one) =>
-        one.kind === "control" &&
-        one.conversation === record.conversation &&
-        !previouslyRetired.has(`${one.response}\0${one.order}`) &&
-        !prefix.some(
-          (outcome) =>
-            outcome.kind === "control-outcome" &&
-            outcome.conversation === one.conversation &&
-            outcome.response === one.response &&
-            outcome.order === one.order,
-        )
-          ? [{ response: one.response, order: one.order }]
-          : [],
-      );
-      if (JSON.stringify(unfinished) !== JSON.stringify(record.controls)) {
+      if (
+        JSON.stringify(unfinished(index, record.conversation)) !== JSON.stringify(record.controls)
+      ) {
         return refused();
       }
       for (const control of record.controls) {
@@ -204,7 +245,7 @@ export function projectRecovery(
       }
     }
   }
-  return Ok([...decisions.values()]);
+  return Ok({ dispositions: [...decisions.values()], stops });
 }
 
 export function recoveryBlocked(

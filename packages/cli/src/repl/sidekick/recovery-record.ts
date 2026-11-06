@@ -50,3 +50,26 @@ export const recoveryReference = z
   })
   .strict();
 export type RecoveryReferenceRecord = z.infer<typeof recoveryReference>;
+
+const control = z
+  .object({ response: z.string().min(1), order: z.number().int().nonnegative() })
+  .strict();
+
+export const humanStop = z
+  .object({
+    kind: z.literal("human-stop"),
+    conversation: z.string().min(1),
+    retained: prefix,
+    requests: z
+      .array(z.number().int().nonnegative())
+      .min(1)
+      .refine((requests) => requests.every((at, index) => index === 0 || requests[index - 1] < at)),
+    controls: z
+      .array(control)
+      .refine(
+        (controls) =>
+          new Set(controls.map((one) => `${one.response}\0${one.order}`)).size === controls.length,
+      ),
+  })
+  .strict();
+export type HumanStopRecord = z.infer<typeof humanStop>;

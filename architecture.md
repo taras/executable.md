@@ -6744,11 +6744,15 @@ pure and answers with the exact objects that model holds.
 ### Local Sidekick attachments
 
 The recovery records stay with the CLI Sidekick owner. `sidekick/recovery-record.ts`
-parses the closed decision and reference facts; `sidekick/recovery-state.ts`
-checks their exact request and offer linkage during history projection.
-`sidekick/recovery-owner.ts` reads the existing logical-session ownership
-administration for the captured provider identity. None of these facts repairs
-canonical Prompt history or establishes old backend acceptance.
+parses the closed decision, reference and `human-stop` facts;
+`sidekick/recovery-state.ts` checks their exact request, control and offer
+linkage during history projection. `sidekick/recovery-owner.ts` reads the
+existing logical-session ownership administration for the captured provider
+identity. None of these facts repairs canonical Prompt history or establishes old
+backend acceptance. A `human-stop` record is local evidence that this owner's
+human Stop of automatic feedback joined; it retires no uncertainty and is no cold
+ownership proof. The Sidekick writer prepares and appends it in one turn, so its
+bound prefix is exactly the acknowledged history it follows.
 
 Deliberate recovery fallback in a child prepares a different conversation in
 the same root and publishes a fresh exact reference. The original stays selected
@@ -9262,7 +9266,10 @@ returns only once the work is down rather than once the request has stopped
 being interesting. It then re-reads the history, because the cycle was writing
 to it and its own refresh never ran, and releases the owner itself rather than
 waiting for the stopped caller's bookkeeping — a person who has stopped the
-Sidekick can speak to it immediately.
+Sidekick can speak to it immediately. A human Stop that halted this owner's
+automatic feedback first retains a `human-stop` record, still holding the owner,
+so nothing is admitted between the join and the acknowledged record. Recovery's
+own Stop, attachment cancellation and teardown retain none.
 
 What it leaves alone is the point. The conversation stays open, held by a task
 in the *owner's* scope rather than by whichever message opened it, so the next
@@ -9450,7 +9457,12 @@ pending item or stops and joins its active exchange; old handles are inert.
 Human Sidekick Stop separately holds advancement synchronously before spawning
 that captured cancellation. Attachment cancellation adds no hold. Ordinary
 failure holds remaining work without retrying the failed item; explicit Resume
-rechecks guards. Fatal owner failures retain their command authority. Teardown
+rechecks guards. A UI message sent while a retained human Stop still applies is
+bound to that Stop when accepted; only such a message at the FIFO head passes
+the unknown-feedback guard. Its activation runs the root's Submit reconciliation
+and the owner's recovery decision while it still waits, then sends it as one
+ordinary message. Older or ACP-origin heads stay blocked, and nothing is
+reordered. A cold dispatch over an applicable Stop starts held. Fatal owner failures retain their command authority. Teardown
 prevents advancement and disposes unsaved waiting work. Cold inspection starts
 none. Entry work remains owned by ReplSession.
 
