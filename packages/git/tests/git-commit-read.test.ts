@@ -429,15 +429,15 @@ describe("GCR2 — configured verification (A2)", () => {
 });
 
 /**
- * A commit carrying an OpenPGP signature header, written directly into the
+ * A commit carrying an OpenPGP or SSH signature header, written directly into the
  * object store.
  *
  * Its signature is not valid, and does not need to be: what these cases ask is
  * which configured program Git runs for it, and whether that program exists.
  */
-function* craftOpenPgpCommit(fixture: CommitFixture): Operation<string> {
+function* craftSignedCommit(fixture: CommitFixture, armor: "PGP" | "SSH"): Operation<string> {
   const tree = fixture.run(["rev-parse", `${fixture.r}^{tree}`]);
-  const object = join(fixture.home, "openpgp-commit");
+  const object = join(fixture.home, `${armor}-commit`);
   yield* until(
     writeFile(
       object,
@@ -445,12 +445,12 @@ function* craftOpenPgpCommit(fixture: CommitFixture): Operation<string> {
         `tree ${tree}`,
         "author Fixture <fixture@example.invalid> 1700000000 +0000",
         "committer Fixture <fixture@example.invalid> 1700000000 +0000",
-        "gpgsig -----BEGIN PGP SIGNATURE-----",
+        `gpgsig -----BEGIN ${armor} SIGNATURE-----`,
         " ",
         " iQEzBAABCAAdFiEE",
-        " -----END PGP SIGNATURE-----",
+        ` -----END ${armor} SIGNATURE-----`,
         "",
-        "openpgp signed",
+        `${armor} signed`,
         "",
       ].join("\n"),
     ),
@@ -461,7 +461,7 @@ function* craftOpenPgpCommit(fixture: CommitFixture): Operation<string> {
 describe("GCR8 — the OpenPGP program Git actually runs decides availability (A2)", () => {
   it("follows Git's last-read value across gpg.program, gpg.openpgp.program and includes", function* () {
     const fixture = yield* useCommitFixture();
-    const signed = yield* craftOpenPgpCommit(fixture);
+    const signed = yield* craftSignedCommit(fixture, "PGP");
     const present = join(fixture.home, "present-verifier");
     yield* until(writeFile(present, "#!/bin/sh\nexit 1\n", { mode: 0o755 }));
     const config = join(fixture.root, ".git", "config");
@@ -497,6 +497,59 @@ describe("GCR8 — the OpenPGP program Git actually runs decides availability (A
       const page = yield* readPage(
         fixture,
         `ref="${signed}" verify={true} yq=".git_verify_commit_result"`,
+      );
+      expect({ layout: layout.name, ...objectOf(page.value) }).toEqual({
+        layout: layout.name,
+        signed: true,
+        verifier_unavailable: layout.unavailable,
+        ...receiptOf(direct),
+      });
+      expect(direct.exitCode).not.toBe(0);
+    }
+  });
+
+  it("keeps an explicitly empty program, which Git cannot run, over an earlier one", function* () {
+    const fixture = yield* useCommitFixture();
+    const openpgp = yield* craftSignedCommit(fixture, "PGP");
+    const ssh = yield* craftSignedCommit(fixture, "SSH");
+    const ran = "present-verifier ran";
+    const present = join(fixture.home, "present-verifier");
+    yield* until(writeFile(present, `#!/bin/sh\necho ${ran} >&2\nexit 1\n`, { mode: 0o755 }));
+    yield* until(writeFile(join(fixture.root, ".git", "no-signers"), ""));
+    const config = join(fixture.root, ".git", "config");
+    const original = yield* until(readFile(config, "utf8"));
+    const openpgpPresent = `[gpg "openpgp"]\n\tprogram = ${present}\n`;
+    const gpgEmpty = '[gpg]\n\tprogram = ""\n';
+    const sshPresent = `[gpg "ssh"]\n\tallowedSignersFile = .git/no-signers\n\tprogram = ${present}\n`;
+    const sshEmpty = '[gpg "ssh"]\n\tallowedSignersFile = .git/no-signers\n\tprogram = ""\n';
+
+    const layouts: { name: string; commit: string; text: string; unavailable: boolean }[] = [
+      {
+        name: "openpgp then empty gpg.program",
+        commit: openpgp,
+        text: openpgpPresent + gpgEmpty,
+        unavailable: true,
+      },
+      {
+        name: "empty gpg.program then openpgp",
+        commit: openpgp,
+        text: gpgEmpty + openpgpPresent,
+        unavailable: false,
+      },
+      { name: "ssh then empty ssh", commit: ssh, text: sshPresent + sshEmpty, unavailable: true },
+      { name: "empty ssh then ssh", commit: ssh, text: sshEmpty + sshPresent, unavailable: false },
+    ];
+    for (const layout of layouts) {
+      yield* until(writeFile(config, original + layout.text));
+      const direct = directVerification(fixture.root, layout.commit);
+      // The present program announces itself, so the native command is the
+      // oracle for whether Git ran it or the empty name that came after it.
+      expect(`${layout.name}: ${direct.stderr.includes(ran)}`).toBe(
+        `${layout.name}: ${!layout.unavailable}`,
+      );
+      const page = yield* readPage(
+        fixture,
+        `ref="${layout.commit}" verify={true} yq=".git_verify_commit_result"`,
       );
       expect({ layout: layout.name, ...objectOf(page.value) }).toEqual({
         layout: layout.name,
