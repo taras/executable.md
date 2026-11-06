@@ -1,4 +1,4 @@
-name: Diagnose Node workflow deadlines
+name: Compare strict Node wrappers with direct execution
 on:
   workflow_dispatch:
 permissions:
@@ -7,14 +7,10 @@ jobs:
   diagnostic:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: source
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ede14f092352542b08b84e5d4e1470978d194b4f
-          path: source
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb
         with:
           deno-version: v2.9.5
@@ -22,54 +18,49 @@ jobs:
         with:
           node-version: "22.23.4"
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
-        with:
-          package_json_file: source/package.json
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.4.0
       - name: Prepare the unchanged target source
         run: deno task setup
-      - name: Profile the two exact failing Node CLI routes
+      - name: Compare unchanged wrappers and direct execution
         run: |
           python3 - <<'PY'
-          import pathlib,subprocess,json,os,time,signal,hashlib,shlex
-          s=pathlib.Path.cwd();out=pathlib.Path(os.environ['RUNNER_TEMP'])/'node-workflow-diagnostic';out.mkdir(exist_ok=False)
+          import pathlib,subprocess,json,os,time,signal,hashlib,resource
+          s=pathlib.Path.cwd();out=pathlib.Path(os.environ['RUNNER_TEMP'])/'node-wrapper-comparison';out.mkdir(exist_ok=False)
           head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip();assert head=='ede14f092352542b08b84e5d4e1470978d194b4f'
-          versions={name:subprocess.check_output([name,'--version'],text=True).strip() for name in ['node','deno','bun','git']}
-          base=['deno','run','--quiet','--allow-all',str(s/'packages/cli/src/deno.ts')]
-          env={k:os.environ[k] for k in ['PATH','DENO_DIR','DENO_INSTALL_ROOT','XDG_CACHE_HOME','TMPDIR'] if k in os.environ};env['XMD_EXAMPLE_COMMAND']=shlex.join(base+['run','--allow-absolute']);env['XMD_EXAMPLE_TEST_COMMAND']=shlex.join(base+['test'])
-          rows=[]
-          for suite in ['Friction','Implementation']:
-           case=out/suite;case.mkdir();journal=case/'diagnostic.jsonl';source=(s/('examples/adversarial-implementation/tests/'+suite+'.test.md')).read_text()
-           argv=['node',str(s/'node_modules/tsx/dist/cli.mjs'),'--cpu-prof','--cpu-prof-dir='+str(case),'--tsconfig',str(s/'tsconfig.node.json'),str(s/'packages/cli/src/node.ts'),'run','--allow-absolute','--journal',str(journal),'--eval','<Testing>\n'+source+'\n</Testing>','--include','examples/adversarial-implementation/tests/components','--include','examples/adversarial-implementation/components']
-           start=time.monotonic();offset=0;index=0;timedout=False
-           with (case/'complete-first-output.log').open('wb') as log,(case/'journal-observation-times.jsonl').open('w') as timings:
-            child=subprocess.Popen(argv,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
-            while child.poll() is None:
-             if journal.exists():
-              with journal.open('rb') as f:
-               f.seek(offset)
-               for line in f:
-                if not line.endswith(b'\n'):break
-                offset+=len(line);index+=1;timings.write(json.dumps({'index':index,'fileOffset':offset,'observedElapsedMs':round((time.monotonic()-start)*1000,3)})+'\n')
-              timings.flush()
-             if time.monotonic()-start>240:
+          versions={name:subprocess.check_output([name,'--version'],text=True).strip() for name in ['node','deno','bun','git']};rows=[]
+          def execute(name,argv,env=None,cap=180):
+           case=out/name;case.mkdir();start=time.monotonic();before=resource.getrusage(resource.RUSAGE_CHILDREN);timedout=False
+           with (case/'complete-first-output.log').open('wb') as log:
+            child=subprocess.Popen(argv,env=env,stdin=subprocess.PIPE,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+            try:
+             try:code=child.wait(timeout=cap)
+             except subprocess.TimeoutExpired:
               timedout=True;os.killpg(child.pid,signal.SIGTERM)
-              try:child.wait(timeout=3)
-              except subprocess.TimeoutExpired:os.killpg(child.pid,signal.SIGKILL)
-              break
-             time.sleep(.05)
-            code=child.wait()
-           row={'suite':suite,'revision':head,'argv':argv,'elapsedSeconds':time.monotonic()-start,'diagnosticCapSeconds':240,'strictWrapperTestCapUnchangedSeconds':120,'exit':code,'timedOut':timedout,'joined':True,'journalObservedRecords':index,'profileInstrumentation':'Requests Node CPU flags through tsx; inspect actual profile scope. Diagnostic journal adds I/O; not an unchanged test rerun','outputSha256':hashlib.sha256((case/'complete-first-output.log').read_bytes()).hexdigest()}
-           rows.append(row);(case/'receipt.json').write_text(json.dumps(row,indent=2));print(json.dumps({k:row[k] for k in ['suite','elapsedSeconds','exit','timedOut','journalObservedRecords']}),flush=True)
+              try:code=child.wait(timeout=5)
+              except subprocess.TimeoutExpired:os.killpg(child.pid,signal.SIGKILL);code=child.wait()
+            finally:
+             if child.stdin:child.stdin.close()
+           after=resource.getrusage(resource.RUSAGE_CHILDREN)
+           row={'name':name,'revision':head,'argv':argv,'elapsedSeconds':time.monotonic()-start,'userCpuSeconds':after.ru_utime-before.ru_utime,'systemCpuSeconds':after.ru_stime-before.ru_stime,'exit':code,'diagnosticParentCapSeconds':cap,'timedOut':timedout,'joined':True,'outputSha256':hashlib.sha256((case/'complete-first-output.log').read_bytes()).hexdigest()}
+           rows.append(row);(case/'receipt.json').write_text(json.dumps(row,indent=2));print(json.dumps({k:row[k] for k in ['name','elapsedSeconds','userCpuSeconds','systemCpuSeconds','exit','timedOut']}),flush=True)
+          for suite in ['friction','implementation']:
+           execute('strict-'+suite,['node',str(s/'node_modules/tsx/dist/cli.mjs'),'--tsconfig','tsconfig.node.json','--test','--test-concurrency=1','packages/cli/tests/adversarial-'+suite+'.test.ts'])
+          base=['deno','run','--quiet','--allow-all',str(s/'packages/cli/src/deno.ts')]
+          def quote(arg):return "'"+arg.replace("'","'\\''")+"'"
+          env={k:os.environ[k] for k in ['PATH','DENO_DIR','DENO_INSTALL_ROOT','XDG_CACHE_HOME','TMPDIR'] if k in os.environ};env['XMD_EXAMPLE_COMMAND']=' '.join(map(quote,base+['run','--allow-absolute']));env['XMD_EXAMPLE_TEST_COMMAND']=' '.join(map(quote,base+['test']))
+          case=out/'direct-friction-no-journal';source=(s/'examples/adversarial-implementation/tests/Friction.test.md').read_text()
+          argv=['node',str(s/'node_modules/tsx/dist/cli.mjs'),'--cpu-prof','--cpu-prof-dir='+str(case),'--tsconfig',str(s/'tsconfig.node.json'),str(s/'packages/cli/src/node.ts'),'run','--allow-absolute','--timeout','210s','--eval','<Testing>\n'+source+'\n</Testing>','--include','examples/adversarial-implementation/tests/components','--include','examples/adversarial-implementation/components']
+          execute('direct-friction-no-journal',argv,env,240)
           clean=subprocess.check_output(['git','status','--porcelain'],text=True)==''
-          (out/'receipt.json').write_text(json.dumps({'revision':head,'versions':versions,'rows':rows,'sourceClean':clean,'diagnosticOnly':True,'noModelCalls':True,'noDeadlineOrSourceChange':True},indent=2))
+          (out/'receipt.json').write_text(json.dumps({'revision':head,'versions':versions,'rows':rows,'sourceClean':clean,'strictWrappersUnchanged':True,'actualWrapperDeadlineSeconds':120,'directCaseOnly':'No journal; profile flags forwarded, minimal runCli environment, every command word quoted, stdin pipe held open; CLI210s and parent240s are diagnostic only'},indent=2))
           raise SystemExit(0 if clean else 1)
           PY
-      - name: Preserve complete diagnostic evidence
+      - name: Preserve complete comparison evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: node-workflow-deadline-diagnostic
-          path: ${{ runner.temp }}/node-workflow-diagnostic
+          name: node-wrapper-comparison
+          path: ${{ runner.temp }}/node-wrapper-comparison
           if-no-files-found: error
