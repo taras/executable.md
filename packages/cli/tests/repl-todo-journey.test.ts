@@ -10,14 +10,39 @@ import { pairedLocation } from "../src/repl/sidekick/history.ts";
 import type { ReplPage, ScreenReading } from "./support/repl-page.ts";
 import { TODO_WAKE } from "../src/repl/todo/wake.ts";
 
-function inertFocused(one: ScreenReading): boolean {
-  const focus = one.rows.findIndex((row) => row.includes("> ☐"));
+/**
+ * Whether the inert last task is the focused one, by its own row and rows.
+ *
+ * Scoped to that task rather than to any focus marker: the marker has to sit on
+ * the row that begins this task, and the row carrying its text has to belong to
+ * the same task. At a narrow width the label wraps, so the text arrives on a
+ * continuation row — which is why the marker row and the text row may differ
+ * while still being one task. No checkbox may appear between them, because a
+ * checkbox is where the next task begins: another task's marker therefore
+ * cannot stand in for this one.
+ *
+ * `glyph` is the checkbox this task is expected to be drawn with, because an
+ * outside edit may complete it without changing which task it is.
+ */
+function inertFocused(one: ScreenReading, glyph: "☐" | "☑" = "☐"): boolean {
+  const marker = one.rows.findIndex((row) => row.includes(`> ${glyph}`));
   const text = one.rows.findIndex((row) => row.includes("<Sidekick.Tod"));
-  return (
-    focus >= 0 &&
-    text >= focus &&
-    !one.rows.slice(focus + 1, text + 1).some((row) => row.includes("☐"))
-  );
+  if (marker < 0 || text < marker) {
+    return false;
+  }
+  return !one.rows.slice(marker + 1, text + 1).some((row) => /[☐☑]/.test(row));
+}
+
+/** Whether this task's own continuation rows still carry its escaped text. */
+function inertTextBelowFocus(one: ScreenReading): boolean {
+  const marker = one.rows.findIndex((row) => /> [☐☑]/.test(row));
+  if (marker < 0) {
+    return false;
+  }
+  const own = one.rows.slice(marker).join("\n");
+  const next = one.rows.slice(marker + 1).findIndex((row) => /[☐☑]/.test(row));
+  const mine = next < 0 ? own : one.rows.slice(marker, marker + 1 + next).join("\n");
+  return mine.includes("<Sidekick.Tod") && mine.includes("{inert}") && mine.includes("\\u{1b}");
 }
 
 function capture(page: ReplPage, name: string, timings: readonly number[] = []) {
@@ -211,16 +236,63 @@ for (const size of [
           continue;
         }
         const started = performance.now();
-        yield* page.resize(resized);
-        yield* page.until("focused task survives resize", (one) => inertFocused(one));
+        // The emulator changes its own screen size as soon as the resize is
+        // requested, so a write tagged with the new geometry is not this
+        // application having run its resize pass. The size read is: production
+        // reads the terminal's size from inside its own listener, and that
+        // counter only advances when it did. Waiting for the read, the geometry
+        // and this task's focus together ties the accepted reading to a pass
+        // that actually saw the new size.
+        // A write tagged with the new geometry is not this application having
+        // settled: the emulator changes its own screen size the moment a resize
+        // is requested, and production may draw once before it reads the
+        // committed tree's focus and draws the settled marker. So the geometry
+        // is driven through the harness's own drag, where production itself
+        // drains the size reads — `churning()` reaching zero is that drain
+        // finishing, on production's side of the boundary, which also outruns
+        // the frame the way a real drag does. Only then is the settled frame at
+        // this geometry asked for, with this task still focused and its own
+        // continuation rows still carrying its text.
+        page.repl.terminal.churnSize(12, resized);
+        page.repl.terminal.resized(resized);
+        yield* awaitedFact(`the drag to ${resized.columns}x${resized.rows} draining`, function* () {
+          return page.repl.terminal.churning() === 0;
+        });
+        yield* page.until(
+          `focused task survives the settled pass at ${resized.columns}x${resized.rows}`,
+          (one) =>
+            one.size.columns === resized.columns &&
+            one.size.rows === resized.rows &&
+            inertFocused(one) &&
+            inertTextBelowFocus(one),
+        );
         resizeTimings.push(performance.now() - started);
       }
-      const changed = source.replace("task-0", "background-0").replace("task-1 ", "background-1 ");
-      const beforeRefresh = page.screen().index;
+      // The baseline this refresh is measured against, asserted rather than
+      // assumed: before anything outside touches the file, this task is the
+      // focused one on its own row and its escaped text is on screen.
+      expect(inertFocused(page.screen())).toBe(true);
+      expect(inertTextBelowFocus(page.screen())).toBe(true);
+      // Not yet completed, so the observation below is a state this screen does
+      // not already satisfy: waiting for it cannot pass on the baseline.
+      expect(inertFocused(page.screen(), "☑")).toBe(false);
+      // The outside edit completes this same task as well as renaming two
+      // offscreen ones. Its text and occurrence are unchanged, so its semantic
+      // key is unchanged and it must stay the focused task — while the checkbox
+      // it is drawn with changes, which is what makes adoption observable at
+      // every profile. The renamed tasks are offscreen under these caps, so a
+      // further write or rereading the file would say nothing about adoption.
+      const changed = source
+        .replace("task-0", "background-0")
+        .replace("task-1 ", "background-1 ")
+        .replace("- [ ] <Sidekick.Todo>", "- [x] <Sidekick.Todo>");
       yield* writeTextFile(file, changed);
+      // One observation for all three: the service adopted the changed source,
+      // the pass that carried it has drawn, and the same task is still the
+      // focused one — now completed, with its inert text still escaped.
       yield* page.until(
-        "background refresh leaves focus",
-        (one) => one.index > beforeRefresh && inertFocused(one),
+        "the adopted outside change leaves this task focused",
+        (one) => inertFocused(one, "☑") && inertTextBelowFocus(one),
       );
       console.log(
         JSON.stringify({
