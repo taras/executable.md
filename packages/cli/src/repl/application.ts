@@ -7665,11 +7665,9 @@ function drawerContent(
       ...detailRows("drawer:value", open.binding.value, width, styleOf("field-value"), details),
     );
   } else if (open.kind === "entry-value") {
-    title = drawerTitle(
-      `${view.state.route.scopes[0] ?? ""} ${bindingsViewName(open.view)}`,
-      open.name,
-      width,
-    );
+    // The title every binding drawer has had: which entry and view the value
+    // came from is the pane's heading behind it and the drawer's own identity.
+    title = drawerTitle("Binding", open.name, width);
     content.push(
       ...detailRows("drawer:value", open.binding.value, width, styleOf("field-value"), details),
     );
