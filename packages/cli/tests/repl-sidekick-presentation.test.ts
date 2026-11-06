@@ -80,6 +80,63 @@ function* completedKey(page: ReplPage, key: Parameters<ReplPage["key"]>[0]): Ope
   yield* page.until(`the completed ${key} frame`, (one) => one.index > before);
 }
 
+/**
+ * Whether the committed tree holds focus on the saved account's own row.
+ *
+ * Read from the decoration rather than from the `> ` cue, because the cue is
+ * written from the view the frame was built from and is therefore a frame
+ * behind, while the frame draws its focused row's runs bold from the tree's own
+ * answer after the reconcile. A walk that stepped on the cue would send one Tab
+ * too many whenever the cue had not caught up, and the Enter after it would
+ * reach the control past this one.
+ *
+ * The decoration is read from the emulator, which is sound because a page hands
+ * a predicate only its latest reading and the emulator holds exactly the cells
+ * that write left. Nothing moves focus without a keystroke, so once a frame
+ * says the tree holds it here, it is still here when the next key is sent.
+ */
+function recoveryFocused(page: ReplPage, one: ScreenReading): boolean {
+  const screen = page.repl.terminal.screen;
+  if (screen === undefined) {
+    throw new Error("The terminal emulator is absent.");
+  }
+  if (one.occurrences("[review recovery]") !== 1) {
+    return false;
+  }
+  const at = one.locate("[review recovery]");
+  return screen.styleAt(at.column, at.row).attrs.includes(1);
+}
+
+/**
+ * Open the saved account the way somebody without a mouse opens it.
+ *
+ * Its row is one of the Sidekick's own region entries, so Tab reaches it. The
+ * walk is bounded, each step waits for focus to have moved rather than for any
+ * write, and it stops on the frame's own answer that this row holds focus — so
+ * the single Enter after it reaches the control this case means.
+ *
+ * The press is the other route a person has, and this one case gives it up
+ * deliberately. Its rail is still filling while the account is offered, so the
+ * row's coordinates can belong to a frame the program has already replaced,
+ * and a press naming no target in the current frame is dropped without an
+ * action or a trace. That route keeps its own coverage elsewhere; nothing else
+ * this case is about changes.
+ */
+function* openSavedAccount(page: ReplPage): Operation<void> {
+  const cue = (one: ScreenReading): string =>
+    one.rows.filter((row) => row.includes("> ")).join("\n");
+  for (let step = 0; step < 12 && !recoveryFocused(page, page.screen()); step += 1) {
+    const before = cue(page.screen());
+    yield* page.key("Tab");
+    yield* page.until(
+      "focus to have moved on",
+      (one) => recoveryFocused(page, one) || cue(one) !== before,
+    );
+  }
+  yield* page.until("the saved account's own row focused", (one) => recoveryFocused(page, one));
+  yield* page.key("Enter");
+}
+
 describe("987 — mounted original recovery", () => {
   for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
     it(`reads actual saved multiline entry feedback by keyboard at ${size.columns} columns`, function* () {
@@ -109,7 +166,7 @@ describe("987 — mounted original recovery", () => {
       for (const line of lines) {
         expect(feedback.text).toContain(line);
       }
-      yield* page.press("[review recovery]");
+      yield* openSavedAccount(page);
       yield* page.until("the saved recovery account", (one) => one.shows("Original conversation:"));
       if (size.columns !== 160) {
         yield* page.resize(size);
@@ -162,7 +219,7 @@ describe("987 — mounted original recovery", () => {
       if (size.columns !== 160) {
         yield* page.resize(WIDE);
       }
-      yield* page.press("[review recovery]");
+      yield* openSavedAccount(page);
       yield* page.until("the reopened saved account", (one) => one.shows("Review recovery"));
       const passive = yield* settledReading(page.repl);
       expect(passive.chat).toEqual(before.chat);
