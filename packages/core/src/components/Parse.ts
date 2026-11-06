@@ -9,7 +9,6 @@
  */
 
 import type { Operation } from "effection";
-import { printErrors } from "../component-failures.ts";
 import { content } from "../component-api.ts";
 import type { Json } from "../types.ts";
 import {
@@ -43,7 +42,7 @@ export const props = {
  */
 export const returns = { $schema: "http://json-schema.org/draft-07/schema#" };
 
-export default printErrors(function* (props: Record<string, Json>): Operation<Json> {
+export default function* (props: Record<string, Json>): Operation<Json> {
   const validate = yield* compileParseSchema("Parse", props.schema);
 
   const text = yield* content();
@@ -59,4 +58,4 @@ export default printErrors(function* (props: Record<string, Json>): Operation<Js
   }
 
   return parsed.value;
-});
+}
