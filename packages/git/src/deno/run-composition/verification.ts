@@ -109,6 +109,10 @@ function environment(): Record<string, string> {
  * one it reads last, across every scope and include. So both are read together,
  * in Git's own reading order, and the last one wins, rather than preferring one
  * name.
+ *
+ * An explicitly empty value is a value: Git keeps it over an earlier program and
+ * then cannot run it. A valueless entry is not one — Git refuses the
+ * configuration outright — so it never replaces the program read before it.
  */
 function* configuredProgram(
   root: string,
@@ -129,7 +133,7 @@ function* configuredProgram(
   let program = fallback;
   for (const entry of answered.stdout.split("\0")) {
     const newline = entry.indexOf("\n");
-    if (newline >= 0 && newline < entry.length - 1) {
+    if (newline >= 0) {
       program = entry.slice(newline + 1);
     }
   }
@@ -157,6 +161,9 @@ function* unavailable(
   env: Record<string, string>,
   program: string,
 ): Operation<boolean> {
+  if (program === "") {
+    return true;
+  }
   if (program.includes("/")) {
     return !(yield* executableFile(isAbsolute(program) ? program : join(root, program)));
   }
