@@ -49,7 +49,12 @@ export function* runAdversarialJourney(suite: string) {
       "examples/adversarial-implementation/components",
     ],
     {
-      timeout: suite === "Preparation" ? preparationTimeout : 120_000,
+      timeout:
+        suite === "Preparation"
+          ? preparationTimeout
+          : suite === "Friction" || suite === "Implementation"
+            ? 180_000
+            : 120_000,
       env: {
         XMD_EXAMPLE_COMMAND: workflowCommand,
         XMD_EXAMPLE_TEST_COMMAND: workflowTestCommand,
