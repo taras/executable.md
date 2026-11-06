@@ -181,6 +181,7 @@ cd -- {directory}
 <Ticket.Text path={fixture.directory+"/preparations/foundation-1/receipt.json"} as="text" /><Parse schema={{type:"object"}} as="continued">{text}</Parse>
 <AssertEquals actual={continued.before} expected={[]} />
 <AssertEquals actual={work.ticketState.checkpoint.plannerCall} expected={fixture.directory+"/foundation-1/preparation-owner.json"} />
+<AssertEquals actual={work.ticketState.manifest.identityDirectory} expected={fixture.directory+"/sessions"} />
 <AssertEquals actual={work.ticketState.manifest.deliveredInputs["conditional-architect"]} expected={taskInputs} />
 </TempDir>
 </Each>
