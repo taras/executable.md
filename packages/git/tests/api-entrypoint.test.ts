@@ -136,7 +136,7 @@ const CONTEXTUAL_APIS: readonly string[] = [
 const OPERATIONS: readonly (readonly [string, readonly string[]])[] = [
   ["Git", ["add", "commit", "push", "switch"]],
   ["GitHost", ["route"]],
-  ["GitQuery", ["changes", "diff", "file", "files", "format", "read", "resolve", "root"]],
+  ["GitQuery", ["changes", "commit", "diff", "file", "files", "format", "read", "resolve", "root"]],
   ["IssueApi", ["read", "upsert"]],
   ["IssueOperations", ["read", "upsert"]],
   ["IssueTrackerContext", ["current"]],
