@@ -88,6 +88,13 @@ export {
 export type { ManagedCheckoutReason } from "./src/deno/run-composition/errors.ts";
 export { captureCommitIdentity, denoIdentityReader } from "./src/deno/run-composition/identity.ts";
 export type { IdentityReader } from "./src/deno/run-composition/identity.ts";
+export { denoCommitVerifier } from "./src/deno/run-composition/verification.ts";
+export type {
+  CommitSignatureFormat,
+  CommitVerificationReceipt,
+  CommitVerificationRequest,
+  CommitVerifier,
+} from "./src/deno/run-composition/verification.ts";
 export { lazily } from "./src/deno/run-composition/lazy.ts";
 export { useLeases } from "./src/deno/run-composition/leases.ts";
 export type { Leases, SlotKind } from "./src/deno/run-composition/leases.ts";

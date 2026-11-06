@@ -261,9 +261,9 @@ function countingOperations(
         yield* note("commitPresent");
         return yield* operations.commitPresent(directory, commit);
       },
-      *observe(element, request, place) {
+      *observe(element, request, place, verifier) {
         yield* note("observe");
-        return yield* operations.observe(element, request, place);
+        return yield* operations.observe(element, request, place, verifier);
       },
       *pushProvider(commonDirectory, origin, inputs) {
         yield* note("pushProvider");

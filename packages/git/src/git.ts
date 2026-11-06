@@ -12,15 +12,16 @@
  * what an immutable workflow definition is made of: which repository, which
  * commit, in which object format, and what the root document held in it.
  *
- * The four selected-checkout reads beside them answer the same kind of
+ * The five selected-checkout reads beside them answer the same kind of
  * question about a checkout a `<Repository>` selected, which is what
- * `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>` and `<Git.File>` ask. They carry
+ * `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>`, `<Git.File>` and the read form
+ * of `<Git.Commit>` ask. They carry
  * the Repository selection and the working directory the component observed, so
  * which checkout answers is the installed provider's decision rather than the
  * process's own directory.
  *
  * Asking is all this Api does. The authored transitions a document writes —
- * `<Git.Switch>`, `<Git.Add>`, `<Git.Commit>`, `<Git.Push>` — are the separate
+ * `<Git.Switch>`, `<Git.Add>`, creating with `<Git.Commit>`, `<Git.Push>` — are the separate
  * `Git` Api, and a replacement installed here never becomes a route to one.
  */
 
@@ -32,6 +33,8 @@ import { GitObservationProviderError } from "./composition/errors.ts";
 import type {
   GitChangesInvocation,
   GitChangesResult,
+  GitCommitPage,
+  GitCommitReadInvocation,
   GitDiffInvocation,
   GitDiffResult,
   GitFileInvocation,
@@ -103,7 +106,7 @@ export interface GitQueryApi {
   /**
    * The tracked paths one selected checkout's index holds.
    *
-   * Four questions about a checkout a Repository selected, rather than about
+   * Five questions about a checkout a Repository selected, rather than about
    * whichever one the contextual working directory happens to be in. They are
    * here because they are read-only Git questions and nothing else: answering
    * one moves no branch, writes no object and changes no file.
@@ -124,6 +127,12 @@ export interface GitQueryApi {
 
   /** A window of the text one commit of the selected checkout holds at one path. */
   file(invocation: GitFileInvocation): Operation<GitFileResult>;
+
+  /**
+   * One page of what yq selects from the commit a ref names in the selected
+   * checkout, with the configured verifier's receipt when verification was asked.
+   */
+  commit(invocation: GitCommitReadInvocation): Operation<GitCommitPage>;
 }
 
 /** Git could not answer for this revision. Carries what Git reported, not a guess. */
@@ -232,6 +241,10 @@ export const GitQuery: Api<GitQueryApi> = createApi<GitQueryApi>("executablemd.g
   // deno-lint-ignore require-yield
   *file(_invocation: GitFileInvocation): Operation<GitFileResult> {
     throw new GitObservationProviderError("<Git.File>");
+  },
+  // deno-lint-ignore require-yield
+  *commit(_invocation: GitCommitReadInvocation): Operation<GitCommitPage> {
+    throw new GitObservationProviderError("<Git.Commit>");
   },
 });
 

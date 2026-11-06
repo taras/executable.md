@@ -316,6 +316,15 @@ function requestJson(request: GitObservationRequest): Json {
   if (request.kind === "files") {
     return { kind: "files", prefix: request.prefix, limit: request.limit, cursor: request.cursor };
   }
+  if (request.kind === "commit") {
+    return {
+      kind: "commit",
+      ref: request.ref,
+      verify: request.verify,
+      yq: request.yq,
+      maxBytes: request.maxBytes,
+    };
+  }
   if (request.kind === "file") {
     return {
       kind: "file",
