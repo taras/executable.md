@@ -31,7 +31,12 @@ import {
   sidekickIdle,
   pasteDraft,
   entrySettles,
+  intoComposer,
+  COMPOSER_VALUE,
+  SIDEKICK_PANE,
 } from "./support/screen-journeys.ts";
+import type { Operation } from "effection";
+import type { ReplPage } from "./support/repl-page.ts";
 import { settledReading } from "./support/mounted-history.ts";
 import { pairedLocation } from "../src/repl/sidekick/history.ts";
 
@@ -439,6 +444,32 @@ describe("1113: session scopes retain their restrictions", () => {
   });
 });
 
+/**
+ * Send one instruction, confirmed in the composer's own rows before Send.
+ *
+ * The ordinary helper confirms the typed text against the whole screen, which
+ * is sound only while no other row can hold it. A paged read sends an
+ * instruction per page and the pane echoes every message it has sent, so the
+ * previous page's identical row satisfies that confirmation before this page's
+ * keystrokes have reached the field — and Send is then pressed over a composer
+ * that holds something else. Confirmed in the composer's own value rows
+ * instead, and the caller gives each page its own text, so the row being
+ * confirmed can only be this one.
+ */
+function* sendInstruction(page: ReplPage, text: string): Operation<void> {
+  yield* intoComposer(page);
+  yield* page.type(text);
+  yield* page.until(
+    `the composer holding ${JSON.stringify(text)}`,
+    (one) => one.found(text, COMPOSER_VALUE) === 1,
+  );
+  yield* page.until(
+    "the Sidekick offering its own Send",
+    (one) => one.found("[send]", SIDEKICK_PANE) === 1,
+  );
+  yield* page.press("[send]", SIDEKICK_PANE);
+}
+
 describe("1113: receipt-directed exact output paging", () => {
   it("1113: follows the receipt's entry and each returned next argument until exact output is complete", function* () {
     const project = yield* useTemporary("1113-output-");
@@ -471,7 +502,7 @@ describe("1113: receipt-directed exact output paging", () => {
       });
       const done = `1113 output page ${parts.length}`;
       page.repl.fake.script({ reply: `<Output>${done}</Output>` });
-      yield* sendMessage(page, "read the next exact page");
+      yield* sendInstruction(page, `read exact page ${parts.length}`);
       // The persisted, attributed response rather than what the chat pane
       // happens to be showing: a long page fills the viewport, so the marker
       // being offscreen and the turn never completing look the same there.
