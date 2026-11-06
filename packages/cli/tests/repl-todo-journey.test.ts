@@ -48,6 +48,87 @@ function inertTextBelowFocus(one: ScreenReading): boolean {
 }
 
 /**
+ * The cell this task's own checkbox is drawn in, and the glyph it holds.
+ *
+ * Found from the row carrying this task's text rather than from the focus cue,
+ * so it is the same answer whether this task holds focus or not: a task's own
+ * row is the last one at or above its text that begins a task. Nothing but the
+ * two-cell cue and spaces is drawn before the checkbox, so its offset in the
+ * row is the column it was drawn in.
+ */
+function inertCheckbox(
+  one: ScreenReading,
+): { readonly column: number; readonly row: number; readonly glyph: string } | undefined {
+  const text = one.rows.findIndex((row) => row.includes("<Sidekick.Tod"));
+  if (text < 0) {
+    return undefined;
+  }
+  for (let row = text; row >= 0; row -= 1) {
+    const found = /[☐☑]/.exec(one.rows[row]);
+    if (found !== null) {
+      return { column: found.index, row, glyph: found[0] };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * What one reading says about this task's focus, from both sides of the commit.
+ *
+ * Two facts, and they come from opposite sides of one frame. The `> ` cue is
+ * written from `view.focused`, which the frame was *built* from, so on its own
+ * it is a frame behind — the loop presents, then reads the committed tree's
+ * focus, and only then draws again if it has moved. The decoration is the
+ * frame's own answer: `commitReplFrame` draws with `tree.focused()` after the
+ * reconcile, so a row whose node holds focus has its runs drawn bold and one
+ * that does not has a completed row drawn dim.
+ *
+ * `"settled"` is both agreeing on this task: the view the frame was built from
+ * already named the control the committed tree holds focus on, so that pass had
+ * nothing to correct and drew no second frame. `"moved"` is both agreeing the
+ * other way — no cue on this task, and its row drawn as a row that does not
+ * hold focus — which is an answer rather than an unfinished stage. Anything
+ * else is a pass still in flight and is not accepted either way.
+ *
+ * The decoration is read from the emulator rather than from the reading, which
+ * is sound because a page hands a predicate only its latest reading and the
+ * emulator holds exactly the cells that write left.
+ */
+function inertFocusAnswer(
+  page: ReplPage,
+  one: ScreenReading,
+  glyph: "☐" | "☑",
+): "settled" | "moved" | "in-flight" {
+  const screen = page.repl.terminal.screen;
+  if (screen === undefined) {
+    throw new Error("The terminal emulator is absent.");
+  }
+  const checkbox = inertCheckbox(one);
+  if (one.index !== page.screen().index || checkbox === undefined || checkbox.glyph !== glyph) {
+    return "in-flight";
+  }
+  const attrs = screen.styleAt(checkbox.column, checkbox.row).attrs;
+  const cued = one.rows[checkbox.row].includes(`> ${glyph}`);
+  if (cued && attrs.includes(1)) {
+    return "settled";
+  }
+  // Dim is the decoration a completed row that does not hold focus is drawn
+  // with, so this half is only an answer once the task is completed. Before
+  // that, an unfocused row is drawn with nothing to tell it apart.
+  return !cued && glyph === "☑" && attrs.includes(2) ? "moved" : "in-flight";
+}
+
+/** Whether this task's own local controls are drawn on its row. */
+function inertActions(one: ScreenReading): boolean {
+  const checkbox = inertCheckbox(one);
+  if (checkbox === undefined) {
+    return false;
+  }
+  const row = one.rows[checkbox.row];
+  return row.includes("↑") && row.includes("↓") && row.includes("x");
+}
+
+/**
  * Replace todo.md the way an outside change actually replaces it.
  *
  * Through a sibling and a rename, which is what this product's own Files
@@ -259,35 +340,41 @@ for (const size of [
         // A drag rather than one step, because a window being dragged outruns
         // the frame being prepared for it: every read answers with the size
         // that was there and leaves a different one behind. Draining those
-        // reads says the drag is over and nothing more — the frame that saw
-        // the last of them may still be on its way. So what is accepted is a
-        // drawn frame at this geometry with the marker on this task: the
-        // marker is drawn from the focus the committed tree answered with, so
-        // a frame carrying both is this application's own answer about where
-        // focus is at this size, rather than the emulator's about its screen.
+        // reads says the drag is over and nothing more — the frame that saw the
+        // last of them may still be on its way, and a presentation already
+        // carrying the new geometry can be the first half of a pass whose focus
+        // has yet to settle. So the drain only says no further size is owed.
+        // What is accepted is a committed frame at this geometry whose own
+        // answer and whose view agree that this task holds focus, with its
+        // local controls drawn and its continuation rows carrying its text.
         page.repl.terminal.churnSize(12, resized);
         page.repl.terminal.resized(resized);
         yield* awaitedFact(`the drag to ${resized.columns}x${resized.rows} draining`, function* () {
           return page.repl.terminal.churning() === 0;
         });
         yield* page.until(
-          `focused task survives the settled pass at ${resized.columns}x${resized.rows}`,
+          `the settled pass at ${resized.columns}x${resized.rows} still focuses this task`,
           (one) =>
             one.size.columns === resized.columns &&
             one.size.rows === resized.rows &&
+            inertFocusAnswer(page, one, "☐") === "settled" &&
             inertFocused(one) &&
-            inertTextBelowFocus(one),
+            inertTextBelowFocus(one) &&
+            inertActions(one),
         );
         resizeTimings.push(performance.now() - started);
       }
       // The baseline this refresh is measured against, asserted rather than
-      // assumed: before anything outside touches the file, this task is the
-      // focused one on its own row and its escaped text is on screen.
+      // assumed: the last completed pass settled with this task holding focus,
+      // its local controls are drawn and its escaped text is on screen.
+      expect(inertFocusAnswer(page, page.screen(), "☐")).toBe("settled");
       expect(inertFocused(page.screen())).toBe(true);
       expect(inertTextBelowFocus(page.screen())).toBe(true);
+      expect(inertActions(page.screen())).toBe(true);
       // Not yet completed, so the observation below is a state this screen does
       // not already satisfy: waiting for it cannot pass on the baseline.
       expect(inertFocused(page.screen(), "☑")).toBe(false);
+      expect(inertFocusAnswer(page, page.screen(), "☑")).toBe("in-flight");
       // The outside edit completes this same task as well as renaming two
       // offscreen ones. Its text and occurrence are unchanged, so its semantic
       // key is unchanged and it must stay the focused task — while the checkbox
@@ -299,12 +386,26 @@ for (const size of [
         .replace("task-1 ", "background-1 ")
         .replace("- [ ] <Sidekick.Todo>", "- [x] <Sidekick.Todo>");
       yield* replaceOutside(file, changed);
-      // One observation for all three: the service adopted the changed source,
-      // the pass that carried it has drawn, and the same task is still the
-      // focused one — now completed, with its inert text still escaped.
+      // The first pass that settles after the change has to be one that still
+      // focuses this task. A pass settling the other way is an answer too, and
+      // it is this observation's failure rather than its deadline: the reading
+      // that carries it is reported where it happened, because what a drop
+      // needs is the transition it happened on.
       yield* page.until(
-        "the adopted outside change leaves this task focused",
-        (one) => inertFocused(one, "☑") && inertTextBelowFocus(one),
+        "the first settled pass after the adopted change still focuses this task",
+        (one) => {
+          if (inertFocusAnswer(page, one, "☑") === "moved") {
+            throw new Error(
+              `a settled pass adopted the change and moved focus off this task. ${page.describe()}`,
+            );
+          }
+          return (
+            inertFocusAnswer(page, one, "☑") === "settled" &&
+            inertFocused(one, "☑") &&
+            inertTextBelowFocus(one) &&
+            inertActions(one)
+          );
+        },
       );
       console.log(
         JSON.stringify({
