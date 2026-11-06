@@ -275,8 +275,8 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 </TempDir>
 </Test>
 
-<Test name="F4 F9 uncertain amendment publication and an unbound successor dispatch nothing" timeout="90s">
-<Each in={["publication","disposition"]} let="scenario">
+<Test name="F4 F9 uncertain amendment publication and an unbound successor dispatch nothing" timeout="150s">
+<Each in={["publication","disposition","disposition-unknown","feedback-unknown"]} let="scenario">
 <TempDir>
 <Fixture.Repository as="fixture" />
 <Fixture.Entry entry="amendment-case" value={{scenario,fixture,runner,root:suiteRoot}} repository={fixture.repository} command={runner} root={suiteRoot} as="child" />

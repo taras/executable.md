@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { envelope, state } from "./control.ts";
 import { describe, read, unused, write } from "./text-storage.ts";
-import { finalFeedback } from "./admission.ts";
+import { acknowledgment, acknowledgmentPath, finalFeedback } from "./admission.ts";
 
 export const props = {
   type: "object",
@@ -57,5 +57,15 @@ export default function* AmendmentFeedback(value: unknown) {
     );
   }
   yield* write("/", path, text);
-  return describe(path, text);
+  const acknowledged = acknowledgmentPath(path);
+  const record = describe(path, text);
+  if (!(yield* unused("/", acknowledged))) {
+    throw new Error("A final feedback acknowledgment already exists at " + acknowledged + ".");
+  }
+  yield* write(
+    "/",
+    acknowledged,
+    JSON.stringify(acknowledgment.parse({ schema: "delivery-amendment-acknowledgment.v1", record })),
+  );
+  return record;
 }

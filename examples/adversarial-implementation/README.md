@@ -397,9 +397,12 @@ ticket's admission; it is never reconstructed from current files.
 A valid admission reserves `delivery/amendment`, keyed by the original feedback,
 writes `request.json`, publishes a successor with one more consumed correction
 round and the original sessions, calls, inputs and budgets, and then writes
-`disposition.json`. It starts no role. Repeating the command, with any envelope
+`disposition.json` and, only after that write returns, `disposition-acknowledged.json`.
+It starts no role. Repeating the command, with any envelope
 or authorization for the same feedback, returns that first disposition. A
-reservation without a valid disposition holds for operator reconciliation: no
+reservation without a valid acknowledged disposition holds for operator
+reconciliation, even when a complete `disposition.json` was left by a write
+whose outcome is unknown: no
 successor is published again, and a successor envelope saved before a failed
 disposition write cannot be continued.
 
@@ -414,7 +417,8 @@ correction follows the ordinary review loop and spends the next ordinary slot.
 
 When the reviews pass B, the final feedback is written beside the reservation as
 `delivery/amendment/feedback.json`, linked to the request, disposition and
-confirmed continuation. The original `feedback.json` is never rewritten.
+confirmed continuation, followed by `feedback-acknowledged.json` once that write
+returns. Final feedback without its acknowledgment holds. The original `feedback.json` is never rewritten.
 `delivery.md` then reports `amendment_hold` for an incomplete or inconsistent
 reservation, `feedback_pending` while the admitted ticket has no final feedback,
 and otherwise the usual gates for B. A's earlier independent review never

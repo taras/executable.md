@@ -11,7 +11,7 @@ props:
 <Let as="scenario" value={input.scenario} />
 <Let as="fixture" value={input.fixture} />
 <Let as="quote" value={"'\"'\"'"} />
-<Let as="work" value={{refusals:"amend-refusals",publication:"amend-publication",disposition:"amend-disposition",sources:"amend-sources",correction:"amend-correction",exhausted:"amend-correction"}[scenario] ?? scenario} />
+<Let as="work" value={{refusals:"amend-refusals",publication:"amend-publication",disposition:"amend-disposition","disposition-unknown":"amend-disposition-unknown","feedback-unknown":"amend-feedback-unknown",sources:"amend-sources",correction:"amend-correction",exhausted:"amend-correction"}[scenario] ?? scenario} />
 <Fixture.Completed fixture={fixture} work={work} maxCorrections={scenario === "exhausted" ? 1 : 2} as="completed" />
 <Let as="delivery" value={completed.delivery} />
 <Let as="original" value={completed.revision} />
@@ -137,7 +137,7 @@ test -e {nextAttempt}
 <AssertEquals actual={[repeated.status,repeated.publication]} expected={["hold","held"]} />
 </If>
 
-<If condition={scenario !== "refusals" && scenario !== "publication" && scenario !== "disposition"}>
+<If condition={scenario !== "refusals" && scenario !== "publication" && scenario !== "disposition" && scenario !== "disposition-unknown"}>
 <Ticket.Amend record={completed.envelope} grant={grant.path} as="admitted" />
 <AssertEquals actual={[admitted.status,admitted.publication]} expected={["running","confirmed"]} />
 <Ticket.Load record={admitted} as="successor" />
@@ -157,6 +157,50 @@ Settlement rechecks the actual import before accepting source or feedback.
 <AssertEquals actual={retained.outcome} expected="complete" />
 <Dir path={fixture.root}><Delivery.Status delivery={delivery} number={7} as="heldStatus" /></Dir>
 <AssertEquals actual={heldStatus.status} expected="feedback_pending" />
+</If>
+
+<If condition={scenario === "disposition-unknown"}>
+A disposition whose rename committed but reported an unknown outcome confirms
+nothing: its complete bytes stay held through repeat, continuation and status.
+
+<Ticket.Capture as="unknown"><Fixture.Override match="/amendment/disposition.json" mode="rename-unknown"><Ticket.Amend record={completed.envelope} grant={grant.path} as="unexpected" /></Fixture.Override><Json value={unexpected} /></Ticket.Capture>
+<AssertEquals actual={unknown.status} expected="failed" />
+<Ticket.Text path={reservation + "/disposition.json"} as="leftText" />
+<Parse schema={{type:"object"}} as="left">{leftText}</Parse>
+<AssertEquals actual={[left.status,left.envelope.publication]} expected={["admitted","confirmed"]} />
+<Dir path={reservation}><Glob include={["**"]} as="reservationFiles" /></Dir>
+<AssertEquals actual={reservationFiles.toSorted()} expected={["disposition.json","request.json"]} />
+<Fixture.Inventory directory={fixture.directory} as="beforeRepeat" />
+<Ticket.Amend record={completed.envelope} grant={grant.path} as="repeated" />
+<AssertEquals actual={[repeated.status,repeated.publication,repeated.continuation]} expected={["hold","held",completed.envelope.continuation]} />
+<If condition={!repeated.hold.includes("never acknowledged")}><Fail message={"The repeat held for another reason: " + repeated.hold} /></If>
+<Ticket.Capture as="bypass"><Ticket.Continue record={left.envelope} maxSteps={1} as="unexpected" /><Json value={unexpected} /></Ticket.Capture>
+<If condition={bypass.status !== "failed" || !bypass.failure.includes("never acknowledged")}><Fail message={"The unacknowledged successor was continued: " + bypass.output + bypass.failure} /></If>
+```bash exec as="dispatched"
+test -e {nextAttempt}
+```
+<AssertEquals actual={dispatched.exitCode === 0} expected={false} />
+<Dir path={fixture.root}><Delivery.Status delivery={delivery} number={7} as="unknownStatus" /></Dir>
+<AssertEquals actual={[unknownStatus.status,unknownStatus.nextAction]} expected={["amendment_hold","reconcile_amendment"]} />
+<Fixture.Inventory directory={fixture.directory} as="afterRepeat" />
+<AssertEquals actual={afterRepeat} expected={beforeRepeat} />
+</If>
+
+<If condition={scenario === "feedback-unknown"}>
+Final feedback whose rename committed but reported an unknown outcome is never
+selected as delivery feedback.
+
+<Ticket.Capture as="unknown"><Fixture.Override match="/amendment/feedback.json" mode="rename-unknown"><Ticket.Continue record={admitted} maxSteps={2} as="unexpected" /></Fixture.Override><Json value={unexpected} /></Ticket.Capture>
+<AssertEquals actual={unknown.status} expected="failed" />
+<Ticket.Text path={reservation + "/feedback.json"} as="leftText" />
+<Parse schema={{type:"object"}} as="left">{leftText}</Parse>
+<AssertEquals actual={left.status} expected="feedback_ready" />
+<Dir path={reservation}><Glob include={["feedback*.json"]} as="feedbackFiles" /></Dir>
+<AssertEquals actual={feedbackFiles} expected={["feedback.json"]} />
+<Dir path={fixture.root}><File path="remote.json"><Json value={{...remote,revision:left.revision,main:{revision:left.revision,run:remote.main.run}}} /></File></Dir>
+<Dir path={fixture.root}><Delivery.Status delivery={delivery} number={7} as="unknownStatus" /></Dir>
+<AssertEquals actual={[unknownStatus.status,unknownStatus.nextAction]} expected={["amendment_hold","reconcile_amendment"]} />
+<If condition={!unknownStatus.reason.includes("never acknowledged")}><Fail message={"Status held for another reason: " + unknownStatus.reason} /></If>
 </If>
 
 <If condition={scenario === "sources"}>

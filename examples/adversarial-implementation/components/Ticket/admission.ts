@@ -128,6 +128,33 @@ export const disposition = z
   })
   .strict();
 
+export const acknowledgment = z
+  .object({ schema: z.literal("delivery-amendment-acknowledgment.v1"), record: descriptor })
+  .strict();
+
+/**
+ * Bytes on disk cannot show that their own write was acknowledged: a rename can
+ * commit and still report an unknown outcome. Each publication is therefore
+ * accepted only beside an acknowledgment written after its write returned.
+ */
+export function acknowledgmentPath(path: string): string {
+  return path.replace(/\.json$/, "-acknowledged.json");
+}
+
+function acknowledges(text: string | undefined, path: string, record: string): boolean {
+  if (text === undefined) {
+    return false;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const parsed = acknowledgment.safeParse(value);
+  return parsed.success && same(parsed.data.record, describe(path, record));
+}
+
 export const finalFeedback = z
   .object({
     schema: z.literal("delivery-amendment-feedback.v1"),
@@ -231,6 +258,11 @@ export function* confirmAdmission(saved: State): Operation<void> {
       "This amended continuation has no confirmed admission disposition. Preserve the reservation for operator reconciliation; no role is dispatched.",
     );
   }
+  if (!acknowledges(yield* optional(acknowledgmentPath(selected.disposition)), selected.disposition, text)) {
+    throw new Error(
+      "This amended continuation has no confirmed admission disposition: its write was never acknowledged. Preserve the reservation for operator reconciliation; no role is dispatched.",
+    );
+  }
   const { successor } = yield* admittedSuccessor(selected, text);
   if (!same(successor.calls, saved.calls.slice(0, successor.calls.length))) {
     throw new Error("The amended continuation does not extend its admitted successor.");
@@ -261,7 +293,9 @@ export function* classify(directory: string, present: boolean): Operation<Reserv
   const texts = {
     request: yield* optional(directory + "/request.json"),
     disposition: yield* optional(directory + "/disposition.json"),
+    dispositionAcknowledged: yield* optional(directory + "/disposition-acknowledged.json"),
     feedback: yield* optional(directory + "/feedback.json"),
+    feedbackAcknowledged: yield* optional(directory + "/feedback-acknowledged.json"),
   };
   const fingerprint = JSON.stringify(
     Object.values(texts).map((text) => (text === undefined ? null : describe("", text).sha256)),
@@ -272,6 +306,24 @@ export function* classify(directory: string, present: boolean): Operation<Reserv
       "The delivery amendment reservation has no confirmed disposition. Preserve " +
         directory +
         " for operator reconciliation; no admission, role or readiness is inferred from its files.",
+    );
+  }
+  if (!acknowledges(texts.dispositionAcknowledged, directory + "/disposition.json", texts.disposition)) {
+    return held(
+      "The amendment disposition write was never acknowledged, so its bytes do not confirm admission. Preserve " +
+        directory +
+        " for operator reconciliation; no role is dispatched and no readiness is inferred.",
+    );
+  }
+  if (
+    texts.feedback === undefined
+      ? texts.feedbackAcknowledged !== undefined
+      : !acknowledges(texts.feedbackAcknowledged, directory + "/feedback.json", texts.feedback)
+  ) {
+    return held(
+      "The final amendment feedback write was never acknowledged, so its bytes are not delivery feedback. Preserve " +
+        directory +
+        " for operator reconciliation.",
     );
   }
   try {

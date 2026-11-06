@@ -8,7 +8,7 @@ export const props = {
   type: "object",
   properties: {
     match: { type: "string" },
-    mode: { enum: ["read", "deny-write", "unknown-write"] },
+    mode: { enum: ["read", "deny-write", "unknown-write", "rename-unknown"] },
     content: { type: "string", default: "Changed fixture text." },
     flag: { type: ["string", "null"], default: null },
   },
@@ -18,7 +18,7 @@ export const props = {
 const input = z
   .object({
     match: z.string().min(1),
-    mode: z.enum(["read", "deny-write", "unknown-write"]),
+    mode: z.enum(["read", "deny-write", "unknown-write", "rename-unknown"]),
     content: z.string(),
     flag: z.string().nullable(),
   })
@@ -31,7 +31,9 @@ function located(selected: { cwd: string; path: string }): string {
 /**
  * Change one Files boundary for the enclosed content only. Reads of the
  * matching path return replacement text, once `flag` exists when one is named;
- * matching writes fail before the target changes or with an unknown commit.
+ * matching writes fail before the target changes or with an unknown commit;
+ * `rename-unknown` lets the host rename commit and then faults, so the caller
+ * observes commit-unknown while the complete target bytes remain.
  */
 export default function* Override(value: unknown) {
   const selected = input.parse(value);
@@ -45,6 +47,15 @@ export default function* Override(value: unknown) {
           return Ok(selected.content);
         }
         return yield* next(request);
+      },
+    });
+  } else if (selected.mode === "rename-unknown") {
+    yield* API.Fs.around({
+      *rename([from, to], next) {
+        yield* next(from, to);
+        if (to.endsWith(selected.match)) {
+          throw new Error("Fixture fault after the rename committed.");
+        }
       },
     });
   } else {

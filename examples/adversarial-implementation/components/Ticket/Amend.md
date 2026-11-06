@@ -15,7 +15,8 @@ returns: {type: object}
 
 The original feedback owns exactly one reservation, `delivery/amendment`. A
 repeated admission returns the first confirmed disposition, and an incomplete
-reservation holds; neither prepares, publishes nor dispatches again. Validation
+reservation holds. A disposition counts only beside the acknowledgment written
+after its own write returned, so complete bytes from an unknown write still hold; neither prepares, publishes nor dispatches again. Validation
 precedes the reservation, so a refusal spends nothing.
 
 <Ticket.Load record={props.record} as="saved" />
@@ -57,6 +58,8 @@ mkdir -- {quotedReservation}
 <If condition={published.publication !== "confirmed"}><Return value={{...published,hold:"The amended successor publication did not complete. Preserve " + reservation + " and the original continuation; operator disposition is required."}} /><Else>
 <Let as="disposition" value={{schema:"delivery-amendment-disposition.v1",status:"admitted",request:prepared.requestDescriptor,predecessor:props.record.continuation,successor:published.continuation,envelope:published}} />
 <Ticket.SaveMetadata name="disposition" repository={saved.manifest.assignment.repository} path={reservation + "/disposition.json"} as="dispositionReceipt" />
+<Let as="acknowledgment" value={{schema:"delivery-amendment-acknowledgment.v1",record:dispositionReceipt}} />
+<Ticket.SaveMetadata name="acknowledgment" repository={saved.manifest.assignment.repository} path={reservation + "/disposition-acknowledged.json"} as="acknowledgmentReceipt" />
 <Return value={published} />
 </Else></If>
 </Else></If>
