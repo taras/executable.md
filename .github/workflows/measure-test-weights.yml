@@ -1,4 +1,4 @@
-name: Compare strict Node wrappers with direct execution
+name: Probe Node compile cache for the intact Sidekick Journal witness
 on:
   workflow_dispatch:
 permissions:
@@ -6,11 +6,11 @@ permissions:
 jobs:
   diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
-          ref: ede14f092352542b08b84e5d4e1470978d194b4f
+          ref: 0c6b488f4af7dea23953a38181b127d72d9e7cac
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb
         with:
           deno-version: v2.9.5
@@ -21,46 +21,56 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.4.0
-      - name: Prepare the unchanged target source
+      - name: Prepare the pinned target source
         run: deno task setup
-      - name: Compare unchanged wrappers and direct execution
+      - name: Run the whole file once with an empty invocation-owned child compile cache
         run: |
           python3 - <<'PY'
-          import pathlib,subprocess,json,os,time,signal,hashlib,resource
-          s=pathlib.Path.cwd();out=pathlib.Path(os.environ['RUNNER_TEMP'])/'node-wrapper-comparison';out.mkdir(exist_ok=False)
-          head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip();assert head=='ede14f092352542b08b84e5d4e1470978d194b4f'
-          versions={name:subprocess.check_output([name,'--version'],text=True).strip() for name in ['node','deno','bun','git']};rows=[]
-          def execute(name,argv,env=None,cap=180):
-           case=out/name;case.mkdir();start=time.monotonic();before=resource.getrusage(resource.RUSAGE_CHILDREN);timedout=False
-           with (case/'complete-first-output.log').open('wb') as log:
-            child=subprocess.Popen(argv,env=env,stdin=subprocess.PIPE,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+          import pathlib,subprocess,json,os,time,signal,hashlib,resource,re
+          s=pathlib.Path.cwd();out=pathlib.Path(os.environ['RUNNER_TEMP'])/'node-journal-cache-probe';out.mkdir(exist_ok=False)
+          head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip();assert head=='0c6b488f4af7dea23953a38181b127d72d9e7cac'
+          assert subprocess.check_output(['git','status','--porcelain'],text=True)==''
+          source=s/'packages/cli/tests/repl-sidekick-acp.test.ts';original=source.read_bytes();(out/'original-test.ts').write_bytes(original)
+          text=original.decode();start=text.index('  it("1077 J1-J5:');end=text.index('    function* componentPage',start)
+          part=text[start:end];needle='            DENO_DIR: process.env.DENO_DIR ?? "",';assert part.count(needle)==1
+          part=part.replace(needle,needle+'\n            NODE_COMPILE_CACHE: join(one.home, "node-compile-cache"),');source.write_text(text[:start]+part+text[end:])
+          patch=subprocess.check_output(['git','diff','--',str(source)],text=False);(out/'diagnostic.patch').write_bytes(patch)
+          versions={name:subprocess.check_output([name,'--version'],text=True).strip() for name in ['node','deno','bun','git']}
+          assert versions['node']=='v22.23.4'
+          launcher=s/'node_modules/.bin/tsx';(out/'prepared-launcher.txt').write_bytes(launcher.read_bytes())
+          resolution=subprocess.check_output(['node','--input-type=module','-e',"import {createRequire} from 'node:module';import fs from 'node:fs';const r=createRequire(process.cwd()+'/packages/test-support/launch.ts');const cli=r.resolve('tsx/cli');const pkg=r.resolve('tsx/package.json');console.log(JSON.stringify({cli,package:pkg,version:JSON.parse(fs.readFileSync(pkg,'utf8')).version}));"],text=True).strip()
+          argv=[str(launcher),'--tsconfig','tsconfig.node.json','--test','--test-concurrency=1','packages/cli/tests/repl-sidekick-acp.test.ts']
+          provenance={'revision':head,'diagnosticOnly':True,'sourcePatchSha256':hashlib.sha256(patch).hexdigest(),'originalTestSha256':hashlib.sha256(original).hexdigest(),'patchedTestSha256':hashlib.sha256(source.read_bytes()).hexdigest(),'versions':versions,'preparedLauncher':str(launcher),'launcherResolved':str(launcher.resolve()),'launcherSha256':hashlib.sha256(launcher.read_bytes()).hexdigest(),'nestedTsx':json.loads(resolution),'argv':argv,'scope':'One added env binding in J1-J5 CLI command; fresh cache under invocation-owned temporary home; no warmup, no name filter, all assertions and both same-owner walks unchanged','parentNodeCompileCacheRemoved':True,'diagnosticParentCapSeconds':1100}
+          (out/'provenance.json').write_text(json.dumps(provenance,indent=2)+'\n');print(json.dumps(provenance),flush=True)
+          env=dict(os.environ);env.pop('NODE_COMPILE_CACHE',None);env.pop('NODE_DISABLE_COMPILE_CACHE',None)
+          start=time.monotonic();before=resource.getrusage(resource.RUSAGE_CHILDREN);timedout=False
+          log=out/'complete-first-output.log'
+          with log.open('wb') as stream:
+           child=subprocess.Popen(argv,env=env,stdin=subprocess.PIPE,stdout=stream,stderr=subprocess.STDOUT,start_new_session=True)
+           try:
+            try:code=child.wait(timeout=1100)
+            except subprocess.TimeoutExpired:
+             timedout=True;os.killpg(child.pid,signal.SIGTERM)
+             try:code=child.wait(timeout=5)
+             except subprocess.TimeoutExpired:os.killpg(child.pid,signal.SIGKILL);code=child.wait()
+           finally:
+            if child.stdin:child.stdin.close()
+          after=resource.getrusage(resource.RUSAGE_CHILDREN);output=log.read_text(errors='replace');homes=[]
+          for line in output.splitlines():
+           marker=line.find('{"kind":"attachment-client-inputs"')
+           if marker>=0:
             try:
-             try:code=child.wait(timeout=cap)
-             except subprocess.TimeoutExpired:
-              timedout=True;os.killpg(child.pid,signal.SIGTERM)
-              try:code=child.wait(timeout=5)
-              except subprocess.TimeoutExpired:os.killpg(child.pid,signal.SIGKILL);code=child.wait()
-            finally:
-             if child.stdin:child.stdin.close()
-           after=resource.getrusage(resource.RUSAGE_CHILDREN)
-           row={'name':name,'revision':head,'argv':argv,'elapsedSeconds':time.monotonic()-start,'userCpuSeconds':after.ru_utime-before.ru_utime,'systemCpuSeconds':after.ru_stime-before.ru_stime,'exit':code,'diagnosticParentCapSeconds':cap,'timedOut':timedout,'joined':True,'outputSha256':hashlib.sha256((case/'complete-first-output.log').read_bytes()).hexdigest()}
-           rows.append(row);(case/'receipt.json').write_text(json.dumps(row,indent=2));print(json.dumps({k:row[k] for k in ['name','elapsedSeconds','userCpuSeconds','systemCpuSeconds','exit','timedOut']}),flush=True)
-          for suite in ['friction','implementation']:
-           execute('strict-'+suite,['node',str(s/'node_modules/tsx/dist/cli.mjs'),'--tsconfig','tsconfig.node.json','--test','--test-concurrency=1','packages/cli/tests/adversarial-'+suite+'.test.ts'])
-          base=['deno','run','--quiet','--allow-all',str(s/'packages/cli/src/deno.ts')]
-          def quote(arg):return "'"+arg.replace("'","'\\''")+"'"
-          env={k:os.environ[k] for k in ['PATH','DENO_DIR','DENO_INSTALL_ROOT','XDG_CACHE_HOME','TMPDIR'] if k in os.environ};env['XMD_EXAMPLE_COMMAND']=' '.join(map(quote,base+['run','--allow-absolute']));env['XMD_EXAMPLE_TEST_COMMAND']=' '.join(map(quote,base+['test']))
-          case=out/'direct-friction-no-journal';source=(s/'examples/adversarial-implementation/tests/Friction.test.md').read_text()
-          argv=['node',str(s/'node_modules/tsx/dist/cli.mjs'),'--cpu-prof','--cpu-prof-dir='+str(case),'--tsconfig',str(s/'tsconfig.node.json'),str(s/'packages/cli/src/node.ts'),'run','--allow-absolute','--timeout','210s','--eval','<Testing>\n'+source+'\n</Testing>','--include','examples/adversarial-implementation/tests/components','--include','examples/adversarial-implementation/components']
-          execute('direct-friction-no-journal',argv,env,240)
-          clean=subprocess.check_output(['git','status','--porcelain'],text=True)==''
-          (out/'receipt.json').write_text(json.dumps({'revision':head,'versions':versions,'rows':rows,'sourceClean':clean,'strictWrappersUnchanged':True,'actualWrapperDeadlineSeconds':120,'directCaseOnly':'No journal; profile flags forwarded, minimal runCli environment, every command word quoted, stdin pipe held open; CLI210s and parent240s are diagnostic only'},indent=2))
-          raise SystemExit(0 if clean else 1)
+             home=json.loads(line[marker:])['home'];homes.append({'home':home,'existsAfterJoinedFile':pathlib.Path(home).exists(),'cacheExistsAfterJoinedFile':(pathlib.Path(home)/'node-compile-cache').exists()})
+            except (ValueError,KeyError):pass
+          samePatch=subprocess.check_output(['git','diff','--',str(source)])==patch
+          receipt={**provenance,'elapsedSeconds':time.monotonic()-start,'userCpuSeconds':after.ru_utime-before.ru_utime,'systemCpuSeconds':after.ru_stime-before.ru_stime,'exit':code,'timedOut':timedout,'joined':True,'sourcePatchUnchanged':samePatch,'outputSha256':hashlib.sha256(log.read_bytes()).hexdigest(),'fixtureHomes':homes,'cacheCleanupVerified':bool(homes) and all(not x['existsAfterJoinedFile'] and not x['cacheExistsAfterJoinedFile'] for x in homes),'pageCountLines':[x for x in output.splitlines() if 'channel-walk' in x or 'originalBytes' in x],'durationLines':[x for x in output.splitlines() if '1077 J1-J5' in x or re.search(r'^\s*#?\s*duration_ms:',x)]}
+          (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');print(json.dumps({k:receipt[k] for k in ['elapsedSeconds','exit','timedOut','joined','sourcePatchUnchanged','cacheCleanupVerified','pageCountLines']}),flush=True)
+          raise SystemExit(0 if code==0 and not timedout and samePatch and receipt['cacheCleanupVerified'] else 1)
           PY
-      - name: Preserve complete comparison evidence
+      - name: Preserve complete first probe evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: node-wrapper-comparison
-          path: ${{ runner.temp }}/node-wrapper-comparison
+          name: node-journal-cache-probe
+          path: ${{ runner.temp }}/node-journal-cache-probe
           if-no-files-found: error
