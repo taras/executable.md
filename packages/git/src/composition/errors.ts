@@ -351,9 +351,11 @@ export class GitOperationProtocolError extends WorkflowStorageError {
  * Every one of them is a condition the document can act on by writing
  * something else: a revision that names no commit, a path the commit does not
  * hold, a blob that is not text, a repository this host could not read, a
- * continuation whose observation has since changed. What a read never reports
- * is what Git printed — a refusal names the condition and the correction, so a
- * document cannot tell which Git version answered.
+ * continuation whose observation has since changed, a yq selection that is not
+ * one value or does not fit its page, and commit text or a verifier channel
+ * that is not lossless UTF-8. What a refusal never reports is what Git printed —
+ * it names the condition and the correction, so a document cannot tell which
+ * Git version answered.
  *
  * `invalid-invocation` and `unexpected-content` are decided before a provider
  * is reached and are therefore never retained: no observation happened.
@@ -365,7 +367,9 @@ export type GitObservationReason =
   | "absent-path"
   | "nontext-blob"
   | "unusable-repository"
-  | "stale-continuation";
+  | "stale-continuation"
+  | "invalid-query"
+  | "undecodable-text";
 
 /**
  * An observation the document asked for and did not get.

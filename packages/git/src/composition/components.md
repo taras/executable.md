@@ -72,15 +72,79 @@ everything it happens to have touched is a document that commits surprises.
 
 ## Git.Commit
 
-Commits what is staged.
+Commits what is staged, or reads a commit that already exists.
 
 ```mdx
 <Git.Commit>Prepare 1.4</Git.Commit>
+<Git.Commit message="Implement the change" as="sha" />
 ```
 
 The content is the commit message, so a message can be as long as it needs to be
 and can interpolate what the document learned. Commits only what `<Git.Add>`
-staged.
+staged, and `as` binds the new commit's full object id.
+
+Write `ref` to read instead. The read is self-closing, and `as` binds one page of
+what `yq` selected from that commit:
+
+```mdx
+<Git.Commit ref={feedbackSha} as="commit" />
+<Git.Commit ref={feedbackSha} yq='pick(["sha", "tree", "parents"])' as="facts" />
+<Git.Commit ref={feedbackSha} verify={true} yq=".git_verify_commit_result" as="verification" />
+```
+
+`ref` resolves when the read runs, so `ref="HEAD"` reads whichever commit HEAD
+names at that moment. `yq` is evaluated over the whole commit, which has this
+shape:
+
+```ts
+{
+  sha: string,
+  author:    { name: string, email: string, date: string },
+  committer: { name: string, email: string, date: string },
+  message: string,
+  tree: { sha: string },
+  parents: { sha: string }[],
+  git_verify_commit_result: null | {
+    signed: boolean,
+    verifier_unavailable: boolean,
+    exitCode: number,
+    stdout: string,
+    stderr: string,
+  },
+}
+```
+
+Names, emails and the message are exactly what the commit stores. A date is the
+stored time at its stored offset, such as `2023-11-15T03:43:20+05:30`. Parents
+keep Git's order, and a root commit has none. A commit whose text is not UTF-8 is
+refused rather than repaired.
+
+Leaving `yq` out reads `.`. The page is `{value, next, prev, last}`: a selected
+string comes 4096 characters at a time and a selected array 20 items at a time,
+and `next`, `prev` and `last` are the `yq` values that read the neighbouring
+pages, or `null`. Pass one back as `yq` with the same `ref`. Anything else, such
+as an object, comes back whole. `maxBytes` limits the page's serialized size, and
+a selection that cannot fit asks for a narrower `yq`. A `yq` that selects nothing
+or several values is refused.
+
+A page is about one commit. Following its `next` after `ref` has moved to another
+commit is refused, and passing the commit's own `sha` as `ref` keeps paging it.
+
+`git_verify_commit_result` is `null` unless you write `verify={true}`. Then this
+checkout's own `git verify-commit` runs, under its configured signature format,
+trust settings and installed verifier, and nothing is configured or installed for
+it. `exitCode`, `stdout` and `stderr` are Git's complete receipt. `signed` says
+whether the commit carries a signature at all, so a signed commit that failed
+verification still says `true`. `verifier_unavailable` says the configured
+verification program is not installed, which is different from a signature Git
+rejected. Your Markdown decides what a result permits:
+
+```mdx
+<Git.Commit ref={feedbackSha} verify={true} yq=".git_verify_commit_result" as="verification" />
+<If condition={verification.value.exitCode !== 0}>
+  <Fail message="The feedback commit did not pass this checkout's signature verification." />
+</If>
+```
 
 ## Git.Push
 

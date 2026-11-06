@@ -64,8 +64,12 @@ import type { RepositoryRequest, WorktreeRequest } from "@executablemd/git/api";
 import type { RepositorySelection } from "@executablemd/git/api";
 import { Git } from "@executablemd/git/api";
 import type { AmbientRepository } from "@executablemd/git/deno";
-import { captureCommitIdentity, denoIdentityReader } from "@executablemd/git/deno";
-import type { GitCommitIdentity, IdentityReader } from "@executablemd/git/deno";
+import {
+  captureCommitIdentity,
+  denoCommitVerifier,
+  denoIdentityReader,
+} from "@executablemd/git/deno";
+import type { CommitVerifier, GitCommitIdentity, IdentityReader } from "@executablemd/git/deno";
 import { lazily } from "@executablemd/git/deno";
 import { useLeases } from "@executablemd/git/deno";
 import type { Leases, SlotKind } from "@executablemd/git/deno";
@@ -140,6 +144,16 @@ export interface ReplRecordingOptions {
    * Context value holds can select or replace it.
    */
   readonly identity?: IdentityReader;
+  /**
+   * How this host runs a checkout's configured signature verification for a
+   * `<Git.Commit ref verify={true}>` read.
+   *
+   * Absent uses native Git with the caller's own environment. A suite
+   * substitutes it to count or hold verification, and to observe that a
+   * completed read verifies nothing again. Nothing a document, a prop or a
+   * Context value holds can select or replace it.
+   */
+  readonly verifier?: CommitVerifier;
 }
 
 /**
@@ -583,12 +597,13 @@ function* initializeReplRepository(
   // in an ordinary run.
   yield* Git.around(replGitMiddleware(gitEntry), { at: "min" });
 
-  // The four reads, at the same slot and on the same terms. They share this
+  // The five reads, at the same slot and on the same terms. They share this
   // entry's registry, its registered checkouts, its slot acquisition and its
   // native turn, and take no mutation lease: a read changes nothing, so there
   // is nothing for one to protect.
   const observationEntry: ReplObservationEntry = {
     operations,
+    verifier: options.verifier ?? denoCommitVerifier(),
     holdSlot,
     serialize,
     selections,

@@ -429,6 +429,13 @@ export type { AnswersState, DeclarationScanner } from "./src/declaration-scan.ts
 export { useSyntax } from "./src/use-syntax.ts";
 
 export { select as selectJson } from "./src/components/query-engine.ts";
+export { pageSelectedValue } from "./src/components/query-page.ts";
+export type {
+  SelectedValuePage,
+  SelectedValuePageAdapter,
+  SelectedValueRange,
+  SelectedValueWindow,
+} from "./src/components/query-page.ts";
 
 export type {
   AuthoredFileOperation,

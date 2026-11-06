@@ -207,13 +207,13 @@ no transaction, no frontier and no logical filesystem — what it has is a
 historical record of each completed operation, which is neither of the other
 two.
 
-`<Git.Files>`, `<Git.Changes>`, `<Git.Diff>` and `<Git.File>` are available to
-a REPL entry and are retained on the same terms, with one difference that
+`<Git.Files>`, `<Git.Changes>`, `<Git.Diff>`, `<Git.File>` and the read form of
+`<Git.Commit>` are available to a REPL entry and are retained on the same terms, with one difference that
 follows from what they are: a read changes nothing, so it takes the selected
 placement's ownership of a managed checkout where it has one and no hold on the
 repository at all. An entry committing in a checkout and an entry reading it do
 not wait for each other. Within one entry they do: every operation of that entry
-that runs `git` against one shared Git directory — the four reads, the three
+that runs `git` against one shared Git directory — the five reads, the three
 transitions and the publication's own observation — takes the same turn, and a
 read keeps it until its children have joined and its page is acknowledged. A completed read is answered from its record with no
 `git` invocation, and the page it answered with describes the repository as it
@@ -1283,7 +1283,7 @@ contextual way `<File>` writes one.
 
 ## 7. Git operations
 
-The four Git transitions and the four Git reads are likewise one language behind
+The four Git transitions and the five Git reads are likewise one language behind
 several providers.
 Which checkout one acts on is decided the same way everywhere: by the Repository
 in scope and by the contextual working directory, neither of which admits
@@ -1450,6 +1450,9 @@ decided the way §7.1 decides it, and neither observation admits anything.
 
 Unlike Switch and Add it produces a value, so it renders nothing and is written
 with `as`: the binding is the full object id of the commit.
+
+A `ref` prop selects the read form in §7.8 instead. Creation without `ref` is
+unchanged.
 
 **The message.** With only `message`, that string is the whole message. With only
 content, the rendered child text is. With both, `message` comes first, one blank
@@ -1971,7 +1974,7 @@ another question is still the wrong answer.
 
 ### 7.8 Local repository reads
 
-Four read-only components answer questions about the checkout a Repository
+Five read-only components answer questions about the checkout a Repository
 selected:
 
 ```md
@@ -1979,6 +1982,7 @@ selected:
 <Git.Changes compare="staged" as="changes" />
 <Git.Diff compare="staged" paths={["packages/core/"]} offset={0} limit={4096} as="diff" />
 <Git.File commit="HEAD~1" path="packages/core/src/expand.ts" offset={0} limit={4096} as="source" />
+<Git.Commit ref={feedbackSha} verify={true} yq=".git_verify_commit_result" as="verification" />
 ```
 
 Each is self-closing, binds JSON through a required ordinary `as`, and renders
@@ -2013,8 +2017,67 @@ at `path`. The result names the full resolved commit id, so it answers the same
 bytes after the working copy has changed and after the branch has moved. A
 symbolic link is its own stored link text and is never followed.
 
-A page is bounded by the caller's own limit: 100 records or 4096 code points by
-default, and whatever larger positive safe integer a caller asks for otherwise.
+`<Git.Commit ref>` resolves `ref` to a commit each time a live read runs, so a
+symbolic ref such as `HEAD` names the commit it names at that moment. An invalid
+ref, and a ref naming a tree, a blob or a tag of one, refuse as
+`invalid-revision`. The read form is self-closing: a `message`, content, or a
+paired element with any read prop refuses before a child expands or a provider
+is asked, and `verify`, `yq` or `maxBytes` without `ref` refuses the same way.
+Its ordinary yq expression — `.` when omitted — is evaluated over the complete
+commit before anything is paged:
+
+```ts
+{
+  sha: string,                                   // full id, 40 or 64 hex
+  author:    { name: string, email: string, date: string },
+  committer: { name: string, email: string, date: string },
+  message: string,                               // exact stored text, untrimmed
+  tree: { sha: string },
+  parents: { sha: string }[],                    // stored order; [] for a root
+  git_verify_commit_result: null | {
+    signed: boolean,
+    verifier_unavailable: boolean,
+    exitCode: number,
+    stdout: string,
+    stderr: string,
+  },
+}
+```
+
+Names and emails are the stored identity lines exactly, with no mailmap. A date
+is ISO 8601 for the stored instant at the stored offset, always written
+`YYYY-MM-DDTHH:MM:SS±HH:MM`; an unparseable timestamp or offset refuses rather
+than inventing one. Commit text is strict UTF-8: a commit holding another byte
+sequence, or naming another `encoding`, refuses as `undecodable-text` and
+nothing is replaced.
+
+The binding is the standard selected-value page `{value, next, prev, last}`. A
+selected string pages by 4096 code points and a selected array by 20 items;
+anything else is one value. Each navigation member is the yq string that reads
+that neighbouring page, or `null`. There is no default byte budget. An explicit
+`maxBytes` counts the UTF-8 bytes of the compact serialized page, navigation
+included, travels with the navigation strings and is replaced by a later
+explicit value; a selected object or single item that cannot fit refuses as
+`invalid-query`, as does an expression that selects no value or several. A
+navigation string names the resolved commit id: following it with a `ref` that
+now resolves to another commit refuses as `stale-continuation`, and following it
+with that id still pages.
+
+`git_verify_commit_result` is `null` unless `verify={true}`, and then no
+verification process runs. When requested, the selected checkout's existing
+configured verification runs as `git verify-commit` for the resolved id, and the
+result is its exit status and complete standard output and error, decoded as
+strict UTF-8 (`undecodable-text` otherwise) and never truncated. `signed` comes
+from the commit object's own signature header, never from verifier text.
+`verifier_unavailable` is true only for a signed commit whose verification
+failed while the program configured for its signature format is not an
+executable file; a missing key, an unmatched principal or a bad signature is a
+failed verification instead. Git reports facts; the calling Markdown decides
+whether a signature is required and what a result permits.
+
+A page of the other four reads is bounded by the caller's own limit: 100
+records or 4096 code points by default, and whatever larger positive safe
+integer a caller asks for otherwise.
 No arbitrary maximum is imposed; the default bounds what a document binds and a
 journal retains rather than what Git had to read. `offset`, `limit`, `length`
 and a next offset count Unicode code points, so no window splits a character,
@@ -2055,6 +2118,18 @@ copied with its own modification time, because that time is what Git's
 racily-clean rule compares against. Nothing refreshes, expands or repairs the
 source index, and lazy fetching is disabled even while a revision is resolved:
 a missing object refuses rather than reaching a remote.
+
+`verify={true}` is the one exception, because what it asks is what the
+checkout's own configuration says. Commit metadata still comes from the
+contained view. Verification then runs `git verify-commit` from the checkout
+root under the caller's inherited environment, so the effective configuration
+precedence and relative paths keep their meaning, with the variables that would
+locate another repository, index or object store removed, replace objects
+disabled, prompting, lazy fetching and optional locks off, and hooks and the
+file-system monitor disabled on the command line. The verifier is trusted host
+code that the entrypoint selects; no prop, Context value or middleware chooses
+it. It configures nothing and installs nothing, and HEAD, refs, the index,
+working files and Git configuration are unchanged afterwards.
 
 ## 8. Agents inspect; XMD mutates
 

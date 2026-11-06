@@ -236,6 +236,7 @@ export type {
 export { admitLocator } from "./src/composition/locator.ts";
 export {
   admitChangesInvocation,
+  admitCommitReadInvocation,
   admitDiffInvocation,
   admitFileInvocation,
   admitFilesInvocation,

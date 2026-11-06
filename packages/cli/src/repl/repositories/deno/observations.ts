@@ -1,12 +1,14 @@
 /**
- * One REPL entry's four local Git reads: performed once, answered from what
+ * One REPL entry's five local Git reads: performed once, answered from what
  * performing them produced.
  *
  * These are the ordinary performers an `xmd run` uses, wrapped in this entry's
  * durable boundary. What is added is memory: a completed read answers with its
  * saved page and runs no `git`, however the checkout has changed since — and a
  * read whose checkout has been deleted still answers, because answering it
- * consults nothing.
+ * consults nothing. A completed commit read keeps its verification receipt the
+ * same way: reopening it runs neither Git nor the verifier, however the trust
+ * configuration has changed since.
  *
  * ## A saved page is history, not a prediction
  *
@@ -55,13 +57,17 @@ import { GitObservationError, GitOperationAdmissionError } from "@executablemd/g
 import type { GitQueryApi } from "@executablemd/git/api";
 import {
   admitChangesInvocation,
+  admitCommitReadInvocation,
   admitDiffInvocation,
   admitFileInvocation,
   admitFilesInvocation,
+  COMMIT,
 } from "@executablemd/git";
 import type {
   GitChangesInvocation,
   GitChangesResult,
+  GitCommitPage,
+  GitCommitReadInvocation,
   GitDiffInvocation,
   GitDiffResult,
   GitFileInvocation,
@@ -90,7 +96,7 @@ import type {
   ReplObservationRequest,
 } from "../observation-records.ts";
 import type { ObservationPlace } from "@executablemd/git/deno";
-import type { DenoRepositoryOperations } from "@executablemd/git/deno";
+import type { CommitVerifier, DenoRepositoryOperations } from "@executablemd/git/deno";
 import { selectCheckout } from "@executablemd/git/deno";
 import { nativeGitTurn } from "./selections.ts";
 import type { SlotKind } from "@executablemd/git/deno";
@@ -116,6 +122,8 @@ export class ReplObservationRecordError extends StaleInputError {
 export interface ReplObservationEntry {
   /** The native repository work this entry asks for, credential-free. */
   readonly operations: DenoRepositoryOperations;
+  /** How a `verify={true}` commit read runs the checkout's configured verification. */
+  readonly verifier: CommitVerifier;
   /** Hold a managed slot for the entry, single-flight per root and slot. */
   holdSlot(root: string, kind: SlotKind, path: string, subject: string): Operation<void>;
   /** Run live native Git for one shared Git directory in order within this entry. */
@@ -127,7 +135,7 @@ export interface ReplObservationEntry {
 }
 
 /**
- * The recorded four reads this entry installs.
+ * The recorded five reads this entry installs.
  *
  * Installed at the implementation slot, exactly where the ordinary provider
  * installs its own, so this is ordinary dispatch rather than a protected
@@ -172,6 +180,15 @@ export function replObservationMiddleware(
       const value = yield* recorded(entry, { ...invocation, request });
       if (!("commit" in value)) {
         throw mismatch(FILE_ELEMENT);
+      }
+      return value;
+    },
+
+    *commit([invocation]: [GitCommitReadInvocation]): Operation<GitCommitPage> {
+      const request = admitCommitReadInvocation(COMMIT, invocation.request);
+      const value = yield* recorded(entry, { ...invocation, request });
+      if (!("prev" in value)) {
+        throw mismatch(COMMIT);
       }
       return value;
     },
@@ -259,6 +276,7 @@ function* recorded(
             element,
             invocation.request,
             placeOf(request, target),
+            entry.verifier,
           );
         });
         const payload = replObservationRecordJson({

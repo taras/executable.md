@@ -125,9 +125,9 @@ function countingOperations(counted: Counted): () => Operation<DenoRepositoryOpe
     const operations = yield* useDenoRepositoryOperations();
     const wrapped: DenoRepositoryOperations = {
       ...operations,
-      *observe(element, request, place) {
+      *observe(element, request, place, verifier) {
         counted.reads.push(request);
-        return yield* operations.observe(element, request, place);
+        return yield* operations.observe(element, request, place, verifier);
       },
     };
     return wrapped;

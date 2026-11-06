@@ -10773,16 +10773,18 @@ one. A live operation takes the selected placement's managed slot and then the
 hold on the repository it changes, keeps both until the entry is torn down, and
 takes neither to answer a completed one.
 
-It answers the four local reads on the same terms — `<Git.Files>`,
-`<Git.Changes>`, `<Git.Diff>` and `<Git.File>` — through the same contextual
-read Api an ordinary run answers, at the same implementation slot, and records
-the page each produced. A completed read is answered from its record with no
+It answers the five local reads on the same terms — `<Git.Files>`,
+`<Git.Changes>`, `<Git.Diff>`, `<Git.File>` and a `<Git.Commit ref>` read —
+through the same contextual read Api an ordinary run answers, at the same
+implementation slot, and records the page each produced. A completed read is answered from its record with no
 `git` invocation of any kind, and the page names the repository as it was then.
 What the record carries is the authenticated Repository identity, the checkout
 the selection named and its common Git directory, the received working directory
 as it arrived, the normalized query, the checkout the route reached, and the
 exact page including its complete `next` — never the ephemeral selection
-identifier, and never anything a Git command printed. Trusted admission holds
+identifier, and nothing a Git command printed beyond the `git verify-commit`
+receipt a commit read asked for and selected. A completed commit read restores
+its metadata and verification receipt with no Git and no verifier process. Trusted admission holds
 that route to the entry's own history before either a completed or an unfinished
 page is reused: the selection and the checkout have to be ones a preceding
 placement in that same history made, decided from parsed historical facts

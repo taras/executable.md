@@ -51,7 +51,10 @@ import {
   type GitChangesNext,
   type GitChangesRequest,
   type GitChangesResult,
+  type GitCommitPage,
+  type GitCommitReadRequest,
   type GitCompareMode,
+  type GitObservationKind,
   type GitComparison,
   type GitDiffNext,
   type GitDiffRequest,
@@ -62,7 +65,6 @@ import {
   type GitFilesNext,
   type GitFilesRequest,
   type GitFilesResult,
-  type GitObservationKind,
   type GitObservationRequest,
   type GitObservationValue,
 } from "./observation-api.ts";
@@ -357,10 +359,18 @@ export function gitFileResultJson(result: GitFileResult): Json {
   };
 }
 
+/** One commit read's page, exactly as the document binds it. */
+export function gitCommitPageJson(page: GitCommitPage): Json {
+  return { value: page.value, next: page.next, prev: page.prev, last: page.last };
+}
+
 export function gitObservationValueJson(
   kind: GitObservationKind,
   value: GitObservationValue,
 ): Json {
+  if (kind === "commit" && "prev" in value) {
+    return gitCommitPageJson(value);
+  }
   if (kind === "files" && "paths" in value) {
     return gitFilesResultJson(value);
   }
@@ -531,7 +541,29 @@ export function parseGitObservationValue(
   if (request.kind === "diff") {
     return parseDiffResult(value, request);
   }
+  if (request.kind === "commit") {
+    return parseCommitPage(value);
+  }
   return parseFileResult(value, request);
+}
+
+function navigation(value: unknown): string | null | undefined {
+  return value === null ? null : typeof value === "string" ? value : undefined;
+}
+
+function parseCommitPage(value: unknown): GitCommitPage | undefined {
+  const read = members(value, ["value", "next", "prev", "last"]);
+  if (read === undefined) {
+    return undefined;
+  }
+  const selected = jsonValue(read["value"]);
+  const next = navigation(read["next"]);
+  const prev = navigation(read["prev"]);
+  const last = navigation(read["last"]);
+  if (selected === undefined || next === undefined || prev === undefined || last === undefined) {
+    return undefined;
+  }
+  return Object.freeze({ value: selected, next, prev, last });
 }
 
 function parseFilesResult(value: unknown, request: GitFilesRequest): GitFilesResult | undefined {
@@ -752,7 +784,7 @@ export function sameObservationCheckout(
  * first page recorded — and a branch that moved cannot retarget a later page.
  */
 export function gitObservationQuery(
-  request: GitObservationRequest,
+  request: Exclude<GitObservationRequest, GitCommitReadRequest>,
   comparison: GitComparison | null,
 ): Json {
   if (request.kind === "files") {

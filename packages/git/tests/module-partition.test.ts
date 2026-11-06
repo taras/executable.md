@@ -46,6 +46,7 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "api.ts",
   "mod.ts",
   "src/composition/api.ts",
+  "src/composition/commit-page.ts",
   "src/composition/components/GitAdd.ts",
   "src/composition/components/GitCommit.ts",
   "src/composition/components/GitPush.ts",
@@ -143,6 +144,7 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/composition/add.ts",
   "src/deno/composition/authentication.ts",
   "src/deno/composition/commit.ts",
+  "src/deno/composition/commit-read.ts",
   "src/deno/composition/credential-helper.ts",
   "src/deno/composition/effects.ts",
   "src/deno/composition/git.ts",
@@ -178,6 +180,7 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/run-composition/checkout-layout.ts",
   "src/deno/run-composition/provider.ts",
   "src/deno/run-composition/pull-request.ts",
+  "src/deno/run-composition/verification.ts",
 ];
 
 /**
