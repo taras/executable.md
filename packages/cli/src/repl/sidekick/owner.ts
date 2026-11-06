@@ -1379,31 +1379,38 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         const id = yield* ReplHost.operations.identify();
         const message = yield* ReplHost.operations.identify();
         const target = replace ? yield* ReplHost.operations.identify() : review.conversation;
-        decision = {
-          kind: "recovery-decision",
-          id,
-          conversation: review.conversation,
-          requests: [...review.requests],
-          controls: [...review.controls],
-          retained: yield* bindRetainedPrefix(storage.writer.path),
-          message,
-          text,
-          origin: { kind: "ui" },
-          action: replace ? "replace" : "continue-original",
-          basis,
-          target,
-        };
-        if (!hooks.current()) {
-          return Err(
-            new SidekickOwnerError("The instruction changed before its decision was saved."),
-          );
+        const path = storage.writer.path;
+        const appended = yield* storage.writer.appendPrepared(function* (records) {
+          if (!hooks.current()) {
+            return Err(
+              new SidekickOwnerError("The instruction changed before its decision was saved."),
+            );
+          }
+          const made: RecoveryDecisionRecord = {
+            kind: "recovery-decision",
+            id,
+            conversation: review.conversation,
+            requests: [...review.requests],
+            controls: [...review.controls],
+            retained: yield* bindRetainedPrefix(path),
+            message,
+            text,
+            origin: { kind: "ui" },
+            action: replace ? "replace" : "continue-original",
+            basis,
+            target,
+          };
+          const validated = projectSidekick([...records, made]);
+          return validated.ok ? Ok(made) : validated;
+        });
+        if (!appended.ok) {
+          return appended;
         }
-        const validated = projectSidekick([...(yield* storage.writer.readAll()), decision]);
-        if (!validated.ok) {
-          return validated;
-        }
-        yield* storage.writer.append(decision);
         yield* refresh();
+        if (appended.value === undefined) {
+          return Err(new SidekickOwnerError("The recovery decision was not saved."));
+        }
+        decision = appended.value;
       }
       return Ok(decision);
     }

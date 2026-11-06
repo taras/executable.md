@@ -1231,9 +1231,9 @@ export class SidekickWriter {
    * returns, so a prefix it binds is the prefix the record follows. An `Err`, or
    * no record, appends nothing.
    */
-  *appendPrepared(
-    prepare: (records: readonly SidekickRecord[]) => Operation<Result<SidekickRecord | undefined>>,
-  ): Operation<Result<SidekickRecord | undefined>> {
+  *appendPrepared<R extends SidekickRecord>(
+    prepare: (records: readonly SidekickRecord[]) => Operation<Result<R | undefined>>,
+  ): Operation<Result<R | undefined>> {
     return yield* scoped(() => this.ordered(prepare));
   }
 
@@ -1253,9 +1253,9 @@ export class SidekickWriter {
     return this.reaching;
   }
 
-  private *ordered(
-    prepare: (records: readonly SidekickRecord[]) => Operation<Result<SidekickRecord | undefined>>,
-  ): Operation<Result<SidekickRecord | undefined>> {
+  private *ordered<R extends SidekickRecord>(
+    prepare: (records: readonly SidekickRecord[]) => Operation<Result<R | undefined>>,
+  ): Operation<Result<R | undefined>> {
     // One turn object, so what this caller is — waiting, or holding — is a fact
     // the handoff below can set rather than something the caller has to be
     // resumed to notice. A caller cancelled between being handed ownership and
