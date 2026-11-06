@@ -1401,7 +1401,14 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
             target,
           };
           const validated = projectSidekick([...records, made]);
-          return validated.ok ? Ok(made) : validated;
+          if (!validated.ok) {
+            return validated;
+          }
+          // Again after measuring, which suspends: an instruction withdrawn
+          // meanwhile must not leave a decision behind.
+          return hooks.current()
+            ? Ok(made)
+            : Err(new SidekickOwnerError("The instruction changed before its decision was saved."));
         });
         if (!appended.ok) {
           return appended;

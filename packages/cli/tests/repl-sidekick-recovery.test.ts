@@ -4185,4 +4185,84 @@ describe("1151 — cold ordinary Send after a retained human Stop", () => {
     const reading = cold.owner.reading;
     expect(reading.ok && reading.value.recoveries.map((one) => one.used)).toEqual([true]);
   });
+
+  it("A3: an instruction withdrawn while its decision prefix is measured records no decision", function* () {
+    const { held, chat } = yield* (function* () {
+      const stopped = yield* stoppedFeedback();
+      if (stopped.held.execution.chat.form !== "paired") {
+        throw new Error("Expected paired history.");
+      }
+      return { held: stopped.held, chat: stopped.held.execution.chat };
+    })();
+    const writer = chat.writer;
+    const appendPrepared = writer.appendPrepared.bind(writer);
+    let preparing = false;
+    writer.appendPrepared = (prepare) =>
+      appendPrepared(function* (records) {
+        preparing = true;
+        try {
+          return yield* prepare(records);
+        } finally {
+          preparing = false;
+        }
+      });
+    let live = true;
+    let measured = false;
+    const withdrawn = yield* held.owner.prepareContinuation("Withdraw this instruction.", {
+      current() {
+        if (!preparing) {
+          return live;
+        }
+        if (!measured) {
+          measured = true;
+          return live;
+        }
+        live = false;
+        return live;
+      },
+    });
+    expect(measured).toBe(true);
+    expect(withdrawn.ok).toBe(false);
+    expect(
+      (yield* readSidekickRecords(chat.location.sidekick)).some(
+        (one) => one.kind === "recovery-decision",
+      ),
+    ).toBe(false);
+    expect(held.owner.reading.ok && held.owner.reading.value.recoveries).toEqual([]);
+    expect(held.owner.humanStop).toBeDefined();
+
+    const dispatch = yield* useSidekickDispatch({
+      owner: held.owner,
+      admission: createSidekickAdmission(),
+      execution: held.execution.id,
+      workspace: held.workspace,
+      changed() {},
+      reconcile: reconciling(chat, held.execution.stream, held.session),
+    });
+    expect(dispatch.queue.held?.kind).toBe("stopped");
+    const text = "A different next instruction.";
+    held.fake.script({ reply: "<Output>The different step.</Output>" });
+    const next = yield* dispatch.send(text);
+    if (!next.ok) {
+      throw next.error;
+    }
+    expect((yield* dispatch.resume()).ok).toBe(true);
+    yield* awaitedFact("the different instruction to send or refuse", function* () {
+      return dispatch.queue.held !== undefined || next.value.snapshot.terminal !== undefined;
+    });
+    expect(dispatch.queue.held).toBe(undefined);
+    const sent = yield* next.value.completion;
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    expect(held.fake.prompts).toHaveLength(3);
+    expect(held.fake.prompts[2]).toContain(text);
+    expect(held.fake.prompts[2]).not.toContain("Withdraw this instruction.");
+    const after = yield* readSidekickRecords(chat.location.sidekick);
+    const decisions = after.filter((one) => one.kind === "recovery-decision");
+    expect(decisions.map((one) => one.text)).toEqual([text]);
+    const messages = after.filter((one) => one.kind === "message");
+    expect(messages.map((one) => one.text)).toEqual(["Run the counted effect.", text]);
+    expect(messages[1]?.id).toBe(decisions[0]?.message);
+  });
 });
