@@ -236,6 +236,7 @@ function screenPlacement(
   }
   if (
     key === "follow" ||
+    key === "sidekick:recovery" ||
     key === "sidekick:answer" ||
     key === "sidekick:send" ||
     key === "sidekick:stop" ||

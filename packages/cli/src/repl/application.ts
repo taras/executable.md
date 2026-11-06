@@ -9506,6 +9506,8 @@ function slotOf(key: string): ReplSlot | undefined {
     key === "sidekick:stop" ||
     key === "sidekick:resume" ||
     key === "sidekick:back" ||
+    key === "sidekick:recovery-announcement" ||
+    key === "sidekick:recovery" ||
     key === "sidekick:working" ||
     key === "sidekick:configure" ||
     key === "sidekick:asking" ||
@@ -12770,7 +12772,10 @@ function workspacePresentation(input: {
     }
     const queueViewport = `box:${QUEUE_WINDOW}:viewport`;
     // The rows this body draws besides its chat and that chat's two controls.
-    const extras = byKey("sidekick:back").length + byKey("sidekick:answer").length;
+    const extras =
+      byKey("sidekick:back").length +
+      byKey("sidekick:recovery").length +
+      byKey("sidekick:answer").length;
     const allocation = trayAllocation(view, context, extras);
     if (
       held !== undefined &&
@@ -12811,6 +12816,7 @@ function workspacePresentation(input: {
             children: [
               ...input.chatColumn(region),
               ...byKey("sidekick:back").map((one) => rowBox(one, region, room)),
+              ...byKey("sidekick:recovery").map((one) => rowBox(one, region, room)),
               ...byKey("sidekick:answer").map((one) => rowBox(one, region, room)),
             ],
           }),
