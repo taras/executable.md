@@ -224,9 +224,30 @@ function screenPlacement(
     key === "sidekick:back" ||
     key.startsWith("sidekick:retry:") ||
     key.startsWith("binding:") ||
+    key.startsWith("bindings-view:") ||
+    key.startsWith("input:") ||
+    key.startsWith("output:") ||
     key.startsWith("elicit:")
   ) {
     return { region: reading };
+  }
+  if (
+    key.startsWith("todo:") ||
+    key === "tray:queue" ||
+    (key.startsWith("queue:") && key.endsWith(":remove"))
+  ) {
+    const task = key.startsWith("todo:task:")
+      ? key.replace(/:action:(up|down|remove)$/, "")
+      : undefined;
+    return {
+      region: { key: "todo", rank: 5.5, axis: "vertical" },
+      ...(key === "todo:header" ? { entry: 0 } : {}),
+      ...(key === "todo:header" || key === "tray:queue" || key === "todo:add"
+        ? { groups: [{ key: "task-tabs", axis: "horizontal" }] }
+        : task === undefined
+          ? {}
+          : { groups: [{ key: task, axis: "horizontal" }] }),
+    };
   }
   if (key === "sidekick:message") {
     return { region: MESSAGE_REGION, entry: 0 };
@@ -236,6 +257,7 @@ function screenPlacement(
   }
   if (
     key === "follow" ||
+    key === "sidekick:recovery" ||
     key === "sidekick:answer" ||
     key === "sidekick:send" ||
     key === "sidekick:stop" ||

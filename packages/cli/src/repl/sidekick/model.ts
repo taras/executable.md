@@ -1,6 +1,6 @@
 import type { EntryPlacement } from "../entry-placement.ts";
-import { projectRecovery, recoveryBlocked } from "./recovery-state.ts";
-import type { RecoveryDisposition } from "./recovery-state.ts";
+import { recoveryBlocked, recoveryFacts, uncertainRequests } from "./recovery-state.ts";
+import type { HumanStopFact, RecoveryDisposition } from "./recovery-state.ts";
 /**
  * What a Sidekick history says, read without running anything.
  *
@@ -372,10 +372,71 @@ export interface SidekickPreferences {
   readonly effort: string | null;
 }
 
+/**
+ * The latest human Stop, while it still describes this conversation's exact unresolved frontier.
+ *
+ * A later request, another active conversation, a used decision, a new
+ * unfinished control or an unused decision this Stop did not lead to makes it
+ * describe some other incident, and it then permits nothing.
+ */
+export function applicableHumanStop(
+  reading: SidekickReading,
+  records: readonly SidekickRecord[],
+): HumanStopFact | undefined {
+  const stop = reading.humanStops.at(-1);
+  if (
+    stop === undefined ||
+    stop.conversation !== reading.active ||
+    reading.requests.some((one) => one.at > stop.at)
+  ) {
+    return undefined;
+  }
+  const used = reading.recoveries.filter((one) => one.used);
+  const retired = new Set(used.flatMap((one) => one.decision.requests));
+  const resolved = new Set(
+    used.flatMap((one) =>
+      one.decision.controls.map((control) => `${control.response}\0${control.order}`),
+    ),
+  );
+  const recorded = new Set(stop.controls.map((one) => `${one.response}\0${one.order}`));
+  const open = uncertainRequests(records, reading.requests, stop.conversation).filter(
+    (at) => !retired.has(at),
+  );
+  if (
+    JSON.stringify(open) !== JSON.stringify(stop.requests) ||
+    reading.unfinished.some(
+      (one) =>
+        one.conversation === stop.conversation &&
+        !resolved.has(`${one.response}\0${one.order}`) &&
+        !recorded.has(`${one.response}\0${one.order}`),
+    ) ||
+    reading.recoveries.some(
+      (one) =>
+        !one.used &&
+        !one.withdrawn &&
+        (one.decision.conversation === stop.conversation ||
+          one.decision.target === stop.conversation) &&
+        (one.decision.action !== "continue-original" ||
+          one.decision.retained.records <= stop.at ||
+          JSON.stringify(one.decision.requests) !== JSON.stringify(stop.requests)),
+    )
+  ) {
+    return undefined;
+  }
+  return stop;
+}
+
 /** Everything a reopened Sidekick knows before anybody says anything. */
 export interface SidekickReading {
   readonly recoveryPending: boolean;
   readonly recoveries: readonly RecoveryDisposition[];
+  /**
+   * Each retained human Stop of automatic feedback, in record order.
+   *
+   * Local evidence that this CLI's owned cancellation joined. It retires no
+   * uncertainty and establishes neither acceptance nor cold quiescence.
+   */
+  readonly humanStops: readonly HumanStopFact[];
   readonly requests: readonly SidekickRequest[];
   readonly submits: readonly SidekickSubmitIntent[];
   readonly conversations: readonly SidekickConversation[];
@@ -634,6 +695,14 @@ export function requestsFromHistory(
   /** The request whose records are still being read, per conversation. */
   const current = new Map<string, (typeof requests)[number]>();
   for (const [index, record] of records.entries()) {
+    if (record.kind === "feedback" && record.turn === null) {
+      const active = current.get(record.conversation);
+      // A message carrying recovered feedback retains the final composed input
+      // after its original source, before either has reached a canonical turn.
+      if (active?.kind === "message" && active.outcomes === 0) {
+        continue;
+      }
+    }
     if (record.kind === "message" || (record.kind === "feedback" && record.turn === null)) {
       const began = {
         conversation: record.conversation,
@@ -828,7 +897,7 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
   if (!requests.ok) {
     return requests;
   }
-  const recovery = projectRecovery(records, requests.value);
+  const recovery = recoveryFacts(records, requests.value);
   if (!recovery.ok) {
     return recovery;
   }
@@ -1434,8 +1503,10 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
       preferences: preferences === undefined ? undefined : Object.freeze(preferences),
       unfinished: Object.freeze(unfinished.map((held) => Object.freeze(held))),
       recoveryPending:
-        active !== undefined && recoveryBlocked(records, requests.value, recovery.value, active),
-      recoveries: recovery.value,
+        active !== undefined &&
+        recoveryBlocked(records, requests.value, recovery.value.dispositions, active),
+      recoveries: recovery.value.dispositions,
+      humanStops: recovery.value.stops,
       requests: requests.value,
       submits: Object.freeze(
         [...intents.entries()].flatMap(([key, held]) => {

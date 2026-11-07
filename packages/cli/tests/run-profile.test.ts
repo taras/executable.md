@@ -65,6 +65,9 @@ const GIT = "@executablemd/git";
  * Nothing here needs it to do anything — the question these rows ask is which
  * object arrives.
  */
+/** The checklist Plugin this command's own profile carries beside Git. */
+const TODO = "repl-todo";
+
 const CONFIGURED: Plugin = Plugin({
   name: GIT,
   // deno-lint-ignore require-yield
@@ -90,7 +93,11 @@ describe("the bundled run profile", () => {
     // by the contribution, as they are for every other command; what is this
     // command's own is the admission that reads back what an entry wrote down
     // about the checkout it was standing in.
-    expect(`repl: ${(yield* profile(["repl"])).join(",")}`).toBe(`repl: ${GIT}`);
+    //
+    // The session checklist arrives beside it, and only here: it contributes a
+    // `repl` session service and a Sidekick vocabulary, so it belongs to this
+    // command's profile rather than to a run profile.
+    expect(`repl: ${(yield* profile(["repl"])).join(",")}`).toBe(`repl: ${GIT},${TODO}`);
 
     const admissions = function* (command: string): Operation<number> {
       const installed = yield* scoped(function* (): Operation<CommandPlugins> {

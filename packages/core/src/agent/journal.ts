@@ -418,26 +418,47 @@ function permissionDecision(outcome: PermissionOutcome): PermissionOutcome | und
   return undefined;
 }
 
+/**
+ * Fix the input this occurrence's pending description will be appended with.
+ *
+ * Offered to the live runner alone, which is the only thing that can know the
+ * text a turn finally asked: a held conversation composes its content above
+ * the provider, so the input this journal holds is settled during the turn
+ * rather than before it. Replay has already been decided by then — `type` and
+ * `name` are the identity fields, and this one is extra metadata — so a
+ * composed turn replays as itself and a run that never reached the boundary
+ * keeps the attempted input it started with.
+ */
+export type RetainPromptInput = (input: string) => void;
+
 export function* persistPrompt(
   identity: {
     name: string;
     input: string;
     position?: Readonly<SourcePosition>;
   },
-  live: () => Operation<PromptRecord>,
+  live: (retain: RetainPromptInput) => Operation<PromptRecord>,
   association: () => AgentPromptAssociation | undefined = () => undefined,
   begun: () => AgentPromptHandle = () => undefined,
 ): Workflow<PromptRecord> {
   const sourceOwner = yield* ephemeral(SourceOwner.get());
+  // Held here, and handed to nothing but the live runner below: the pending
+  // description belongs to this function, so composition can settle the input
+  // without reaching the journal, a second record or the retained history.
+  const description = {
+    type: AGENT_PROMPT,
+    name: identity.name,
+    input: identity.input,
+    ...sourceOwnerDescription(identity.position, sourceOwner),
+  };
   const stored = yield createDurableOperation<Json>(
-    {
-      type: AGENT_PROMPT,
-      name: identity.name,
-      input: identity.input,
-      ...sourceOwnerDescription(identity.position, sourceOwner),
-    },
+    description,
     function* (): Operation<Json> {
-      return serializePromptRecord(yield* live());
+      return serializePromptRecord(
+        yield* live((input) => {
+          description.input = input;
+        }),
+      );
     },
     { coordinator: promptPublication(association, begun) },
   );

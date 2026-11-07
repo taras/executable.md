@@ -42,11 +42,16 @@
  * permission drawer is spelled `+permission` and carries nothing: the request it
  * opens over belongs to this process, and a URL naming one would be a URL
  * naming something no other reader could ever have.
+ *
+ * `+input:<name>` and `+output:<name>` open one value of the selected entry's
+ * Input or Output. Both read the entry rather than the innermost scope, so the
+ * same name under each view, and under each entry, is a different value.
  */
 
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 
+import { entryInputBindings, entryOutput } from "./model.ts";
 import type {
   ReplAgentSession,
   ReplBinding,
@@ -81,9 +86,13 @@ export type ReplReading = "sidekick";
 /** Which right-hand pane a location retains. */
 export type ReplPane = "bindings" | "sidekick";
 
+/** Which of an entry's two binding readings is meant: what it started with, or its result. */
+export type ReplBindingsView = "input" | "output";
+
 /** One drawer in the stack, as the grammar spells it. */
 export type ReplDrawerRef =
   | { readonly kind: "binding"; readonly name: string }
+  | { readonly kind: "entry-value"; readonly view: ReplBindingsView; readonly name: string }
   | { readonly kind: "recorded-elicit"; readonly marker: string }
   | { readonly kind: "live-elicit" }
   | { readonly kind: "live-permission" }
@@ -204,6 +213,12 @@ export const NO_LIVE: ReplLiveAvailability = Object.freeze({
 /** One drawer resolved against a model. */
 export type ReplDrawer =
   | { readonly kind: "binding"; readonly name: string; readonly binding: ReplBinding }
+  | {
+      readonly kind: "entry-value";
+      readonly view: ReplBindingsView;
+      readonly name: string;
+      readonly binding: ReplBinding;
+    }
   | { readonly kind: "recorded-elicit"; readonly elicitation: ReplElicitation }
   | { readonly kind: "live-elicit" }
   | { readonly kind: "live-permission" }
@@ -691,6 +706,9 @@ function openDrawer(
     }
     return Ok({ kind: "binding", name: reference.name, binding });
   }
+  if (reference.kind === "entry-value") {
+    return openEntryValue(model, route, reference.view, reference.name);
+  }
   if (reference.kind === "live-elicit") {
     if (route.surface !== "entries") {
       return Err(
@@ -752,6 +770,45 @@ function openDrawer(
   return Ok({ kind: "recorded-elicit", elicitation });
 }
 
+/**
+ * One value of the selected entry's Input or Output.
+ *
+ * Output exists only where this prefix holds the entry's successful result, so
+ * a running, failed, stopped or older entry refuses rather than answering with
+ * values its result never carried.
+ */
+function openEntryValue(
+  model: ReplModel,
+  route: ReplRoute,
+  view: ReplBindingsView,
+  name: string,
+): Result<ReplDrawer> {
+  const entry = model.entries.find((candidate) => candidate.key === route.scopes[0]);
+  if (entry === undefined) {
+    return Err(new ReplRouteError(`an ${view} value opens over the entry that holds it.`));
+  }
+  let bindings = entryInputBindings(model, entry);
+  if (view === "output") {
+    const output = entryOutput(entry);
+    if (output.state !== "ok") {
+      return Err(
+        new ReplRouteError(`${entry.key} has no successful Output at this history position.`),
+      );
+    }
+    bindings = output.bindings;
+  }
+  const binding = bindings.find((candidate) => candidate.name === name);
+  if (binding === undefined) {
+    return Err(
+      new ReplRouteError(
+        `${entry.key}'s ${view === "input" ? "Input" : "Output"} holds no ${name} at this ` +
+          "history position.",
+      ),
+    );
+  }
+  return Ok({ kind: "entry-value", view, name, binding });
+}
+
 /** The drawer one segment names, or none when nothing names it. */
 function readDrawer(text: string): ReplDrawerRef | undefined {
   const at = text.indexOf(":");
@@ -771,6 +828,11 @@ function readDrawer(text: string): ReplDrawerRef | undefined {
       ? undefined
       : { kind: "binding", name: argument };
   }
+  if (kind === "input" || kind === "output") {
+    return argument === undefined || argument.length === 0
+      ? undefined
+      : { kind: "entry-value", view: kind, name: argument };
+  }
   if (kind === "elicit") {
     if (argument === undefined) {
       return { kind: "live-elicit" };
@@ -786,6 +848,9 @@ function spellDrawer(drawer: ReplDrawerRef): string {
   }
   if (drawer.kind === "binding") {
     return `binding:${drawer.name}`;
+  }
+  if (drawer.kind === "entry-value") {
+    return `${drawer.view}:${drawer.name}`;
   }
   if (drawer.kind === "live-permission") {
     return "permission";

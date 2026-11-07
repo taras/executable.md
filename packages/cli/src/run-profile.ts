@@ -35,6 +35,7 @@ import {
   replRepositoryPlugin,
   replRepositoryPluginDeclaresFor,
 } from "./repl/repositories/plugin.ts";
+import { todoPlugin, todoPluginDeclaresFor } from "./repl/todo/plugin.ts";
 import type { Plugin } from "@executablemd/core/api";
 import { loadPlugins, type PluginModuleLoader } from "./plugin-loader.ts";
 import type { PluginSelection } from "./plugin-selection.ts";
@@ -116,19 +117,27 @@ export function* assembleRunProfile(
   // native variant and the neutral value are the same Plugin to everything
   // below, and which one this is was decided by the entrypoint.
   const value = yield* BundledRunPlugin.expect();
+  // The command's own bundled contributions, after the Git value and before
+  // the operator's: a session checklist belongs to `xmd repl` rather than to a
+  // run profile, so it is prefixed where that command is the one being
+  // assembled and nowhere else.
+  const prefix = [
+    ...(bundled ? [value] : []),
+    ...(todoPluginDeclaresFor(selection.command) ? [todoPlugin] : []),
+  ];
   // Resolved before anything is loaded: the reserved selector names a value
   // this profile holds, so it is never handed to a module loader, and a command
   // whose profile does not carry the bundled Plugin cannot conjure one by
   // writing the selector either.
   const named = selection.specifiers.filter((specifier) => specifier !== BUNDLED_SELECTOR);
   if (named.length === 0) {
-    return bundled ? Object.freeze([value]) : Object.freeze([]);
+    return Object.freeze(prefix);
   }
   // Captured before the first module is loaded, so a relative path and a
   // package specifier both resolve where the caller is standing.
   const directory = yield* cwd();
   const loaded = yield* loadPlugins(named, directory, load);
-  return Object.freeze(bundled ? [value, ...loaded] : [...loaded]);
+  return Object.freeze([...prefix, ...loaded]);
 }
 
 /**

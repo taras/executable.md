@@ -5147,6 +5147,14 @@ still reaches a registered modifier by name, a replaced `timeout` included.
 
 #### Capability-backed invocation identity
 
+Canonical generated capture includes acknowledged ordinary identity registrations.
+The execution privately retains each exact factory implementation and domain,
+and projects that identity-only association through core-owned lifetime and
+form/result wrappers. Evaluation narrows to exact admitted functions and closes
+its route on exit; execution teardown revokes every descendant. This grants no
+protected dispatch, new form or effect. Names and registry records establish
+no domain, and ordinary authored imports still settle their own selection frame.
+
 A component that names a durable operation after itself decides which retained
 record a replay restores, so two invocations arriving at one name each replay
 the other's work, and an implementation running under somebody else's identity
@@ -6291,8 +6299,11 @@ protected route for exact admitted definitions. None is published through a cont
 import answer or public host input.
 
 Protected lookup uses exact function identity. The execution's route projects
-an already routed source onto a wrapper without exposing the body; an
-unprotected source projects nothing. Profile sealing projects the first wrapper
+an already routed source onto a wrapper without exposing the body. An ordinary
+installed identity implementation carries only its existing execution domain,
+so its projected route issues an authenticated invocation while `body()` remains
+absent. Foreign functions project nothing. Ordinary identity projection reports
+no protected origin and preserves normal wrapper execution and form admission. Profile sealing projects the first wrapper
 onto the full execution route. `<Evaluate>` derives a fresh child route seeded
 only with its selected sealed definitions, and passes that route and its narrowed
 lexical `SyntaxReference` internally to generated expansion. Generated import
@@ -6736,19 +6747,67 @@ DurableEvent[] → frozen ReplModel → resolved view → keyed descriptions
             typed semantic actions, target ancestry → root
 ```
 
-The Journal is the only durable truth, and history terminates at `ReplModel`:
+The Journal owns execution history, and history terminates at `ReplModel`:
 projection detaches every value it retains and freezes it, so nothing below
 holds a `DurableEvent` and nothing above can change one. Route resolution is
 pure and answers with the exact objects that model holds.
 
+### The session checklist
+
+One session `todo.md` owns the shared checklist. Its feature-local initialized
+service owns serialized source observation/replacement, refresh, pending change
+observations and live prompt recovery. Detached view facts flow down; semantic
+human edits return to the logical root. The file is not an execution-history
+projection or a second task store.
+
+Runtime adapters supply one private strict UTF-8 reader. Each observation scopes
+an Fs byte decoder beneath the existing semantic Files read, preserving
+permission, resolution and target checks. Successful BOM-preserving UTF-8 text
+has byte-faithful equality; undecodable input supplies no valid source snapshot.
+Mutation validates the complete source, all hunks and the candidate before one
+Files replacement, publishes its acknowledged own-commit observation in order,
+and releases serialization before agent consequences. Outside writers are not
+excluded. Issued native work joins teardown; current bytes never establish a
+past unknown acknowledgement.
+
+The one dual-form `Sidekick.Todo` definition retains typed results under each
+execution's occurrence owner. Both generated forms use ordinary designated
+feedback. Plugin-owned finite observations enrich independently admitted prompts;
+failed/stopped work supplies fresh full current state next time without retry.
+Only an eligible idle human commit asks existing root dispatch for one honestly
+attributed TODO change message. Busy context uses no FIFO slot and idle alone
+starts no turn. Close discards pending/recovery state and preserves the file.
+
+A held conversation composes content and its cold stream through outer max
+`Agent.prompt` middleware. Its private turn-local min terminal validates the
+unchanged selected agent, exact checked Session and timeout, bypasses ancestor
+min routing/default handlers, and calls the captured provider on its retained
+receiver. Before native prompt subscription, Core fixes final XMD-composed
+input in its pending canonical description and acknowledges matching feedback
+intent. Canonical publication and matching feedback acknowledgement retain that
+text; original human source stays original. One canonical consumer and audit
+publish once after owned cleanup joins. Middleware return and `stream.done`
+establish no canonical outcome.
+
+Initialization, the one declaration both surfaces read, and that middleware are
+one selected Plugin's `repl` contribution, described under
+[Selected Plugin session services](specs/repl-spec.md#selected-plugin-session-services).
+No manual initializer wrapping, control catalog or private invocation journal
+belongs to the feature: the host records a contributed control's intent and
+outcome.
+
 ### Local Sidekick attachments
 
 The recovery records stay with the CLI Sidekick owner. `sidekick/recovery-record.ts`
-parses the closed decision and reference facts; `sidekick/recovery-state.ts`
-checks their exact request and offer linkage during history projection.
-`sidekick/recovery-owner.ts` reads the existing logical-session ownership
-administration for the captured provider identity. None of these facts repairs
-canonical Prompt history or establishes old backend acceptance.
+parses the closed decision, reference and `human-stop` facts;
+`sidekick/recovery-state.ts` checks their exact request, control and offer
+linkage during history projection. `sidekick/recovery-owner.ts` reads the
+existing logical-session ownership administration for the captured provider
+identity. None of these facts repairs canonical Prompt history or establishes old
+backend acceptance. A `human-stop` record is local evidence that this owner's
+human Stop of automatic feedback joined; it retires no uncertainty and is no cold
+ownership proof. The Sidekick writer prepares and appends it in one turn, so its
+bound prefix is exactly the acknowledged history it follows.
 
 Deliberate recovery fallback in a child prepares a different conversation in
 the same root and publishes a fresh exact reference. The original stays selected
@@ -7142,6 +7201,16 @@ would replay a whole execution to mount nothing. It defaults to *not* asking, so
 a caller that cannot say refuses. The overlay's
 output is announced on its own stream, because it is the one thing a frame shows
 that leaves no record for anything else to observe.
+
+The Bindings pane reads an entry's two boundaries from those same records. An
+entry's Input is the frozen inherited bindings of the entry admitted before it,
+held by reference — the record `entryInitialBindings` hands its execution — and
+its Output is the root data its own successful result carried, read from the
+retained close. Neither is a snapshot of its own: nothing new is journaled,
+captured at run time or read from a live environment, so a history prefix shows
+only the boundaries that prefix holds. Output is not inheritance. A failed or
+stopped entry shows its outcome instead of the data its result may still have
+handed on, and inheritance keeps every retained value regardless.
 
 `specs/repl-spec.md` describes the product this assembles. The runtime-named
 `{deno,node,bun,compiled}-repl.ts` modules state their own platform's data
@@ -9252,7 +9321,10 @@ returns only once the work is down rather than once the request has stopped
 being interesting. It then re-reads the history, because the cycle was writing
 to it and its own refresh never ran, and releases the owner itself rather than
 waiting for the stopped caller's bookkeeping — a person who has stopped the
-Sidekick can speak to it immediately.
+Sidekick can speak to it immediately. A human Stop that halted this owner's
+automatic feedback first retains a `human-stop` record, still holding the owner,
+so nothing is admitted between the join and the acknowledged record. Recovery's
+own Stop, attachment cancellation and teardown retain none.
 
 What it leaves alone is the point. The conversation stays open, held by a task
 in the *owner's* scope rather than by whichever message opened it, so the next
@@ -9440,7 +9512,12 @@ pending item or stops and joins its active exchange; old handles are inert.
 Human Sidekick Stop separately holds advancement synchronously before spawning
 that captured cancellation. Attachment cancellation adds no hold. Ordinary
 failure holds remaining work without retrying the failed item; explicit Resume
-rechecks guards. Fatal owner failures retain their command authority. Teardown
+rechecks guards. A UI message sent while a retained human Stop still applies is
+bound to that Stop when accepted; only such a message at the FIFO head passes
+the unknown-feedback guard. Its activation runs the root's Submit reconciliation
+and the owner's recovery decision while it still waits, then sends it as one
+ordinary message. Older or ACP-origin heads stay blocked, and nothing is
+reordered. A cold dispatch over an applicable Stop starts held. Fatal owner failures retain their command authority. Teardown
 prevents advancement and disposes unsaved waiting work. Cold inspection starts
 none. Entry work remains owned by ReplSession.
 
@@ -9771,6 +9848,7 @@ Status is measured against main.
 | `GitQuery.resolve()` | verifies and resolves one Git revision expression contextually [Interface and evidence](specs/workflow-spec.md#7-the-git-capability--moved). | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry [Invariant](#workflow-run-storage); [Interface and evidence](specs/workflow-spec.md#9-retained-run-storage). | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in [Invariant](#one-database-at-a-time-and-a-transaction-a-caller-can-hold). | built on main |
+| session TODO checklist | Shares one workspace file between human controls and typed Todo forms; a selected Plugin's conversation-scoped `Agent.prompt` middleware carries committed observations and fresh recovery state into the retained input, and only eligible idle human commits wake existing dispatch. [Contract](specs/repl-spec.md#the-shared-checklist). | Built. |
 | REPL workspace mounts | Repeatable explicit SOURCE:TARGET pairs interpret existing Dir scopes through a private authored/actual expansion frame. Actual cwd reaches File, Glob and foreground processes; captured native Agent placement and ordinary/workflow hosts remain separate. Selected reads and originally covered ensures use a closed authored-first association in their entry's ordered engine slots; legacy physical records retain physical matching. [Boundary](#the-document-filesystem-boundary); [retention](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | implemented on the workspace-mount branch |
 | REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the captured project ambient checkout, a selected managed checkout, or the marked entry's owned session workspace — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result before policy or routing. A new absolute directory request refuses denied write/absolute before routing, acquisition or a new file record; permitted live work retains the complete composition and final provider check — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. The shared raw/direct recorder preserves ordinary ancestor-max `Files` composition, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. The local Git and issue work an entry retains have rows of their own beside this one; except for selected mapped reads, work outside every selected checkout and the marked entry's owned workspace stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained selection | one executing REPL entry's own `<Repository>` and `<Worktree>` selections, recorded beside its file work as small routing records: the canonical managed root, the checkout root, the common Git directory, the credential-free repository identity, the display name and the owner checkout, with a root-level `<Worktree>`'s ambient owner recorded as its own answer. The selector is the ordinary managed one, with its own creation, compatible-reuse, conflict and interrupted-adoption policy; what this adds is that a completed selection answers from its record, calling no selector and reaching no clone, `worktree add`, sidecar, credential or lock — so a continuation works in a checkout somebody has since changed or removed, while only new work meets today's filesystem. Parsed facts are held to the call they stand at with pure slot arithmetic against the root the record itself carries, registered in entry-private state and minted as a fresh selection, so a copied or edited Repository value can misname a target and never reach one. One entry at a time *owns* a managed slot, held until teardown and reacquired lazily by the first new operation inside a restored placement; that is a different hold from the shared Git directory's mutation lease, which only a new `<Worktree>` selector and a new mutation take. A selection is acknowledged before its path is bound, and native work that was never acknowledged runs live again under the ordinary partial-creation policy [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |

@@ -2219,7 +2219,7 @@ describe("F3 — a narrow frame offers no inspection control (#875 R1)", () => {
     [...keys]
       .filter(
         (key): key is string =>
-          key !== undefined && (key.startsWith("binding:") || key.startsWith("elicit:")),
+          key !== undefined && (key.startsWith("output:") || key.startsWith("elicit:")),
       )
       .sort();
 
@@ -2241,7 +2241,10 @@ describe("F3 — a narrow frame offers no inspection control (#875 R1)", () => {
   it("TL11: a recorded binding and answer are in a wide frame and in no part of a narrow one", function* () {
     const recorded = yield* retained();
     const live = asking(undefined);
-    const state = withScope(initialState("frames"), recorded.scope);
+    const state: ReplState = {
+      ...withScope(initialState("frames"), recorded.scope),
+      bindingsView: "output",
+    };
 
     // Wide, where there is an inspection region: both rows are placed, drawn and
     // targetable. Without this the absence below would be absence of nothing.
@@ -2250,7 +2253,7 @@ describe("F3 — a narrow frame offers no inspection control (#875 R1)", () => {
     const wideLaidOut = yield* laidOutKeys(wideTree, wideView);
     expect(inspecting(wideLaidOut.keys()).length).toBeGreaterThan(0);
     expect(wideLaidOut.get(`elicit:${recorded.marker}`)).toBe(true);
-    expect(inspecting(wideLaidOut.keys()).some((key) => key.startsWith("binding:"))).toBe(true);
+    expect(inspecting(wideLaidOut.keys()).some((key) => key.startsWith("output:"))).toBe(true);
 
     // Narrow, where there is not.
     const tree = yield* useReplTree<ReplAction>();

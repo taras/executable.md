@@ -11,7 +11,7 @@ import {
   applyConfigure,
   sidekickIdle,
 } from "./support/screen-journeys.ts";
-import { OTHER_MOUNTED_AGENT } from "./support/mounted-repl.ts";
+import { awaitedFact, OTHER_MOUNTED_AGENT } from "./support/mounted-repl.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 
 function* key(page: ReplPage, name: PageKey): Operation<void> {
@@ -19,6 +19,48 @@ function* key(page: ReplPage, name: PageKey): Operation<void> {
   yield* page.key(name);
   yield* page.until(`write after ${name}`, (one) => one.index > before);
   yield* sleep(30);
+}
+
+/** The choice this permission's options draw at one order. */
+function choiceLabel(order: number): string {
+  return `[Choice ${String(order).padStart(2, "0")}]`;
+}
+
+/**
+ * One traversal step, acknowledged by the choice it was supposed to reach.
+ *
+ * A write is not an answer about focus: any later presentation satisfies "the
+ * screen changed", including one this keystroke did not cause and one drawn
+ * before the move was committed. The marker on the exact expected choice is the
+ * answer, so each step states where focus has to be and waits for that.
+ */
+function* steppedTo(page: ReplPage, name: PageKey, order: number): Operation<void> {
+  yield* page.key(name);
+  yield* page.until(`focus on ${choiceLabel(order)} after ${name}`, (one) =>
+    one.shows(`> ${choiceLabel(order)}`),
+  );
+}
+
+/**
+ * The same step, with the frame carrying it held back.
+ *
+ * The control for the walk above: while this move's presentation is held, the
+ * screen is every write before it, and the marker this step is waiting for is
+ * not on it. So an earlier or unrelated write cannot acknowledge the step —
+ * only the frame that actually carries the move can, which is what the release
+ * then allows.
+ */
+function* heldStepTo(page: ReplPage, name: PageKey, order: number): Operation<void> {
+  page.repl.terminal.holdNextPresent();
+  yield* page.key(name);
+  yield* awaitedFact(`the frame carrying ${name} held`, function* () {
+    return page.repl.terminal.holdPresent !== undefined;
+  });
+  expect(page.screen().shows(`> ${choiceLabel(order)}`)).toBe(false);
+  page.repl.terminal.holdPresent?.release();
+  yield* page.until(`focus on ${choiceLabel(order)} after the released ${name}`, (one) =>
+    one.shows(`> ${choiceLabel(order)}`),
+  );
 }
 function* wheel(page: ReplPage, direction: "up" | "down", at: ScreenCell): Operation<void> {
   const before = page.screen().index;
@@ -78,14 +120,20 @@ describe("wheel remaining migration journeys", () => {
     const choice = page.screen().locate("[Choice 00]");
     yield* ticks(page, "down", choice, 8);
     expect(page.screen().shows("> [Choice 00]")).toBe(true);
-    for (let at = 0; at < 39; at += 1) {
-      yield* key(page, "ArrowDown");
+    for (let at = 1; at <= 39; at += 1) {
+      // One middle step through the held frame, which is this walk's control.
+      if (at === 20) {
+        yield* heldStepTo(page, "ArrowDown", at);
+        continue;
+      }
+      yield* steppedTo(page, "ArrowDown", at);
     }
     expect(page.screen().shows("> [Choice 39]")).toBe(true);
     expect(page.repl.fake.decisions).toHaveLength(0);
-    for (let at = 0; at < 39; at += 1) {
-      yield* key(page, "ArrowUp");
+    for (let at = 38; at >= 0; at -= 1) {
+      yield* steppedTo(page, "ArrowUp", at);
     }
+    expect(page.screen().shows("> [Choice 00]")).toBe(true);
     for (let at = 0; at < 8; at += 1) {
       yield* key(page, "PageUp");
     }
@@ -291,7 +339,7 @@ describe("wheel remaining migration journeys", () => {
     page.repl.fake.script({
       reply: `<Elicit as="answer" schema={{type:"object",properties:{value:{type:"string"}},required:["value"],additionalProperties:false}}>${preview}</Elicit>`,
     });
-    for (let at = 0; at < 3; at += 1) {
+    for (let at = 0; at < 4; at += 1) {
       yield* key(page, "Tab");
     }
     yield* page.type("question");
@@ -469,8 +517,8 @@ describe("wheel remaining migration journeys", () => {
       "current restored and joined",
       (one) => !one.shows("[Back to current chat]") && sidekickIdle(one),
     );
-    // Retiring Stop returns one header row to chat without moving its first visible row.
-    const last = inspected[inspected.length - 1];
+    // Retiring Stop releases the wrapped action row without moving the reading anchor.
+    const last = inspected.at(-1);
     if (last === undefined) {
       throw new Error("the streaming chat had no rows to inspect");
     }

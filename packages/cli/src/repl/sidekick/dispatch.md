@@ -83,6 +83,14 @@ live-only; teardown settles pending cancellation and cold inspection starts none
 A first setup establishes this owner's association; pending messages never move
 to a replacement. Admission excludes replacement while messages wait.
 
+A UI Stop passes `cancel("human")`, and the owner retains its `human-stop` record
+before releasing the exchange. A UI message accepted while that Stop applies and
+the queue is held records the Stop's position. Only such a head passes the
+unknown-feedback guard: it keeps its place while the root-supplied `reconcile`
+and `owner.prepareContinuation` bind it, then starts through `owner.message` with
+that decision. A dispatch with no `reconcile` leaves it refused. A dispatch
+opened over an applicable Stop starts held.
+
 Ordinary product edits to labels, fitted rows and navigation belong in the root
 and presentation consumers. Execution policy, guard checks, cancellation and
 queue settlement belong in `dispatch.ts`. Editor revision policy belongs in

@@ -10,9 +10,9 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { useTempFileCompiler } from "@executablemd/core";
+import { INLINE_SOURCE_PATH, useTempFileCompiler } from "@executablemd/core";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 
 import { projectRepl } from "../src/repl/model.ts";
 import type { ReplModel } from "../src/repl/model.ts";
@@ -23,7 +23,8 @@ import type {
   ReplRoute,
   ReplSelection,
 } from "../src/repl/route.ts";
-import { initialState, NO_AGENT, reduceRepl } from "../src/repl/application.ts";
+import { ROOT_IMPORT } from "../src/repl/entries.ts";
+import { initialState, NO_AGENT, readingKeyOf, reduceRepl } from "../src/repl/application.ts";
 import type { ReplLive } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { agentReferenceEvents, referenceEvents } from "./fixtures/repl/reference.ts";
@@ -1108,5 +1109,91 @@ describe("REPL route: the saved chat a location reads", () => {
         chats({ chats: ["chat-1"], sessions: ["sk:chat"] }),
       ).session,
     ).toBe(retained);
+  });
+});
+
+/** One entry whose result carried this root data, as a run records one. */
+function settledEntry(bindings: { [name: string]: Json }): DurableEvent[] {
+  return [
+    {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "import_component", name: ROOT_IMPORT },
+      result: {
+        status: "ok",
+        value: { kind: "repository", path: INLINE_SOURCE_PATH, content: "Entry.\n" },
+      },
+    },
+    {
+      type: "close",
+      coroutineId: "root",
+      result: { status: "ok", value: { status: "ok", output: "", value: "", bindings } },
+    },
+  ];
+}
+
+describe("REPL route: an entry's Input and Output values (#982)", () => {
+  const A = settledEntry({ config: { mode: "draft" } });
+  const B = settledEntry({ config: { mode: "final" }, added: 1 });
+  const location = (scope: string, drawer: string) =>
+    `xmd://repl/${EXECUTION}/entries/${scope}/+${drawer}`;
+
+  /** The one value a location's drawer opened, or a failure naming what it opened. */
+  function opened(model: ReplModel, at: string): Json {
+    const drawer = resolved(model, at).drawers[0];
+    if (drawer?.kind !== "entry-value") {
+      throw new Error(`${at} opened ${drawer?.kind}`);
+    }
+    return drawer.binding.value;
+  }
+
+  it("E7: one name under each view and each entry is its own value", function* () {
+    const model = projected([...A, ...B]);
+    expect(opened(model, location("entry-1", "output:config"))).toEqual({ mode: "draft" });
+    expect(opened(model, location("entry-2", "input:config"))).toEqual({ mode: "draft" });
+    expect(opened(model, location("entry-2", "output:config"))).toEqual({ mode: "final" });
+    // The first entry started from nothing, so its Input names nothing.
+    expect(unresolved(model, location("entry-1", "input:config"))).toContain("holds no config");
+    expect(unresolved(model, location("entry-2", "input:added"))).toContain("holds no added");
+
+    // Each spelling is its own canonical location, and the existing binding
+    // drawer still reads the scope's own published value.
+    for (const drawer of ["input:config", "output:config", "binding:config"]) {
+      const spelled = location("entry-2", drawer);
+      expect(encodeLocation(decoded(spelled))).toBe(spelled);
+    }
+    const published = resolved(model, location("entry-2", "binding:config")).drawers[0];
+    expect(published?.kind).toBe("binding");
+    expect(refused(`xmd://repl/${EXECUTION}/entries/entry-2/+input:`)).toContain("drawer");
+    expect(refused(`xmd://repl/${EXECUTION}/sessions/+output:config`)).toContain("Sessions");
+
+    // Four readings, four identities.
+    const state = (scope: string) => ({
+      ...initialState(EXECUTION),
+      route: { ...initialState(EXECUTION).route, scopes: [scope] },
+    });
+    const keys = [
+      readingKeyOf(state("entry-1"), { kind: "entry-value", view: "output", name: "config" }),
+      readingKeyOf(state("entry-2"), { kind: "entry-value", view: "output", name: "config" }),
+      readingKeyOf(state("entry-2"), { kind: "entry-value", view: "input", name: "config" }),
+      readingKeyOf(state("entry-2"), { kind: "binding", name: "config" }),
+    ];
+    expect(new Set(keys).size).toBe(4);
+  });
+
+  it("E7: Output opens only over a successful result the prefix holds", function* () {
+    const admitted = projected([...A, B[0]]);
+    expect(opened(admitted, location("entry-2", "input:config"))).toEqual({ mode: "draft" });
+    expect(unresolved(admitted, location("entry-2", "output:config"))).toContain(
+      "no successful Output",
+    );
+    const failed = projected([
+      ...A,
+      B[0],
+      { type: "close", coroutineId: "root", result: { status: "err", error: { message: "no" } } },
+    ]);
+    expect(unresolved(failed, location("entry-2", "output:config"))).toContain(
+      "no successful Output",
+    );
   });
 });

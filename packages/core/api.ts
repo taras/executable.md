@@ -83,11 +83,14 @@ export type { AgentSessionRequest } from "./src/agent/session-request.ts";
  * for; a chat does not, because what holds it to the configuration it was
  * created under cannot be something a handler may route around.
  *
- * Before capture, a trusted conversation installation can decorate the selected
- * provider's prompt content and cold stream. It retains the prior receiver and
- * forwards setup and inspection unchanged. Prompt delegation keeps the selected
- * agent and exact checked Session; later selection cannot replace either provider.
- * The decoration and subscription-owned cleanup belong to that conversation.
+ * A held turn is captured here and reached through this object's own receiver.
+ * Its content and cold stream are composed by ordinary outer `Agent.prompt`
+ * middleware above a turn-local terminal bound to this provider, the selected
+ * agent and the exact checked Session — so composition changes the text and the
+ * stream, never which provider answers. What this provider receives is the text
+ * the journal retains; a composition that changed the checked call is refused
+ * before any native work, and nothing routes through ordinary provider handlers
+ * as a fallback. Subscription-owned cleanup belongs to that conversation's turn.
  *
  * One name for the interface and the Context, as `Agent` already has.
  */

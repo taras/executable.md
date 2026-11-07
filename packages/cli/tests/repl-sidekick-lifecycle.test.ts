@@ -973,9 +973,11 @@ describe("Tier PV — generation that ended without a reply", () => {
     expect(repl.fake.prompts).toHaveLength(1);
 
     // Explicit Resume releases the failure hold without retrying the failed candidate.
+    yield* page.press("QUEUE");
     yield* page.until("failure hold", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("failure hold released", (one) => !one.shows("[Resume queue]"));
+    yield* intoComposer(page);
     yield* sendMessage(page, "again");
     yield* page.until(
       "the next reply, with no preview left",
@@ -1794,9 +1796,11 @@ describe("Tier MQ — two questions, two answers, and Stop", () => {
     // And a later message asks a new question, with the same field names and an
     // empty form: the values typed into the stopped one are not an answer to it.
     repl.fake.script({ reply: asks(SIDEKICK_ASKS, "Asking again.") });
+    yield* page.press("QUEUE");
     yield* page.until("human Stop hold", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("human Stop hold released", (one) => !one.shows("[Resume queue]"));
+    yield* intoComposer(page);
     yield* sendMessage(page, "ask again");
     yield* page.until("the next question announcing itself", (one) =>
       // The notice this screen gives: the control that opens the question, in
@@ -2197,8 +2201,11 @@ describe("Follow: mounted Stop owns continuation", () => {
       (one) => one.occurrences("[stop]") === 0,
     );
     expect(page.repl.fake.prompts).toHaveLength(1);
+    yield* page.press("QUEUE");
+    yield* page.until("stopped queue selected", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("queue hold released without work", (one) => !one.shows("[Resume queue]"));
+    yield* intoComposer(page);
     expect(page.repl.fake.prompts).toHaveLength(1);
     page.repl.fake.script({
       reply: "<REPL.EntryInput>Second independent entry.</REPL.EntryInput>\n<REPL.Submit />",

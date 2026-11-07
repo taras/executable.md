@@ -2039,9 +2039,11 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
       retryOffered(one),
     );
     expect(retryOffered(failed)).toBe(true);
+    yield* page.press("QUEUE");
     yield* page.until("failure queue hold", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("explicit failure release", (one) => !one.shows("[Resume queue]"));
+    yield* intoComposer(page);
 
     // Unrelated newer text in the box, and a newer draft edit: neither is what
     // Retry sends, and neither is consumed by it.
@@ -2097,9 +2099,11 @@ describe("Tier CFG — Retry for a request whose turn failed", () => {
     // rather than a control that was never there.
     yield* page.until("the failed attempt and its retry", (one) => retryOffered(one));
 
+    yield* page.press("QUEUE");
     yield* page.until("failure queue hold", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("explicit failure release", (one) => !one.shows("[Resume queue]"));
+    yield* intoComposer(page);
 
     // Something else asked, and answered. The failure is still in the history
     // and still readable, but it is behind a reply now: resending it would put

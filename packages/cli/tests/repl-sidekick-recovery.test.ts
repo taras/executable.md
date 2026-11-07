@@ -44,7 +44,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensure, Err, Ok, race, scoped, spawn, suspend, until, withResolvers } from "effection";
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
+import type { AgentSessionOwnershipAdministration } from "@executablemd/runtime";
+import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sidekick/dispatch.ts";
+import type { SidekickDispatch, SidekickExchange } from "../src/repl/sidekick/dispatch.ts";
+import type { SidekickOwner } from "../src/repl/sidekick/owner.ts";
+import type { PairedChatStorage } from "../src/repl/sidekick/repository.ts";
+import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import { useTempFileCompiler, Elicitation } from "@executablemd/core";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
@@ -3697,5 +3703,566 @@ describe("987 correction — cold prepared replacement", () => {
     expect(JSON.stringify(resumed.prompts)).toContain("A new deliberate replacement instruction.");
     expect(resumed.decisions).toHaveLength(2);
     expect(resumed.unknown).toBeGreaterThan(0);
+  });
+});
+
+describe("1151 — cold ordinary Send after a retained human Stop", () => {
+  type Administration = "clean" | "active" | "forced" | "missing";
+  function administered(mode: Administration): AgentSessionOwnershipAdministration | undefined {
+    if (mode === "missing") {
+      return undefined;
+    }
+    return {
+      *inspectOwnership(keyDigest) {
+        return Ok({
+          keyDigest,
+          recordRevision: mode,
+          record: {
+            keyDigest,
+            state: mode === "active" ? "active" : "idle",
+            release: mode === "clean" ? "quiesced" : mode === "forced" ? "forced" : "none",
+            ownerKind: "session",
+            operationId: "retained-owner",
+            lastForcedRecovery: null,
+          },
+        });
+      },
+      *forceRecoverOwnership() {
+        throw new Error("Recovery must not force ownership.");
+      },
+    };
+  }
+  function reconciling(
+    chat: PairedChatStorage,
+    stream: { settled(): Operation<void> },
+    session: Harness["session"],
+  ): () => Operation<Result<void>> {
+    return function* () {
+      yield* stream.settled();
+      const entries = session.reading(undefined);
+      if (!entries.ok) {
+        throw entries.error;
+      }
+      const findings = yield* coldReservations(
+        yield* chat.writer.readAll(),
+        entries.value.model.entries,
+        chat.location.entries,
+      );
+      if (!findings.ok) {
+        return findings;
+      }
+      for (const finding of findings.value) {
+        yield* retainResolution(chat.writer, finding);
+      }
+      return Ok(undefined);
+    };
+  }
+  /** Reply 1 submits one counted entry, and its automatic feedback is held streaming. */
+  function* counted(): Operation<{ held: Harness; chat: PairedChatStorage; effects(): number }> {
+    let effects = 0;
+    const held = yield* useHarness(undefined, {
+      entryInstallation: {
+        components: [
+          {
+            name: "CountedEffect",
+            origin: "test",
+            props: { type: "object", additionalProperties: false },
+            factory: () =>
+              function* () {
+                effects++;
+                return "counted once";
+              },
+          },
+        ],
+      },
+    });
+    if (held.execution.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    held.fake.script({
+      reply:
+        '<Let as="code" select="code">\n```xmd\n<CountedEffect />\n```\n</Let>\n' +
+        "<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />\n<Output>Working.</Output>",
+    });
+    held.fake.script({ deltas: ["<Output>Thinking", " further.</Output>"], holdAfter: 1 });
+    return { held, chat: held.execution.chat, effects: () => effects };
+  }
+  function* liveFeedback(
+    held: Harness,
+    chat: PairedChatStorage,
+  ): Operation<{ dispatch: SidekickDispatch; first: SidekickExchange }> {
+    const dispatch = yield* useSidekickDispatch({
+      owner: held.owner,
+      admission: createSidekickAdmission(),
+      execution: held.execution.id,
+      workspace: held.workspace,
+      changed() {},
+      reconcile: reconciling(chat, held.execution.stream, held.session),
+    });
+    const first = yield* dispatch.send("Run the counted effect.");
+    if (!first.ok) {
+      throw first.error;
+    }
+    yield* held.fake.streamingTurns(1);
+    dispatch.hold();
+    return { dispatch, first: first.value };
+  }
+  function* stoppedFeedback(): Operation<{ held: Harness; effects(): number }> {
+    const { held, chat, effects } = yield* counted();
+    yield* scoped(function* () {
+      const { first } = yield* liveFeedback(held, chat);
+      yield* first.cancel("human");
+    });
+    return { held, effects };
+  }
+  function failing(kind: SidekickRecord["kind"], failure: Error, text?: string): Operation<void> {
+    return ReplHost.around(
+      {
+        *appendRecord([path, line], next) {
+          const record = parseSidekickRecord(line.trim());
+          if (
+            record?.kind === kind &&
+            (text === undefined || (record.kind === "message" && record.text === text))
+          ) {
+            throw failure;
+          }
+          yield* next(path, line);
+        },
+      },
+      { at: "max" },
+    );
+  }
+  function* coldOwner(
+    held: Harness,
+    administration: AgentSessionOwnershipAdministration | undefined,
+  ): Operation<{ owner: SidekickOwner; chat: PairedChatStorage; dispatch: SidekickDispatch }> {
+    const reopened = yield* held.repository.open(held.execution.id);
+    if (reopened.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    const chat = reopened.chat;
+    const owner = yield* useSidekickOwner({
+      assembly: { ...held.profile.sidekickAssembly, ownershipAdministration: administration },
+      chat,
+      *establish() {
+        return Ok(chat);
+      },
+      root: {
+        ...rootReads(held.session, held.profile),
+        *fill() {
+          return Err(new Error("This witness admits no draft fill."));
+        },
+      },
+      *submit() {
+        return Err(new Error("This witness admits no entry."));
+      },
+      revision: () => 0,
+      *acknowledge() {},
+      draft: () => "",
+    });
+    const dispatch = yield* useSidekickDispatch({
+      owner,
+      admission: createSidekickAdmission(),
+      execution: held.execution.id,
+      workspace: held.workspace,
+      changed() {},
+      reconcile: reconciling(chat, reopened.stream, held.session),
+    });
+    return { owner, chat, dispatch };
+  }
+  function* bytes(held: Harness): Operation<string> {
+    if (held.execution.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    return yield* until(readFile(held.execution.chat.location.sidekick, "utf8"));
+  }
+
+  for (const mode of ["clean", "active", "forced", "missing"] as const) {
+    it(`A2: a cold eligible Send ${mode === "clean" ? "binds clean retained ownership" : `refuses ${mode} ownership`}`, function* () {
+      const { held, effects } = yield* stoppedFeedback();
+      const key = held.fake.turns[0]?.handle.sessionKey;
+      const before = yield* bytes(held);
+      const prompts = held.fake.prompts.length;
+      expect(prompts).toBe(2);
+      const cold = yield* coldOwner(held, administered(mode));
+      expect(yield* bytes(held)).toBe(before);
+      expect(held.fake.prompts).toHaveLength(prompts);
+      expect(cold.dispatch.queue.held?.kind).toBe("stopped");
+      held.fake.script({ reply: "<Output>The next step.</Output>" });
+      const next = yield* cold.dispatch.send("Propose the next step from the counted result.");
+      if (!next.ok) {
+        throw next.error;
+      }
+      expect(next.value.snapshot.state).toBe("queued");
+      expect(yield* bytes(held)).toBe(before);
+      expect((yield* cold.dispatch.resume()).ok).toBe(true);
+      if (mode === "clean") {
+        const sent = yield* next.value.completion;
+        if (!sent.ok) {
+          throw sent.error;
+        }
+        expect(held.fake.prompts).toHaveLength(prompts + 1);
+        expect(held.fake.prompts.at(-1)).toContain(
+          "Propose the next step from the counted result.",
+        );
+        expect(held.fake.prompts.at(-1)).toContain("acceptance remains unknown");
+        expect(held.fake.turns.at(-1)?.handle.sessionKey).toBe(key);
+        const decisions = (yield* cold.chat.writer.readAll()).filter(
+          (one) => one.kind === "recovery-decision",
+        );
+        expect(decisions.map((one) => [one.action, one.basis])).toEqual([
+          ["continue-original", "retained-clean-ownership"],
+        ]);
+      } else {
+        yield* awaitedFact("the refused cold continuation", function* () {
+          return cold.dispatch.queue.held?.kind === "failure";
+        });
+        expect(held.fake.prompts).toHaveLength(prompts);
+        expect(yield* bytes(held)).toBe(before);
+        expect(cold.dispatch.queue.pending).toHaveLength(1);
+        yield* next.value.cancel();
+      }
+      expect(held.session.model.entries).toHaveLength(1);
+      expect(effects()).toBe(1);
+    });
+  }
+
+  it("A4: a cut before the Stop is acknowledged leaves only the existing refusal", function* () {
+    const { held, chat, effects } = yield* counted();
+    const reached = withResolvers<void>();
+    yield* ReplHost.around(
+      {
+        *appendRecord([path, line], next) {
+          if (parseSidekickRecord(line.trim())?.kind === "human-stop") {
+            reached.resolve();
+            yield* suspend();
+          }
+          yield* next(path, line);
+        },
+      },
+      { at: "max" },
+    );
+    const { first } = yield* liveFeedback(held, chat);
+    yield* spawn(() => first.cancel("human"));
+    yield* reached.operation;
+    const before = yield* bytes(held);
+    const cold = yield* coldOwner(held, administered("clean"));
+    expect(cold.owner.humanStop).toBe(undefined);
+    expect(cold.dispatch.queue.held).toBe(undefined);
+    const refused = yield* cold.dispatch.send("Propose the next step from the counted result.");
+    expect(refused.ok ? "" : refused.error.message).toContain("cannot be established");
+    const review = yield* cold.owner.reviewRecovery();
+    expect(review.ok && review.value.requests).toHaveLength(1);
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(yield* bytes(held)).toBe(before);
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(effects()).toBe(1);
+  });
+
+  it("A4: a cut between the decision and its message needs renewed Send of the same text", function* () {
+    const { held, chat, effects } = yield* counted();
+    const text = "Propose the next step from the counted result.";
+    const failure = new Error("Recording failure at the bound message");
+    const observed = yield* scoped(function* () {
+      const { dispatch, first } = yield* liveFeedback(held, chat);
+      yield* first.cancel("human");
+      const next = yield* dispatch.send(text);
+      if (!next.ok) {
+        throw next.error;
+      }
+      yield* failing("message", failure, text);
+      expect((yield* dispatch.resume()).ok).toBe(true);
+      const done = yield* next.value.completion;
+      return done.ok ? undefined : done.error;
+    });
+    expect(observed).toBe(failure);
+    const cut = yield* chat.writer.readAll();
+    expect(cut.filter((one) => one.kind === "recovery-decision")).toHaveLength(1);
+    expect(cut.filter((one) => one.kind === "message").map((one) => one.text)).toEqual([
+      "Run the counted effect.",
+    ]);
+    expect(held.fake.prompts).toHaveLength(2);
+    const before = yield* bytes(held);
+
+    const other = yield* coldOwner(held, administered("clean"));
+    expect(other.dispatch.queue.held?.kind).toBe("stopped");
+    expect(held.fake.prompts).toHaveLength(2);
+    const different = yield* other.dispatch.send("A different instruction.");
+    if (!different.ok) {
+      throw different.error;
+    }
+    expect((yield* other.dispatch.resume()).ok).toBe(true);
+    yield* awaitedFact("the refused different instruction", function* () {
+      return other.dispatch.queue.held?.kind === "failure";
+    });
+    expect(other.dispatch.queue.held?.reason).toContain("different instruction");
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(yield* bytes(held)).toBe(before);
+    yield* different.value.cancel();
+
+    const renewed = yield* coldOwner(held, administered("clean"));
+    held.fake.script({ reply: "<Output>The next step.</Output>" });
+    const same = yield* renewed.dispatch.send(text);
+    if (!same.ok) {
+      throw same.error;
+    }
+    expect((yield* renewed.dispatch.resume()).ok).toBe(true);
+    const sent = yield* same.value.completion;
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    expect(held.fake.prompts).toHaveLength(3);
+    expect(held.fake.prompts[2]).toContain(text);
+    const after = yield* renewed.chat.writer.readAll();
+    const decisions = after.filter((one) => one.kind === "recovery-decision");
+    expect(decisions).toHaveLength(1);
+    const messages = after.filter((one) => one.kind === "message");
+    expect(messages.map((one) => one.text)).toEqual(["Run the counted effect.", text]);
+    expect(messages[1]?.id).toBe(decisions[0]?.message);
+    expect(after.filter((one) => one.kind === "feedback")).toHaveLength(1);
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(effects()).toBe(1);
+  });
+
+  it("A5: a Stop whose frontier changed afterwards permits nothing", function* () {
+    const { held } = yield* stoppedFeedback();
+    if (held.execution.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    const stopped = yield* held.execution.chat.writer.readAll();
+    const response = stopped.find((one) => one.kind === "response");
+    if (response?.kind !== "response") {
+      throw new Error("Expected the first reply's response.");
+    }
+    yield* held.execution.chat.writer.append({
+      kind: "control",
+      conversation: response.conversation,
+      response: response.response,
+      order: 99,
+      component: "REPL.Bindings",
+      arguments: {},
+    });
+    const before = yield* bytes(held);
+    const cold = yield* coldOwner(held, administered("clean"));
+    const reading = cold.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    expect(reading.value.humanStops).toHaveLength(1);
+    expect(reading.value.unfinished.some((one) => one.order === 99)).toBe(true);
+    expect(cold.owner.humanStop).toBe(undefined);
+    expect(cold.dispatch.queue.held).toBe(undefined);
+    const refused = yield* cold.dispatch.send("Propose the next step from the counted result.");
+    expect(refused.ok).toBe(false);
+    expect(held.fake.prompts).toHaveLength(2);
+    expect(yield* bytes(held)).toBe(before);
+  });
+
+  it("A5: a failed Stop publication surfaces and leaves Send refused", function* () {
+    const { held, chat } = yield* counted();
+    const failure = new Error("Recording failure at the human Stop");
+    yield* failing("human-stop", failure);
+    let observed: unknown;
+    try {
+      yield* scoped(function* () {
+        const { first } = yield* liveFeedback(held, chat);
+        yield* first.cancel("human");
+      });
+    } catch (error) {
+      observed = error;
+    }
+    expect(observed).toBe(failure);
+    expect((yield* chat.writer.readAll()).some((one) => one.kind === "human-stop")).toBe(false);
+    expect(held.owner.humanStop).toBe(undefined);
+    const dispatch = yield* useSidekickDispatch({
+      owner: held.owner,
+      admission: createSidekickAdmission(),
+      execution: held.execution.id,
+      workspace: held.workspace,
+      changed() {},
+      reconcile: reconciling(chat, held.execution.stream, held.session),
+    });
+    expect(dispatch.queue.held).toBe(undefined);
+    const refused = yield* dispatch.send("Propose the next step from the counted result.");
+    expect(refused.ok ? "" : refused.error.message).toContain("cannot be established");
+    expect(held.fake.prompts).toHaveLength(2);
+  });
+
+  it("A5: a preference saved while the continuation decision waits stays outside its prefix", function* () {
+    const { held } = yield* stoppedFeedback();
+    held.fake.configuration({
+      model: {
+        selected: "default-model",
+        choices: [{ id: "default-model" }, { id: "saved-model" }],
+      },
+    });
+    const clean = administered("clean");
+    if (clean === undefined) {
+      throw new Error("Expected clean administration.");
+    }
+    const inspecting = withResolvers<void>();
+    const inspected = withResolvers<void>();
+    const cold = yield* coldOwner(held, {
+      *inspectOwnership(digest) {
+        inspecting.resolve();
+        yield* inspected.operation;
+        return yield* clean.inspectOwnership(digest);
+      },
+      forceRecoverOwnership: clean.forceRecoverOwnership,
+    });
+    const saving = withResolvers<void>();
+    const saved = withResolvers<void>();
+    yield* ensure(() => {
+      inspected.resolve();
+      saved.resolve();
+    });
+    yield* ReplHost.around(
+      {
+        *appendRecord([path, line], next) {
+          if (parseSidekickRecord(line.trim())?.kind === "preferences") {
+            saving.resolve();
+            yield* saved.operation;
+          }
+          yield* next(path, line);
+        },
+      },
+      { at: "max" },
+    );
+    const deciding = withResolvers<void>();
+    const writer = cold.chat.writer;
+    const append = writer.append.bind(writer);
+    writer.append = function* (record) {
+      if (record.kind === "recovery-decision") {
+        deciding.resolve();
+      }
+      yield* append(record);
+    };
+    const appendPrepared = writer.appendPrepared.bind(writer);
+    writer.appendPrepared = (prepare) => {
+      deciding.resolve();
+      return appendPrepared(prepare);
+    };
+    const text = "The exact new instruction.";
+    held.fake.script({ reply: "<Output>The next step.</Output>" });
+    const next = yield* cold.dispatch.send(text);
+    if (!next.ok) {
+      throw next.error;
+    }
+    expect((yield* cold.dispatch.resume()).ok).toBe(true);
+    yield* inspecting.operation;
+    const save = yield* spawn(() => cold.owner.configure({ model: "saved-model" }));
+    yield* saving.operation;
+    inspected.resolve();
+    yield* deciding.operation;
+    saved.resolve();
+    yield* save;
+    yield* awaitedFact("the continuation to send or refuse", function* () {
+      return cold.dispatch.queue.held !== undefined || next.value.snapshot.terminal !== undefined;
+    });
+    expect(cold.dispatch.queue.held).toBe(undefined);
+    const sent = yield* next.value.completion;
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    if (held.execution.chat.form !== "paired") {
+      throw new Error("Expected paired history.");
+    }
+    const read = yield* readSidekickRecords(held.execution.chat.location.sidekick);
+    expect(read).toEqual(yield* writer.readAll());
+    const at = read.findIndex((one) => one.kind === "recovery-decision");
+    const decision = read[at];
+    if (decision?.kind !== "recovery-decision") {
+      throw new Error("Expected the continuation decision.");
+    }
+    expect(decision.retained.records).toBe(at);
+    expect(read.slice(0, at).some((one) => one.kind === "preferences")).toBe(true);
+    const messages = read.filter((one) => one.kind === "message");
+    expect(messages.map((one) => one.text)).toEqual(["Run the counted effect.", text]);
+    expect(messages[1]?.id).toBe(decision.message);
+    expect(held.fake.prompts).toHaveLength(3);
+    expect(held.fake.prompts[2]).toContain(text);
+    expect(cold.dispatch.queue.held).toBe(undefined);
+    const reading = cold.owner.reading;
+    expect(reading.ok && reading.value.recoveries.map((one) => one.used)).toEqual([true]);
+  });
+
+  it("A3: an instruction withdrawn while its decision prefix is measured records no decision", function* () {
+    const { held, chat } = yield* (function* () {
+      const stopped = yield* stoppedFeedback();
+      if (stopped.held.execution.chat.form !== "paired") {
+        throw new Error("Expected paired history.");
+      }
+      return { held: stopped.held, chat: stopped.held.execution.chat };
+    })();
+    const writer = chat.writer;
+    const appendPrepared = writer.appendPrepared.bind(writer);
+    let preparing = false;
+    writer.appendPrepared = (prepare) =>
+      appendPrepared(function* (records) {
+        preparing = true;
+        try {
+          return yield* prepare(records);
+        } finally {
+          preparing = false;
+        }
+      });
+    let live = true;
+    let measured = false;
+    const withdrawn = yield* held.owner.prepareContinuation("Withdraw this instruction.", {
+      current() {
+        if (!preparing) {
+          return live;
+        }
+        if (!measured) {
+          measured = true;
+          return live;
+        }
+        live = false;
+        return live;
+      },
+    });
+    expect(measured).toBe(true);
+    expect(withdrawn.ok).toBe(false);
+    expect(
+      (yield* readSidekickRecords(chat.location.sidekick)).some(
+        (one) => one.kind === "recovery-decision",
+      ),
+    ).toBe(false);
+    expect(held.owner.reading.ok && held.owner.reading.value.recoveries).toEqual([]);
+    expect(held.owner.humanStop).toBeDefined();
+
+    const dispatch = yield* useSidekickDispatch({
+      owner: held.owner,
+      admission: createSidekickAdmission(),
+      execution: held.execution.id,
+      workspace: held.workspace,
+      changed() {},
+      reconcile: reconciling(chat, held.execution.stream, held.session),
+    });
+    expect(dispatch.queue.held?.kind).toBe("stopped");
+    const text = "A different next instruction.";
+    held.fake.script({ reply: "<Output>The different step.</Output>" });
+    const next = yield* dispatch.send(text);
+    if (!next.ok) {
+      throw next.error;
+    }
+    expect((yield* dispatch.resume()).ok).toBe(true);
+    yield* awaitedFact("the different instruction to send or refuse", function* () {
+      return dispatch.queue.held !== undefined || next.value.snapshot.terminal !== undefined;
+    });
+    expect(dispatch.queue.held).toBe(undefined);
+    const sent = yield* next.value.completion;
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    expect(held.fake.prompts).toHaveLength(3);
+    expect(held.fake.prompts[2]).toContain(text);
+    expect(held.fake.prompts[2]).not.toContain("Withdraw this instruction.");
+    const after = yield* readSidekickRecords(chat.location.sidekick);
+    const decisions = after.filter((one) => one.kind === "recovery-decision");
+    expect(decisions.map((one) => one.text)).toEqual([text]);
+    const messages = after.filter((one) => one.kind === "message");
+    expect(messages.map((one) => one.text)).toEqual(["Run the counted effect.", text]);
+    expect(messages[1]?.id).toBe(decisions[0]?.message);
   });
 });
