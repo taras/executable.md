@@ -768,11 +768,25 @@ eval resources join before the next phase. Actual failed release is retained bef
 printing or Prompt normalization can discard it. Failed owning teardown permits
 neither Catch, replacement work nor an unentered Finally. Canonical execution
 captures the durable root's shared failure slot before document preparation or
-middleware and passes its activation closure through the private release ledger.
+middleware and passes its activation closure through the private ledger.
 Actual invocation release failure and terminal infrastructure failure activate
 that slot before a durable child can serialize an ordinary error Close; replacing
-a later ambient Context does not redirect activation. Each phase checks the
-combined terminal failure before entering an unentered Finally. Prompt's existing live publication coordinator likewise
+a later ambient Context does not redirect activation. The existing
+[canonical Test reporting boundary](#canonical-test-containment) keeps ordinary
+joined teardown in a private invocation domain: nested Try still stops, while
+Testing classifies the failed test and runs the next independent test. A failure
+escaping that boundary reaches its enclosing owner with the original causes.
+Infrastructure failures still activate the root, and retained child publication
+keeps its own access to that activation even inside a Test reporting domain.
+
+Core combines and ranks its own reports, but preserves an independently selected
+failure already present in the captured root state, including an ordinary Error
+selected by ReplayGuard. Presence in that owned slot, rather than a class or
+name, identifies the durable owner's decision. This preserves the
+[shared persistence rule](packages/durable-streams/specs/effection-integration.md#81-rundurablechild--the-core-building-block)
+and the checkpoint owner in [history fork compatibility](specs/workflow-workspace-spec.md#112-what-compatibility-means).
+No later effect or append is admitted. Each phase checks the combined terminal
+failure before entering an unentered Finally. Prompt's existing live publication coordinator likewise
 activates its infrastructure failure path before serializing failed release;
 no recoverable failed-turn record is published. Initiating and
 teardown failures remain separate. Through the complete combined causes, durability

@@ -10,6 +10,9 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
+import { API } from "@executablemd/runtime";
+import { invokeFiles } from "../../core/src/files.ts";
+import { filesFatalFailure } from "../../core/src/errors.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { Component, registerComponents, useTempFileCompiler } from "@executablemd/core";
 import type { ErrorSegment } from "@executablemd/core";
@@ -26,6 +29,113 @@ describe("<Test> as a function component", () => {
     'yield* spawn(function* () { try { yield* suspend(); } finally { throw new Error("cleanup exploded"); } });',
     "```",
   ].join("\n");
+  it("keeps Try release safety local to the canonical failed Test report", function* () {
+    let released = 0;
+    let replacement = 0;
+    let finalized = 0;
+    yield* registerComponents([
+      {
+        name: "BrokenTestRelease",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          yield* ensure(() => {
+            released++;
+            throw new Error("test release failed");
+          });
+          return "body";
+        },
+      },
+      {
+        name: "TestReplacement",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          replacement++;
+          return "WRONG";
+        },
+      },
+      {
+        name: "TestFinally",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          finalized++;
+          return "WRONG";
+        },
+      },
+    ]);
+    const run = yield* runDoc({
+      "README.md":
+        '<Testing><Test name="broken"><Try><BrokenTestRelease /><Catch><TestReplacement /></Catch><Finally><TestFinally /></Finally></Try></Test><Test name="fine"><Assert expr={true} /></Test></Testing>',
+    });
+    expect(released).toBe(1);
+    expect(replacement).toBe(0);
+    expect(finalized).toBe(0);
+    expect(run.results.map((result) => [result.name, result.status])).toEqual([
+      ["broken", "fail"],
+      ["fine", "pass"],
+    ]);
+    expect(run.completion.ok).toBe(false);
+    expect(run.output).not.toContain("WRONG");
+  });
+
+  it("keeps actual Files infrastructure failure globally terminal inside canonical Test", function* () {
+    let fatal: unknown;
+    let later = 0;
+    let released = false;
+    const stream = new InMemoryStream();
+    yield* registerComponents([
+      {
+        name: "LaterTestWork",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          later++;
+          return "later work";
+        },
+      },
+      {
+        name: "TestFilesInfra",
+        origin: "test-interaction",
+        props: { type: "object" },
+        *fn() {
+          yield* ensure(() => {
+            released = true;
+          });
+          yield* API.Files.around({
+            *readTextFile() {
+              throw new Error("broken provider");
+            },
+          });
+          try {
+            yield* invokeFiles(API.Files.operations.readTextFile({ cwd: ".", path: "notes.txt" }));
+          } catch (error) {
+            fatal = filesFatalFailure(error);
+            throw error;
+          }
+          return "unreachable";
+        },
+      },
+    ]);
+    const run = yield* runDoc(
+      {
+        "README.md":
+          '<Testing><Test name="infra"><TestFilesInfra /></Test><Test name="later"><LaterTestWork /></Test></Testing>',
+      },
+      { stream },
+    );
+    expect(released).toBe(true);
+    expect(fatal).toBeDefined();
+    expect(run.completion.ok).toBe(false);
+    if (!run.completion.ok) {
+      expect(filesFatalFailure(run.completion.error)).toBe(fatal);
+    }
+    expect(later).toBe(0);
+    expect(run.results).toHaveLength(0);
+    expect(stream.snapshot().filter((event) => event.type === "close")).toHaveLength(0);
+  });
+
   // The raise interceptor answers nearest-first so <AssertThrows> can catch a
   // diagnostic before the test claims it. That must not cost the property the
   // interception exists for: a raise the test does NOT claim still fails it,

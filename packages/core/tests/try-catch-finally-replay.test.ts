@@ -6,6 +6,7 @@ import {
   createDurableOperation,
   InMemoryStream,
   DurablePersistenceError,
+  ReplayGuard,
 } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
@@ -19,6 +20,81 @@ import { fixture, run, start } from "./try-catch-finally-harness.ts";
 const noProps = { type: "object", properties: {}, additionalProperties: false };
 
 describe("Try retained continuation", () => {
+  it("preserves the durable owner's exact selected Error through a replayed Files operation", function* () {
+    const stream = new InMemoryStream();
+    const entered = withResolvers<void>();
+    const selected = new Error("owned replay checkpoint");
+    let reads = 0;
+    let after = 0;
+    let released = 0;
+    let held = true;
+    yield* registerComponents([
+      {
+        name: "GuardedRead",
+        origin: "try-replay",
+        props: noProps,
+        *fn() {
+          yield* ensure(() => {
+            released++;
+          });
+          yield* API.Files.around({
+            *readTextFile([input]) {
+              const text = yield createDurableOperation(
+                { type: "guarded_file_read", name: "read", path: input.path },
+                function* () {
+                  reads++;
+                  return "retained file";
+                },
+              );
+              if (typeof text !== "string") {
+                throw new Error("recorded Files read did not return text");
+              }
+              return Ok(text);
+            },
+          });
+          yield* invokeFiles(API.Files.operations.readTextFile({ cwd: ".", path: "notes.txt" }));
+          entered.resolve();
+          if (held) {
+            yield* suspend();
+          }
+          after++;
+          return "WRONG";
+        },
+      },
+    ]);
+    const source = "<Try><GuardedRead /><Catch>WRONG</Catch><Finally>WRONG</Finally></Try>WRONG";
+    const live = yield* spawn(() => run(source, undefined, stream));
+    yield* entered.operation;
+    yield* live.halt();
+    expect(reads).toBe(1);
+    expect(released).toBe(1);
+    const prefix = stream.snapshot();
+    expect(
+      prefix.some(
+        (event) => event.type === "yield" && event.description.type === "guarded_file_read",
+      ),
+    ).toBe(true);
+    expect(prefix.some((event) => event.type === "close")).toBe(false);
+    held = false;
+    yield* ReplayGuard.around({
+      decide([event], next) {
+        return event.description.type === "guarded_file_read"
+          ? { outcome: "error", error: selected }
+          : next(event);
+      },
+    });
+    const resumed = yield* run(source, undefined, stream);
+    expect(resumed.result.ok).toBe(false);
+    if (!resumed.result.ok) {
+      expect(resumed.result.error).toBe(selected);
+    }
+    expect(reads).toBe(1);
+    expect(after).toBe(0);
+    expect(released).toBe(2);
+    expect(resumed.output).not.toContain("WRONG");
+    expect(stream.snapshot()).toEqual(prefix);
+  });
+
   for (const kind of ["Files", "ordinary"]) {
     it(`F2: ${kind} child failure keeps its recovery policy across the actual retained prefix`, function* () {
       yield* race([
