@@ -908,7 +908,8 @@ boundary runs after the component has returned.
 Each prompt is one durable operation (`agent_prompt`). The record carries the
 prompt's identity and input, the agent and session identity, terminal status,
 stop reason, text (including partial text on failure), any structured failure,
-one optional canonical `configuration`, and one optional list of `permissions`.
+one optional canonical `configuration`, one optional list of `permissions`, and
+one optional `usage` (see [Prompt usage](#prompt-usage)).
 The configuration is retained only
 after the provider emits `started`: a turn that started is one the provider put
 under exactly those settings, while a configuration refusal started no turn
@@ -1012,6 +1013,127 @@ producing identical output and identical aggregated failures. A prompt failure
 that was thrown through `throwOnError` is marked `raised`; a partial replay
 re-throws it, while a full replay omits it from aggregate restoration because it
 was already handled where it occurred.
+
+### Prompt usage
+
+An acknowledged Prompt keeps the usage its provider reported for that turn in
+its own record. Selecting retained history — `--journal`, a workflow run, a REPL
+entry, a Sidekick conversation — selects it; there is no accounting flag and no
+second usage journal. A transient history stays transient.
+
+```json
+{
+  "usage": {
+    "requestId": "…",
+    "providerRecordId": "…",
+    "providerMessageId": "…",
+    "providerSessionId": "…",
+    "provenance": {
+      "host": "deno-source",
+      "xmd": { "version": "0.14.1" },
+      "runtime": { "version": "0.21.1" },
+      "adapter": { "version": "1.6.2", "digest": "sha256:…" }
+    },
+    "readings": [
+      {
+        "source": "response",
+        "scope": "last-request",
+        "kind": "tokens",
+        "counter": "snapshot",
+        "tokens": { "inputTokens": 900, "cachedReadTokens": 3000, "outputTokens": 40 }
+      },
+      { "source": "update", "scope": "session", "kind": "context", "used": 12000, "size": 258000 }
+    ],
+    "coverage": {
+      "finalReport": "received",
+      "outerPrompt": "partial",
+      "limitations": ["codex-last-request-only", "codex-reasoning-inclusion-unverified"]
+    }
+  }
+}
+```
+
+`requestId` is the runtime request this turn was started with;
+`providerMessageId` is the user message the runtime generated and saved for it,
+under the record `providerRecordId`; `providerSessionId` is the ACP session it
+was prompted in. They are observations: none routes a turn, authorizes work or
+names a native Session, which stays `agentSessionId`. Each is absent when it was
+not observed. `provenance` names the host and the builds that produced the turn;
+an unmeasured build stays absent rather than borrowed from elsewhere.
+
+Each reading is one source's own view, under the source's own counter names:
+
+| `source` | `kind` | Allowed values |
+| --- | --- | --- |
+| `response` | `tokens` | `inputTokens`, `outputTokens`, `cachedReadTokens`, `cachedWriteTokens`, `thoughtTokens`, `totalTokens` |
+| `quota-total` | `tokens` | `totalTokens`, `inputTokens`, `cachedInputTokens`, `cachedWriteTokens`, `outputTokens`, `reasoningOutputTokens` |
+| `quota-model` | `tokens` | the same counters, with the reported `model` |
+| `update` | `tokens`, `context`, `cost` | live breakdown counters; occupancy `used` and `size`; reported `amount` and `currency` |
+
+Views of the same work are not additional spend: nothing adds a response total,
+a quota total and per-model rows together. An omitted counter is unknown,
+`tokens: null` is a source that reported null, and an empty list of readings is
+not zero. Live updates replace one another, and an occupancy-only update leaves
+an earlier cost or breakdown in place. `scope` and `counter` state what the
+traced adapter release's view covers:
+
+| Adapter | `response` and `quota-total` | `quota-model` | Outer Prompt |
+| --- | --- | --- | --- |
+| Claude 0.70.0 | `main-loop`, `turn-total` | `broader-model-work`, `turn-total` | `partial`: subagent inclusion is unverified, absent counters are reported as zero, and reasoning is billed inside output |
+| Codex 1.6.2 | `last-request`, `snapshot` | `last-request`, `snapshot` | `partial`: only the final internal request is reported |
+
+Any other release reports `unknown` scope and counter with
+`source-semantics-unknown`. `finalReport` is `unavailable` when the turn ended
+without a response view, and an unknown remainder stays unknown.
+`examples/agent-usage/README.md` measures these meanings on a selected build.
+
+A failed or cancelled Prompt whose record is acknowledged keeps what was reported
+before it ended, and never gains a checkpoint. Work stopped before its record was
+acknowledged — a scope cancellation, a refused publication or append, a lost
+process — leaves only the earlier history; nothing appends a substitute ending,
+an invented zero or a second paid turn. A direct `Agent.prompt()` call, which no
+canonical Prompt authors, may be observed but is retained nowhere and lends its
+usage to no neighbouring Prompt. Native-launch materialization keeps its own
+`MaterializationUsage` on its own record.
+
+Core selects the retained value under the producing execution's protection
+before the record is serialized. Each optional string — identities, build
+versions and digests, model names, currency — is withheld on its own when it
+fails the secret scanner or matches a protected input, which a scanner opt-out
+does not waive; `field-withheld` then joins the limitations. The complete event
+still crosses the unchanged journal gate.
+
+The current reader validates a present `usage` completely and refuses the record
+when it is malformed or carries an unknown member. A record without `usage` —
+including every record written before it existed — reads as unknown and is never
+backfilled. Completed replay returns the retained value and limitations without
+reaching a provider, refreshing a measurement or recording more spend.
+
+#### How a provider reports it
+
+The coordinator Core delivers to an installed provider carries one optional
+member:
+
+```ts
+export type PromptUsageReporter = (usage: PromptUsage) => void;
+promptUsage?(): Operation<PromptUsageReporter | undefined>;
+```
+
+A provider calls it once when its stream is actually subscribed, before any
+native work, and keeps the receiver for that turn. The receiver belongs to that
+one subscription: Core opens it when the subscription starts, keeps it open
+through the subscription's joined teardown and seals it afterwards, so a
+retained receiver records nothing later and two subscriptions of one cold stream
+never share one. A canonical turn whose stream was subscribed more than once
+retains only an `association-ambiguous` receipt. Reporting is synchronous
+observation: it appends nothing and establishes no identity, checkpoint or
+outcome. An absent member, an undefined receiver and a report that never came
+all leave usage unknown and refuse nothing.
+
+The ACPX provider reports from its one reader of the turn, outside its failure
+handling: an acquisition, normalization or receiver failure leaves the turn's
+events, text, outcome and cleanup exactly as they were. A provider installed
+without a host's usage facts (`promptUsageHost`) reports nothing.
 
 A native session launch is not a prompt and does not reuse `agent_prompt`. It
 retains its own `agent_session_launch` records, one per completed phase, so an

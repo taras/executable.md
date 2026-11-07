@@ -20,6 +20,8 @@ import type {
   PromptOptions,
   Session,
   SessionConfiguration,
+  PromptUsage,
+  UsageBuild,
 } from "@executablemd/core";
 import {
   AcpxSessionPolicyError,
@@ -35,7 +37,7 @@ import type {
   AcpxSessionPolicy,
 } from "../src/provider.ts";
 import { useSerialQueues } from "../src/serial-queue.ts";
-import type { AcpxProvider } from "../src/provider.ts";
+import type { AcpxProvider, ProbeCapableRuntime } from "../src/provider.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 import {
   choice,
@@ -49,7 +51,11 @@ import {
   useFlatWorld,
   useGitWorld,
 } from "./helpers.ts";
-import type { AcpPermissionRequest, AcpRuntimeTurnResult } from "../src/acpx-runtime.ts";
+import type {
+  AcpPermissionRequest,
+  AcpRuntimeEvent,
+  AcpRuntimeTurnResult,
+} from "../src/acpx-runtime.ts";
 import type { CoordinatorHarness, FakeRuntimeHarness } from "./helpers.ts";
 import type { NativeAdapter } from "../src/native-launch.ts";
 
@@ -2958,5 +2964,428 @@ describe("Tier SE — reconfiguring an owned session", () => {
       expect(harness.configOptions?.[0]?.currentValue).toBe("gpt-5.4");
       expect(harness.turns.length).toBe(1);
     });
+  });
+});
+
+/** What one observed turn's receiver was handed, in order. */
+interface UsageObservation {
+  readonly reports: PromptUsage[];
+  /** How many receivers the provider asked for. */
+  acquisitions: number;
+}
+
+interface ObservedOptions {
+  /** Offer a receiver at all. */
+  observe?: boolean;
+  /** Raise from the acquisition itself. */
+  acquisitionFails?: boolean;
+  /** Raise from every report. */
+  reportFails?: boolean;
+  /** The carried adapter release, for the semantics table. */
+  adapter?: UsageBuild;
+  /** Construct through the first-turn acceptance barrier under a session policy. */
+  strong?: boolean;
+  /** Wrap the runtime this provider creates. */
+  wrap?: (runtime: ProbeCapableRuntime) => ProbeCapableRuntime;
+}
+
+const USAGE_HOST = { host: "deno-source", xmd: { version: "0.0.0-test" } } as const;
+
+function* installObservedProvider(
+  harness: FakeRuntimeHarness,
+  observation: UsageObservation,
+  options: ObservedOptions = {},
+): Operation<void> {
+  yield* useFlatWorld(options.strong === true ? WORKSPACE : CWD);
+  const coordinator = stubCoordinator();
+  if (options.observe !== false) {
+    // deno-lint-ignore require-yield
+    coordinator.promptUsage = function* () {
+      observation.acquisitions++;
+      if (options.acquisitionFails === true) {
+        throw new Error("acquisition failed");
+      }
+      return (usage: PromptUsage) => {
+        if (options.reportFails === true) {
+          throw new Error("receiver failed");
+        }
+        observation.reports.push(usage);
+      };
+    };
+  }
+  const factory = createAcpxProvider({
+    createRuntime:
+      options.wrap === undefined
+        ? harness.create
+        : (runtimeOptions) => options.wrap!(harness.create(runtimeOptions)),
+    sessionStore: makeStore(),
+    agentRegistry: makeRegistry({ scribe: "scribe-cmd", codex: "codex-cmd", claude: "claude-cmd" }),
+    advertiseNativeLaunch: [],
+    advertiseClientNativeAttachment: [],
+    promptUsageHost: USAGE_HOST,
+    ...(options.adapter === undefined ? {} : { adapterBuild: () => options.adapter }),
+    ...(options.strong === true
+      ? {
+          nativeAdapters: {
+            scribe: {
+              launcher: "scribe",
+              identity: "provider-returned",
+              acceptance: "first-turn-acceptance",
+              resume: () => [],
+            },
+          },
+          // deno-lint-ignore require-yield
+          agentCwd: function* () {
+            return HOST_DIR;
+          },
+          mcpServers: [],
+          newSessionOptions: { allowedTools: [], systemPrompt: INSTRUCTIONS },
+          permissions: "strict",
+          sessions: {
+            // deno-lint-ignore require-yield
+            *requestSession() {
+              return { sessionKey: WORKFLOW_SESSION_KEY, cwd: SESSION_DIR, state: "new" };
+            },
+            *recordSessionIdentity() {},
+          },
+        }
+      : {}),
+  });
+  yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, coordinator);
+}
+
+function observation(): UsageObservation {
+  return { reports: [], acquisitions: 0 };
+}
+
+/** One turn whose result retained identities and selected readings. */
+function usageResult(
+  status: "completed" | "cancelled" | "failed",
+  usage: AcpRuntimeTurnResult["usage"],
+): AcpRuntimeTurnResult {
+  if (status === "failed") {
+    return { status, error: { message: "turn failed" }, usage };
+  }
+  return { status, stopReason: status === "completed" ? "end_turn" : "cancelled", usage };
+}
+
+const RETAINED = {
+  promptMessageId: "message-1",
+  acpxRecordId: "record-1",
+  sessionId: "acp-session-1",
+  response: { inputTokens: 7, outputTokens: 0, totalTokens: 7 },
+  quota: {
+    tokenCount: { totalTokens: 7, inputTokens: 7, reasoningOutputTokens: 0 },
+    modelUsage: [{ model: "model-x", tokenCount: { totalTokens: 9 } }],
+  },
+};
+
+const LIVE: AcpRuntimeEvent[] = [
+  { type: "text_delta", text: "hello ", stream: "output" },
+  {
+    type: "status",
+    text: "usage",
+    tag: "usage_update",
+    used: 100,
+    size: 1000,
+    cost: { amount: 0.25, currency: "USD" },
+  },
+  { type: "text_delta", text: "world", stream: "output" },
+  // Occupancy alone: the latest context replaces the first, and the cost
+  // already reported stays.
+  { type: "status", text: "usage", tag: "usage_update", used: 150, size: 1000 },
+];
+
+describe("Tier AP — Prompt usage observation", () => {
+  it("UO1: observing a turn changes none of its events, text or runtime work", function* () {
+    const runs: { events: AgentPromptEvent[]; close: string; turns: number; ensures: number }[] =
+      [];
+    for (const observe of [false, true]) {
+      const harness = createFakeRuntime();
+      harness.script({ events: LIVE, result: usageResult("completed", RETAINED) });
+      const seen = observation();
+      yield* scoped(function* () {
+        yield* installObservedProvider(harness, seen, { observe });
+        const { events, close } = yield* collectPrompt("hello");
+        runs.push({
+          events,
+          close,
+          turns: harness.turns.length,
+          ensures: harness.ensureCalls.length,
+        });
+      });
+      expect(seen.reports.length).toBe(observe ? 1 : 0);
+      expect(seen.acquisitions).toBe(observe ? 1 : 0);
+    }
+    const strip = (events: AgentPromptEvent[]) =>
+      events.map((event) => (event.type === "started" ? event.type : event));
+    expect(strip(runs[1].events)).toEqual(strip(runs[0].events));
+    expect(runs[1].close).toBe(runs[0].close);
+    expect(runs[1].turns).toBe(runs[0].turns);
+    expect(runs[1].ensures).toBe(runs[0].ensures);
+  });
+
+  it("UO2: the report carries the turn's own identities, separate views and replaced live snapshots", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ events: LIVE, result: usageResult("completed", RETAINED) });
+    const seen = observation();
+    yield* scoped(function* () {
+      yield* installObservedProvider(harness, seen);
+      yield* collectPrompt("hello");
+    });
+    const [usage] = seen.reports;
+    expect(usage.requestId).toBe(harness.turns[0].turn.requestId);
+    expect(usage.providerMessageId).toBe("message-1");
+    expect(usage.providerRecordId).toBe("record-1");
+    expect(usage.providerSessionId).toBe("acp-session-1");
+    expect(usage.provenance).toEqual({
+      host: "deno-source",
+      xmd: { version: "0.0.0-test" },
+      runtime: { version: "0.21.1" },
+      adapter: {},
+    });
+    expect(usage.readings).toEqual([
+      {
+        source: "response",
+        scope: "unknown",
+        kind: "tokens",
+        counter: "unknown",
+        tokens: { inputTokens: 7, outputTokens: 0, totalTokens: 7 },
+      },
+      {
+        source: "quota-total",
+        scope: "unknown",
+        kind: "tokens",
+        counter: "unknown",
+        tokens: { totalTokens: 7, inputTokens: 7, reasoningOutputTokens: 0 },
+      },
+      {
+        source: "quota-model",
+        scope: "unknown",
+        model: "model-x",
+        kind: "tokens",
+        counter: "unknown",
+        tokens: { totalTokens: 9 },
+      },
+      { source: "update", scope: "session", kind: "context", used: 150, size: 1000 },
+      { source: "update", scope: "unknown", kind: "cost", amount: 0.25, currency: "USD" },
+    ]);
+    expect(usage.coverage).toEqual({
+      finalReport: "received",
+      outerPrompt: "unknown",
+      limitations: [
+        "source-semantics-unknown",
+        "cost-scope-unverified",
+        "adapter-build-unknown",
+        "native-build-unobserved",
+      ],
+    });
+  });
+
+  it("UO3: a traced adapter release names its own scope, counter and limitations", function* () {
+    const cases = [
+      {
+        agent: "claude",
+        adapter: { version: "0.70.0", digest: "sha256:claude" },
+        response: { scope: "main-loop", counter: "turn-total" },
+        model: { scope: "broader-model-work", counter: "turn-total" },
+        limitations: [
+          "claude-imputed-zero",
+          "claude-quota-model-overlaps-response",
+          "claude-subagent-inclusion-unverified",
+        ],
+      },
+      {
+        agent: "codex",
+        adapter: { version: "1.6.2", digest: "sha256:codex" },
+        response: { scope: "last-request", counter: "snapshot" },
+        model: { scope: "last-request", counter: "snapshot" },
+        limitations: ["codex-last-request-only", "codex-reasoning-inclusion-unverified"],
+      },
+      {
+        agent: "codex",
+        adapter: { version: "1.7.0" },
+        response: { scope: "unknown", counter: "unknown" },
+        model: { scope: "unknown", counter: "unknown" },
+        limitations: ["source-semantics-unknown"],
+      },
+    ] as const;
+    for (const row of cases) {
+      const harness = createFakeRuntime();
+      harness.script({ events: [], result: usageResult("completed", RETAINED) });
+      const seen = observation();
+      yield* scoped(function* () {
+        yield* installObservedProvider(harness, seen, { adapter: row.adapter });
+        yield* collectPrompt("hello", { agent: row.agent });
+      });
+      const [usage] = seen.reports;
+      const [response, , model] = usage.readings;
+      expect({
+        scope: response.scope,
+        counter: response.kind === "tokens" ? response.counter : "",
+      }).toEqual(row.response);
+      expect({ scope: model.scope, counter: model.kind === "tokens" ? model.counter : "" }).toEqual(
+        row.model,
+      );
+      expect(usage.provenance.adapter).toEqual(row.adapter);
+      expect(usage.coverage.outerPrompt).toBe(
+        row.limitations[0] === "source-semantics-unknown" ? "unknown" : "partial",
+      );
+      expect(usage.coverage.limitations).toEqual([...row.limitations, "native-build-unobserved"]);
+    }
+  });
+
+  it("UO4: optional acquisition, report and normalization failures leave the turn as it was", function* () {
+    const baseline = createFakeRuntime();
+    baseline.script({ result: usageResult("completed", RETAINED) });
+    const expected = yield* scoped(function* () {
+      yield* installObservedProvider(baseline, observation(), { observe: false });
+      return yield* collectPrompt("hello");
+    });
+    const phases: { name: string; options: ObservedOptions; result: AcpRuntimeTurnResult }[] = [
+      {
+        name: "acquisition",
+        options: { acquisitionFails: true },
+        result: usageResult("completed", RETAINED),
+      },
+      {
+        name: "report",
+        options: { reportFails: true },
+        result: usageResult("completed", RETAINED),
+      },
+      {
+        name: "normalization",
+        options: {},
+        // A selected reading that is not an object at all: normalizing it
+        // throws inside the collector, which must keep that to itself.
+        result: usageResult("completed", { ...RETAINED, response: "malformed" as never }),
+      },
+    ];
+    for (const phase of phases) {
+      const harness = createFakeRuntime();
+      harness.script({ result: phase.result });
+      const seen = observation();
+      const observed = yield* scoped(function* () {
+        yield* installObservedProvider(harness, seen, phase.options);
+        return yield* collectPrompt("hello");
+      });
+      const strip = (events: AgentPromptEvent[]) =>
+        events.map((event) => (event.type === "started" ? event.type : event));
+      expect({ phase: phase.name, events: strip(observed.events), close: observed.close }).toEqual({
+        phase: phase.name,
+        events: strip(expected.events),
+        close: expected.close,
+      });
+      expect(harness.turns.length).toBe(1);
+      expect(harness.turns[0].cancelled).toBe(false);
+      if (phase.name === "normalization") {
+        expect(seen.reports.map((usage) => usage.coverage)).toEqual([
+          {
+            finalReport: "unavailable",
+            outerPrompt: "unknown",
+            limitations: ["normalization-failed"],
+          },
+        ]);
+      } else {
+        expect(seen.reports).toEqual([]);
+      }
+    }
+  });
+
+  it("UO5: failed and cancelled terminals keep the readings reported before they ended", function* () {
+    for (const status of ["failed", "cancelled"] as const) {
+      const harness = createFakeRuntime();
+      harness.script({
+        events: LIVE,
+        result: usageResult(status, { promptMessageId: "message-1", acpxRecordId: "record-1" }),
+      });
+      const seen = observation();
+      const { events } = yield* scoped(function* () {
+        yield* installObservedProvider(harness, seen);
+        return yield* collectPrompt("hello");
+      });
+      expect(events.find((event) => event.type === "terminal")?.status).toBe(status);
+      const [usage] = seen.reports;
+      expect(usage.providerMessageId).toBe("message-1");
+      expect(usage.readings.map((reading) => reading.kind)).toEqual(["context", "cost"]);
+      // The live readings stay; the remainder the turn never reported is
+      // unknown, not zero.
+      expect(usage.coverage.finalReport).toBe("unavailable");
+      expect(usage.coverage.outerPrompt).toBe("unknown");
+      expect(usage.coverage.limitations).toContain("final-report-unavailable");
+    }
+  });
+
+  it("UO6: a real cleanup failure stays the turn's outcome; usage rides beside it", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ result: usageResult("completed", RETAINED) });
+    const seen = observation();
+    const { events } = yield* scoped(function* () {
+      yield* installObservedProvider(harness, seen, {
+        wrap: (runtime) => ({
+          ...runtime,
+          startTurn(input) {
+            const turn = runtime.startTurn(input);
+            let reads = 0;
+            // The first read of the result fails in transport; the cleanup
+            // that follows it fails to cancel, then reads the result itself.
+            return {
+              ...turn,
+              get result() {
+                reads++;
+                return reads === 1
+                  ? Promise.reject(new Error("result transport broke"))
+                  : turn.result;
+              },
+              cancel: () => Promise.reject(new Error("cancel failed")),
+            };
+          },
+        }),
+      });
+      return yield* collectPrompt("hello");
+    });
+    const terminal = events.find((event) => event.type === "terminal");
+    expect(terminal?.status).toBe("failed");
+    expect(terminal?.error).toBeInstanceOf(AggregateError);
+    expect(
+      terminal?.error instanceof AggregateError
+        ? terminal.error.errors.map((error) => error.message)
+        : [],
+    ).toEqual(["result transport broke", "cancel failed"]);
+    expect(seen.reports.map((usage) => usage.providerMessageId)).toEqual(["message-1"]);
+  });
+
+  it("UO7: a turn halted before it ended reports nothing and invents no ending", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    const seen = observation();
+    yield* scoped(function* () {
+      yield* installObservedProvider(harness, seen);
+      const task = yield* spawn(() => collectPrompt("hello"));
+      yield* harness.startedTurns(1);
+      yield* task.halt();
+    });
+    expect(seen.acquisitions).toBe(1);
+    expect(seen.reports).toEqual([]);
+    expect(harness.turns[0].cancelled).toBe(true);
+  });
+
+  it("UO8: a turn no backend accepted reports its result before the refusal", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ accepted: false, result: usageResult("completed", RETAINED) });
+    const seen = observation();
+    let raised: unknown;
+    yield* scoped(function* () {
+      yield* installObservedProvider(harness, seen, { strong: true });
+      const session = yield* Agent.operations.session();
+      try {
+        yield* collectPrompt("first", { session });
+      } catch (error) {
+        raised = error;
+      }
+    });
+    expect(raised).toBeInstanceOf(Error);
+    expect(seen.reports.map((usage) => usage.providerMessageId)).toEqual(["message-1"]);
+    expect(seen.reports[0].coverage.finalReport).toBe("received");
   });
 });

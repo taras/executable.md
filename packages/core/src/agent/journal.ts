@@ -55,7 +55,7 @@ import type {
   Result as DurableResult,
   Workflow,
 } from "@executablemd/durable-streams";
-import { createContext } from "effection";
+import { createContext, ensure } from "effection";
 import type { Operation, Stream } from "effection";
 import { Agent } from "./agent-api.ts";
 import type {
@@ -74,6 +74,13 @@ import { AgentInternal } from "./internal.ts";
 import { HostObservationFailure } from "./publication.ts";
 import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
 import { SourceOwner, sourceOwnerDescription } from "../source-owner.ts";
+import {
+  canonicalUsage,
+  promptUsageDestination,
+  readPromptUsage,
+  serializePromptUsage,
+} from "./usage.ts";
+import type { PromptUsage, PromptUsageDestination, PromptUsageReporter } from "./usage.ts";
 import type { SourcePosition } from "../types.ts";
 
 /** The durable effect type every journaled Agent Prompt is recorded under. */
@@ -144,6 +151,15 @@ export interface PromptRecord {
    * it happened if it names which turn it was.
    */
   checkpoint?: AgentPromptCheckpoint;
+  /**
+   * What the provider reported about this turn's consumption, when it reported
+   * anything this execution could retain.
+   *
+   * Absent when nothing was reported, and on every record written before this
+   * member existed — both mean unknown, never zero. A failed or cancelled turn
+   * keeps what was reported before it ended; its coverage says what is missing.
+   */
+  usage?: PromptUsage;
 }
 
 /** The safe half of one request, before its decision has been made. */
@@ -187,6 +203,32 @@ export interface PromptPermissionAudit {
   readonly ledger: PromptAuditLedger;
   /** The requests that were decided, in the order they arrived. */
   completed(): readonly PromptPermission[];
+}
+
+/**
+ * Where the current subscription's provider reports usage.
+ *
+ * Placed around one actual subscription and its `next()` calls, so a provider
+ * asking from inside its own stream finds the destination of the turn it is
+ * running and no other. Private to this module, like the permission ledger.
+ */
+const PromptUsageAudit = createContext<PromptUsageDestination>("xmd.agent.prompt-usage-audit");
+
+/**
+ * The receiver for the subscription being started, if one is being audited.
+ *
+ * Reached only through the launch coordinator Core delivers to an installed
+ * provider. Undefined outside an audited subscription, which leaves usage
+ * unavailable and refuses nothing.
+ */
+export function* currentPromptUsageReporter(): Operation<PromptUsageReporter | undefined> {
+  return (yield* PromptUsageAudit.get())?.report;
+}
+
+/** One wrapped stream's audits: its permission ledger, and one usage slot per subscription. */
+interface StreamAudit {
+  readonly permissions: PromptPermissionAudit;
+  readonly usage: PromptUsageDestination[];
 }
 
 /**
@@ -244,8 +286,8 @@ export function* observePermissionDecisions(): Operation<void> {
 export function* auditedPromptStream(
   stream: Stream<AgentPromptEvent, string>,
 ): Operation<Stream<AgentPromptEvent, string>> {
-  const audit = promptPermissionAudit();
-  const wrapped = audited(stream, audit.ledger);
+  const audit: StreamAudit = { permissions: promptPermissionAudit(), usage: [] };
+  const wrapped = audited(stream, audit);
   (yield* PromptAudits.get())?.set(wrapped, audit);
   return wrapped;
 }
@@ -257,9 +299,7 @@ export function* auditedPromptStream(
  * can reach the map, and holding a stream is the only way to name an entry.
  */
 const PromptAudits =
-  createContext<WeakMap<Stream<AgentPromptEvent, string>, PromptPermissionAudit>>(
-    "xmd.agent.prompt-audits",
-  );
+  createContext<WeakMap<Stream<AgentPromptEvent, string>, StreamAudit>>("xmd.agent.prompt-audits");
 
 /**
  * What the turn consumed through this exact stream was allowed to do.
@@ -271,7 +311,23 @@ export function* completedPromptAudit(
   stream: Stream<AgentPromptEvent, string>,
 ): Operation<readonly PromptPermission[] | undefined> {
   const audits = yield* PromptAudits.get();
-  return audits?.get(stream)?.completed();
+  return audits?.get(stream)?.permissions.completed();
+}
+
+/**
+ * What the turn consumed through this exact stream reported about its usage.
+ *
+ * Read by the canonical runner once its subscribing scope has unwound, so every
+ * destination it reads has been sealed by its own subscription's teardown.
+ * Undefined for a stream this middleware did not wrap, for one never
+ * subscribed, and for a turn whose provider reported nothing.
+ */
+export function* completedPromptUsage(
+  stream: Stream<AgentPromptEvent, string>,
+): Operation<PromptUsage | undefined> {
+  const audits = yield* PromptAudits.get();
+  const audit = audits?.get(stream);
+  return audit === undefined ? undefined : canonicalUsage(audit.usage);
 }
 
 /**
@@ -285,16 +341,32 @@ export function* completedPromptAudit(
  */
 function audited(
   stream: Stream<AgentPromptEvent, string>,
-  ledger: PromptAuditLedger,
+  audit: StreamAudit,
 ): Stream<AgentPromptEvent, string> {
+  const ledger = audit.permissions.ledger;
   return {
     *[Symbol.iterator]() {
+      // One usage destination per subscription, because each subscription of
+      // a cold stream is its own native turn.
+      const usage = promptUsageDestination();
+      audit.usage.push(usage);
+      // Registered before the provider's own subscription, so it runs after
+      // every finalizer that subscription registers in this same scope: a
+      // receiver stays open through the turn's joined teardown and is inert
+      // after it.
+      yield* ensure(() => {
+        usage.seal();
+      });
       // A `Stream` is itself the operation that subscribes, so this is that
       // subscription run beneath the ledger — not a copy of it.
-      const subscription = yield* PromptAudit.with(ledger, () => stream);
+      const subscription = yield* PromptAudit.with(ledger, () =>
+        PromptUsageAudit.with(usage, () => stream),
+      );
       return {
         *next() {
-          return yield* PromptAudit.with(ledger, () => subscription.next());
+          return yield* PromptAudit.with(ledger, () =>
+            PromptUsageAudit.with(usage, () => subscription.next()),
+          );
         },
       };
     },
@@ -651,6 +723,9 @@ function serializePromptRecord(record: PromptRecord): Json {
       value: record.checkpoint.value,
     };
   }
+  if (record.usage !== undefined) {
+    payload.usage = serializePromptUsage(record.usage);
+  }
   return payload;
 }
 
@@ -804,6 +879,7 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
     permissions,
     raised,
     checkpoint,
+    usage,
   } = value;
   if (
     typeof sequence !== "number" ||
@@ -860,6 +936,16 @@ export function parsePromptRecord(value: unknown): PromptRecord | undefined {
       return undefined;
     }
     record.checkpoint = parsed;
+  }
+  if (usage !== undefined) {
+    // Refused rather than read past: a present account of spend that does not
+    // read back is not one this build can report, and dropping it would make a
+    // damaged record look like one that never measured anything.
+    const read = readPromptUsage(usage);
+    if (read === undefined) {
+      return undefined;
+    }
+    record.usage = read;
   }
   return record;
 }

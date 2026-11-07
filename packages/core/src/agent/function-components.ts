@@ -58,9 +58,11 @@ import type { SerializedPromptFailure } from "./errors.ts";
 import {
   auditedPromptStream,
   completedPromptAudit,
+  completedPromptUsage,
   persistPrompt,
   promptFailureFromRecord,
 } from "./journal.ts";
+import { retainablePromptUsage } from "./usage.ts";
 import type { PromptRecord, RetainPromptInput } from "./journal.ts";
 import { checkpointOf } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
@@ -1014,6 +1016,20 @@ export function* runPrompt(
   const answered = (audited === undefined ? undefined : yield* completedPromptAudit(audited)) ?? [];
   if (answered.length > 0) {
     record.permissions = answered;
+  }
+  // Read from the same exact stream, after the same joined teardown, and
+  // selected here because this is still the execution that produced the turn.
+  // Usage is observation: if reading or selecting it fails, the record simply
+  // carries none, and the turn's outcome is exactly what it was.
+  if (audited !== undefined) {
+    try {
+      const reported = yield* completedPromptUsage(audited);
+      if (reported !== undefined) {
+        record.usage = yield* retainablePromptUsage(reported);
+      }
+    } catch {
+      // Unknown usage is what an absent member already says.
+    }
   }
   if (throwOnError && status !== "completed") {
     record.raised = true;

@@ -3741,6 +3741,18 @@ argument that factory closes over. It validates the routed request, runs each ab
 phase once, cross-checks and retains what comes back, and derives the result. There is
 no reader for one, no context holding one, and no request member carrying one.
 
+#### Prompt usage observation
+
+The same delivered coordinator carries an optional `promptUsage()` receiver, the one
+route by which a provider's turn readings reach the Prompt that consumed them. Core
+creates one usage destination per actual stream subscription inside the audited
+stream that already carries the permission ledger, opens it before the provider's own
+subscription and seals it after that subscription's teardown joins; the canonical
+runner reads it afterwards, under the producing execution's disclosure, and the
+existing `agent_prompt` append retains it. A receiver is observation only: it appends
+nothing, authorizes nothing, and its absence or failure leaves execution unchanged.
+Specified in specs/acp-client-spec.md §Prompt usage.
+
 #### Session ownership
 
 A session coordinator is the host-built capability that answers who owns one logical

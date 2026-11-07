@@ -23,6 +23,7 @@ import { denoRunRepositories, selectReplEntryHost } from "./deno-repositories.ts
 import { BundledRunPlugin } from "./run-profile.ts";
 import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/git/credential-helper";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
+import type { PromptUsageHost } from "@executablemd/acp";
 import { useCompiledService } from "./compiled-service.ts";
 
 /**
@@ -51,6 +52,13 @@ const UPGRADE = compiledUpgradeAssembly({
   architecture: process.arch,
   currentVersion: XMD_VERSION,
 });
+
+/**
+ * What this host states about its own build for the Prompt usage its turns
+ * retain. The version is this build's own; a digest or source revision this
+ * process has not measured is left unknown rather than guessed.
+ */
+const USAGE: PromptUsageHost = { host: "compiled", xmd: { version: XMD_VERSION } };
 
 // Before anything public is parsed, and absent from every public surface.
 if (isReplSubmit(process.argv.slice(2))) {
@@ -141,8 +149,8 @@ if (isReplSubmit(process.argv.slice(2))) {
       UPGRADE,
       () => readInputStream(process.stdin),
       importPluginModule,
-      () => useDenoWorkflowHost(HELPER),
-      useMachineSessions(),
+      () => useDenoWorkflowHost(HELPER, USAGE),
+      { ...useMachineSessions(), usage: USAGE },
       // What this host selects for a REPL command, and what it installs for
       // one. The selection is the capability an entry runs with — its
       // checkouts, its local Git, its publications and its issues; Node and Bun

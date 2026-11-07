@@ -16,7 +16,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { executeInstalled } from "@executablemd/core/host";
+import { executeInstalled, parsePromptRecord } from "@executablemd/core/host";
 import { useAgentPromptPublisher } from "@executablemd/core/host";
 import {
   Agent,
@@ -30,6 +30,7 @@ import type {
   AgentLaunchCoordinator,
   AgentProviderFactory,
   Json,
+  PromptUsage,
   Session,
 } from "@executablemd/core";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -91,6 +92,34 @@ interface Reply {
   readonly failed?: true;
   /** Held here before the turn answers, so a run can be interrupted mid-turn. */
   readonly hold?: () => Operation<void>;
+  /** Reported through this subscription's usage receiver before the turn ends. */
+  readonly usage?: PromptUsage;
+}
+
+/**
+ * The same events, through a subscription that reports usage the way a
+ * provider does: it captures its receiver when subscribed, from the
+ * coordinator it was delivered, and reports before the turn's terminal.
+ */
+function reporting(
+  inner: Stream<AgentPromptEvent, string>,
+  launchCoordinator: AgentLaunchCoordinator,
+  usage: PromptUsage | undefined,
+): Stream<AgentPromptEvent, string> {
+  return {
+    *[Symbol.iterator]() {
+      const report = yield* launchCoordinator.promptUsage?.() ?? none();
+      if (usage !== undefined) {
+        report?.(usage);
+      }
+      return yield* inner;
+    },
+  };
+}
+
+// deno-lint-ignore require-yield
+function* none(): Operation<undefined> {
+  return undefined;
 }
 
 function subscriptionOver(
@@ -160,13 +189,17 @@ function scriptedProvider(replies: readonly Reply[]): AgentProviderFactory {
               value: reply.turnId,
             });
           }
-          return subscriptionOver(
-            [
-              { type: "started", agent: "codex", session },
-              { type: "text_delta", text: reply.text },
-              terminal,
-            ],
-            reply.text,
+          return reporting(
+            subscriptionOver(
+              [
+                { type: "started", agent: "codex", session },
+                { type: "text_delta", text: reply.text },
+                terminal,
+              ],
+              reply.text,
+            ),
+            launchCoordinator,
+            reply.usage,
           );
         },
         // deno-lint-ignore require-yield
@@ -723,4 +756,80 @@ describe("Tier WPC — retained Prompt checkpoints", () => {
     expect(declaredSchema(path)).toEqual(before);
     expect(committedPrompts(path)).toEqual([]);
   });
+
+  it("WPC13: a completed Prompt's usage commits with the Prompt and its association", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* retainSession(database);
+      const attempt = yield* runDocument(database, ONE_PROMPT, [
+        { text: "looks fine", turnId: "turn-alpha", usage: USAGE },
+      ]);
+      expect(attempt.failure).toBe(undefined);
+      expect(retainedUsage(attempt.events)).toEqual([USAGE]);
+      expect(committedPrompts(path)).toHaveLength(1);
+      expect(yield* associations(database)).toHaveLength(1);
+    });
+  });
+
+  it("WPC14: an unsuccessful Prompt keeps its usage and supplies no association", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* retainSession(database);
+      const attempt = yield* runDocument(database, ONE_PROMPT, [
+        // No turn id: a provider naming a failed turn is refused before the
+        // turn exists, which is WPC5's case rather than this one.
+        { text: "partial", failed: true, usage: USAGE },
+      ]);
+      expect(retainedUsage(attempt.events)).toEqual([USAGE]);
+      expect(committedPrompts(path)).toHaveLength(1);
+      expect(committedAssociations(path)).toEqual([]);
+    });
+  });
+
+  it("WPC15: a refused association rolls back the Prompt and the usage it carried", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* retainSession(database);
+      refuseAssociation(path);
+      const attempt = yield* runDocument(database, ONE_PROMPT, [
+        { text: "ok", turnId: "turn-alpha", usage: USAGE },
+      ]);
+      expect(attempt.failure).toContain("the run refuses this association");
+      expect(committedPrompts(path)).toEqual([]);
+      expect(committedAssociations(path)).toEqual([]);
+      expect(retainedUsage(yield* database.journal.readAll())).toEqual([]);
+    });
+  });
 });
+
+/** One provider-neutral usage value, as a provider would report it. */
+const USAGE: PromptUsage = {
+  requestId: "request-wpc",
+  providerMessageId: "message-wpc",
+  provenance: { host: "deno-source", xmd: { version: "0.0.0-test" }, runtime: {}, adapter: {} },
+  readings: [
+    {
+      source: "response",
+      scope: "last-request",
+      kind: "tokens",
+      counter: "snapshot",
+      tokens: { inputTokens: 5, outputTokens: 1 },
+    },
+  ],
+  coverage: { finalReport: "received", outerPrompt: "partial", limitations: ["fixture"] },
+};
+
+/** The usage each retained Prompt carries, in journal order. */
+function retainedUsage(events: readonly DurableEvent[]): (PromptUsage | undefined)[] {
+  return prompts(events).flatMap((event) =>
+    event.type === "yield" && event.result.status === "ok"
+      ? [parsePromptRecord(event.result.value)?.usage]
+      : [],
+  );
+}

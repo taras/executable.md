@@ -713,9 +713,27 @@ export function carriesEmbeddedAdapter(adapters: EmbeddedAdapters, agentName: st
  */
 export function embeddedAdapterDependencies(
   adapters: EmbeddedAdapters,
-): Pick<AcpxProviderDependencies, "agentRegistry" | "prepareAgent" | "agentProcessEnv"> {
+): Pick<
+  AcpxProviderDependencies,
+  "agentRegistry" | "prepareAgent" | "agentProcessEnv" | "adapterBuild"
+> {
   return {
     agentRegistry: overlaidAdapterRegistry(adapters),
+    // The snapshot a turn's usage names: only for a command that is this
+    // host's own carried adapter, so a registry entry that merely shares the
+    // agent's name is never described as a build this host verified.
+    adapterBuild(agentName, agentCommand) {
+      if (
+        !carriesEmbeddedAdapter(adapters, agentName) ||
+        agentCommand !== adapters.command(agentName)
+      ) {
+        return undefined;
+      }
+      const snapshot = EMBEDDED_ADAPTER_SNAPSHOTS.find((entry) => entry.provider === agentName);
+      return snapshot === undefined
+        ? undefined
+        : { version: snapshot.version, digest: `sha256:${snapshot.sha256}` };
+    },
     *agentProcessEnv(agentName, agentCommand) {
       if (
         agentName !== "claude" ||

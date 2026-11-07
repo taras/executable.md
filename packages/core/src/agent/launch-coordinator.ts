@@ -22,6 +22,8 @@ import { createSessionSetupOwner } from "./session-setup.ts";
 import type { AgentSessionSetup, SessionSetupOwner } from "./session-setup.ts";
 import type { ReadSessionUse } from "./session-use.ts";
 import { associateCheckpoint } from "./checkpoint.ts";
+import { currentPromptUsageReporter } from "./journal.ts";
+import type { PromptUsageReporter } from "./usage.ts";
 import { AgentLaunchProtocolError } from "./launch-request.ts";
 import type { AgentLaunchRequest, IssuedLaunch } from "./launch-request.ts";
 import { consumeSessionRequest } from "./session-request.ts";
@@ -124,6 +126,15 @@ export interface AgentLaunchCoordinator {
    * presents itself as a configured use and is not one refuses.
    */
   sessionUse(routed: string | Session | undefined): ReadSessionUse | undefined;
+  /**
+   * Bind usage reporting to the current subscription's live audit, when available.
+   *
+   * Capture before native turn work and keep the receiver through that turn's
+   * joined cleanup. Reporting records observation only; it appends no journal
+   * event and establishes no canonical identity, checkpoint or successful outcome.
+   * An absent method or receiver leaves usage unavailable without refusing work.
+   */
+  promptUsage?(): Operation<PromptUsageReporter | undefined>;
   /**
    * Say how a session this provider just issued is configured.
    *
@@ -244,6 +255,9 @@ export function createLaunchCoordinator(
     sessionUse(routed) {
       return owner.read(routed);
     },
+    // Read from the subscription being started, never from the coordinator:
+    // one installation serves many turns, and each turn's receiver is its own.
+    promptUsage: currentPromptUsageReporter,
     *perform(request, phases) {
       const launch = locate(request);
       launch.issued.admit(request, generation);
