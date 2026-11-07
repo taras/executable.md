@@ -610,42 +610,40 @@ function markerScanner(marker: string): () => SecretScanner {
 
 describe("Tier PU — producing-execution disclosure", () => {
   it("PU-P5: a protected input stays withheld under scanner opt-out, whatever context is rebound", function* () {
-    yield* scoped(function* () {
-      const owner = yield* createInputOwner();
-      const values = yield* attachInputOwner(owner);
-      const protectedText = "PU_PROTECTED_MARKER";
-      values.protect({ coroutine: "root", index: 0, field: "code" }, protectedText);
-      // The producing execution's own policy, selected with its protected
-      // inputs and with the scanner explicitly turned off.
-      yield* useSecretDetection(false, new InMemoryStream(), values);
-      const reported: PromptUsage = {
-        ...versioned("protected"),
-        providerMessageId: protectedText,
-        coverage: {
-          finalReport: "received",
-          outerPrompt: "partial",
-          limitations: ["fixture-limit", protectedText, "Not A Category"],
-        },
-      };
-      const expected = {
-        message: undefined,
-        limitations: ["fixture-limit", "field-withheld"],
-      };
-      const normal = yield* retainablePromptUsage(reported);
-      expect({
-        message: normal.providerMessageId,
-        limitations: normal.coverage.limitations,
-      }).toEqual(expected);
-      // Removing the same-name contextual inputs removes nothing: the policy
-      // binding carries the inputs it was selected with.
-      yield* createContext<unknown>("executablemd.secret-input.values").set(undefined);
-      const substituted = yield* retainablePromptUsage(reported);
-      expect({
-        message: substituted.providerMessageId,
-        limitations: substituted.coverage.limitations,
-      }).toEqual(expected);
-      expect(substituted.requestId).toBe(reported.requestId);
-    });
+    const owner = yield* createInputOwner();
+    const values = yield* attachInputOwner(owner);
+    const protectedText = "PU_PROTECTED_MARKER";
+    values.protect({ coroutine: "root", index: 0, field: "code" }, protectedText);
+    // The producing execution's own policy, selected with its protected
+    // inputs and with the scanner explicitly turned off.
+    yield* useSecretDetection(false, new InMemoryStream(), values);
+    const reported: PromptUsage = {
+      ...versioned("protected"),
+      providerMessageId: protectedText,
+      coverage: {
+        finalReport: "received",
+        outerPrompt: "partial",
+        limitations: ["fixture-limit", protectedText, "Not A Category"],
+      },
+    };
+    const expected = {
+      message: undefined,
+      limitations: ["fixture-limit", "field-withheld"],
+    };
+    const normal = yield* retainablePromptUsage(reported);
+    expect({
+      message: normal.providerMessageId,
+      limitations: normal.coverage.limitations,
+    }).toEqual(expected);
+    // Removing the same-name contextual inputs removes nothing: the policy
+    // binding carries the inputs it was selected with.
+    yield* createContext<unknown>("executablemd.secret-input.values").set(undefined);
+    const substituted = yield* retainablePromptUsage(reported);
+    expect({
+      message: substituted.providerMessageId,
+      limitations: substituted.coverage.limitations,
+    }).toEqual(expected);
+    expect(substituted.requestId).toBe(reported.requestId);
   });
 
   it("PU-P6: outside an execution's policy every supplied string is withheld", function* () {
