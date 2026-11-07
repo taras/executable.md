@@ -21,6 +21,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { HELP, parseSelection, Refusal } from "../../../examples/agent-usage/selection.ts";
+import {
+  claudeNative,
+  codexNative,
+  nativeComparison,
+} from "../../../examples/agent-usage/evidence.ts";
+import type { PromptUsage } from "@executablemd/core";
+import { writeTextFile } from "@effectionx/fs";
 
 const CHECKOUT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const DRIVER = join(CHECKOUT, "examples/agent-usage/calibrate.ts");
@@ -194,4 +201,140 @@ describe("Tier UC — usage calibration driver", () => {
       ]),
     );
   });
+
+  it("UC4: native accounts separate a whole Prompt from its final request, and find subagents", function* () {
+    const home = yield* useRoot();
+    const codex = join(home, ".codex", "sessions", "2026", "11", "07");
+    yield* ensureDir(codex);
+    const total = (input: number, output: number) => ({
+      input_tokens: input,
+      cached_input_tokens: 0,
+      output_tokens: output,
+      reasoning_output_tokens: 0,
+      total_tokens: input + output,
+    });
+    const rollout = [
+      { type: "event_msg", payload: { type: "task_started" } },
+      { type: "response_item", payload: { type: "function_call", name: "spawn_agent" } },
+      {
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: { total_token_usage: total(100, 10), last_token_usage: total(100, 10) },
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: { total_token_usage: total(250, 15), last_token_usage: total(150, 5) },
+        },
+      },
+      { type: "event_msg", payload: { type: "task_started" } },
+      {
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: { total_token_usage: total(400, 20), last_token_usage: total(150, 5) },
+        },
+      },
+    ];
+    yield* writeTextFile(
+      join(codex, "rollout-2026-11-07T00-00-00-thread-1.jsonl"),
+      rollout.map((line) => JSON.stringify(line)).join("\n"),
+    );
+    const read = yield* codexNative(home, "thread-1");
+    expect(
+      read?.prompts.map(({ calls, toolCalls, subagentCalls, outer }) => ({
+        calls,
+        toolCalls,
+        subagentCalls,
+        total: outer?.total_tokens,
+      })),
+    ).toEqual([
+      { calls: 2, toolCalls: 1, subagentCalls: 1, total: 265 },
+      { calls: 1, toolCalls: 0, subagentCalls: 0, total: 155 },
+    ]);
+    const lastOnly = usageWith({
+      inputTokens: 150,
+      outputTokens: 5,
+      cachedReadTokens: 0,
+      thoughtTokens: 0,
+      totalTokens: 155,
+    });
+    expect(nativeComparison("codex", lastOnly, read?.prompts[0])).toEqual({
+      outcome: "limited",
+      reason: "final-request-only",
+    });
+    expect(nativeComparison("codex", lastOnly, read?.prompts[1])).toEqual({
+      outcome: "verified",
+      reason: "matches-native-outer-total",
+    });
+    expect(nativeComparison("codex", undefined, read?.prompts[0]).outcome).toBe("unavailable");
+
+    const claude = join(home, ".claude", "projects", "-fixture");
+    yield* ensureDir(claude);
+    const usage = {
+      input_tokens: 3,
+      output_tokens: 2,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    };
+    const transcript = [
+      { type: "user", message: { content: "read the files" } },
+      { type: "user", isMeta: true, message: { content: "a reminder" } },
+      { type: "assistant", message: { id: "m1", usage, content: [{ type: "tool_use" }] } },
+      { type: "assistant", message: { id: "m1", usage, content: [{ type: "tool_use" }] } },
+      { type: "user", message: { content: [{ type: "tool_result" }] } },
+      { type: "assistant", isSidechain: true, message: { id: "s1", usage, content: [] } },
+      { type: "assistant", message: { id: "m2", usage, content: [{ type: "text" }] } },
+    ];
+    yield* writeTextFile(
+      join(claude, "session-1.jsonl"),
+      transcript.map((line) => JSON.stringify(line)).join("\n"),
+    );
+    const main = yield* claudeNative(home, "session-1");
+    expect(main?.prompts).toEqual([
+      {
+        calls: 2,
+        toolCalls: 2,
+        outer: {
+          input_tokens: 6,
+          output_tokens: 4,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        subagent: {
+          input_tokens: 3,
+          output_tokens: 2,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+        subagentCalls: 1,
+      },
+    ]);
+    expect(
+      nativeComparison(
+        "claude",
+        usageWith({
+          inputTokens: 6,
+          outputTokens: 4,
+          cachedReadTokens: 0,
+          cachedWriteTokens: 0,
+          totalTokens: 10,
+        }),
+        main?.prompts[0],
+      ),
+    ).toEqual({ outcome: "verified", reason: "matches-native-outer-total-multicall" });
+  });
 });
+
+function usageWith(tokens: Record<string, number>): PromptUsage {
+  return {
+    provenance: { host: "compiled", xmd: {}, runtime: {}, adapter: {} },
+    readings: [
+      { source: "response", scope: "last-request", kind: "tokens", counter: "snapshot", tokens },
+    ],
+    coverage: { finalReport: "received", outerPrompt: "partial", limitations: [] },
+  };
+}

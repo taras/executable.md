@@ -290,6 +290,8 @@ export function* claudeNative(home: string, sessionId: string): Operation<Native
 interface CodexPrompt {
   calls: number;
   toolCalls: number;
+  /** Native subagents this Prompt's thread spawned; their own threads hold their usage. */
+  subagentCalls: number;
   start: Record<string, number>;
   end: Record<string, number>;
   last?: Record<string, number>;
@@ -343,7 +345,13 @@ export function* codexNative(home: string, threadId: string): Operation<NativeSe
     const payload = asRecord(entry.payload);
     if (entry.type === "event_msg" && payload?.type === boundary) {
       previousTotal = { ...runningTotal };
-      prompts.push({ calls: 0, toolCalls: 0, start: previousTotal, end: previousTotal });
+      prompts.push({
+        calls: 0,
+        toolCalls: 0,
+        subagentCalls: 0,
+        start: previousTotal,
+        end: previousTotal,
+      });
       continue;
     }
     const current = prompts.at(-1);
@@ -352,6 +360,9 @@ export function* codexNative(home: string, threadId: string): Operation<NativeSe
     }
     if (entry.type === "response_item" && typeof payload?.type === "string" && /call$/u.test(payload.type) && !/output$/u.test(payload.type)) {
       current.toolCalls++;
+      if (payload.name === "spawn_agent") {
+        current.subagentCalls++;
+      }
     }
     if (entry.type === "event_msg" && payload?.type === "token_count") {
       const info = asRecord(payload.info);
@@ -388,7 +399,7 @@ export function* codexNative(home: string, threadId: string): Operation<NativeSe
         toolCalls: prompt.toolCalls,
         outer,
         ...(prompt.last === undefined ? {} : { last: prompt.last }),
-        subagentCalls: 0,
+        subagentCalls: prompt.subagentCalls,
       };
     }),
   };
