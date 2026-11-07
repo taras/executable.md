@@ -1,6 +1,6 @@
 import { exists, readdir, readTextFile } from "@effectionx/fs";
 import type { Operation } from "effection";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
 import type { PromptRecord } from "@executablemd/core/host";
@@ -22,6 +22,8 @@ export function check(outcome: Outcome, reason: string): Check {
 /** One canonical Prompt the history acknowledged, read back without a provider. */
 export interface Acknowledged {
   readonly name: string;
+  /** The input this occurrence retained: the text the turn delivered. */
+  readonly input: string;
   readonly record: PromptRecord;
 }
 
@@ -55,7 +57,8 @@ export function* readAcknowledged(journal: string): Operation<Acknowledged[] | u
     if (record === undefined) {
       throw new Error("a canonical Prompt record does not read back");
     }
-    prompts.push({ name: event.description.name, record });
+    const input = event.description.input;
+    prompts.push({ name: event.description.name, input: typeof input === "string" ? input : "", record });
   }
   return prompts;
 }
@@ -156,22 +159,91 @@ export function* acpxAgreement(
 export interface NativePrompt {
   /** Internal model calls the native source recorded for this Prompt. */
   readonly calls: number;
-  /** Native tool calls the main loop made. */
+  /** Distinct native tool calls the main loop made, by their own identity. */
   readonly toolCalls: number;
+  /** Distinct native read calls whose target is one of the run's private fixture files. */
+  readonly fixtureReads: number;
+  /** Distinct fixture files those reads covered. */
+  readonly fixtureFilesRead: number;
   /** The whole outer Prompt's counters, where the source can say. */
   readonly outer?: Record<string, number>;
   /** The final internal request's counters, where the source can say. */
   readonly last?: Record<string, number>;
   /** Counters native subagent work recorded separately. */
   readonly subagent?: Record<string, number>;
+  /** Native subagent requests and separately recorded subagent model calls. */
   readonly subagentCalls: number;
+}
+
+/**
+ * One native Prompt while it is read, with what association needs.
+ *
+ * `userText` is only ever compared, inside this process, with the canonical
+ * input this run itself delivered; it is never written anywhere.
+ */
+interface Reading {
+  calls: number;
+  readonly tools: Set<string>;
+  readonly reads: Set<string>;
+  readonly files: Set<string>;
+  readonly subagents: Set<string>;
+  subagentCalls: number;
+  outer: Record<string, number>;
+  subagent: Record<string, number>;
+  last?: Record<string, number>;
+  start: Record<string, number>;
+  end: Record<string, number>;
+  userText: string;
+  readonly seen: Set<string>;
+}
+
+function reading(start: Record<string, number> = {}): Reading {
+  return {
+    calls: 0,
+    tools: new Set(),
+    reads: new Set(),
+    files: new Set(),
+    subagents: new Set(),
+    subagentCalls: 0,
+    outer: {},
+    subagent: {},
+    start,
+    end: start,
+    userText: "",
+    seen: new Set(),
+  };
 }
 
 /** A native session's Prompts, located by its confirmed native identity, and where they came from. */
 export interface NativeSession {
-  readonly prompts: NativePrompt[];
+  readonly prompts: readonly NativePrompt[];
   /** The exact private source file, for the private support record only. */
   readonly source: string;
+  /**
+   * The one native Prompt whose user turn carried exactly this delivered input.
+   *
+   * Exact or nothing: no Prompt, or more than one, is an association gap, never
+   * a choice by position.
+   */
+  associate(input: string): NativePrompt | undefined;
+}
+
+function session(source: string, readings: readonly Reading[], summary: (reading: Reading) => NativePrompt): NativeSession {
+  const prompts = readings.map(summary);
+  return {
+    source,
+    prompts,
+    associate(input) {
+      const wanted = input.trim();
+      if (wanted.length === 0) {
+        return undefined;
+      }
+      const matches = readings.flatMap((entry, index) =>
+        entry.userText.includes(wanted) ? [prompts[index]] : [],
+      );
+      return matches.length === 1 ? matches[0] : undefined;
+    },
+  };
 }
 
 function add(into: Record<string, number>, from: Record<string, unknown>, keys: readonly string[]) {
@@ -189,6 +261,9 @@ const CLAUDE_KEYS = [
   "cache_read_input_tokens",
   "cache_creation_input_tokens",
 ] as const;
+
+/** Claude Code's own names for delegating to a subagent. */
+const CLAUDE_SUBAGENT_TOOLS = new Set(["Task", "Agent"]);
 
 function* findFile(root: string, accept: (name: string) => boolean, depth: number): Operation<string | undefined> {
   if (!(yield* exists(root))) {
@@ -223,21 +298,54 @@ function lines(text: string): Record<string, unknown>[] {
   });
 }
 
+function textOf(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((block) => {
+      const text = asRecord(block)?.text;
+      return typeof text === "string" ? text : "";
+    })
+    .join("\n");
+}
+
+/** The fixture files a native read may target, resolved against its working directory. */
+export interface Fixture {
+  readonly files: readonly string[];
+}
+
+function fixtureFile(fixture: Fixture | undefined, path: unknown, cwd: unknown): string | undefined {
+  if (fixture === undefined || typeof path !== "string") {
+    return undefined;
+  }
+  const resolved = resolve(typeof cwd === "string" ? cwd : "/", path);
+  return fixture.files.find((file) => resolve(file) === resolved);
+}
+
 /**
  * Claude Code's own transcript for one native session.
  *
  * A user entry that is a typed prompt rather than a tool result starts a
  * Prompt. Assistant entries repeat one API message per content block, so usage
- * counts once per message id. Sidechain entries and subagent transcripts are
- * the native account of subagent work, kept apart from the main loop.
+ * counts once per message id and a tool call once per tool-use id. Sidechain
+ * entries are the native account of subagent work, kept apart from the main
+ * loop; a `Task`/`Agent` tool use is the main loop asking for one.
  */
-export function* claudeNative(home: string, sessionId: string): Operation<NativeSession | undefined> {
+export function* claudeNative(
+  home: string,
+  sessionId: string,
+  fixture?: Fixture,
+): Operation<NativeSession | undefined> {
   const projects = join(home, ".claude", "projects");
   const file = yield* findFile(projects, (name) => name === `${sessionId}.jsonl`, 1);
   if (file === undefined) {
     return undefined;
   }
-  const prompts: ClaudePrompt[] = [];
+  const readings: Reading[] = [];
   for (const entry of lines(yield* readTextFile(file))) {
     const message = asRecord(entry.message);
     if (entry.type === "user" && entry.isSidechain !== true && entry.isMeta !== true) {
@@ -248,20 +356,40 @@ export function* claudeNative(home: string, sessionId: string): Operation<Native
           content.some((block) => asRecord(block)?.type === "text") &&
           !content.some((block) => asRecord(block)?.type === "tool_result"));
       if (typed) {
-        prompts.push({ calls: 0, toolCalls: 0, outer: {}, subagent: {}, seen: new Set(), subagentCalls: 0 });
+        const next = reading();
+        next.userText = textOf(content);
+        readings.push(next);
       }
       continue;
     }
-    const current = prompts.at(-1);
+    const current = readings.at(-1);
     if (entry.type !== "assistant" || current === undefined || message === undefined) {
       continue;
     }
     const id = typeof message.id === "string" ? message.id : undefined;
-    const usage = asRecord(message.usage);
     const content = Array.isArray(message.content) ? message.content : [];
-    current.toolCalls += entry.isSidechain === true
-      ? 0
-      : content.filter((block) => asRecord(block)?.type === "tool_use").length;
+    if (entry.isSidechain !== true) {
+      for (const [index, raw] of content.entries()) {
+        const block = asRecord(raw);
+        if (block?.type !== "tool_use") {
+          continue;
+        }
+        const tool = typeof block.id === "string" ? block.id : `${id ?? "message"}#${index}`;
+        current.tools.add(tool);
+        const input = asRecord(block.input);
+        if (block.name === "Read") {
+          const target = fixtureFile(fixture, input?.file_path, "/");
+          if (target !== undefined) {
+            current.reads.add(tool);
+            current.files.add(target);
+          }
+        }
+        if (typeof block.name === "string" && CLAUDE_SUBAGENT_TOOLS.has(block.name)) {
+          current.subagents.add(tool);
+        }
+      }
+    }
+    const usage = asRecord(message.usage);
     if (id === undefined || usage === undefined || current.seen.has(id)) {
       continue;
     }
@@ -274,37 +402,15 @@ export function* claudeNative(home: string, sessionId: string): Operation<Native
       add(current.outer, usage, CLAUDE_KEYS);
     }
   }
-  return {
-    source: file,
-    prompts: prompts.map(({ calls, toolCalls, outer, subagent, subagentCalls }) => ({
-      calls,
-      toolCalls,
-      outer,
-      ...(subagentCalls > 0 ? { subagent } : {}),
-      subagentCalls,
-    })),
-  };
-}
-
-/** One Codex Prompt while its rollout is being read. */
-interface CodexPrompt {
-  calls: number;
-  toolCalls: number;
-  /** Native subagents this Prompt's thread spawned; their own threads hold their usage. */
-  subagentCalls: number;
-  start: Record<string, number>;
-  end: Record<string, number>;
-  last?: Record<string, number>;
-}
-
-/** One Claude Prompt while its transcript is being read. */
-interface ClaudePrompt {
-  calls: number;
-  toolCalls: number;
-  outer: Record<string, number>;
-  subagent: Record<string, number>;
-  subagentCalls: number;
-  readonly seen: Set<string>;
+  return session(file, readings, (entry) => ({
+    calls: entry.calls,
+    toolCalls: entry.tools.size,
+    fixtureReads: entry.reads.size,
+    fixtureFilesRead: entry.files.size,
+    outer: entry.outer,
+    ...(entry.subagentCalls > 0 ? { subagent: entry.subagent } : {}),
+    subagentCalls: entry.subagents.size + entry.subagentCalls,
+  }));
 }
 
 const CODEX_KEYS = [
@@ -322,17 +428,20 @@ const CODEX_KEYS = [
  * Each `token_count` event carries both the running thread total and the last
  * request's reading. A started task starts a Prompt; the difference between the
  * running totals at its end and at the previous Prompt's end is the outer
- * Prompt's own total, and the last reading in it is its final request.
+ * Prompt's own total, and the last reading in it is its final request. Tool
+ * calls count once per call id; a completed command whose parsed form is a read
+ * of a fixture file is a fixture read; `spawn_agent` is a native subagent.
  */
-export function* codexNative(home: string, threadId: string): Operation<NativeSession | undefined> {
+export function* codexNative(
+  home: string,
+  threadId: string,
+  fixture?: Fixture,
+): Operation<NativeSession | undefined> {
   const sessions = join(home, ".codex", "sessions");
   const file = yield* findFile(sessions, (name) => name.endsWith(`${threadId}.jsonl`), 3);
   if (file === undefined) {
     return undefined;
   }
-  let previousTotal: Record<string, number> = {};
-  let runningTotal: Record<string, number> = {};
-  const prompts: CodexPrompt[] = [];
   const entries = lines(yield* readTextFile(file));
   // A turn starts where the rollout says a task started; older rollouts mark
   // only the user message.
@@ -341,27 +450,45 @@ export function* codexNative(home: string, threadId: string): Operation<NativeSe
   )
     ? "task_started"
     : "user_message";
+  let runningTotal: Record<string, number> = {};
+  const readings: Reading[] = [];
   for (const entry of entries) {
     const payload = asRecord(entry.payload);
     if (entry.type === "event_msg" && payload?.type === boundary) {
-      previousTotal = { ...runningTotal };
-      prompts.push({
-        calls: 0,
-        toolCalls: 0,
-        subagentCalls: 0,
-        start: previousTotal,
-        end: previousTotal,
-      });
+      readings.push(reading({ ...runningTotal }));
       continue;
     }
-    const current = prompts.at(-1);
+    const current = readings.at(-1);
     if (current === undefined) {
       continue;
     }
-    if (entry.type === "response_item" && typeof payload?.type === "string" && /call$/u.test(payload.type) && !/output$/u.test(payload.type)) {
-      current.toolCalls++;
+    if (entry.type === "response_item" && payload?.type === "message" && payload.role === "user") {
+      current.userText += `${textOf(payload.content)}\n`;
+    }
+    if (
+      entry.type === "response_item" &&
+      typeof payload?.type === "string" &&
+      /call$/u.test(payload.type) &&
+      !/output$/u.test(payload.type)
+    ) {
+      const call = typeof payload.call_id === "string" ? payload.call_id : `call#${current.tools.size}`;
+      current.tools.add(call);
       if (payload.name === "spawn_agent") {
-        current.subagentCalls++;
+        current.subagents.add(call);
+      }
+    }
+    if (entry.type === "event_msg" && payload?.type === "item_completed") {
+      const item = asRecord(payload.item);
+      if (item?.type === "CommandExecution" && Array.isArray(item.parsed_cmd)) {
+        const id = typeof item.id === "string" ? item.id : `command#${current.reads.size}`;
+        for (const parsed of item.parsed_cmd) {
+          const command = asRecord(parsed);
+          const target = command?.type === "read" ? fixtureFile(fixture, command.path, item.cwd) : undefined;
+          if (target !== undefined) {
+            current.reads.add(id);
+            current.files.add(target);
+          }
+        }
       }
     }
     if (entry.type === "event_msg" && payload?.type === "token_count") {
@@ -377,32 +504,31 @@ export function* codexNative(home: string, threadId: string): Operation<NativeSe
         runningTotal = next;
       }
       if (last !== undefined) {
-        const reading: Record<string, number> = {};
-        add(reading, last, CODEX_KEYS);
-        current.last = reading;
+        const latest: Record<string, number> = {};
+        add(latest, last, CODEX_KEYS);
+        current.last = latest;
       }
     }
     current.end = { ...runningTotal };
   }
-  return {
-    source: file,
-    prompts: prompts.map((prompt) => {
-      const outer: Record<string, number> = {};
-      for (const key of CODEX_KEYS) {
-        const end = prompt.end[key];
-        if (end !== undefined) {
-          outer[key] = end - (prompt.start[key] ?? 0);
-        }
+  return session(file, readings, (entry) => {
+    const outer: Record<string, number> = {};
+    for (const key of CODEX_KEYS) {
+      const end = entry.end[key];
+      if (end !== undefined) {
+        outer[key] = end - (entry.start[key] ?? 0);
       }
-      return {
-        calls: prompt.calls,
-        toolCalls: prompt.toolCalls,
-        outer,
-        ...(prompt.last === undefined ? {} : { last: prompt.last }),
-        subagentCalls: prompt.subagentCalls,
-      };
-    }),
-  };
+    }
+    return {
+      calls: entry.calls,
+      toolCalls: entry.tools.size,
+      fixtureReads: entry.reads.size,
+      fixtureFilesRead: entry.files.size,
+      outer,
+      ...(entry.last === undefined ? {} : { last: entry.last }),
+      subagentCalls: entry.subagents.size,
+    };
+  });
 }
 
 /** The canonical response view, spelled in a native source's own counter names. */
@@ -443,6 +569,10 @@ function sameOn(left: Record<string, number>, right: Record<string, number> | un
 /**
  * Compare one acknowledged response view with the native account of the same Prompt.
  *
+ * The native Prompt is the one whose user turn, in the session the canonical
+ * record names, carried the exact input this run delivered; anything else is
+ * an association gap rather than a comparison.
+ *
  * `limited` when the canonical value matches only the final internal request
  * of a Prompt that made more than one: a bound, not a total. A disagreement is
  * a documented limitation, never a reason to manufacture a total.
@@ -450,10 +580,15 @@ function sameOn(left: Record<string, number>, right: Record<string, number> | un
 export function nativeComparison(
   agent: "claude" | "codex",
   usage: PromptUsage | undefined,
-  native: NativePrompt | undefined,
+  session: NativeSession | undefined,
+  input: string,
 ): Check {
-  if (native === undefined) {
+  if (session === undefined) {
     return check("unavailable", "native-source-unavailable");
+  }
+  const native = session.associate(input);
+  if (native === undefined) {
+    return check("unavailable", "native-association-unavailable");
   }
   const response = tokensOf(usage, "response");
   if (response === undefined || response === null) {

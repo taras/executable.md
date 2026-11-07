@@ -44,7 +44,10 @@ import { registerComponents } from "../src/components/registration.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretFinding } from "../src/secrets/findings.ts";
 import type { PromptUsage, PromptUsageReporter } from "../src/agent/usage.ts";
-import { useSecretScannerFactory } from "../src/secrets/policy.ts";
+import { useSecretDetection, useSecretScannerFactory } from "../src/secrets/policy.ts";
+import { attachInputOwner, createInputOwner } from "../src/secrets/inputs.ts";
+import { createContext } from "effection";
+import { retainablePromptUsage } from "../src/agent/usage.ts";
 import { createSecretScanner } from "../src/secrets/scanner.ts";
 import type { Json } from "../src/types.ts";
 
@@ -232,9 +235,17 @@ function stubFactory(trace: StubTrace, plans: () => TurnPlan): AgentProviderFact
         if (!authorized.ok) {
           throw authorized.error;
         }
+        // Established, as a provider that kept the conversation answers both
+        // when it is first opened and when its retained history is reopened.
         return yield* setup.finish(
           { sessionKey: `stub:${request.name ?? agent}`, cwd: "/stub" },
-          { kind: "new" },
+          {
+            kind: "existing",
+            // deno-lint-ignore require-yield
+            *configure(asked) {
+              return asked;
+            },
+          },
         );
       },
       // deno-lint-ignore require-yield
@@ -596,6 +607,134 @@ function markerScanner(marker: string): () => SecretScanner {
     },
   });
 }
+
+describe("Tier PU — producing-execution disclosure", () => {
+  it("PU-P5: a protected input stays withheld under scanner opt-out, whatever context is rebound", function* () {
+    yield* scoped(function* () {
+      const owner = yield* createInputOwner();
+      const values = yield* attachInputOwner(owner);
+      const protectedText = "PU_PROTECTED_MARKER";
+      values.protect({ coroutine: "root", index: 0, field: "code" }, protectedText);
+      // The producing execution's own policy, selected with its protected
+      // inputs and with the scanner explicitly turned off.
+      yield* useSecretDetection(false, new InMemoryStream(), values);
+      const reported: PromptUsage = {
+        ...versioned("protected"),
+        providerMessageId: protectedText,
+        coverage: {
+          finalReport: "received",
+          outerPrompt: "partial",
+          limitations: ["fixture-limit", protectedText, "Not A Category"],
+        },
+      };
+      const expected = {
+        message: undefined,
+        limitations: ["fixture-limit", "field-withheld"],
+      };
+      const normal = yield* retainablePromptUsage(reported);
+      expect({
+        message: normal.providerMessageId,
+        limitations: normal.coverage.limitations,
+      }).toEqual(expected);
+      // Removing the same-name contextual inputs removes nothing: the policy
+      // binding carries the inputs it was selected with.
+      yield* createContext<unknown>("executablemd.secret-input.values").set(undefined);
+      const substituted = yield* retainablePromptUsage(reported);
+      expect({
+        message: substituted.providerMessageId,
+        limitations: substituted.coverage.limitations,
+      }).toEqual(expected);
+      expect(substituted.requestId).toBe(reported.requestId);
+    });
+  });
+
+  it("PU-P6: outside an execution's policy every supplied string is withheld", function* () {
+    const retained = yield* retainablePromptUsage(sampleUsage("orphan"));
+    expect(retained.requestId).toBe(undefined);
+    expect(retained.provenance).toEqual({
+      host: "deno-source",
+      xmd: {},
+      runtime: {},
+      adapter: {},
+      native: {},
+    });
+    expect(retained.readings.some((reading) => reading.source === "quota-model")).toBe(false);
+    expect(retained.coverage.limitations).toEqual(["field-withheld"]);
+  });
+
+  it("PU-P7: the final whole-event gate still refuses a record its fields passed one by one", function* () {
+    // Each optional string is clean alone; only the complete event holds both.
+    const scanner = (): SecretScanner => ({
+      // deno-lint-ignore require-yield
+      *scan(content: string): Operation<SecretFinding[]> {
+        return content.includes("model-a") && content.includes("USD")
+          ? [
+              {
+                ruleId: "test-rule",
+                messageId: "TEST_SECRET",
+                location: { line: 1, column: 1 },
+                fingerprint: "test-fingerprint",
+              },
+            ]
+          : [];
+      },
+    });
+    const stream = new InMemoryStream();
+    const { result, events } = yield* runDocument(
+      "<Prompt>one</Prompt>\n",
+      stream,
+      stubFactory(newTrace(), always({ usage: () => sampleUsage("gated") })),
+      { scanner },
+    );
+    expect(result.ok).toBe(false);
+    expect(promptValues(events)).toEqual([]);
+  });
+
+  it("PU-P8: reopening a held conversation replays its usage without a provider or a new event", function* () {
+    const stream = new InMemoryStream();
+    const installation = (trace: StubTrace, label: string): ExecutionInstallation => ({
+      *install(): Operation<void> {
+        yield* installAgentComponents({
+          rootProvider: {
+            factory: stubFactory(trace, always({ usage: () => versioned(label) })),
+            options: { defaultAgent: AGENT, permissionMode: "deny-all" },
+          },
+        });
+      },
+    });
+    function* converse(trace: StubTrace, label: string, text: string) {
+      return yield* scoped(function* () {
+        const opened = yield* useAgentConversation({
+          history: stream,
+          id: "chat-replay",
+          agent: AGENT,
+          installations: [installation(trace, label)],
+        });
+        if (!opened.ok) {
+          throw opened.error;
+        }
+        return yield* opened.value.prompt(text);
+      });
+    }
+    const first = newTrace();
+    const opened = yield* converse(first, "original", "hello");
+    expect(opened.ok ? "ok" : opened.error.message).toBe("ok");
+    const before = yield* stream.readAll();
+    const [original] = promptValues(before);
+
+    const again = newTrace();
+    const reopened = yield* converse(again, "refreshed", "again");
+    expect(reopened.ok ? "ok" : reopened.error.message).toBe("ok");
+    const after = promptValues(yield* stream.readAll());
+    // Only the new turn reached a provider or captured a receiver; the
+    // retained one answered from its record, unchanged and not appended again.
+    expect([again.subscriptions, again.acquisitions]).toEqual([1, 1]);
+    expect(after.length).toBe(2);
+    expect(after[0]).toEqual(original);
+    expect(parsePromptRecord(after[0])?.usage?.provenance.xmd.version).toBe("original");
+    expect(parsePromptRecord(after[1])?.usage?.provenance.xmd.version).toBe("refreshed");
+  });
+});
 
 describe("Tier PU — retained data", () => {
   it("PU-D1: a complete value round-trips, keeping zero, null and absent apart", function* () {

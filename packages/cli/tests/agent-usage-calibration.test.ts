@@ -21,6 +21,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { HELP, parseSelection, Refusal } from "../../../examples/agent-usage/selection.ts";
+import { calibrate } from "../../../examples/agent-usage/calibrate.ts";
+import type { CalibrationEnvironment } from "../../../examples/agent-usage/calibrate.ts";
+import { chmod } from "node:fs/promises";
+import { until } from "effection";
 import {
   claudeNative,
   codexNative,
@@ -155,17 +159,22 @@ describe("Tier UC — usage calibration driver", () => {
     ]);
     const report = JSON.parse(yield* readTextFile(join(output, "report.json")));
     expect(report.result).toBe("incomplete");
-    expect([report.allowance, report.submittedPrompts, report.acknowledgedPrompts]).toEqual([
-      2, 2, 2,
-    ]);
+    // Both Prompts were reserved, and both are witnessed as submitted by the
+    // user message the runtime generated for each.
+    expect([
+      report.allowance,
+      report.reservedPrompts,
+      report.observedSubmissions,
+      report.acknowledgedPrompts,
+    ]).toEqual([2, 2, 2, 2]);
     expect(report.scenarioChecks.twoPromptsOneSession.outcome).toBe("verified");
     // A controlled agent writes no native transcript: the required multicall
     // witness is missing, which is incomplete calibration, not a pass.
     expect(report.scenarioChecks.multicall).toEqual({
       outcome: "unavailable",
-      reason: "native-tool-evidence-unavailable",
+      reason: "native-source-unavailable",
     });
-    expect(report.teardown.outcome).toBe("verified");
+    expect(report.teardown).toEqual({ outcome: "verified", reason: "owner-cleanup-succeeded" });
     for (const prompt of report.prompts) {
       expect(prompt.checks.usage.outcome).toBe("verified");
       expect(prompt.checks.association).toEqual({
@@ -240,8 +249,53 @@ describe("Tier UC — usage calibration driver", () => {
     expect(records[0].usage.provenance.adapter.version).toBe("0.70.0");
   });
 
-  it("UC4: native accounts separate a whole Prompt from its final request, and find subagents", function* () {
+  it("UC11: Plan retains its writer's usage only in the journal it was asked to keep", function* () {
+    const root = yield* useRoot();
+    const cli = [
+      process.execPath,
+      "run",
+      "--allow-all",
+      "--frozen",
+      join(CHECKOUT, "packages/cli/src/deno.ts"),
+    ];
+    const plan = (extra: string[]) =>
+      scoped(function* () {
+        yield* useQuietProcessOutput();
+        return yield* exec({
+          command: [
+            ...cli,
+            "plan",
+            "write a hello document",
+            "--default-agent",
+            "claude",
+            ...extra,
+          ],
+          cwd: root,
+          env: { ...inherited(), CLAUDE_CODE_EXECUTABLE: FAKE_CLAUDE },
+          retain: true,
+          timeout: 180_000,
+        });
+      });
+    // The controlled writer cannot produce a valid program, so Plan ends
+    // unsuccessfully either way; what is asserted is where its turns went.
+    yield* plan([]);
+    expect(yield* readdirOf(root)).toEqual([]);
+    yield* plan(["--journal", join(root, "plan.jsonl")]);
+    expect(yield* readdirOf(root)).toEqual(["plan.jsonl"]);
+    const records = (yield* readTextFile(join(root, "plan.jsonl")))
+      .split("\n")
+      .filter((line) => line.includes('"agent_prompt"'))
+      .map((line) => JSON.parse(line).result.value);
+    expect(records.length).toBeGreaterThan(0);
+    for (const record of records) {
+      expect(record.usage.provenance.host).toBe("deno-source");
+      expect(record.usage.provenance.adapter.version).toBe("0.70.0");
+    }
+  });
+
+  it("UC4: native accounts count distinct calls, separate a whole Prompt from its final request, and associate exactly", function* () {
     const home = yield* useRoot();
+    const fixture = { files: ["/fixture/a.txt", "/fixture/b.txt"] };
     const codex = join(home, ".codex", "sessions", "2026", "11", "07");
     yield* ensureDir(codex);
     const total = (input: number, output: number) => ({
@@ -251,9 +305,33 @@ describe("Tier UC — usage calibration driver", () => {
       reasoning_output_tokens: 0,
       total_tokens: input + output,
     });
+    const userTurn = (text: string) => ({
+      type: "response_item",
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+    });
+    const command = (id: string, path: string) => ({
+      type: "event_msg",
+      payload: {
+        type: "item_completed",
+        item: {
+          type: "CommandExecution",
+          id,
+          cwd: "/fixture",
+          parsed_cmd: [{ type: "read", path }],
+        },
+      },
+    });
     const rollout = [
       { type: "event_msg", payload: { type: "task_started" } },
-      { type: "response_item", payload: { type: "function_call", name: "spawn_agent" } },
+      userTurn("<environment_context/>\nread both fixture files"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "c1" } },
+      command("i1", "a.txt"),
+      { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "c2" } },
+      command("i2", "b.txt"),
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "spawn_agent", call_id: "c3" },
+      },
       {
         type: "event_msg",
         payload: {
@@ -269,6 +347,7 @@ describe("Tier UC — usage calibration driver", () => {
         },
       },
       { type: "event_msg", payload: { type: "task_started" } },
+      userTurn("repeat them"),
       {
         type: "event_msg",
         payload: {
@@ -281,18 +360,42 @@ describe("Tier UC — usage calibration driver", () => {
       join(codex, "rollout-2026-11-07T00-00-00-thread-1.jsonl"),
       rollout.map((line) => JSON.stringify(line)).join("\n"),
     );
-    const read = yield* codexNative(home, "thread-1");
+    const read = yield* codexNative(home, "thread-1", fixture);
     expect(
-      read?.prompts.map(({ calls, toolCalls, subagentCalls, outer }) => ({
-        calls,
-        toolCalls,
-        subagentCalls,
-        total: outer?.total_tokens,
-      })),
+      read?.prompts.map(
+        ({ calls, toolCalls, fixtureReads, fixtureFilesRead, subagentCalls, outer }) => ({
+          calls,
+          toolCalls,
+          fixtureReads,
+          fixtureFilesRead,
+          subagentCalls,
+          total: outer?.total_tokens,
+        }),
+      ),
     ).toEqual([
-      { calls: 2, toolCalls: 1, subagentCalls: 1, total: 265 },
-      { calls: 1, toolCalls: 0, subagentCalls: 0, total: 155 },
+      {
+        calls: 2,
+        toolCalls: 3,
+        fixtureReads: 2,
+        fixtureFilesRead: 2,
+        subagentCalls: 1,
+        total: 265,
+      },
+      {
+        calls: 1,
+        toolCalls: 0,
+        fixtureReads: 0,
+        fixtureFilesRead: 0,
+        subagentCalls: 0,
+        total: 155,
+      },
     ]);
+    // Association is by the delivered input in exactly one native turn of the
+    // confirmed session, never by position.
+    expect(read?.associate("read both fixture files")).toBe(read?.prompts[0]);
+    expect(read?.associate("repeat them")).toBe(read?.prompts[1]);
+    expect(read?.associate("a Prompt this session never saw")).toBe(undefined);
+    expect(read?.associate("re")).toBe(undefined);
     const lastOnly = usageWith({
       inputTokens: 150,
       outputTokens: 5,
@@ -300,15 +403,22 @@ describe("Tier UC — usage calibration driver", () => {
       thoughtTokens: 0,
       totalTokens: 155,
     });
-    expect(nativeComparison("codex", lastOnly, read?.prompts[0])).toEqual({
+    expect(nativeComparison("codex", lastOnly, read, "read both fixture files")).toEqual({
       outcome: "limited",
       reason: "final-request-only",
     });
-    expect(nativeComparison("codex", lastOnly, read?.prompts[1])).toEqual({
+    expect(nativeComparison("codex", lastOnly, read, "repeat them")).toEqual({
       outcome: "verified",
       reason: "matches-native-outer-total",
     });
-    expect(nativeComparison("codex", undefined, read?.prompts[0]).outcome).toBe("unavailable");
+    expect(nativeComparison("codex", lastOnly, read, "unknown input")).toEqual({
+      outcome: "unavailable",
+      reason: "native-association-unavailable",
+    });
+    expect(nativeComparison("codex", lastOnly, undefined, "repeat them")).toEqual({
+      outcome: "unavailable",
+      reason: "native-source-unavailable",
+    });
 
     const claude = join(home, ".claude", "projects", "-fixture");
     yield* ensureDir(claude);
@@ -318,11 +428,17 @@ describe("Tier UC — usage calibration driver", () => {
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0,
     };
+    const reads = [
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "/fixture/a.txt" } },
+      { type: "tool_use", id: "t2", name: "Read", input: { file_path: "/fixture/b.txt" } },
+    ];
     const transcript = [
       { type: "user", message: { content: "read the files" } },
       { type: "user", isMeta: true, message: { content: "a reminder" } },
-      { type: "assistant", message: { id: "m1", usage, content: [{ type: "tool_use" }] } },
-      { type: "assistant", message: { id: "m1", usage, content: [{ type: "tool_use" }] } },
+      // One API message, logged once per content block: one model call and
+      // two distinct tool calls, however many times the entry repeats.
+      { type: "assistant", message: { id: "m1", usage, content: reads } },
+      { type: "assistant", message: { id: "m1", usage, content: reads } },
       { type: "user", message: { content: [{ type: "tool_result" }] } },
       { type: "assistant", isSidechain: true, message: { id: "s1", usage, content: [] } },
       { type: "assistant", message: { id: "m2", usage, content: [{ type: "text" }] } },
@@ -331,11 +447,13 @@ describe("Tier UC — usage calibration driver", () => {
       join(claude, "session-1.jsonl"),
       transcript.map((line) => JSON.stringify(line)).join("\n"),
     );
-    const main = yield* claudeNative(home, "session-1");
+    const main = yield* claudeNative(home, "session-1", fixture);
     expect(main?.prompts).toEqual([
       {
         calls: 2,
         toolCalls: 2,
+        fixtureReads: 2,
+        fixtureFilesRead: 2,
         outer: {
           input_tokens: 6,
           output_tokens: 4,
@@ -361,9 +479,119 @@ describe("Tier UC — usage calibration driver", () => {
           cachedWriteTokens: 0,
           totalTokens: 10,
         }),
-        main?.prompts[0],
+        main,
+        "read the files",
       ),
     ).toEqual({ outcome: "verified", reason: "matches-native-outer-total-multicall" });
+  });
+
+  it("UC6: an unsuccessful seed stops its continuation; a successful seed admits it", function* () {
+    const failed = yield* controlled({ "resume-seed.md": { exit: 1 } });
+    const stopped = yield* runControlled(failed, "resume");
+    expect(stopped.status).toBe(1);
+    expect(stopped.stderr).toContain(Refusal.cleanup);
+    expect(yield* documents(failed)).toEqual(["resume-seed.md:started"]);
+    const report = JSON.parse(yield* readTextFile(join(stopped.output, "report.json")));
+    expect(report.teardown).toEqual({
+      outcome: "failed",
+      reason: "unsuccessful-owner-stopped-admission",
+    });
+    expect(report.scenarioChecks.seed).toEqual({ outcome: "failed", reason: "seed-unsuccessful" });
+    expect(report.scenarioChecks.separateInvocations.reason).toBe("continuation-not-admitted");
+    expect([report.reservedPrompts, report.observedSubmissions]).toEqual([1, "unknown"]);
+    expect(report.result).toBe("incomplete");
+    // Earlier evidence survives the stop.
+    expect(yield* exists(join(stopped.output, "support/child-0-stderr.txt"))).toBe(true);
+
+    const control = yield* controlled({ "resume-seed.md": { exit: 0 } });
+    const admitted = yield* runControlled(control, "resume");
+    expect(yield* documents(control)).toEqual([
+      "resume-seed.md:started",
+      "resume-continuation.md:started",
+    ]);
+    expect(admitted.stderr).not.toContain(Refusal.cleanup);
+    const controlReport = JSON.parse(yield* readTextFile(join(admitted.output, "report.json")));
+    expect(controlReport.teardown).toEqual({
+      outcome: "verified",
+      reason: "owner-cleanup-succeeded",
+    });
+    expect(controlReport.reservedPrompts).toBe(2);
+  });
+
+  it("UC7: cancellation waits for the ready marker while work is active, then joins the owner", function* () {
+    const host = yield* controlled({ "cancel.md": { ready: true, hold: true, cleanupMs: 300 } });
+    const ran = yield* runControlled(host, "cancel");
+    expect(yield* documents(host)).toEqual([
+      "cancel.md:started",
+      "cancel.md:interrupted",
+      "cancel.md:cleaned",
+    ]);
+    const report = JSON.parse(yield* readTextFile(join(ran.output, "report.json")));
+    expect(report.scenarioChecks.cancelledWhileActive).toEqual({
+      outcome: "verified",
+      reason: "cancelled-after-ready-marker",
+    });
+    expect(report.scenarioChecks.acknowledgement.reason).toBe("no-acknowledged-record");
+    expect(report.teardown).toEqual({ outcome: "limited", reason: "joined-cleanup-unproven" });
+    expect([
+      report.reservedPrompts,
+      report.observedSubmissions,
+      report.acknowledgedPrompts,
+    ]).toEqual([1, 1, 0]);
+    // Submitted work with no acknowledged record is an accounting gap.
+    expect([ran.status, report.result]).toEqual([0, "limited"]);
+  });
+
+  it("UC8: the admission deadline interrupts owned work, waits for its held cleanup and admits nothing later", function* () {
+    const host = yield* controlled({ "resume-seed.md": { hold: true, cleanupMs: 400 } });
+    const ran = yield* runControlled(host, "resume", { admissionMs: 300, promptMs: 10_000 });
+    expect(ran.status).toBe(1);
+    // Joined only after the held cleanup finished; the continuation never started.
+    expect(yield* documents(host)).toEqual([
+      "resume-seed.md:started",
+      "resume-seed.md:interrupted",
+      "resume-seed.md:cleaned",
+    ]);
+    expect(ran.elapsedMs).toBeGreaterThanOrEqual(700);
+    const report = JSON.parse(yield* readTextFile(join(ran.output, "report.json")));
+    expect(report.teardown).toEqual({ outcome: "not_run", reason: "admission-deadline" });
+    expect(report.result).toBe("incomplete");
+  });
+
+  it("UC9: a report that cannot be written is said so once, with no completion line and no retry", function* () {
+    const host = yield* controlled({ "failure.md": { exit: 1, blockReport: true } });
+    const ran = yield* runControlled(host, "failure");
+    expect(ran.status).toBe(1);
+    expect(ran.stderr).toContain("Calibration report could not be written");
+    expect(ran.stdout).not.toContain("Calibration completed");
+    expect(ran.stdout).not.toContain("Calibration incomplete");
+    expect(yield* documents(host)).toEqual(["failure.md:started"]);
+  });
+
+  it("UC10: a Prompt that failed before the experiment is missing execution, not a limitation", function* () {
+    for (const scenario of ["failure", "subagent"]) {
+      const host = yield* controlled({
+        [`${scenario}.md`]: { exit: 1, failedRecord: "Failed to authenticate: controlled refusal" },
+      });
+      const ran = yield* runControlled(host, scenario);
+      const report = JSON.parse(yield* readTextFile(join(ran.output, "report.json")));
+      // The host's own refusal reaches the operator; the report says only
+      // which required witness is missing.
+      expect(ran.stderr).toContain(
+        "Agent prompt failed: Failed to authenticate: controlled refusal",
+      );
+      expect(JSON.stringify(report).includes("controlled refusal")).toBe(false);
+      expect([ran.status, report.result]).toEqual([1, "incomplete"]);
+      expect(
+        scenario === "failure"
+          ? report.scenarioChecks.attemptedWriteRefused
+          : report.scenarioChecks.nativeSubagent,
+      ).toEqual(
+        scenario === "failure"
+          ? { outcome: "failed", reason: "prompt-failed-before-write" }
+          : { outcome: "failed", reason: "experiment-not-executed" },
+      );
+    }
   });
 });
 
@@ -375,4 +603,174 @@ function usageWith(tokens: Record<string, number>): PromptUsage {
     ],
     coverage: { finalReport: "received", outerPrompt: "partial", limitations: [] },
   };
+}
+
+/** What one controlled host does for each scenario document it is asked to run. */
+interface Behaviors {
+  readonly [document: string]: {
+    readonly exit?: number;
+    /** Write ACPX's live record of the Agent saying the ready marker. */
+    readonly ready?: boolean;
+    /** Keep working until interrupted. */
+    readonly hold?: boolean;
+    /** How long cleanup takes after an interrupt. */
+    readonly cleanupMs?: number;
+    /** Make the run's report impossible to write. */
+    readonly blockReport?: boolean;
+    /** Acknowledge one failed Prompt with this error before doing anything else. */
+    readonly failedRecord?: string;
+  };
+}
+
+interface Controlled {
+  readonly root: string;
+  readonly host: string;
+  readonly log: string;
+  readonly home: string;
+}
+
+/**
+ * A controlled stand-in for a compiled XMD host: it answers its version, logs
+ * each document it is asked to run, and behaves as the case says. It starts no
+ * agent and sends no Prompt.
+ */
+function* controlled(behaviors: Behaviors): Operation<Controlled> {
+  const root = yield* useRoot();
+  const home = join(root, "home");
+  const log = join(root, "invocations.jsonl");
+  const host = join(root, "controlled-xmd.cjs");
+  yield* ensureDir(home);
+  const config = JSON.stringify({ behaviors, log, home });
+  yield* writeTextFile(
+    host,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const config = ${config};
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("controlled-host 0.0.0");
+  process.exit(0);
+}
+const document = path.basename(args[1]);
+const journal = args[args.indexOf("--journal") + 1];
+const prop = (name) => args[args.indexOf("--props-" + name) + 1];
+const note = (event) => fs.appendFileSync(config.log, JSON.stringify({ document, event }) + "\\n");
+note("started");
+const behavior = config.behaviors[document] ?? { exit: 0 };
+if (behavior.failedRecord) {
+  const event = {
+    type: "yield",
+    coroutineId: "root",
+    description: { type: "agent_prompt", name: "prompt:controlled#0", input: "controlled" },
+    result: {
+      status: "ok",
+      value: { sequence: 0, agent: "codex", sessionKey: "controlled", status: "failed", text: "", error: { message: behavior.failedRecord } },
+    },
+  };
+  fs.writeFileSync(journal, JSON.stringify(event) + "\\n");
+}
+if (behavior.blockReport) {
+  fs.mkdirSync(path.join(path.dirname(journal), "report.json"), { recursive: true });
+}
+if (behavior.ready) {
+  const sessions = path.join(config.home, ".acpx", "sessions");
+  fs.mkdirSync(sessions, { recursive: true });
+  const record = {
+    messages: [
+      { User: { content: [{ Text: prop("first") }] } },
+      { Agent: { content: [{ Text: "USAGE_CALIBRATION_READY" }] } },
+    ],
+  };
+  fs.writeFileSync(path.join(sessions, "controlled.json"), JSON.stringify(record));
+}
+if (behavior.hold) {
+  process.on("SIGINT", () => {
+    note("interrupted");
+    setTimeout(() => {
+      note("cleaned");
+      process.exit(130);
+    }, behavior.cleanupMs ?? 0);
+  });
+  setInterval(() => {}, 1000);
+} else {
+  process.exit(behavior.exit ?? 0);
+}
+`,
+  );
+  yield* until(chmod(host, 0o755));
+  return { root, host, log, home };
+}
+
+function* documents(host: Controlled): Operation<string[]> {
+  if (!(yield* exists(host.log))) {
+    return [];
+  }
+  return (yield* readTextFile(host.log))
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const { document, event } = JSON.parse(line);
+      return `${document}:${event}`;
+    });
+}
+
+/** Run the driver in this process against a controlled host, with short clocks. */
+function* runControlled(
+  host: Controlled,
+  scenario: string,
+  clocks: Partial<CalibrationEnvironment> = {},
+): Operation<{
+  status: number;
+  stdout: string;
+  stderr: string;
+  output: string;
+  elapsedMs: number;
+}> {
+  const output = join(host.root, `codex-compiled-${scenario}`);
+  const environment: CalibrationEnvironment = {
+    promptMs: 5_000,
+    admissionMs: 30_000,
+    slackMs: 0,
+    pollMs: 25,
+    home: host.home,
+    native: host.host,
+    ...clocks,
+  };
+  const out: string[] = [];
+  const err: string[] = [];
+  const log = console.log;
+  const error = console.error;
+  console.log = (...values: unknown[]) => {
+    out.push(values.join(" "));
+  };
+  console.error = (...values: unknown[]) => {
+    err.push(values.join(" "));
+  };
+  const started = Date.now();
+  try {
+    const status = yield* scoped(() =>
+      calibrate(
+        [
+          "--host=compiled",
+          `--xmd=${host.host}`,
+          "--agent=codex",
+          `--scenario=${scenario}`,
+          `--output=${output}`,
+          "--allow-paid",
+        ],
+        environment,
+      ),
+    );
+    return {
+      status,
+      stdout: out.join("\n"),
+      stderr: err.join("\n"),
+      output,
+      elapsedMs: Date.now() - started,
+    };
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
 }

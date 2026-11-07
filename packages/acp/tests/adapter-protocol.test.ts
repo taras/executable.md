@@ -331,6 +331,107 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     });
   });
 
+  it("EA13: Claude keeps its broader per-model tally beside, not inside, its main-loop usage", function* () {
+    const adapter = yield* useAdapter("claude", {
+      ...CLAUDE_ENV,
+      FAKE_CLAUDE_RESULT_USAGE: JSON.stringify({
+        input_tokens: 3,
+        output_tokens: 2,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 1,
+      }),
+      // The SDK's modelUsage also counts subagents and internal calls, so it
+      // is larger than the main loop's own result.
+      FAKE_CLAUDE_MODEL_USAGE: JSON.stringify({
+        "fake-model": {
+          inputTokens: 7,
+          outputTokens: 5,
+          cacheReadInputTokens: 6,
+          cacheCreationInputTokens: 2,
+        },
+      }),
+    });
+    yield* initialize(adapter);
+    const sessionId = yield* openSession(adapter);
+
+    const response = yield* prompt(adapter, sessionId);
+
+    expect(response["usage"]).toEqual({
+      inputTokens: 3,
+      outputTokens: 2,
+      cachedReadTokens: 4,
+      cachedWriteTokens: 1,
+      totalTokens: 10,
+    });
+    expect(metaOf(response, "quota")).toEqual({
+      token_count: {
+        totalTokens: 10,
+        inputTokens: 3,
+        cachedInputTokens: 4,
+        cachedWriteTokens: 1,
+        outputTokens: 2,
+        reasoningOutputTokens: 0,
+      },
+      model_usage: [
+        {
+          model: "fake-model",
+          token_count: {
+            totalTokens: 20,
+            inputTokens: 7,
+            cachedInputTokens: 6,
+            cachedWriteTokens: 2,
+            outputTokens: 5,
+            reasoningOutputTokens: 0,
+          },
+        },
+      ],
+    });
+  });
+
+  it("EA14: Codex reports only its last internal request, net of cached input, with reasoning apart", function* () {
+    const reading = (input: number, cached: number, output: number, reasoning: number) => ({
+      totalTokens: input + output,
+      inputTokens: input,
+      cachedInputTokens: cached,
+      outputTokens: output,
+      reasoningOutputTokens: reasoning,
+    });
+    const adapter = yield* useAdapter("codex", {
+      ...CODEX_ENV,
+      // Two internal requests in one turn: the second's reading is the last,
+      // and the thread total covers both.
+      FAKE_CODEX_TOKEN_USAGE: JSON.stringify([
+        { last: reading(100, 40, 10, 3), total: reading(100, 40, 10, 3), modelContextWindow: 1000 },
+        { last: reading(150, 90, 5, 2), total: reading(250, 130, 15, 5), modelContextWindow: 1000 },
+      ]),
+    });
+    yield* initialize(adapter);
+    const sessionId = yield* openSession(adapter);
+
+    const response = yield* prompt(adapter, sessionId);
+
+    expect(response["usage"]).toEqual({
+      totalTokens: 155,
+      inputTokens: 60,
+      cachedReadTokens: 90,
+      outputTokens: 5,
+      thoughtTokens: 2,
+    });
+    const quota = metaOf(response, "quota");
+    const lastCount = {
+      totalTokens: 155,
+      inputTokens: 60,
+      cachedInputTokens: 90,
+      outputTokens: 5,
+      reasoningOutputTokens: 2,
+    };
+    expect(Reflect.get(Object(quota), "token_count")).toEqual(lastCount);
+    const rows = Reflect.get(Object(quota), "model_usage");
+    expect(
+      Array.isArray(rows) ? rows.map((row) => Reflect.get(Object(row), "token_count")) : rows,
+    ).toEqual([lastCount]);
+  });
+
   it("EA4: interleaved Claude sessions each carry their own assistant message", function* () {
     const adapter = yield* useAdapter("claude", CLAUDE_ENV);
     yield* initialize(adapter);

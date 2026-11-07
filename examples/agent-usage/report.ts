@@ -14,7 +14,12 @@ export interface PromptReport {
     readonly persistedAgreement: Check;
     readonly independentNative: Check;
   };
-  readonly native?: { readonly calls: number; readonly toolCalls: number; readonly subagentCalls: number };
+  readonly native?: {
+    readonly calls: number;
+    readonly toolCalls: number;
+    readonly fixtureReads: number;
+    readonly subagentCalls: number;
+  };
 }
 
 /**
@@ -29,7 +34,11 @@ export interface Report {
   readonly host: "source" | "compiled";
   readonly scenario: string;
   readonly allowance: number;
-  readonly submittedPrompts: number;
+  /** Outer Prompts reserved against the allowance by the invocations admitted. */
+  readonly reservedPrompts: number;
+  /** Submissions the evidence shows, or unknown when it cannot account for every reservation. */
+  readonly observedSubmissions: number | "unknown";
+  readonly observedAtLeast: number;
   readonly acknowledgedPrompts: number;
   readonly provenance: {
     readonly xmd: {
@@ -75,7 +84,7 @@ export function renderMarkdown(report: Report, result: string): string {
   const out: string[] = [
     `# Usage calibration: ${report.agent} on ${report.host}, ${report.scenario}`,
     "",
-    `Result: **${result}**. Allowance ${report.allowance} outer Prompts; submitted ${report.submittedPrompts}; acknowledged ${report.acknowledgedPrompts}.`,
+    `Result: **${result}**. Allowance ${report.allowance} outer Prompts; reserved ${report.reservedPrompts}; observed submissions ${report.observedSubmissions === "unknown" ? `unknown (at least ${report.observedAtLeast})` : report.observedSubmissions}; acknowledged ${report.acknowledgedPrompts}.`,
     "",
     "## Builds",
     "",
@@ -104,7 +113,7 @@ export function renderMarkdown(report: Report, result: string): string {
     out.push("");
     if (prompt.native !== undefined) {
       out.push(
-        `Native account: ${prompt.native.calls} model calls, ${prompt.native.toolCalls} tool calls, ${prompt.native.subagentCalls} subagent calls.`,
+        `Native account: ${prompt.native.calls} model calls, ${prompt.native.toolCalls} tool calls, ${prompt.native.fixtureReads} fixture reads, ${prompt.native.subagentCalls} subagent calls.`,
         "",
       );
     }

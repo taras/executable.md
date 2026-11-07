@@ -29,7 +29,7 @@ import {
   nativeComparison,
   readAcknowledged,
 } from "./evidence.ts";
-import type { Acknowledged, Check, NativeSession } from "./evidence.ts";
+import type { Acknowledged, Check, Fixture, NativeSession } from "./evidence.ts";
 import { renderMarkdown } from "./report.ts";
 import type { PromptReport, Report } from "./report.ts";
 
@@ -126,12 +126,16 @@ interface Measured {
   readonly nativeVersion?: string;
 }
 
-function* measure(selection: Selection, cwd: string): Operation<Measured> {
+function* measure(
+  selection: Selection,
+  cwd: string,
+  environment: CalibrationEnvironment,
+): Operation<Measured> {
   const version = (yield* firstLine([...hostCommand(selection), "--version"], cwd))?.match(VERSION_TOKEN)?.[0];
   // The executable the bundled adapter would bind, when the host names one.
   const bound =
     selection.agent === "claude" ? process.env.CLAUDE_CODE_EXECUTABLE : process.env.CODEX_PATH;
-  const native = (yield* firstLine([bound ?? selection.agent, "--version"], cwd))?.match(VERSION_TOKEN)?.[0];
+  const native = (yield* firstLine([environment.native ?? bound ?? selection.agent, "--version"], cwd))?.match(VERSION_TOKEN)?.[0];
   if (selection.host === "compiled" && selection.xmd !== undefined) {
     return {
       ...(version === undefined ? {} : { xmdVersion: version }),
@@ -202,11 +206,44 @@ function* readyInAcpx(acpxRoot: string, fixture: string, since: number): Operati
 }
 
 /**
+ * The clocks and native home one calibration runs under.
+ *
+ * The approved values are the defaults; a deterministic test supplies shorter
+ * clocks and a private home through this same value, so no command-line knob
+ * exists to change what an operator's run is held to.
+ */
+export interface CalibrationEnvironment {
+  /** Work allowed per outer Prompt. */
+  readonly promptMs: number;
+  /** No invocation is admitted after this long from the start of the command. */
+  readonly admissionMs: number;
+  /** Extra work time one invocation gets beyond its Prompts' own. */
+  readonly slackMs: number;
+  /** How often readiness and deadlines are checked while a child runs. */
+  readonly pollMs: number;
+  /** Where ACPX and the native agents keep their own state. */
+  readonly home: string;
+  /** The native executable whose version is measured, when not the host's bound one. */
+  readonly native?: string;
+}
+
+function approvedEnvironment(): CalibrationEnvironment {
+  return {
+    promptMs: PROMPT_SECONDS * 1000,
+    admissionMs: ADMISSION_SECONDS * 1000,
+    slackMs: 30_000,
+    pollMs: 250,
+    home: homedir(),
+  };
+}
+
+/**
  * Run one child host invocation to its joined end.
  *
  * A deadline or readiness marker sends the child an interrupt, which is the
  * host's own structured cancellation, and then joins it: nothing is detached
- * or killed to make a report timely.
+ * or killed to make a report timely, and joining waits as long as the child's
+ * own cleanup takes.
  */
 function* invoke(
   selection: Selection,
@@ -214,6 +251,7 @@ function* invoke(
   cwd: string,
   deadlineAt: number,
   stderrPath: string,
+  environment: CalibrationEnvironment,
 ): Operation<Joined> {
   const argv = [
     ...hostCommand(selection),
@@ -241,19 +279,22 @@ function* invoke(
     });
     let cancelledAfterReady = false;
     let deadline = false;
-    const workDeadline = Math.min(deadlineAt, started + invocation.prompts * PROMPT_SECONDS * 1000 + 30_000);
+    const workDeadline = Math.min(
+      deadlineAt,
+      started + invocation.prompts * environment.promptMs + environment.slackMs,
+    );
     const status = yield* race([
       child.join(),
       (function* (): Operation<never> {
         while (true) {
-          yield* sleep(250);
-          if (invocation.cancelOn !== undefined && !cancelledAfterReady) {
-            if (yield* readyInAcpx(join(homedir(), ".acpx"), invocation.cancelOn, started)) {
+          yield* sleep(environment.pollMs);
+          if (invocation.cancelOn !== undefined && !cancelledAfterReady && !deadline) {
+            if (yield* readyInAcpx(join(environment.home, ".acpx"), invocation.cancelOn, started)) {
               cancelledAfterReady = true;
               process.kill(child.pid, "SIGINT");
             }
           }
-          if (!deadline && Date.now() > workDeadline) {
+          if (!deadline && !cancelledAfterReady && Date.now() > workDeadline) {
             deadline = true;
             process.kill(child.pid, "SIGINT");
           }
@@ -265,21 +306,40 @@ function* invoke(
     }
     return {
       started: true,
-      ...(status.code === undefined ? {} : { code: status.code }),
-      ...(status.signal === undefined ? {} : { signal: status.signal }),
+      // The join reports an absent code or signal as null.
+      ...(typeof status.code === "number" ? { code: status.code } : {}),
+      ...(typeof status.signal === "string" ? { signal: status.signal } : {}),
       ...(invocation.cancelOn === undefined ? {} : { cancelledAfterReady }),
       ...(deadline ? { deadline } : {}),
     };
   });
 }
 
-function* nativeFor(agent: Selection["agent"], record: Acknowledged | undefined): Operation<NativeSession | undefined> {
+/**
+ * Whether a joined child's XMD owner is known to have finished cleanly.
+ *
+ * Only a zero exit says so: a teardown failure reaches the command line as a
+ * nonzero exit, exactly as an ordinary Prompt failure does, so a process that
+ * merely closed proves it joined and nothing about its cleanup.
+ */
+function succeeded(joined: Joined): boolean {
+  return joined.code === 0 && joined.signal === undefined;
+}
+
+function* nativeFor(
+  agent: Selection["agent"],
+  record: Acknowledged | undefined,
+  environment: CalibrationEnvironment,
+  fixture: Fixture,
+): Operation<NativeSession | undefined> {
   const id = record?.record.agentSessionId;
   if (id === undefined) {
     return undefined;
   }
   try {
-    return agent === "claude" ? yield* claudeNative(homedir(), id) : yield* codexNative(homedir(), id);
+    return agent === "claude"
+      ? yield* claudeNative(environment.home, id, fixture)
+      : yield* codexNative(environment.home, id, fixture);
   } catch {
     return undefined;
   }
@@ -293,13 +353,30 @@ function shareable(usage: PromptUsage | undefined): PromptReport["usage"] {
   return {
     readings: usage.readings.map((reading) => {
       const { model, ...rest } = reading;
-      return model !== undefined && /^[A-Za-z0-9._:\-[\]]{1,80}$/u.test(model) ? reading : rest;
+      return model !== undefined && MODEL.test(model) ? reading : rest;
     }),
     coverage: usage.coverage,
   };
 }
 
-function* runScenario(selection: Selection, output: string): Operation<Report> {
+const MODEL = /^[A-Za-z0-9._:\-[\]]{1,80}$/u;
+
+/** What one scenario actually did, beside the record the report is built from. */
+interface Observed {
+  readonly acknowledged: Acknowledged[];
+  readonly joins: Joined[];
+  readonly planned: number;
+  readonly stopped?: "admission-deadline" | "unsuccessful-owner";
+  /** The native session each acknowledged record names, by record index. */
+  readonly natives: (NativeSession | undefined)[];
+}
+
+function* runScenario(
+  selection: Selection,
+  output: string,
+  start: number,
+  environment: CalibrationEnvironment,
+): Operation<Report> {
   const fixture = join(output, "fixture");
   const support = join(output, "support");
   yield* ensureDir(fixture);
@@ -331,42 +408,60 @@ function* runScenario(selection: Selection, output: string): Operation<Report> {
         return [{ document: join(SCENARIOS, "subagent.md"), props: { ...base, first: fileA }, journal: journal("subagent"), prompts: 1 }];
     }
   })();
-  const submissions = plan.reduce((sum, invocation) => sum + invocation.prompts, 0);
-  if (submissions > ALLOWANCE[selection.scenario]) {
+  const planned = plan.reduce((sum, invocation) => sum + invocation.prompts, 0);
+  if (planned > ALLOWANCE[selection.scenario]) {
     throw new Error("the scenario plans more outer Prompts than its allowance");
   }
 
-  const start = Date.now();
-  const admissionAt = start + ADMISSION_SECONDS * 1000;
-  const measured = yield* measure(selection, fixture);
+  const admissionAt = start + environment.admissionMs;
+  const measured = yield* measure(selection, fixture, environment);
   const joins: Joined[] = [];
-  let admitted = 0;
-  let stopped: string | undefined;
+  let reserved = 0;
+  let stopped: Observed["stopped"];
   for (const [index, invocation] of plan.entries()) {
     if (Date.now() > admissionAt) {
       stopped = "admission-deadline";
       break;
     }
-    admitted += invocation.prompts;
-    const joined = yield* invoke(selection, invocation, fixture, admissionAt, join(support, `child-${index}-stderr.txt`));
-    joins.push(joined);
-    if (joined.code === undefined && joined.signal !== undefined && joined.signal !== "SIGINT") {
-      stopped = "cleanup-failed";
+    // A later invocation depends on the one before it having finished
+    // cleanly. A child that did not exit zero either failed its work or its
+    // owner's cleanup, and nothing here can tell which, so nothing more starts.
+    const previous = joins.at(-1);
+    if (previous !== undefined && !succeeded(previous)) {
+      stopped = "unsuccessful-owner";
       break;
     }
+    reserved += invocation.prompts;
+    joins.push(
+      yield* invoke(selection, invocation, fixture, admissionAt, join(support, `child-${index}-stderr.txt`), environment),
+    );
+  }
+  if (stopped === "unsuccessful-owner") {
+    console.error(Refusal.cleanup);
   }
 
   const acknowledged: Acknowledged[] = [];
   for (const invocation of plan) {
     acknowledged.push(...((yield* readAcknowledged(invocation.journal)) ?? []));
   }
-  const firstNative = yield* nativeFor(selection.agent, acknowledged[0]);
+  for (const entry of acknowledged) {
+    if (entry.record.status !== "completed" && entry.record.error?.message !== undefined) {
+      // The host's own refusal, as the operator would have seen it.
+      console.error(`Agent prompt ${entry.record.status}: ${entry.record.error.message}`);
+    }
+  }
+  const files: Fixture = { files: [fileA, fileB, deniedFile] };
+  const natives: (NativeSession | undefined)[] = [];
+  for (const entry of acknowledged) {
+    natives.push(yield* nativeFor(selection.agent, entry, environment, files));
+  }
   const prompts: PromptReport[] = [];
   const supportRecords: unknown[] = [];
   for (const [index, entry] of acknowledged.entries()) {
     const usage = entry.record.usage;
-    const native = selection.scenario === "resume" ? (yield* nativeFor(selection.agent, entry))?.prompts.at(index) : firstNative?.prompts[index];
-    const acpx = yield* acpxAgreement(join(homedir(), ".acpx"), usage);
+    const native = natives[index];
+    const associated = native?.associate(entry.input);
+    const acpx = yield* acpxAgreement(join(environment.home, ".acpx"), usage);
     prompts.push({
       status: entry.record.status,
       usage: shareable(usage),
@@ -374,33 +469,43 @@ function* runScenario(selection: Selection, output: string): Operation<Report> {
         usage: usage === undefined ? check("unavailable", "usage-unavailable") : check("verified", "usage-retained"),
         association: acpx.association,
         persistedAgreement: acpx.agreement,
-        independentNative: nativeComparison(selection.agent, usage, native),
+        independentNative: nativeComparison(selection.agent, usage, native, entry.input),
       },
-      native: native === undefined ? undefined : { calls: native.calls, toolCalls: native.toolCalls, subagentCalls: native.subagentCalls },
+      native:
+        associated === undefined
+          ? undefined
+          : {
+              calls: associated.calls,
+              toolCalls: associated.toolCalls,
+              fixtureReads: associated.fixtureReads,
+              subagentCalls: associated.subagentCalls,
+            },
     });
     supportRecords.push({
       name: entry.name,
       sessionKey: entry.record.sessionKey,
       agentSessionId: entry.record.agentSessionId,
       usage,
-      native: native ?? null,
-      nativeSource: firstNative?.source ?? null,
+      native: associated ?? null,
+      nativeAssociation: native === undefined ? "native-source-unavailable" : associated === undefined ? "native-association-unavailable" : "delivered-input-in-one-native-turn",
+      nativeSource: native?.source ?? null,
     });
   }
   yield* writeTextFile(join(support, "association.json"), `${JSON.stringify({ measured, prompts: supportRecords }, null, 2)}\n`);
 
-  const scenario = scenarioChecks(selection, acknowledged, joins, firstNative, markers, yield* exists(deniedFile));
-  const teardown = stopped === "cleanup-failed"
-    ? check("failed", "owned-cleanup-failed")
-    : joins.length === plan.length
-      ? check("verified", "owner-joined")
-      : check("not_run", stopped ?? "not-admitted");
+  const observed: Observed = { acknowledged, joins, planned, natives, ...(stopped === undefined ? {} : { stopped }) };
+  const scenario = scenarioChecks(selection, observed, markers, yield* exists(deniedFile), deniedFile);
+  const witnessed =
+    acknowledged.filter((entry) => entry.record.usage?.providerMessageId !== undefined).length +
+    (selection.scenario === "cancel" && joins[0]?.cancelledAfterReady === true && acknowledged.length === 0 ? 1 : 0);
   return {
     agent: selection.agent,
     host: selection.host,
     scenario: selection.scenario,
     allowance: ALLOWANCE[selection.scenario],
-    submittedPrompts: admitted,
+    reservedPrompts: reserved,
+    observedSubmissions: witnessed === reserved ? witnessed : "unknown",
+    observedAtLeast: witnessed,
     acknowledgedPrompts: acknowledged.length,
     provenance: {
       xmd: {
@@ -415,24 +520,61 @@ function* runScenario(selection: Selection, output: string): Operation<Report> {
         ...(acknowledged[0]?.record.usage?.provenance.native ?? {}),
         ...(measured.nativeVersion === undefined ? {} : { observedVersion: measured.nativeVersion }),
       },
-      models: [...new Set(acknowledged.flatMap((entry) => entry.record.usage?.readings.flatMap((reading) => reading.model !== undefined && /^[A-Za-z0-9._:\-[\]]{1,80}$/u.test(reading.model) ? [reading.model] : []) ?? []))],
+      models: [...new Set(acknowledged.flatMap((entry) => entry.record.usage?.readings.flatMap((reading) => reading.model !== undefined && MODEL.test(reading.model) ? [reading.model] : []) ?? []))],
     },
     prompts,
     scenarioChecks: scenario,
     readback: acknowledged.length > 0 ? check("verified", "canonical-journal-read-back") : check("unavailable", "no-acknowledged-history"),
-    teardown,
+    teardown: teardownCheck(selection, observed, plan.length),
   };
+}
+
+/** Whether this scenario's own expected path ends its one child unsuccessfully. */
+function expectsUnsuccessfulChild(selection: Selection): boolean {
+  return selection.scenario === "failure" || selection.scenario === "cancel";
+}
+
+function teardownCheck(selection: Selection, observed: Observed, planned: number): Check {
+  if (observed.stopped === "unsuccessful-owner") {
+    return check("failed", "unsuccessful-owner-stopped-admission");
+  }
+  if (observed.stopped === "admission-deadline") {
+    return check("not_run", "admission-deadline");
+  }
+  if (observed.joins.length !== planned) {
+    return check("not_run", "not-admitted");
+  }
+  if (observed.joins.every(succeeded)) {
+    return check("verified", "owner-cleanup-succeeded");
+  }
+  // An expected Agent failure or cancellation exits nonzero like a cleanup
+  // failure would: the owner joined, and its cleanup stays unproven.
+  return expectsUnsuccessfulChild(selection)
+    ? check("limited", "joined-cleanup-unproven")
+    : check("unavailable", "joined-cleanup-unproven");
+}
+
+function failedBeforeWork(entry: Acknowledged | undefined): boolean {
+  return entry !== undefined && entry.record.status !== "completed" && (entry.record.permissions ?? []).length === 0;
 }
 
 function scenarioChecks(
   selection: Selection,
-  acknowledged: Acknowledged[],
-  joins: Joined[],
-  native: NativeSession | undefined,
+  observed: Observed,
   markers: { a: string; b: string; r: string },
   deniedWritten: boolean,
+  deniedFile: string,
 ): Record<string, Check> {
+  const { acknowledged, joins, natives } = observed;
   const completed = acknowledged.filter((entry) => entry.record.status === "completed");
+  const associated = (index: number) => {
+    const entry = acknowledged[index];
+    return entry === undefined ? undefined : natives[index]?.associate(entry.input);
+  };
+  const nativeGap = (index: number) =>
+    natives[index] === undefined
+      ? check("unavailable", "native-source-unavailable")
+      : check("unavailable", "native-association-unavailable");
   switch (selection.scenario) {
     case "success": {
       const sameSession =
@@ -440,16 +582,18 @@ function scenarioChecks(
         acknowledged[0].record.sessionKey === acknowledged[1].record.sessionKey &&
         acknowledged[0].record.agentSessionId !== undefined &&
         acknowledged[0].record.agentSessionId === acknowledged[1].record.agentSessionId;
-      const reads = native?.prompts[0]?.toolCalls;
+      const first = associated(0);
       return {
         twoPromptsOneSession: completed.length === 2 && sameSession
           ? check("verified", "two-acknowledged-prompts-one-session")
-          : check("failed", "two-prompts-not-observed"),
-        multicall: reads === undefined
-          ? check("unavailable", "native-tool-evidence-unavailable")
-          : reads >= 2
-            ? check("verified", "two-or-more-native-tool-calls")
-            : check("failed", "fewer-than-two-native-tool-calls"),
+          : acknowledged.some((entry) => entry.record.status !== "completed")
+            ? check("failed", "prompts-failed")
+            : check("failed", "two-prompts-not-observed"),
+        multicall: first === undefined
+          ? nativeGap(0)
+          : first.fixtureReads >= 2 && first.fixtureFilesRead === 2
+            ? check("verified", "two-separate-fixture-reads")
+            : check("failed", "two-separate-fixture-reads-not-observed"),
         recall: acknowledged[1]?.record.text.includes(markers.a) && acknowledged[1]?.record.text.includes(markers.b)
           ? check("verified", "markers-recalled")
           : check("limited", "markers-not-recalled"),
@@ -463,7 +607,10 @@ function scenarioChecks(
         seed.record.agentSessionId !== undefined &&
         continuation.record.agentSessionId === seed.record.agentSessionId;
       return {
-        separateInvocations: joins.length === 2 ? check("verified", "two-joined-invocations") : check("failed", "separate-invocation-not-observed"),
+        seed: seed?.record.status === "completed" && joins[0] !== undefined && succeeded(joins[0])
+          ? check("verified", "seed-completed")
+          : check("failed", "seed-unsuccessful"),
+        separateInvocations: joins.length === 2 ? check("verified", "two-joined-invocations") : check("failed", "continuation-not-admitted"),
         exactTarget: continued && continuation?.record.status === "completed"
           ? check("verified", "exact-retained-target-continued")
           : continuation !== undefined && continuation.record.status !== "completed"
@@ -473,18 +620,33 @@ function scenarioChecks(
       };
     }
     case "failure": {
-      const refused = acknowledged[0]?.record.permissions?.some((permission) =>
-        permission.outcome.outcome === "cancelled" ||
-        permission.options.some((option) => option.optionId === (permission.outcome.outcome === "selected" ? permission.outcome.optionId : "") && option.kind.startsWith("reject")),
+      const entry = acknowledged[0];
+      const permissions = entry?.record.permissions ?? [];
+      // The requested write, by what the host was asked to permit: an edit,
+      // or a request that names this run's private denied file. Another tool
+      // refused on the way is not the experiment.
+      const requested = permissions.filter(
+        (permission) => permission.kind === "edit" || (permission.title ?? "").includes(deniedFile),
       );
+      const refused = requested.some((permission) => {
+        const outcome = permission.outcome;
+        if (outcome.outcome === "cancelled") {
+          return true;
+        }
+        return permission.options.some((option) => option.optionId === outcome.optionId && option.kind.startsWith("reject"));
+      });
       return {
-        attemptedWriteRefused: refused === true
-          ? check("verified", "host-refused-attempted-native-write")
-          : check("failed", "native-write-not-attempted"),
+        attemptedWriteRefused: refused
+          ? check("verified", "host-refused-requested-native-write")
+          : entry === undefined
+            ? check("failed", "no-acknowledged-record")
+            : failedBeforeWork(entry)
+              ? check("failed", "prompt-failed-before-write")
+              : check("failed", "requested-write-not-attempted"),
         nothingWritten: deniedWritten ? check("failed", "denied-file-written") : check("verified", "denied-file-absent"),
-        acknowledgement: acknowledged.length === 1
-          ? check("verified", `acknowledged-${acknowledged[0].record.status}`)
-          : check("limited", "no-acknowledged-record"),
+        acknowledgement: entry === undefined
+          ? check("limited", "no-acknowledged-record")
+          : check("verified", refused && entry.record.status === "completed" ? "acknowledged-completed-after-refusal" : `acknowledged-${entry.record.status}`),
       };
     }
     case "cancel": {
@@ -499,16 +661,29 @@ function scenarioChecks(
       };
     }
     case "subagent": {
-      const observed = native?.prompts[0]?.subagentCalls;
+      const entry = acknowledged[0];
+      if (entry === undefined || entry.record.status !== "completed") {
+        // Unavailability is a finding only about an experiment that ran.
+        return {
+          nativeSubagent: check("failed", "experiment-not-executed"),
+          inclusion: check("not_run", "experiment-not-executed"),
+        };
+      }
+      const native = associated(0);
+      if (native === undefined) {
+        return { nativeSubagent: nativeGap(0), inclusion: check("not_run", "no-subagent-work") };
+      }
+      if (native.subagentCalls > 0) {
+        return {
+          nativeSubagent: check("verified", "native-subagent-requested"),
+          inclusion: check("limited", "subagent-inclusion-unverified"),
+        };
+      }
       return {
-        nativeSubagent: observed === undefined
-          ? check("unavailable", "native-source-unavailable")
-          : observed > 0
-            ? check("verified", "native-subagent-work-observed")
-            : check("limited", "native-subagent-not-observed"),
-        inclusion: observed !== undefined && observed > 0
-          ? check("limited", "subagent-inclusion-unverified")
-          : check("not_run", "no-subagent-work"),
+        nativeSubagent: /\bunavailable\b/iu.test(entry.record.text)
+          ? check("limited", "subagents-reported-unavailable")
+          : check("limited", "native-subagent-not-observed"),
+        inclusion: check("not_run", "no-subagent-work"),
       };
     }
   }
@@ -517,9 +692,13 @@ function scenarioChecks(
 /** Every check a selected scenario requires, and whether any of them is missing. */
 function verdict(report: Report): "completed" | "limited" | "incomplete" {
   const required = Object.values(report.scenarioChecks);
-  if (report.teardown.outcome !== "verified" || required.some((item) => item.outcome === "failed" || item.outcome === "not_run" && item.reason !== "no-subagent-work")) {
+  const teardown = report.teardown;
+  const joined = teardown.outcome === "verified" || (teardown.outcome === "limited" && teardown.reason === "joined-cleanup-unproven");
+  if (!joined || required.some((item) => item.outcome === "failed" || (item.outcome === "not_run" && item.reason !== "no-subagent-work"))) {
     return "incomplete";
   }
+  // Only a subagent experiment that actually ran may end with its native
+  // evidence unavailable; every other required witness must have occurred.
   if (required.some((item) => item.outcome === "unavailable") && report.scenario !== "subagent") {
     return "incomplete";
   }
@@ -528,8 +707,8 @@ function verdict(report: Report): "completed" | "limited" | "incomplete" {
   }
   const accounting = report.prompts.flatMap((prompt) => Object.values(prompt.checks));
   // Work that ran and left no acknowledged record is consumption nothing accounts for.
-  const unaccounted = report.submittedPrompts > report.acknowledgedPrompts;
-  const limited = unaccounted || [...required, ...accounting].some((item) => item.outcome !== "verified");
+  const unaccounted = report.reservedPrompts > report.acknowledgedPrompts;
+  const limited = unaccounted || teardown.outcome !== "verified" || [...required, ...accounting].some((item) => item.outcome !== "verified");
   return limited || report.prompts.some((prompt) => prompt.usage?.coverage.outerPrompt !== "verified") ? "limited" : "completed";
 }
 
@@ -576,7 +755,12 @@ function* quietChildren(): Operation<void> {
   );
 }
 
-export function* calibrate(args: readonly string[]): Operation<number> {
+export function* calibrate(
+  args: readonly string[],
+  environment: CalibrationEnvironment = approvedEnvironment(),
+): Operation<number> {
+  // The admission clock covers the whole command, preparation included.
+  const start = Date.now();
   const parsed = parseSelection(args);
   if (parsed.kind === "help") {
     console.log(HELP);
@@ -596,18 +780,17 @@ export function* calibrate(args: readonly string[]): Operation<number> {
     console.error(Refusal.exists(output));
     return 1;
   }
-  const report = yield* runScenario(selection, output);
+  const report = yield* runScenario(selection, output, start, environment);
   const outcome = verdict(report);
   try {
     yield* writeTextFile(join(output, "report.json"), `${JSON.stringify({ ...report, result: outcome }, null, 2)}\n`);
     yield* writeTextFile(join(output, "report.md"), renderMarkdown(report, outcome));
     yield* writeIndex(output);
   } catch (error) {
+    // The paid work already happened and is not repeated; no report is
+    // claimed where none could be written.
     console.error(`Calibration report could not be written: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
-  }
-  if (report.teardown.outcome === "failed") {
-    console.error(Refusal.cleanup);
   }
   console.log(COMPLETION[outcome](output));
   return outcome === "incomplete" ? 1 : 0;

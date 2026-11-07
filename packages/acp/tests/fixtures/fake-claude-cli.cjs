@@ -247,8 +247,14 @@ process.stdin.on("data", (chunk) => {
       duration_api_ms: 1,
       num_turns: 1,
       total_cost_usd: 0,
-      usage: usage(),
-      modelUsage: {},
+      // A case may script the main loop's own result usage and the broader
+      // per-model tally the SDK reports beside it.
+      usage: process.env.FAKE_CLAUDE_RESULT_USAGE
+        ? JSON.parse(process.env.FAKE_CLAUDE_RESULT_USAGE)
+        : usage(),
+      modelUsage: process.env.FAKE_CLAUDE_MODEL_USAGE
+        ? JSON.parse(process.env.FAKE_CLAUDE_MODEL_USAGE)
+        : {},
       permission_denials: [],
       uuid: crypto.randomUUID(),
       session_id: SESSION,
