@@ -1,9 +1,11 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, spawn, withResolvers } from "effection";
+import { ensure, race, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
+import type { DurableEvent } from "@executablemd/durable-streams";
 import {
   InMemoryStream,
+  DurableContext,
   createDurableOperation,
   DurablePersistenceError,
 } from "@executablemd/durable-streams";
@@ -391,6 +393,158 @@ describe("Try owned lifetimes", () => {
           cause instanceof InvocationTeardownError ? cause : undefined,
         ),
       ).toBeDefined();
+    }
+  });
+
+  it("R1: failed child release never becomes recoverable through an actual retained prefix", function* () {
+    yield* race([
+      scoped(function* () {
+        const saved = withResolvers<void>();
+        const release = withResolvers<void>();
+        const entered = withResolvers<void>();
+        const cancelled = withResolvers<void>();
+        const completed = withResolvers<void>();
+        let paused = true;
+        let caught = 0;
+        const failure = new Error("owned native release failed");
+        class History extends InMemoryStream {
+          override *append(event: DurableEvent): Operation<void> {
+            yield* super.append(event);
+            if (
+              paused &&
+              event.type === "close" &&
+              event.coroutineId === "root.0" &&
+              event.result.status === "err"
+            ) {
+              saved.resolve();
+              yield* release.operation;
+            }
+          }
+        }
+        const stream = new History();
+        yield* registerComponents([
+          {
+            name: "BrokenRelease",
+            origin: "try-lifecycle",
+            props: noProps,
+            *fn() {
+              yield* ensure(function* () {
+                throw failure;
+              });
+              yield* entered.operation;
+              return "body";
+            },
+          },
+          {
+            name: "HeldSibling",
+            origin: "try-lifecycle",
+            props: noProps,
+            *fn() {
+              yield* ensure(function* () {
+                cancelled.resolve();
+              });
+              entered.resolve();
+              yield* suspend();
+              return "unreachable";
+            },
+          },
+          {
+            name: "Recovered",
+            origin: "try-lifecycle",
+            props: noProps,
+            *fn() {
+              caught += 1;
+              return "recovery entered";
+            },
+          },
+        ]);
+        const source =
+          "<Try><All><Spawn><BrokenRelease /></Spawn><Spawn><HeldSibling /></Spawn></All><Catch><Recovered /></Catch></Try>";
+        const live = yield* spawn(function* () {
+          try {
+            return yield* run(source, undefined, stream);
+          } finally {
+            completed.resolve();
+          }
+        });
+        const boundary = yield* race([
+          (function* () {
+            yield* saved.operation;
+            return "child close";
+          })(),
+          (function* () {
+            yield* completed.operation;
+            return "joined";
+          })(),
+        ]);
+        if (boundary === "child close") {
+          const halt = yield* spawn(() => live.halt());
+          yield* cancelled.operation;
+          release.resolve();
+          yield* halt;
+        } else {
+          const result = yield* live;
+          expect(result.result.ok).toBe(false);
+          if (!result.result.ok) {
+            expect(
+              firstCause(result.result.error, (cause) => (cause === failure ? failure : undefined)),
+            ).toBe(failure);
+          }
+          yield* cancelled.operation;
+          expect(stream.snapshot().filter((event) => event.type === "close")).toHaveLength(0);
+        }
+        expect(
+          stream.snapshot().some((event) => event.type === "close" && event.coroutineId === "root"),
+        ).toBe(false);
+        expect(caught).toBe(0);
+        paused = false;
+        const resumed = yield* run(source, undefined, stream);
+        expect(caught).toBe(0);
+        expect(resumed.result.ok).toBe(false);
+      }),
+      (function* (): Operation<never> {
+        yield* sleep(10000);
+        throw new Error("retained release regression deadline");
+      })(),
+    ]);
+  });
+
+  it("R1: invocation context replacement cannot redirect the root release fence", function* () {
+    const failure = new Error("shadowed invocation release failed");
+    const initiating = new Error("shadowed invocation body failed");
+    let replaced: import("@executablemd/durable-streams").DurableContext | undefined;
+    yield* registerComponents([
+      {
+        name: "ShadowedRelease",
+        origin: "try-lifecycle",
+        props: noProps,
+        *fn() {
+          const current = yield* DurableContext.expect();
+          replaced = { ...current, durability: {} };
+          yield* DurableContext.set(replaced);
+          yield* ensure(function* () {
+            throw failure;
+          });
+          throw initiating;
+        },
+      },
+    ]);
+    const result = yield* run(
+      "<Try><All><Spawn><ShadowedRelease /></Spawn><Spawn>other</Spawn></All><Catch>WRONG</Catch><Finally>WRONG</Finally></Try>WRONG",
+    );
+    expect(result.result.ok).toBe(false);
+    expect(result.output).not.toContain("WRONG");
+    expect(
+      result.events.filter((event) => event.type === "close" && event.coroutineId !== "root.1"),
+    ).toHaveLength(0);
+    expect(replaced?.durability?.failure).toBeUndefined();
+    if (!result.result.ok) {
+      expect(
+        firstCause(result.result.error, (cause) => (cause === initiating ? initiating : undefined)),
+      ).toBe(initiating);
+      expect(
+        firstCause(result.result.error, (cause) => (cause === failure ? failure : undefined)),
+      ).toBe(failure);
     }
   });
 

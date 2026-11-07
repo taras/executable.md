@@ -766,9 +766,14 @@ only the finalizer may run before that failure leaves Try.
 Each phase uses ordered invocation settlement: projected content, body and retained
 eval resources join before the next phase. Actual failed release is retained before
 printing or Prompt normalization can discard it. Failed owning teardown permits
-neither Catch, replacement work nor an unentered Finally. Prompt's existing live
-publication coordinator activates its infrastructure failure path before serializing
-failed release; no recoverable failed-turn record is published. Initiating and
+neither Catch, replacement work nor an unentered Finally. Canonical execution
+captures the durable root's shared failure slot before document preparation or
+middleware and passes its activation closure through the private release ledger.
+Actual invocation release failure activates that slot before a durable child can
+serialize an ordinary error Close; replacing a later ambient Context does not
+redirect activation. Prompt's existing live publication coordinator likewise
+activates its infrastructure failure path before serializing failed release;
+no recoverable failed-turn record is published. Initiating and
 teardown failures remain separate. Through the complete combined causes, durability
 then Files wins by identity. Otherwise the first unhandled ordinary failure stays
 primary, with a later finalizer failure alongside it. Successful Catch retires the

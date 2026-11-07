@@ -67,7 +67,7 @@ export interface CheckedFailures {
   /** Whether an authored `<PrintErrors>` region covers this work. */
   readonly authorized: boolean;
   readonly cancellation?: DurableCancellation;
-  readonly release?: { failure?: Error };
+  readonly release?: { failure?: Error; readonly activate?: (error: Error) => void };
   phase?: Invocation;
   phaseProjection?: object;
   readonly ignoredBreak?: LoopFrame;
@@ -76,8 +76,11 @@ export interface CheckedFailures {
 }
 
 /** The ledger an execution starts with: no recovery, nothing suffered yet. */
-export function checkedFailureLedger(cancellation?: DurableCancellation): CheckedFailures {
-  return { authorized: false, cancellation };
+export function checkedFailureLedger(
+  cancellation?: DurableCancellation,
+  failedRelease?: (error: Error) => void,
+): CheckedFailures {
+  return { authorized: false, cancellation, release: { activate: failedRelease } };
 }
 
 /**

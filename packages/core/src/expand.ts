@@ -2534,6 +2534,9 @@ function recordFailedRelease(ledger: CheckedFailures | undefined, error: unknown
       cause: previous,
     });
   }
+  if (release.failure !== undefined) {
+    release.activate?.(release.failure);
+  }
 }
 
 function terminalTryFailure(error: unknown): Error | undefined {

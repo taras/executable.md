@@ -21,6 +21,7 @@ import type { Operation, Result, Stream } from "effection";
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import {
   durableRun,
+  DurableContext,
   createDurableOperation,
   ephemeral,
   preserveJournalProvenance,
@@ -106,6 +107,7 @@ import {
   durabilityFailure,
   ErrorMode,
   filesFatalFailure,
+  firstCause,
   useSegmentCauses,
 } from "./errors.ts";
 import {
@@ -2245,11 +2247,12 @@ function* documentWorkflow(
   computed: ComputedBindings,
   filesystem?: FilesystemExpansion,
   cancellation?: () => "terminal" | "resumable",
+  failedRelease?: (error: Error) => void,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
   // document, component, or printing boundary can clear it (#441).
-  const checkedFailures = checkedFailureLedger(cancellation);
+  const checkedFailures = checkedFailureLedger(cancellation, failedRelease);
   // Import root — same pipeline as any component. The provider middleware
   // installed by execute maps "__root__" to the run's root document source.
   // The ephemeral() wrapper bridges typing only — the import inside remains a
@@ -3370,6 +3373,36 @@ function* executeDocument(
       // left behind is not this run having recorded a completion.
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
+          // Capture the kernel's shared slot before preparations or document
+          // middleware can replace the ambient context. Later release reports
+          // reach this root even when their invocation shadows DurableContext.
+          const failureState = (yield* DurableContext.expect()).durability;
+          if (failureState === undefined) {
+            throw new Error("Durable root has no shared failure state");
+          }
+          const failedRelease = (error: Error): void => {
+            const previous = failureState.failure;
+            const fatal =
+              durabilityFailure(previous) ??
+              durabilityFailure(error) ??
+              filesFatalFailure(previous) ??
+              filesFatalFailure(error);
+            if (fatal !== undefined) {
+              failureState.failure = fatal;
+            } else if (
+              previous === undefined ||
+              firstCause(error, (cause) => (cause === previous ? previous : undefined)) !==
+                undefined
+            ) {
+              failureState.failure = error;
+            } else if (
+              firstCause(previous, (cause) => (cause === error ? error : undefined)) === undefined
+            ) {
+              failureState.failure = new AggregateError([previous, error], previous.message, {
+                cause: previous,
+              });
+            }
+          };
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
             documentWorkflow(
               claimed,
@@ -3380,6 +3413,7 @@ function* executeDocument(
               computed,
               filesystem,
               () => (terminalStop ? "terminal" : "resumable"),
+              failedRelease,
             ),
           );
           try {
