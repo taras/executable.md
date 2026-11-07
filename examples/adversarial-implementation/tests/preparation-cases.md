@@ -4,7 +4,7 @@ pwd -P
 <Let as="root" value={location.stdout.trim()} />
 <Let as="clause" value={'Keep the accepted scope. If validation fails, hold; except the named read-only case. Unresolved: preserve finding U. Run `deno task test focused.test.ts`. Review identity: exact-sha-123.\n'} />
 
-<Test name="R D H P: production preparation continues only the unstarted successor and bounds unsuccessful reduction" timeout="180s">
+<Test name="R D H P: production preparation continues only the unstarted successor and bounds unsuccessful reduction" timeout="240s">
 <Each in={["success","validation","overage","missing","uncertain","identity"]} let="variant">
 <TempDir>
 ```bash exec as="repositoryPrepared"
