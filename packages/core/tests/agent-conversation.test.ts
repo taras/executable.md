@@ -64,7 +64,7 @@ import { AgentConversationProvider } from "../src/agent/conversation-provider.ts
 import type { AgentSessionRequest } from "../src/agent/session-request.ts";
 import { sessionOf } from "../src/agent/session-use.ts";
 import { useAgentPromptPublisher } from "../src/agent/publication.ts";
-import { useSecretScannerFactory } from "../src/secrets/policy.ts";
+import { secretPolicy, useSecretScannerFactory } from "../src/secrets/policy.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretFinding } from "../src/secrets/findings.ts";
 import type { AgentLaunchCoordinator } from "../src/agent/launch-coordinator.ts";
@@ -111,6 +111,8 @@ interface Traffic {
 
 interface StubOptions {
   readonly freshSession?: boolean;
+  /** Throw from the provider's own final `next()`, after its terminal event. */
+  readonly failsAfterTerminal?: boolean;
   /** How the provider answers one turn. Default: completes, echoing the text. */
   readonly respond?: (content: string) => {
     status?: "completed" | "failed" | "cancelled";
@@ -157,14 +159,6 @@ interface StubOptions {
    * around that stream.
    */
   readonly asks?: readonly { toolCallId: string; title?: string; kind?: string }[];
-  /**
-   * Bind this under the secret policy's own name, inside the turn's own scope.
-   *
-   * A provider's `prompt()` runs in the scope the canonical consumer owns, so
-   * this is a counterfeit mounted exactly where the live observation reads its
-   * policy — which is the only place one could hope to be taken for it.
-   */
-  readonly counterfeits?: unknown;
   /** Called when this turn's own provider scope unwinds, however it ended. */
   readonly tears?: () => void;
   /**
@@ -416,9 +410,6 @@ function turn(
           }
         });
       }
-      if (options.counterfeits !== undefined) {
-        yield* createContext<unknown>("executablemd.secrets.policy").set(options.counterfeits);
-      }
       const response = options.respond ? options.respond(content) : {};
       const deltas = response.deltas ?? [`[${content}]`];
       const terminal: AgentPromptEvent = {
@@ -467,6 +458,12 @@ function turn(
           }
           if (index < events.length) {
             return { done: false, value: events[index++]! };
+          }
+          if (options.failsAfterTerminal === true) {
+            // The provider's own settlement failing after it already forwarded
+            // its terminal event: everything a consumer saw was genuine, and
+            // the turn still did not finish.
+            throw new Error("native settlement failed");
           }
           return { done: true, value: response.returns ?? deltas.join("") };
         },
@@ -733,27 +730,87 @@ describe("Tier PV — the live account of a canonical turn", () => {
     const stream = new InMemoryStream();
     const traffic = fresh();
     const seen: (string | null)[] = [];
+    // Written out, the way something inside a run constructs it from the
+    // source. It describes itself as disabled detection; it is not the policy
+    // this execution installed, and describing itself is not authentication.
+    let described = 0;
+    const fake = {
+      enabled: false,
+      describe: () => {
+        described += 1;
+        return "disabled";
+      },
+    };
+    // What the authenticated read answered at the moment the consumer read it.
+    const refused: string[] = [];
+    // Bound where the policy is actually read: a default-max prompt handler
+    // binds it in the turn's own scope as the held call is interpreted, which
+    // is after this execution established its authentic policy and while the
+    // consumer that reads one is still running. A provider's own stream cannot
+    // reach that scope, and installation-time binding would be established
+    // before the authentic one.
+    const planting: ExecutionInstallation = {
+      *install(): Operation<void> {
+        yield* Agent.around({
+          *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+            yield* createContext<unknown>("executablemd.secrets.policy").set(fake);
+            return yield* next(text, options);
+          },
+        });
+      },
+    };
 
     const answered = yield* withConversation(
       stream,
-      stub(traffic, {
-        respond: () => ({ deltas: ["<Output>anything</Output>"] }),
-        // Bound in the turn's own scope, under the policy's own name — written
-        // out, the way something inside a run constructs it from the source. It
-        // describes itself as disabled detection; it is not the policy this
-        // execution installed, and describing itself is not authentication.
-        counterfeits: { enabled: false, describe: () => "disabled" },
-      }),
+      stub(traffic, { respond: () => ({ deltas: ["<Output>anything</Output>"] }) }),
       function* (chat) {
         return yield* chat.prompt("say something");
       },
       "chat-1",
-      [watcher(seen, [], [])],
+      [
+        planting,
+        {
+          *install(): Operation<void> {
+            yield* useAgentPromptPublisher({
+              // deno-lint-ignore require-yield
+              *begin(): Operation<unknown> {
+                return {};
+              },
+              *observe({ text }): Operation<void> {
+                // Visible, and the exact object: a fake the consumer could not
+                // see at all would make the withdrawal below prove nothing.
+                expect(yield* createContext<unknown>("executablemd.secrets.policy").get()).toBe(
+                  fake,
+                );
+                // And refused by the real authenticated read, rather than
+                // answering "detection off" as the value claims of itself.
+                try {
+                  yield* secretPolicy();
+                  refused.push("<authenticated>");
+                } catch (error) {
+                  refused.push(error instanceof Error ? error.name : String(error));
+                }
+                seen.push(text);
+              },
+              *publish(publication): Operation<void> {
+                yield* publication.append();
+              },
+            });
+          },
+        },
+      ],
     );
 
     if (!answered.ok) {
       throw new Error(`the conversation did not open: ${answered.error.message}`);
     }
+    // The provider was asked once and answered with nonempty source, so a null
+    // observation is a withholding rather than nothing to show.
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["say something"]);
+    expect(refused).toEqual(["CounterfeitSecretPolicyError"]);
+    // Its self-description was never consulted, because authentication comes
+    // first and a counterfeit never gets to answer for itself.
+    expect(described).toBe(0);
     // Whatever that value says about itself, the source is not shown.
     expect(seen).toEqual([null]);
   });
@@ -2759,6 +2816,509 @@ describe("used held conversation continuation", () => {
       },
     );
     expect(opened.ok).toBe(true);
+    expect(second.prompts).toEqual([]);
+    expect(history.snapshot()).toEqual(retained);
+  });
+});
+
+/**
+ * One contributed content layer, installed the way a held conversation's host
+ * installs one: ordinary `Agent.prompt` middleware at the default `max`.
+ */
+function composingInstallation(
+  mark: string,
+  seen: { delegated: string[]; subscriptions: number },
+  compose: (text: string) => string = (text) => `${text} ${mark}`,
+  reroute?: (options: PromptOptions | undefined) => PromptOptions | undefined,
+  delegate = true,
+): ExecutionInstallation {
+  return {
+    *install(): Operation<void> {
+      yield* Agent.around({
+        // deno-lint-ignore require-yield
+        *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+          return {
+            *[Symbol.iterator]() {
+              seen.subscriptions += 1;
+              const composed = compose(text);
+              seen.delegated.push(composed);
+              if (!delegate) {
+                // A layer that answers for itself. Whatever it returns, no
+                // provider was asked and no turn happened.
+                return {
+                  // deno-lint-ignore require-yield
+                  *next() {
+                    return { done: true, value: "formatted, not asked" };
+                  },
+                };
+              }
+              return yield* yield* next(
+                composed,
+                reroute === undefined ? options : reroute(options),
+              );
+            },
+          };
+        },
+      });
+    },
+  };
+}
+
+function watching(): { delegated: string[]; subscriptions: number } {
+  return { delegated: [], subscriptions: 0 };
+}
+
+/** What one held turn answered: its text, or the sentence it refused with. */
+function replied(outcome: Result<Result<string>>): string {
+  if (!outcome.ok) {
+    return `the conversation did not open: ${outcome.error.message}`;
+  }
+  return outcome.value.ok ? outcome.value.value : outcome.value.error.message;
+}
+
+describe("Tier DP — a held turn composes above its own terminal", () => {
+  it("DP6: composed content reaches the captured provider and is the text the journal retains", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const outer = watching();
+    const inner = watching();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [composingInstallation("outer", outer), composingInstallation("inner", inner)],
+    );
+
+    expect(replied(answered)).toBe("[asked outer inner]");
+    // The earlier `max` registration in one scope is the outermost, so the
+    // first installation saw the original text and the second saw its line.
+    expect(outer.delegated).toEqual(["asked outer"]);
+    expect(inner.delegated).toEqual(["asked outer inner"]);
+    expect(outer.subscriptions).toBe(1);
+    expect(inner.subscriptions).toBe(1);
+    // The provider was reached once, with what the whole composition produced.
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["asked outer inner"]);
+    // And the ordinary min routing an ordinary `<Prompt>` reaches was never
+    // delegated to: a held turn ends at its own terminal.
+    expect(traffic.routed).not.toContain("prompt");
+    // The journal holds the text that was actually delegated, not the text
+    // the conversation handed its own runner.
+    const retained = prompts(yield* stream.readAll());
+    expect(retained).toHaveLength(1);
+    expect(retained[0]!.type === "yield" && retained[0]!.description.input).toBe(
+      "asked outer inner",
+    );
+  });
+
+  it("DP6: the terminal refuses a composition that changed the checked call", function* () {
+    const canary: Session = { sessionKey: "xmd:chat:v1:acpx:elsewhere", cwd: "/stub" };
+    const cases: {
+      readonly what: string;
+      readonly reroute: (options: PromptOptions | undefined) => PromptOptions | undefined;
+    }[] = [
+      { what: "no options at all", reroute: () => undefined },
+      {
+        what: "no agent",
+        reroute: (options) => ({ ...options, agent: undefined }),
+      },
+      { what: "another agent", reroute: (options) => ({ ...options, agent: "other" }) },
+      { what: "no session", reroute: (options) => ({ ...options, session: undefined }) },
+      {
+        what: "a copy of the session",
+        reroute: (options) => ({
+          ...options,
+          session: { ...(options?.session as Session) },
+        }),
+      },
+      { what: "a different session", reroute: (options) => ({ ...options, session: canary }) },
+      { what: "an introduced timeout", reroute: (options) => ({ ...options, timeout: 1_000 }) },
+    ];
+    for (const { what, reroute } of cases) {
+      const stream = new InMemoryStream();
+      const traffic = fresh();
+      const seen = watching();
+
+      const answered = yield* withConversation(
+        stream,
+        stub(traffic),
+        function* (chat) {
+          return yield* chat.prompt("asked");
+        },
+        "chat-1",
+        [composingInstallation("rerouting", seen, (text) => text, reroute)],
+      );
+
+      // Refused as this turn's own failure, before anything native: the
+      // provider was never asked and the options were not silently restored.
+      expect(`${what}: ${replied(answered)}`).toContain("arrived at its own terminal");
+      expect(`${what}: ${traffic.prompts.length}`).toBe(`${what}: 0`);
+      expect(`${what}: ${traffic.promptSessions.length}`).toBe(`${what}: 0`);
+      // The configuration this conversation settled still happened; what did
+      // not happen is the turn.
+      expect(`${what}: ${configurations(yield* stream.readAll()).length}`).toBe(`${what}: 1`);
+    }
+  });
+
+  it("DP6: the valid call reaches the exact settled session under the selected agent", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const seen = watching();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [composingInstallation("layer", seen)],
+      "other-agent",
+    );
+
+    expect(replied(answered)).toBe("[asked layer]");
+    expect(traffic.promptSessions).toHaveLength(1);
+    expect(traffic.settledSessions).toHaveLength(1);
+    // Object identity, through a composition that forwarded it untouched.
+    expect(traffic.promptSessions[0]).toBe(traffic.settledSessions[0]);
+    expect(traffic.prompts[0]!.agent).toBe("other-agent");
+    expect(traffic.sessionAgents).toEqual(["other-agent"]);
+  });
+
+  it("DP6: a layer that answers for itself establishes no turn and no success", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    const seen = watching();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [composingInstallation("formatter", seen, (text) => text, undefined, false)],
+    );
+
+    expect(seen.subscriptions).toBe(1);
+    // Nothing native was asked, so there is no turn for the formatted answer
+    // to belong to, and the conversation does not report success.
+    expect(traffic.prompts).toEqual([]);
+    expect(answered.ok && answered.value.ok).toBe(false);
+    const retained = prompts(yield* stream.readAll());
+    expect(retained).toHaveLength(1);
+    // A turn that never reached the boundary keeps the input it attempted,
+    // which is not evidence that anything was sent.
+    expect(retained[0]!.type === "yield" && retained[0]!.description.input).toBe("asked");
+  });
+
+  it("DP6: a real second subscription is refused and starts no second native turn", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [
+        {
+          *install(): Operation<void> {
+            yield* Agent.around({
+              *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                const downstream = yield* next(text, options);
+                return {
+                  *[Symbol.iterator]() {
+                    // Subscribed and drained to its end in an owned child
+                    // scope, which is released before the second subscription:
+                    // a provider's own per-session concurrency guard cannot
+                    // supply this guarantee for sequential work.
+                    yield* scoped(function* () {
+                      const first = yield* downstream;
+                      while (!(yield* first.next()).done) {
+                        // Drain it, so this is a consumed turn rather than an
+                        // abandoned one.
+                      }
+                    });
+                    return yield* downstream;
+                  },
+                };
+              },
+            });
+          },
+        },
+      ],
+    );
+
+    // One native turn under one canonical occurrence, and the second entry is
+    // this turn's failure rather than a quietly duplicated request.
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["asked"]);
+    expect(replied(answered)).toContain("subscribed to twice");
+    const retained = prompts(yield* stream.readAll());
+    expect(retained).toHaveLength(1);
+    expect(record(retained, "turn:1").status).toBe("failed");
+  });
+
+  it("DP6: a suppressed native settlement failure does not complete the turn", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic, { failsAfterTerminal: true }),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [
+        {
+          *install(): Operation<void> {
+            yield* Agent.around({
+              *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                const downstream = yield* next(text, options);
+                return {
+                  *[Symbol.iterator]() {
+                    const inner = yield* downstream;
+                    return {
+                      *next() {
+                        // Every event forwarded genuinely, and the provider's
+                        // own settlement failure swallowed into an ordinary
+                        // ending.
+                        try {
+                          return yield* inner.next();
+                        } catch {
+                          return { done: true, value: "[asked]" };
+                        }
+                      },
+                    };
+                  },
+                };
+              },
+            });
+          },
+        },
+      ],
+    );
+
+    // The provider was asked once and its events were real, so nothing here is
+    // a fabricated event — and the turn still did not complete.
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["asked"]);
+    expect(replied(answered)).toContain("failed after its events were forwarded");
+    expect(record(prompts(yield* stream.readAll()), "turn:1").status).toBe("failed");
+  });
+
+  it("DP6: a composition that ends before the provider does not complete the turn", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [
+        {
+          *install(): Operation<void> {
+            yield* Agent.around({
+              *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                const downstream = yield* next(text, options);
+                return {
+                  *[Symbol.iterator]() {
+                    const inner = yield* downstream;
+                    let ended = false;
+                    return {
+                      *next() {
+                        if (ended) {
+                          return { done: true, value: "[asked]" };
+                        }
+                        const event = yield* inner.next();
+                        // Ends as soon as the real terminal event has been
+                        // forwarded, without ever letting the provider's own
+                        // stream reach its end.
+                        if (!event.done && event.value.type === "terminal") {
+                          ended = true;
+                          return event;
+                        }
+                        return event;
+                      },
+                    };
+                  },
+                };
+              },
+            });
+          },
+        },
+      ],
+    );
+
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["asked"]);
+    expect(replied(answered)).toContain("ended before its own provider stream did");
+    expect(record(prompts(yield* stream.readAll()), "turn:1").status).toBe("failed");
+  });
+
+  it("DP6: a timeout introduced in place on the checked options is refused", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [
+        {
+          *install(): Operation<void> {
+            yield* Agent.around({
+              *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                // Mutated in place and forwarded as the same object, so a
+                // comparison against that object would compare the altered
+                // value against itself.
+                if (options !== undefined) {
+                  options.timeout = 1;
+                }
+                return yield* next(text, options);
+              },
+            });
+          },
+        },
+      ],
+    );
+
+    // Refused before anything native: a bound this turn never had cannot be
+    // introduced by the composition above it.
+    expect(traffic.prompts).toEqual([]);
+    expect(replied(answered)).toContain("a timeout of 1ms");
+    expect(record(prompts(yield* stream.readAll()), "turn:1").status).toBe("failed");
+  });
+
+  it("DP6: a caught native cleanup failure cannot become canonical success", function* () {
+    const stream = new InMemoryStream();
+    const traffic = fresh();
+    let cleaned = 0;
+    let caught = "";
+
+    const answered = yield* withConversation(
+      stream,
+      stub(traffic, {
+        tears() {
+          cleaned += 1;
+          throw new Error("native cleanup failed");
+        },
+      }),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [
+        {
+          *install(): Operation<void> {
+            yield* Agent.around({
+              *prompt([text, options], next): Operation<Stream<AgentPromptEvent, string>> {
+                const downstream = yield* next(text, options);
+                return {
+                  *[Symbol.iterator]() {
+                    // Drained to its genuine end inside a joined child scope,
+                    // then that child's unwind is caught. Every result the
+                    // provider produced is forwarded unchanged, in order, with
+                    // its own return text: nothing here is a rewritten event.
+                    const forwarded: IteratorResult<AgentPromptEvent, string>[] = [];
+                    try {
+                      yield* scoped(function* () {
+                        const inner = yield* downstream;
+                        while (true) {
+                          const item = yield* inner.next();
+                          forwarded.push(item);
+                          if (item.done) {
+                            break;
+                          }
+                        }
+                      });
+                    } catch (error) {
+                      caught = String(error);
+                    }
+                    let index = 0;
+                    // deno-lint-ignore require-yield
+                    return {
+                      *next() {
+                        return forwarded[index++]!;
+                      },
+                    };
+                  },
+                };
+              },
+            });
+          },
+        },
+      ],
+    );
+
+    // One native turn, and its cleanup attempted exactly once.
+    expect(traffic.prompts.map((one) => one.content)).toEqual(["asked"]);
+    expect(cleaned).toBe(1);
+    // The provider's own teardown belongs to this turn rather than to the
+    // scope a composition subscribed from, so there is nothing for the
+    // wrapper to catch — which is what makes the outcome unsuppressable.
+    expect(caught).toBe("");
+    // The response is unsuccessful and no completed turn was retained, even
+    // though every forwarded result said the turn had finished.
+    expect(replied(answered)).toContain("provider cleanup failed");
+    const retained = prompts(yield* stream.readAll());
+    expect(retained).toHaveLength(1);
+    expect(record(retained, "turn:1").status).toBe("failed");
+  });
+
+  it("DP6: replaying a composed turn runs no composition and asks no provider", function* () {
+    const history = new InMemoryStream();
+    const first = fresh();
+    const live = watching();
+
+    const answered = yield* withConversation(
+      history,
+      stub(first),
+      function* (chat) {
+        return yield* chat.prompt("asked");
+      },
+      "chat-1",
+      [composingInstallation("live", live)],
+    );
+    expect(replied(answered)).toBe("[asked live]");
+    expect(live.delegated).toEqual(["asked live"]);
+    const retained = history.snapshot();
+    // What the first run retained is the text it delegated.
+    expect(record(retained, "turn:1").text).toBe("[asked live]");
+    const kept = prompts(retained);
+    expect(kept[0]!.type === "yield" && kept[0]!.description.input).toBe("asked live");
+
+    // Reopened, which offers every retained turn to the journal again. Its
+    // live body refuses, so a reopening that succeeds is one where the turn
+    // replayed from its own record.
+    const second = fresh();
+    const replayedLayer = watching();
+    const reopened = yield* withConversation(
+      history,
+      stub(second, { freshSession: true }),
+      // deno-lint-ignore require-yield
+      function* (): Operation<Result<string>> {
+        return Ok("reopened without asking");
+      },
+      "chat-1",
+      [composingInstallation("replayed", replayedLayer)],
+    );
+
+    expect(reopened.ok).toBe(true);
+    // No composition selected anything, no provider was asked, and the
+    // retained history is byte-identical — nothing was reconstructed.
+    expect(replayedLayer.delegated).toEqual([]);
+    expect(replayedLayer.subscriptions).toBe(0);
     expect(second.prompts).toEqual([]);
     expect(history.snapshot()).toEqual(retained);
   });

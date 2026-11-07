@@ -14,8 +14,8 @@
  * part of. None of them asks for anything special to make that so.
  */
 
-import { scoped } from "effection";
-import type { Operation } from "effection";
+import { scoped, spawn, suspend, withResolvers } from "effection";
+import type { Operation, Task } from "effection";
 import { content, hasContent, raise } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
 
@@ -61,7 +61,7 @@ import {
   persistPrompt,
   promptFailureFromRecord,
 } from "./journal.ts";
-import type { PromptRecord } from "./journal.ts";
+import type { PromptRecord, RetainPromptInput } from "./journal.ts";
 import { checkpointOf } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 import { HostObservationFailure } from "./publication.ts";
@@ -71,7 +71,7 @@ import type {
   AgentPromptPublisher,
 } from "./publication.ts";
 import { clearsLiveOutput, secretPolicy, scanSecrets } from "../secrets/policy.ts";
-import type { Stream } from "effection";
+import type { Stream, Subscription } from "effection";
 import type { AgentPromptEvent } from "./agent-api.ts";
 
 export const AGENT_PROVIDER_PROPS: PropsSchema = {
@@ -414,6 +414,269 @@ export interface DirectPromptTurn {
   readonly provider: AgentConversationProvider;
   readonly agent: string;
   readonly session: Session;
+  /**
+   * Fix this occurrence's pending canonical input to the composed text.
+   *
+   * Supplied by the journal, which owns the pending description, and called by
+   * the terminal below once the composition above it has settled and before
+   * the provider is asked: the text this turn is retained as is the text it
+   * actually delegated.
+   */
+  readonly retain: RetainPromptInput;
+}
+
+/** What a held turn's own terminal refuses a rerouted call with. */
+export class HeldPromptRoutingError extends Error {
+  override name = "HeldPromptRoutingError";
+}
+
+/**
+ * Refuse a held call whose checked options did not arrive unchanged.
+ *
+ * Composition above this terminal is for content and for the stream, and the
+ * agent, the Session and the turn's bound are not content. Each is compared
+ * against the value this conversation's own setup settled — the Session by
+ * identity, because a copy naming the same conversation is still a value
+ * nothing authorized — and absence is compared too, so a bound this turn never
+ * had cannot be introduced. Refusing is the whole answer: silently restoring
+ * the original would run a turn under options its own composition disowned.
+ */
+function refuseReroutedHeldCall(
+  forwarded: PromptOptions | undefined,
+  checked: HeldPromptTurn,
+  direct: DirectPromptTurn,
+): void {
+  if (forwarded?.agent !== direct.agent) {
+    throw new HeldPromptRoutingError(
+      `this held conversation's prompt arrived at its own terminal under ${
+        forwarded?.agent === undefined ? "no agent" : `the agent "${forwarded.agent}"`
+      }, and this conversation resolved "${direct.agent}". A held turn's agent is not something ` +
+        "its content composition decides.",
+    );
+  }
+  if (forwarded.session !== direct.session) {
+    throw new HeldPromptRoutingError(
+      "this held conversation's prompt arrived at its own terminal with a different Session " +
+        "object from the one its own request settled, so the turn would run in a conversation " +
+        "nothing authorized. A Session naming the same conversation is still not that value.",
+    );
+  }
+  if (forwarded.timeout !== checked.timeout) {
+    throw new HeldPromptRoutingError(
+      `this held conversation's prompt arrived at its own terminal with ${
+        forwarded.timeout === undefined ? "no timeout" : `a timeout of ${forwarded.timeout}ms`
+      }, and this turn was checked with ${
+        checked.timeout === undefined ? "none" : `${checked.timeout}ms`
+      }. A held turn's bound is not something its content composition decides.`,
+    );
+  }
+}
+
+/**
+ * What one held turn privately knows about its own native work.
+ *
+ * Owned by the canonical turn and reachable from nothing the composition above
+ * it is handed. `timeout` is the primitive this turn was checked with, copied
+ * before any handler saw the options object — comparing against that object
+ * would compare a value middleware can change in place against itself.
+ * `admitted` is what makes one subscription one turn. The settlement fields are
+ * read from the native subscription on the way through, so what the record says
+ * is what the provider actually did rather than what the stream above it
+ * reported.
+ */
+interface HeldPromptTurn {
+  readonly timeout: number | undefined;
+  admitted: boolean;
+  stream?: Stream<AgentPromptEvent, string>;
+  /** The native subscription reached its own `done`. */
+  settled: boolean;
+  /** What the native subscription threw, if it failed on the way out. */
+  failure?: Error;
+  /** The text the native subscription itself returned. */
+  text?: string;
+  /**
+   * The task holding this turn's native acquisition, subscription and cleanup.
+   *
+   * Spawned in the turn's own scope rather than wherever the composition above
+   * happened to subscribe from. A provider registers its per-turn teardown in
+   * the scope that subscribes to its stream, so acquiring there would put that
+   * teardown inside a wrapper's child scope — where unwinding it is the
+   * wrapper's event to catch. Held here, the turn owns it.
+   */
+  holder?: Task<void>;
+  /** This turn's native cleanup ran and came down without failing. */
+  cleaned: boolean;
+  /** What this turn's native cleanup failed with, if it did. */
+  cleanup?: Error;
+}
+
+function heldPromptTurn(options: PromptOptions): HeldPromptTurn {
+  return { timeout: options.timeout, admitted: false, settled: false, cleaned: false };
+}
+
+/**
+ * Bring this turn's native work down, and keep what that cost.
+ *
+ * Called at the end of the turn's own body, so the provider's teardown runs
+ * where the turn can see it rather than during an unwind a composition is
+ * catching. `halt()` raises whatever the teardown raised, which is the one
+ * place that outcome is observable at all.
+ */
+function* joinHeldNative(turn: HeldPromptTurn): Operation<void> {
+  const holder = turn.holder;
+  if (holder === undefined) {
+    return;
+  }
+  turn.holder = undefined;
+  try {
+    yield* holder.halt();
+    turn.cleaned = true;
+  } catch (error) {
+    turn.cleanup = error instanceof Error ? error : new Error(String(error));
+  }
+}
+
+/**
+ * Why this held turn's outer consumption does not describe its native one.
+ *
+ * Asked once the subscribing scope has unwound, so every owned cleanup has
+ * joined before the answer is used. A turn whose native subscription failed on
+ * its way out, or never reached its own end, did not complete however the
+ * composition above it ended: catching a downstream failure and returning, or
+ * returning early after forwarding a terminal event, is not a turn finishing.
+ */
+function heldSettlementFailure(turn: HeldPromptTurn): string | undefined {
+  if (turn.failure !== undefined) {
+    return `this held turn's own provider stream failed after its events were forwarded: ${turn.failure.message}`;
+  }
+  if (!turn.settled) {
+    return (
+      "this held turn's composition ended before its own provider stream did, so nothing " +
+      "observed the turn finish"
+    );
+  }
+  if (turn.cleanup !== undefined) {
+    return `this held turn's own provider cleanup failed after it finished: ${turn.cleanup.message}`;
+  }
+  if (!turn.cleaned) {
+    return (
+      "this held turn's own provider cleanup did not come down, so nothing observed its work " +
+      "released"
+    );
+  }
+  return undefined;
+}
+
+/**
+ * Install the terminal one held turn's own composition ends at.
+ *
+ * At `min` and in this turn's scope, so it is this turn's and no other's. The
+ * outer `max` handlers a conversation installed compose the content and the
+ * stream above it; this answers, and never delegates, so the ancestor `min`
+ * routing an ordinary `<Prompt>` reaches is bypassed rather than kept as a
+ * fallback. What it answers with is the captured provider's own cold stream,
+ * so obtaining it still starts nothing and the turn begins at subscription.
+ *
+ * One subscription is one turn. Obtaining this stream as many times as a
+ * composition likes starts nothing, but entering it twice would retain a
+ * second input, announce a second turn to the host and ask the provider again
+ * under one durable occurrence — so the second entry is refused here, before
+ * any of that. The refusal is this turn's failure, which is what a composition
+ * that consumed its own turn and then asked for another has produced.
+ */
+function* installHeldPromptTerminal(
+  direct: DirectPromptTurn,
+  checked: HeldPromptTurn,
+  carried: Carried,
+): Operation<void> {
+  // What the terminal asks for, and what it waits to be handed. Acquisition
+  // happens in the holder below rather than in the terminal's own body,
+  // because the terminal's body runs wherever the composition above subscribed
+  // from — and a provider's per-turn teardown belongs to that scope. The turn
+  // owns the holder, so the turn owns the teardown.
+  const asked = withResolvers<{
+    content: string;
+    options: PromptOptions & { agent: string; session: Session };
+  }>();
+  const ready = withResolvers<Subscription<AgentPromptEvent, string>>();
+  checked.holder = yield* spawn(function* (): Operation<void> {
+    const request = yield* asked.operation;
+    try {
+      const audited = yield* auditedPromptStream(
+        yield* direct.provider.prompt(request.content, request.options),
+      );
+      // Held out so the audit names the native stream rather than whatever
+      // transparent wrapper the composition above returned.
+      checked.stream = audited;
+      ready.resolve(yield* audited);
+    } catch (error) {
+      // Answered to the terminal rather than raised here, so one failure
+      // reaches the turn by the one path the turn already reads.
+      ready.reject(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    // Held open for the turn, which is what keeps the provider's own cleanup
+    // attached here until the turn brings it down.
+    yield* suspend();
+  });
+  yield* Agent.around(
+    {
+      // deno-lint-ignore require-yield
+      *prompt([content, forwarded]): Operation<Stream<AgentPromptEvent, string>> {
+        return {
+          *[Symbol.iterator]() {
+            // First, and synchronously: everything below is an effect this
+            // occurrence may have only once.
+            if (checked.admitted) {
+              throw new HeldPromptRoutingError(
+                "this held conversation's prompt was subscribed to twice, and one canonical turn " +
+                  "asks its provider once. A composition that needs the reply again reads the " +
+                  "subscription it already has rather than starting another turn.",
+              );
+            }
+            checked.admitted = true;
+            // Before anything native, and before this turn is retained as
+            // having asked anything: a call that was rerouted on its way here
+            // sends nothing and fixes no input.
+            refuseReroutedHeldCall(forwarded, checked, direct);
+            // The text this turn actually delegates, fixed in the journal's
+            // own pending description and then announced to the host under
+            // exactly that text, both before the provider is reached.
+            direct.retain(content);
+            const publisher = yield* AgentInternal.operations.promptPublisher;
+            if (publisher?.begin !== undefined) {
+              carried.begun = yield* publisher.begin(content);
+            }
+            asked.resolve({
+              content,
+              options: { ...forwarded, agent: direct.agent, session: direct.session },
+            });
+            const subscription = yield* ready.operation;
+            // Read on the way through, on this same forwarding path: what the
+            // provider's own stream did is recorded here, where a wrapper above
+            // cannot suppress it by catching a failure or ending early.
+            return {
+              *next() {
+                let event;
+                try {
+                  event = yield* subscription.next();
+                } catch (error) {
+                  checked.failure = error instanceof Error ? error : new Error(String(error));
+                  throw checked.failure;
+                }
+                if (event.done) {
+                  checked.settled = true;
+                  checked.text = event.value;
+                }
+                return event;
+              },
+            };
+          },
+        };
+      },
+    },
+    { at: "min" },
+  );
 }
 
 /**
@@ -554,6 +817,12 @@ export function* runPrompt(
   // it was asked before it did. Holding the stream is what makes its audit
   // readable — nothing else can name it.
   let consumedStream: Stream<AgentPromptEvent, string> | undefined;
+  // What a held turn privately knows about its own native work: the timeout
+  // primitive copied before any handler saw the options, the one-subscription
+  // admission, the audited stream its audit is named by, and what the provider's
+  // own stream actually settled with. Held out here because all of it is read
+  // after the turn rather than where the stream is obtained.
+  const held = direct === undefined ? undefined : heldPromptTurn(options);
   // What this turn was authored to run under, and — once the provider has been
   // reached — the exact value it was reached with. The record below is written
   // from the second, so the journal describes the turn that actually ran.
@@ -570,7 +839,10 @@ export function* runPrompt(
       // nothing else. A component calling the public `Agent.prompt()` never
       // reaches here, which is exactly why it can claim no publication later.
       const publisher = yield* AgentInternal.operations.promptPublisher;
-      if (publisher?.begin !== undefined) {
+      // A held turn begins inside its own terminal instead, under the text its
+      // composition settled on: announcing the undelegated text here would
+      // name this turn by something it never asked.
+      if (direct === undefined && publisher?.begin !== undefined) {
         carried.begun = yield* publisher.begin(text);
       }
       // Only for a host that asked to be told. A publisher with no `observe`
@@ -588,17 +860,16 @@ export function* runPrompt(
       // places the ledger itself, around that provider's own cold stream.
       // Holding the stream is how this turn reads what it was allowed to do,
       // and it is the same stream in both cases.
-      const stream =
-        direct === undefined
-          ? yield* Agent.operations.prompt(text, options)
-          : yield* auditedPromptStream(
-              yield* direct.provider.prompt(text, {
-                ...options,
-                agent: direct.agent,
-                session: direct.session,
-              }),
-            );
-      consumedStream = stream;
+      if (direct !== undefined && held !== undefined) {
+        yield* installHeldPromptTerminal(direct, held, carried);
+      }
+      // One call either way. An ordinary `<Prompt>` routes to the provider the
+      // chain selects; a held conversation routes to the terminal installed
+      // just above, which is the only thing below its own composition.
+      const stream = yield* Agent.operations.prompt(text, options);
+      if (direct === undefined) {
+        consumedStream = stream;
+      }
       const subscription = yield* stream;
       let next = yield* subscription.next();
       while (!next.done) {
@@ -646,19 +917,40 @@ export function* runPrompt(
         }
         next = yield* subscription.next();
       }
-      result.text = next.value;
+      // For a held turn, the provider's own return read on the way through,
+      // which is the one a composition above cannot have replaced. For an
+      // ordinary one it is the stream's return, as it always was.
+      result.text = held?.settled === true ? (held.text ?? "") : next.value;
       // What the stream returned, where it is not what the deltas already
       // said. A provider that answers with its own whole text — or with
       // nothing at all — replaces the candidate exactly rather than leaving a
       // host showing something the record will not hold. The journal's result
       // is the stream's own return, untouched by any of this.
       if (watching !== undefined) {
-        yield* watching.returned(next.value);
+        yield* watching.returned(result.text);
+      }
+      // Brought down here, inside the turn's own body: the provider's teardown
+      // runs where this turn reads its outcome rather than during an unwind a
+      // composition above could be catching.
+      if (held !== undefined) {
+        yield* joinHeldNative(held);
       }
       return result;
     });
     if (consumed.status === undefined) {
       consumed.failure = { message: "agent prompt stream closed without a terminal event" };
+    }
+    // Asked here, where the subscribing scope has unwound and every owned
+    // cleanup has joined: a held turn completes only where its own provider
+    // stream says so. A composition that caught the native failure or ended
+    // before the provider did has not produced a completed turn, whatever the
+    // events it forwarded said.
+    if (held !== undefined && consumed.status === "completed") {
+      const unsettled = heldSettlementFailure(held);
+      if (unsettled !== undefined) {
+        consumed.status = "failed";
+        consumed.failure = { message: unsettled };
+      }
     }
   } catch (error) {
     if (error instanceof HostObservationFailure) {
@@ -715,9 +1007,11 @@ export function* runPrompt(
   // Written once the turn is over, with the rest of the result: a decision is
   // part of the account of this turn, not an event of its own.
   // Read from the exact stream this turn consumed. A turn that never got one
-  // was allowed nothing, because it never asked.
-  const answered =
-    (consumedStream === undefined ? undefined : yield* completedPromptAudit(consumedStream)) ?? [];
+  // was allowed nothing, because it never asked. For a held turn that is the
+  // stream its own terminal wrapped, which transparent composition above it
+  // forwards rather than replaces.
+  const audited = held === undefined ? consumedStream : held.stream;
+  const answered = (audited === undefined ? undefined : yield* completedPromptAudit(audited)) ?? [];
   if (answered.length > 0) {
     record.permissions = answered;
   }

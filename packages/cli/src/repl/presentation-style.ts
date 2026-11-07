@@ -23,6 +23,8 @@ import { rgba } from "@bomb.sh/tty";
  * ordinary prose looks like.
  */
 export type ReplPresentationRole =
+  | "todo-completed"
+  | "todo-em"
   /** A pane's own name. */
   | "pane-heading"
   /** Document text and ordinary prose, and whatever has no stronger reading. */
@@ -350,8 +352,14 @@ export function runStyleOf(
   focused: boolean,
 ): ReplTextStyle {
   return Object.freeze({
-    colour: colourOf(role, row.inspected),
-    attrs: attrsOf(role) | (focused ? BOLD : 0),
+    colour:
+      row.role === "todo-completed" && !focused
+        ? REPL_PALETTE.historical
+        : colourOf(role, row.inspected),
+    attrs:
+      attrsOf(role) |
+      (row.role === "todo-completed" ? 64 | (focused ? 0 : 2) : 0) |
+      (focused ? BOLD : 0),
   });
 }
 
@@ -403,6 +411,9 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
     return REPL_PALETTE.historical;
   }
   switch (role) {
+    case "todo-completed":
+      return REPL_PALETTE.historical;
+    case "todo-em":
     case "output":
     case "field-value":
       return REPL_PALETTE.output;
@@ -514,6 +525,10 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
 
 function attrsOf(role: ReplPresentationRole): number {
   switch (role) {
+    case "todo-em":
+      return 4;
+    case "todo-completed":
+      return 64 | 2;
     case "pane-heading":
     case "drawer-title":
     case "question-title":

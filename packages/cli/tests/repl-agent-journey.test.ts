@@ -1,3 +1,4 @@
+import { installTodoSource } from "../src/node-todo-source.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, suspend, until as untilResolved, withResolvers } from "effection";
@@ -369,6 +370,10 @@ describe("C1 — the command line this REPL runs under", () => {
     expect(settled.installations[0]).toBe(settled.children?.installation);
     const own = settled.installations[1]!;
     expect((own.declarations ?? []).map((declaration) => declaration.name)).toEqual(["Plan"]);
+    // This assembly was handed NO_PLUGINS, and only a selected contribution
+    // admits its own generated forms — so the checklist's are absent here.
+    // Their presence under a real selection is `repl-plugin` and `run-profile`'s
+    // to prove, not this no-plugin row's.
     expect(settled.generated).toEqual({
       Cwd: ["self-closing"],
       File: ["self-closing", "paired"],
@@ -377,6 +382,7 @@ describe("C1 — the command line this REPL runs under", () => {
       Syntax: ["self-closing"],
       Elicit: ["paired"],
     });
+    expect(Object.keys(settled.generated ?? {})).not.toContain("Sidekick.Todo");
     expect(Object.isFrozen(settled)).toBe(true);
     expect(Object.isFrozen(settled.installations)).toBe(true);
     expect(Object.isFrozen(own)).toBe(true);
@@ -1492,6 +1498,7 @@ function* useJourneyHost(options: {
 }): Operation<JourneyHost> {
   const dataRoot =
     options.dataRoot ?? (yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-"))));
+  yield* installTodoSource();
   yield* installReplHost({
     dataRoot: () => dataRoot,
     identify: () => randomBytes(8).toString("hex"),
@@ -1906,13 +1913,21 @@ function sessionTurns(one: ScreenReading): string[] {
   return one.rows.filter((row) => / · (?:queued|streaming|completed|cancelled|failed)/.test(row));
 }
 
+function conversationSelector(one: ScreenReading): string {
+  const row = one.rows.find((line) => /(?:All sessions|xmd:v1:\S+) ▾/.test(line));
+  if (row === undefined) {
+    throw new Error("the Transcript has no conversation selector");
+  }
+  return row;
+}
+
 function conversationFilter(one: ScreenReading): string | undefined {
   const label = one.rows.find((row) => row.includes(" ▾")) ?? "";
   return label.includes("All sessions") ? undefined : label.match(/xmd:v1:[a-z0-9:]+…?/)?.[0];
 }
 
 function* openSelector(page: ReplPage): Operation<void> {
-  yield* page.press(" ▾");
+  yield* page.press(" ▾", { onRow: conversationSelector(page.screen()) });
   yield* page.until("the conversation choices", (one) => one.shows("All conversations"));
 }
 
@@ -1940,7 +1955,7 @@ function* chooseEveryConversation(page: ReplPage): Operation<void> {
 }
 
 function* closeSelector(page: ReplPage): Operation<void> {
-  yield* page.press(" ▾");
+  yield* page.press(" ▾", { onRow: conversationSelector(page.screen()) });
   yield* page.until("the choices closing", (one) => !one.shows("All conversations"));
 }
 

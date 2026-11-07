@@ -25,6 +25,7 @@ export interface RecoveryHooks {
     activate: () => Operation<Result<void>>,
   ): Operation<Result<void>>;
 }
+import { Todo } from "../todo/service.ts";
 import type { ReplPrinting } from "../session.ts";
 import type { MessageOrigin } from "./history.ts";
 import type { ReplTesting } from "./testing.ts";
@@ -248,6 +249,7 @@ interface Watching {
   /** The agent and request this turn is being asked on behalf of. */
   readonly agent: string;
   readonly asked: "person" | "automatic";
+  readonly origin?: MessageOrigin;
   readonly title: string | undefined;
   /** Whether the canonical boundary has begun this turn. */
   begun: boolean;
@@ -361,6 +363,7 @@ export interface SidekickLiveTurn {
   readonly agent: string;
   /** What this turn was asked on behalf of, which this owner is the one asking. */
   readonly asked: "person" | "automatic";
+  readonly origin?: MessageOrigin;
   /** The exact message a person sent, for a person's turn. */
   readonly title: string | undefined;
   /**
@@ -819,6 +822,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * everything after that is addressed by that exact object.
      */
     let registering: ResponseAt | undefined;
+    let preparingInput:
+      | { readonly at: ResponseAt; prepare(text: string): Operation<void> }
+      | undefined;
     /** Which response each begun turn belongs to, by the handle it began with. */
     const begun = new WeakMap<object, ResponseAt>();
 
@@ -837,6 +843,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         response: watching.at.response,
         agent: watching.agent,
         asked: watching.asked,
+        origin: watching.origin,
         title: watching.title,
         phase: watching.evaluating ? "evaluating" : watching.begun ? "generating" : "pending",
         sessionKey: watching.sessionKey,
@@ -921,9 +928,14 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * and this host never substitutes a record of its own.
      */
     const publisher: AgentPromptPublisher = {
-      *begin(): Operation<AgentPromptHandle> {
+      *begin(text): Operation<AgentPromptHandle> {
         const slot = registering;
         registering = undefined;
+        const preparing = preparingInput;
+        preparingInput = undefined;
+        if (preparing !== undefined && preparing.at === slot) {
+          yield* preparing.prepare(text);
+        }
         // A fresh object every turn, even for identical input: identity is the
         // whole mechanism, so two turns that look alike are still two turns.
         const handle = {};
@@ -2355,20 +2367,6 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           sending.finished?.response ?? (recovered === undefined ? undefined : held?.response);
         if (delivering !== undefined) {
           carried = delivering;
-          // Retained before it is sent, and asserting nothing — the same
-          // feedback text a feedback turn writes, for the same reason: an
-          // interrupted process
-          // leaves a readable account of what it was sending and no assertion
-          // that any turn took it. It holds the whole request, because that is
-          // what the turn is sent and what its canonical record can be
-          // compared against.
-          yield* paired.writer.append({
-            kind: "feedback",
-            conversation,
-            response: delivering,
-            turn: null,
-            text: request,
-          });
         }
         const messageId =
           sending.options.recovery?.decision.message ?? (yield* ReplHost.operations.identify());
@@ -2394,19 +2392,6 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         if (sending.options.origin.kind === "ui" && sending.options.recovery === undefined) {
           yield* input.acknowledge(sending.revision);
         }
-      } else {
-        // Claimed before it is sent, and claiming nothing: an interrupted
-        // process left a readable "this was composed" and no assertion that any
-        // turn took it. What a turn carried is established by the canonical
-        // record of that turn, never by this CLI having meant to send it.
-        yield* paired.writer.append({
-          kind: "feedback",
-          conversation,
-          response: sending.of,
-          turn: null,
-          text: request,
-        });
-        began = (yield* paired.writer.readAll()).length - 1;
       }
 
       /**
@@ -2429,6 +2414,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // changes agent in place, so its row says what answered in it.
         agent: agentOf(current.value, conversation),
         asked: sending.kind === "message" ? ("person" as const) : ("automatic" as const),
+        origin: sending.kind === "message" ? sending.options.origin : undefined,
         // A person's own words, and nothing for a delivery of a response's
         // results: that request is this host's account of what a reply did, and
         // it is not something anybody said.
@@ -2474,7 +2460,42 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // may suspend: a save acknowledged in that gap belongs to the next turn,
       // and a turn that picked up a setting after Core had its request would be
       // running under one thing while the history says another.
+      const deliveringInput = sending.kind === "feedback" ? sending.of : carried;
+      const preparing = {
+        at,
+        *prepare(text: string): Operation<void> {
+          request = text;
+          if (deliveringInput !== undefined) {
+            yield* paired.writer.append({
+              kind: "feedback",
+              conversation,
+              response: deliveringInput,
+              turn: null,
+              text,
+            });
+            if (sending.kind === "feedback") {
+              began = (yield* paired.writer.readAll()).length - 1;
+            }
+            yield* refresh();
+          }
+        },
+      };
+      preparingInput = preparing;
+      yield* ensure(() => {
+        if (preparingInput === preparing) {
+          preparingInput = undefined;
+        }
+      });
+      const todo = yield* Todo.get();
+      let confirmed = false;
+      yield* ensure(() => {
+        if (!confirmed) {
+          todo?.finishPrompt(false);
+        }
+      });
       const replied = yield* handle.prompt(request, desired(settings.value, conversation));
+      todo?.finishPrompt(replied.ok);
+      confirmed = true;
       if (!replied.ok) {
         // No control runs: a partial, failed or cancelled response is source
         // nobody completed, and evaluating it would perform effects from a

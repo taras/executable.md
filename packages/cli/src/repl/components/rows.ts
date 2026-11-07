@@ -160,9 +160,44 @@ export const SELECT_ROW: ReplComponent<ReplAction> = component<ReplAction>({
     node.onInput((input: ReplViewData) => node.render(marked(input, textOf(input, "label"))));
     node.claim((event: ReplInputEvent): ReplAction | undefined => {
       if (event.kind === "text") {
+        const input = fields(node.input);
+        if (event.text === " " && input?.["select"] === "todo-collapse") {
+          return { kind: "todo-collapse" };
+        }
+        if (event.text === " " && input?.["select"] === "todo-edit" && input["text"] === "") {
+          return activation(node.input);
+        }
+        if (
+          event.text === " " &&
+          input?.["select"] === "todo-edit" &&
+          typeof input["source"] === "string" &&
+          typeof input["index"] === "number"
+        ) {
+          return {
+            kind: "todo-mutate",
+            source: input["source"],
+            index: input["index"],
+            action: "toggle",
+          };
+        }
         return undefined;
       }
       if (event.kind === "key") {
+        const owned = fields(node.input);
+        if (
+          event.key === "ArrowDown" &&
+          owned?.["select"] === "todo-edit" &&
+          owned["last"] === true &&
+          typeof owned["source"] === "string" &&
+          typeof owned["index"] === "number"
+        ) {
+          return {
+            kind: "todo-edit",
+            source: owned["source"],
+            index: owned["index"] + 1,
+            text: "",
+          };
+        }
         const beyond = revealed(node.input, event.key);
         if (beyond !== undefined) {
           return { kind: "reveal", key: beyond };
@@ -195,6 +230,43 @@ function activation(input: ReplViewData): ReplAction | undefined {
     return undefined;
   }
   const select = named["select"];
+  if (select === "select-task-tray") {
+    const tray = named["tray"];
+    return tray === "todo" || tray === "queue" ? { kind: "select-task-tray", tray } : undefined;
+  }
+  if (select === "todo-collapse") {
+    return { kind: "todo-collapse" };
+  }
+  if (
+    select === "todo-edit" ||
+    select === "todo-toggle" ||
+    select === "todo-remove" ||
+    select === "todo-up" ||
+    select === "todo-down"
+  ) {
+    const source = named["source"];
+    const index = named["index"];
+    const text = named["text"];
+    if (typeof source !== "string" || typeof index !== "number") {
+      return undefined;
+    }
+    if (select === "todo-edit") {
+      return typeof text === "string" ? { kind: "todo-edit", source, index, text } : undefined;
+    }
+    return {
+      kind: "todo-mutate",
+      source,
+      index,
+      action:
+        select === "todo-toggle"
+          ? "toggle"
+          : select === "todo-remove"
+            ? "remove"
+            : select === "todo-up"
+              ? "up"
+              : "down",
+    };
+  }
   if (select === "surface") {
     const surface = named["surface"];
     return surface === "entries" || surface === "sessions"
@@ -478,6 +550,7 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       const purpose = optional(node.input, "purpose");
       const question = optional(node.input, "question");
       if (
+        purpose !== "todo" &&
         purpose !== "draft" &&
         purpose !== "message" &&
         purpose !== "answer" &&
@@ -501,6 +574,9 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
       }
       if (event.kind !== "key") {
         return undefined;
+      }
+      if (event.key === "Escape" && purpose === "todo") {
+        return { kind: "todo-cancel" };
       }
       if (event.key === "Backspace") {
         return { kind: "erase", ...owns };
@@ -545,6 +621,9 @@ export const FIELD: ReplComponent<ReplAction> = component<ReplAction>({
 /** What submitting this field asks for. */
 function submission(input: ReplViewData): ReplAction | undefined {
   const purpose = optional(input, "purpose");
+  if (purpose === "todo") {
+    return { kind: "todo-save" };
+  }
   if (purpose === "draft") {
     return { kind: "submit" };
   }

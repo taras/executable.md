@@ -38,12 +38,11 @@ export const SIDEKICK_PANE: ScreenScope = { after: SIDEKICK, rightOf: SIDEKICK }
 /**
  * The rows the Sidekick's composer draws its own value on.
  *
- * Its prompt is drawn once, and the value sits under it, so the rows below that
- * prompt are the composer's own. A pane scope cannot say this: the composer's
- * value begins at column 104 while the tab above it begins at 106, so a floor
- * taken from the tab excludes the field. Measured at 160x36.
+ * The multiline composer shares rows with the Draft. Its value starts four
+ * cells left of its prompt label, so both vertical and horizontal bounds are
+ * needed to distinguish the two fields. Measured at 160x36.
  */
-export const COMPOSER_VALUE: ScreenScope = { after: COMPOSER };
+export const COMPOSER_VALUE: ScreenScope = { after: COMPOSER, rightOf: COMPOSER, rightOffset: -4 };
 
 /**
  * The rows the Draft draws its own value on.

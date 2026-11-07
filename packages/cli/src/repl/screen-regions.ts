@@ -231,6 +231,24 @@ function screenPlacement(
   ) {
     return { region: reading };
   }
+  if (
+    key.startsWith("todo:") ||
+    key === "tray:queue" ||
+    (key.startsWith("queue:") && key.endsWith(":remove"))
+  ) {
+    const task = key.startsWith("todo:task:")
+      ? key.replace(/:action:(up|down|remove)$/, "")
+      : undefined;
+    return {
+      region: { key: "todo", rank: 5.5, axis: "vertical" },
+      ...(key === "todo:header" ? { entry: 0 } : {}),
+      ...(key === "todo:header" || key === "tray:queue" || key === "todo:add"
+        ? { groups: [{ key: "task-tabs", axis: "horizontal" }] }
+        : task === undefined
+          ? {}
+          : { groups: [{ key: task, axis: "horizontal" }] }),
+    };
+  }
   if (key === "sidekick:message") {
     return { region: MESSAGE_REGION, entry: 0 };
   }

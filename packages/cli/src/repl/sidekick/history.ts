@@ -230,6 +230,7 @@ export interface ReferenceRecord {
 
 export type MessageOrigin =
   | { readonly kind: "ui" }
+  | { readonly kind: "todo" }
   | { readonly kind: "acp"; readonly attachment: string };
 
 /** Exactly what a person sent, and which chat revision it cleared. */
@@ -1653,8 +1654,8 @@ function messageOrigin(value: unknown): MessageOrigin | undefined {
   if (!("kind" in value)) {
     return undefined;
   }
-  if (value.kind === "ui" && Object.keys(value).length === 1) {
-    return { kind: "ui" };
+  if ((value.kind === "ui" || value.kind === "todo") && Object.keys(value).length === 1) {
+    return { kind: value.kind };
   }
   if (
     value.kind === "acp" &&

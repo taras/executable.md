@@ -653,11 +653,14 @@ describe("Tier HC — what this provider declared it was building under", () => 
  * do the same thing one call later by replacing `options.session` after another
  * session had been checked.
  *
- * A conversation now reads its provider once and calls it directly, so there is
- * no dispatch for either handler to sit on. These rows are the permanent form
- * of that: the refusal must still be the specific one about configuration — a
- * refusal because no provider object was installed would prove nothing about
- * the routing at all.
+ * A conversation reads its provider once and reaches it through a terminal of
+ * its own, so there is no dispatch for an `agent` or `session` handler to sit
+ * on. Content is the exception and the only one: a held turn's text and its
+ * stream are composed by outer `prompt` middleware above that terminal, which
+ * validates the checked call rather than letting it be rerouted. These rows are
+ * the permanent form of that: the refusal must still be the specific one about
+ * configuration — a refusal because no provider object was installed would
+ * prove nothing about the routing at all.
  */
 describe("Tier DP — a saved conversation reaches its provider directly", () => {
   /** How many provider configurations this history holds. */
@@ -749,59 +752,87 @@ describe("Tier DP — a saved conversation reaches its provider directly", () =>
   });
 
   it("DP2: neither the session nor the agent of a chat is something a handler decides", function* () {
-    const seen: string[] = [];
-    // A session this chat has never been in, and a canary on the prompt: if
-    // either handler were reached, the turn would run somewhere else and the
-    // runtime below would say so.
+    // A session this chat has never been in. Composition reaches the content
+    // and nothing else, so a handler that puts this on the call is refused
+    // rather than quietly sending the turn somewhere else.
     const canary: Session = { sessionKey: "xmd:chat:v1:acpx:elsewhere", cwd: SESSION_DIR };
-    const target = host({
-      agents: { scribe: "scribe-cmd", editor: "editor-cmd" },
-      around: function* (): Operation<void> {
-        yield* Agent.around(
-          {
-            *session([request], next) {
-              seen.push("session");
-              return yield* next(named(request));
+    for (const reroutes of [false, true]) {
+      const seen: string[] = [];
+      const target = host({
+        agents: { scribe: "scribe-cmd", editor: "editor-cmd" },
+        around: function* (): Operation<void> {
+          yield* Agent.around(
+            {
+              *session([request], next) {
+                seen.push("session");
+                return yield* next(named(request));
+              },
+              *agent([_name], next) {
+                seen.push("agent");
+                return yield* next("scribe");
+              },
+              *prompt([content, promptOptions], next) {
+                seen.push("prompt");
+                return yield* next(
+                  content,
+                  reroutes ? { ...promptOptions, session: canary } : promptOptions,
+                );
+              },
             },
-            *agent([_name], next) {
-              seen.push("agent");
-              return yield* next("scribe");
-            },
-            *prompt([content, promptOptions], next) {
-              seen.push("prompt");
-              return yield* next(content, { ...promptOptions, session: canary });
-            },
-          },
-          { at: "max" },
-        );
-      },
-    });
-    const stream = new InMemoryStream();
+            { at: "max" },
+          );
+        },
+      });
+      const stream = new InMemoryStream();
 
-    const answered = yield* withConversation(
-      stream,
-      target.installation,
-      function* (chat): Operation<Result<string>> {
-        return yield* chat.prompt("first");
-      },
-      "editor",
-    );
+      const answered = yield* withConversation(
+        stream,
+        target.installation,
+        function* (chat): Operation<Result<string>> {
+          return yield* chat.prompt("first");
+        },
+        "editor",
+      );
 
-    expect(answer(answered)).toBe("hello world");
-    // None of the three handlers was reached on the chat's path.
-    expect(seen).toEqual([]);
-    // The turn ran in this conversation's own native session, under the agent
-    // the conversation selected rather than the host's default — and the
-    // command the configuration was saved against is that agent's.
-    expect(target.harness.ensureCalls.map((call) => call.sessionKey)).toEqual([CHAT_SESSION_KEY]);
-    expect(asked(target)).toEqual(["first"]);
-    const retained = turns(yield* stream.readAll());
-    expect(retained.map((turn) => turn.name)).toEqual(["turn:1"]);
-    expect(retained[0]!.record.agentSessionId).toBe(NATIVE);
-    expect(retained[0]!.record.agent).toBe("editor");
-    expect(retained[0]!.record.sessionKey).toBe(CHAT_SESSION_KEY);
-    expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
-    expect(configurations(yield* stream.readAll())).toBe(1);
+      // The content handler is reached, because composing what a held turn
+      // says is what outer prompt middleware is for. The agent and the session
+      // are not its to decide, and neither handler is on the chat's path.
+      expect(seen).toEqual(["prompt"]);
+
+      if (reroutes) {
+        // Refused at the turn's own terminal, before anything native: the
+        // canary never reached a provider and this chat established no native
+        // conversation through it.
+        expect(answer(answered)).toContain("arrived at its own terminal");
+        expect(asked(target)).toEqual([]);
+        expect(target.retained).toEqual([]);
+        // The attempt is retained the way every other failure before native
+        // work is — as a failed turn carrying its refusal. What it holds is
+        // what this turn tried to ask, which is not evidence it was sent.
+        const refused = turns(yield* stream.readAll());
+        expect(refused.map((turn) => turn.name)).toEqual(["turn:1"]);
+        expect(refused[0]!.record.status).toBe("failed");
+        expect(refused[0]!.record.text).toBe("");
+        expect(refused[0]!.record.agentSessionId).toBe(undefined);
+        // What this conversation settled still happened; the turn did not.
+        expect(configurations(yield* stream.readAll())).toBe(1);
+        continue;
+      }
+
+      expect(answer(answered)).toBe("hello world");
+      // The turn ran in this conversation's own native session, under the agent
+      // the conversation selected rather than the host's default — and the
+      // command the configuration was saved against is that agent's.
+      expect(target.harness.ensureCalls.map((call) => call.sessionKey)).toEqual([CHAT_SESSION_KEY]);
+      expect(asked(target)).toEqual(["first"]);
+      const retained = turns(yield* stream.readAll());
+      expect(retained.map((turn) => turn.name)).toEqual(["turn:1"]);
+      expect(retained[0]!.record.agentSessionId).toBe(NATIVE);
+      expect(retained[0]!.record.agent).toBe("editor");
+      expect(retained[0]!.record.sessionKey).toBe(CHAT_SESSION_KEY);
+      expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
+      expect(configurations(yield* stream.readAll())).toBe(1);
+    }
   });
 });
 

@@ -10,6 +10,7 @@ import { useNodeReplAssetImport } from "./node-repl-asset-import.ts";
  * that was selected.
  */
 
+import { installTodoSource } from "./node-todo-source.ts";
 import { randomBytes } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -23,6 +24,7 @@ import { useBunReplTerminal } from "./bun-repl-terminal.ts";
 export function* useBunRepl(): Operation<void> {
   yield* useNodeReplAssetImport();
   yield* useNodeReplProjectAccess();
+  yield* installTodoSource();
   yield* installReplHost({
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
     // What this process is, stated here because this is where it is known.

@@ -695,6 +695,14 @@ export function requestsFromHistory(
   /** The request whose records are still being read, per conversation. */
   const current = new Map<string, (typeof requests)[number]>();
   for (const [index, record] of records.entries()) {
+    if (record.kind === "feedback" && record.turn === null) {
+      const active = current.get(record.conversation);
+      // A message carrying recovered feedback retains the final composed input
+      // after its original source, before either has reached a canonical turn.
+      if (active?.kind === "message" && active.outcomes === 0) {
+        continue;
+      }
+    }
     if (record.kind === "message" || (record.kind === "feedback" && record.turn === null)) {
       const began = {
         conversation: record.conversation,

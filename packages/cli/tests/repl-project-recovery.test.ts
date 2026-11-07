@@ -486,7 +486,18 @@ describe("1113: project placement before live recovery", () => {
         ],
       });
       const profile = yield* selected.profile.finalize(held.files.directory, held.host.root);
-      expect(profile.repl).toHaveLength(1);
+      // Two contributions, named rather than counted: the mounted host prefixes
+      // the command's own bundled checklist Plugin, and this case selected the
+      // counter beside it. Asserting the names is what keeps this row about
+      // what was collected rather than about how many things a profile has.
+      const contributed = profile.repl ?? [];
+      expect(
+        contributed.flatMap((one) => [...(one.components ?? [])]).map((one) => one.name),
+      ).toEqual(["Sidekick.Todo"]);
+      // The counter contributed its `initialize` exactly once and declared no
+      // component, so it was collected once and is still distinct.
+      expect(contributed.filter((one) => (one.components ?? []).length === 0)).toHaveLength(1);
+      expect(contributed).toHaveLength(2);
       if (profile.access === undefined) {
         throw new Error("missing host file roots");
       }

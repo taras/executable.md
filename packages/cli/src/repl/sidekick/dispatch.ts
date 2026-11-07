@@ -143,6 +143,7 @@ export interface SidekickDispatch {
 
 export function* useSidekickDispatch(options: {
   owner: SidekickOwner;
+  todoEligible?: () => boolean;
   admission: SidekickAdmission;
   execution: string;
   workspace: string;
@@ -278,6 +279,14 @@ export function* useSidekickDispatch(options: {
     },
     *send(text, instruction): Operation<Result<SidekickExchange>> {
       const origin = Object.freeze({ ...(yield* SidekickOrigin.expect()) });
+      if (origin.kind === "todo" && options.todoEligible?.() !== true) {
+        return Err(
+          new Error("TODO changes remain pending until another independently eligible prompt."),
+        );
+      }
+      // Only a person's own Send past their own Stop carries that consent: a
+      // checklist wake and an attachment's message are not the hand that
+      // stopped this owner, so they reach the unchanged guard.
       const stop =
         origin.kind === "ui" && held?.kind === "stopped" ? owner.humanStop?.at : undefined;
       const ready = guard({ stop });

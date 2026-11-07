@@ -35,6 +35,7 @@ import type { MountedRepl } from "./support/mounted-repl.ts";
 import { useReplPage } from "./support/repl-page.ts";
 import {
   composerHolds,
+  COMPOSER_VALUE,
   intoComposer,
   selectPane,
   drawerLines,
@@ -449,7 +450,7 @@ describe("REPL original admission and terminal exit claims", () => {
         "the initial Draft taking the text",
         (one) => one.found("startup draft", DRAFT_VALUE) === 1,
       );
-      expect(page.screen().found("startup draft", { after: "message the sidekick" })).toBe(0);
+      expect(page.screen().found("startup draft", COMPOSER_VALUE)).toBe(0);
       const location = route(yield* leaveWithLocation(page));
       expect(location.execution).toBe(files[0]);
       expect(location.draft).toBe("startup draft");
@@ -2606,6 +2607,11 @@ describe("REPL original surface and entry selection marks", () => {
         }
         if (size.columns === 72) {
           yield* intoDraft(page, ["Tab", "Tab"]);
+        }
+        if (size.columns !== 72) {
+          yield* intoComposer(page);
+          yield* tab(page);
+          yield* page.until("History focused", (one) => one.shows("Enter opens History"));
         }
         yield* page.key("ArrowRight");
         yield* page.until("the way out keeping the entry selected", (one) =>

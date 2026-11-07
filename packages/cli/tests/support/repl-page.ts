@@ -52,6 +52,7 @@ export interface ScreenScope {
   readonly onRow?: string;
   readonly after?: string;
   readonly rightOf?: string;
+  readonly rightOffset?: number;
 }
 
 /** The screen after one write the command completed. */
@@ -205,7 +206,7 @@ function reading(index: number, size: ReplTerminalSize, cells: string[][]): Scre
     }
     if (scope?.rightOf !== undefined) {
       const at = rowOf(rows, scope.rightOf, what);
-      floor = columnAt(at, rows[at].indexOf(scope.rightOf));
+      floor = Math.max(0, columnAt(at, rows[at].indexOf(scope.rightOf)) + (scope.rightOffset ?? 0));
     }
     return { from, to, floor };
   };

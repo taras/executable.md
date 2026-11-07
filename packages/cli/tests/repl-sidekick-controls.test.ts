@@ -99,6 +99,7 @@ import {
   sidekickResponseCeiling,
 } from "../src/repl/sidekick/profile.ts";
 import type { ResponseCeiling } from "../src/repl/sidekick/profile.ts";
+import { todoDeclaration } from "../src/repl/todo/component.ts";
 import type { OutputRead, OutputReadRequest } from "../src/repl/sidekick/output.ts";
 import type {
   EntryJournalPage,
@@ -318,7 +319,11 @@ function textPage(text: string, request: EntryReadRequest): EntryTextPage {
  */
 function ceilingFor(asked: Asked, options: StubOptions = {}): ResponseCeiling {
   const journal = journalOf(asked);
-  return sidekickResponseCeiling(requests(asked, journal, options), journal);
+  // The session checklist arrives as the contribution a `repl` command selects,
+  // which is how every control beyond this CLI's builtins reaches a ceiling.
+  return sidekickResponseCeiling(requests(asked, journal, options), journal, [
+    { components: [todoDeclaration()] },
+  ]);
 }
 
 /** The journal the owner keeps, in the order a response admitted its controls. */
@@ -698,6 +703,8 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Prompt",
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
+        "Sidekick.Todo",
+        "Sidekick.Todo",
       ].sort(),
     );
     // The name they replaced is not among them. A response written now cannot
@@ -715,7 +722,14 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         .filter((entry) => entry.effect === "write")
         .map((entry) => entry.name)
         .sort(),
-    ).toEqual(["Elicit", "REPL.EntryInput", "REPL.ImportAsset", "REPL.Submit", "REPL.Test"]);
+    ).toEqual([
+      "Elicit",
+      "REPL.EntryInput",
+      "REPL.ImportAsset",
+      "REPL.Submit",
+      "REPL.Test",
+      "Sidekick.Todo",
+    ]);
     expect(surface.find((entry) => entry.name === "REPL.EntryInput")?.form).toBe("paired");
     expect(surface.find((entry) => entry.name === "REPL.Submit")?.form).toBe("self-closing");
     // Paired, because the question is the content.
@@ -789,6 +803,8 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Entry.Prompt",
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
+        "Sidekick.Todo",
+        "Sidekick.Todo",
       ].sort(),
     );
     // Core's own self-description is deliberately not designated: its ordinary

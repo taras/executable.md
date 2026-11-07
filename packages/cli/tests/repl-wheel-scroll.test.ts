@@ -172,7 +172,7 @@ describe("wheel real consumers", () => {
     page.repl.fake.script({
       reply: `<Elicit as="response" schema={{type:"object",properties:{value:{type:"string"}},required:["value"],additionalProperties:false}}>${preview}</Elicit>`,
     });
-    for (let at = 0; at < 3; at += 1) {
+    for (let at = 0; at < 4; at += 1) {
       yield* key(page, "Tab");
     }
     yield* typed(page, "question please");
@@ -217,7 +217,7 @@ describe("wheel real consumers", () => {
 
   it("Transcript scrolls independently and keyboard reveals its last real turn", function* () {
     const page = yield* useReplPage({ size: { columns: 160, rows: 36 } });
-    for (let at = 0; at < 3; at += 1) {
+    for (let at = 0; at < 4; at += 1) {
       yield* key(page, "Tab");
     }
     for (let at = 0; at < 18; at += 1) {
@@ -359,6 +359,7 @@ describe("wheel real consumers", () => {
     it(`Sidekick chat retains composer caret and follows only at the tail at ${size.columns}x${size.rows}`, function* () {
       const page = yield* useReplPage({ size });
       yield* typed(page, "draft-kept");
+      yield* key(page, "Tab");
       yield* key(page, "Tab");
       yield* key(page, "Tab");
       yield* key(page, "Tab");

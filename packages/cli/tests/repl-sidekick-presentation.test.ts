@@ -80,6 +80,89 @@ function* completedKey(page: ReplPage, key: Parameters<ReplPage["key"]>[0]): Ope
   yield* page.until(`the completed ${key} frame`, (one) => one.index > before);
 }
 
+/**
+ * Whether the committed tree holds focus on the saved account's own row.
+ *
+ * Read from the decoration rather than from the `> ` cue, because the cue is
+ * written from the view the frame was built from and is therefore a frame
+ * behind, while the frame draws its focused row's runs bold from the tree's own
+ * answer after the reconcile. A walk that stepped on the cue would send one Tab
+ * too many whenever the cue had not caught up, and the Enter after it would
+ * reach the control past this one.
+ *
+ * The decoration is read from the emulator, which is sound because a page hands
+ * a predicate only its latest reading and the emulator holds exactly the cells
+ * that write left. Nothing moves focus without a keystroke, so once a frame
+ * says the tree holds it here, it is still here when the next key is sent.
+ */
+function recoveryFocused(page: ReplPage, one: ScreenReading): boolean {
+  const screen = page.repl.terminal.screen;
+  if (screen === undefined) {
+    throw new Error("The terminal emulator is absent.");
+  }
+  if (one.occurrences("[review recovery]") !== 1) {
+    return false;
+  }
+  const at = one.locate("[review recovery]");
+  return screen.styleAt(at.column, at.row).attrs.includes(1);
+}
+
+/**
+ * Whether the committed tree holds focus on the Message field's own heading.
+ *
+ * The same answer `recoveryFocused` reads, asked of the other control in this
+ * region: the frame draws its focused node's runs bold after the reconcile, and
+ * this field's style role carries no weight of its own, so bold on its heading
+ * is the tree's answer. Its value rows are read rather than reached.
+ */
+function messageFocused(page: ReplPage, one: ScreenReading): boolean {
+  const screen = page.repl.terminal.screen;
+  if (screen === undefined) {
+    throw new Error("The terminal emulator is absent.");
+  }
+  if (one.occurrences(COMPOSER) !== 1) {
+    return false;
+  }
+  const at = one.locate(COMPOSER);
+  return screen.styleAt(at.column, at.row).attrs.includes(1);
+}
+
+/**
+ * Open the saved account the way somebody without a mouse opens it.
+ *
+ * Two stages, because recovery is not a region entry. It is one of the fixed
+ * conversation controls of the Message region, whose own fixed entry is the
+ * Message field — so Tab cycles to that region and Alt+ArrowUp walks the
+ * controls inside it. Replacing Tab with Alt+ArrowUp outright would not do:
+ * this case can arrive with the Draft focused, where Alt+ArrowUp stays local to
+ * the Draft and never leaves it.
+ *
+ * So: if recovery already holds focus, activate it. Otherwise Tab until the
+ * Message heading holds focus, then Alt+ArrowUp until recovery does. Both
+ * stages are bounded and both read the frame's own answer rather than the `> `
+ * cue, which is written from the view and can lag a step behind. Then one Enter.
+ *
+ * The press is the other route a person has, and this one case gives it up
+ * deliberately. Its rail is still filling while the account is offered, so the
+ * row's coordinates can belong to a frame the program has already replaced,
+ * and a press naming no target in the current frame is dropped without an
+ * action or a trace. That route keeps its own coverage elsewhere; nothing else
+ * this case is about changes.
+ */
+function* openSavedAccount(page: ReplPage): Operation<void> {
+  if (!recoveryFocused(page, page.screen())) {
+    for (let step = 0; step < 12 && !messageFocused(page, page.screen()); step += 1) {
+      yield* completedKey(page, "Tab");
+    }
+    yield* page.until("the Message heading holding focus", (one) => messageFocused(page, one));
+    for (let step = 0; step < 8 && !recoveryFocused(page, page.screen()); step += 1) {
+      yield* completedKey(page, "Alt+ArrowUp");
+    }
+  }
+  yield* page.until("the saved account's own row focused", (one) => recoveryFocused(page, one));
+  yield* page.key("Enter");
+}
+
 describe("987 — mounted original recovery", () => {
   for (const size of [WIDE, { columns: 120, rows: 30 }, NARROW]) {
     it(`reads actual saved multiline entry feedback by keyboard at ${size.columns} columns`, function* () {
@@ -109,7 +192,7 @@ describe("987 — mounted original recovery", () => {
       for (const line of lines) {
         expect(feedback.text).toContain(line);
       }
-      yield* page.press("[review recovery]");
+      yield* openSavedAccount(page);
       yield* page.until("the saved recovery account", (one) => one.shows("Original conversation:"));
       if (size.columns !== 160) {
         yield* page.resize(size);
@@ -162,7 +245,7 @@ describe("987 — mounted original recovery", () => {
       if (size.columns !== 160) {
         yield* page.resize(WIDE);
       }
-      yield* page.press("[review recovery]");
+      yield* openSavedAccount(page);
       yield* page.until("the reopened saved account", (one) => one.shows("Review recovery"));
       const passive = yield* settledReading(page.repl);
       expect(passive.chat).toEqual(before.chat);
@@ -200,14 +283,57 @@ describe("987 — mounted original recovery", () => {
       expect(after.model.entries).toEqual(before.model.entries);
     });
   }
+  /**
+   * Walk the keyboard from the composer to the Draft, and prove it arrived.
+   *
+   * The Draft's own value is the oracle, not a phrase somewhere on the screen:
+   * `Type here` is optional guidance that required recovery and placement
+   * advice can crowd out, so a traversal that waited for it would be waiting on
+   * the layout rather than on focus. One probe character is typed at each stop
+   * and erased again; the stop where it lands in the Draft's own rows, and not
+   * the composer's, is the one these keystrokes are reaching.
+   *
+   * The probe is polled rather than awaited, because a stop that is not a text
+   * field swallows the key and draws nothing — which is an answer about focus,
+   * not a reason to fail.
+   */
   function* draftFromComposer(page: ReplPage): Operation<void> {
     yield* intoComposer(page);
-    for (let index = 0; index < 24 && !page.screen().shows("Type here"); index++) {
+    // A token no part of this screen draws: a single letter would collide with
+    // ordinary labels like QUEUE and make every stop look like the Draft.
+    const probe = "zq7";
+    function* settles(holds: (one: ScreenReading) => boolean): Operation<boolean> {
+      for (let poll = 0; poll < 25; poll += 1) {
+        if (holds(page.screen())) {
+          return true;
+        }
+        yield* sleep(20);
+      }
+      return holds(page.screen());
+    }
+    const route: string[] = [];
+    for (let stop = 0; stop < 24; stop += 1) {
+      yield* page.type(probe);
+      const landed = yield* settles((one) => draftHolds(one, probe));
+      const anywhere = landed || (yield* settles((one) => one.shows(probe)));
+      if (anywhere) {
+        for (let erase = 0; erase < probe.length; erase += 1) {
+          yield* page.key("Backspace");
+        }
+        yield* settles((one) => !one.shows(probe));
+      }
+      if (landed) {
+        return;
+      }
+      route.push(anywhere ? "field" : "control");
       const before = page.screen().index;
       yield* page.key("Tab");
       yield* page.until("the next keyboard traversal", (one) => one.index > before);
     }
-    expect(page.screen().shows("Type here")).toBe(true);
+    throw new Error(
+      `the keyboard never reached the Draft from the composer. stops=${JSON.stringify(route)} ` +
+        `${page.describe()}`,
+    );
   }
 
   it("keeps recovery closed through healthy idle and running work, and removes the action on an exact completed match", function* () {
@@ -1538,6 +1664,7 @@ function* twoChats(page: ReplPage, withOlderFailure = false): Operation<void> {
   }
   yield* newConversation(page);
   if (withOlderFailure) {
+    yield* page.press("QUEUE");
     yield* page.until("failure hold after agent replacement", (one) => one.shows("[Resume queue]"));
     yield* page.press("[Resume queue]");
     yield* page.until("explicit failure hold release", (one) => !one.shows("[Resume queue]"));
@@ -1602,7 +1729,14 @@ describe("Transcript ownership and immutable older chat readings", () => {
   it("SS1: a turn that renders nothing is announced at begin and keeps its row", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "<Output>First answer.</Output>\n<REPL.Bindings />\n" });
-    page.repl.fake.script({ held: true, reply: "<REPL.Bindings />\n" });
+    // The first reply's read is what owes this exchange its one automatic
+    // follow-up. That follow-up renders ordinary body text and selects no
+    // Output, which is the case's own subject: a turn that says nothing to a
+    // person. It reads nothing either, so it owes no further feedback — a
+    // second designated read here would be answered by another automatic turn,
+    // and a completed row beside a second pending one is not the duplicate
+    // identity this case is about.
+    page.repl.fake.script({ held: true, reply: "Silent internal working.\n" });
     yield* sendMessage(page, "read it");
     yield* page.until("the first reply", (one) => sidekickShows(one, "First answer."));
     yield* page.repl.fake.holdingTurns(1);
@@ -1626,6 +1760,67 @@ describe("Transcript ownership and immutable older chat readings", () => {
       transcriptLines(page.screen()).filter((row) => row.includes("Automatic feed")),
     ).toHaveLength(1);
     expect(transcriptLines(page.screen()).filter((row) => row.includes("read it"))).toHaveLength(1);
+    // Two turns and two requests, and the second one answered: the row this
+    // case is about is a turn that ran and said nothing, not one that failed
+    // or never happened. Its body text stays out of the chat, which is what
+    // "renders nothing" means here, and it produced no further feedback — so
+    // there is no third turn this exchange still owes.
+    expect(page.repl.fake.prompts).toHaveLength(2);
+    const read = yield* settledReading(page.repl);
+    const responses = read.chat.flatMap((one) => (one.kind === "response" ? [one] : []));
+    expect(responses).toHaveLength(2);
+    expect(responses.map((one) => one.outcome.status)).toEqual(["ok", "ok"]);
+    expect(responses.map((one) => one.hasOutput)).toEqual([true, false]);
+    expect(responses[1]?.output).toBe("");
+    expect(
+      read.chat.some((one) => one.kind === "feedback" && one.response === responses[1]?.response),
+    ).toBe(false);
+    expect(sidekickShows(page.screen(), "Silent internal working.")).toBe(false);
+    const projected = projectSidekick(read.chat);
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    // One row per identity, from the facts this exchange actually saved: a
+    // saved turn addressed by a live slot of its own is the same row rather
+    // than a second one beside it, and a live turn with a response of its own
+    // is a row of its own. Asked of the projection directly, because what the
+    // screen shows is downstream of this answer.
+    const saved = projected.value.turns.at(-1);
+    if (saved?.reply === undefined) {
+      throw new Error("this exchange saved no replied turn to address");
+    }
+    const slot = {
+      conversation: saved.conversation,
+      agent: saved.agent,
+      // The saved turn's own kind where it recorded one. It reaches the live
+      // row's label and not its key, which is what these two calls are about.
+      asked: saved.asked ?? "automatic",
+      title: saved.title,
+      phase: "evaluating",
+      sessionKey: saved.sessionKey,
+      turn: saved.turn,
+      output: "",
+      incomplete: false,
+    } as const;
+    const addressed = sidekickTurnRows(projected.value, {
+      ...slot,
+      response: saved.reply.response,
+    });
+    expect(addressed).toHaveLength(projected.value.turns.length);
+    expect(new Set(addressed.map((one) => one.key)).size).toBe(addressed.length);
+    expect(addressed.map((one) => one.key)).toContain(
+      `sidekick:${saved.conversation}:${saved.reply.response}`,
+    );
+    const separate = sidekickTurnRows(projected.value, {
+      ...slot,
+      response: `${saved.reply.response}:later`,
+      turn: null,
+    });
+    expect(separate).toHaveLength(projected.value.turns.length + 1);
+    expect(new Set(separate.map((one) => one.key)).size).toBe(separate.length);
+    expect(separate.at(-1)?.key).toBe(
+      `sidekick:${saved.conversation}:${saved.reply.response}:later`,
+    );
   });
 
   it("SS7: a fresh Transcript says nothing is retained, and an unreadable chat history is refused with its reason", function* () {
@@ -2232,7 +2427,7 @@ describe("Older chats retain their identity across failure and cold opening", ()
 });
 
 function* conversationChoices(page: ReplPage): Operation<string[]> {
-  yield* page.press(" ▾");
+  yield* page.press(" ▾", page.screen().size.columns <= 72 ? undefined : { onRow: "TRANSCRIPT" });
   yield* page.until("the offered conversations", (one) => one.shows("All conversations"));
   return page
     .screen()
@@ -2489,7 +2684,7 @@ describe("Sidekick original multiline composer ownership", () => {
     const page = yield* useReplPage();
     yield* populateChat(page, 10);
     yield* intoComposer(page);
-    expect(composerRows(page.screen())).toHaveLength(1);
+    expect(composerRows(page.screen())).toHaveLength(3);
     yield* composerPaste(page, "a question whose words have to wrap onto another row of the pane");
     const wrapped = composerRows(page.screen(), "a question");
     expect(wrapped.length).toBeGreaterThan(1);
@@ -2548,7 +2743,7 @@ describe("Sidekick original multiline composer ownership", () => {
     ).toEqual(newer);
   });
 
-  it("MC6: control — an acknowledged Send leaves one blank value row", function* () {
+  it("MC6: control — an acknowledged Send leaves three blank value rows", function* () {
     const page = yield* useReplPage();
     page.repl.fake.script({ reply: "<Output>Done.</Output>\n" });
     yield* intoComposer(page);
@@ -2556,7 +2751,7 @@ describe("Sidekick original multiline composer ownership", () => {
     expect(composerRows(page.screen()).length).toBeGreaterThan(1);
     yield* sendComposed(page);
     yield* page.until("the value acknowledged", (one) => chatHas(one, "Done."));
-    expect(composerRows(page.screen())).toHaveLength(1);
+    expect(composerRows(page.screen())).toHaveLength(3);
     expect(personMessages((yield* settledReading(page.repl)).chat)).toEqual(["one\ntwo\nthree"]);
   });
 
@@ -3080,7 +3275,7 @@ describe("Sidekick original interrupted identities and native input routes", () 
     const page = yield* useReplPage();
     yield* draftText(page, "kept entry");
     yield* compose(page, "kept question");
-    for (let press = 0; press < 1; press += 1) {
+    for (let press = 0; press < 2; press += 1) {
       const index = page.screen().index;
       yield* page.key("Backtab");
       yield* page.until("the preceding control", (one) => one.index > index);
@@ -3489,6 +3684,8 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
     (_, at) => `LONG${String(at + 1).padStart(2, "0")} retained reply row`,
   );
   const RECOVERY = "[review recovery]";
+  /** The person's own message, which is this chat's first item. */
+  const ASKED = "A long retained reply.";
   const UNFINISHED = "(unfinished): Internal error";
   /** The send refusal's opening words, which a narrow frame wraps after. */
   const REFUSED = "This conversation holds feedback whose acceptance";
@@ -3506,7 +3703,7 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
       const host = yield* useMountedHost({ dataRoot });
       const page = yield* useReplPage({ host, size: WIDE });
       host.fake.script({ reply: `<Output>${LONG.join("\n")}</Output>` });
-      yield* sendMessage(page, "A long retained reply.");
+      yield* sendMessage(page, ASKED);
       yield* page.until(
         "the long reply at rest",
         (one) => sidekickIdle(one) && sidekickShows(one, "LONG60"),
@@ -3563,13 +3760,22 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
         page.screen().locate(UNFINISHED).row,
       );
 
-      for (let tick = 0; tick < 40 && !chatShows(page.screen(), "LONG01"); tick++) {
+      // Up to the start this case is about, not merely into the long reply. The
+      // assertion after the account closes is about the person's own message,
+      // which this chat emits before that reply's first row — so stopping as
+      // soon as LONG01 appears can leave the message just above the window, and
+      // whether it is inside depends on where a three-row traversal happens to
+      // land at each measured capacity. The established reading requires both.
+      const started = (one: ScreenReading): boolean =>
+        chatShows(one, ASKED) && chatShows(one, "LONG01");
+      for (let tick = 0; tick < 40 && !started(page.screen()); tick++) {
         const at = page.screen().index;
         const control = fixedRecovery(page.screen());
         yield* page.wheel("up", { column: control.column + 2, row: control.row - 3 });
         yield* page.until("the chat scrolling back", (one) => one.index > at);
       }
       expect(chatShows(page.screen(), "LONG01")).toBe(true);
+      expect(chatShows(page.screen(), ASKED)).toBe(true);
       expect(chatShows(page.screen(), UNFINISHED)).toBe(false);
       fixedRecovery(page.screen());
 
@@ -3590,7 +3796,7 @@ describe("1137 — recovery stays among the fixed conversation controls", () => 
       yield* page.key("Escape");
       yield* page.until("the closed account", (one) => !one.shows("Review recovery"));
       yield* page.until("focus returning to its opener", (one) => one.shows(`> ${RECOVERY}`));
-      expect(chatShows(page.screen(), "A long retained reply.")).toBe(true);
+      expect(chatShows(page.screen(), ASKED)).toBe(true);
       expect(page.screen().shows("A held message.")).toBe(true);
 
       for (const next of [other, size]) {

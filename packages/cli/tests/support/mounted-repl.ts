@@ -1,5 +1,6 @@
 import type { Plugin } from "@executablemd/core/api";
 import { useNodeReplProjectAccess } from "../../src/node-repl-project-access.ts";
+import { installTodoSource } from "../../src/node-todo-source.ts";
 /**
  * The real REPL command, run on a terminal this test owns.
  *
@@ -28,6 +29,7 @@ import { assembleReplProfile } from "../../src/repl-profile.ts";
 import type { ReplProfileAssembly, ReplProfileFacts } from "../../src/repl-profile.ts";
 import { resolveAgentStack } from "../../src/agent-stack.ts";
 import { NO_PLUGINS, installPlugins } from "../../src/plugin-host.ts";
+import { todoPlugin, todoPluginDeclaresFor } from "../../src/repl/todo/plugin.ts";
 import { pairedReplRepository } from "../../src/repl/sidekick/repository.ts";
 import { PAIRED_DIRECTORY } from "../../src/repl/sidekick/history.ts";
 import type { SidekickRecord } from "../../src/repl/sidekick/history.ts";
@@ -742,7 +744,7 @@ export function* useMountedHost(
       { at: "min" },
     );
   }
-  if (options.hostFiles === true) {
+  if (options.hostFiles !== false) {
     yield* useHostFiles();
   }
   if (options.entryInstallation !== undefined) {
@@ -753,6 +755,7 @@ export function* useMountedHost(
   yield* useTempFileCompiler();
   const dataRoot = options.dataRoot ?? (yield* useTemporary("xmd-repl-mounted-"));
   yield* useNodeReplProjectAccess();
+  yield* installTodoSource();
   yield* installReplHost({
     dataRoot: () => dataRoot,
     environment: () => [
@@ -791,11 +794,19 @@ export function* useMountedHost(
   if (!stack.ok) {
     throw stack.error;
   }
+  // The command's own prefix first, then whatever a case selected, which is the
+  // order `assembleRunProfile` installs for `xmd repl`: every mounted session
+  // has the session checklist a real one has, and a case adding contributions
+  // composes outside it rather than replacing it.
+  const selected = [
+    ...(todoPluginDeclaresFor("repl") ? [todoPlugin] : []),
+    ...(options.plugins ?? []),
+  ];
   const profile = yield* assembleReplProfile(
     stack.value,
-    options.plugins === undefined
+    selected.length === 0
       ? NO_PLUGINS
-      : yield* installPlugins(options.plugins, { command: "repl", args: [] }),
+      : yield* installPlugins(selected, { command: "repl", args: [] }),
     {
       ...(options.testingHarness === undefined ? {} : { testingHarness: options.testingHarness }),
       ...(options.includes === undefined ? {} : { includes: options.includes }),

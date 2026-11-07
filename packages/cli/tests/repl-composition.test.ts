@@ -1541,6 +1541,7 @@ describe("REPL composition: a modal stack", () => {
 
 import { runXmd, replGrammarError } from "../src/cli.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
+import { installTodoSource } from "../src/node-todo-source.ts";
 import { API, Permissions, useHostFiles } from "@executablemd/runtime";
 import { recordingTerminal, awaited, awaitedFact } from "./support/mounted-repl.ts";
 import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
@@ -1602,6 +1603,12 @@ describe("1075 invocation to REPL entry", () => {
             {
               *install() {
                 yield* useHostFiles();
+                // The command this case drives selects the bundled checklist
+                // Plugin, whose session service reads `todo.md` through the
+                // host's own strict adapter. A host that installs none is
+                // refused deliberately, so this assembly supplies the same
+                // adapter the mounted host does rather than relaxing that.
+                yield* installTodoSource();
                 yield* installReplHost({
                   dataRoot: () => root,
                   identify: () => "absolute-entry",
