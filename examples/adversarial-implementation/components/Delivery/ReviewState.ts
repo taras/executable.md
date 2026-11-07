@@ -64,11 +64,58 @@ function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+const USAGE_LIMIT_NOTICE =
+  "You've reached your Fable limit. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.";
+const USAGE_LIMIT_MESSAGE = `Internal error: ${USAGE_LIMIT_NOTICE}`;
+
+type Outcome = z.infer<typeof outcomeSchema>;
+
+/**
+ * Fable's usage-limit refusal, recognized only as the whole of what the turn
+ * said: the exact notice in every reading of its output, and the exact
+ * provider runtime-turn diagnostic it was reported with. Any other text, a
+ * matching message without that diagnostic, or a reviewer outside the Fable
+ * chain is partial output and holds.
+ */
+function usageLimitRefusal(outcome: Outcome, fableChoices: readonly string[] | null): boolean {
+  const turn = outcome.turn;
+  if (
+    fableChoices === null ||
+    outcome.reviewer.provider !== "claude" ||
+    outcome.catalog.model === null ||
+    !fableChoices.includes(outcome.catalog.model) ||
+    turn === null ||
+    turn.state !== "failed" ||
+    turn.stage !== "turn" ||
+    turn.configuration !== null ||
+    turn.refusal === null
+  ) {
+    return false;
+  }
+  const { requestId: _requestId, ...diagnostic } = turn.refusal.diagnostic;
+  return (
+    turn.refusal.agent === outcome.reviewer.provider &&
+    turn.partial === USAGE_LIMIT_NOTICE &&
+    turn.refusal.output === USAGE_LIMIT_NOTICE &&
+    turn.refusal.closeValue === USAGE_LIMIT_NOTICE &&
+    turn.refusal.message === USAGE_LIMIT_MESSAGE &&
+    same(diagnostic, {
+      provider: "acp",
+      operation: "session/prompt",
+      stage: "runtime-turn",
+      code: "RUNTIME",
+      origin: "runtime",
+      acp: { code: -32603, message: USAGE_LIMIT_MESSAGE },
+    })
+  );
+}
+
 function* attempt(
   directory: string,
   position: 0 | 1,
   reviewer: Reviewer,
   assignment: unknown,
+  fableChoices: readonly string[] | null,
 ): Operation<Attempt> {
   const files = ["assignment.json", "outcome.json", "execution.json"];
   const texts: Record<string, string | null> = {};
@@ -134,6 +181,12 @@ function* attempt(
   if (turn.state === "reply") {
     return result("review", "The reviewer returned a joined reply.");
   }
+  if (usageLimitRefusal(outcome, fableChoices)) {
+    return result(
+      "eligible",
+      "Fable reported its usage limit: the turn said exactly that notice, with the matching provider diagnostic, and no review output.",
+    );
+  }
   if (turn.partial.trim() !== "") {
     return result(
       "held",
@@ -192,7 +245,13 @@ function* observe(directory: string, expected: Selection, replacement: boolean):
   if (first === undefined) {
     return { ...empty, next: "uncertain", hold: null };
   }
-  const primary = yield* attempt(directory, 0, first.reviewer, assignmentFor(expected, first.reviewer));
+  const primary = yield* attempt(
+    directory,
+    0,
+    first.reviewer,
+    assignmentFor(expected, first.reviewer),
+    expected.chain === "fable-astra" ? first.choices : null,
+  );
   const attempts: Attempt[] = [primary];
   let candidate: { position: number; directory: string; reviewer: Reviewer } | null = {
     position: 0,
@@ -215,6 +274,7 @@ function* observe(directory: string, expected: Selection, replacement: boolean):
         1,
         second.reviewer,
         assignmentFor(expected, second.reviewer),
+        null,
       );
       const evidence =
         transitionText === null

@@ -16,6 +16,33 @@ export const catalogSchema = z.strictObject({
   failure: z.string().nullable(),
 });
 
+export const diagnosticSchema = z.strictObject({
+  provider: z.literal("acp"),
+  operation: z.literal("session/prompt"),
+  stage: z.literal("runtime-turn"),
+  requestId: z.string().optional(),
+  code: z.string().optional(),
+  detailCode: z.string().optional(),
+  retryable: z.boolean().optional(),
+  origin: z.enum(["cli", "runtime", "queue", "acp"]).optional(),
+  acp: z
+    .strictObject({
+      code: z.number(),
+      message: z.string().optional(),
+      details: z.string().optional(),
+    })
+    .optional(),
+});
+
+export const refusalSchema = z.strictObject({
+  agent: z.string(),
+  sessionKey: z.string(),
+  message: z.string(),
+  diagnostic: diagnosticSchema,
+  output: z.string(),
+  closeValue: z.string(),
+});
+
 const turnSchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("reply"), reply: z.string() }),
   z.strictObject({
@@ -24,6 +51,7 @@ const turnSchema = z.discriminatedUnion("state", [
     failure: z.string(),
     partial: z.string(),
     configuration: configurationSchema,
+    refusal: refusalSchema.nullable(),
   }),
 ]);
 

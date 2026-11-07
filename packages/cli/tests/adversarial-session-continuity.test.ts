@@ -476,6 +476,49 @@ function agentOf(fake: FakeAcp, index: number): string | undefined {
   return fake.ensured.find((input) => input.sessionKey === key)?.agent;
 }
 
+function closeGate(fake: FakeAcp) {
+  const events: string[] = [];
+  const reached = withResolvers<void>();
+  let resume: (() => void) | undefined;
+  let gated = false;
+  function create(options: AcpRuntimeOptions): ProbeCapableRuntime {
+    const runtime = fake.create(options);
+    return {
+      ...runtime,
+      close(input: Parameters<ProbeCapableRuntime["close"]>[0]) {
+        if (gated || fake.turns.length === 0) {
+          return runtime.close(input);
+        }
+        gated = true;
+        events.push("close-held");
+        reached.resolve();
+        return new Promise<void>((resolved) => {
+          resume = resolved;
+        }).then(() => {
+          events.push("close-released");
+          return runtime.close(input);
+        });
+      },
+    };
+  }
+  return {
+    events,
+    reached,
+    create,
+    release() {
+      resume?.();
+    },
+  };
+}
+
+const notice =
+  "You've reached your Fable limit. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.";
+const runtimeRefusal = {
+  code: "RUNTIME",
+  origin: "runtime" as const,
+  acp: { code: -32603, message: `Internal error: ${notice}` },
+};
+
 describe(
   "production independent review over the registered acpx factory",
   { sanitizeOps: false, sanitizeResources: false },
@@ -578,41 +621,18 @@ describe(
       fake.configuration(catalog(["fable", "gpt-6-astra"]));
       fake.script({ failure: "The Fable provider turn failed." });
       fake.script({ failure: "The Astra provider turn failed." });
-      const events: string[] = [];
-      const reached = withResolvers<void>();
-      let release: (() => void) | undefined;
-      let gated = false;
-      function create(options: AcpRuntimeOptions): ProbeCapableRuntime {
-        const runtime = fake.create(options);
-        return {
-          ...runtime,
-          close(input: Parameters<ProbeCapableRuntime["close"]>[0]) {
-            if (gated || fake.turns.length === 0) {
-              return runtime.close(input);
-            }
-            gated = true;
-            events.push("close-held");
-            reached.resolve();
-            return new Promise<void>((resume) => {
-              release = resume;
-            }).then(() => {
-              events.push("close-released");
-              return runtime.close(input);
-            });
-          },
-        };
-      }
-      const harness = yield* reviewWorld(fake, create);
+      const gate = closeGate(fake);
+      const harness = yield* reviewWorld(fake, gate.create);
       const task = yield* spawn(() =>
         harness.run(reviewSource, { delivery: harness.delivery, revision }),
       );
-      yield* reached.operation;
+      yield* gate.reached.operation;
       expect(fake.turns).toHaveLength(1);
       expect(agentOf(fake, 0)).toBe("claude");
-      release?.();
+      gate.release();
       const ran = yield* task;
       expect(ran.ok).toBe(true);
-      expect(events).toEqual(["close-held", "close-released"]);
+      expect(gate.events).toEqual(["close-held", "close-released"]);
       expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude", "codex"]);
       const attempt = join(harness.delivery.directory as string, `review-${revision}`);
       const primary = execution.parse(
@@ -637,10 +657,83 @@ describe(
       expect(harness.asked).toHaveLength(1);
     });
 
+    it("replaces Fable after its exact usage-limit refusal only, and holds substantive output or a lookalike message", function* () {
+      for (const variant of ["refusal", "substantive", "lookalike"]) {
+        const fake = createFakeAcp();
+        fake.configuration(catalog(["fable", "gpt-6-astra"]));
+        fake.script({
+          deltas:
+            variant === "substantive"
+              ? [notice, `\n\n${review}`]
+              : [notice.slice(0, 40), notice.slice(40)],
+          failure: `Internal error: ${notice}`,
+          ...(variant === "lookalike" ? {} : { failureFacts: runtimeRefusal }),
+        });
+        fake.script({ failure: "The Astra provider turn failed." });
+        const gate = closeGate(fake);
+        const harness = yield* reviewWorld(fake, gate.create);
+        const task = yield* spawn(() =>
+          harness.run(reviewSource, { delivery: harness.delivery, revision }),
+        );
+        yield* gate.reached.operation;
+        expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude"]);
+        gate.release();
+        const ran = yield* task;
+        expect(ran.ok).toBe(true);
+        expect(gate.events).toEqual(["close-held", "close-released"]);
+        const attempt = join(harness.delivery.directory as string, `review-${revision}`);
+        const primary = outcome.parse(
+          JSON.parse(yield* readTextFile(join(attempt, "outcome.json"))),
+        );
+        expect(primary.turn).toMatchObject({
+          state: "failed",
+          stage: "turn",
+          partial: variant === "substantive" ? `${notice}\n\n${review}` : notice,
+        });
+        const hold = z
+          .object({ attempts: z.array(z.object({ state: z.string(), reason: z.string() })) })
+          .parse(JSON.parse(yield* readTextFile(join(attempt, "hold.json"))));
+        if (variant === "refusal") {
+          expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude", "codex"]);
+          expect(fake.prompts[1]).toBe(fake.prompts[0]);
+          expect(hold.attempts.map((item) => item.state)).toEqual(["eligible", "eligible"]);
+          expect(hold.attempts[0]?.reason).toContain("usage limit");
+          const assignments: Record<string, unknown>[] = [];
+          for (const file of ["assignment.json", "replacement/assignment.json"]) {
+            assignments.push(
+              z
+                .record(z.string(), z.unknown())
+                .parse(JSON.parse(yield* readTextFile(join(attempt, file)))),
+            );
+          }
+          expect(assignments[1]).toEqual({
+            ...assignments[0],
+            reviewer: {
+              provider: "codex",
+              model: "gpt-6-astra",
+              effort: null,
+              session: "independent-astra",
+            },
+          });
+          expect(assignments[0]?.revision).toBe(revision);
+          expect(assignments[0]?.acceptance).toEqual(acceptance);
+        } else {
+          expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude"]);
+          expect(hold.attempts.map((item) => item.state)).toEqual(["held"]);
+          expect(hold.attempts[0]?.reason).toContain("partial review output");
+        }
+        expect(harness.asked).toHaveLength(1);
+      }
+    });
+
     it("ends the run without Astra or a hold when the failed Fable owner's real ACP close rejects", function* () {
       const fake = createFakeAcp();
       fake.configuration(catalog(["fable", "gpt-6-astra"]));
-      fake.script({ failure: "The Fable provider turn failed." });
+      fake.script({
+        reply: notice,
+        failure: `Internal error: ${notice}`,
+        failureFacts: runtimeRefusal,
+      });
       fake.closeFailure = new Error("the review provider would not close");
       const harness = yield* reviewWorld(fake);
       const ran = yield* harness.run(reviewSource, { delivery: harness.delivery, revision });
@@ -649,9 +742,12 @@ describe(
       expect(fake.closes).toContain("scope teardown");
       expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude"]);
       const attempt = join(harness.delivery.directory as string, `review-${revision}`);
-      expect(
-        outcome.parse(JSON.parse(yield* readTextFile(join(attempt, "outcome.json")))).turn,
-      ).toMatchObject({ state: "failed", stage: "turn" });
+      expect(JSON.parse(yield* readTextFile(join(attempt, "outcome.json"))).turn).toMatchObject({
+        state: "failed",
+        stage: "turn",
+        partial: notice,
+        refusal: { output: notice, closeValue: notice },
+      });
       const retained: string[] = [];
       for (const file of ["execution.json", "hold.json", "replacement/assignment.json"]) {
         try {
@@ -679,80 +775,123 @@ describe(
   "delivery review partial continuation",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    it("restores a retained no-output failed turn as the same outcome without another provider call", function* () {
-      const root = join(tmpdir(), `xmd-delivery-turn-${randomUUID()}`);
-      yield* ensureDir(root);
-      const path = join(root, "turn.md");
-      yield* writeTextFile(
-        path,
-        '<Ticket.Capture as="captured"><Delivery.Turn as="turn"><Prompt session="review" throwOnError={true}>review</Prompt></Delivery.Turn><Json value={turn} /></Ticket.Capture><Json value={captured} />',
-      );
-      let calls = 0;
-      function perform(stream: InMemoryStream) {
-        return scoped(function* () {
-          yield* useHostFiles();
-          yield* useComponentModuleLoader();
-          yield* Permissions.around({ files: () => true });
-          yield* useNormalizedOutput();
-          yield* installAgentComponents({ defaultAgent: "fixture" });
-          yield* Agent.around(
-            {
-              *agent([name]) {
-                return name ?? "fixture";
+    it("restores a retained failed turn, including its refusal facts, as the same outcome without another provider call", function* () {
+      for (const variant of ["no-output", "refusal"]) {
+        const root = join(tmpdir(), `xmd-delivery-turn-${randomUUID()}`);
+        yield* ensureDir(root);
+        const path = join(root, "turn.md");
+        yield* writeTextFile(
+          path,
+          '<Ticket.Capture as="captured"><Delivery.Turn as="turn"><Prompt session="review" throwOnError={true}>review</Prompt></Delivery.Turn><Json value={turn} /></Ticket.Capture><Json value={captured} />',
+        );
+        let calls = 0;
+        function perform(stream: InMemoryStream) {
+          return scoped(function* () {
+            yield* useHostFiles();
+            yield* useComponentModuleLoader();
+            yield* Permissions.around({ files: () => true });
+            yield* useNormalizedOutput();
+            yield* installAgentComponents({ defaultAgent: "fixture" });
+            yield* Agent.around(
+              {
+                *agent([name]) {
+                  return name ?? "fixture";
+                },
+                *session() {
+                  return { sessionKey: "review", cwd: root };
+                },
+                *prompt() {
+                  calls++;
+                  const refused = new Error(`Internal error: ${notice}`);
+                  Object.defineProperty(refused, "executablemd.agent.prompt-diagnostic", {
+                    value: {
+                      provider: "acp",
+                      operation: "session/prompt",
+                      stage: "runtime-turn",
+                      requestId: "request-1",
+                      ...runtimeRefusal,
+                    },
+                  });
+                  const events: AgentPromptEvent[] =
+                    variant === "refusal"
+                      ? [
+                          {
+                            type: "started",
+                            agent: "fixture",
+                            session: { sessionKey: "review", cwd: root },
+                          },
+                          { type: "text_delta", text: notice },
+                          { type: "terminal", status: "failed", error: refused },
+                        ]
+                      : [
+                          {
+                            type: "started",
+                            agent: "fixture",
+                            session: { sessionKey: "review", cwd: root },
+                          },
+                          {
+                            type: "terminal",
+                            status: "failed",
+                            error: new Error("recorded provider refusal"),
+                          },
+                        ];
+                  const turn: Stream<AgentPromptEvent, string> = {
+                    *[Symbol.iterator]() {
+                      let count = 0;
+                      return {
+                        *next() {
+                          const event = events[count++];
+                          return event === undefined
+                            ? { done: true as const, value: variant === "refusal" ? notice : "" }
+                            : { done: false as const, value: event };
+                        },
+                      };
+                    },
+                  };
+                  return turn;
+                },
               },
-              *session() {
-                return { sessionKey: "review", cwd: root };
-              },
-              *prompt() {
-                calls++;
-                const events: AgentPromptEvent[] = [
-                  {
-                    type: "started",
-                    agent: "fixture",
-                    session: { sessionKey: "review", cwd: root },
+              { at: "min" },
+            );
+            const executed = yield* executeInstalled({ path, includes: [components], stream }, []);
+            return z.string().parse(yield* collect(executed));
+          });
+        }
+        calls = 0;
+        const live = new InMemoryStream();
+        const first = captured.parse(JSON.parse(yield* perform(live)));
+        const prefix = live
+          .snapshot()
+          .filter((event) => !(event.type === "close" && event.coroutineId === "root"));
+        const continued = captured.parse(JSON.parse(yield* perform(new InMemoryStream(prefix))));
+        expect(calls).toBe(1);
+        expect(first.status).toBe("completed");
+        expect(JSON.parse(first.output)).toMatchObject(
+          variant === "refusal"
+            ? {
+                state: "failed",
+                stage: "turn",
+                partial: notice,
+                configuration: null,
+                refusal: {
+                  agent: "fixture",
+                  sessionKey: "review",
+                  message: `Internal error: ${notice}`,
+                  diagnostic: {
+                    provider: "acp",
+                    operation: "session/prompt",
+                    stage: "runtime-turn",
+                    requestId: "request-1",
+                    ...runtimeRefusal,
                   },
-                  {
-                    type: "terminal",
-                    status: "failed",
-                    error: new Error("recorded provider refusal"),
-                  },
-                ];
-                const turn: Stream<AgentPromptEvent, string> = {
-                  *[Symbol.iterator]() {
-                    let count = 0;
-                    return {
-                      *next() {
-                        const event = events[count++];
-                        return event === undefined
-                          ? { done: true as const, value: "" }
-                          : { done: false as const, value: event };
-                      },
-                    };
-                  },
-                };
-                return turn;
-              },
-            },
-            { at: "min" },
-          );
-          const executed = yield* executeInstalled({ path, includes: [components], stream }, []);
-          return z.string().parse(yield* collect(executed));
-        });
+                  output: notice,
+                  closeValue: notice,
+                },
+              }
+            : { state: "failed", partial: "", configuration: null, refusal: null },
+        );
+        expect(continued).toEqual(first);
       }
-      const live = new InMemoryStream();
-      const first = captured.parse(JSON.parse(yield* perform(live)));
-      const prefix = live
-        .snapshot()
-        .filter((event) => !(event.type === "close" && event.coroutineId === "root"));
-      const continued = captured.parse(JSON.parse(yield* perform(new InMemoryStream(prefix))));
-      expect(calls).toBe(1);
-      expect(first.status).toBe("completed");
-      expect(JSON.parse(first.output)).toMatchObject({
-        state: "failed",
-        partial: "",
-        configuration: null,
-      });
-      expect(continued).toEqual(first);
     });
 
     it("continues an unfinished REPL review to its held question, and a new action after Entry Stop reads the same hold", function* () {

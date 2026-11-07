@@ -261,7 +261,9 @@ writes `review-<sha>/selection.json` before any reviewer starts, binding the
 revision, policy, captured inputs, response schema and both identities. Fable is
 selected from the agent's advertised catalog, preferring its `fable` alias, so a
 catalog that offers neither sends no paid prompt. Astra starts only after Fable
-proved unavailable, was refused before its turn, or failed without review output
+proved unavailable, was refused before its turn, failed without review output, or
+failed saying nothing but its exact usage-limit notice under the matching provider
+runtime diagnostic,
 *and* its provider scope closed normally. Its records go to
 `review-<sha>/replacement/`, after `transition.json` names the Fable evidence it
 replaces; Fable's own files are never rewritten. A pass, a finding or a blocked
