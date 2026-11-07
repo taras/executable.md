@@ -3380,8 +3380,14 @@ function* executeDocument(
           if (failureState === undefined) {
             throw new Error("Durable root has no shared failure state");
           }
+          let publishedFailure: Error | undefined;
           const failedRelease = (error: Error): void => {
             const previous = failureState.failure;
+            // A guard's independently selected failure belongs to the durable
+            // owner even when Core cannot classify its Error type.
+            if (previous !== undefined && previous !== publishedFailure) {
+              return;
+            }
             const fatal =
               durabilityFailure(previous) ??
               durabilityFailure(error) ??
@@ -3402,6 +3408,7 @@ function* executeDocument(
                 cause: previous,
               });
             }
+            publishedFailure = failureState.failure;
           };
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
             documentWorkflow(

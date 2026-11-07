@@ -67,6 +67,7 @@ export interface CheckedFailures {
   /** Whether an authored `<PrintErrors>` region covers this work. */
   readonly authorized: boolean;
   readonly cancellation?: DurableCancellation;
+  readonly publicationFailure?: (error: Error) => void;
   readonly release?: { failure?: Error; readonly activate?: (error: Error) => void };
   phase?: Invocation;
   phaseProjection?: object;
@@ -80,7 +81,12 @@ export function checkedFailureLedger(
   cancellation?: DurableCancellation,
   failedRelease?: (error: Error) => void,
 ): CheckedFailures {
-  return { authorized: false, cancellation, release: { activate: failedRelease } };
+  return {
+    authorized: false,
+    cancellation,
+    publicationFailure: failedRelease,
+    release: { activate: failedRelease },
+  };
 }
 
 /**

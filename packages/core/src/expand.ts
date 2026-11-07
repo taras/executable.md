@@ -3386,6 +3386,9 @@ function retained(
       };
     } catch (error) {
       recordTerminalFailure(ledger, error);
+      if (terminalTryFailure(error) !== undefined) {
+        ledger?.publicationFailure?.(asFailure(error));
+      }
       throw error;
     }
   })();
@@ -4271,7 +4274,21 @@ function* expandFunctionComponent(
   // canonical core owns. A repository `Test`, or a package that registers the
   // name, is selected ahead of core's default: a different definition runs and
   // inherits the ordinary disposition.
-  const checkedFailures = definition.fn === CoreTest ? containedLedger(inherited) : inherited;
+  // Reporting a Test's joined teardown does not grant a durable child Close
+  // permission to discard that failure's terminal disposition.
+  const canonicalTest = definition.fn === CoreTest;
+  const checkedFailures: CheckedFailures | undefined = canonicalTest
+    ? {
+        ...containedLedger(inherited),
+        release: {
+          activate(error) {
+            if (durabilityFailure(error) !== undefined || filesFatalFailure(error) !== undefined) {
+              inherited?.publicationFailure?.(error);
+            }
+          },
+        },
+      }
+    : inherited;
   const asExpression = asExpressionViolation(name, expressions);
   if (asExpression !== undefined) {
     return [yield* raise({ type: "error", message: asExpression.message, source: name })];
@@ -4833,7 +4850,15 @@ function* expandFunctionComponent(
     }
     return produced;
   }
-  return yield* accepted();
+  try {
+    return yield* accepted();
+  } catch (error) {
+    if (canonicalTest) {
+      recordTerminalFailure(inherited, checkedFailures?.release?.failure);
+      recordTerminalFailure(inherited, error);
+    }
+    throw error;
+  }
 }
 
 /**
