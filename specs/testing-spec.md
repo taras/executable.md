@@ -81,6 +81,45 @@ recorded results are preserved. On live and partial runs nothing is
 restored: re-expansion records each result exactly once, in discovery
 order, with completed records replaying in place.
 
+### Progress and failure journals
+
+While `xmd test` runs, it writes a progress report to stderr, one line per
+change, so a pipe or a CI log shows where a run is before it finishes:
+
+```text
+[xmd test] start test "held" at suite.test.md:1:1
+[xmd test] start sh exec at suite.test.md:3:1
+[xmd test] cancelled sh exec at suite.test.md:3:1
+[xmd test] fail test "held" at suite.test.md:1:1 (timeout; interrupted sh exec at suite.test.md:3:1)
+[xmd test] journal saved: /work/.xmd/test-artifacts/2026-…-6f1c…/root-1.jsonl (root 1 suite.test.md)
+```
+
+A test's start is reported when its behavior begins and its outcome once its
+result is recorded, which follows the test's teardown — a component that
+expanded successfully is not a passing test. Between them each executable
+element and command block reports its start and how it settled, so a timeout
+names the operation it interrupted. Work inside a nested `<Execution>` child is
+labelled with that child, for example `child 1 ./child.md:`. The report names
+tests, elements, command languages and modifier words, locations and states. It
+never carries a captured value, a prop, command or prompt text, an assertion's
+operands or anything a document rendered, and the rendered report on stdout is
+unchanged by it.
+
+Each root document and each nested `run` child keeps its journal in memory.
+When that execution fails, times out or is cancelled, the command saves the
+recorded events as JSONL after the execution's assertions and teardown have
+finished, and reports the file's absolute path. A child's journal is saved when
+the child fails, even when the test binds that failure with `as`. A passing
+execution writes no file.
+
+Files go to a fresh directory for each invocation, beneath `XMD_TEST_ARTIFACTS`
+when it is set and `.xmd/test-artifacts` in the working directory otherwise.
+The directory is created only when a journal is saved. An explicit `--journal`
+names the root's journal file instead, and no automatic root copy is made. A
+saved file selects no authored journal, grants nothing to `<CollectJournal>`,
+and is not continuation input. A process killed without running its cleanup
+saves nothing.
+
 ### Registration, mode, and activation
 
 Three things are distinct, and only the last one makes a test run.
@@ -366,11 +405,16 @@ collection changes neither routing nor completion. When the child fails or is
 cancelled, the binding holds the partial prefix. Ordinary `<Let>` stays
 lexical — it captures the rendered content it wraps and never the child's stream.
 
-`<DiagnosticJournal>` selects an isolated diagnostic journal for a `run` child,
-equivalent to what `xmd run --journal` retains. Without it a run is transient and
-allocates no journal because output was displayed. `<CollectJournal as="…">`
-binds a read-only snapshot of a journal the host already selected; it grants no
-retention, and declaring it without a selected journal is malformed.
+`<DiagnosticJournal>` selects an isolated diagnostic journal for authored
+collection from a `run` child, equivalent to the process-output retention
+selected by `xmd run --journal`. Without it the child selects no authored
+diagnostic journal and retains no process channels because output was
+displayed. `<CollectJournal as="…">` binds a read-only snapshot of the authored
+journal the host selected; it grants no retention and is malformed without that
+selection. A trusted test host may separately save already-admitted execution
+events as host-private failure artifacts after joined cleanup. Those files
+confer no authored collection or continuation rights and do not change
+`retainProcessOutput`.
 
 A component declaration is recognized by the definition it resolves to, never
 by its name. A repository `CollectOutput.md` is chosen ahead of this package's,

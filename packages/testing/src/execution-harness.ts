@@ -1062,7 +1062,7 @@ export const HARNESS_REGISTRATIONS = [
       description:
         "Give a child execution a journal of its own. `<DiagnosticJournal />` goes " +
         "inside `<Execution>`, before the assertions, and is invalid anywhere else. " +
-        "Without it the child keeps no journal — with it, `<CollectJournal>` has one " +
+        "Without it the child keeps no journal you can collect — with it, `<CollectJournal>` has one " +
         "to read.",
       as: null,
       context: null,

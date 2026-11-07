@@ -100,6 +100,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
     runs-on: ubuntu-latest
+    # Where every `xmd test` this job launches saves a failed execution's
+    # journal, whichever directory it runs in (specs/testing-spec.md).
+    env:
+      XMD_TEST_ARTIFACTS: ${{ github.workspace }}/.xmd/test-artifacts
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -135,6 +139,17 @@ jobs:
       - name: Test
         run: deno run --allow-all --frozen scripts/runtime-tests.ts deno ${{ matrix.shard }}/22
 
+      # A failed or cancelled run leaves the journals of the executions that
+      # failed; a passing one uploads nothing.
+      - name: Upload failed test journals
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-journals-deno-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ env.XMD_TEST_ARTIFACTS }}
+          if-no-files-found: ignore
+          retention-days: "7"
+
   # The same command the release publishes with, minus --dry-run. Catches slow
   # types and unresolvable specifiers before they reach a tag.
   jsr:
@@ -160,6 +175,10 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
+    # Where every `xmd test` this job launches saves a failed execution's
+    # journal, whichever directory it runs in (specs/testing-spec.md).
+    env:
+      XMD_TEST_ARTIFACTS: ${{ github.workspace }}/.xmd/test-artifacts
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -204,6 +223,11 @@ jobs:
             --include smoke-test \
             --include packages/core/components \
             --raw
+
+      # Progress on stderr and a failed test's journal, from the binary rather
+      # than the source entrypoint the runtime shards launch.
+      - name: Test diagnostics from the compiled binary
+        run: deno test --allow-all --frozen scripts/tests/test-diagnostics-compiled.test.ts
 
       - name: Smoke test attached-service ping-pong with the compiled binary
         run: |
@@ -436,6 +460,17 @@ jobs:
             --include smoke-test/agent/components \
             --raw
 
+      # A failed or cancelled run leaves the journals of the executions that
+      # failed; a passing one uploads nothing.
+      - name: Upload failed test journals
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-journals-smoke-attempt-${{ github.run_attempt }}
+          path: ${{ env.XMD_TEST_ARTIFACTS }}
+          if-no-files-found: ignore
+          retention-days: "7"
+
   # The host document-filesystem contract, on every target a release ships.
   #
   # `test-deno`, `test-node`, and `test-bun` run the whole corpus on Linux x64
@@ -619,6 +654,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     runs-on: ubuntu-latest
+    # Where every `xmd test` this job launches saves a failed execution's
+    # journal, whichever directory it runs in (specs/testing-spec.md).
+    env:
+      XMD_TEST_ARTIFACTS: ${{ github.workspace }}/.xmd/test-artifacts
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -657,6 +696,17 @@ jobs:
       - name: Test
         run: pnpm test:node ${{ matrix.shard }}/18
 
+      # A failed or cancelled run leaves the journals of the executions that
+      # failed; a passing one uploads nothing.
+      - name: Upload failed test journals
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-journals-node-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ env.XMD_TEST_ARTIFACTS }}
+          if-no-files-found: ignore
+          retention-days: "7"
+
   test-bun:
     name: test-bun (${{ matrix.shard }}/10)
     strategy:
@@ -664,6 +714,10 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     runs-on: ubuntu-latest
+    # Where every `xmd test` this job launches saves a failed execution's
+    # journal, whichever directory it runs in (specs/testing-spec.md).
+    env:
+      XMD_TEST_ARTIFACTS: ${{ github.workspace }}/.xmd/test-artifacts
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -689,6 +743,17 @@ jobs:
       # exercises that relaunch.
       - name: Bun entrypoint smoke
         run: bun run packages/cli/src/bun.ts test smoke-test/test-agent/README.md --raw
+
+      # A failed or cancelled run leaves the journals of the executions that
+      # failed; a passing one uploads nothing.
+      - name: Upload failed test journals
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-journals-bun-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ env.XMD_TEST_ARTIFACTS }}
+          if-no-files-found: ignore
+          retention-days: "7"
 
   # The one required check. It installs nothing and uses no action, so the
   # result it reports is the jobs' and never the infrastructure's.

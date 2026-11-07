@@ -80,12 +80,21 @@ export function shellQuote(word: string): string {
 }
 
 /**
- * What a subprocess needs from this one: where to find executables, and where
- * each runtime caches what it downloads. `HOME` is deliberately absent — a run
+ * What a subprocess needs from this one: where to find executables, where
+ * each runtime caches what it downloads, and where a failed test saves its
+ * journal. `HOME` is deliberately absent — a run
  * that exercises user configuration supplies an isolated one — so a
  * developer's own configuration cannot reach a test.
  */
-const INHERITED = ["PATH", "DENO_DIR", "DENO_INSTALL_ROOT", "XDG_CACHE_HOME", "TMPDIR"];
+const INHERITED = [
+  "PATH",
+  "DENO_DIR",
+  "DENO_INSTALL_ROOT",
+  "XDG_CACHE_HOME",
+  "TMPDIR",
+  // Where a CI job collects the journals of failed `xmd test` runs.
+  "XMD_TEST_ARTIFACTS",
+];
 
 const DEFAULT_TIMEOUT = 60_000;
 

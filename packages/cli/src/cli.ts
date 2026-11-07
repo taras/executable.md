@@ -100,6 +100,7 @@ import {
   installTestingComponents,
   testHarnessInstallation,
   useTesting,
+  withFailureJournal,
 } from "@executablemd/testing";
 import {
   installTestAgentComponents,
@@ -162,6 +163,8 @@ import type { CommandPlugins } from "./plugin-host.ts";
 import { selectPlugins } from "./plugin-selection.ts";
 import type { PluginSelection } from "./plugin-selection.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
+import { useTestDiagnostics } from "./test-diagnostics.ts";
+import type { ExecutionDiagnostics, TestDiagnostics } from "./test-diagnostics.ts";
 import { testingExecutionHost } from "./testing-host.ts";
 import { ComponentModuleLoader } from "@executablemd/core/api";
 import type { ChildPlanDeclaration } from "./testing-host.ts";
@@ -1333,6 +1336,16 @@ export interface DocumentMode {
    * scope, which is the one place a second installation is correct.
    */
   plugins?: CommandPlugins;
+  /**
+   * The progress report and failure journals of the `xmd test` command running
+   * this document, captured before it runs.
+   *
+   * Handed to nested children through the trusted host settings, never through
+   * a Context or the request a document's middleware can read.
+   */
+  diagnostics?: TestDiagnostics;
+  /** What this one document's tests, elements and command blocks report to. */
+  observed?: ExecutionDiagnostics;
 }
 
 export type HostServiceInstaller = () => Operation<void>;
@@ -1520,6 +1533,9 @@ function* runDocument(
     yield* useTerminalOutput();
   }
 
+  if (mode.observed !== undefined) {
+    yield* mode.observed.observe();
+  }
   yield* installDocumentComponents(mode, verbose);
 
   // `xmd test` reports on stdout, so the JSON result contract is `xmd run`'s
@@ -1560,6 +1576,7 @@ function* runDocument(
   // that inherits no `API.Env` handler. What crosses is the argv, not the Api
   // that produced it.
   const testingHost = testingExecutionHost({
+    ...(mode.diagnostics === undefined ? {} : { diagnostics: mode.diagnostics }),
     componentModuleLoader: yield* ComponentModuleLoader.get(),
     includes: include,
     // The Plugin *values*, so an isolated child installs them again for itself
@@ -1796,17 +1813,23 @@ function* test(
       return;
     }
     announceSecretDetection(config.secretDetection);
-    const result = yield* runScopedDocument(
-      { ...config, root: { path } },
-      { testing: true, plugins },
-      installService,
-      // The outer `xmd test` command installs no operational repository
-      // provider. A test that needs the production behavior exercises an
-      // explicit `<Execution host="run">` child, which is an ordinary run and
-      // assembles the entrypoint's own bundled Plugin for itself.
+    const { value: result, delivery } = yield* withTestProgress((diagnostics) =>
+      runTestDocument(
+        { ...config, root: { path } },
+        { testing: true, plugins },
+        installService,
+        diagnostics,
+        // The outer `xmd test` command installs no operational repository
+        // provider. A test that needs the production behavior exercises an
+        // explicit `<Execution host="run">` child, which is an ordinary run and
+        // assembles the entrypoint's own bundled Plugin for itself.
+      ),
     );
     if (!result.ok) {
       reportFailure(result.error);
+      yield* exit(1);
+    } else if (!delivery.ok) {
+      reportFailure(delivery.error);
       yield* exit(1);
     }
     return;
@@ -1832,29 +1855,79 @@ function* test(
   // and a directory of fifty documents would otherwise say so fifty times.
   announceSecretDetection(config.secretDetection);
 
-  const failures: string[] = [];
-
-  for (const document of target.documents) {
-    process.stdout.write(`\n# ${document.relativePath}\n\n`);
-    const result = yield* runScopedDocument(
-      {
-        ...config,
-        root: { path: document.path },
-        include: componentSearchPath(document, target.root, config.include),
-      },
-      { testing: true, plugins },
-      installService,
-    );
-    if (!result.ok) {
-      reportFailure(result.error, document.relativePath);
-      failures.push(document.relativePath);
+  const { value: failures, delivery } = yield* withTestProgress(function* (diagnostics) {
+    const failed: string[] = [];
+    for (const document of target.documents) {
+      process.stdout.write(`\n# ${document.relativePath}\n\n`);
+      const result = yield* runTestDocument(
+        {
+          ...config,
+          root: { path: document.path },
+          include: componentSearchPath(document, target.root, config.include),
+        },
+        { testing: true, plugins },
+        installService,
+        diagnostics,
+      );
+      if (!result.ok) {
+        reportFailure(result.error, document.relativePath);
+        failed.push(document.relativePath);
+      }
     }
-  }
+    return failed;
+  });
 
   if (failures.length > 0) {
     console.error(`\n${failures.length} of ${target.documents.length} documents failed`);
     yield* exit(1);
+  } else if (!delivery.ok) {
+    reportFailure(delivery.error);
+    yield* exit(1);
   }
+}
+
+/**
+ * Run `body` with this command's test diagnostics, and report whether every
+ * progress line reached stderr.
+ *
+ * The diagnostics close — their last accepted line delivered — before this
+ * returns, so whatever the command reports next follows them.
+ */
+function* withTestProgress<T>(
+  body: (diagnostics: TestDiagnostics) => Operation<T>,
+): Operation<{ value: T; delivery: Result<void> }> {
+  let delivery: () => Result<void> = () => Ok(undefined);
+  const value = yield* scoped(function* () {
+    const diagnostics = yield* useTestDiagnostics(process.stderr);
+    delivery = diagnostics.delivery;
+    return yield* body(diagnostics);
+  });
+  return { value, delivery: delivery() };
+}
+
+/**
+ * Run one `xmd test` document under this command's diagnostics.
+ *
+ * Its journal stays in memory and is saved only when the document fails —
+ * including a failure its own teardown raised — or its run is cancelled. An
+ * explicit `--journal` already names the root's one file, so that run writes
+ * it exactly as before and no second copy is made.
+ */
+function runTestDocument(
+  config: DocumentConfig,
+  mode: DocumentMode,
+  installService: HostServiceInstaller,
+  diagnostics: TestDiagnostics,
+): Operation<Result<void>> {
+  const root = diagnostics.execution("root", rootSourcePath(config.root));
+  const observed: DocumentMode = { ...mode, diagnostics, observed: root };
+  if (config.journal !== undefined) {
+    return runScopedDocument(config, observed, installService);
+  }
+  return withFailureJournal(
+    root.journal((result: Result<void>) => !result.ok),
+    (stream) => runScopedDocument({ ...config, stream }, observed, installService),
+  );
 }
 
 /** A file document reference read as one, or why it cannot be read. */

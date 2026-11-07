@@ -6,6 +6,8 @@ node_modules/
 .reviews/analyze-report.md
 .reviews/analyze-run.json
 .xmd-eval/
+# xmd test failure journals (specs/testing-spec.md)
+.xmd/test-artifacts/
 dist/
 .DS_Store
 
