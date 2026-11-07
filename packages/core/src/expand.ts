@@ -19,7 +19,17 @@ import type { ProtectedInput } from "./secrets/inputs.ts";
 import type { FilesystemExpansion } from "./filesystem-placement.ts";
 import { invokeFixedFilesystem, fixedFilesystemByFunction } from "./components/fixed-filesystem.ts";
 
-import { all, createContext, ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
+import {
+  all,
+  createContext,
+  ensure,
+  Err,
+  Ok,
+  scoped,
+  spawn as spawnTask,
+  useScope,
+  withResolvers,
+} from "effection";
 import type { Operation, Result, Stream } from "effection";
 import type {
   FunctionComponent,
@@ -53,6 +63,8 @@ import {
   ifConditionViolation,
   ifPropsViolation,
   ifStructure,
+  tryStructure,
+  strayTryBranchMessage,
   letBindingName,
   letViolations,
   loopBound,
@@ -95,6 +107,7 @@ import {
   durabilityFailure,
   ErrorMode,
   fatalCause,
+  firstCause,
   filesFatalFailure,
   projectedContentFailure,
   SegmentCauses,
@@ -128,7 +141,7 @@ import type { IdentityDomain } from "./invocation-identity.ts";
 import { protectedContentLease } from "./protected-content.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import { useNarrowedSyntax } from "./syntax-api.ts";
-import { withInvocation } from "./invocation.ts";
+import { InvocationTeardownError, withInvocation } from "./invocation.ts";
 import { observeExpansion } from "./component-expansion.ts";
 import type { ObservedExpansion } from "./component-expansion.ts";
 import type { Invocation } from "./invocation.ts";
@@ -494,6 +507,58 @@ interface ProjectionFrame {
   hideSet: Set<string>;
 }
 
+const PROJECTION_OWNER = {};
+
+type PhaseProjection = (
+  ...args: [...Parameters<ProjectionHandle["expandClaimed"]>, CheckedFailures?]
+) => Operation<Segment[]>;
+
+class CanonicalProjection implements ProjectionHandle {
+  readonly #handle: ProjectionHandle;
+  readonly #expand: PhaseProjection;
+
+  constructor(owner: object, handle: ProjectionHandle, expand: PhaseProjection) {
+    if (owner !== PROJECTION_OWNER) {
+      throw new Error("Only canonical expansion creates a projection owner.");
+    }
+    this.#handle = handle;
+    this.#expand = expand;
+  }
+
+  readonly claim = (element: ComponentElement): ComponentElement => this.#handle.claim(element);
+  readonly claims = (element: ComponentElement): boolean => this.#handle.claims(element);
+  readonly expandClaimed = (
+    element: ComponentElement,
+    owner: Segment[],
+    elementPath: string,
+    current?: OutputFrame,
+    filesystem?: FilesystemExpansion,
+  ): Operation<Segment[]> =>
+    this.#handle.expandClaimed(element, owner, elementPath, current, filesystem);
+  readonly project = (...args: Parameters<ProjectionHandle["project"]>): Operation<Segment[]> =>
+    this.#handle.project(...args);
+  readonly projectToString = (
+    ...args: Parameters<ProjectionHandle["projectToString"]>
+  ): Operation<string> => this.#handle.projectToString(...args);
+  readonly tryProject = (
+    ...args: Parameters<ProjectionHandle["tryProject"]>
+  ): ReturnType<ProjectionHandle["tryProject"]> => this.#handle.tryProject(...args);
+
+  expandPhase(
+    owner: object,
+    ledger: CheckedFailures | undefined,
+    ...args: Parameters<ProjectionHandle["expandClaimed"]>
+  ): Operation<Segment[]> {
+    if (owner !== PROJECTION_OWNER) {
+      throw new Error("Only canonical expansion supplies a projection phase.");
+    }
+    return this.#expand(...args, ledger);
+  }
+}
+
+// A replaceable projection receives no execution-private recovery or lifetime state.
+const expandProjectionPhase = CanonicalProjection.prototype.expandPhase;
+
 /**
  * Build the handle one invocation publishes (spec §6.3).
  *
@@ -531,6 +596,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     return request.kind === "markdown" ? state.authored : state.caller;
   }
 
+  let publishedHandle: ProjectionHandle;
   const claimed = new WeakSet<ComponentElement>();
 
   /**
@@ -583,6 +649,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     path: string;
     outputFrame?: OutputFrame;
     filesystem: FilesystemExpansion | undefined;
+    checkedFailures?: CheckedFailures;
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
       // Every projection this invocation performs funnels through here —
@@ -604,7 +671,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         write: yield* Permissions.operations.files("write"),
         absolute: yield* Permissions.operations.files("absolute"),
       };
-      const contentScope = yield* state.invocation.useContentScope();
+      const contentScope = yield* (
+        options.checkedFailures?.phase ?? state.invocation
+      ).useContentScope();
       // The projection's failure travels back to the caller rather than into
       // the content scope. Raising it there would poison the scope, and the
       // invocation's teardown would then re-report it as a teardown error,
@@ -652,7 +721,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             rendered,
             options.path,
             0,
-            state.checkedFailures,
+            options.checkedFailures ?? state.checkedFailures,
             state.environment,
             state.imports,
             options.returnFrame,
@@ -726,7 +795,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     // The enclosing handle answers <Content /> written inside projected
     // content: it belongs to the caller's invocation, not to this one.
     // Dynamic markdown is the component's own, so it keeps this handle.
-    const inner = request.kind === "markdown" ? handle : state.enclosing;
+    const inner = request.kind === "markdown" ? publishedHandle : state.enclosing;
 
     // Raised for the whole projection, as in `runInContentScope`: everything
     // expanded below belongs to the content, so the invocation that owns it
@@ -823,7 +892,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     }
   }
 
-  const handle: ProjectionHandle = {
+  const handle = {
     claim(element: ComponentElement): ComponentElement {
       claimed.add(element);
       return element;
@@ -837,6 +906,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       elementPath: string,
       current?: OutputFrame,
       filesystem?: FilesystemExpansion,
+      checkedFailures?: CheckedFailures,
     ): Operation<Segment[]> {
       // Slots were resolved during substitution. The projected content keeps
       // the caller frame; only the resource scope moves.
@@ -846,6 +916,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       return yield* runInContentScope({
         segments: element.children,
         filesystem,
+        checkedFailures,
         mode,
         env: layerProjectedContentEnvironment(state.caller.env, state.authored.env),
         meta: state.caller.meta,
@@ -881,8 +952,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       }
       return renderSegments(segments);
     },
-  };
-  return handle;
+  } satisfies ProjectionHandle;
+  publishedHandle = new CanonicalProjection(PROJECTION_OWNER, handle, handle.expandClaimed);
+  return publishedHandle;
 }
 
 function validateRenderOverride(override: unknown): Record<string, unknown> | undefined {
@@ -1147,6 +1219,9 @@ function* expandListSegments(
   for (const [index, segment] of segments.entries()) {
     // A checked failure the document did not authorize ends the work: whatever
     // enclosing boundary printed it, nothing after it in any frame begins.
+    if (checkedFailures?.release?.failure !== undefined) {
+      throw checkedFailures.release.failure;
+    }
     if (checkedFailures?.failure !== undefined) {
       break;
     }
@@ -1200,7 +1275,21 @@ function* expandListSegments(
           // the ambient error mode, so they are appended as they are.
           const projection = yield* ActiveProjection.get();
           if (projection && projection.claims(segment)) {
-            yield* projection.expandClaimed(segment, result, elementPath, outputFrame, filesystem);
+            yield* projection instanceof CanonicalProjection
+              ? expandProjectionPhase.call(
+                  projection,
+                  PROJECTION_OWNER,
+                  checkedFailures?.phase === undefined ||
+                    checkedFailures.phaseProjection !== projection
+                    ? undefined
+                    : checkedFailures,
+                  segment,
+                  result,
+                  elementPath,
+                  outputFrame,
+                  filesystem,
+                )
+              : projection.expandClaimed(segment, result, elementPath, outputFrame, filesystem);
             break;
           }
         }
@@ -1338,6 +1427,35 @@ function* expandListSegments(
             returnBody,
             filesystem,
             outputFrame,
+          );
+          break;
+        }
+
+        if (segment.name === "Try") {
+          yield* expandTry(
+            segment,
+            parentMeta,
+            parentProps,
+            hideSet,
+            counter,
+            result,
+            elementPath,
+            checkedFailures,
+            environment,
+            imports,
+            returnBody,
+            filesystem,
+            outputFrame,
+          );
+          break;
+        }
+        if (segment.name === "Catch" || segment.name === "Finally") {
+          result.push(
+            yield* raise({
+              type: "error",
+              source: segment.name,
+              message: positioned(strayTryBranchMessage(segment.name), segment),
+            }),
           );
           break;
         }
@@ -1810,7 +1928,7 @@ function* expandListSegments(
 
     // A `<Break>` anywhere below this segment ends the iteration here: what the
     // list already produced stands, and nothing after it expands.
-    if (loop?.broken) {
+    if (loop?.broken && loop !== checkedFailures?.ignoredBreak) {
       break;
     }
   }
@@ -2392,6 +2510,251 @@ function* expandIf(
   }
 }
 
+function recordFailedRelease(ledger: CheckedFailures | undefined, error: unknown): void {
+  const release = ledger?.release;
+  if (
+    release === undefined ||
+    firstCause(error, (cause) => (cause instanceof InvocationTeardownError ? cause : undefined)) ===
+      undefined
+  ) {
+    return;
+  }
+  const current = asFailure(error);
+  const previous = release.failure;
+  if (
+    previous === undefined ||
+    previous === current ||
+    firstCause(current, (cause) => (cause === previous ? previous : undefined)) !== undefined
+  ) {
+    release.failure = current;
+  } else if (
+    firstCause(previous, (cause) => (cause === current ? current : undefined)) === undefined
+  ) {
+    release.failure = new AggregateError([previous, current], previous.message, {
+      cause: previous,
+    });
+  }
+}
+
+function terminalTryFailure(error: unknown): Error | undefined {
+  return (
+    durabilityFailure(error) ??
+    filesFatalFailure(error) ??
+    firstCause(error, (cause) =>
+      cause instanceof InvocationTeardownError ? asFailure(error) : undefined,
+    )
+  );
+}
+
+function* expandTry(
+  segment: ComponentElement,
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
+  owner: Segment[],
+  path: string,
+  inherited: CheckedFailures | undefined,
+  environment: ExecutionEnvironment | undefined,
+  imports: ComponentImportTerminal | undefined,
+  returnBody: ReturnBody | undefined,
+  filesystem: FilesystemExpansion | undefined,
+  outputFrame: OutputFrame | undefined,
+): Operation<void> {
+  yield* structural(segment, path, function* () {
+    const structure = tryStructure(segment);
+    if (structure.violations.length > 0) {
+      for (const violation of structure.violations) {
+        owner.push(yield* raise(structuralErrorSegment(violation, violation.element ?? segment)));
+      }
+      return;
+    }
+    const surrounding = yield* env;
+    const mode = (yield* ErrorMode.get()) ?? "print";
+    const loop = yield* ActiveLoop.get();
+    const release = inherited?.release ?? {};
+    const attempt: CheckedFailures = {
+      ...inherited,
+      authorized: false,
+      failure: undefined,
+      release,
+    };
+    let pending: Error | undefined;
+    let finished = false;
+    let finalizerEntered = false;
+    let finalizerCompleted = false;
+    const unchecked: ErrorSegment[] = [];
+
+    function* phase(
+      children: Segment[],
+      element: ComponentElement | undefined,
+      ledger: CheckedFailures,
+      local: EvalEnv | undefined,
+      errorMode: ErrorMode,
+    ): Operation<void> {
+      const phasePath =
+        element === undefined
+          ? path
+          : extendPath(path, elementFrame(element.name, elementSite(element.position, 0)));
+      const expand = function* (): Operation<void> {
+        yield* withInvocation(
+          function* (invocation) {
+            yield* provideEvalScope(invocation.evalScope);
+            yield* provideRetain(invocation.evalScope);
+            if (local !== undefined) {
+              yield* provideEnv(local);
+            }
+            yield* ErrorMode.set(errorMode);
+            ledger.phase = invocation;
+            ledger.phaseProjection = yield* ActiveProjection.get();
+            yield* expandSegmentsWithin(
+              children,
+              parentMeta,
+              parentProps,
+              hideSet,
+              counter,
+              owner,
+              phasePath,
+              0,
+              ledger,
+              environment,
+              imports,
+              returnBody,
+              filesystem,
+              outputFrame,
+            );
+            if (ledger.release?.failure !== undefined) {
+              throw ledger.release.failure;
+            }
+            yield* refuseCheckedFailure(ledger);
+          },
+          undefined,
+          undefined,
+          (error) => recordFailedRelease(ledger, error),
+        );
+      };
+      if (element === undefined) {
+        yield* expand();
+      } else {
+        yield* structural(element, phasePath, expand);
+      }
+    }
+
+    function* finalize(): Operation<void> {
+      if (structure.finalizer === undefined) {
+        return;
+      }
+      const ledger: CheckedFailures = {
+        ...containedLedger(inherited),
+        release,
+        ignoredBreak: loop?.broken ? loop : inherited?.ignoredBreak,
+      };
+      try {
+        yield* phase(structure.finalizer.children, structure.finalizer, ledger, surrounding, mode);
+      } catch (error) {
+        const later = asFailure(error);
+        pending =
+          pending === undefined
+            ? later
+            : new AggregateError([pending, later], pending.message, { cause: pending });
+      }
+      if (ledger.failure !== undefined) {
+        unchecked.push(ledger.failure);
+      }
+      finalizerCompleted = true;
+    }
+
+    function settledFailure(): Error | undefined {
+      const teardown = release.failure;
+      return pending === undefined
+        ? teardown
+        : teardown === undefined || teardown === pending
+          ? pending
+          : new AggregateError([pending, teardown], pending.message, { cause: pending });
+    }
+
+    yield* scoped(function* () {
+      yield* ensure(function* () {
+        const terminal = terminalTryFailure(settledFailure());
+        if (terminal !== undefined) {
+          throw terminal;
+        }
+        if (!finished && inherited?.cancellation?.() !== "terminal") {
+          return;
+        }
+        if (!finalizerEntered && structure.finalizer !== undefined) {
+          finalizerEntered = true;
+          yield* finalize();
+        }
+        if (finalizerEntered && !finalizerCompleted && inherited?.cancellation?.() !== "terminal") {
+          return;
+        }
+        const fatal = terminalTryFailure(settledFailure());
+        if (fatal !== undefined) {
+          throw fatal;
+        }
+        if (inherited !== undefined && !inherited.authorized) {
+          inherited.failure ??= unchecked[0];
+        }
+        if (pending !== undefined) {
+          throw pending;
+        }
+      });
+      try {
+        yield* phase(
+          structure.body,
+          undefined,
+          attempt,
+          surrounding,
+          mode === "print" ? "output" : mode,
+        );
+      } catch (error) {
+        pending = asFailure(error);
+      }
+      if (release.failure !== undefined || terminalTryFailure(pending) !== undefined) {
+        finished = true;
+        return;
+      }
+      if (pending !== undefined && structure.catcher !== undefined) {
+        const local = spawnEnvironment(surrounding);
+        if (structure.binding !== undefined) {
+          local.values[structure.binding] = pending;
+        }
+        pending = undefined;
+        const ledger: CheckedFailures = { ...containedLedger(inherited), release };
+        try {
+          yield* phase(structure.catcher.children, structure.catcher, ledger, local, mode);
+        } catch (error) {
+          pending = asFailure(error);
+        }
+        if (ledger.failure !== undefined) {
+          unchecked.push(ledger.failure);
+        }
+      } else if (attempt.failure !== undefined) {
+        unchecked.push(attempt.failure);
+      }
+      finished = true;
+      if (structure.finalizer !== undefined) {
+        yield* scoped(function* () {
+          const begin = withResolvers<void>();
+          const task = yield* spawnTask(function* () {
+            yield* begin.operation;
+            yield* finalize();
+          });
+          yield* ensure(function* () {
+            if (inherited?.cancellation?.() === "terminal") {
+              yield* task;
+            }
+          });
+          finalizerEntered = true;
+          begin.resolve();
+          yield* task;
+        });
+      }
+    });
+  });
+}
+
 function switchError(segment: ComponentElement, message: string): ErrorSegment {
   return { type: "error", message: positioned(message, segment), source: "Switch" };
 }
@@ -2806,6 +3169,7 @@ function spawnChild(
   imports: ComponentImportTerminal | undefined,
   filesystem: FilesystemExpansion | undefined = undefined,
   outputFrame: OutputFrame | undefined = undefined,
+  cancellation?: () => "terminal" | "resumable",
 ): Operation<SpawnRendering> {
   return scoped(function* () {
     const childFrame =
@@ -2826,7 +3190,7 @@ function spawnChild(
     // A fresh record with the inherited recovery, like a contained invocation's:
     // a checked command failure inside one child fails that child, and a
     // sibling's walk is not stopped by a ledger it does not own.
-    const ledger = containedLedger(inherited);
+    const ledger = { ...containedLedger(inherited), cancellation };
     // Each child the `<All>` actually runs is its own element, observed on its
     // own: real siblings reach their phases independently of each other.
     yield* structural(spawn.element, childPath, () =>
@@ -2931,7 +3295,7 @@ function* expandAll(
     // others saw.
     const incoming = yield* env;
     const children = structure.spawns.map(
-      (spawn) => () =>
+      (spawn) => (cancellation: () => "terminal" | "resumable") =>
         spawnChild(
           spawn,
           incoming,
@@ -2944,15 +3308,36 @@ function* expandAll(
           imports,
           filesystem,
           outputFrame,
+          cancellation,
         ),
     );
 
     const scope = yield* useScope();
+    const enclosing = checkedFailures?.cancellation ?? (() => "resumable");
+    let abandoned = false;
+    const childCancellation: () => "terminal" | "resumable" = () =>
+      abandoned ? "terminal" : enclosing();
     const rendered =
       scope.get(DurableContext) === undefined
-        ? yield* all(children.map((child) => child()))
+        ? yield* all(
+            children.map((child) =>
+              (function* () {
+                try {
+                  return yield* child(childCancellation);
+                } catch (error) {
+                  abandoned = true;
+                  throw error;
+                }
+              })(),
+            ),
+          )
         : (yield* durableAll(
-            children.map((child) => (): Workflow<Json> => ephemeral(retained(child()))),
+            children.map(
+              (child) =>
+                (cancellation): Workflow<Json> =>
+                  ephemeral(retained(child(cancellation))),
+            ),
+            { cancellation: enclosing },
           )).map(readEmissions);
 
     for (const child of rendered) {
@@ -3098,7 +3483,7 @@ function* expandPrintErrors(
       0,
       // The region grants recovery for the work it causes, and a failure it
       // recovers is not one the run suffered.
-      recoveringLedger(),
+      recoveringLedger(checkedFailures),
       environment,
       imports,
       returnBody,
@@ -3561,32 +3946,38 @@ function* expandComponent(
       let value: unknown;
       try {
         value = yield* SourceOwner.with(importedOwner, () =>
-          withInvocation(function* (invocation) {
-            yield* installInvocation(invocation);
-            return yield* expandValueBody(
-              name,
-              returns,
-              definition.bodySegments,
-              children,
-              definition.meta,
-              validatedProps,
-              newHideSet,
-              counter,
-              callerEvalEnv ?? undefined,
-              claimProjection,
-              path,
-              checkedFailures,
-              bodyEnvironment,
-              imports,
-              returnBody,
-              filesystem,
-              outputFrame,
-            );
-          }, observed.settled),
+          withInvocation(
+            function* (invocation) {
+              yield* installInvocation(invocation);
+              return yield* expandValueBody(
+                name,
+                returns,
+                definition.bodySegments,
+                children,
+                definition.meta,
+                validatedProps,
+                newHideSet,
+                counter,
+                callerEvalEnv ?? undefined,
+                claimProjection,
+                path,
+                checkedFailures,
+                bodyEnvironment,
+                imports,
+                returnBody,
+                filesystem,
+                outputFrame,
+              );
+            },
+            observed.settled,
+            undefined,
+            (error) => recordFailedRelease(checkedFailures, error),
+          ),
         );
       } catch (error) {
         // Body fail-fast propagates unchanged; a return-value failure is the
         // component's own printed error and follows the caller's error mode.
+        recordFailedRelease(checkedFailures, error);
         const fatal = fatalCause(error);
         if (fatal !== undefined) {
           throw fatal;
@@ -3615,27 +4006,32 @@ function* expandComponent(
     // from what the caller had already produced into the same array.
     const renderedFrom = bodyOwner?.length ?? 0;
     const expanded = yield* SourceOwner.with(importedOwner, () =>
-      withInvocation(function* (invocation) {
-        yield* installInvocation(invocation);
-        return yield* expandBody(
-          definition.bodySegments,
-          children,
-          definition.meta,
-          validatedProps,
-          newHideSet,
-          counter,
-          callerEvalEnv ?? undefined,
-          claimProjection,
-          bodyOwner,
-          path,
-          checkedFailures,
-          bodyEnvironment,
-          imports,
-          returnBody,
-          filesystem,
-          outputFrame,
-        );
-      }, observed.settled),
+      withInvocation(
+        function* (invocation) {
+          yield* installInvocation(invocation);
+          return yield* expandBody(
+            definition.bodySegments,
+            children,
+            definition.meta,
+            validatedProps,
+            newHideSet,
+            counter,
+            callerEvalEnv ?? undefined,
+            claimProjection,
+            bodyOwner,
+            path,
+            checkedFailures,
+            bodyEnvironment,
+            imports,
+            returnBody,
+            filesystem,
+            outputFrame,
+          );
+        },
+        observed.settled,
+        undefined,
+        (error) => recordFailedRelease(checkedFailures, error),
+      ),
     );
 
     markSelection(
@@ -4251,6 +4647,7 @@ function* expandFunctionComponent(
         },
         observed.settled,
         invocationObservation,
+        (error) => recordFailedRelease(checkedFailures, error),
       );
       if (asBinding) {
         const parentEnv = yield* env;
@@ -4284,6 +4681,7 @@ function* expandFunctionComponent(
       // invocation, so what is handled here accounts for the body and its
       // teardown together.
 
+      recordFailedRelease(checkedFailures, error);
       const fatal = fatalCause(error);
 
       // A refused activation decision is not a failure any boundary may account

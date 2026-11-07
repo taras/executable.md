@@ -728,6 +728,89 @@ partial replay rebuilds the selection through ordinary expansion while completed
 effects in the chosen branch replay from their own records, and a completed
 document replay reuses the retained result without expanding anything.
 
+### Authored Try recovery and completion
+
+Use `<Try>` to stop an attempted region at an ordinary failure, recover with
+`<Catch>`, and finish with `<Finally>`:
+
+```xmd
+<Try>
+  <Fail message="Review is unavailable." />
+  <Catch as="error">Review failed: {error.message}</Catch>
+  <Finally>Review lookup finished.</Finally>
+</Try>
+```
+
+All three forms are paired. Try requires Catch, Finally, or both, in that order
+as direct children after the attempted body. Only whitespace follows or separates
+these branches. Try and Finally accept no props; Catch accepts only optional
+literal `as`, validated as an ordinary binding name. Shared pure source analysis
+checks every branch before attempted effects or prop evaluation. Expansion,
+body validation, document validation and generated admission use the same rule.
+
+The attempted body and Finally use the surrounding binding environment. Catch
+gets a fresh local environment containing completed body bindings and its optional
+Error binding, by reference. Catch locals do not escape, and Finally cannot read
+them. Failed operations bind nothing. Existing Error and Prompt reconstruction
+continues to define replayed detail; recovery adds no error snapshot format.
+
+Try preserves inherited throw mode and otherwise stops attempted work at failure,
+including checked nonzero exec under an enclosing printing region. An explicit
+Catch can recover ordinary failures in documentation and value bodies. Nested
+PrintErrors retains its own permitted recovery; an already printed error is not
+caught again. Catch and Finally inherit the surrounding recovery rules. Without
+Catch, the pending failure propagates after Finally. An unauthorized checked
+failure stays authoritative even if a component swallows its content failure;
+only the finalizer may run before that failure leaves Try.
+
+Each phase uses ordered invocation settlement: projected content, body and retained
+eval resources join before the next phase. Actual failed release is retained before
+printing or Prompt normalization can discard it. Failed owning teardown permits
+neither Catch, replacement work nor an unentered Finally. Prompt's existing live
+publication coordinator activates its infrastructure failure path before serializing
+failed release; no recoverable failed-turn record is published. Initiating and
+teardown failures remain separate. Through the complete combined causes, durability
+then Files wins by identity. Otherwise the first unhandled ordinary failure stays
+primary, with a later finalizer failure alongside it. Successful Catch retires the
+handled body failure; a later finalizer failure becomes the new failure.
+
+Output discovery reads all source regions, while only entered declarations
+contribute. Entitled prefix remains; captures, value/documentation bodies and
+string projections keep their private buffers. Source selection and ordinary
+transformations retain their owners. Return selects without ending execution or
+resetting its reservation; Break retains its lexical and projected invocation
+owner. Finally runs before a pending loop exit and cannot erase a pending failure
+with successful control flow. Try and entered Catch/Finally have distinct stable
+expansion observations; skipped branches have none. Observation grants no recovery.
+
+The exact accepted HostExecution Stop selects terminal cancellation before halt.
+Try joins interrupted phase cleanup, skips Catch, runs and joins Finally once while
+lexical services and the journal remain live, then permits cancelled Close. Stop
+during an entered finalizer joins that entry without restarting it; indefinite
+finalizer work can delay Stop indefinitely. An enclosing resumable Exit or workflow
+interruption instead joins physical resources and leaves an unentered finalizer
+pending. An entered forward-path finalizer can unwind resumably; acknowledged
+effects restore on continuation and only its frontier runs live. In-memory pause
+and UI detach alone unwind nothing. All sibling abandonment is terminal; the
+combinator's effective read, passed directly into child expansion, selects both
+Finally and child Close. A Context or an error name selects neither outcome.
+
+Try adds no durable wrapper or event family. Ordinary inline effects restore
+completed work; complete root replay expands no body, provider or finalizer. A
+terminal append already begun wins over a refused Stop. If authored cleanup was
+acknowledged but cancelled Close was not, preserve that prefix and fail closed on
+incompatible continuation before live body/reviewer work. Do not invent a Close,
+restart acknowledged cleanup or recover unfinished Stop through a new intent
+record. Unacknowledged external work receives no exactly-once guarantee. Durability
+fail-stop prevents new entry or append during cleanup while physical destructors
+still join; cleanup success grants no retry or resend.
+
+Generated preflight walks attempted, Catch and Finally source before effects.
+Catch names are local to its branch. Structural recovery grants no component,
+effect or expression permission: calls and property access stay refused by the
+generated data grammar. Preview treats text under Try as conditional, and Syntax
+inspection describes these forms without running them.
+
 ### Concurrent spawned children
 
 `<All>` and `<Spawn>` are the engine's own syntax, not components, so core owns
@@ -795,7 +878,13 @@ or completion time.
 `<All>`, cancels every unfinished sibling and does not return until all of them
 have finished tearing down. No private buffer is emitted, records acknowledged
 before the failure stay durable, and interrupted work is never recorded as
-complete. Cancelling the parent takes the same ownership path, and no task,
+complete. Enclosing resumable unwind takes the same physical containment path but leaves
+still-pending children without Close. Terminal sibling abandonment and exact Stop
+finalize them and retain cancelled Close after cleanup. Core supplies its private
+cancellation read to durableAll and forwards each effective child read into nested
+expansion. Low-level unenrolled combinators retain terminal-on-halt behavior. An
+All with a retained cancelled direct child and no retained failed direct sibling
+refuses before live child work; terminal children are never reopened. No task,
 subscription, retained resource or buffer survives its spawn. No scheduler, no
 new record family and no document-visible concurrency control is introduced.
 
@@ -1238,13 +1327,16 @@ how a failure of their own is reported; whether a command that exited nonzero
 failed the run is not theirs to decide. A run that suffered an unauthorized
 checked failure records it in an execution-owned ledger passed by value through
 core's own calls, so an enclosing boundary that prints and returns cannot make
-the run succeed, and no later work in any frame begins. `<File>` and `<TempDir>`
+the run succeed. No later work begins except an entitled Finally phase before
+that failure propagates. `<File>` and `<TempDir>`
 are covered by that rule like any other printing boundary: their own cleanup and
 their own report still happen, and neither writes, replaces, or continues.
 
 `<PrintErrors>` *recovers*: a region that says the failures inside it are
-printed and the document continues. It is the only thing that says it. A root
-asks for nothing, so a root gets the failure.
+printed and the document continues. An authored Try with Catch instead stops its
+attempted region and explicitly handles its ordinary checked failure after clean
+settlement. Try without Catch permits only Finally before propagating the pending
+failure. A root asks for neither recovery, so a root gets the failure.
 
 One other construct *contains* a failure instead, which is a different thing.
 An invocation of `<Test>` keeps its checked failures to itself: the failure
@@ -4534,7 +4626,7 @@ Bindings and structural constructs are engine-owned language syntax and require
 no profile entry. Every built-in construct is available inside a generated
 fragment with its ordinary semantics — `Content`, `Output`, `Return`, `Let`,
 `Each`, `If`, `Else`, `Switch`, `Case`, `Loop`, `Break`, `All`, `Spawn`,
-`PrintErrors`, `Answers` and `Answer` — decided by the same source rules ordinary validation
+`PrintErrors`, `Answers`, `Answer`, `Try`, `Catch` and `Finally` — decided by the same source rules ordinary validation
 and expansion read, so a construct means one thing whether a person or an Agent
 wrote it. Preflight dispatches a reserved name to those rules before the
 admitted table is consulted, which is why a construct is never reported as a
@@ -4730,7 +4822,8 @@ Plan owns one fixed recovery policy: after the child's structured teardown it
 turns the one narrow, typed generated-request refusal into retry context and rethrows
 every other failure unchanged. That policy is Plan's alone. It is not another
 evaluator, another document root, a special Evaluate result, or a new public
-XMD component, and it adds no public `<Try>`, `<Catch>` or `<Finally>` surface.
+XMD component. That Plan feature introduced no public recovery syntax; Core now
+supplies generic Try/Catch/Finally independently of this narrow Plan policy.
 
 One Plan invocation permits eight information requests total across drafting,
 repair and revision. Successes and safe refusals each spend one. They neither
@@ -4865,6 +4958,10 @@ host contributions and arming their revocation, before provider/installation
 callbacks, documentation capture and public execution policy. Setup receives no
 installation array, request, entry identifier or receipt and creates no second
 execution owner.
+
+An exact terminal Stop also joins authored Finally before its cancelled Close.
+Resumable enclosing unwind instead leaves unentered logical finalizers pending;
+physical cleanup joins in both cases.
 
 A host may also **stop** the execution it owns. `HostExecution.stop()` is the
 same seam's opt-in: it answers for the stop and the join, never for the
@@ -7076,6 +7173,13 @@ Neither reading nor continuation rewrites earlier records to add ownership.
 Generated-fragment attribution keeps its existing admission identity.
 
 ### Sequential entries over one physical journal
+
+Entry Stop finalizes and joins authored Finally before cancelled Close. Exit
+leaves unentered logical finalizers pending while physical resources join. A
+finalizer interrupted on the ordinary forward path restores acknowledged effects
+on continuation. Cleanup acknowledged without a terminal Close may leave a prefix
+that refuses continuation; unfinished history promises no repair or safe restart.
+
 
 One execution is one append-only stream, and entries are ranges of it. A segment
 begins at the root `import_component` admission and ends at that root's `Close`;
@@ -9902,6 +10006,7 @@ Status is measured against main.
 | generated mutation proposals | Admits filesystem change proposals through the host's generated selection and ordinary component transactions. [Invariant](#agent-permissions-and-generated-xmd); [Interface and evidence](specs/workflow-workspace-spec.md#mutation-proposal-admission). | Built on #369/#567, with persistent directory creation added by #643; legacy Dir grants refuse, and Git/process/credential/external-write classes remain excluded. |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield [Invariant](#local-workspace-topology). | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker [Interface and evidence](specs/workflow-workspace-spec.md#104-worker-shell). | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
+| `<Try>` / `<Catch>` / `<Finally>` | Stops ordinary attempted failure, joins cleanup before recovery and preserves terminal Stop versus resumable unwind. [Contract](#authored-try-recovery-and-completion). | Built in Core. |
 | `<Retry max timeout>` | retry a region until it completes [Invariant](#1-middleware-wraps-the-work). | defined, unbuilt |
 | `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it [Invariant](#durable-suspension). | built on the #367 stack |
 | `xmd workflow answer <run-id> <suspension-id> <json>` | retains one schema-validated value for one retained wait, taking no executor lock and changing no run state [Invariant](#typed-answer-delivery); [Interface and evidence](specs/workflow-workspace-spec.md#typed-answer-delivery). | built by #300 |

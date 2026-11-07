@@ -2244,11 +2244,12 @@ function* documentWorkflow(
    */
   computed: ComputedBindings,
   filesystem?: FilesystemExpansion,
+  cancellation?: () => "terminal" | "resumable",
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
   // document, component, or printing boundary can clear it (#441).
-  const checkedFailures = checkedFailureLedger();
+  const checkedFailures = checkedFailureLedger(cancellation);
   // Import root — same pipeline as any component. The provider middleware
   // installed by execute maps "__root__" to the run's root document source.
   // The ephemeral() wrapper bridges typing only — the import inside remains a
@@ -3035,6 +3036,7 @@ function* executeDocument(
    * actually settled.
    */
   let rootControl: DurableRootControl | undefined;
+  let terminalStop = false;
 
   // Created before the run it belongs to, because the handle is published
   // before the document workflow has installed anything: a trusted host holds
@@ -3377,6 +3379,7 @@ function* executeDocument(
               roots,
               computed,
               filesystem,
+              () => (terminalStop ? "terminal" : "resumable"),
             ),
           );
           try {
@@ -3552,6 +3555,7 @@ function* executeDocument(
       yield* operation;
       return Ok(undefined);
     }
+    terminalStop = true;
     return yield* haltRunner();
   }
 

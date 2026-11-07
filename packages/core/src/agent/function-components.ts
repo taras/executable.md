@@ -1,3 +1,5 @@
+import { withInvocation, InvocationTeardownError } from "../invocation.ts";
+import { durabilityFailure, filesFatalFailure, firstCause } from "../errors.ts";
 /**
  * The agent components (specs/acp-client-spec.md §Components).
  *
@@ -533,6 +535,7 @@ function* joinHeldNative(turn: HeldPromptTurn): Operation<void> {
     turn.cleaned = true;
   } catch (error) {
     turn.cleanup = error instanceof Error ? error : new Error(String(error));
+    throw new InvocationTeardownError([turn.cleanup]);
   }
 }
 
@@ -812,6 +815,7 @@ export function* runPrompt(
   direct?: DirectPromptTurn,
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
+  let turnFailure: Error | undefined;
   // The exact stream this turn consumed, held out here because the audit
   // outlives the turn's own scope: a turn that failed still answered whatever
   // it was asked before it did. Holding the stream is what makes its audit
@@ -831,7 +835,7 @@ export function* runPrompt(
     // owns the turn, so the provider's per-turn cleanups (turn cancellation,
     // permission routing, session lock) run when this prompt finishes — not at
     // document teardown.
-    consumed = yield* scoped(function* (): Operation<ConsumedTurn> {
+    consumed = yield* withInvocation(function* (): Operation<ConsumedTurn> {
       const result: ConsumedTurn = { text: "" };
       // Begun immediately before the provider is asked, in this turn's own
       // scope: the one moment that is both canonical and live, so it is the
@@ -901,6 +905,9 @@ export function* runPrompt(
           }
         } else if (event.type === "terminal") {
           result.status = event.status;
+          if (event.status !== "completed") {
+            turnFailure = event.error ?? new Error(`agent prompt ${event.status}`);
+          }
           if (event.stopReason !== undefined) {
             result.stopReason = event.stopReason;
           }
@@ -953,6 +960,23 @@ export function* runPrompt(
       }
     }
   } catch (error) {
+    const fatal = durabilityFailure(error) ?? filesFatalFailure(error);
+    if (fatal !== undefined) {
+      throw fatal;
+    }
+    if (
+      firstCause(error, (cause) =>
+        cause instanceof InvocationTeardownError ? cause : undefined,
+      ) !== undefined
+    ) {
+      const initiating = turnFailure ?? held?.failure;
+      throw initiating === undefined ||
+        firstCause(error, (cause) => (cause === initiating ? initiating : undefined)) !== undefined
+        ? error
+        : new AggregateError([initiating, error], "agent prompt and release both failed", {
+            cause: initiating,
+          });
+    }
     if (error instanceof HostObservationFailure) {
       // Not this turn's failure to describe. The provider's own cleanup has
       // already run — the scope above owns it — and this travels on to the

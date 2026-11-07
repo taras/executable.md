@@ -653,6 +653,15 @@ entry received reaches nothing.
 
 ### Values that stay in the entry that made them
 
+Explicit Entry Stop runs and joins authored Finally before retaining cancelled
+Close. It skips Catch and joins an already-entered finalizer without restarting
+it. Exit instead leaves an unentered logical finalizer pending and joins physical
+resources. A finalizer entered on the ordinary forward path restores acknowledged
+effects on continuation. Cleanup acknowledged without a terminal Close can leave
+an unfinished history that refuses continuation before live body work; failed
+append or cleanup is not successful Stop and admits no successor.
+
+
 What crosses between entries is ordinary JSON data: text, numbers, `true`,
 `false`, `null`, lists and plain objects of those. A function, a live handle, a
 class instance, a cycle, a non-finite number and `undefined` are **entry-local**.

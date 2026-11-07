@@ -2019,10 +2019,8 @@ describe("993 nested Spawn joined cleanup", () => {
       if (stopping !== undefined) {
         yield* stopping;
         expect(
-          closes(stream.snapshot())
-            .filter((entry) => entry.id.startsWith("root."))
-            .every((entry) => entry.status === "cancelled"),
-        ).toBe(true);
+          closes(stream.snapshot()).filter((entry) => entry.id.startsWith("root.")),
+        ).toHaveLength(0);
       } else {
         const result = yield* task;
         expect(result.ok).toBe(false);
@@ -2031,4 +2029,50 @@ describe("993 nested Spawn joined cleanup", () => {
       }
     });
   }
+});
+
+describe("All enclosing resumable unwind", () => {
+  beforeAll(() => useTempFileCompiler());
+  it("resumes both held children from the actual unedited prefix under their original identities", function* () {
+    const stream = new InMemoryStream();
+    const first = harness();
+    const source =
+      '<All><Spawn><Keep name="one" /><Gate name="one" /></Spawn><Spawn><Keep name="two" /><Gate name="two" /></Spawn></All>';
+    const task = yield* spawn(() => run(source, { stream, shared: first }));
+    yield* first.arrival("one");
+    yield* first.arrival("two");
+    yield* task.halt();
+    expect(first.timeline.filter((entry) => entry.startsWith("stop:")).sort()).toEqual([
+      "stop:one",
+      "stop:two",
+    ]);
+    expect(closes(stream.snapshot())).toEqual([]);
+    const originalIds = stream
+      .snapshot()
+      .filter((event) => event.type === "yield" && event.coroutineId !== "root")
+      .map((event) => event.coroutineId);
+    const resumed = harness();
+    const result = yield* run(source, {
+      stream,
+      shared: resumed,
+      *drive(shared) {
+        yield* shared.arrival("one");
+        yield* shared.arrival("two");
+        shared.release("one");
+        shared.release("two");
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe("held:one[one]held:two[two]");
+    expect(gateOrder(result.events).sort()).toEqual(["one", "two"]);
+    expect(
+      [
+        ...new Set(
+          result.events
+            .filter((event) => event.type === "yield" && event.description.type === "gate")
+            .map((event) => event.coroutineId),
+        ),
+      ].sort(),
+    ).toEqual([...new Set(originalIds)].sort());
+  });
 });

@@ -331,9 +331,9 @@ describe("Tier SY: structural vocabulary", () => {
     expect(find(entries, "Else").syntax).toEqual(["<Else>…</Else>"]);
     expect(find(entries, "Break").syntax).toEqual(["<Break />"]);
 
-    // `as` applies to the two constructs that bind, and to no other.
+    // Catch binds only in its recovery branch.
     const binding = entries.filter((entry) => entry.as !== undefined).map((entry) => entry.name);
-    expect(binding.sort()).toEqual(["Each", "Let"]);
+    expect(binding.sort()).toEqual(["Catch", "Each", "Let"]);
     // `Break` and `Content` read no content; `Else` and `Answers` do.
     expect(find(entries, "Break").context).toBeUndefined();
     expect(find(entries, "Content").context).toBeUndefined();
@@ -383,9 +383,11 @@ describe("Tier SY: structural vocabulary", () => {
       "Answers",
       "Break",
       "Case",
+      "Catch",
       "Content",
       "Each",
       "Else",
+      "Finally",
       "If",
       "Let",
       "Loop",
@@ -394,6 +396,7 @@ describe("Tier SY: structural vocabulary", () => {
       "Return",
       "Spawn",
       "Switch",
+      "Try",
     ]);
     for (const name of ["Terminal.Grid", "Terminal"]) {
       expect(RESERVED_STRUCTURAL.has(name)).toBe(false);
@@ -1663,5 +1666,16 @@ describe("1113: cwd syntax", () => {
       origin: "@executablemd/core",
       reserved: false,
     });
+  });
+});
+
+describe("Try syntax reference", () => {
+  it("describes paired recovery and terminal Stop versus resumable Exit without executing", function* () {
+    const entries = engineEntries(yield* catalogFor({}, []));
+    expect(find(entries, "Catch").syntax).toContain('<Catch as="error">…</Catch>');
+    expect(find(entries, "Catch").as).toContain("reference");
+    expect(find(entries, "Finally").description).toContain("terminal Stop");
+    expect(find(entries, "Finally").description).toContain("Resumable Exit");
+    expect(find(entries, "Try").description).toContain("Failed release");
   });
 });
