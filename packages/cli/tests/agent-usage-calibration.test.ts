@@ -27,7 +27,7 @@ import {
   nativeComparison,
 } from "../../../examples/agent-usage/evidence.ts";
 import type { PromptUsage } from "@executablemd/core";
-import { writeTextFile } from "@effectionx/fs";
+import { readdir as readdirOf, writeTextFile } from "@effectionx/fs";
 
 const CHECKOUT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const DRIVER = join(CHECKOUT, "examples/agent-usage/calibrate.ts");
@@ -200,6 +200,44 @@ describe("Tier UC — usage calibration driver", () => {
         "support/association.json",
       ]),
     );
+  });
+
+  it("UC5: an ordinary run retains usage only in the journal it was asked to keep", function* () {
+    const root = yield* useRoot();
+    const document = join(root, "doc.md");
+    yield* writeTextFile(document, '<Agent name="claude"><Prompt>measure me</Prompt></Agent>\n');
+    const cli = [
+      process.execPath,
+      "run",
+      "--allow-all",
+      "--frozen",
+      join(CHECKOUT, "packages/cli/src/deno.ts"),
+    ];
+    const runOnce = (extra: string[]) =>
+      scoped(function* () {
+        yield* useQuietProcessOutput();
+        return yield* exec({
+          command: [...cli, "run", document, ...extra],
+          cwd: root,
+          env: { ...inherited(), CLAUDE_CODE_EXECUTABLE: FAKE_CLAUDE },
+          retain: true,
+          timeout: 120_000,
+        });
+      });
+    const transient = yield* runOnce([]);
+    expect(transient.exitCode).toBe(0);
+    expect((yield* readdirOf(root)).sort()).toEqual(["doc.md"]);
+    const journal = join(root, "run.jsonl");
+    const retained = yield* runOnce(["--journal", journal]);
+    expect(retained.exitCode).toBe(0);
+    expect((yield* readdirOf(root)).sort()).toEqual(["doc.md", "run.jsonl"]);
+    const records = (yield* readTextFile(journal))
+      .split("\n")
+      .filter((line) => line.includes('"agent_prompt"'))
+      .map((line) => JSON.parse(line).result.value);
+    expect(records.length).toBe(1);
+    expect(records[0].usage.provenance.host).toBe("deno-source");
+    expect(records[0].usage.provenance.adapter.version).toBe("0.70.0");
   });
 
   it("UC4: native accounts separate a whole Prompt from its final request, and find subagents", function* () {
