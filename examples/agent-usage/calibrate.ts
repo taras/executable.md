@@ -527,7 +527,9 @@ function verdict(report: Report): "completed" | "limited" | "incomplete" {
     return "incomplete";
   }
   const accounting = report.prompts.flatMap((prompt) => Object.values(prompt.checks));
-  const limited = [...required, ...accounting].some((item) => item.outcome !== "verified");
+  // Work that ran and left no acknowledged record is consumption nothing accounts for.
+  const unaccounted = report.submittedPrompts > report.acknowledgedPrompts;
+  const limited = unaccounted || [...required, ...accounting].some((item) => item.outcome !== "verified");
   return limited || report.prompts.some((prompt) => prompt.usage?.coverage.outerPrompt !== "verified") ? "limited" : "completed";
 }
 
