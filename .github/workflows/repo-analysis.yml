@@ -1,10 +1,10 @@
-name: 1158 CI Bun layout capture
+name: 1158 corrected ownership verification
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Exact failing source revision
+        description: Exact feedback commit to verify
         required: true
         default: bd85a00406f245adffda5b296d4dc8163347cacd
       report_name:
@@ -35,12 +35,12 @@ jobs:
       - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb
         with:
           deno-version: v2.9.5
-      - name: Reconstruct committed Bun preparation and run three-file prefix once
+      - name: Reconstruct committed Bun preparation and verify corrected journey once
         timeout-minutes: 20
         shell: bash
         run: |
           set -euo pipefail
-          python3 "$GITHUB_WORKSPACE/diagnostic-kit/.diagnostics/1158/ci-layout-capture.py" --source "$GITHUB_WORKSPACE/source" --output "$RUNNER_TEMP/main-1158-ci-layout" --bun "$(command -v bun)" --deno "$(command -v deno)"
+          python3 "$GITHUB_WORKSPACE/diagnostic-kit/.diagnostics/1158/ci-layout-capture.py" --source "$GITHUB_WORKSPACE/source" --output "$RUNNER_TEMP/main-1158-ci-layout" --bun "$(command -v bun)" --deno "$(command -v deno)" --expected-revision "${{ inputs.ref }}"
       - name: Preserve complete first evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

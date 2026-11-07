@@ -6,6 +6,7 @@ parser.add_argument('--source', required=True)
 parser.add_argument('--output', required=True)
 parser.add_argument('--bun', required=True)
 parser.add_argument('--deno', required=True)
+parser.add_argument('--expected-revision', required=True)
 args = parser.parse_args()
 root = pathlib.Path(args.source).resolve()
 out = pathlib.Path(args.output).resolve()
@@ -13,7 +14,7 @@ kit = pathlib.Path(__file__).resolve().parent
 out.mkdir(parents=True, exist_ok=False)
 (out / 'locks').mkdir()
 (out / 'bin').mkdir()
-ledger = {'sourceRevision': 'bd85a00406f245adffda5b296d4dc8163347cacd', 'testedRevision': None, 'startedAt': time.time(), 'commands': [], 'state': 'started'}
+ledger = {'sourceRevision': args.expected_revision, 'testedRevision': None, 'startedAt': time.time(), 'commands': [], 'state': 'started'}
 
 def write(name, value):
     (out / name).write_text(json.dumps(value, indent=2) + '\n')
@@ -71,7 +72,7 @@ def fingerprint(stage):
 
 try:
     if capture(['git', 'rev-parse', 'HEAD']) != ledger['sourceRevision'] or capture(['git', 'status', '--porcelain']):
-        raise RuntimeError('Requires clean exact failing source before preparation')
+        raise RuntimeError('Requires clean exact candidate source before preparation')
     if (root / 'node_modules').exists():
         raise RuntimeError('Requires fresh source without an installed tree')
     ledger['versions'] = {'bun': capture([bun, '--version']), 'deno': capture([deno, '--version']), 'node': capture(['node', '--version'])}
@@ -88,6 +89,10 @@ try:
         raise RuntimeError('bun install failed; no repeat')
     locks('after-bun')
     baseline = fingerprint('after-bun')
+    link = root / 'node_modules/effection'
+    ledger['effectionLinkBefore'] = os.readlink(link)
+    if not ledger['effectionLinkBefore'].startswith('.bun/'):
+        raise RuntimeError('Expected the discriminating Bun dependency layout')
     code = '''import * as effection from "effection"; import * as processApi from "@effectionx/process"; import {createRequire} from "node:module"; const require=createRequire(new URL("./package.json", import.meta.url)); console.log(JSON.stringify({esm:{effection:import.meta.resolve("effection"),process:import.meta.resolve("@effectionx/process")},require:{effection:require.resolve("effection"),process:require.resolve("@effectionx/process")},loaded:{effection:typeof effection.main,process:typeof processApi.exec}}));'''
     if command('bun-resolution', [bun, '--eval', code]) != 0:
         raise RuntimeError('Bun resolution observation failed')
@@ -113,12 +118,11 @@ main(function* () {{
 }});
 '''
     (out / 'prefix.mjs').write_text(prefix)
-    files = ['packages/acp/tests/acceptance.test.ts', 'packages/acp/tests/acpx-transient-env.test.ts', 'packages/cli/tests/adversarial-implementation.test.ts']
+    files = ['packages/cli/tests/adversarial-implementation.test.ts']
     for i, file in enumerate(files):
         name = f'prefix-{i+1}'
         env = dict(os.environ)
-        if i == 2:
-            env['PATH'] = str(out / 'bin') + os.pathsep + env['PATH']
+        env['PATH'] = str(out / 'bin') + os.pathsep + env['PATH']
         code = command(name, [bun, 'run', str(out / 'prefix.mjs'), file, str(out / (name + '-outcome.json'))], env)
         after = fingerprint('after-' + name)
         locks('after-' + name)
@@ -130,6 +134,16 @@ main(function* () {{
         if outcome.get('failure'):
             ledger['testFailure'] = outcome['failure']
             raise RuntimeError('Original workload failed at ' + file)
+    ledger['effectionLinkAfter'] = os.readlink(link)
+    children = [json.loads(line) for line in (out / 'children.jsonl').read_text().splitlines()]
+    starts = [item for item in children if item['kind'] == 'child-start']
+    waited = [item for item in children if item['kind'] == 'child-waited']
+    required = ['--node-modules-dir=manual', '--cached-only', '--frozen']
+    if len(starts) != 3 or len(waited) != 3 or any(item['code'] != 0 for item in waited):
+        raise RuntimeError('Expected three joined successful Deno children')
+    if any(not all(flag in item['argv'][:item['argv'].index(next(arg for arg in item['argv'] if arg.endswith('/packages/cli/src/deno.ts')))] for flag in required) for item in starts):
+        raise RuntimeError('Actual Deno startup argv lacks a required constraint')
+    write('startup-constraints.json', {'required': required, 'starts': starts, 'waited': waited})
     ledger['state'] = 'completed'
 except Exception as error:
     ledger['state'] = 'stopped'
