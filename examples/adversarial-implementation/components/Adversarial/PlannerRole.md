@@ -12,7 +12,7 @@ props:
 
 <Adversarial.Schema as="schemas" />
 <Phase.Profile role="planner" design={true} plannerProvider={props.assignment.plannerProvider} assessment={props.assignment.assessment} as="profile" />
-<Output><Agent name={profile.provider}><Session name={props.assignment.session} model={profile.model} effort={profile.effort}><Prompt throwOnError={true}>
+<Output><Agent name={profile.provider}><Session name={props.assignment.session} model={profile.model} effort={profile.effort}><Phase.Session directory={props.assignment.identityDirectory} name={props.assignment.session} requireExisting={props.assignment.sessionEstablished === true || props.correction !== null}><Prompt throwOnError={true}>
 <If condition={props.correction !== null}>
 You remain the original Planner. This is response-only correction {props.correction.ordinal} with {props.correction.remaining} remaining. Shorten only the rejected summary or handoff to its stated bound. Every other result value is frozen by the supplied schema, including the API, outcome, source revision, artifacts, assessment and command evidence.
 
@@ -42,8 +42,10 @@ Return needs_architect only for a concrete structural question, needs_decision f
 Prepared assignment:
 <Json value={props.assignment} />
 
+Keep summary within {schemas.foundation.properties.summary.maxLength} characters and handoff within {schemas.foundation.properties.handoff.maxLength} characters. Use artifact files for detailed reports and command receipts. Report the actual committed revision. Return only the fields declared by this foundation schema; do not add ordinary phase metadata. Check every required field against the contract before returning.
+
 Return exactly one JSON object satisfying this contract. Evidence names actual command receipts and revisions; schema validation does not establish that tests passed.
 <Json value={schemas.foundation} />
 </Else>
 </If>
-</Prompt></Session></Agent></Output>
+</Prompt></Phase.Session></Session></Agent></Output>

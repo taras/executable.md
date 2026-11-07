@@ -152,8 +152,8 @@ size does not select a route. A later material question holds under the existing
 phase contract; ordinary planning does not decide it.
 
 An initial refusal returns `status=hold`, an actionable reason and empty history,
-with no fabricated phase call or checkpoint. Simple and standard return the
-existing Ticket record; migration returns the existing Adversarial result.
+with no fabricated phase call or checkpoint. Simple and standard return a small Ticket envelope; migration returns its bounded
+Adversarial disposition and Ticket reference.
 Provider and persistence failures retain their existing handling. Preserve first
 failure output and partial effects before another attempt.
 
@@ -161,8 +161,8 @@ The ordinary Ticket starts before the first Planner call. A validated
 `needs_discovery` request reaches the original Architect and returns its answer
 to the same Planner. Only that Planner's complete handoff starts implementation.
 The initial journey runs at most those three discovery calls. Another discovery
-request returns `status=paused`, `dispatchable=true`, `hold=null` and the exact
-pending gate. Save the complete returned record and advance it with `continue.md
+request saves a dispatchable paused checkpoint and returns its confirmed
+continuation descriptor and next gate. Save the small returned envelope and advance it with `continue.md
 --props-record /absolute/path/to/ticket-record.json --props-steps 1`.
 Planning and discovery must leave source clean at the exact launch revision,
 including when a reply is rejected or absent. They require no signed feedback
@@ -177,6 +177,51 @@ and include version. Keep the original session identities and recorded inputs.
 The roles use the normal agent permission policy. Running this example invokes
 paid coding agents and permits the assigned implementation work. Publication,
 issue/PR metadata and delivery remain with the Sidekick running Codex.
+
+## Keep the original conversation
+
+Every production role passes through `Phase.Session` inside its resolved Session,
+before its Prompt. The first call records the agent, logical name, resolved
+session key, cwd and exact public `Session.identity` kind/value pair under the work's `sessions`
+directory. It records prompt subscription attempts separately from the first
+actual started event. An attempted call with no confirmed identity holds for
+reconciliation even if later resolution offers an identity. A verified placement
+that was never prompted remains distinct from an uncertain attempted call.
+Fresh placements that acquire their confirmed identity during the turn
+retain it when that turn unwinds. Subsequent calls compare the resolved identity
+by both kind and value before expanding the prompt. An ACP loading target stays
+distinct from a native identity. A mismatch preserves the original receipt and saves
+the observed mismatch; it sends no prompt and grants no retry or fallback.
+Session resolution retains its existing provider setup behavior.
+
+This candidate writes `phase-session.v2` receipts. Older receipts refuse without
+changes; they are not migrated. Existing tickets keep their pinned workflow and
+original receipts.
+
+Ordinary Tickets and API foundation/migration work share their original identity
+directory across attempts. For standalone `phase.md` requests, retain
+`assignment.identityDirectory` and set `assignment.sessionEstablished=true` on
+continuations. An established continuation with a missing receipt holds; recover
+the original evidence rather than treating it as a fresh call. Adopting a runtime
+or adapter never proves conversation continuity from a logical session name alone.
+Independent review uses `delivery.directory/sessions` and requires its retained
+identity when an earlier review assignment exists. An explicitly prepared
+continuation can likewise require the original receipt with
+`delivery.sessionEstablished=true`.
+
+## Select typing evidence and record amendments
+
+When a shared type, required property or exported interface changes, planning
+identifies its typing consumers, declarations and test fixtures as well as
+runtime callers. Include the applicable Deno and Node typecheck in the focused
+evidence for affected shared shapes. Runtime affected-test selection follows
+imports and does not establish that every typing consumer still compiles.
+Include real cross-runtime child-execution witnesses when fixture filenames, module boundaries or loader behavior change; typing alone cannot show which module mode a child selects. This does not require full runtime suites for ordinary changes.
+
+Record user-directed amendments separately from implementation defects in plans,
+handoffs and cost reports, with their accepted scope and approval evidence.
+Both retain the existing correction allowances. Classification grants no extra
+call, resets no counter and does not turn an amendment into a defect metric.
 
 ## Complete delivery from recorded requirements
 
@@ -218,6 +263,34 @@ feedback ready   -> independent review pending -> joined exact-commit verdict
                       | all passed + PR ready       -> await authorized merge
                       | confirmed merge             -> delivered
 ```
+
+Independent review summaries allow 1500 characters; detailed observations belong
+in `findings`. The request states this bound alongside the exact revision and
+clause IDs. Ordinary phase and API-foundation summaries retain their own bounds.
+
+Use `--props-action reconcile` when an original joined review has saved execution
+and raw reply but no accepted receipt. It checks the original assignment,
+joined execution, unchanged raw reply, current schema, clauses and source before
+creating the missing receipt. It never shortens text, changes a verdict, repeats
+a model call or overwrites a contradictory receipt. Missing or uncertain execution
+continues to hold. Status uses this same validation boundary to read receipts.
+
+Reconciliation is limited to independent review from a work item launched under
+the same response contract. Its assignment retains the exact response schema; a
+missing or different schema refuses rather than reinterpreting an old reply. It cannot repair or adopt an ordinary rejected role
+verdict, rewrite its raw rejection or partial work, or reset a correction budget.
+A current schema accepting older text does not retroactively approve that work.
+Preserve the original rejection and require an explicit applicable
+schema-amendment decision, recording the old bound, amended bound, exact raw
+reply and source revision before any historical acceptance. This example's
+new-ticket pilot imports no historical review attempts; historical adoption is
+held for explicit reconciliation rather than automatic schema migration.
+
+Use `--props-action closeout` to write `delivery/closeout.json` and
+`delivery/closeout.md` from the actual `Delivery.Status` result. The JSON retains
+the full status and evidence; the report names the revision, gates, review,
+findings and next action. Incomplete gates remain visible. This action starts no
+model, publishes nothing and grants no merge permission.
 
 A complete review covers every recorded clause and has no blocking finding.
 The component writes its completion receipt after the role operation has returned
@@ -336,13 +409,14 @@ deno task xmd run --allow-absolute examples/adversarial-implementation/phase.md 
   --include examples/adversarial-implementation/components --raw
 ```
 
-The command returns the canonical phase result. `Phase.Run` saves its assignment,
+The command returns status, revision and the saved canonical result path.
+`Phase.Run` saves its assignment,
 raw reply, result, status and acceptance receipt beneath the request's attempt.
 Source and role checks run before a prompt. Reusing an occupied attempt refuses;
 inspect its saved effects before selecting another attempt.
 
 Set `maxResponseCorrections` to zero to validate the reply without another model
-prompt. A valid reply still returns its canonical result. A rejected reply saves
+prompt. A valid reply saves its canonical result. A rejected reply saves
 the raw text, rejection and `response-disposition.json`, then fails without a
 canonical result or successor. Inspect those records before continuing; zero
 does not skip validation or retry an uncertain prompt. This limit controls
@@ -361,11 +435,11 @@ omitted. A direct REPL invocation uses the same option:
 ```
 
 Here `request` is the prepared phase request above and `documents` is the
-selected input map returned by `<Ticket.Documents>`. Keep the original session
+selected input map produced by `<Ticket.Selected>` from `<Ticket.Documents>` metadata. Keep the original session
 and reserved attempts when changing this limit at a completed phase boundary.
 
-To advance a saved ordinary `run.md`, `Ticket.Run` or `Ticket.Continue` record, pass that complete
-record rather than reconstructing its assignment or artifact paths:
+To advance a saved ordinary `run.md`, `Ticket.Run` or `Ticket.Continue` return,
+pass its complete small envelope:
 
 ```bash
 deno task xmd run --allow-absolute examples/adversarial-implementation/continue.md \
@@ -373,17 +447,52 @@ deno task xmd run --allow-absolute examples/adversarial-implementation/continue.
   --include examples/adversarial-implementation/components --raw
 ```
 
-The returned record preserves the original manifest, sessions, documents, calls
-and correction counts, including a pre-implementation planning checkpoint.
-Each explicit step executes at most one recorded role and joins settlement.
-A dispatchable pause names its next gate and continuation action. A genuine
-hold is nondispatchable and retains its pending assignment and reconciliation
-reason. Held and
-completed records return without a prompt. This entry does not clear a hold or
-retry an uncertain execution. Resolve the recorded cause before preparing a
-continuation, and preserve the original evidence. Capture the complete output
-under a new filename when retaining the next record; do not redirect it over
-the input file.
+The envelope names a confirmed continuation by path, UTF-8 byte length and SHA-256.
+The protected continuation retains the original manifest, sessions, call ordinals,
+delivered-input accounting and correction counts. Each explicit step runs at most
+one role and joins settlement and publication before the next step. A paused
+checkpoint names its next gate; held and completed tickets dispatch no role.
+Save each returned envelope under a new filename rather than redirecting over its
+input. A held publication preserves the previous confirmed descriptor and pending
+canonical/execution receipt paths. Even an existing matching file cannot confirm
+an uncertain write; preserve it for operator disposition without rewriting or
+repeating completed work.
+
+After the original host entry has joined, inspect its saved return without
+advancing the ticket:
+
+```bash
+deno task xmd run --allow-absolute examples/adversarial-implementation/return.md \
+  --props-record /absolute/path/to/ticket-record.json \
+  --include examples/adversarial-implementation/components --raw
+```
+
+This entry validates saved control metadata and its exact length/hash through
+current File permissions and enabled protection. It reads no unselected artifact
+body and invokes no role, source command, signature check or test. Canonical role
+completion, confirmed continuation publication and the host's joined outer
+outcome remain separate facts. A failed outer return does not undo a completed
+role or authorize a replay.
+
+Artifact references retain the first successfully accepted permitted File text,
+including unselected references. This observation intentionally differs from
+configured `cat` stdout preprocessing. Literal reference reuse restores its
+snapshot after the original changes or disappears; use a fresh reference for new
+evidence. Equal text at distinct references keeps distinct provenance. Selected
+hydration checks current permissions, protection and exact UTF-8 length/hash;
+missing or changed snapshots hold without consulting the original file. Snapshot
+and original receipt retention lasts through ticket completion. Calls carry
+metadata and receipt paths, not cached input, result or observation bodies.
+
+The native-host example bounds all outward representations together to 65,536
+UTF-8 bytes, complete continuation metadata to 1,048,576 bytes, and each exact
+text to 8,388,608 bytes, inclusively. JSON escaping, output and root duplicates
+count toward these bounds. The selected prompt allowance remains separately
+64,000 UTF-16 characters. Capacity saturation holds before another dispatch,
+retaining the prior confirmed state and canonical work; it truncates or evicts
+nothing. These guarantees cover the ordinary native File provider, with its
+existing permission, containment and stable-namespace limits. They establish no
+custom/workflow provider storage contract or migration of old inline records.
 
 External reviewer models and publication use their existing workflows. The
 phase entry retains the implementation workflow's role and model policy.
@@ -401,12 +510,12 @@ determine the work's outcome.
 | Owner | Work | Model and effort |
 | --- | --- | --- |
 | Planner | Ordinary plan/evidence; on migration, implement the API, validate representative consumers and repair API conflicts | Selected Codex `gpt-6.1-sol` or Claude `opus`; ordinary planning uses medium, high for a concrete recorded risk; migration foundation design uses high |
-| Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Selected Codex `gpt-6.1-sol`, medium (high for a concrete recorded risk), or Claude `sonnet`, high |
+| Implementor | Implement accepted work; on migration, challenge the API, convert consumers and delete obsolete machinery | Selected Codex `gpt-6.1-sol`, medium (high for a concrete recorded risk), or Claude `opus`, high |
 | Planner reviewer | Inspect the migration against the accepted outcome and evidence | Same selected provider and original Planner session, medium; high for a concrete recorded risk |
 | Architect | Answer a concrete structural question or review structural impact | Codex `gpt-6.1-sol`, medium; high for a concrete recorded risk |
 | Sidekick running Codex | Author and apply issue/PR titles and descriptions; own publication and delivery | Existing coordinating Sidekick |
 
-Aliases select the provider's available Opus and Sonnet models. Coding roles
+Aliases select the provider's available Opus model. Coding roles
 do not draft or edit issue/PR titles or descriptions. The phase runner
 refuses editorial assignments; technical handoffs and API documentation remain
 part of the roles' work.
@@ -533,7 +642,7 @@ installed.
 `ExactCorrection` and `Guide.ExactCorrection` package the existing local feedback
 workflow. The normal launch composes those owners from prepared scope while retaining
 validated foundations, role profiles, API-conflict repair, retirement and Codex
-editorial ownership. Delivery
+editorial ownership. Publication
 automation, task-specific attachment/routing programs and historical trial
 artifacts are outside this example.
 
@@ -556,7 +665,7 @@ benchmark or recurring automation.
 ## Common mistake
 
 Do not accept shorter selected examples while the promised fixture or legacy
-adapter remains. Do not ask Sonnet to validate a paper API by designing it from
+adapter remains. Do not ask the Implementor to validate a paper API by designing it from
 scratch. The first handoff contains working consumer code and passing evidence;
 the final handoff contains the finished retirement and review evidence.
 
@@ -566,3 +675,44 @@ Read [Planner](../../.agents/planner.md) and
 [Implementor](../../.agents/implementor.md) for role assignments.
 Read `<Adversarial.Schema />` for the API handoff shape and `<ReviewPolicy />`
 for impact-based review selection.
+
+## Prepare the next handoff
+
+`<Ticket.Prepare record={record} call={call} as="prepared" />` checks the exact
+recipient selected by Gate before its productive call starts. Inputs counts the
+undelivered accepted inputs, that role's guide and explicitly selected handoff
+files once each. Its 64,000 UTF-16-unit limit is separate from the complete
+phase prompt's 256,000-character ceiling. A recorded delivery for the current
+session takes precedence over the manifest's earlier delivery list.
+
+A fitting packet keeps its paths, order and captured text and starts no analysis
+prompt. Preparation saves its inventory, hashes and remaining allowance under
+`preparations/<call.id>/receipt.json`. `original.json` names the retained snapshot
+of every oversize original. Captured windows and a reduced candidate are retained
+as protected snapshot text; the candidate uses a fresh path and links to that
+receipt. Saved documents and call inputs carry only those snapshot descriptors. The original
+Planner prepares exact extracts and supporting references, then compares the
+candidate with the originals. The comparison is a recorded semantic judgment;
+hashes establish text identity, not completeness of requirement extraction.
+
+Preparation permits one reduction prompt, one comparison prompt and no correction
+prompt. Captured windows contain at most 8,000 UTF-16 units without splitting a
+surrogate pair. Every acquisition is recorded, including repeated original
+windows in comparison; each prompt admits at most 64,000 selected units and
+128,000 acquired material units. These measurements describe workflow acquisition,
+not a sandbox on the native agent's tools. A mandatory floor above the limit,
+missing original Planner evidence, remaining excess or uncertain preservation
+holds before the successor. Continuing a held record replenishes no allowance.
+
+Step, foundation, direct Architect and standalone callers retain their dispatch
+owners. Only a successful captured raw reply establishes input delivery and
+initialization. A later phase-validation refusal does not erase that delivery;
+a pre-Prompt refusal or uncertain completion establishes none. Dispatch receipts
+link the exact selection to the original recipient, execution and result. The
+foundation passes its saved Planner call and factual delivery into migration;
+standalone preparation has no delivery ledger or replacement reducer.
+
+Reduction and comparison prompts run in the original Planner's conversation from
+the same repository directory as its productive calls, behind the same
+`Phase.Session` identity guard: a changed or unconfirmed identity holds before
+the prompt and spends that preparation stage.

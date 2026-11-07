@@ -14,4 +14,4 @@ returns: {type: object}
 ---
 
 <ReviewPolicy assessment={props.assessment} as="policy" />
-<Return value={props.role === "planner" && props.plannerProvider === "claude" ? {provider:"claude",model:"opus",effort:props.design ? "high" : policy.effort} : props.role === "implementor" && props.implementationProvider === "claude" ? {provider:"claude",model:"sonnet",effort:"high"} : {provider:"codex",model:policy.model,effort:props.role === "planner" && props.design ? "high" : policy.effort}} />
+<Return value={props.role === "planner" && props.plannerProvider === "claude" ? {provider:"claude",model:"opus",effort:props.design ? "high" : policy.effort} : props.role === "implementor" && props.implementationProvider === "claude" ? {provider:"claude",model:"opus",effort:"high"} : {provider:"codex",model:policy.model,effort:props.role === "planner" && props.design ? "high" : policy.effort}} />

@@ -16,7 +16,7 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <Phase.Profile role="architect" assessment={assessment} as="architecture" />
 <AssertEquals actual={design} expected={{provider:"claude",model:"opus",effort:"high"}} />
 <AssertEquals actual={review} expected={{provider:"claude",model:"opus",effort:"medium"}} />
-<AssertEquals actual={migration} expected={{provider:"claude",model:"sonnet",effort:"high"}} />
+<AssertEquals actual={migration} expected={{provider:"claude",model:"opus",effort:"high"}} />
 <AssertEquals actual={architecture} expected={{provider:"codex",model:"gpt-6.1-sol",effort:"medium"}} />
 </Test>
 

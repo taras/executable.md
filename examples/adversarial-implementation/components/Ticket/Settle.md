@@ -28,14 +28,14 @@ its signed commit and focused evidence requirements.
 </Ticket.Capture>
 <Dir path={pending.call.record}><File path="source.json"><Json value={sourceCheck} /></File></Dir>
 <If condition={sourceCheck.status === "completed"}><Parse schema={{type:"object"}} as="source">{sourceCheck.output}</Parse></If>
-<Let as="pending" value={{...pending,call:{...pending.call,source:pending.call.record + "/source.json",sourceValue:source}}} />
+<Let as="pending" value={{...pending,call:{...pending.call,source:pending.call.record + "/source.json"}}} />
 <If condition={source === null || source.head !== pending.manifest.assignment.revision || !source.clean}>
-<Return value={{manifest:pending.manifest,documents:pending.documents,deliveredInputs:pending.deliveredInputs ?? {},checkpoint:{...pending.checkpoint,status:"hold",dispatchable:false,hold:{kind:"source_mismatch",reason:"Planning and discovery must leave clean unchanged launch source. Reconcile source and the original phase execution; inspect " + pending.call.record + "/source.json"}},calls:[...pending.calls,{...pending.call,status:"source_mismatch",result:pending.result === null ? null : pending.resultPath,execution:pending.call.record + "/execution.json"}]}} />
+<Return value={{schema:"ticket-state.v1",manifest:pending.manifest,documents:pending.documents,deliveredInputs:pending.deliveredInputs ?? {},checkpoint:{...pending.checkpoint,status:"hold",dispatchable:false,hold:{kind:"source_mismatch",reason:"Planning and discovery must leave clean unchanged launch source. Reconcile source and the original phase execution; inspect " + pending.call.record + "/source.json"}},calls:[...pending.calls,{...pending.call,status:"source_mismatch",result:pending.result === null ? null : pending.resultPath,execution:pending.call.record + "/execution.json"}]}} />
 <Break />
 </If>
 </If>
 <If condition={pending.result === null}>
-<Return value={{manifest:pending.manifest,deliveredInputs:pending.deliveredInputs ?? {},documents:pending.documents,checkpoint:{...pending.checkpoint,status:"hold",dispatchable:false,hold:{kind:"execution_failure",reason:pending.execution.failure || "No canonical role result; inspect " + pending.call.record + "/execution.json"}},calls:[...pending.calls,{...pending.call,status:"failed_without_result",execution:pending.call.record + "/execution.json"}]}} />
+<Return value={{schema:"ticket-state.v1",manifest:pending.manifest,deliveredInputs:pending.deliveredInputs ?? {},documents:pending.documents,checkpoint:{...pending.checkpoint,status:"hold",dispatchable:false,hold:{kind:"execution_failure",reason:pending.execution.failure || "No canonical role result; inspect " + pending.call.record + "/execution.json"}},calls:[...pending.calls,{...pending.call,status:"failed_without_result",execution:pending.call.record + "/execution.json"}]}} />
 </If>
 
 <If condition={pending.result !== null}>
@@ -94,21 +94,26 @@ git merge-base --is-ancestor {pending.manifest.assignment.revision} {revision}
 <If condition={exactReceipt.status === "failed"}><Fail message={"Exact correction checks failed; inspect " + pending.call.record + "/exact-correction.json"} /></If>
 </If>
 </If>
-<Ticket.Documents repository={pending.call.assignment.repository} paths={[...result.artifacts,...(result.assessment?.evidence ?? []),...result.evidence.flatMap(entry => entry.revision === null ? [entry.artifact,entry.candidate] : [entry.artifact])]} documents={pending.documents} as="documents" />
-  <Let as="observation" value={{path:pending.call.record + "/observation.json",revision,exactApproval,exactReceipt,checkout:discovery ? source : checkout,ancestry,changes,changedPaths:changes.paths,signature,artifacts:result.artifacts,evidence:result.evidence}} />
+<Ticket.Documents repository={pending.call.assignment.repository} directory={pending.manifest.directory} paths={[...result.artifacts,...(result.assessment?.evidence ?? []),...result.evidence.flatMap(entry => entry.revision === null ? [entry.artifact,entry.candidate] : [entry.artifact])]} documents={pending.documents} as="documents" />
+  <Ticket.SaveDocuments repository={pending.call.assignment.repository} path={pending.call.artifactDocumentRecord} documents={documents} as="artifactDocumentReceipt" />
+<Let as="observation" value={{path:pending.call.record + "/observation.json",revision,exactApproval,exactReceipt,checkout:discovery ? source : checkout,ancestry,changes,changedPaths:changes.paths,signature,artifacts:result.artifacts,evidence:result.evidence}} />
   <Json value={observation} as="observationText" />
   <Dir path={pending.call.record}><File path="observation.json">{observationText}</File></Dir>
-  <Let as="documents" value={{...documents,[pending.resultPath]:{path:pending.resultPath,content:reply},[observation.path]:{path:observation.path,content:observationText}}} />
-  <Ticket.Advance pending={pending} result={result} observation={observation} as="checkpoint" />
-  <Json value={{checkpoint,observation,documents}} />
+  <Ticket.Documents repository={pending.call.assignment.repository} directory={pending.manifest.directory} paths={[pending.resultPath,observation.path]} documents={documents} as="documents" />
+  <Ticket.SaveDocuments repository={pending.call.assignment.repository} path={pending.call.documentRecord} documents={documents} as="documentReceipt" />
+<Ticket.Advance pending={pending} result={result} observation={observation} as="checkpoint" />
+  <Let as="candidate" value={{schema:"ticket-state.v1",manifest:pending.manifest,deliveredInputs:pending.deliveredInputs ?? {},checkpoint,calls:[...pending.calls,{...pending.call,status:"accepted",result:pending.resultPath,execution:pending.call.record + "/execution.json",observation:observation.path}],documents}} />
+<Ticket.Capacity name="candidate" as="fits" />
+<If condition={!fits}><Fail message={"Continuation metadata capacity exceeded. Preserve captured-text metadata at " + documentReceipt.path} /></If>
+<Json value={{checkpoint,observation,documents}} />
 </Ticket.Capture>
 <If condition={validation.status === "completed"}>
 <Parse schema={{type:"object"}} as="validated">{validation.output}</Parse>
-<Return value={{manifest:pending.manifest,deliveredInputs:pending.deliveredInputs ?? {},checkpoint:validated.checkpoint,calls:[...pending.calls,{...pending.call,status:"accepted",result:pending.resultPath,resultValue:pending.result,execution:pending.call.record + "/execution.json",observation:validated.observation.path,observationValue:validated.observation}],documents:validated.documents}} />
+<Return value={{schema:"ticket-state.v1",manifest:pending.manifest,deliveredInputs:pending.deliveredInputs ?? {},checkpoint:validated.checkpoint,calls:[...pending.calls,{...pending.call,status:"accepted",result:pending.resultPath,execution:pending.call.record + "/execution.json",observation:validated.observation.path}],documents:validated.documents}} />
 </If>
 <If condition={validation.status === "failed"}>
 <Dir path={pending.call.record}><File path="validation.json"><Json value={validation} /></File></Dir>
-<Return value={{manifest:pending.manifest,deliveredInputs:pending.deliveredInputs ?? {},checkpoint:{...pending.checkpoint,status:"hold",dispatchable:false,hold:{kind:"verification_failure",reason:validation.failure}},calls:[...pending.calls,{...pending.call,status:"rejected",validation:pending.call.record + "/validation.json"}],documents:pending.documents}} />
+<Return value={{schema:"ticket-state.v1",manifest:pending.manifest,deliveredInputs:pending.deliveredInputs ?? {},checkpoint:{...pending.checkpoint,status:"hold",dispatchable:false,hold:{kind:"verification_failure",reason:validation.failure}},calls:[...pending.calls,{...pending.call,status:"rejected",result:pending.resultPath,execution:pending.call.record + "/execution.json",validation:pending.call.record + "/validation.json"}],documents:pending.documents}} />
 </If>
 </If>
 

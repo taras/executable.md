@@ -13,5 +13,5 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 ```bash exec as="cases"
 {runner} {caseArguments}
 ```
-<If condition={cases.exitCode !== 0}><Fail message={cases.stderr || cases.stdout} /></If>
+<If condition={cases.exitCode !== 0}><Fail message={cases.stdout + "\n" + cases.stderr} /></If>
 </Test>

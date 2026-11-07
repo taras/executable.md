@@ -150,6 +150,30 @@ describe("the applicable corpus", () => {
    * Every runtime derives from one discovered set, so a file can only be missing
    * from a runtime by being named in that runtime's manifest.
    */
+  it("runs each adversarial workflow wrapper under every runtime", function* () {
+    const wrappers = [
+      "adversarial-artifact-return-recovery",
+      "adversarial-artifact-return",
+      "adversarial-delivery",
+      "adversarial-friction",
+      "adversarial-implementation",
+      "adversarial-launch-policy",
+      "adversarial-preparation",
+      "adversarial-production-role",
+      "adversarial-session-continuity",
+      "adversarial-workflow",
+    ].map((name) => `packages/cli/tests/${name}.test.ts`);
+    expect(
+      (yield* listTestFiles(ROOT)).filter((file) =>
+        file.startsWith("packages/cli/tests/adversarial-"),
+      ),
+    ).toEqual(wrappers);
+    for (const runtime of RUNTIMES) {
+      const applicable = yield* applicableTestFiles(runtime, ROOT);
+      expect(wrappers.filter((file) => !applicable.includes(file))).toEqual([]);
+    }
+  });
+
   it("drops a file from a runtime only through the manifest", function* () {
     const discovered = yield* listTestFiles(ROOT);
 
@@ -181,6 +205,40 @@ describe("the one-file runner commands", () => {
     expect(oneFileCommand("bun", "packages/core/tests/a.test.ts")).toEqual({
       command: "bun",
       arguments: ["test", "--timeout=300000", "packages/core/tests/a.test.ts"],
+    });
+    expect(oneFileCommand("bun", "packages/cli/tests/adversarial-preparation.test.ts")).toEqual({
+      command: "bun",
+      arguments: ["test", "--timeout=450000", "packages/cli/tests/adversarial-preparation.test.ts"],
+    });
+    for (const file of [
+      "packages/cli/tests/adversarial-implementation.test.ts",
+      "packages/cli/tests/adversarial-session-continuity.test.ts",
+      "packages/cli/tests/adversarial-artifact-return.test.ts",
+      "packages/cli/tests/adversarial-artifact-return-recovery.test.ts",
+    ]) {
+      expect(oneFileCommand("bun", file)).toEqual({
+        command: "bun",
+        arguments: ["test", "--timeout=300000", file],
+      });
+    }
+    expect(oneFileCommand("deno", "packages/cli/tests/adversarial-preparation.test.ts")).toEqual({
+      command: "deno",
+      arguments: [
+        "test",
+        "--allow-all",
+        "--frozen",
+        "packages/cli/tests/adversarial-preparation.test.ts",
+      ],
+    });
+    expect(oneFileCommand("node", "packages/cli/tests/adversarial-preparation.test.ts")).toEqual({
+      command: "tsx",
+      arguments: [
+        "--tsconfig",
+        "tsconfig.node.json",
+        "--test",
+        "--test-concurrency=1",
+        "packages/cli/tests/adversarial-preparation.test.ts",
+      ],
     });
   });
 });

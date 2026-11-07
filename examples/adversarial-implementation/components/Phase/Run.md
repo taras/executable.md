@@ -82,6 +82,7 @@ returns:
 <Fail message="PR and issue metadata belong to the Sidekick running Codex. Do not dispatch an editorial assignment to a workflow role." />
 </If>
 <Phase.Schema as="schemas" />
+<If condition={Array.isArray(props.assignment.handoffInputs) && props.assignment.handoffInputs.length > 12}><Fail message={"handoffInputs has " + props.assignment.handoffInputs.length + " references, exceeding 12: " + props.assignment.handoffInputs.join(", ") + ". Select concise evidence before dispatch. No provider prompt began."} /></If>
 <Parse schema={schemas.assignment} as="parsed"><Json value={props.assignment} /></Parse>
 <ReviewPolicy assessment={parsed.assessment} kind={parsed.reviewKind ?? "feature"} as="policy" />
 <SafeParse schema={schemas.result} as="schemaPrepared"><Json value={{}} /></SafeParse>
@@ -108,7 +109,7 @@ pwd -P
 <If condition={workspace.exitCode !== 0}><Fail message={JSON.stringify(workspace)} /></If>
 <Let as="attempt" value={workspace.stdout.slice(0,-1) + "/" + attempt} />
 </If>
-<Let as="assignment" value={{...parsed,artifactDirectory:attempt,contract:parsed.contract ?? null,continuation:{phase:successor,role:nextRole}}} />
+<Let as="assignment" value={{...parsed,artifactDirectory:attempt,identityDirectory:parsed.identityDirectory ?? attempt.slice(0,attempt.lastIndexOf("/")) + "/sessions",contract:parsed.contract ?? null,continuation:{phase:successor,role:nextRole}}} />
 <If condition={assignment.phase !== props.phase}>
 <Fail message="The prepared assignment belongs to another phase." />
 </If>
@@ -129,6 +130,9 @@ mkdir -- {quotedAttempt}
 <Phase.Event attempt={attempt} stage="started" assignment={assignment} role={props.role} as="started" />
 <Phase.Role inputs={props.inputs} role={props.role} session={props.session} assignment={assignment} initialize={props.initialize} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} as="raw" />
 <Dir path={attempt}><File path="raw.txt">{raw}</File></Dir>
+<Phase.Profile role={props.role} assessment={assignment.assessment} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} as="deliveredProfile" />
+<Ticket.Fingerprint inputs={props.inputs} as="sentInputs" />
+<Dir path={attempt}><File path="delivery.json"><Json value={{schema:"role-input-delivery.v1",role:props.role,session:props.session,provider:deliveredProfile.provider,profile:deliveredProfile,initialize:props.initialize,inputs:sentInputs,raw:attempt + "/raw.txt"}} /></File></Dir>
 <Phase.Event attempt={attempt} stage="reply-saved" assignment={assignment} role={props.role} as="replied" />
 <Phase.Correct assignment={assignment} raw={raw} role={props.role} session={props.session} attempt={attempt} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} inputs={props.inputs} profile={props.responseProfile} maxResponseCorrections={props.maxResponseCorrections} as="accepted" />
 <Let as="result" value={accepted.result} />
