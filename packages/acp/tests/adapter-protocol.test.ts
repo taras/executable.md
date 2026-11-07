@@ -300,6 +300,37 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     });
   });
 
+  it("EA12: Claude's response usage is its main loop, and quota fills what it never measured", function* () {
+    const adapter = yield* useAdapter("claude", CLAUDE_ENV);
+    yield* initialize(adapter);
+    const sessionId = yield* openSession(adapter);
+
+    const response = yield* prompt(adapter, sessionId);
+
+    // The fake native result reports one input and one output token and no
+    // cache use. The response view is that main-loop tally under ACP's names;
+    // the quota view mirrors it and supplies a reasoning zero the native source
+    // never reported, which is why a retained record says `claude-imputed-zero`.
+    expect(response["usage"]).toEqual({
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0,
+      totalTokens: 2,
+    });
+    expect(metaOf(response, "quota")).toEqual({
+      token_count: {
+        totalTokens: 2,
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        cachedWriteTokens: 0,
+        outputTokens: 1,
+        reasoningOutputTokens: 0,
+      },
+      model_usage: [],
+    });
+  });
+
   it("EA4: interleaved Claude sessions each carry their own assistant message", function* () {
     const adapter = yield* useAdapter("claude", CLAUDE_ENV);
     yield* initialize(adapter);
