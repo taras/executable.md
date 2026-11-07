@@ -2510,13 +2510,9 @@ function* expandIf(
   }
 }
 
-function recordFailedRelease(ledger: CheckedFailures | undefined, error: unknown): void {
+function recordTerminalFailure(ledger: CheckedFailures | undefined, error: unknown): void {
   const release = ledger?.release;
-  if (
-    release === undefined ||
-    firstCause(error, (cause) => (cause instanceof InvocationTeardownError ? cause : undefined)) ===
-      undefined
-  ) {
+  if (release === undefined || terminalTryFailure(error) === undefined) {
     return;
   }
   const current = asFailure(error);
@@ -2633,7 +2629,7 @@ function* expandTry(
           },
           undefined,
           undefined,
-          (error) => recordFailedRelease(ledger, error),
+          (error) => recordTerminalFailure(ledger, error),
         );
       };
       if (element === undefined) {
@@ -2737,6 +2733,9 @@ function* expandTry(
         unchecked.push(attempt.failure);
       }
       finished = true;
+      if (terminalTryFailure(settledFailure()) !== undefined) {
+        return;
+      }
       if (structure.finalizer !== undefined) {
         yield* scoped(function* () {
           const begin = withResolvers<void>();
@@ -3338,7 +3337,7 @@ function* expandAll(
             children.map(
               (child) =>
                 (cancellation): Workflow<Json> =>
-                  ephemeral(retained(child(cancellation))),
+                  ephemeral(retained(child(cancellation), checkedFailures)),
             ),
             { cancellation: enclosing },
           )).map(readEmissions);
@@ -3371,16 +3370,24 @@ interface SpawnRendering {
   readonly runs: SpawnRun[];
 }
 
-function retained(child: Operation<SpawnRendering>): Operation<Json> {
+function retained(
+  child: Operation<SpawnRendering>,
+  ledger: CheckedFailures | undefined,
+): Operation<Json> {
   return (function* (): Operation<Json> {
-    const rendering = yield* child;
-    return {
-      runs: rendering.runs.map((run) => ({
-        text: run.text,
-        exact: run.exact,
-        selection: run.selection,
-      })),
-    };
+    try {
+      const rendering = yield* child;
+      return {
+        runs: rendering.runs.map((run) => ({
+          text: run.text,
+          exact: run.exact,
+          selection: run.selection,
+        })),
+      };
+    } catch (error) {
+      recordTerminalFailure(ledger, error);
+      throw error;
+    }
   })();
 }
 
@@ -3974,13 +3981,13 @@ function* expandComponent(
             },
             observed.settled,
             undefined,
-            (error) => recordFailedRelease(checkedFailures, error),
+            (error) => recordTerminalFailure(checkedFailures, error),
           ),
         );
       } catch (error) {
         // Body fail-fast propagates unchanged; a return-value failure is the
         // component's own printed error and follows the caller's error mode.
-        recordFailedRelease(checkedFailures, error);
+        recordTerminalFailure(checkedFailures, error);
         const fatal = fatalCause(error);
         if (fatal !== undefined) {
           throw fatal;
@@ -4033,7 +4040,7 @@ function* expandComponent(
         },
         observed.settled,
         undefined,
-        (error) => recordFailedRelease(checkedFailures, error),
+        (error) => recordTerminalFailure(checkedFailures, error),
       ),
     );
 
@@ -4650,7 +4657,7 @@ function* expandFunctionComponent(
         },
         observed.settled,
         invocationObservation,
-        (error) => recordFailedRelease(checkedFailures, error),
+        (error) => recordTerminalFailure(checkedFailures, error),
       );
       if (asBinding) {
         const parentEnv = yield* env;
@@ -4684,7 +4691,7 @@ function* expandFunctionComponent(
       // invocation, so what is handled here accounts for the body and its
       // teardown together.
 
-      recordFailedRelease(checkedFailures, error);
+      recordTerminalFailure(checkedFailures, error);
       const fatal = fatalCause(error);
 
       // A refused activation decision is not a failure any boundary may account

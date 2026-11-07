@@ -769,9 +769,10 @@ printing or Prompt normalization can discard it. Failed owning teardown permits
 neither Catch, replacement work nor an unentered Finally. Canonical execution
 captures the durable root's shared failure slot before document preparation or
 middleware and passes its activation closure through the private release ledger.
-Actual invocation release failure activates that slot before a durable child can
-serialize an ordinary error Close; replacing a later ambient Context does not
-redirect activation. Prompt's existing live publication coordinator likewise
+Actual invocation release failure and terminal infrastructure failure activate
+that slot before a durable child can serialize an ordinary error Close; replacing
+a later ambient Context does not redirect activation. Each phase checks the
+combined terminal failure before entering an unentered Finally. Prompt's existing live publication coordinator likewise
 activates its infrastructure failure path before serializing failed release;
 no recoverable failed-turn record is published. Initiating and
 teardown failures remain separate. Through the complete combined causes, durability

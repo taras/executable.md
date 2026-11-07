@@ -10,6 +10,7 @@ import {
   DurablePersistenceError,
 } from "@executablemd/durable-streams";
 import { API, FilesProviderUnavailableError } from "@executablemd/runtime";
+import { invokeFiles } from "../src/files.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { Component, content, retain } from "../src/component-api.ts";
@@ -545,6 +546,57 @@ describe("Try owned lifetimes", () => {
       expect(
         firstCause(result.result.error, (cause) => (cause === failure ? failure : undefined)),
       ).toBe(failure);
+    }
+  });
+
+  it("F1: a genuine Files failure in Catch joins cleanup and skips unentered Finally", function* () {
+    let finalized = 0;
+    let released = false;
+    let fatal: unknown;
+    yield* registerComponents([
+      {
+        name: "CatchInfra",
+        origin: "try-lifecycle",
+        props: noProps,
+        *fn() {
+          yield* ensure(() => {
+            released = true;
+          });
+          yield* API.Files.around({
+            *readTextFile() {
+              throw new Error("provider broke read contract");
+            },
+          });
+          try {
+            yield* invokeFiles(API.Files.operations.readTextFile({ cwd: ".", path: "notes.txt" }));
+          } catch (error) {
+            fatal = filesFatalFailure(error);
+            throw error;
+          }
+          return "unreachable";
+        },
+      },
+      {
+        name: "FinalMark",
+        origin: "try-lifecycle",
+        props: noProps,
+        *fn() {
+          finalized++;
+          return "FINALIZED";
+        },
+      },
+    ]);
+    const result = yield* run(
+      '<Try><Fail message="ordinary" /><Catch><CatchInfra /></Catch><Finally><FinalMark /></Finally></Try>WRONG',
+    );
+    expect(released).toBe(true);
+    expect(fatal).toBeDefined();
+    expect(result.result.ok).toBe(false);
+    expect(finalized).toBe(0);
+    expect(result.output).not.toContain("FINALIZED");
+    expect(result.output).not.toContain("WRONG");
+    if (!result.result.ok) {
+      expect(filesFatalFailure(result.result.error)).toBe(fatal);
     }
   });
 
