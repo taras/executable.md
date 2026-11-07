@@ -1,7 +1,8 @@
 import { Agent, Component } from "@executablemd/core/api";
 import type { Operation } from "effection";
 import { z } from "zod";
-import { causedBy, configurationOf, describeFailure, isFilesFailure } from "./failure.ts";
+import { causedBy, configurationOf, configurationSchema, describeFailure, isFilesFailure } from "./failure.ts";
+import { retained } from "./observation.ts";
 import { outcomeSchema, reviewerSchema, settledSchema } from "./records.ts";
 
 export const props = {
@@ -39,14 +40,30 @@ export default function* Classify(value: unknown): Operation<unknown> {
   if (isFilesFailure(outcome.failure)) {
     throw outcome.failure;
   }
-  const session = causedBy(outcome.failure, sessionFailures);
+  const failure = outcome.failure;
+  const attributed = yield* retained(
+    "delivery-review-classification",
+    z.strictObject({
+      stage: z.enum(["session", "other"]),
+      failure: z.string(),
+      configuration: configurationSchema,
+    }),
+    function* () {
+      const session = causedBy(failure, sessionFailures);
+      return {
+        stage: session ? "session" : "other",
+        failure: describeFailure(failure),
+        configuration: session ? configurationOf(failure) : null,
+      };
+    },
+  );
   return outcomeSchema.parse({
     schema: "delivery-review-outcome.v1",
     reviewer,
-    stage: session ? "session" : "other",
+    stage: attributed.stage,
     catalog: null,
     turn: null,
-    failure: describeFailure(outcome.failure),
-    configuration: session ? configurationOf(outcome.failure) : null,
+    failure: attributed.failure,
+    configuration: attributed.configuration,
   });
 }

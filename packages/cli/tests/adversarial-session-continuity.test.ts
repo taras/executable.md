@@ -3,6 +3,7 @@ import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { expect } from "@executablemd/test-support/expect";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { scoped, spawn, withResolvers } from "effection";
+import type { Stream } from "effection";
 import type { Operation } from "effection";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -26,6 +27,12 @@ import type { AcpRuntimeOptions, ProbeCapableRuntime } from "@executablemd/acp";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { createAcpxProvider } from "../../acp/src/provider.ts";
 import { installAgentProviderStack } from "../src/agent-stack.ts";
+import { gitPlugin } from "@executablemd/git";
+import { installPlugins } from "../src/plugin-host.ts";
+import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
+import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
+import type { ReplSession, ReplSessionOptions } from "../src/repl/session.ts";
+import type { ReplQuestion } from "../src/repl/elicitation.ts";
 import { createFakeAcp, makeStore } from "./support/fake-acp.ts";
 import type { FakeAcp } from "./support/fake-acp.ts";
 import { AGENT_SOURCE, world } from "../../acp/tests/released-peer.ts";
@@ -658,6 +665,202 @@ describe(
       expect(held.attempts.map((item) => item.state)).toEqual(["unjoined"]);
       expect(held.summary).toContain("uncertain");
       expect(harness.asked).toHaveLength(1);
+    });
+  },
+);
+
+function* question(session: ReplSession): Operation<ReplQuestion> {
+  const changes = yield* session.elicitation.changes;
+  while (session.elicitation.pending === undefined) {
+    yield* changes.next();
+  }
+  return session.elicitation.pending;
+}
+
+describe(
+  "delivery review partial continuation",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("restores a retained no-output failed turn as the same outcome without another provider call", function* () {
+      const root = join(tmpdir(), `xmd-delivery-turn-${randomUUID()}`);
+      yield* ensureDir(root);
+      const path = join(root, "turn.md");
+      yield* writeTextFile(
+        path,
+        '<Ticket.Capture as="captured"><Delivery.Turn as="turn"><Prompt session="review" throwOnError={true}>review</Prompt></Delivery.Turn><Json value={turn} /></Ticket.Capture><Json value={captured} />',
+      );
+      let calls = 0;
+      function perform(stream: InMemoryStream) {
+        return scoped(function* () {
+          yield* useHostFiles();
+          yield* useComponentModuleLoader();
+          yield* Permissions.around({ files: () => true });
+          yield* useNormalizedOutput();
+          yield* installAgentComponents({ defaultAgent: "fixture" });
+          yield* Agent.around(
+            {
+              *agent([name]) {
+                return name ?? "fixture";
+              },
+              *session() {
+                return { sessionKey: "review", cwd: root };
+              },
+              *prompt() {
+                calls++;
+                const events: AgentPromptEvent[] = [
+                  {
+                    type: "started",
+                    agent: "fixture",
+                    session: { sessionKey: "review", cwd: root },
+                  },
+                  {
+                    type: "terminal",
+                    status: "failed",
+                    error: new Error("recorded provider refusal"),
+                  },
+                ];
+                const turn: Stream<AgentPromptEvent, string> = {
+                  *[Symbol.iterator]() {
+                    let count = 0;
+                    return {
+                      *next() {
+                        const event = events[count++];
+                        return event === undefined
+                          ? { done: true as const, value: "" }
+                          : { done: false as const, value: event };
+                      },
+                    };
+                  },
+                };
+                return turn;
+              },
+            },
+            { at: "min" },
+          );
+          const executed = yield* executeInstalled({ path, includes: [components], stream }, []);
+          return z.string().parse(yield* collect(executed));
+        });
+      }
+      const live = new InMemoryStream();
+      const first = execution.parse(JSON.parse(yield* perform(live)));
+      const prefix = live
+        .snapshot()
+        .filter((event) => !(event.type === "close" && event.coroutineId === "root"));
+      const continued = execution.parse(JSON.parse(yield* perform(new InMemoryStream(prefix))));
+      expect(calls).toBe(1);
+      expect(first.status).toBe("completed");
+      expect(JSON.parse(first.output)).toMatchObject({
+        state: "failed",
+        partial: "",
+        configuration: null,
+      });
+      expect(continued).toEqual(first);
+    });
+
+    it("continues an unfinished REPL review to its held question, and a new action after Entry Stop reads the same hold", function* () {
+      const fake = createFakeAcp();
+      fake.configuration(catalog(["fable", "gpt-6-astra"]));
+      fake.script({ failure: "The Fable provider turn failed." });
+      fake.script({ failure: "The Astra provider turn failed." });
+      const harness = yield* reviewWorld(fake);
+      const attempt = join(harness.delivery.directory as string, `review-${revision}`);
+      const source = `<Let as="delivery" value={${JSON.stringify(harness.delivery)}} /><Delivery.Review delivery={delivery} revision="${revision}" as="result" /><Json value={result} />`;
+      const stream = new InMemoryStream();
+      const store = makeStore();
+      function* sessionOptions(): Operation<ReplSessionOptions> {
+        const plugins = yield* installPlugins([replRepositoryPlugin(gitPlugin)], {
+          command: "repl",
+          args: [],
+        });
+        return {
+          execution: { id: "delivery-review-held", stream },
+          includes: [components],
+          installations: [
+            ...plugins.installations,
+            { components: agentIdentityComponents(), *install() {} },
+          ],
+        };
+      }
+      function* evidence() {
+        const files: Record<string, string> = {};
+        for (const file of [
+          "selection.json",
+          "assignment.json",
+          "outcome.json",
+          "execution.json",
+          "hold.json",
+          "replacement/transition.json",
+          "replacement/assignment.json",
+          "replacement/outcome.json",
+          "replacement/execution.json",
+        ]) {
+          files[file] = yield* readTextFile(join(attempt, file));
+        }
+        return files;
+      }
+      function* hosted<T>(body: () => Operation<T>): Operation<T> {
+        return yield* scoped(function* () {
+          yield* useHostFiles();
+          yield* useComponentModuleLoader();
+          yield* Permissions.around({ files: () => true });
+          yield* installAgentProviderStack(
+            {
+              provider: "acpx",
+              defaultAgent: "claude",
+              permissionMode: "deny-all",
+              adapters: createEmbeddedAdapters(join(harness.root, "adapters")),
+            },
+            {
+              createRuntime: fake.create,
+              sessionStore: store,
+              advertiseNativeLaunch: [],
+              advertiseClientNativeAttachment: [],
+            },
+          );
+          return yield* body();
+        });
+      }
+
+      const asked = yield* hosted(function* () {
+        const opened = yield* submitReplEntry({ ...(yield* sessionOptions()), source });
+        if (!opened.ok) {
+          throw opened.error;
+        }
+        return (yield* question(opened.value)).message;
+      });
+      expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude", "codex"]);
+      const held = yield* evidence();
+      expect(JSON.parse(held["outcome.json"]!)).toMatchObject({
+        stage: "settled",
+        turn: { state: "failed", partial: "" },
+      });
+      expect(asked).toContain("Every eligible independent reviewer failed without a valid review.");
+
+      yield* hosted(function* () {
+        const reopened = yield* openReplSession(yield* sessionOptions());
+        if (!reopened.ok) {
+          throw reopened.error;
+        }
+        const continued = yield* question(reopened.value);
+        expect(continued.message).toBe(asked);
+        expect(fake.turns).toHaveLength(2);
+        expect((yield* reopened.value.stopEntry("entry-1")).ok).toBe(true);
+        expect(reopened.value.model.entries[0]?.terminal?.status).toBe("cancelled");
+        const submitted = yield* reopened.value.submit(source);
+        if (!submitted.ok) {
+          throw submitted.error;
+        }
+        const again = yield* question(reopened.value);
+        expect(again.message).toBe(asked);
+        expect(again.submit({ disposition: "hold" }).kind).toBe("answered");
+        expect((yield* submitted.value.join()).ok).toBe(true);
+      });
+      expect(fake.turns).toHaveLength(2);
+      expect(yield* evidence()).toEqual(held);
+      const disposition = z
+        .object({ answer: z.object({ disposition: z.string() }) })
+        .parse(JSON.parse(yield* readTextFile(join(attempt, "disposition.json"))));
+      expect(disposition.answer).toEqual({ disposition: "hold" });
     });
   },
 );

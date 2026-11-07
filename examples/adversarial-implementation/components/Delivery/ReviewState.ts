@@ -1,6 +1,7 @@
 import { API, parseFilesFailure } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import { z } from "zod";
+import { retained } from "./observation.ts";
 import {
   attemptSchema,
   dispositionSchema,
@@ -197,10 +198,16 @@ function transitionFor(selection: Selection, primary: Attempt) {
 
 export default function* ReviewState(value: unknown): Operation<unknown> {
   const { directory, expected, replacement } = input.parse(value);
+  return yield* retained("delivery-review-state", z.record(z.string(), z.unknown()), () =>
+    observe(directory, expected, replacement),
+  );
+}
+
+function* observe(directory: string, expected: Selection, replacement: boolean): Operation<unknown> {
   const selectionText = yield* read(directory, "selection.json");
-  const retained = parsed(selectionSchema, selectionText);
+  const recorded = parsed(selectionSchema, selectionText);
   const selection =
-    selectionText === null ? "absent" : retained !== null && same(retained, expected) ? "matches" : "mismatch";
+    selectionText === null ? "absent" : recorded !== null && same(recorded, expected) ? "matches" : "mismatch";
   const empty = { selection, chain: expected.chain, attempts: [], candidate: null, effective: null, transition: null };
   if (selection !== "matches") {
     return { ...empty, next: "uncertain", hold: null };

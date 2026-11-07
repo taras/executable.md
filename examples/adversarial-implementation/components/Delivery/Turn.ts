@@ -1,9 +1,21 @@
 import { Agent, Component } from "@executablemd/core/api";
 import type { AgentPromptEvent } from "@executablemd/core/api";
 import type { Operation, Stream } from "effection";
-import { configurationOf, describeFailure, isFilesFailure } from "./failure.ts";
+import { z } from "zod";
+import { configurationOf, configurationSchema, describeFailure, isFilesFailure } from "./failure.ts";
+import { retained } from "./observation.ts";
 
 export const props = { type: "object", properties: {}, additionalProperties: false };
+
+const observationSchema = z.discriminatedUnion("provider", [
+  z.strictObject({ provider: z.literal(false) }),
+  z.strictObject({
+    provider: z.literal(true),
+    failure: z.string(),
+    partial: z.string(),
+    configuration: configurationSchema,
+  }),
+]);
 
 export default function* Turn(): Operation<unknown> {
   let requested = false;
@@ -55,15 +67,30 @@ export default function* Turn(): Operation<unknown> {
   if (outcome.failure === undefined) {
     return { state: "reply", reply: outcome.text };
   }
-  const reported = terminal !== undefined && terminal.status !== "completed";
-  if (isFilesFailure(outcome.failure) || !requested || (providerFailure === undefined && !reported)) {
-    throw outcome.failure;
+  const failure = outcome.failure;
+  if (isFilesFailure(failure)) {
+    throw failure;
   }
-  const cause = providerFailure?.error ?? terminal?.error;
+  const observed = yield* retained("delivery-review-turn", observationSchema, function* () {
+    const reported = terminal !== undefined && terminal.status !== "completed";
+    if (!requested || (providerFailure === undefined && !reported)) {
+      return { provider: false };
+    }
+    const cause = providerFailure?.error ?? terminal?.error;
+    return {
+      provider: true,
+      failure: describeFailure(failure),
+      partial: produced,
+      configuration: configurationOf(cause) ?? configurationOf(failure),
+    };
+  });
+  if (!observed.provider) {
+    throw failure;
+  }
   return {
     state: "failed",
-    failure: describeFailure(outcome.failure),
-    partial: produced,
-    configuration: configurationOf(cause) ?? configurationOf(outcome.failure),
+    failure: observed.failure,
+    partial: observed.partial,
+    configuration: observed.configuration,
   };
 }
