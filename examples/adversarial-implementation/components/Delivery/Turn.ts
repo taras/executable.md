@@ -24,6 +24,7 @@ const observationSchema = z.discriminatedUnion("provider", [
     partial: z.string(),
     configuration: configurationSchema,
     refusal: refusalSchema.nullable(),
+    terminal: z.enum(["failed", "cancelled"]).nullable(),
   }),
 ]);
 
@@ -154,6 +155,7 @@ export default function* Turn(): Operation<unknown> {
         partial: "",
         configuration: configurationOf(failure),
         refusal: null,
+        terminal: null,
       };
     }
     const raw = streamFailure?.error;
@@ -168,6 +170,8 @@ export default function* Turn(): Operation<unknown> {
       partial: produced,
       configuration: configurationOf(raw ?? terminal?.error) ?? configurationOf(failure),
       refusal: refusalOf(),
+      terminal:
+        terminal?.status === "failed" || terminal?.status === "cancelled" ? terminal.status : null,
     };
   });
   if (!observed.provider) {

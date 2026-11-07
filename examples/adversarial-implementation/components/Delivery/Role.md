@@ -33,9 +33,8 @@ Return exactly one JSON object satisfying this schema. acceptance lists every cl
 <Json value={schemas.review} />
 </Let>
 <If condition={instructions.length > 64000}><Fail message="The complete independent-review request exceeds 64000 characters. Prepare concise accepted inputs before dispatch." /></If>
-<Dir path={props.delivery.directory}><Glob include={[props.position === 0 ? "review-*/assignment.json" : "review-*/replacement/assignment.json"]} as="priorReviews" /></Dir>
-<Let as="own" value={props.attempt.slice(props.delivery.directory.length + 1) + "/assignment.json"} />
-<Let as="continuation" value={props.delivery.sessionEstablished === true || priorReviews.some(path => path !== own)} />
+<Delivery.Continuation directory={props.delivery.directory} session={props.reviewer.session} own={props.attempt.slice(props.delivery.directory.length + 1) + "/assignment.json"} as="established" />
+<Let as="continuation" value={props.delivery.sessionEstablished === true || established} />
 <AgentProvider name="acpx" defaultAgent={props.reviewer.provider}><Dir path={props.delivery.repository}>
 <Delivery.Inspect agent={props.reviewer.provider} choices={props.choices} as="catalog" />
 <Let as="turn" value={null} />

@@ -52,6 +52,7 @@ const turnSchema = z.discriminatedUnion("state", [
     partial: z.string(),
     configuration: configurationSchema,
     refusal: refusalSchema.nullable(),
+    terminal: z.enum(["failed", "cancelled"]).nullable(),
   }),
 ]);
 

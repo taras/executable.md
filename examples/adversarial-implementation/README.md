@@ -205,9 +205,11 @@ continuations. An established continuation with a missing receipt holds; recover
 the original evidence rather than treating it as a fresh call. Adopting a runtime
 or adapter never proves conversation continuity from a logical session name alone.
 Independent review uses `delivery.directory/sessions` and requires a reviewer's
-retained identity when that same reviewer has an earlier review assignment. An
-Astra replacement keeps a conversation and receipt of its own, so a Fable
-assignment never makes it a continuation. An explicitly prepared continuation
+retained identity when that same reviewer has an earlier attempt that may have
+entered its session. An attempt whose catalog offered no selectable model, or
+whose session could not be established, does not count. An Astra replacement
+keeps a conversation and receipt of its own, so a Fable attempt never makes it a
+continuation. An explicitly prepared continuation
 can likewise require the original receipt with `delivery.sessionEstablished=true`.
 
 ## Select typing evidence and record amendments
@@ -275,7 +277,8 @@ Each attempt runs inside `<Try>`: its provider scope is released before Catch or
 the next step runs, and `execution.json` records that release. A release that
 fails ends the run, leaving the attempt reserved for reconciliation without a
 replacement or a hold. When no eligible reviewer produced a review, or the first
-attempt cannot be replaced (it streamed partial output, or it failed outside the
+attempt cannot be replaced (it streamed partial output, the provider reported the
+turn cancelled, or it failed outside the
 provider), the action writes `review-<sha>/hold.json` and then asks through
 `<Elicit>` with the actual identities and reasons. The answer is `hold` or
 `reconcile`, retained in `disposition.json` before it acts: `hold` leaves

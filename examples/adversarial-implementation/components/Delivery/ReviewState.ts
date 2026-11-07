@@ -181,6 +181,12 @@ function* attempt(
   if (turn.state === "reply") {
     return result("review", "The reviewer returned a joined reply.");
   }
+  if (turn.terminal === "cancelled") {
+    return result(
+      "held",
+      "The provider reported the review turn cancelled, which is not evidence that the reviewer is unavailable.",
+    );
+  }
   if (usageLimitRefusal(outcome, fableChoices)) {
     return result(
       "eligible",

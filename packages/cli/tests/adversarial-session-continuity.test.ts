@@ -1,5 +1,5 @@
 import { describe, it } from "@executablemd/test-support/bdd";
-import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { expect } from "@executablemd/test-support/expect";
 import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { scoped, spawn, withResolvers } from "effection";
@@ -726,6 +726,88 @@ describe(
       }
     });
 
+    it("holds a provider-cancelled Fable turn without output and starts no Astra", function* () {
+      const fake = createFakeAcp();
+      fake.configuration(catalog(["fable", "gpt-6-astra"]));
+      fake.script({ reply: "", cancelled: true });
+      const harness = yield* reviewWorld(fake);
+      const ran = yield* harness.run(reviewSource, { delivery: harness.delivery, revision });
+      expect(ran.ok).toBe(true);
+      expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude"]);
+      const attempt = join(harness.delivery.directory as string, `review-${revision}`);
+      expect(JSON.parse(yield* readTextFile(join(attempt, "outcome.json"))).turn).toMatchObject({
+        state: "failed",
+        stage: "turn",
+        partial: "",
+        terminal: "cancelled",
+      });
+      expect(
+        execution.parse(JSON.parse(yield* readTextFile(join(attempt, "execution.json")))).status,
+      ).toBe("completed");
+      const hold = z
+        .object({ attempts: z.array(z.object({ state: z.string(), reason: z.string() })) })
+        .parse(JSON.parse(yield* readTextFile(join(attempt, "hold.json"))));
+      expect(hold.attempts.map((item) => item.state)).toEqual(["held"]);
+      expect(hold.attempts[0]?.reason).toContain("cancelled");
+      expect(harness.asked).toHaveLength(1);
+    });
+
+    it("lets a reviewer first prompt after a catalog-only revision, and refuses when its established receipt is gone", function* () {
+      const fake = createFakeAcp();
+      const harness = yield* reviewWorld(fake);
+      const reviewer = { provider: "claude", model: "fable", effort: null, session: "independent" };
+      const sessionReceipt = join(
+        harness.delivery.directory as string,
+        "sessions",
+        "independent.json",
+      );
+      function* reviewAt(sha: string) {
+        const attempt = join(harness.delivery.directory as string, `review-${sha}`);
+        yield* ensureDir(attempt);
+        yield* writeTextFile(
+          join(attempt, "assignment.json"),
+          JSON.stringify({ work: "production-review", revision: sha, reviewer }),
+        );
+        const ran = yield* harness.run(roleSource, {
+          delivery: harness.delivery,
+          revision: sha,
+          reviewer,
+          choices: ["fable"],
+          attempt,
+        });
+        return { ran, attempt };
+      }
+      fake.configuration(catalog(["claude-opus"]));
+      const skipped = yield* reviewAt("b".repeat(40));
+      expect(skipped.ran.ok).toBe(true);
+      expect(
+        outcome.parse(JSON.parse(yield* readTextFile(join(skipped.attempt, "outcome.json"))))
+          .catalog.state,
+      ).toBe("unavailable");
+      expect(fake.prompts).toEqual([]);
+      fake.configuration(catalog(["fable"]));
+      fake.script({ reply: review });
+      const first = yield* reviewAt("c".repeat(40));
+      expect(first.ran.ok).toBe(true);
+      expect(fake.prompts).toHaveLength(1);
+      expect(
+        outcome.parse(JSON.parse(yield* readTextFile(join(first.attempt, "outcome.json")))).turn,
+      ).toEqual({ state: "reply", reply: review });
+      const established = z
+        .object({
+          name: z.string(),
+          attempted: z.boolean(),
+          identity: z.object({ value: z.string() }),
+        })
+        .parse(JSON.parse(yield* readTextFile(sessionReceipt)));
+      expect(established).toMatchObject({ name: "independent", attempted: true });
+      yield* rm(sessionReceipt);
+      const refused = yield* reviewAt("d".repeat(40));
+      expect(refused.ran.ok).toBe(false);
+      expect(refused.ran.text).toContain("identity receipt is unavailable");
+      expect(fake.prompts).toHaveLength(1);
+    });
+
     it("ends the run without Astra or a hold when the failed Fable owner's real ACP close rejects", function* () {
       const fake = createFakeAcp();
       fake.configuration(catalog(["fable", "gpt-6-astra"]));
@@ -776,7 +858,7 @@ describe(
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     it("restores a retained failed turn, including its refusal facts, as the same outcome without another provider call", function* () {
-      for (const variant of ["no-output", "refusal"]) {
+      for (const variant of ["no-output", "cancelled", "refusal"]) {
         const root = join(tmpdir(), `xmd-delivery-turn-${randomUUID()}`);
         yield* ensureDir(root);
         const path = join(root, "turn.md");
@@ -829,11 +911,13 @@ describe(
                             agent: "fixture",
                             session: { sessionKey: "review", cwd: root },
                           },
-                          {
-                            type: "terminal",
-                            status: "failed",
-                            error: new Error("recorded provider refusal"),
-                          },
+                          variant === "cancelled"
+                            ? { type: "terminal", status: "cancelled" }
+                            : {
+                                type: "terminal",
+                                status: "failed",
+                                error: new Error("recorded provider refusal"),
+                              },
                         ];
                   const turn: Stream<AgentPromptEvent, string> = {
                     *[Symbol.iterator]() {
@@ -887,8 +971,15 @@ describe(
                   output: notice,
                   closeValue: notice,
                 },
+                terminal: "failed",
               }
-            : { state: "failed", partial: "", configuration: null, refusal: null },
+            : {
+                state: "failed",
+                partial: "",
+                configuration: null,
+                refusal: null,
+                terminal: variant === "cancelled" ? "cancelled" : "failed",
+              },
         );
         expect(continued).toEqual(first);
       }
