@@ -37,6 +37,9 @@ import { useWorkflowAgentProfile } from "../src/workflow-agent.ts";
 import { createFakeAcp, makeStore } from "./support/fake-acp.ts";
 import type { FakeAcp } from "./support/fake-acp.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/workflow-run.ts";
+import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import { parseDurableEvent } from "@executablemd/durable-streams";
+import { sleep } from "effection";
 
 const HOST: PromptUsageHost = { host: "deno-source", xmd: { version: "0.0.0-hosts" } };
 
@@ -242,4 +245,53 @@ describe("Tier HU — Prompt usage through the host assemblies", () => {
     });
     expect(usageIn(yield* stream.readAll())).toEqual([undefined]);
   });
+
+  it("HU7: a REPL entry retains usage through the entry publisher, and the Sidekick through its owner", function* () {
+    yield* useHostFiles();
+    const held = yield* useHarness(undefined, { promptUsageHost: HOST });
+    held.fake.script({ reply: "entry answered", usage: RETAINED });
+    const entry = yield* held.session.submit(
+      '<Session name="planner"><Prompt text="measure the entry" /></Session>\n',
+    );
+    expect(entry.ok ? "ok" : entry.error.message).toBe("ok");
+    const entryUsage = yield* settledUsage(() => held.execution.stream.readAll());
+    expect(entryUsage.length).toBe(1);
+    // The scripted agent has no traced adapter release, so its semantics stay
+    // unknown — the retained identities and provenance are the row's subject.
+    expect(entryUsage[0]?.providerMessageId).toBe("message-hosts");
+    expect(entryUsage[0]?.provenance.host).toBe("deno-source");
+    expect(entryUsage[0]?.coverage.limitations).toContain("source-semantics-unknown");
+
+    held.fake.script({
+      reply: "<Output>sidekick answered</Output>",
+      usage: { ...RETAINED, promptMessageId: "message-sidekick" },
+    });
+    const turn = yield* held.owner.message("measure the conversation");
+    expect(turn.ok ? "ok" : turn.error.message).toBe("ok");
+    const chat = yield* settledUsage(function* () {
+      return (yield* records(held.execution)).flatMap((one) => {
+        if (one.kind !== "event") {
+          return [];
+        }
+        const parsed = parseDurableEvent(one.event);
+        return parsed.ok ? [parsed.value] : [];
+      });
+    });
+    expect(chat.map((usage) => usage?.providerMessageId)).toEqual(["message-sidekick"]);
+    expect(chat[0]?.provenance.host).toBe("deno-source");
+  });
 });
+
+/** The usage each retained Prompt carries, once a history holds at least one. */
+function* settledUsage(
+  read: () => Operation<readonly DurableEvent[]>,
+): Operation<(PromptUsage | undefined)[]> {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const found = usageIn(yield* read());
+    if (found.length > 0) {
+      return found;
+    }
+    yield* sleep(10);
+  }
+  throw new Error("no Prompt was retained");
+}

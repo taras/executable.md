@@ -17,8 +17,7 @@
 
 import type { Json } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import { inputValues } from "../secrets/inputs.ts";
-import { secretPolicy, scanSecrets } from "../secrets/policy.ts";
+import { retainsOptionalText } from "../secrets/policy.ts";
 
 /** One build identity, where it was observed. */
 export interface UsageBuild {
@@ -448,34 +447,8 @@ export function canonicalUsage(
   return unavailableUsage(reported[0].provenance, USAGE_ASSOCIATION_AMBIGUOUS);
 }
 
-/**
- * Whether one optional string may be retained by the execution running now.
- *
- * Protected inputs are refused whatever the scanner setting, because that check
- * is not the scanner's to waive. Doubt withholds: an absent or unauthentic
- * policy, a finding and a scanner that failed all answer no.
- */
-function* disclosable(value: string): Operation<boolean> {
-  try {
-    const inputs = yield* inputValues();
-    if (inputs !== undefined) {
-      if (inputs.contains(value)) {
-        return false;
-      }
-      const shown = inputs.display(value);
-      if (!shown.ok || shown.value !== value) {
-        return false;
-      }
-    }
-    const policy = yield* secretPolicy();
-    if (!policy.enabled) {
-      return true;
-    }
-    return (yield* scanSecrets(value)).length === 0;
-  } catch {
-    return false;
-  }
-}
+/** A limitation is a fixed categorical name: lowercase words joined by hyphens. */
+const LIMITATION = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 
 /**
  * The part of a reported value this execution may retain.
@@ -485,8 +458,10 @@ function* disclosable(value: string): Operation<boolean> {
  * so one unsafe model name withholds that name rather than the whole account;
  * a reading whose only identity was a withheld model is dropped, because
  * keeping its numbers without the model would let it read as another view.
- * Numbers, enumerations and the fixed limitation names carry nothing a host
- * wrote. The journal's own gate still decides whether the record is persisted.
+ * Numbers and enumerations carry nothing a host wrote. Every supplied string —
+ * identities, builds, model names, currency and limitation names — is checked
+ * through the producing execution's own policy binding. The journal's own gate
+ * still decides whether the record is persisted.
  */
 export function* retainablePromptUsage(usage: PromptUsage): Operation<PromptUsage> {
   let withheld = false;
@@ -494,7 +469,7 @@ export function* retainablePromptUsage(usage: PromptUsage): Operation<PromptUsag
     if (value === undefined) {
       return undefined;
     }
-    if (yield* disclosable(value)) {
+    if (yield* retainsOptionalText(value)) {
       return value;
     }
     withheld = true;
@@ -556,7 +531,18 @@ export function* retainablePromptUsage(usage: PromptUsage): Operation<PromptUsag
     }
     readings.push(reading);
   }
-  const limitations = [...usage.coverage.limitations];
+  // Limitations are supplied strings too, so each is selected like any other
+  // and only a categorical name survives.
+  const limitations: string[] = [];
+  for (const limitation of usage.coverage.limitations) {
+    const kept =
+      LIMITATION.test(limitation) && limitation.length <= 64 ? yield* keep(limitation) : undefined;
+    if (kept === undefined) {
+      withheld = true;
+    } else if (!limitations.includes(kept)) {
+      limitations.push(kept);
+    }
+  }
   if (withheld && !limitations.includes(USAGE_FIELD_WITHHELD)) {
     limitations.push(USAGE_FIELD_WITHHELD);
   }

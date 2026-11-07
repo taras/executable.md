@@ -33,7 +33,9 @@ overwrites earlier evidence. `--help` prints the grammar and starts nothing.
 | `subagent` | 1 | One native subagent where supported, or the specific gap. |
 
 Each Prompt is attempted once. Nothing is retried, repaired or restarted, and no
-other scenario runs. Each Prompt has 60 seconds of work, and no invocation is
+other scenario runs. A later invocation starts only after the one before it exited
+successfully: a host that ended unsuccessfully may have failed its own cleanup,
+so the resume continuation is never started after an unsuccessful seed. Each Prompt has 60 seconds of work, and no invocation is
 admitted after 300 seconds; either deadline interrupts the host's own work and
 then waits for it to finish.
 
@@ -56,7 +58,11 @@ Calibration incomplete. Read <output>/report.md before attempting another run.
 acknowledged Prompt's source-labelled readings and coverage, and one row per
 check — usage retained, request-to-message association, ACPX's saved copy,
 the independent native comparison, the scenario's own behavior, history
-readback and joined teardown. Each row is `verified`, `limited`, `unavailable`,
+readback and joined teardown. The counts separate the outer Prompts reserved
+against the allowance from the submissions the evidence actually shows, which
+are `unknown` when the evidence cannot account for every reservation. A native
+comparison is made only with the native turn that carried this run's exact
+input in the session the record names. Each row is `verified`, `limited`, `unavailable`,
 `failed` or `not_run`, with a fixed reason.
 
 A `limited` row is a measured bound, such as `final-request-only`: the reported

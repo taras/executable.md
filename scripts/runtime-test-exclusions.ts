@@ -609,6 +609,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
  */
 const COMPILED_BINARY: RuntimeExclusion[] = [
   {
+    path: "scripts/tests/prompt-usage-compiled.test.ts",
+    reason:
+      "runs the compiled `dist/xmd`, which only `deno compile` produces and no test shard builds, to read the Prompt usage the compiled entrypoint's own host assembly retains; it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
+  {
     path: "scripts/tests/component-form-dispatch.test.ts",
     reason:
       "drives the compiled `dist/xmd`, which only `deno compile` produces and which no test shard builds — the subject is the binary's two loaded copies of core, a shape no Node or Bun run can build or exercise, and one the Deno shards saw only while an unrelated Deno-only build test happened to share a shard and leave the binary behind. The `smoke` job builds through README.md#Build and runs it there, beside the other suites whose subject is the binary",
