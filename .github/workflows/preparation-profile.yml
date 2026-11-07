@@ -30,7 +30,7 @@ jobs:
       - name: Prepare this checkout once
         run: deno task setup
 
-      - name: Capture the one Node Preparation execution
+      - name: Capture the one Bun Preparation execution
         id: capture
         shell: bash
         run: |
@@ -50,8 +50,7 @@ jobs:
               "sha": output("git", "rev-parse", "HEAD"),
               "tree": output("git", "rev-parse", "HEAD^{tree}"),
               "cwd": os.getcwd(),
-              "argv": ["pnpm", "exec", "tsx", "--tsconfig", "tsconfig.node.json",
-                       "--test", "--test-concurrency=1",
+              "argv": ["bun", "test", "--timeout=450000",
                        "packages/cli/tests/adversarial-preparation.test.ts"],
               "runUrl": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
               "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
@@ -67,7 +66,7 @@ jobs:
           if [ "$metadata_status" -ne 0 ]; then
             exit "$metadata_status"
           fi
-          pnpm exec tsx --tsconfig tsconfig.node.json --test --test-concurrency=1 packages/cli/tests/adversarial-preparation.test.ts \
+          bun test --timeout=450000 packages/cli/tests/adversarial-preparation.test.ts \
             > "$capture_directory/stdout.log" 2> "$capture_directory/stderr.log" &
           capture_pid=$!
           printf '%s\n' "$capture_pid" > "$capture_directory/child-pid.txt"

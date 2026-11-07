@@ -27,6 +27,10 @@ export default Plugin({
         let inspecting = false;
         let inputCount = 0;
         let inputOrdinal: number | undefined;
+        let planning = false;
+        let preparationCount = 0;
+        let providerCount = 0;
+        let responseCount = 0;
 
         yield* Component.around({
           *expand([request], next) {
@@ -35,7 +39,9 @@ export default Plugin({
             const previousVariant = variantOrdinal;
             const previousInspection = inspecting;
             const previousInput = inputOrdinal;
+            const previousPlanning = planning;
             let interval: string | undefined;
+            let occurrenceOrdinal: number | undefined;
             if (
               sourceMatches(position?.path, "tests/preparation-cases.md") &&
               expansion.name === "Test" &&
@@ -55,10 +61,61 @@ export default Plugin({
               position?.line === 41
             ) {
               interval = "journey";
+            } else if (
+              root !== "preparation-test-root" &&
+              sourceMatches(
+                position?.path,
+                "examples/adversarial-implementation/tests/preparation-journey.md",
+              ) &&
+              expansion.name === "Ticket.Run" &&
+              position?.line === 11 &&
+              position.column === 1
+            ) {
+              interval = identity ? "identity-planning" : "initial-planning";
+              planning = true;
+            } else if (
+              planning &&
+              sourceMatches(
+                position?.path,
+                "examples/adversarial-implementation/components/Ticket/Step.md",
+              ) &&
+              expansion.name === "Ticket.Prepare" &&
+              position?.line === 30 &&
+              position.column === 1
+            ) {
+              interval = "input-preparation";
+              occurrenceOrdinal = ++preparationCount;
+            } else if (
+              planning &&
+              sourceMatches(
+                position?.path,
+                "examples/adversarial-implementation/components/Phase/Run.md",
+              ) &&
+              expansion.name === "Phase.Role" &&
+              position?.line === 131 &&
+              position.column === 1
+            ) {
+              interval = "provider-execution";
+              occurrenceOrdinal = ++providerCount;
+            } else if (
+              planning &&
+              expansion.name === "Phase.Response" &&
+              position?.column === 1 &&
+              ((sourceMatches(
+                position.path,
+                "examples/adversarial-implementation/components/Phase/Correct.md",
+              ) &&
+                position.line === 26) ||
+                (sourceMatches(
+                  position.path,
+                  "examples/adversarial-implementation/components/Phase/Accept.md",
+                ) &&
+                  position.line === 9))
+            ) {
+              interval = "response-validation";
+              occurrenceOrdinal = ++responseCount;
             } else if (identity && sourceMatches(position?.path, "tests/preparation-journey.md")) {
-              if (expansion.name === "Ticket.Run" && position?.line === 11) {
-                interval = "identity-planning";
-              } else if (expansion.name === "Ticket.Gate" && position?.line === 14) {
+              if (expansion.name === "Ticket.Gate" && position?.line === 14) {
                 interval = "planning-checked";
               } else if (expansion.name === "Ticket.Inputs" && position?.line === 15) {
                 interval = "initial-inspection";
@@ -104,6 +161,7 @@ export default Plugin({
                     variantOrdinal: variant,
                     variant: variant === undefined ? undefined : variants[variant - 1],
                     inputOrdinal: input,
+                    occurrenceOrdinal,
                     milliseconds,
                     edge,
                   }),
@@ -119,6 +177,7 @@ export default Plugin({
               variantOrdinal = previousVariant;
               inspecting = previousInspection;
               inputOrdinal = previousInput;
+              planning = previousPlanning;
             }
           },
           *applyBoundModifiers([modifiers, request], next) {
