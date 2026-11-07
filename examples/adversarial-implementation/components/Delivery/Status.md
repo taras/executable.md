@@ -20,17 +20,15 @@ returns: {type: object}
 <Parse schema={schemas.policy} as="policy"><Json value={props.delivery.policy} /></Parse>
 <Ticket.Checkout repository={props.delivery.repository} as="checkout" />
 <Let as="revision" value={checkout.head} />
-<Let as="attempt" value={props.delivery.directory + "/review-" + revision} />
 <Let as="review" value={null} />
 <Let as="reviewState" value="review_pending" />
-<Dir path={props.delivery.directory}><Glob include={["review-" + revision + "/**"]} as="files" /></Dir>
-<Let as="quotedAttempt" value={"'" + attempt.replaceAll("'","'\"'\"'") + "'"} />
-```bash exec as="occupied"
-test -e {quotedAttempt} -o -L {quotedAttempt}
-```
-<If condition={occupied.exitCode === 0}>
+<Delivery.Attempts delivery={props.delivery} revision={revision} as="selected" />
+<Let as="attempt" value={selected.state.effective?.directory ?? selected.directory} />
+<If condition={selected.occupied}>
 <Let as="reviewState" value="reconciliation_required" />
-<If condition={files.includes("review-" + revision + "/receipt.json") && files.includes("review-" + revision + "/execution.json")}>
+<If condition={selected.state.effective !== null}>
+<Dir path={attempt}><Glob include={["receipt.json","execution.json"]} as="files" /></Dir>
+<If condition={files.length === 2}>
 <Ticket.Capture as="reading">
 <Delivery.Reconcile delivery={props.delivery} revision={revision} as="receipt" />
 <Json value={receipt} />
@@ -40,6 +38,9 @@ test -e {quotedAttempt} -o -L {quotedAttempt}
 <Let as="reviewState" value={review.result.verdict === "pass" ? "passed" : review.result.verdict === "changes_required" ? "repair_required" : "blocked"} />
 </If>
 </If>
+</If>
+<If condition={reviewState === "reconciliation_required" && selected.state.hold !== null && selected.state.hold.valid}><Let as="reviewState" value="review_held" /></If>
+<If condition={reviewState === "reconciliation_required" && selected.state.next === "replace" && selected.state.hold === null}><Let as="reviewState" value="review_pending" /></If>
 </If>
 <Delivery.Remote repository={policy.repository} number={props.number} as="remote" />
 <Ticket.Checkout repository={props.delivery.repository} as="afterRead" />
@@ -56,7 +57,7 @@ git symbolic-ref --quiet --short HEAD
 <Let as="remaining" value={required.filter(gate => gate.state !== "passed")} />
 <Let as="sourceMatches" value={checkout.clean && afterRead.clean && afterRead.head === revision && feedback.revision === revision && remote.stable && remote.revision === revision && branchRead.exitCode === 0 && remote.branch === branch && remote.base === "main"} />
 <Let as="status" value={!sourceMatches ? "source_changed" : reviewState === "reconciliation_required" ? reviewState : reviewState !== "passed" ? reviewState : remaining.some(gate => gate.state === "failed") ? "checks_failed" : remaining.length !== 0 ? "checks_pending" : remote.merged && /^[0-9a-f]{40}$/.test(remote.mergeRevision) ? "delivered" : remote.state !== "open" ? "closed_unmerged" : remote.draft ? "publication_pending" : "ready_for_merge"} />
-<Let as="nextAction" value={status === "review_pending" ? "review" : status === "repair_required" ? "request_approved_repair" : status === "reconciliation_required" ? "reconcile_original_review" : status === "checks_pending" ? "wait_for_checks" : status === "checks_failed" ? "repair_failed_check" : status === "publication_pending" ? "finish_pr_metadata" : status === "ready_for_merge" ? "await_authorized_merge" : status === "delivered" ? "report_delivery" : status === "blocked" ? "report_review_blocker" : "reconcile_source"} />
-<Return value={{work:props.delivery.work,revision,status,nextAction,required,remaining,review:review === null ? null : {attempt,result:review.result},remote}} />
+<Let as="nextAction" value={status === "review_pending" ? "review" : status === "repair_required" ? "request_approved_repair" : status === "reconciliation_required" ? "reconcile_original_review" : status === "checks_pending" ? "wait_for_checks" : status === "checks_failed" ? "repair_failed_check" : status === "publication_pending" ? "finish_pr_metadata" : status === "ready_for_merge" ? "await_authorized_merge" : status === "delivered" ? "report_delivery" : status === "blocked" ? "report_review_blocker" : status === "review_held" ? (selected.state.hold.answer === null ? "resolve_review_hold" : "report_review_hold") : "reconcile_source"} />
+<Return value={{work:props.delivery.work,revision,status,nextAction,required,remaining,review:review === null ? null : {attempt,result:review.result},reviewAttempts:selected.occupied ? {chain:selected.state.chain,selection:selected.state.selection,attempts:selected.state.attempts,effective:selected.state.effective,hold:selected.state.hold} : null,remote}} />
 </Else>
 </If>

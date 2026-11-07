@@ -204,10 +204,11 @@ directory across attempts. For standalone `phase.md` requests, retain
 continuations. An established continuation with a missing receipt holds; recover
 the original evidence rather than treating it as a fresh call. Adopting a runtime
 or adapter never proves conversation continuity from a logical session name alone.
-Independent review uses `delivery.directory/sessions` and requires its retained
-identity when an earlier review assignment exists. An explicitly prepared
-continuation can likewise require the original receipt with
-`delivery.sessionEstablished=true`.
+Independent review uses `delivery.directory/sessions` and requires a reviewer's
+retained identity when that same reviewer has an earlier review assignment. An
+Astra replacement keeps a conversation and receipt of its own, so a Fable
+assignment never makes it a continuation. An explicitly prepared continuation
+can likewise require the original receipt with `delivery.sessionEstablished=true`.
 
 ## Select typing evidence and record amendments
 
@@ -247,16 +248,43 @@ xmd run --allow-absolute /absolute/path/to/workflow/examples/adversarial-impleme
 `status` starts no model. It reads the saved joined review, the current PR and
 GitHub's CI workflow runs. Its `nextAction` is computed from the same facts as
 its `status` and `remaining` fields. When it requests `review`, select
-`--props-action review` on that command to perform one independent review with
-the provider, model, effort and session recorded at launch. Prepare the installed
-client for that model beforehand; a provider refusal retains its original
-attempt and grants no fallback. The review uses normal coding-agent permissions.
-It receives the original captured acceptance text and may inspect source and run
-focused checks; it receives no implementation, delegation, posting or merge task.
+`--props-action review` on that command to perform the independent review with
+the provider, model, effort and session recorded at launch. The review uses
+normal coding-agent permissions in a provider scope of its own. It receives the
+original captured acceptance text and may inspect source and run focused checks;
+it receives no implementation, delegation, posting or merge task.
+
+A Fable reviewer (`claude` with model `fable` or `claude-fable-*`) has one
+standing replacement: Codex `gpt-6-astra` with the same effort, in the
+conversation named by the reviewer's session plus `-astra`. The review action
+writes `review-<sha>/selection.json` before any reviewer starts, binding the
+revision, policy, captured inputs, response schema and both identities. Fable is
+selected from the agent's advertised catalog, preferring its `fable` alias, so a
+catalog that offers neither sends no paid prompt. Astra starts only after Fable
+proved unavailable, was refused before its turn, or failed without review output
+*and* its provider scope closed normally. Its records go to
+`review-<sha>/replacement/`, after `transition.json` names the Fable evidence it
+replaces; Fable's own files are never rewritten. A pass, a finding or a blocked
+review from Fable is final: findings go to the normal repair path, never to
+another reviewer. A policy that already names Astra is the final reviewer, and
+any other reviewer remains the only one.
+
+When no eligible reviewer produced a review, or the first attempt is uncertain
+(its owner did not close, it streamed partial output, or it failed outside the
+provider), the action writes `review-<sha>/hold.json` and then asks through
+`<Elicit>` with the actual identities and reasons. The answer is `hold` or
+`reconcile`, retained in `disposition.json` before it acts: `hold` leaves
+delivery waiting, and `reconcile` reads the existing evidence once. Neither
+starts a reviewer, waives the review or changes an allowance. A cancelled or
+failed question leaves the hold unanswered, and the next `review` action asks the
+same question again without sending a reviewer; an answered hold is never asked
+again. `status`, `closeout` and `reconcile` ask nothing and start no reviewer.
 
 ```text
 feedback pending -> continue original feedback
 feedback ready   -> independent review pending -> joined exact-commit verdict
+                      | Fable unavailable/refused  -> one Astra review (review)
+                      | no reviewer completed      -> review_held: answer via review
                       | incomplete/uncertain       -> reconcile original call
                       | blocking finding           -> request approved repair
                       | pass + required CI + main   -> finish PR metadata
@@ -268,10 +296,12 @@ Independent review summaries allow 1500 characters; detailed observations belong
 in `findings`. The request states this bound alongside the exact revision and
 clause IDs. Ordinary phase and API-foundation summaries retain their own bounds.
 
-Use `--props-action reconcile` when an original joined review has saved execution
-and raw reply but no accepted receipt. It checks the original assignment,
-joined execution, unchanged raw reply, current schema, clauses and source before
-creating the missing receipt. It never shortens text, changes a verdict, repeats
+Use `--props-action reconcile` when the selected joined review has a saved
+execution but no accepted receipt. Only the selection's attempt qualifies: the
+original reviewer, or Astra after a retained transition from an eligible Fable
+failure. It checks that attempt's assignment, joined execution, unchanged raw
+reply, current schema, clauses and source before creating the missing receipt,
+and saves a raw reply the execution joined but never wrote. It never shortens text, changes a verdict, repeats
 a model call or overwrites a contradictory receipt. Missing or uncertain execution
 continues to hold. Status uses this same validation boundary to read receipts.
 
@@ -614,7 +644,10 @@ Select Fable from the host provider's advertised model catalog, using its
 `fable` alias when available. Record the exact provider and resolved model for
 each review. A model name refused before the prompt is a configuration failure:
 preserve the refusal and confirm that no prompt was sent before selecting an
-advertised model. Keep automatic retries disabled.
+advertised model. Keep automatic retries disabled. `delivery.md` applies this
+order itself, as [above](#complete-delivery-from-recorded-requirements), and its
+closeout names each attempt's provider, requested and configured model, effort,
+conversation and evidence.
 
 The repository's [review rules](../../AGENTS.md#feedback-commits) retain main
 health and required CI as merge gates; review acceptance waives neither.

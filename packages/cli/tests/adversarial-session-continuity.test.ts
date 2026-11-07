@@ -1,22 +1,33 @@
 import { describe, it } from "@executablemd/test-support/bdd";
-import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
-import { join } from "node:path";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
+import { scoped, spawn, withResolvers } from "effection";
+import type { Operation } from "effection";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import {
   Agent,
   agentIdentityComponents,
+  collect,
   configurationOf,
+  Elicitation,
   installAgentComponents,
   registerComponents,
   useNormalizedOutput,
 } from "@executablemd/core";
-import type { AgentPromptEvent, Session } from "@executablemd/core";
+import type { AgentPromptEvent, Json, Session } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { Permissions, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import type { AcpRuntimeOptions, ProbeCapableRuntime } from "@executablemd/acp";
+import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { createAcpxProvider } from "../../acp/src/provider.ts";
+import { installAgentProviderStack } from "../src/agent-stack.ts";
+import { createFakeAcp, makeStore } from "./support/fake-acp.ts";
+import type { FakeAcp } from "./support/fake-acp.ts";
 import { AGENT_SOURCE, world } from "../../acp/tests/released-peer.ts";
 import PhaseSession, {
   props as phaseSessionProps,
@@ -322,3 +333,331 @@ describe("workflow Session continuity", { sanitizeOps: false, sanitizeResources:
     ).toEqual(["no-accept"]);
   });
 });
+
+const components = resolve("examples/adversarial-implementation/components");
+const revision = "a".repeat(40);
+const acceptance = [
+  { id: "behavior", source: "accepted.md", requirement: "Keep the accepted behavior." },
+];
+const review = JSON.stringify({
+  revision,
+  verdict: "pass",
+  summary: "Reviewed the assigned behavior.",
+  acceptance: ["behavior"],
+  findings: [],
+});
+const outcome = z.object({
+  stage: z.string(),
+  catalog: z
+    .object({
+      state: z.string(),
+      model: z.string().nullable(),
+      advertised: z.array(z.string()).nullable(),
+    })
+    .nullable(),
+  turn: z
+    .object({
+      state: z.string(),
+      reply: z.string().optional(),
+      partial: z.string().optional(),
+      configuration: z.object({ reason: z.string(), setting: z.string() }).nullable().optional(),
+    })
+    .nullable(),
+  configuration: z.object({ reason: z.string(), setting: z.string() }).nullable(),
+});
+const execution = z.strictObject({
+  status: z.enum(["completed", "failed"]),
+  output: z.string(),
+  failure: z.string().nullable(),
+});
+
+interface ReviewWorld {
+  root: string;
+  delivery: Record<string, Json>;
+  asked: unknown[];
+  run(source: string, props: Record<string, Json>): Operation<{ ok: boolean; text: string }>;
+}
+
+function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorld> {
+  const root = join(tmpdir(), `xmd-delivery-review-${randomUUID()}`);
+  yield* ensureDir(join(root, "repository"));
+  yield* ensureDir(join(root, "delivery"));
+  const asked: unknown[] = [];
+  const delivery = {
+    work: "production-review",
+    repository: join(root, "repository"),
+    directory: join(root, "delivery"),
+    policy: {
+      repository: "taras/executable.md",
+      reviewer: { provider: "claude", model: "fable", effort: null, session: "independent" },
+      acceptance,
+    },
+    inputs: [{ path: "accepted.md", content: "The original accepted behavior." }],
+    required: ["independent-review", "required-ci", "main-health"],
+  };
+  function run(source: string, props: Record<string, Json>) {
+    return scoped(function* () {
+      yield* useHostFiles();
+      yield* useComponentModuleLoader();
+      yield* Permissions.around({ files: () => true });
+      yield* useNormalizedOutput();
+      yield* installAgentProviderStack(
+        {
+          provider: "acpx",
+          defaultAgent: "claude",
+          permissionMode: "deny-all",
+          adapters: createEmbeddedAdapters(join(root, "adapters")),
+        },
+        {
+          createRuntime: create,
+          sessionStore: makeStore(),
+          advertiseNativeLaunch: [],
+          advertiseClientNativeAttachment: [],
+        },
+      );
+      yield* Elicitation.around(
+        {
+          *elicit([request]) {
+            asked.push(request);
+            return { disposition: "hold" };
+          },
+        },
+        { at: "min" },
+      );
+      const doc = join(root, `document-${randomUUID()}.md`);
+      yield* writeTextFile(doc, `---\nprops: {type: object}\n---\n${source}`);
+      const executed = yield* executeInstalled(
+        { path: doc, stream: new InMemoryStream(), includes: [components], props },
+        [{ components: agentIdentityComponents(), *install() {} }],
+      );
+      try {
+        return {
+          ok: true,
+          text: z
+            .string()
+            .parse(yield* collect(executed))
+            .trim(),
+        };
+      } catch (error) {
+        return { ok: false, text: error instanceof Error ? error.message : String(error) };
+      }
+    });
+  }
+  return { root, delivery, asked, run };
+}
+
+const roleSource =
+  '<Delivery.Role delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} choices={props.choices} position={0} attempt={props.attempt} as="outcome" /><Json value={outcome} />';
+const reviewSource =
+  '<Delivery.Review delivery={props.delivery} revision={props.revision} as="result" /><Json value={result} />';
+
+function catalog(models: string[], efforts: string[] = ["low", "high"]) {
+  return {
+    model: { selected: models[0]!, choices: models.map((id) => ({ id })) },
+    effort: Object.fromEntries(
+      models.map((model) => [
+        model,
+        { selected: efforts[0]!, choices: efforts.map((id) => ({ id })) },
+      ]),
+    ),
+  };
+}
+
+function agentOf(fake: FakeAcp, index: number): string | undefined {
+  const key = fake.turns[index]?.handle.sessionKey;
+  return fake.ensured.find((input) => input.sessionKey === key)?.agent;
+}
+
+describe(
+  "production independent review over the registered acpx factory",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("configures the advertised exact Fable model and effort, and omits a null effort", function* () {
+      for (const effort of ["high", null]) {
+        const fake = createFakeAcp();
+        fake.configuration(catalog(["claude-opus", "fable"]));
+        fake.script({ reply: review });
+        const harness = yield* reviewWorld(fake);
+        const attempt = join(harness.root, "delivery", "attempt");
+        const reviewer = {
+          provider: "claude",
+          model: "claude-fable-5-1[1m]",
+          effort,
+          session: "independent",
+        };
+        const ran = yield* harness.run(roleSource, {
+          delivery: harness.delivery,
+          revision,
+          reviewer,
+          choices: ["fable", "claude-fable-5-1[1m]"],
+          attempt,
+        });
+        expect(ran.ok).toBe(true);
+        const settled = outcome.parse(JSON.parse(ran.text));
+        expect(settled.stage).toBe("settled");
+        expect(settled.catalog).toEqual({
+          state: "selected",
+          model: "fable",
+          advertised: ["claude-opus", "fable"],
+        });
+        expect(settled.turn).toEqual({ state: "reply", reply: review });
+        expect(fake.prompts).toHaveLength(1);
+        expect(fake.prompts[0]).toContain(`independent correctness review of ${revision}`);
+        expect(fake.prompts[0]).toContain(
+          JSON.stringify(acceptance, null, 2).split("\n")[2]!.trim(),
+        );
+        expect(fake.prompts[0]).toContain("The original accepted behavior.");
+        const writes = fake.configCalls.filter((call) => call.startsWith("set "));
+        expect(writes).toEqual(
+          effort === null ? ["set model=fable"] : ["set model=fable", "set effort=high"],
+        );
+        expect(fake.running(fake.turns[0]!.handle.sessionKey)).toEqual({
+          model: "fable",
+          effort: effort ?? undefined,
+        });
+        expect(JSON.parse(yield* readTextFile(join(attempt, "outcome.json")))).toEqual(
+          JSON.parse(ran.text),
+        );
+        expect(fake.closes.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("sends no review prompt when the catalog lacks Fable or configuration is refused", function* () {
+      for (const variant of ["missing", "refused"]) {
+        const fake = createFakeAcp();
+        fake.configuration(
+          variant === "missing"
+            ? catalog(["claude-opus"])
+            : { model: { selected: "fable", choices: [{ id: "fable" }] } },
+        );
+        const harness = yield* reviewWorld(fake);
+        const attempt = join(harness.root, "delivery", "attempt");
+        const ran = yield* harness.run(roleSource, {
+          delivery: harness.delivery,
+          revision,
+          reviewer: {
+            provider: "claude",
+            model: "fable",
+            effort: variant === "refused" ? "high" : null,
+            session: "independent",
+          },
+          choices: ["fable"],
+          attempt,
+        });
+        expect(ran.ok).toBe(true);
+        const settled = outcome.parse(JSON.parse(ran.text));
+        expect(fake.prompts).toEqual([]);
+        if (variant === "missing") {
+          expect(settled.stage).toBe("settled");
+          expect(settled.catalog).toEqual({
+            state: "unavailable",
+            model: null,
+            advertised: ["claude-opus"],
+          });
+          expect(settled.turn).toBe(null);
+        } else {
+          const configuration =
+            settled.stage === "session" ? settled.configuration : settled.turn?.configuration;
+          expect(configuration).toEqual({ reason: "selector-unavailable", setting: "effort" });
+        }
+        expect(JSON.parse(yield* readTextFile(join(attempt, "catalog.json")))).toMatchObject({
+          model: variant === "missing" ? null : "fable",
+        });
+      }
+    });
+
+    it("starts the Astra replacement only after the failed Fable owner has released its provider", function* () {
+      const fake = createFakeAcp();
+      fake.configuration(catalog(["fable", "gpt-6-astra"]));
+      fake.script({ failure: "The Fable provider turn failed." });
+      fake.script({ failure: "The Astra provider turn failed." });
+      const events: string[] = [];
+      const reached = withResolvers<void>();
+      let release: (() => void) | undefined;
+      let gated = false;
+      function create(options: AcpRuntimeOptions): ProbeCapableRuntime {
+        const runtime = fake.create(options);
+        return {
+          ...runtime,
+          close(input: Parameters<ProbeCapableRuntime["close"]>[0]) {
+            if (gated || fake.turns.length === 0) {
+              return runtime.close(input);
+            }
+            gated = true;
+            events.push("close-held");
+            reached.resolve();
+            return new Promise<void>((resume) => {
+              release = resume;
+            }).then(() => {
+              events.push("close-released");
+              return runtime.close(input);
+            });
+          },
+        };
+      }
+      const harness = yield* reviewWorld(fake, create);
+      const task = yield* spawn(() =>
+        harness.run(reviewSource, { delivery: harness.delivery, revision }),
+      );
+      yield* reached.operation;
+      expect(fake.turns).toHaveLength(1);
+      expect(agentOf(fake, 0)).toBe("claude");
+      release?.();
+      const ran = yield* task;
+      expect(ran.ok).toBe(true);
+      expect(events).toEqual(["close-held", "close-released"]);
+      expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude", "codex"]);
+      const attempt = join(harness.delivery.directory as string, `review-${revision}`);
+      const primary = execution.parse(
+        JSON.parse(yield* readTextFile(join(attempt, "execution.json"))),
+      );
+      expect(primary.status).toBe("completed");
+      expect(outcome.parse(JSON.parse(primary.output)).turn).toMatchObject({
+        state: "failed",
+        partial: "",
+      });
+      const sessions = z.object({ name: z.string(), attempted: z.boolean() });
+      for (const name of ["independent", "independent-astra"]) {
+        expect(
+          sessions.parse(
+            JSON.parse(
+              yield* readTextFile(
+                join(harness.delivery.directory as string, "sessions", `${name}.json`),
+              ),
+            ),
+          ),
+        ).toMatchObject({ name, attempted: true });
+      }
+      expect(harness.asked).toHaveLength(1);
+    });
+
+    it("holds without Astra when the failed Fable owner's real ACP close rejects", function* () {
+      const fake = createFakeAcp();
+      fake.configuration(catalog(["fable", "gpt-6-astra"]));
+      fake.script({ failure: "The Fable provider turn failed." });
+      fake.closeFailure = new Error("the review provider would not close");
+      const harness = yield* reviewWorld(fake);
+      const ran = yield* harness.run(reviewSource, { delivery: harness.delivery, revision });
+      expect(ran.ok).toBe(true);
+      expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude"]);
+      const attempt = join(harness.delivery.directory as string, `review-${revision}`);
+      const primary = execution.parse(
+        JSON.parse(yield* readTextFile(join(attempt, "execution.json"))),
+      );
+      expect(primary.status).toBe("failed");
+      expect(primary.failure).toContain("agent provider teardown failed");
+      expect(fake.closes).toContain("scope teardown");
+      expect(
+        outcome.parse(JSON.parse(yield* readTextFile(join(attempt, "outcome.json")))).turn,
+      ).toMatchObject({ state: "failed" });
+      const hold = z.object({
+        summary: z.string(),
+        attempts: z.array(z.object({ state: z.string() })),
+      });
+      const held = hold.parse(JSON.parse(yield* readTextFile(join(attempt, "hold.json"))));
+      expect(held.attempts.map((item) => item.state)).toEqual(["unjoined"]);
+      expect(held.summary).toContain("uncertain");
+      expect(harness.asked).toHaveLength(1);
+    });
+  },
+);
