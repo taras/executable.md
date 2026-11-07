@@ -76,6 +76,7 @@ import type {
   Session,
   SessionConfiguration,
   SessionLaunchResult,
+  UsageBuild,
 } from "@executablemd/core";
 import {
   AcpConfigurationError,
@@ -125,6 +126,8 @@ import {
   strictPermissions,
 } from "./permission-bridge.ts";
 import { consumeTurn } from "./events.ts";
+import { capturePromptUsage, turnUsage } from "./usage.ts";
+import type { PromptUsageHost, TurnUsage } from "./usage.ts";
 import { checkpointFromResult } from "./checkpoint.ts";
 import { resolveSessionDetails } from "./session-key.ts";
 import { useSerialQueues } from "./serial-queue.ts";
@@ -285,6 +288,16 @@ export interface AcpxProviderDependencies {
    * asks for one prepares nothing.
    */
   prepareAgent?: (agentName: string) => Operation<void>;
+  /**
+   * What this host states about the XMD build its Prompt usage is measured on.
+   *
+   * Supplied by the host that knows what it is, beside the adapters it carries.
+   * Absent means this host collects no Prompt usage: turns run exactly as they
+   * would have, and their records carry none.
+   */
+  promptUsageHost?: PromptUsageHost;
+  /** The carried adapter build behind an agent's command, when this host carries it. */
+  adapterBuild?: (agentName: string, agentCommand: string) => UsageBuild | undefined;
   /** Child-only host inputs for the selected command; never session configuration. */
   agentProcessEnv?: (
     agentName: string,
@@ -1106,6 +1119,8 @@ function* useAcpxProviderState(
   const coordinator = dependencies?.coordinator;
   const routeStore = dependencies?.routeStore;
   const executableObserver = dependencies?.executableObserver;
+  const promptUsageHost = dependencies?.promptUsageHost;
+  const adapterBuild = dependencies?.adapterBuild;
   const agentCwd = dependencies?.agentCwd ?? cwd;
   const prepareAgent = dependencies?.prepareAgent;
   // Copied out of the host's containers once, here, and never read from them
@@ -1921,6 +1936,16 @@ function* useAcpxProviderState(
   }
 
   /** The resolved agent command behind session details or an existing entry. */
+  /** The adapter build a turn's usage names, when this host carries one for the command. */
+  function adapterUsageBuild(agentName: string, agentCommand: string): { adapter?: UsageBuild } {
+    try {
+      const build = adapterBuild?.(agentName, agentCommand);
+      return build === undefined ? {} : { adapter: build };
+    } catch {
+      return {};
+    }
+  }
+
   function agentCommandOf(prepared: Prepared): string {
     return prepared.kind === "existing" ? prepared.entry.agentCommand : prepared.agentCommand;
   }
@@ -2514,6 +2539,7 @@ function* useAcpxProviderState(
     entry: ManagedSession,
     details: AcpxSessionDetails,
     turn: AcpRuntimeTurn,
+    usage?: TurnUsage,
   ): Operation<void> {
     const accepted: Result<AcpRuntimeMaterialization> = yield* until(
       turn.materialized.then(
@@ -2532,6 +2558,9 @@ function* useAcpxProviderState(
       // barrier only knows that this session is still awaiting its first
       // accepted turn.
       const settled = yield* until(turn.result);
+      // Events were never read for this turn, so the result is all there is to
+      // report — and it is reported here, before the failure ends the turn.
+      usage?.settle(settled);
       if (settled.status === "failed") {
         throw new Error(settled.error.message);
       }
@@ -2772,6 +2801,10 @@ function* useAcpxProviderState(
   ): Stream<AgentPromptEvent, string> {
     return {
       *[Symbol.iterator]() {
+        // First, and once: this subscription's usage receiver, captured before
+        // any native work so the turn reports to the subscription that started
+        // it and to no later one.
+        const reportUsage = yield* capturePromptUsage(launchCoordinator, promptUsageHost);
         // Same distinction as a session resolution's: an ordinary turn resolves
         // its agent through the chain, and a conversation's turn was handed the
         // agent its own session was resolved under.
@@ -2908,6 +2941,7 @@ function* useAcpxProviderState(
 
           const callbacks = agentName === "xmd" ? registration : undefined;
           const timeoutMs = options?.timeout;
+          const requestId = randomUUID();
           // The runtime that made this handle, never "the" runtime: a turn
           // started through another partition would be a second child in a
           // conversation the first already owns.
@@ -2915,7 +2949,7 @@ function* useAcpxProviderState(
             handle: entry.handle,
             text: content,
             mode: "prompt",
-            requestId: randomUUID(),
+            requestId,
             timeoutMs,
             ...(callbacks === undefined
               ? {}
@@ -2940,6 +2974,23 @@ function* useAcpxProviderState(
                 }),
           });
           activeTurns.add(turn);
+          const usage: TurnUsage | undefined =
+            reportUsage === undefined || promptUsageHost === undefined
+              ? undefined
+              : turnUsage(reportUsage, {
+                  agent: agentName,
+                  requestId,
+                  host: promptUsageHost,
+                  ...adapterUsageBuild(agentName, agentCommandOf(prepared)),
+                  ...(construction?.build === undefined
+                    ? {}
+                    : {
+                        native: {
+                          version: construction.build.binding.reportedVersion,
+                          digest: `${construction.build.binding.executableDigest.algorithm}:${construction.build.binding.executableDigest.value}`,
+                        },
+                      }),
+                });
           let completed = false;
           yield* ensure(function* () {
             activeTurns.delete(turn);
@@ -2971,7 +3022,7 @@ function* useAcpxProviderState(
             adapterFor(agentName)?.acceptance === "first-turn-acceptance" &&
             prepared.kind === "details"
           ) {
-            yield* materialize(entry, prepared.details, turn);
+            yield* materialize(entry, prepared.details, turn, usage);
           } else {
             try {
               yield* until(turn.promptStarted);
@@ -3013,6 +3064,7 @@ function* useAcpxProviderState(
                     releasedHandle(entry);
                     detachSessionHandle(entry.session.sessionKey, entry);
                   },
+              usage,
             ),
           );
           return subscription;

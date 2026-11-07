@@ -151,6 +151,7 @@ export function hostAcpDependencies(stack: PlanWriterStack): AcpxProviderDepende
   const adapters = {
     ...embeddedAdapterDependencies(stack.adapters),
     sessionStore: createAcpxSessionStore(join(homedir(), ".acpx")),
+    ...(sessions?.usage === undefined ? {} : { promptUsageHost: sessions.usage }),
   };
   if (sessions === undefined) {
     return adapters;

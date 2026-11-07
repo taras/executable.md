@@ -19,6 +19,7 @@
  * directory being involved at all.
  */
 
+import type { PromptUsageHost } from "@executablemd/acp";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Operation } from "effection";
@@ -42,7 +43,10 @@ export const DEFAULT_RUN_STORAGE_ROOT: string = join(homedir(), ".xmd", "runs");
 /** The variable that names a different run store. Absolute, or it is refused. */
 export const RUN_STORAGE_ROOT_ENV = "XMD_WORKFLOW_RUNS";
 
-export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<WorkflowHost> {
+export function* useDenoWorkflowHost(
+  helper: HelperAssembly,
+  usage?: PromptUsageHost,
+): Operation<WorkflowHost> {
   const configured = yield* readEnv(RUN_STORAGE_ROOT_ENV);
   const root =
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
@@ -71,7 +75,12 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
         // Only a live or partial attachment reaches this, which is what keeps a
         // completed replay from starting an agent process to restore a turn it
         // already has the answer to.
-        agent: (attachment) => useWorkflowAgentProfile({ root, attachment }),
+        agent: (attachment) =>
+          useWorkflowAgentProfile({
+            root,
+            attachment,
+            ...(usage === undefined ? {} : { promptUsageHost: usage }),
+          }),
       });
     },
   };

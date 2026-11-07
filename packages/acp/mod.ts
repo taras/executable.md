@@ -29,6 +29,7 @@ export type {
   AcpxSessionPolicy,
   SessionRouteContext,
 } from "./src/provider.ts";
+export type { PromptUsageHost } from "./src/usage.ts";
 /** The agent ACPX selects when nothing else is configured. */
 export { DEFAULT_AGENT_NAME } from "./src/acpx-runtime.ts";
 export { createAcpRuntime, createAgentRegistry } from "./src/acpx-runtime.ts";

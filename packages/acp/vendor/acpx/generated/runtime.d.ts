@@ -310,7 +310,33 @@ type AcpRuntimeTurnResultError = {
   detailCode?: string;
   retryable?: boolean;
 };
-type AcpRuntimeTurnResult = {
+/** XMD prompt usage: quota counters, under the adapter's own names. */
+type AcpRuntimeQuotaTokens = {
+  totalTokens?: number;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cachedWriteTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+};
+/**
+ * XMD prompt usage: what one turn retained about itself, whichever way it ended.
+ * `promptMessageId` is the user message this turn persisted, under the record
+ * `acpxRecordId`; `sessionId` is the ACP session it was prompted in. `null`
+ * is a source that reported null; an absent member is unknown.
+ */
+type AcpRuntimeTurnUsage = {
+  promptMessageId?: string;
+  acpxRecordId?: string;
+  sessionId?: string;
+  response?: AcpRuntimeUsageBreakdown | null;
+  quota?: {
+    tokenCount?: AcpRuntimeQuotaTokens | null;
+    modelUsage?: Array<{ model: string; tokenCount: AcpRuntimeQuotaTokens | null }>;
+  };
+};
+// XMD prompt usage: carried on every terminal result.
+type AcpRuntimeTurnResult = ({
   status: "completed";
   stopReason?: string;
   _meta?: Record<string, unknown> | null;
@@ -321,7 +347,8 @@ type AcpRuntimeTurnResult = {
 } | {
   status: "failed";
   error: AcpRuntimeTurnResultError;
-};
+}) & { usage?: AcpRuntimeTurnUsage };
+// XMD prompt usage: the turn result's usage member, exported below.
 type AcpRuntimeMaterialization = { acpxRecordId: string; agentSessionId?: string };
 interface AcpRuntimeTurn {
   readonly materialized: Promise<AcpRuntimeMaterialization>;
@@ -866,4 +893,5 @@ export declare function createAcpRuntime(options: AcpRuntimeOptions): AcpxRuntim
 export declare function createRuntimeStore(options: {
   stateDir: string;
 }): AcpSessionStore;
-export { type AcpAgentInspection, type AcpAgentInspectionOptions, type AcpAgentRegistry, type AcpElicitationContext, type AcpElicitationHandler, type AcpElicitationMode, type AcpElicitationRequest, type AcpElicitationResponse, type AcpFileSessionStoreOptions, type AcpInspectableAgentRegistry, type AcpPermissionDecision, type AcpPermissionHandler, type AcpPermissionRequest, type AcpProcessExit, type AcpProcessLaunch, type AcpProcessLaunchScope, type AcpProcessLifecycle, type AcpProcessSpawnFailure, type AcpProcessStarted, type AcpRuntime, type AcpRuntimeMaterialization, type AcpRuntimeAvailableCommand, type AcpRuntimeCapabilities, type AcpRuntimeDoctorReport, type AcpRuntimeEnsureInput, type AcpRuntimeErrorCode, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeOptions, type AcpRuntimePlanEntry, type AcpRuntimePromptMode, type AcpRuntimeSessionContext, type AcpRuntimeSessionMode, type AcpRuntimeSessionModels, type AcpRuntimeSessionPermissions, type AcpRuntimeSessionUsage, type AcpRuntimeStatus, type AcpRuntimeTurn, type AcpRuntimeTurnAttachment, type AcpRuntimeTurnInput, type AcpRuntimeTurnResult, type AcpRuntimeTurnResultError, type AcpRuntimeUsageBreakdown, type AcpRuntimeUsageCost, type AcpSessionRecord, type AcpSessionStore, type AcpSessionUpdateTag, type AcpTextDeltaOriginMeta, DEFAULT_AGENT_NAME, type InspectAgentModelsOptions, type PermissionPolicy, type RequestedModelUnsupportedErrorCode, type RequestedModelUnsupportedReason, type SessionAgentOptions, type SessionWatchEvent, type SessionWatchResult, type SharedAcpRuntimeOptions, type SystemPromptOption, createAgentRegistry };
+// XMD prompt usage: AcpRuntimeTurnUsage and AcpRuntimeQuotaTokens are exported with the turn types.
+export { type AcpAgentInspection, type AcpAgentInspectionOptions, type AcpAgentRegistry, type AcpElicitationContext, type AcpElicitationHandler, type AcpElicitationMode, type AcpElicitationRequest, type AcpElicitationResponse, type AcpFileSessionStoreOptions, type AcpInspectableAgentRegistry, type AcpPermissionDecision, type AcpPermissionHandler, type AcpPermissionRequest, type AcpProcessExit, type AcpProcessLaunch, type AcpProcessLaunchScope, type AcpProcessLifecycle, type AcpProcessSpawnFailure, type AcpProcessStarted, type AcpRuntime, type AcpRuntimeMaterialization, type AcpRuntimeAvailableCommand, type AcpRuntimeCapabilities, type AcpRuntimeDoctorReport, type AcpRuntimeEnsureInput, type AcpRuntimeErrorCode, type AcpRuntimeEvent, type AcpRuntimeHandle, type AcpRuntimeOptions, type AcpRuntimePlanEntry, type AcpRuntimePromptMode, type AcpRuntimeSessionContext, type AcpRuntimeSessionMode, type AcpRuntimeSessionModels, type AcpRuntimeSessionPermissions, type AcpRuntimeSessionUsage, type AcpRuntimeStatus, type AcpRuntimeTurn, type AcpRuntimeTurnAttachment, type AcpRuntimeTurnInput, type AcpRuntimeTurnResult, type AcpRuntimeTurnResultError, type AcpRuntimeTurnUsage, type AcpRuntimeQuotaTokens, type AcpRuntimeUsageBreakdown, type AcpRuntimeUsageCost, type AcpSessionRecord, type AcpSessionStore, type AcpSessionUpdateTag, type AcpTextDeltaOriginMeta, DEFAULT_AGENT_NAME, type InspectAgentModelsOptions, type PermissionPolicy, type RequestedModelUnsupportedErrorCode, type RequestedModelUnsupportedReason, type SessionAgentOptions, type SessionWatchEvent, type SessionWatchResult, type SharedAcpRuntimeOptions, type SystemPromptOption, createAgentRegistry };

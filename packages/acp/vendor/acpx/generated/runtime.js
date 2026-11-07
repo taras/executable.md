@@ -985,6 +985,46 @@ async function createOrLoadRuntimeSession(client, resumeSessionId, cwd) {
 	};
 }
 const SESSION_MATERIALIZATION_CONTRACT = "executablemd.session-materialization/v1";
+// XMD prompt usage: the typed response and quota counters a turn reported, never raw metadata.
+const XMD_PROMPT_USAGE_RESPONSE_FIELDS = ["inputTokens", "outputTokens", "cachedReadTokens", "cachedWriteTokens", "thoughtTokens", "totalTokens"];
+const XMD_PROMPT_USAGE_QUOTA_FIELDS = ["totalTokens", "inputTokens", "cachedInputTokens", "cachedWriteTokens", "outputTokens", "reasoningOutputTokens"];
+// XMD prompt usage: null is the source saying null; a missing or malformed value is unknown.
+function xmdPromptUsageCounts(value, fields) {
+	if (value === null) return null;
+	if (typeof value !== "object" || Array.isArray(value)) return void 0;
+	const counts = {};
+	for (const field of fields) if (typeof value[field] === "number" && Number.isFinite(value[field]) && value[field] >= 0) counts[field] = value[field];
+	return counts;
+}
+// XMD prompt usage: response.usage, and _meta.quota's token_count and model_usage rows.
+function xmdPromptUsageReadings(response) {
+	const readings = {};
+	if (response?.usage !== void 0) {
+		const counts = xmdPromptUsageCounts(response.usage, XMD_PROMPT_USAGE_RESPONSE_FIELDS);
+		if (counts !== void 0) readings.response = counts;
+	}
+	const quota = response?._meta?.quota;
+	if (quota !== null && typeof quota === "object" && !Array.isArray(quota)) {
+		const selected = {};
+		// XMD prompt usage: quota counters keep their own names.
+		if (quota.token_count !== void 0) {
+			const counts = xmdPromptUsageCounts(quota.token_count, XMD_PROMPT_USAGE_QUOTA_FIELDS);
+			if (counts !== void 0) selected.tokenCount = counts;
+		}
+		if (Array.isArray(quota.model_usage)) selected.modelUsage = quota.model_usage.flatMap((row) => {
+			if (row === null || typeof row !== "object" || typeof row.model !== "string" || !row.model) return [];
+			const counts = xmdPromptUsageCounts(row.token_count, XMD_PROMPT_USAGE_QUOTA_FIELDS);
+			// XMD prompt usage: a row without readable counters says nothing about its model.
+			return counts === void 0 ? [] : [{ model: row.model, tokenCount: counts }];
+		});
+		if (Object.keys(selected).length > 0) readings.quota = selected;
+	}
+	return readings;
+}
+// XMD prompt usage: attached to the terminal result whichever way the turn ended.
+function withXmdPromptUsage(result, usage) {
+	return Object.keys(usage).length === 0 ? result : { ...result, usage: { ...usage } };
+}
 function sessionMaterializationPending(record) {
 	return record?.sessionMaterialization?.state === "pending";
 }
@@ -1747,6 +1787,8 @@ var AcpRuntimeManager = class {
 	async runRuntimeTurnTask(task) {
 		let turn;
 		let terminalResult;
+		// XMD prompt usage: identities and selected readings this turn retains on every ending.
+		const usage = {};
 		try {
 			if (this.cancelRuntimeTurnBeforePrompt(task)) {
 				await this.closeRetainedOneShotHandle(task.input.handle);
@@ -1756,7 +1798,12 @@ var AcpRuntimeManager = class {
 				};
 			} else {
 				turn = await this.prepareRuntimeTurn(task);
+				// XMD prompt usage: the generated user message and its owning record.
+				usage.promptMessageId = turn.promptMessageId;
+				usage.acpxRecordId = turn.record.acpxRecordId;
 				const { sessionId } = await this.connectRuntimeTurn(task, turn);
+				// XMD prompt usage: the ACP session this turn was loaded into and prompted.
+				if (typeof sessionId === "string" && sessionId) usage.sessionId = sessionId;
 				this.assertOpen();
 				await this.resolveRuntimeTurnReady(task, turn);
 				if (this.cancelRuntimeTurnBeforePrompt(task)) terminalResult = {
@@ -1765,6 +1812,8 @@ var AcpRuntimeManager = class {
 				};
 				else {
 					const response = await this.runRuntimePrompt(task, turn, sessionId);
+					// XMD prompt usage: selected before the response metadata is projected.
+					Object.assign(usage, xmdPromptUsageReadings(response));
 					this.updateCompletedRuntimeTurn(turn);
 					terminalResult = {
 						status: response.stopReason === "cancelled" ? "cancelled" : "completed",
@@ -1777,11 +1826,12 @@ var AcpRuntimeManager = class {
 			terminalResult = this.handleRuntimeTurnFailure(task, error);
 		}
 		const finalization = await settleAttempt(async () => this.serializeManagerOperation(this.runtimeOperationLocks, task.input.handle.acpxRecordId ?? task.input.handle.sessionKey, async () => this.finalizeRuntimeTurn(task, turn)));
+		// XMD prompt usage: a failed finalization keeps the readings already observed.
 		if (!finalization.ok) {
-			task.settleResult(this.failRuntimeTurn(task, finalization.error));
+			task.settleResult(withXmdPromptUsage(this.failRuntimeTurn(task, finalization.error), usage));
 			throw finalization.error;
 		}
-		task.settleResult(terminalResult);
+		task.settleResult(withXmdPromptUsage(terminalResult, usage));
 	}
 	async runRuntimePrompt(task, turn, sessionId) {
 		return await runPromptTurn({
