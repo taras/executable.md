@@ -5,8 +5,9 @@ import { projectInputValue, useSecretInputs } from "@executablemd/core/host";
 import { cwd } from "@executablemd/runtime";
 import { inspectRecoveryOwnership } from "./recovery-owner.ts";
 import { recoveryBlocked, uncertainRequests } from "./recovery-state.ts";
+import type { HumanStopFact } from "./recovery-state.ts";
 import { bindRetainedPrefix } from "./history.ts";
-import type { RecoveryDecisionRecord } from "./recovery-record.ts";
+import type { HumanStopRecord, RecoveryDecisionRecord } from "./recovery-record.ts";
 import type { AgentSessionOwnershipAdministration } from "@executablemd/runtime";
 
 export interface RecoveryReview {
@@ -125,7 +126,7 @@ import { ReplHost } from "../host.ts";
 import { API } from "@executablemd/runtime";
 import { conversationStream, failedOutcome } from "./history.ts";
 import type { SidekickRecord, SidekickWriter } from "./history.ts";
-import { projectSidekick, requestsFromHistory } from "./model.ts";
+import { applicableHumanStop, projectSidekick, requestsFromHistory } from "./model.ts";
 import type { SidekickReading } from "./model.ts";
 import { controlJournal } from "./admission.ts";
 import {
@@ -452,6 +453,19 @@ export interface SidekickOwnerInput {
 /** The conversation this execution owns, for as long as the caller holds it. */
 export interface SidekickOwner {
   reviewRecovery(): Operation<Result<RecoveryReview>>;
+  /**
+   * Bind a distinct new instruction past a retained human Stop, without sending it.
+   *
+   * The same decision {@link SidekickOwner.recover} saves for the original
+   * conversation, with its live or cold ownership proof renewed, for the caller
+   * to send through {@link SidekickOwner.message}.
+   */
+  prepareContinuation(
+    text: string,
+    hooks: RecoveryHooks,
+  ): Operation<Result<{ readonly decision: RecoveryDecisionRecord; readonly account: string }>>;
+  /** The retained human Stop that still describes the active conversation's frontier. */
+  readonly humanStop: HumanStopFact | undefined;
   recover(
     review: RecoveryReview,
     text: string,
@@ -593,8 +607,11 @@ export interface SidekickOwner {
    * Returns once all of that has come down. A Stop that returned early would
    * tell a person their Sidekick had stopped while it was still writing to
    * their history.
+   *
+   * A `human` Stop of automatic feedback retains a `human-stop` record once its
+   * cancellation has joined, before this owner admits anything else.
    */
-  stop(): Operation<void>;
+  stop(reason?: "human"): Operation<void>;
 }
 
 /** Which response this conversation's captured controls are answering for. */
@@ -771,12 +788,14 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
           readonly task: Task<void>;
           readonly answer: { resolve(answer: Result<SidekickTurn>): void };
           readonly operation: Operation<Result<SidekickTurn>>;
+          readonly from: number;
         }
       | undefined;
     let joined:
       | { readonly work: NonNullable<typeof working>; readonly frontier: string }
       | undefined;
     let reading: Result<SidekickReading> = Ok(EMPTY);
+    let applicable: HumanStopFact | undefined;
     /**
      * The response whose generation this process is watching, where one is.
      *
@@ -1000,7 +1019,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * anything.
      */
     function* refresh(): Operation<void> {
-      reading = projectSidekick(storage === undefined ? [] : yield* storage.writer.readAll());
+      const records = storage === undefined ? [] : yield* storage.writer.readAll();
+      reading = projectSidekick(records);
+      applicable = reading.ok ? applicableHumanStop(reading.value, records) : undefined;
       // Every re-read is a change somebody may be looking at: a message landing,
       // a reply, a failed turn and a configuration all come through here.
       moved();
@@ -1224,20 +1245,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       }
       const known = reading.value;
       const records = storage === undefined ? [] : yield* storage.writer.readAll();
-      if (
-        records.some((record) => {
-          if (record.kind !== "event" || record.conversation !== known.active) {
-            return false;
-          }
-          const event = parseDurableEvent(record.event);
-          return (
-            event.ok &&
-            event.value.type === "yield" &&
-            event.value.description.type === AGENT_PROMPT &&
-            event.value.result.status === "err"
-          );
-        })
-      ) {
+      if (failedPrompt(records, known.active)) {
         return Err(
           new SidekickOwnerError(
             "This conversation's saved Prompt result cannot be continued safely. Recovery changes no canonical history. No instruction was sent.",
@@ -1301,32 +1309,14 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       });
     }
 
-    function* recover(
+    function* decide(
       review: RecoveryReview,
       text: string,
       replace: boolean,
       hooks: RecoveryHooks,
-    ): Operation<Result<SidekickTurn>> {
-      if (text.trim().length === 0 || storage === undefined || !hooks.current()) {
-        return Err(
-          new SidekickOwnerError("Review the current target and enter a new instruction."),
-        );
-      }
-      yield* stop();
-      const current = yield* reviewRecovery();
-      if (!current.ok) {
-        return current;
-      }
-      if (
-        !hooks.current() ||
-        current.value.conversation !== review.conversation ||
-        JSON.stringify(current.value.requests) !== JSON.stringify(review.requests) ||
-        JSON.stringify(current.value.controls) !== JSON.stringify(review.controls) ||
-        current.value.requests.length === 0
-      ) {
-        return Err(
-          new SidekickOwnerError("The recovery target changed. Review it again before continuing."),
-        );
+    ): Operation<Result<RecoveryDecisionRecord>> {
+      if (storage === undefined) {
+        return Err(new SidekickOwnerError("Recovery storage is unavailable."));
       }
       const existing = reading.ok
         ? reading.value.recoveries.find(
@@ -1401,33 +1391,101 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         const id = yield* ReplHost.operations.identify();
         const message = yield* ReplHost.operations.identify();
         const target = replace ? yield* ReplHost.operations.identify() : review.conversation;
-        decision = {
-          kind: "recovery-decision",
-          id,
-          conversation: review.conversation,
-          requests: [...review.requests],
-          controls: [...review.controls],
-          retained: yield* bindRetainedPrefix(storage.writer.path),
-          message,
-          text,
-          origin: { kind: "ui" },
-          action: replace ? "replace" : "continue-original",
-          basis,
-          target,
-        };
-        if (!hooks.current()) {
-          return Err(
-            new SidekickOwnerError("The instruction changed before its decision was saved."),
-          );
+        const path = storage.writer.path;
+        const appended = yield* storage.writer.appendPrepared(function* (records) {
+          if (!hooks.current()) {
+            return Err(
+              new SidekickOwnerError("The instruction changed before its decision was saved."),
+            );
+          }
+          const made: RecoveryDecisionRecord = {
+            kind: "recovery-decision",
+            id,
+            conversation: review.conversation,
+            requests: [...review.requests],
+            controls: [...review.controls],
+            retained: yield* bindRetainedPrefix(path),
+            message,
+            text,
+            origin: { kind: "ui" },
+            action: replace ? "replace" : "continue-original",
+            basis,
+            target,
+          };
+          const validated = projectSidekick([...records, made]);
+          if (!validated.ok) {
+            return validated;
+          }
+          // Again after measuring, which suspends: an instruction withdrawn
+          // meanwhile must not leave a decision behind.
+          return hooks.current()
+            ? Ok(made)
+            : Err(new SidekickOwnerError("The instruction changed before its decision was saved."));
+        });
+        if (!appended.ok) {
+          return appended;
         }
-        const validated = projectSidekick([...(yield* storage.writer.readAll()), decision]);
-        if (!validated.ok) {
-          return validated;
-        }
-        yield* storage.writer.append(decision);
         yield* refresh();
+        if (appended.value === undefined) {
+          return Err(new SidekickOwnerError("The recovery decision was not saved."));
+        }
+        decision = appended.value;
       }
-      const permission = decision;
+      return Ok(decision);
+    }
+
+    function* prepareContinuation(
+      text: string,
+      hooks: RecoveryHooks,
+    ): Operation<Result<{ readonly decision: RecoveryDecisionRecord; readonly account: string }>> {
+      if (text.trim().length === 0 || storage === undefined || busy || !hooks.current()) {
+        return Err(new SidekickOwnerError("Enter a new instruction for the stopped conversation."));
+      }
+      const current = yield* reviewRecovery();
+      if (!current.ok) {
+        return current;
+      }
+      if (current.value.requests.length === 0) {
+        return Err(
+          new SidekickOwnerError("The stopped feedback is no longer unresolved. Send it again."),
+        );
+      }
+      const decided = yield* decide(current.value, text, false, hooks);
+      return decided.ok ? Ok({ decision: decided.value, account: current.value.account }) : decided;
+    }
+
+    function* recover(
+      review: RecoveryReview,
+      text: string,
+      replace: boolean,
+      hooks: RecoveryHooks,
+    ): Operation<Result<SidekickTurn>> {
+      if (text.trim().length === 0 || storage === undefined || !hooks.current()) {
+        return Err(
+          new SidekickOwnerError("Review the current target and enter a new instruction."),
+        );
+      }
+      yield* stop();
+      const current = yield* reviewRecovery();
+      if (!current.ok) {
+        return current;
+      }
+      if (
+        !hooks.current() ||
+        current.value.conversation !== review.conversation ||
+        JSON.stringify(current.value.requests) !== JSON.stringify(review.requests) ||
+        JSON.stringify(current.value.controls) !== JSON.stringify(review.controls) ||
+        current.value.requests.length === 0
+      ) {
+        return Err(
+          new SidekickOwnerError("The recovery target changed. Review it again before continuing."),
+        );
+      }
+      const decided = yield* decide(review, text, replace, hooks);
+      if (!decided.ok) {
+        return decided;
+      }
+      const permission = decided.value;
       if (replace) {
         const preparedResult = yield* scoped(function* (): Operation<Result<void>> {
           let interrupted = true;
@@ -1616,11 +1674,12 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       //
       // In this caller's scope rather than the owner's, so work nobody is
       // waiting for cannot outlive the thing that asked for it.
+      const from = storage === undefined ? 0 : (yield* storage.writer.readAll()).length;
       const answer = withResolvers<Result<SidekickTurn>>();
       const task = yield* spawn(function* (): Operation<void> {
         answer.resolve(yield* cycle(text, revision, options));
       });
-      const held = { task, answer, operation: answer.operation };
+      const held = { task, answer, operation: answer.operation, from };
       working = held;
       try {
         const result = yield* answer.operation;
@@ -1649,7 +1708,44 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       }
     }
 
-    function* stop(): Operation<void> {
+    function* publishStop(
+      writer: SidekickWriter,
+      conversation: string,
+      from: number,
+    ): Operation<void> {
+      yield* writer.appendPrepared(function* (records) {
+        const known = projectSidekick(records);
+        if (
+          !known.ok ||
+          known.value.active !== conversation ||
+          failedPrompt(records, conversation)
+        ) {
+          return Ok(undefined);
+        }
+        const retired = new Set(
+          known.value.recoveries
+            .filter((one) => !one.withdrawn)
+            .flatMap((one) => one.decision.requests),
+        );
+        const requests = uncertainRequests(records, known.value.requests, conversation).filter(
+          (at) => !retired.has(at),
+        );
+        if (!requests.some((at) => at >= from && records[at]?.kind === "feedback")) {
+          return Ok(undefined);
+        }
+        const record: HumanStopRecord = {
+          kind: "human-stop",
+          conversation,
+          retained: yield* bindRetainedPrefix(writer.path),
+          requests,
+          controls: recoveryTarget(known.value).controls,
+        };
+        const validated = projectSidekick([...records, record]);
+        return validated.ok ? Ok(record) : validated;
+      });
+    }
+
+    function* stop(reason?: "human"): Operation<void> {
       const held =
         working ??
         (reading.ok && joined?.frontier === stoppedTarget(reading.value) ? joined.work : undefined);
@@ -1658,6 +1754,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
         // undone either. Stop is not a way to discard a conversation.
         return;
       }
+      const conversation = reading.ok ? reading.value.active : undefined;
       // Halting cancels the generation, the controls and the wait wherever the
       // cycle is, and returns only once all of it has come down — so a person
       // who pressed Stop is not left with work still running behind a screen
@@ -1680,6 +1777,12 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       // what is on disk — including the intent of a submission that began and
       // whose result nobody knows, which is exactly the state Stop leaves.
       yield* refresh();
+      if (reason === "human" && storage !== undefined && conversation !== undefined) {
+        // Still holding `working`, so nothing is admitted between the join and
+        // the acknowledged record that says it joined.
+        yield* publishStop(storage.writer, conversation, held.from);
+        yield* refresh();
+      }
       stopped = reading.ok ? stoppedTarget(reading.value) : undefined;
       // Released here rather than left to the caller's own return. A person who
       // has stopped the Sidekick can say something to it immediately, and the
@@ -2594,7 +2697,11 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       options,
       configure,
       select,
+      get humanStop(): HumanStopFact | undefined {
+        return applicable;
+      },
       reviewRecovery,
+      prepareContinuation,
       recover,
       message,
       stop,
@@ -2614,10 +2721,30 @@ function partialOf(error: Error): GeneratedXmdRootResult | undefined {
   return error instanceof GeneratedXmdRootError ? error.partial : undefined;
 }
 
+/** Whether this conversation's canonical history holds a failed outer Prompt result. */
+function failedPrompt(
+  records: readonly SidekickRecord[],
+  conversation: string | undefined,
+): boolean {
+  return records.some((record) => {
+    if (record.kind !== "event" || record.conversation !== conversation) {
+      return false;
+    }
+    const event = parseDurableEvent(record.event);
+    return (
+      event.ok &&
+      event.value.type === "yield" &&
+      event.value.description.type === AGENT_PROMPT &&
+      event.value.result.status === "err"
+    );
+  });
+}
+
 /** A history nobody has written to, which is what a legacy execution reads as. */
 const EMPTY: SidekickReading = Object.freeze({
   recoveryPending: false,
   recoveries: Object.freeze([]),
+  humanStops: Object.freeze([]),
   requests: Object.freeze([]),
   submits: Object.freeze([]),
   conversations: Object.freeze([]),

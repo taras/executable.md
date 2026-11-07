@@ -2,8 +2,8 @@ import { Agent, isJsonObject, parseJson } from "@executablemd/core";
 import { Plugin } from "@executablemd/core/api";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, spawn, withResolvers } from "effection";
-import type { Operation, Stream, Subscription } from "effection";
+import { ensure, Ok, resource, scoped, spawn, withResolvers } from "effection";
+import type { Operation, Result, Stream, Subscription } from "effection";
 import type { AgentPromptEvent } from "@executablemd/core";
 import type { ReplPluginInstallation } from "../api.ts";
 import { writeTextFile } from "@effectionx/fs";
@@ -13,7 +13,9 @@ import { todoPlugin } from "../src/repl/todo/plugin.ts";
 import { useTodo } from "../src/repl/todo/service.ts";
 import { createSidekickAdmission, useSidekickDispatch } from "../src/repl/sidekick/dispatch.ts";
 import type { SidekickDispatch, SidekickExchange } from "../src/repl/sidekick/dispatch.ts";
+import { coldReservations, retainResolution } from "../src/repl/sidekick/admission.ts";
 import { records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 
 /** What one composing layer did, so a case can say it did it exactly once. */
 interface Layer {
@@ -77,7 +79,41 @@ function composing(
   );
 }
 
-function* setup(extra: readonly Plugin[] = []) {
+/**
+ * Settle the entry writer and retain the complete unresolved Submit set, as the
+ * loop's own `reconcileSubmits` does.
+ *
+ * The fixture's, not a production helper: what a post-Stop instruction needs
+ * before it is bound is this reconciliation, and a case about a checklist
+ * composed into such an instruction has to supply it the way the loop supplies
+ * it rather than reach for an API nothing in the product would call.
+ */
+function reconciling(host: Harness): () => Operation<Result<void>> {
+  return function* () {
+    if (host.execution.chat.form !== "paired") {
+      throw new Error("Recovery requires its acknowledged paired history.");
+    }
+    yield* host.execution.stream.settled();
+    const entries = host.session.reading(undefined);
+    if (!entries.ok) {
+      throw entries.error;
+    }
+    const findings = yield* coldReservations(
+      yield* host.execution.chat.writer.readAll(),
+      entries.value.model.entries,
+      host.execution.chat.location.entries,
+    );
+    if (!findings.ok) {
+      return findings;
+    }
+    for (const finding of findings.value) {
+      yield* retainResolution(host.execution.chat.writer, finding);
+    }
+    return Ok(undefined);
+  };
+}
+
+function* setup(extra: readonly Plugin[] = [], reconciles = false) {
   yield* useHostFiles();
   yield* installTodoSource();
   const host = yield* useHarness(undefined, { plugins: [todoPlugin, ...extra] });
@@ -88,6 +124,7 @@ function* setup(extra: readonly Plugin[] = []) {
     execution: host.execution.id,
     workspace: host.workspace,
     changed() {},
+    ...(reconciles ? { reconcile: reconciling(host) } : {}),
   });
   return { host, todo, dispatch };
 }
@@ -364,5 +401,126 @@ describe("TODO context on independently admitted prompts", () => {
     expect(canonical).toEqual(host.fake.prompts);
     expect(canonical[1]).toBe(second.layer.delegated[1]);
     expect(canonical.every((input) => input !== "original person source")).toBe(true);
+  });
+  it("sends one post-Stop instruction with the fresh checklist and retires only its selection", function* () {
+    const { host, todo, dispatch } = yield* setup([], true);
+    host.fake.script({ reply: "<REPL.Bindings />\n" });
+    // The automatic feedback turn, streaming and unfinished. A Stop of a turn
+    // that never started and a Stop of one in flight are different joins, and
+    // the exchange this case is about is the second.
+    host.fake.script({ deltas: ["<Output>Reading", " the bindings.</Output>"], holdAfter: 1 });
+    const asked = yield* send(dispatch, "Report this session's bindings.");
+    yield* host.fake.streamingTurns(1);
+    expect(host.fake.prompts).toHaveLength(2);
+    dispatch.hold();
+    yield* asked.cancel("human");
+    expect((yield* asked.completion).ok).toBe(false);
+
+    const stopped = yield* records(host.execution);
+    const intent = stopped.findIndex((one) => one.kind === "feedback" && one.turn === null);
+    const stops = stopped.flatMap((one, at) => (one.kind === "human-stop" ? [at] : []));
+    expect(intent).toBeGreaterThan(-1);
+    expect(stops).toHaveLength(1);
+    // After the feedback it joined, which is what says the record follows the
+    // exchange rather than racing it.
+    expect(stops[0]).toBeGreaterThan(intent);
+    const reading = host.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    const conversation = reading.value.active;
+    expect(reading.value.unestablished).toEqual([{ conversation, turn: null }]);
+    expect(reading.value.recoveryPending).toBe(true);
+    // The Stop left the checklist owed rather than retired, which is the state
+    // the next independently allowed prompt has to read fresh.
+    expect(todo.recovery).toBe(true);
+    expect(todo.pending).toEqual([]);
+
+    yield* todo.save("", "- [ ] committed-while-held-Q1157\n");
+    expect(todo.pending).toHaveLength(1);
+    const waiting = yield* send(dispatch, "Report the bindings again, from the current checklist.");
+    expect(waiting.snapshot.state).toBe("queued");
+    expect(dispatch.queue.held?.kind).toBe("stopped");
+    // Nothing reached the provider and nothing was saved: a waiting instruction
+    // is not an ordinary message yet.
+    expect(host.fake.prompts).toHaveLength(2);
+    expect(yield* records(host.execution)).toEqual(stopped);
+
+    yield* writeTextFile(
+      `${host.workspace}/todo.md`,
+      "- [x] committed-while-held-Q1157\n- [ ] later-outside-Q1157\n",
+    );
+    yield* todo.refresh();
+    host.fake.script({ reply: "<Output>The current checklist.</Output>", held: true });
+    expect((yield* dispatch.resume()).ok).toBe(true);
+    yield* host.fake.holdingTurns(1);
+    expect(host.fake.prompts).toHaveLength(3);
+    const input = host.fake.prompts[2];
+    expect(input).toContain("Report the bindings again, from the current checklist.");
+    expect(input).toContain("acceptance remains unknown");
+    expect(input).toContain("Current TODO checklist (fresh recovery state)");
+    // What the file says now, including the change made while the instruction
+    // waited — not the delta the pending observation was recorded from.
+    expect(input).toContain('"text":"later-outside-Q1157"');
+    expect(input).not.toContain("Committed TODO changes");
+    const old = stopped[intent];
+    if (old?.kind !== "feedback") {
+      throw new Error("Expected the retained feedback intent.");
+    }
+    // The uncertain feedback is accounted for, not resent.
+    expect(input).not.toContain(old.text);
+
+    yield* todo.save(
+      "- [x] committed-while-held-Q1157\n- [ ] later-outside-Q1157\n",
+      "- [x] committed-while-held-Q1157\n- [x] later-outside-Q1157\n",
+    );
+    expect(todo.pending).toHaveLength(2);
+    expect(todo.recovery).toBe(true);
+    host.fake.releaseTurn();
+    const sent = yield* waiting.completion;
+    if (!sent.ok) {
+      throw sent.error;
+    }
+    expect(host.fake.prompts).toHaveLength(3);
+    // Only what this turn selected retired; the edit made after its selection
+    // and before its completion is still owed.
+    expect(todo.pending).toHaveLength(1);
+    expect(todo.pending[0].diff).toContain("+- [x] later-outside-Q1157");
+    expect(todo.recovery).toBe(false);
+
+    expect(waiting.snapshot.message?.conversation).toBe(conversation);
+    const key = host.fake.turns[0]?.handle.sessionKey;
+    expect(host.fake.turns[2]?.handle.sessionKey).toBe(key);
+    const after = yield* records(host.execution);
+    expect(
+      after.flatMap((one) => (one.kind === "message" ? [[one.text, one.origin.kind]] : [])),
+    ).toEqual([
+      ["Report this session's bindings.", "ui"],
+      ["Report the bindings again, from the current checklist.", "ui"],
+    ]);
+    // The control the Stopped feedback came from ran once and was not repeated,
+    // and no entry was submitted for either turn to repeat.
+    expect(
+      after.filter((one) => one.kind === "control" && one.component === "REPL.Bindings"),
+    ).toHaveLength(1);
+    expect(host.session.model.entries).toEqual([]);
+    expect(
+      after.flatMap((one) => (one.kind === "recovery-decision" ? [[one.action, one.basis]] : [])),
+    ).toEqual([["continue-original", "joined-owned-exchange"]]);
+    // The first turn and the resumed one retained exactly the input they
+    // delegated. The Stopped feedback turn retained none, because it completed
+    // none.
+    expect(canonicalInputs(after)).toEqual([host.fake.prompts[0], host.fake.prompts[2]]);
+    const feedback = after.filter((one) => one.kind === "feedback");
+    expect(feedback).toHaveLength(1);
+    expect(feedback[0].kind === "feedback" && feedback[0].turn).toBe(null);
+    const settled = host.owner.reading;
+    if (!settled.ok) {
+      throw settled.error;
+    }
+    expect(settled.value.recoveries.map((one) => one.used)).toEqual([true]);
+    // Unchanged by the successful ordinary turn: the old feedback's acceptance
+    // is still nobody's to establish.
+    expect(settled.value.unestablished).toEqual([{ conversation, turn: null }]);
   });
 });

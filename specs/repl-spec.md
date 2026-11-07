@@ -2721,6 +2721,27 @@ it neither delivers the old feedback nor re-evaluates interrupted controls.
 Unknown old acceptance remains visible. Running entries retain their own lifetime.
 The separate Message and Draft values survive review.
 
+A human Sidekick Stop during automatic feedback is the one ordinary path past
+that refusal. Once its owned cancellation and cleanup have joined, and before the
+owner admits anything else, the history retains a `human-stop` record binding the
+exact retained prefix, the conversation's unresolved requests and its unfinished
+controls. The record marks no Prompt terminal and delivers nothing: old
+acceptance stays unknown and `[review recovery]` stays available. While that Stop
+still describes the active conversation's exact frontier, a UI Send typed after
+it waits in the held queue bound to that Stop. Resume releases the hold only for
+such a message at the head. Its activation reconciles the entire unresolved
+Submit set, retains the same `continue-original` decision for that exact
+instruction, and sends it once as an ordinary message carrying the
+unknown-acceptance account. Messages queued before the Stop, ACP-origin messages
+and Resume itself bind nothing; an older head keeps the queue held until it is
+removed or explicit recovery runs. A later request, another active conversation,
+a new unfinished control or a used decision ends the Stop's eligibility. A
+refused binding leaves the message waiting at the head under a failure hold and
+sends nothing. A cold reopening of that history starts with the queue held and
+writes nothing, and its continuation still requires exact retained clean
+ownership. A retained Stop is local joined evidence, never backend acceptance or
+cold quiescence.
+
 A cold original continues only with exact retained clean ownership evidence.
 An outer failed Prompt outcome or unreadable/fatal canonical history refuses.
 A free lock or forced release supplies no joined-stop evidence. Deliberate
@@ -2971,7 +2992,8 @@ survives; Retry consumes no composer text and ACP changes neither field.
 Waiting work has no ordinary saved message record. When it starts, ordinary saved
 acknowledgement releases only matching Draft takeover before response controls
 run. The entire exchange and its cleanup finish before the next starts. Human
-Sidekick Stop holds remaining work until explicit guarded Resume; attachment
+Sidekick Stop holds remaining work until explicit guarded Resume, which passes the
+unknown-feedback guard only for a head bound to a retained human Stop; attachment
 cancellation affects only its exact exchange and adds no hold. Ordinary failure
 holds without automatic retry; fatal failures and unknown-feedback guards retain
 their authority. Pending work must be removed before agent replacement. Waiting

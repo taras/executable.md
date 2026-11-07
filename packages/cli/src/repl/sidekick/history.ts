@@ -66,13 +66,17 @@ import {
   serializeError,
 } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, SerializedError } from "@executablemd/durable-streams";
-import { call, ensure, scoped, withResolvers } from "effection";
-import type { Operation } from "effection";
+import { call, ensure, Ok, scoped, withResolvers } from "effection";
+import type { Operation, Result } from "effection";
 import { createHash } from "node:crypto";
 
 import { ReplHost } from "../host.ts";
-import { recoveryDecision, recoveryReference } from "./recovery-record.ts";
-import type { RecoveryDecisionRecord, RecoveryReferenceRecord } from "./recovery-record.ts";
+import { humanStop, recoveryDecision, recoveryReference } from "./recovery-record.ts";
+import type {
+  HumanStopRecord,
+  RecoveryDecisionRecord,
+  RecoveryReferenceRecord,
+} from "./recovery-record.ts";
 import { readRecords, RetainedReplStream } from "../journal.ts";
 import type { MovableWriter, RetainedStream } from "../journal.ts";
 import { fileFingerprint, forEachLine, measureLines } from "../record-file.ts";
@@ -147,6 +151,7 @@ export interface RetainedPrefix {
 export type SidekickRecord =
   | RecoveryDecisionRecord
   | RecoveryReferenceRecord
+  | HumanStopRecord
   | OwnerRecord
   | ReadyRecord
   | ConversationRecord
@@ -375,7 +380,9 @@ export interface FeedbackRecord {
  */
 export function serializeSidekickRecord(record: SidekickRecord): string {
   if (
-    (record.kind === "recovery-decision" || record.kind === "recovery-reference") &&
+    (record.kind === "recovery-decision" ||
+      record.kind === "recovery-reference" ||
+      record.kind === "human-stop") &&
     parseSidekickRecord(JSON.stringify(record)) === undefined
   ) {
     throw new SidekickHistoryError("this recovery record does not match its closed declaration.");
@@ -411,6 +418,10 @@ export function parseSidekickRecord(line: string): SidekickRecord | undefined {
     }
     case "recovery-reference": {
       const parsed = recoveryReference.safeParse(value);
+      return parsed.success ? parsed.data : undefined;
+    }
+    case "human-stop": {
+      const parsed = humanStop.safeParse(value);
       return parsed.success ? parsed.data : undefined;
     }
     case "owner":
@@ -895,7 +906,7 @@ export function* readSidekickRecords(path: string): Operation<SidekickRecord[]> 
     records.push(parsed);
   }
   for (const [index, record] of records.entries()) {
-    if (record.kind !== "recovery-decision") {
+    if (record.kind !== "recovery-decision" && record.kind !== "human-stop") {
       continue;
     }
     const measured = yield* measureRetainedPrefix(path, record.retained.records);
@@ -904,7 +915,7 @@ export function* readSidekickRecords(path: string): Operation<SidekickRecord[]> 
       measured.measured?.bytes !== record.retained.bytes ||
       measured.measured.sha256 !== record.retained.sha256
     ) {
-      throw new SidekickHistoryError("this recovery decision names a different retained history.");
+      throw new SidekickHistoryError("this recovery record names a different retained history.");
     }
   }
   return records;
@@ -1206,7 +1217,25 @@ export class SidekickWriter {
     // belongs to the frame that is running, and nearly every caller here
     // appends more than once in one scope — the second append would then be
     // waiting for a writer the first one had not let go of yet.
-    yield* scoped(() => this.ordered(record));
+    // deno-lint-ignore require-yield
+    yield* scoped(() =>
+      this.ordered(function* () {
+        return Ok(record);
+      }),
+    );
+  }
+
+  /**
+   * Prepare one record from the acknowledged history and append it in the same turn.
+   *
+   * Nothing can append between the reading `prepare` is given and the record it
+   * returns, so a prefix it binds is the prefix the record follows. An `Err`, or
+   * no record, appends nothing.
+   */
+  *appendPrepared<R extends SidekickRecord>(
+    prepare: (records: readonly SidekickRecord[]) => Operation<Result<R | undefined>>,
+  ): Operation<Result<R | undefined>> {
+    return yield* scoped(() => this.ordered(prepare));
   }
 
   /**
@@ -1225,7 +1254,9 @@ export class SidekickWriter {
     return this.reaching;
   }
 
-  private *ordered(record: SidekickRecord): Operation<void> {
+  private *ordered<R extends SidekickRecord>(
+    prepare: (records: readonly SidekickRecord[]) => Operation<Result<R | undefined>>,
+  ): Operation<Result<R | undefined>> {
     // One turn object, so what this caller is — waiting, or holding — is a fact
     // the handoff below can set rather than something the caller has to be
     // resumed to notice. A caller cancelled between being handed ownership and
@@ -1254,6 +1285,11 @@ export class SidekickWriter {
     }
     this.writing = true;
     turn.owning = true;
+    const prepared = yield* prepare([...this.records]);
+    if (!prepared.ok || prepared.value === undefined) {
+      return prepared;
+    }
+    const record = prepared.value;
     // Said before the bytes go, so whoever is leaving can tell a caller that
     // has reached the file from one still waiting its turn.
     this.reaching = record.kind;
@@ -1266,6 +1302,7 @@ export class SidekickWriter {
     } finally {
       this.reaching = undefined;
     }
+    return prepared;
   }
 
   /**
