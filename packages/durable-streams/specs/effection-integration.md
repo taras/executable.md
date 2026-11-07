@@ -667,33 +667,14 @@ All three combinators share a single helper, `runDurableChild()`, that
 wraps any child workflow with DurableContext setup and Close event handling.
 This is an `Operation<T>` meant to run inside a `spawn()`:
 
-```typescript
-function* runDurableChild<T extends Json | void>(
-  childWorkflow: () => Workflow<T>,
-  childId: string,
-  parentCtx: DurableContext,
-): Operation<T> {
-  parentCtx.replayIndex.claim(childId);
-
-  if (parentCtx.replayIndex.hasClose(childId)) {
-    return yield* restoreChildClose(childId, parentCtx);
-  }
-
-  const childCtx = installChildContext(childId, parentCtx);
-  try {
-    const result = yield* childWorkflow();
-    throwIfDurabilityFailed(childCtx);
-    assertSubtreeAligned(childCtx.replayIndex, childId, "return");
-    yield* appendChildClose(childCtx, closeOk(childId, result));
-    return result;
-  } catch (error) {
-    throwIfDurabilityFailed(childCtx, error);
-    assertSubtreeAligned(childCtx.replayIndex, childId, "error", error);
-    yield* appendChildClose(childCtx, closeError(childId, error));
-    throw error;
-  }
-}
-```
+The helper receives a synchronous cancellation read for enrolled All children.
+Its pre-registered ensure runs after owned child work and physical cleanup. A
+selected ok/err outcome retains the existing alignment, fail-stop and append
+rules. Without an ordinary outcome, a resumable read suppresses Close and terminal
+subtree validation, preserving unread replay work. A terminal read retains
+cancelled Close only after joined cleanup and only if no Close already exists.
+Failed cleanup remains failure; fail-stop prevents every later append. Async
+cleanup uses ensure rather than yielding from JavaScript finally.
 
 Key design decisions in this helper:
 
@@ -704,7 +685,9 @@ it returns/throws immediately. For `cancelled`, it uses `yield* suspend()`
 (see §8.4).
 
 **The same terminal policy as the root.** Normal return, ordinary error, and
-cancellation all check the child's retained subtree before a `Close`. A stale
+terminal cancellation all check the child's retained subtree before a `Close`.
+Enrolled resumable physical unwind instead preserves that subtree without a
+terminal check or Close. A stale
 input, divergence, terminal divergence, or journal persistence failure
 suppresses the child close and propagates to the root without becoming a root
 close.
@@ -748,51 +731,49 @@ usable from a `Workflow` without journaling the scope-plumbing effects.
 
 ### 8.3 durableAll
 
-Fork/join — runs all children concurrently, waits for all to complete:
+Fork/join runs all children concurrently and joins their cleanup. Its public
+interface is:
 
 ```typescript
-function* durableAll<T extends Json | void>(
-  workflows: (() => Workflow<T> | Operation<T>)[],
-): Operation<T[]> {
-  const scope = yield* useScope();
-  const ctx = scope.expect<DurableContext>(DurableContext);
+export type DurableCancellation = () => "terminal" | "resumable";
 
-  const childOps: Operation<T>[] = workflows.map((workflow) => {
-    const childId = `${ctx.coroutineId}.${ctx.childCounter++}`;
-    return {
-      *[Symbol.iterator]() {
-        return yield* runDurableChild(workflow, childId, ctx);
-      },
-    };
-  });
-
-  return yield* effectionAll(childOps);
-}
+export function durableAll<T extends WorkflowValue>(
+  workflows: ((cancellation: DurableCancellation) => Workflow<T>)[],
+  options?: { readonly cancellation?: DurableCancellation },
+): Workflow<T[]>;
 ```
 
-Delegates to Effection's native `all()`, which provides error isolation
-via `trap()` internally. When any child fails, remaining siblings are
-cancelled — Effection handles this, and `runDurableChild`'s finally block
-emits `Close(cancelled)` for each.
+The callback is captured once at entry; its later answer remains live. Reads are
+synchronous, effect-free and grant no halt, append or execution capability. Each
+All owns sticky actual sibling abandonment in its closure and selects it before
+native all cancels siblings. Enclosing unwind and cleanup failure discovered only
+during unwind do not select initiating sibling abandonment. Each child receives
+the effective read also passed into its durable Close owner: terminal after
+abandonment, otherwise the captured enclosing answer. Nested Core All forwards
+that same effective read. The nonjournal Core path uses its existing native join
+with the same distinction and no Close.
+
+Existing zero-argument workflows may ignore the parameter. Omitting options keeps
+terminal-on-halt behavior. durableSpawn and durableRace retain their signatures
+and default behavior; enrollment does not silently cover trusted-extension
+combinators. Source-order identities, reverse cleanup, private buffers and native
+fail-fast joining remain unchanged.
 
 ### 8.4 Cancellation replay via suspend()
 
-When replaying a child that was cancelled in a previous run (journal has
-`Close(cancelled)`), the child cannot simply throw or return — that would
-change the control flow the parent combinator sees. Instead, `runDurableChild`
-calls `yield* suspend()`, which blocks the child forever.
+A retained cancelled child remains terminal and runs no body or finalizer. All
+checks its direct child closes before starting any child workflow. If one is
+cancelled, a retained failed direct sibling must be available to settle this join.
+Without it, All refuses through the existing stale-history/fail-stop path before
+live work. This also refuses unsupported incomplete-Stop prefixes rather than
+silently restarting them. Completed root replay is unchanged.
 
-This works because the parent combinator (`durableRace` or `durableAll`
-with a failed sibling) will cancel this child as part of normal structured
-concurrency teardown — the same thing that happened in the original run.
-The `suspend()` just holds the child alive until that cancellation arrives.
-
-The `Close(cancelled)` event already exists in the journal, so the finally
-block's `if (!replayIndex.hasClose(childId))` guard skips re-emission.
-
-This is the only correct approach: it makes replay indistinguishable from
-live execution from the parent's perspective. The parent's race/all sees
-exactly the same behavior — one child completes, the others get cancelled.
+With that failed sibling, cancelled children use `yield* suspend()` while the
+sibling restores its failure and native all tears down the join. The no-duplicate
+Close guard preserves history. An enrolled child halted resumably has no Close,
+so its existing Yield prefix restores under the same identity and execution
+continues at its unfinished frontier. Physical resource lifetimes can be rebuilt;
+completed durable effects are not repeated.
 
 ### 8.5 durableRace
 

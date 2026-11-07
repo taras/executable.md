@@ -464,3 +464,31 @@ describe("Tier FE33 — occurrences do not share generated history", () => {
     expect(admitted).toHaveLength(2);
   });
 });
+
+describe("Try generated admission", () => {
+  for (const branch of ["Catch", "Finally"]) {
+    it(`preflights forbidden writes in untaken ${branch} before an allowed read`, function* () {
+      const files = recordedFiles({ "note.md": "saved" });
+      const text = `<Try><File path="note.md" /><${branch}><File path="wrong.md">write</File></${branch}></Try>`;
+      const refused = yield* refusal(run(evaluating(text), [reading(files)]));
+      expect(refused).toContain("self-closing");
+      expect(files.performed).toEqual([]);
+    });
+  }
+  it("admits literal recovery without exporting Catch locals or admitting property access and calls", function* () {
+    const files = recordedFiles();
+    const capturedRead = '<File path="missing.md" as="missing" />';
+    const text = `<Try>${capturedRead}<Catch as="error"><Let as="local" value="inside" />literal fallback</Catch><Finally>finished</Finally></Try>`;
+    const result = yield* run(evaluating(text), [reading(files)]);
+    expect(String(result)).toContain("literal fallback");
+    for (const expression of ["local", "error.message", "error.toString()"]) {
+      const candidate =
+        expression === "local"
+          ? text + `<Let as="escaped" value={local} />`
+          : `<Try>${capturedRead}<Catch as="error"><Let as="value" value={${expression}} /></Catch></Try>`;
+      const fresh = recordedFiles();
+      yield* refusal(run(evaluating(candidate), [reading(fresh)]));
+      expect(fresh.performed).toEqual([]);
+    }
+  });
+});

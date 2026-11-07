@@ -1732,3 +1732,24 @@ describe("993 nested Output validation", () => {
     expect(value.result.diagnostics.some((item) => item.message.includes("exclusive"))).toBe(true);
   });
 });
+
+describe("Try source validation", () => {
+  it("shares branch structure and binding rules without evaluating expressions", function* () {
+    for (const source of [
+      '<Try><Catch as="for"></Catch></Try>',
+      "<Try><Catch as={tripwire()}></Catch></Try>",
+      "<Try><Finally></Finally><Catch></Catch></Try>",
+      "<Try><Wrapper><Catch></Catch></Wrapper></Try>",
+      "<Finally></Finally>",
+    ]) {
+      const { result, seen } = yield* validateText(source);
+      expect(codes(result)).toContain("structural-usage-invalid");
+      expect(seen.effects).toEqual([]);
+    }
+    const { result, seen } = yield* validateText(
+      '<Try><Catch as="error">fallback</Catch><Finally>done</Finally></Try>',
+    );
+    expect(codes(result)).toEqual([]);
+    expect(seen.effects).toEqual([]);
+  });
+});

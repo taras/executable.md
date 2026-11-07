@@ -343,9 +343,11 @@ describe("Tier SX — the run profile the command describes", () => {
       "Answers",
       "Break",
       "Case",
+      "Catch",
       "Content",
       "Each",
       "Else",
+      "Finally",
       "If",
       "Let",
       "Loop",
@@ -354,6 +356,7 @@ describe("Tier SX — the run profile the command describes", () => {
       "Return",
       "Spawn",
       "Switch",
+      "Try",
     ]);
     for (const name of ["Terminal.Grid", "Terminal"]) {
       expect(names(builtIn.entries)).not.toContain(name);

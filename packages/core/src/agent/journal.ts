@@ -58,6 +58,8 @@ import type {
 import { createContext } from "effection";
 import type { Operation, Stream } from "effection";
 import { Agent } from "./agent-api.ts";
+import { InvocationTeardownError } from "../invocation.ts";
+import { durabilityFailure, filesFatalFailure, firstCause } from "../errors.ts";
 import type {
   AgentPromptEvent,
   PermissionOption,
@@ -506,6 +508,13 @@ function promptPublication(
       try {
         result = { status: "ok", value: yield* execute() };
       } catch (error) {
+        const fatal = durabilityFailure(error) ?? filesFatalFailure(error);
+        const teardown = firstCause(error, (cause) =>
+          cause instanceof InvocationTeardownError ? cause : undefined,
+        );
+        if (fatal !== undefined || teardown !== undefined) {
+          throw activateFailure(fatal ?? error);
+        }
         if (error instanceof HostObservationFailure) {
           // A trusted host failed while being shown this turn, which is not a
           // result this prompt may answer with. Activated before anything is

@@ -1073,3 +1073,50 @@ describe("Tier CX — what surrounds one expansion", () => {
     expect(arrived[arrived.length - 1]).toBe("complete");
   });
 });
+
+describe("Try branch observations", () => {
+  it("observes entered branches with distinct stable IDs and never repeats a raise", function* () {
+    for (const failing of [false, true]) {
+      let raised = 0;
+      const source = `<Try>${failing ? "<Failing />" : "body"}<Catch>recovered</Catch><Finally>finished</Finally></Try>`;
+      const result = yield* scoped(function* () {
+        yield* Component.around({
+          *raise([segment], next) {
+            raised++;
+            return yield* next(segment);
+          },
+        });
+        return yield* watch(source, {
+          Failing: component("Failing", function* () {
+            yield* Component.operations.raise({
+              type: "error",
+              source: "Failing",
+              message: "ordinary",
+            });
+            return "";
+          }),
+        });
+      });
+      const names = result.watched.requests.map((request) => request.expansion.name);
+      expect(names.filter((name) => name === "Catch")).toHaveLength(failing ? 1 : 0);
+      expect(names.filter((name) => name === "Finally")).toHaveLength(1);
+      const again = yield* watch(source, {
+        Failing: component("Failing", function* () {
+          yield* Component.operations.raise({
+            type: "error",
+            source: "Failing",
+            message: "ordinary",
+          });
+          return "";
+        }),
+      });
+      expect(result.watched.requests.map((request) => request.expansion.id)).toEqual(
+        again.watched.requests.map((request) => request.expansion.id),
+      );
+      expect(new Set(result.watched.requests.map((request) => request.expansion.id)).size).toBe(
+        names.length,
+      );
+      expect(raised).toBe(failing ? 1 : 0);
+    }
+  });
+});

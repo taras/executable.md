@@ -69,6 +69,8 @@ import {
   ifConditionViolation,
   ifPropsViolation,
   ifStructure,
+  tryStructure,
+  strayTryBranchMessage,
   letViolations,
   loopViolations,
   printErrorsViolations,
@@ -315,6 +317,7 @@ interface LexicalContext {
   readonly insideLoop: boolean;
   /** Whether an `<If>` in this source lexically encloses this point. */
   readonly insideIf: boolean;
+  readonly insideTry: boolean;
   /** Whether a `<Switch>` in this source lexically encloses this point. */
   readonly insideSwitch: boolean;
   /**
@@ -522,6 +525,7 @@ class ValidationState {
         insideLoop: false,
         insideAll: false,
         insideIf: false,
+        insideTry: false,
         insideSwitch: false,
         insideSpawn: false,
         underAnswers: false,
@@ -1148,6 +1152,19 @@ class ValidationState {
         }
         return found;
       }
+      case "Try":
+        return tryStructure(segment).violations;
+      case "Catch":
+      case "Finally":
+        return context.insideTry
+          ? []
+          : [
+              {
+                code: "structural-usage-invalid",
+                source: segment.name,
+                message: strayTryBranchMessage(segment.name),
+              },
+            ];
       case "Switch":
         // Every branch's own source is decided here too, so a malformed `<Case>`
         // is reported wherever it was written — including one the comparison
@@ -1371,6 +1388,7 @@ function childContext(segment: ComponentElement, context: LexicalContext): Lexic
     // a `<Loop>` written inside the spawn opens a new one.
     insideLoop: !spawned && (context.insideLoop || segment.name === "Loop"),
     insideIf: context.insideIf || segment.name === "If",
+    insideTry: context.insideTry || segment.name === "Try",
     insideSwitch: context.insideSwitch || segment.name === "Switch",
     // Never cleared by a spawn: a nested `<All>` owns its own descendants, and
     // everything below the outermost one already has an owner.

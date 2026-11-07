@@ -928,6 +928,14 @@ provider, calling `begin()` or reconstructing current state.
 
 ### Saved Prompt failure details
 
+A failed owning stream release is terminal before ordinary failure serialization
+and publication. Core preserves initiating work and teardown failures separately
+and activates the existing live publication failure path without a recoverable
+failed-turn record. Authored Catch therefore starts neither replacement work nor
+an unentered finalizer after failed release. Ordinary cleanly released failed
+turns keep the saved record and raised replay marker below, and may be handled
+by explicit authored Catch. Optional diagnostic screening is unchanged.
+
 A failed Prompt keeps its readable `message`, optional `name` and cause message.
 Its optional `error.diagnostic` retains selected ACP facts in the same record:
 

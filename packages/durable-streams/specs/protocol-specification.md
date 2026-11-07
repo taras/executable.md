@@ -132,8 +132,11 @@ states are:
 
 - **Completed** (`status: "ok"`): the generator returned normally.
 - **Failed** (`status: "err"`): an unhandled error propagated out of the generator.
-- **Cancelled** (`status: "cancelled"`): the coroutine was halted by its parent
-  or by an external signal.
+- **Cancelled** (`status: "cancelled"`): terminal logical cancellation ended the
+  coroutine. An enrolled All child undergoing only resumable physical unwind
+  remains logically pending, joins its resources and emits no Close. Unenrolled
+  low-level callers retain terminal-on-halt behavior. A retained Close always
+  remains terminal; no event shape or format version changes.
 
 `Close` events cannot be derived from `Yield` events because:
 
@@ -760,32 +763,38 @@ creation order** (last-created child first). This is a post-order traversal
 of the subtree rooted at the cancelled scope: leaves are cancelled before
 their parents.
 
-For each cancelled coroutine, the runtime calls `iterator.return()`. This
-triggers `finally` blocks in the generator, allowing cleanup. If cleanup
-code yields effects, those effects are executed and journaled normally
-(in live mode) or replayed (if the cancellation itself is being replayed).
+Terminal cancellation and enrolled resumable physical unwind both halt and join
+owned resources. Only terminal cancellation emits cancelled Close. An enrolled
+resumable All child preserves unread replay work and skips terminal subtree
+exhaustion validation. A selected ordinary result still follows its ok/err path.
+Existing low-level callers without enrollment retain terminal-on-halt behavior.
 
-```
-cancel(scope)
-  │
-  ├─ for child in scope.children.reverse():
-  │     cancel(child)                         // recurse, leaf-first
-  │
-  ├─ step = scope.iterator.return(CANCELLED)
-  │
-  ├─ while not step.done:                    // cleanup may yield effects
-  │     effect = step.value
-  │     result = handleEffect(effect)         // replay or live, per §4.2
-  │     step = scope.iterator.next(result)
-  │
-  └─ stream.append({ type: "close", coroutineId, result: { status: "cancelled" } })
+Asynchronous cleanup uses Effection ensure registered before resource acquisition,
+never a yielding JavaScript finally. The owner joins children and destructors
+before its terminal append:
+
+```text
+physical unwind
+  -> halt and join owned children and resources
+  -> selected ordinary outcome: validate and append existing ok/err Close
+  -> terminal cancellation: validate and append cancelled Close
+  -> enrolled resumable interruption: preserve unread work, append no Close
 ```
 
-> **INVARIANT (Cancellation Replay Fidelity):** Cancellation events in
-> the journal MUST be replayed by calling `iterator.return()` at the
-> same journal position, driving the generator through its stored
-> cleanup path. The sequence of effects yielded during cleanup MUST
-> match the recorded cleanup effects.
+All captures an enclosing synchronous cancellation read and gives each child its
+effective read. Actual sibling failure selects sticky terminal abandonment before
+native joining cancels siblings; otherwise the read delegates to the enclosing
+owner. A cleanup failure encountered only during enclosing unwind does not select
+initiating sibling abandonment. Core's exact accepted Stop and its Try finalizers
+use this same disposition, passed directly rather than through public Context.
+No new event, scheduler or durable Stop intent is introduced.
+
+A previously acknowledged cancelled child stays terminal. Before any live child
+workflow, All requires a retained failed direct sibling to reproduce settlement
+when a direct child has cancelled Close. Without that sibling the prefix refuses
+through the existing stale-history/fail-stop path; it never reopens a cancelled
+child. With that sibling, cancelled-child suspend and failed-sibling restoration
+reproduce the terminal join without repeating either child's work.
 
 ### 7.3 Error propagation
 
@@ -810,7 +819,9 @@ When a scope exits for any reason, cleanup proceeds in this order:
 
 1. Cancel all children in reverse creation order (§7.2).
 2. Run the scope's own `ensure()` / `finally` blocks.
-3. Write the scope's `Close` event to the stream.
+3. For a logical terminal outcome, write the scope's `Close` event. Enrolled
+   resumable physical unwind writes no Close, preserves unread retained work and
+   publishes no completed result.
 4. Deliver the scope's result to the parent (via the parent's
    pending join or the resolution of a `spawn` effect).
 

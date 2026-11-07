@@ -23,6 +23,9 @@ import { Component, raise } from "./component-api.ts";
 import { attributeCause, documentationError, ErrorMode } from "./errors.ts";
 import type { ComponentFailure, ErrorSegment, FunctionComponent } from "./types.ts";
 import type { Operation } from "effection";
+import type { DurableCancellation } from "@executablemd/durable-streams";
+import type { Invocation } from "./invocation.ts";
+import type { LoopFrame } from "./loop.ts";
 
 /**
  * The declaration a component wears to say it continues after failing.
@@ -63,21 +66,29 @@ const PRINTS_ERRORS = "executablemd.core.printsErrors";
 export interface CheckedFailures {
   /** Whether an authored `<PrintErrors>` region covers this work. */
   readonly authorized: boolean;
+  readonly cancellation?: DurableCancellation;
+  readonly release?: { failure?: Error; readonly activate?: (error: Error) => void };
+  phase?: Invocation;
+  phaseProjection?: object;
+  readonly ignoredBreak?: LoopFrame;
   /** The first unauthorized checked failure this run suffered, once it has. */
   failure?: ErrorSegment;
 }
 
 /** The ledger an execution starts with: no recovery, nothing suffered yet. */
-export function checkedFailureLedger(): CheckedFailures {
-  return { authorized: false };
+export function checkedFailureLedger(
+  cancellation?: DurableCancellation,
+  failedRelease?: (error: Error) => void,
+): CheckedFailures {
+  return { authorized: false, cancellation, release: { activate: failedRelease } };
 }
 
 /**
  * The ledger for work a `<PrintErrors>` region causes: recovery is authorized,
  * so nothing it prints is a failure the run suffered.
  */
-export function recoveringLedger(): CheckedFailures {
-  return { authorized: true };
+export function recoveringLedger(inherited?: CheckedFailures): CheckedFailures {
+  return { ...inherited, failure: undefined, authorized: true };
 }
 
 /**
@@ -89,7 +100,7 @@ export function recoveringLedger(): CheckedFailures {
  * session's completion policy is what decides the run.
  */
 export function containedLedger(inherited: CheckedFailures | undefined): CheckedFailures {
-  return { authorized: inherited?.authorized ?? false };
+  return { ...inherited, failure: undefined, authorized: inherited?.authorized ?? false };
 }
 
 /**
