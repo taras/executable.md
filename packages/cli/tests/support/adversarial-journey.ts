@@ -14,6 +14,9 @@ export function* runAdversarialJourney(suite: string) {
     "run",
     "--quiet",
     "--allow-all",
+    "--node-modules-dir=manual",
+    "--cached-only",
+    "--frozen",
     fileURLToPath(new URL("../../src/deno.ts", import.meta.url)),
   ];
   const workflowCommand = [...executableCommand, "run", "--allow-absolute"]
