@@ -5,7 +5,7 @@ pwd -P
 ```bash exec as="commandSetting"
 printf '%s' "$XMD_EXAMPLE_COMMAND"
 ```
-<Let as="runner" value={commandSetting.stdout || "deno run --allow-all '" + root.replaceAll("'","'\"'\"'") + "/packages/cli/src/deno.ts' run --allow-absolute"} />
+<Let as="runner" value={commandSetting.stdout || "deno run --allow-all --node-modules-dir=manual --cached-only --frozen '" + root.replaceAll("'","'\"'\"'") + "/packages/cli/src/deno.ts' run --allow-absolute"} />
 
 <Test name="Implementation fixture journeys" timeout="120s">
 <Let as="program" value={'<Testing><Fixture.Implementation root={' + JSON.stringify(root) + '} command={' + JSON.stringify(runner) + '} /></Testing>'} />
