@@ -241,7 +241,7 @@ jobs:
       # different assembly from the source CLI's, so its carriage is asserted
       # against the binary this job just built.
       - name: Prompt usage the compiled binary retains
-        run: deno test --allow-all --frozen scripts/tests/prompt-usage-compiled.test.ts
+        run: deno run --allow-all --frozen scripts/smoke-prompt-usage.ts
 
       # The entry host a REPL entry's file work is retained by is assembled by
       # `compiled.ts`, which is a different entrypoint from the one the source
