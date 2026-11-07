@@ -161,6 +161,7 @@ import {
   ifConditionViolation,
   ifPropsViolation,
   ifStructure,
+  tryStructure,
   isBlankText,
   letBindingName,
   letViolations,
@@ -1819,7 +1820,14 @@ function stated(segment: ComponentElement, scope: ReadonlySet<string>): void {
 }
 
 /** The structural names that only their own parent may consume. */
-const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set(["Else", "Case", "Answer", "Spawn"]);
+const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set([
+  "Else",
+  "Case",
+  "Answer",
+  "Spawn",
+  "Catch",
+  "Finally",
+]);
 
 /**
  * The structural names the generated root supplies no context for.
@@ -1916,6 +1924,23 @@ function* structural(
       scope,
       inner,
     );
+    return;
+  }
+
+  if (name === "Try") {
+    const structure = tryStructure(segment);
+    refuseStructure(structure.violations);
+    yield* transparent(structure.body, table, named, scope, inner);
+    if (structure.catcher !== undefined) {
+      const local = new Set(scope);
+      if (structure.binding !== undefined) {
+        local.add(structure.binding);
+      }
+      yield* transparent(structure.catcher.children, table, named, local, inner);
+    }
+    if (structure.finalizer !== undefined) {
+      yield* transparent(structure.finalizer.children, table, named, scope, inner);
+    }
     return;
   }
 

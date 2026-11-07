@@ -101,6 +101,7 @@ export { durableAction, durableCall, durableSleep, versionCheck } from "./operat
 
 // Structured concurrency combinators
 export { durableAll, durableRace, durableSpawn } from "./combinators.ts";
+export type { DurableCancellation } from "./combinators.ts";
 
 // Durable iteration
 export { durableEach } from "./each.ts";

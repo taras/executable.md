@@ -6,6 +6,8 @@
  * scope lifecycles, Close events, cancellation, and replay.
  */
 
+import { ensure, spawn, suspend, withResolvers } from "effection";
+import { ephemeral, StaleInputError } from "../mod.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
@@ -544,5 +546,183 @@ describe("structured concurrency", () => {
 
     expect(result2).toBe("PRE-a,b");
     expect(tracker2.calls).toEqual([]);
+  });
+});
+
+describe("enrolled All cancellation", () => {
+  it("reads a changed enclosing terminal disposition after children start", function* () {
+    const stream = new InMemoryStream();
+    const entered = withResolvers<void>();
+    let terminal = false;
+    let observed = "";
+    const task = yield* spawn(() =>
+      durableRun(
+        function* () {
+          return yield* durableAll(
+            [
+              function* (cancellation) {
+                return yield* ephemeral(
+                  (function* () {
+                    yield* ensure(() => {
+                      observed = cancellation();
+                    });
+                    entered.resolve();
+                    yield* suspend();
+                    return "unreachable";
+                  })(),
+                );
+              },
+            ],
+            { cancellation: () => (terminal ? "terminal" : "resumable") },
+          );
+        },
+        { stream },
+      ),
+    );
+    yield* entered.operation;
+    terminal = true;
+    yield* task.halt();
+    expect(observed).toBe("terminal");
+    expect(
+      stream
+        .snapshot()
+        .some(
+          (event) =>
+            event.type === "close" &&
+            event.coroutineId === "root.0" &&
+            event.result.status === "cancelled",
+        ),
+    ).toBe(true);
+  });
+
+  it("makes the child's read sticky-terminal before failed siblings are joined", function* () {
+    const stream = new InMemoryStream();
+    const entered = withResolvers<void>();
+    let observed = "";
+    const failure = new Error("sibling failure");
+    let caught: unknown;
+    try {
+      yield* durableRun(
+        function* () {
+          return yield* durableAll(
+            [
+              function* (cancellation) {
+                return yield* ephemeral(
+                  (function* () {
+                    yield* ensure(() => {
+                      observed = cancellation();
+                    });
+                    entered.resolve();
+                    yield* suspend();
+                    return "unreachable";
+                  })(),
+                );
+              },
+              function* () {
+                yield* ephemeral(entered.operation);
+                throw failure;
+              },
+            ],
+            { cancellation: () => "resumable" },
+          );
+        },
+        { stream },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(observed).toBe("terminal");
+    expect(
+      stream
+        .snapshot()
+        .some(
+          (event) =>
+            event.type === "close" &&
+            event.coroutineId === "root.0" &&
+            event.result.status === "cancelled",
+        ),
+    ).toBe(true);
+  });
+
+  it("propagates resumable disposition through nested enrolled All without child closes", function* () {
+    const stream = new InMemoryStream();
+    const entered = withResolvers<void>();
+    let released = false;
+    const task = yield* spawn(() =>
+      durableRun(
+        function* () {
+          return yield* durableAll(
+            [
+              function* (cancellation) {
+                return yield* durableAll(
+                  [
+                    function* (inner) {
+                      return yield* ephemeral(
+                        (function* () {
+                          yield* ensure(() => {
+                            released = inner() === "resumable";
+                          });
+                          entered.resolve();
+                          yield* suspend();
+                          return "unreachable";
+                        })(),
+                      );
+                    },
+                  ],
+                  { cancellation },
+                );
+              },
+            ],
+            { cancellation: () => "resumable" },
+          );
+        },
+        { stream },
+      ),
+    );
+    yield* entered.operation;
+    yield* task.halt();
+    expect(released).toBe(true);
+    expect(stream.snapshot().filter((event) => event.type === "close")).toHaveLength(0);
+  });
+
+  it("keeps default terminal-on-halt and refuses its actual unsupported partial continuation", function* () {
+    const stream = new InMemoryStream();
+    const entered = withResolvers<void>();
+    let calls = 0;
+    let held = true;
+    function* workflow(): Workflow<Json> {
+      return yield* durableAll([
+        function* () {
+          return yield* ephemeral(
+            (function* () {
+              calls++;
+              entered.resolve();
+              if (held) {
+                yield* suspend();
+              }
+              return "done";
+            })(),
+          );
+        },
+      ]);
+    }
+    const task = yield* spawn(() => durableRun(workflow, { stream }));
+    yield* entered.operation;
+    yield* task.halt();
+    expect(
+      stream
+        .snapshot()
+        .some((event) => event.type === "close" && event.result.status === "cancelled"),
+    ).toBe(true);
+    held = false;
+    let failure: unknown;
+    try {
+      yield* durableRun(workflow, { stream });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(StaleInputError);
+    expect(calls).toBe(1);
   });
 });

@@ -18,6 +18,7 @@
  */
 
 import type { ComponentElement, ReturnsSchema, Segment, TextSegment } from "./types.ts";
+import { tryStructure, strayTryBranchMessage } from "./structural-rules.ts";
 import type { ErrorSegment } from "./types.ts";
 
 /** One thing an output or return element itself got wrong. */
@@ -261,7 +262,24 @@ export function validateBodyStructure(
   bodySegments: Segment[],
   returns: ReturnsSchema | undefined,
 ): ErrorSegment | undefined {
-  return renderBodyStructure(bodyStructureFacts(bodySegments, returns));
+  const violations: string[] = [];
+  function walk(segments: Segment[], insideTry: boolean): void {
+    for (const segment of segments) {
+      if (segment.type !== "component") {
+        continue;
+      }
+      if (segment.name === "Try") {
+        violations.push(...tryStructure(segment).violations.map((entry) => entry.message));
+      } else if (!insideTry && (segment.name === "Catch" || segment.name === "Finally")) {
+        violations.push(strayTryBranchMessage(segment.name));
+      }
+      walk(segment.children, insideTry || segment.name === "Try");
+    }
+  }
+  walk(bodySegments, false);
+  return violations.length > 0
+    ? structureError("Try", "Invalid Try structure:", violations)
+    : renderBodyStructure(bodyStructureFacts(bodySegments, returns));
 }
 
 /** What a misplaced `<Output>` reaching expansion's dispatch says. */

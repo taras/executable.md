@@ -41,6 +41,30 @@ export interface EngineStructuralDeclaration {
 
 export const STRUCTURAL_DECLARATIONS: readonly EngineStructuralDeclaration[] = [
   {
+    name: "Try",
+    syntax: ["<Try>…<Catch>…</Catch><Finally>…</Finally></Try>"],
+    description:
+      "Recover an ordinary failure after its resources close. `<Try>…<Catch>fallback</Catch></Try>` keeps the rendered prefix and stops the attempted body at failure. Write Catch, Finally, or both. Failed release and infrastructure failures end execution.",
+    as: null,
+    context: "Attempted content followed by direct Catch and Finally branches.",
+  },
+  {
+    name: "Catch",
+    syntax: ['<Catch as="error">…</Catch>', "<Catch>…</Catch>"],
+    description:
+      'Handle a failure in the preceding Try body. `<Catch as="error">{error.message}</Catch>` runs after clean release; its bindings stay local. Cancellation skips this branch.',
+    as: "Optional. Binds the ordinary Error by reference in this branch.",
+    context: "Recovery content.",
+  },
+  {
+    name: "Finally",
+    syntax: ["<Finally>…</Finally>"],
+    description:
+      "Finish a Try after its attempted body and recovery. `<Finally>Cleanup.</Finally>` also runs and joins on terminal Stop. Resumable Exit leaves an unentered branch pending; failed release and infrastructure failure prevent new entry.",
+    as: null,
+    context: "Completion content using the surrounding bindings.",
+  },
+  {
     name: "Content",
     syntax: ["<Content />", '<Content slot="name" />'],
     description:

@@ -449,3 +449,27 @@ describe("protected input preserves durable protocol identity", () => {
     expect(String(output).includes("[redacted]")).toBe(true);
   });
 });
+
+describe("Try protected capture", () => {
+  it("keeps marked input out of recovered private captures and public output", function* () {
+    const entered = "entered-private-value-1164";
+    yield* Elicitation.around({
+      *elicit() {
+        return { code: entered, public: "safe" };
+      },
+    });
+    yield* useStubFs({
+      "doc.md": `<Elicit schema={${JSON.stringify(schema)}} as="answer">Enter.</Elicit><Let as="recovery"><Try><Fail message="ordinary" /><Catch>{answer.code}</Catch><Finally>finished</Finally></Try></Let>{recovery}`,
+    });
+    const stream = new InMemoryStream();
+    const execution = yield* execute({ path: "doc.md", stream, secretDetection: false });
+    const subscription = yield* execution.output;
+    let next = yield* subscription.next();
+    while (!next.done) {
+      next = yield* subscription.next();
+    }
+    expect((yield* execution).ok).toBe(true);
+    expect(next.value).not.toContain(entered);
+    expect(JSON.stringify(stream.snapshot())).not.toContain(entered);
+  });
+});

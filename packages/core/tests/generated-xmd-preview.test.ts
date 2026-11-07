@@ -358,3 +358,13 @@ describe("Tier GP — nothing runs", () => {
     expect(previewGeneratedXmdRoot(source)).toEqual(previewGeneratedXmdRoot(source));
   });
 });
+
+describe("Try preview", () => {
+  it("withholds all conditional regions beneath Try without effects", function* () {
+    expect(
+      preview(
+        "<Try><Output>body</Output><Catch><Output>fallback</Output></Catch><Finally><Output>completion</Output></Finally></Try>",
+      ),
+    ).toEqual({ output: "", incomplete: false });
+  });
+});

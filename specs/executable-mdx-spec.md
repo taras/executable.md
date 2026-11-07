@@ -2833,7 +2833,7 @@ A component name is resolved in tiers, and the first tier that answers wins:
 
 1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Let>`,
    `<Each>`, `<If>`/`<Else>`, `<Switch>`/`<Case>`, `<Loop>`/`<Break>`,
-   `<PrintErrors>`, and `<Answers>`/`<Answer>`. These are the language's own constructs.
+   `<PrintErrors>`, `<Answers>`/`<Answer>`, and `<Try>`/`<Catch>`/`<Finally>`. These are the language's own constructs.
    They are reserved: a registration cannot claim one, and a repository file
    named after one never stands in for it. A structural name written where its
    construct gives it no meaning is a printed error, not a missing component.
@@ -4765,7 +4765,7 @@ begins with an environment of its own, so its bindings stay in it.
 
 **Every built-in structural construct is available, with its ordinary
 semantics.** `Content`, `Output`, `Return`, `Let`, `Each`, `If`, `Else`,
-`Switch`, `Case`, `Loop`, `Break`, `PrintErrors`, `Answers` and `Answer` are
+`Switch`, `Case`, `Loop`, `Break`, `PrintErrors`, `Answers`, `Answer`, `Try`, `Catch` and `Finally` are
 engine-owned language rather than component permission. A generated fragment
 composes admitted reads with branching, binding and bounded iteration, and the
 source rules deciding each construct are the same ones ordinary validation and
@@ -7373,6 +7373,80 @@ a rejected element also ending the loop.
 Printed errors from `<Loop>` and `<Break>` carry source locations on the same
 terms as `<If>`.
 
+#### `<Try>`, `<Catch>` and `<Finally>`: recover after clean release
+
+Use Try to attempt content and Catch to handle an ordinary failure:
+
+```xmd
+<Try>
+  <Fail message="Review is unavailable." />
+  <Catch as="error">Review failed: {error.message}</Catch>
+  <Finally>Review lookup finished.</Finally>
+</Try>
+```
+
+All three forms are paired, including empty bodies. Try and Finally take no
+props. Catch takes only optional literal `as`, using the ordinary binding-name
+validation. At least one branch is required. The attempted body precedes at most
+one direct Catch, then at most one direct Finally. Only whitespace may follow or
+separate branches. Stray, wrapped, reordered, duplicate or malformed branches
+refuse shared structural analysis before attempted effects or prop expressions.
+
+Completed attempted-body bindings remain in the surrounding environment. Catch
+receives them in a new local environment, with its optional ordinary Error binding
+shadowing locally by reference. Catch locals do not escape. Finally reads and
+writes the surrounding environment and cannot see Catch locals. Failed operations
+bind nothing. The existing generic Error codec and saved Prompt fields define
+replayed error detail; Try adds no snapshot of arbitrary Error properties.
+
+Attempted work stops at ordinary failure, including checked nonzero exec under
+an enclosing printing mode. Try preserves inherited throw mode; explicit Catch
+can recover ordinary failures in documentation and value bodies. Nested permitted
+PrintErrors retains its owned recovery, so already printed errors do not enter
+Catch. Catch and Finally inherit surrounding recovery rules; their Try grants no
+permission to excuse their failures. Without Catch the pending failure propagates
+after Finally, even if an inner component swallowed a checked content failure.
+
+Each phase joins projected content, body and retained eval resources before the
+next phase. Failed owning teardown, durability or Files infrastructure failure
+ends execution without Catch, replacement-provider work or an unentered Finally.
+All cleanup stages are attempted. Durability then Files wins by identity through
+the complete combined causes. Otherwise the first unhandled ordinary failure
+stays primary; a later finalizer failure remains alongside it. A successful Catch
+retires its handled failure; failing Finally then becomes the new failure.
+
+Entitled rendered prefix stands, followed by executed Catch and Finally content.
+Captures, documentation, value and string-projection buffers stay private. Output
+is discovered from source in all branches and selected only when entered, under
+its existing source owner. Ordinary component transformations still apply.
+Return selects without ending the body; its reservation is never reset between
+phases. Break keeps its lexical or caller-projected owner and takes effect after
+Finally. Successful finalizer control flow cannot erase a pending failure.
+
+Accepted exact terminal Stop skips Catch, joins the interrupted phase, runs and
+joins Finally once while lexical services and the journal remain live, and only
+then retains cancelled Close. Stop during entered Finally joins that one entry;
+a waiting finalizer may delay Stop indefinitely. Enclosing resumable Exit or
+workflow interruption joins physical cleanup and leaves unentered Finally pending.
+An entered forward-path finalizer resumes acknowledged effects without repeating
+them. In-memory pause or UI detach alone unwinds nothing. All sibling abandonment
+runs Finally, while propagated resumable unwind does not terminalize its children.
+
+Try adds no durable wrapper or event. Completed stopped replay expands no body,
+provider or finalizer. A terminal append already begun wins over refused Stop.
+Cleanup acknowledged without cancelled Close may leave a prefix that refuses
+continuation before live body/reviewer work; no ending is synthesized, acknowledged
+cleanup repeated or interrupted Stop silently restarted. Durability fail-stop
+prevents new durable entry and append during cleanup; physical destructors still
+join. No exactly-once promise covers unacknowledged external work.
+
+Shared source validation and generated preflight check all branches. Catch names
+remain branch-local; generated effects and expression grammar do not widen.
+Generated calls and property access remain refused. Syntax inspection is effect-free;
+preview withholds conditional text beneath Try. Canonical expansion observes Try
+and each entered branch with distinct stable IDs, never repeats a raise, and grants
+observers no recovery authority.
+
 #### `<All>` and `<Spawn>`: running independent work at the same time
 
 `<All>` runs its direct `<Spawn>` children at the same time and waits for every
@@ -7442,7 +7516,12 @@ change and follows the ordinary divergence contract.
 fails the `<All>`, cancels every unfinished sibling and waits for all of them to
 finish tearing down. No child output is emitted, durable records acknowledged
 before the failure stay durable, and interrupted work is never recorded as
-complete. Cancelling the document cancels and joins every child; no task,
+complete. A resumable enclosing unwind joins every physical child lifetime but leaves
+pending children without Close, preserving unread replay work. Terminal sibling
+abandonment and accepted exact Stop instead run and join authored Finally and
+retain cancelled child Close after cleanup. A retained cancelled child is never
+reopened; All refuses before live child work unless a retained failed direct
+sibling can settle that join. Completed root replay still executes nothing. No task,
 subscription, retained resource or output buffer survives its spawn.
 
 **Control flow.** `<Spawn>` is a boundary. A `<Return>` inside one cannot select
@@ -13168,7 +13247,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | # | Test | Verify |
 |---|------|--------|
 | SY1/SY2 | Versioned shape | `version` is 1, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
-| SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers` and `Answer` carry the frozen forms, and `as` applies to `Let` and `Each` alone |
+| SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers` and `Answer` carry the frozen forms, and `as` applies to `Let`, `Each` and branch-local `Catch` |
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
 | SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
 | SY7c | Pruning | A lower-case, hidden or dotted directory is never read — at the top level or deeper — while the direct, nested and index candidates beside it stay discoverable; every skipped directory throws if it is read, and the recorded reads name only the ones a name reaches |
@@ -15241,3 +15320,14 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |
 | 102 | A successful `undefined` omits an ordinary prop | Absence is the fact an author has to be able to state: an optional identity that a preceding result will supply is not there yet, and there is no value that means "not there" — `null` is a value, and a second element written for the other case duplicates the invocation. The omission is decided in the one resolver both component kinds pass through, before validation, so the schema answers it: optional stays unset, a `default` applies, a required prop fails as missing. It stops at the root and at that boundary — nested members keep native `JSON.stringify` normalization, failures stay failures, and captures and `<Let>` keep binding the exact value — and it puts `undefined` nowhere durable, because a prop that was never there is nothing to record |
 | 103 | Protected `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate text={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. Canonical core supplies [protected Evaluate](#532-evaluate-the-protected-evaluation-component); the host offers its generated selection, read and resolved before public execution policy. Protection fixes the implementation and grants no permission; every ceiling comes from that captured selection and the declarations that own the implementations it named. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |
+
+
+### Try/Catch/Finally conformance
+
+| Evidence | Required observation |
+| --- | --- |
+| A1 | Actual two-provider Markdown skips fallback on primary success and joins release before ordinary failed-turn recovery. |
+| A2–A4 | Checked failure authority, local bindings, private captures, pending failures and Return/Break owners survive all phases. |
+| A5–A6 | Shared whole-source rules, generated admission, selected Output, stable observations, Syntax and conditional preview agree. |
+| A7 | Genuine interrupted prefixes restore completed providers and effects; stopped replay is inert and incomplete Stop refuses without history repair. |
+| A8–A9 | Exact Stop joins one finalizer; resumable unwind leaves logical work pending; sibling abandonment finalizes; failed release and protected infrastructure remain terminal. |

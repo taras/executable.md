@@ -48,7 +48,8 @@ import { useSelection } from "./support/generated-selection.ts";
 import { answerProvider } from "./support/answer-provider.ts";
 import { contributeDocumentation, Documentation } from "../src/documentation-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import { durabilityFailure } from "../src/errors.ts";
+import { InvocationTeardownError } from "../src/invocation.ts";
+import { durabilityFailure, firstCause } from "../src/errors.ts";
 import { Execution } from "../src/execute.ts";
 import type { Json } from "../src/types.ts";
 import { Agent } from "../src/agent/agent-api.ts";
@@ -3203,6 +3204,7 @@ describe("Tier DP — a held turn composes above its own terminal", () => {
   it("DP6: a caught native cleanup failure cannot become canonical success", function* () {
     const stream = new InMemoryStream();
     const traffic = fresh();
+    const failure = new Error("native cleanup failed");
     let cleaned = 0;
     let caught = "";
 
@@ -3211,7 +3213,7 @@ describe("Tier DP — a held turn composes above its own terminal", () => {
       stub(traffic, {
         tears() {
           cleaned += 1;
-          throw new Error("native cleanup failed");
+          throw failure;
         },
       }),
       function* (chat) {
@@ -3268,12 +3270,21 @@ describe("Tier DP — a held turn composes above its own terminal", () => {
     // scope a composition subscribed from, so there is nothing for the
     // wrapper to catch — which is what makes the outcome unsuppressable.
     expect(caught).toBe("");
-    // The response is unsuccessful and no completed turn was retained, even
-    // though every forwarded result said the turn had finished.
-    expect(replied(answered)).toContain("provider cleanup failed");
-    const retained = prompts(yield* stream.readAll());
-    expect(retained).toHaveLength(1);
-    expect(record(retained, "turn:1").status).toBe("failed");
+    expect(answered.ok).toBe(true);
+    if (answered.ok) {
+      expect(answered.value.ok).toBe(false);
+      if (!answered.value.ok) {
+        expect(
+          firstCause(answered.value.error, (cause) =>
+            cause instanceof InvocationTeardownError ? cause : undefined,
+          ),
+        ).toBeInstanceOf(InvocationTeardownError);
+        expect(
+          firstCause(answered.value.error, (cause) => (cause === failure ? failure : undefined)),
+        ).toBe(failure);
+      }
+    }
+    expect(prompts(yield* stream.readAll())).toEqual([]);
   });
 
   it("DP6: replaying a composed turn runs no composition and asks no provider", function* () {

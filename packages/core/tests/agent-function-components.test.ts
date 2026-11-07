@@ -1915,11 +1915,16 @@ const DIAGNOSTIC = {
   },
 };
 
-function diagnosticPrompt(error: Error): Operation<void> {
+function diagnosticPrompt(error: Error, releaseError?: Error): Operation<void> {
   return Agent.around({
     *prompt() {
       return {
         *[Symbol.iterator]() {
+          yield* ensure(() => {
+            if (releaseError !== undefined) {
+              throw releaseError;
+            }
+          });
           const events: AgentPromptEvent[] = [
             {
               type: "started",
@@ -2085,4 +2090,39 @@ describe("1039 saved Prompt diagnostics", () => {
       expect(JSON.stringify(run.events)).not.toContain('"fingerprint"');
     });
   }
+});
+
+describe("Try Prompt normalization", () => {
+  it("withholds a failed-turn record when the subscribed stream fails release", function* () {
+    const result = yield* runDoc('<Prompt text="once" throwOnError={true} />', {
+      handler: () => diagnosticPrompt(new Error("ordinary"), new Error("release failed")),
+    });
+    expect(result.result.ok).toBe(false);
+    expect(
+      result.events.some(
+        (event) => event.type === "yield" && event.description.type === "agent_prompt",
+      ),
+    ).toBe(false);
+  });
+  it("screens nested saved diagnostics before Catch renders a captured recovery", function* () {
+    const credential = ["ghp", "_", "abcdefghijklmnopqrstuvwxyz0123456789"].join("");
+    const diagnostic = {
+      ...DIAGNOSTIC,
+      acp: { code: -32041, message: credential, details: credential },
+    };
+    const error = Object.assign(new Error("ordinary unavailable"), {
+      [DIAGNOSTIC_KEY]: diagnostic,
+    });
+    const result = yield* runDoc(
+      '<Let as="recovery"><Try><Prompt text="once" throwOnError={true} /><Catch as="error">Recovered: {error.message}</Catch></Try></Let>{recovery}',
+      { handler: () => diagnosticPrompt(error) },
+    );
+    expect(result.result.ok).toBe(true);
+    expect(result.output).toContain("Recovered:");
+    expect(result.output).not.toContain(credential);
+    expect(JSON.stringify(result.events)).not.toContain(credential);
+    expect(diagnosticRecord(result.events).error).toMatchObject({
+      diagnostic: { ...DIAGNOSTIC, acp: { code: -32041 } },
+    });
+  });
 });

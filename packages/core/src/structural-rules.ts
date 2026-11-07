@@ -1235,3 +1235,88 @@ export function answerViolations(segment: ComponentElement): StructuralViolation
   }
   return found;
 }
+
+export function strayTryBranchMessage(name: string): string {
+  return `<${name}> must be a direct child of <Try>.`;
+}
+
+export function tryStructure(segment: ComponentElement): {
+  body: Segment[];
+  catcher?: ComponentElement;
+  finalizer?: ComponentElement;
+  binding?: string;
+  violations: StructuralViolation[];
+} {
+  const violations: StructuralViolation[] = [];
+  const body: Segment[] = [];
+  let catcher: ComponentElement | undefined;
+  let finalizer: ComponentElement | undefined;
+  let binding: string | undefined;
+  function refuse(element: ComponentElement, message: string): void {
+    violations.push(violation("structural-usage-invalid", element.name, message, element));
+  }
+  function form(element: ComponentElement): void {
+    if (element.selfClosing) {
+      refuse(element, `<${element.name}> requires a paired closing tag.`);
+    }
+    for (const name of authoredPropNames(element)) {
+      if (element.name !== "Catch" || name !== "as") {
+        refuse(element, `<${element.name}> does not accept a "${name}" prop.`);
+      }
+    }
+    if (element.name === "Catch") {
+      if ("as" in element.expressions) {
+        refuse(element, '<Catch as="error"> requires a literal binding name.');
+      } else {
+        const parsed = validateBindingName(element.props.as);
+        if (!parsed.ok) {
+          refuse(element, parsed.error.message);
+        } else {
+          binding = parsed.value;
+        }
+      }
+    }
+  }
+  function nested(segments: Segment[]): void {
+    for (const child of segments) {
+      if (child.type !== "component" || child.name === "Try") {
+        continue;
+      }
+      if (child.name === "Catch" || child.name === "Finally") {
+        refuse(child, strayTryBranchMessage(child.name));
+      }
+      nested(child.children);
+    }
+  }
+  form(segment);
+  for (const child of segment.children) {
+    if (child.type === "component" && (child.name === "Catch" || child.name === "Finally")) {
+      form(child);
+      if (child.name === "Catch") {
+        if (catcher !== undefined || finalizer !== undefined) {
+          refuse(child, "Write at most one <Catch>, before <Finally>.");
+        }
+        catcher = child;
+      } else {
+        if (finalizer !== undefined) {
+          refuse(child, "Write at most one <Finally>.");
+        }
+        finalizer = child;
+      }
+      nested(child.children);
+    } else {
+      if (catcher !== undefined || finalizer !== undefined) {
+        if (!isBlankText(child)) {
+          refuse(segment, "Only whitespace may follow a <Catch> or <Finally> branch.");
+        }
+      } else {
+        body.push(child);
+      }
+      nested([child]);
+    }
+  }
+  if (catcher === undefined && finalizer === undefined) {
+    refuse(segment, "<Try> requires <Catch>, <Finally>, or both.");
+  }
+  return { body, catcher, finalizer, binding, violations };
+}

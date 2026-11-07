@@ -27,6 +27,14 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 </Each>
 </Test>
 
+<Test name="A-H required review follows Fable, one independent Astra replacement, then a retained Elicit hold" timeout="420s">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.Entry entry="fallback-case" value={{fixture,scenarios:["fable-pass","unavailable","configuration","turn-failed","exhausted","exhausted-reconcile","exhausted-failure","interrupted","partial","unjoined-primary","outside","astra-final","repair","blocked","malformed","reserved"],runner,root}} repository={fixture.repository} command={runner} root={root} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={child.stderr + child.stdout} /></If>
+</TempDir>
+</Test>
+
 <Test name="CI selection shares the exact-main rule and follows newer attempts">
 <Let as="revision" value={"a".repeat(40)} />
 <Let as="run" value={{id:1,run_number:4,run_attempt:1,status:"completed",conclusion:"success",head_sha:revision,head_branch:"main",event:"push",name:"CI",html_url:"https://example.invalid/run/1",actor:{login:"test"}}} />

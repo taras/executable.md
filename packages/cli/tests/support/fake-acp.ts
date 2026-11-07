@@ -141,6 +141,18 @@ export interface ScriptedTurn {
   readonly cancelled?: boolean;
   readonly failure?: string;
   /**
+   * The structured facts a failed runtime result carries beside `failure`.
+   *
+   * Absent for a turn whose failure is a message alone. Present, these travel
+   * exactly as a runtime reports a normalized protocol error, which is what the
+   * provider turns into the prompt's diagnostic.
+   */
+  readonly failureFacts?: {
+    readonly code?: string;
+    readonly origin?: "cli" | "runtime" | "queue" | "acp";
+    readonly acp?: { readonly code: number; readonly message: string };
+  };
+  /**
    * The pieces this turn streams, in order, instead of one whole `reply`.
    *
    * How a transport that arrives in chunks is modelled: a reader of this turn
@@ -887,7 +899,10 @@ export function createFakeAcp(): FakeAcp {
             void allowed.then(
               () => {
                 if (turn.failure !== undefined) {
-                  settled.resolve({ status: "failed", error: { message: turn.failure } });
+                  settled.resolve({
+                    status: "failed",
+                    error: { message: turn.failure, ...turn.failureFacts },
+                  });
                   return;
                 }
                 if (turn.cancelled === true) {

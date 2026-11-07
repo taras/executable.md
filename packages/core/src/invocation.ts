@@ -101,6 +101,7 @@ export function* withInvocation<T>(
     readonly value: ComponentInvocationObservation;
     accept(value: T): Operation<T>;
   },
+  failedRelease?: (failure: Error) => void,
 ): Operation<T> {
   const result = yield* scoped(function* () {
     let returned: { value: T } | undefined;
@@ -134,6 +135,9 @@ export function* withInvocation<T>(
                 [bodyFailure, teardown],
                 "component invocation body and teardown both failed",
               );
+      }
+      if (teardownFailures.length > 0 && failure !== undefined) {
+        failedRelease?.(failure);
       }
       const cancelled = failure === undefined && returned === undefined;
       if (observation !== undefined) {

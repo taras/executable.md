@@ -34,7 +34,7 @@ import {
   rememberDurabilityFailure,
 } from "./durability.ts";
 import { ephemeral } from "./ephemeral.ts";
-import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
+import { EarlyReturnDivergenceError, StaleInputError, TerminalDivergenceError } from "./errors.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { Close, Json, Workflow, WorkflowValue } from "./types.ts";
 
@@ -49,6 +49,7 @@ function* runDurableChild<T extends WorkflowValue>(
   childWorkflow: () => Workflow<T>,
   childId: string,
   parentCtx: DurableContext,
+  cancellation: DurableCancellation = () => "terminal",
 ): Operation<T> {
   const { replayIndex, stream } = parentCtx;
   replayIndex.claim(childId);
@@ -106,6 +107,9 @@ function* runDurableChild<T extends WorkflowValue>(
     // closeEvent still undefined means the child was cancelled before the
     // normal-return or catch path ran.
     if (!closeEvent) {
+      if (cancellation() === "resumable") {
+        return;
+      }
       const unaligned = replayIndex.firstUnaligned(childId);
       if (unaligned) {
         const failure = new TerminalDivergenceError(
@@ -227,6 +231,9 @@ export function durableSpawn<T extends WorkflowValue>(
   );
 }
 
+/** Read whether cancellation ends the logical child or only its physical lifetime. */
+export type DurableCancellation = () => "terminal" | "resumable";
+
 /**
  * Run multiple durable workflows concurrently and wait for all to complete.
  *
@@ -242,23 +249,42 @@ export function durableSpawn<T extends WorkflowValue>(
  * See spec §7, §11.5.
  */
 export function durableAll<T extends WorkflowValue>(
-  workflows: (() => Workflow<T>)[],
+  workflows: ((cancellation: DurableCancellation) => Workflow<T>)[],
+  options?: { readonly cancellation?: DurableCancellation },
 ): Workflow<T[]> {
   return ephemeral(
     (function* (): Operation<T[]> {
       const scope = yield* useScope();
       const ctx = scope.expect<DurableContext>(DurableContext);
 
-      const childOps: Operation<T>[] = workflows.map((workflow) => {
-        const childIndex = ctx.childCounter++;
-        const childId = `${ctx.coroutineId}.${childIndex}`;
-
-        return {
-          *[Symbol.iterator]() {
-            return yield* runDurableChild(workflow, childId, ctx);
-          },
-        };
-      });
+      const enclosing = options?.cancellation ?? (() => "terminal");
+      let abandoned = false;
+      const cancellation: DurableCancellation = () => (abandoned ? "terminal" : enclosing());
+      const children = workflows.map((workflow) => ({
+        workflow,
+        id: `${ctx.coroutineId}.${ctx.childCounter++}`,
+      }));
+      const closes = children.map(({ id }) => ctx.replayIndex.getClose(id));
+      if (
+        closes.some((close) => close?.result.status === "cancelled") &&
+        !closes.some((close) => close?.result.status === "err")
+      ) {
+        const failure = new StaleInputError(
+          "All has retained cancelled children without a failed sibling to settle the join.",
+        );
+        rememberDurabilityFailure(ctx, failure);
+        throw failure;
+      }
+      const childOps: Operation<T>[] = children.map(({ workflow, id }) => ({
+        *[Symbol.iterator]() {
+          try {
+            return yield* runDurableChild(() => workflow(cancellation), id, ctx, cancellation);
+          } catch (error) {
+            abandoned = true;
+            throw error;
+          }
+        },
+      }));
 
       // Native all() isolates child failures so the caller can catch them.
       return yield* effectionAll(childOps);
