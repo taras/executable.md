@@ -37,7 +37,12 @@ other scenario runs. A later invocation starts only after the one before it exit
 successfully: a host that ended unsuccessfully may have failed its own cleanup,
 so the resume continuation is never started after an unsuccessful seed. Each Prompt has 60 seconds of work, and no invocation is
 admitted after 300 seconds; either deadline interrupts the host's own work and
-then waits for it to finish.
+then waits for it to finish. A nonzero child exit leaves cleanup unproven,
+including an expected Agent failure or cancellation, so calibration stays
+incomplete. A readiness marker alone does not prove active work: cancellation
+requires an unsettled journal before the interrupt and an acknowledged cancelled
+Prompt afterwards. Missing that witness, or a Prompt that completed instead,
+also leaves calibration incomplete.
 
 The scenario documents in `scenarios/` are what the host runs; read them to see
 exactly what is asked. The source host is `packages/cli/src/deno.ts` from this

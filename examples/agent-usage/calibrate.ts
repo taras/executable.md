@@ -49,7 +49,7 @@ interface Invocation {
   readonly journal: string;
   readonly prompts: number;
   readonly denyAll?: boolean;
-  /** Cancel once the live Agent output says this, while the work is still active. */
+  /** Interrupt once the saved Agent output says this. */
   readonly cancelOn?: string;
 }
 
@@ -58,8 +58,9 @@ interface Joined {
   readonly started: boolean;
   readonly code?: number;
   readonly signal?: string;
-  /** The cancellation marker was seen while the work was still active, and cancellation was sent. */
+  /** The cancellation marker was seen and an interrupt was sent. */
   readonly cancelledAfterReady?: boolean;
+  readonly unacknowledgedAtInterrupt?: boolean;
   readonly deadline?: boolean;
 }
 
@@ -168,7 +169,8 @@ function* measure(
  * The provider checkpoints a turn's session updates while it runs, so the
  * marker in the saved Agent text, in the record whose user message names this
  * run's private fixture, is the earliest evidence a host has that the Agent
- * actually said it while its work is still active. Nothing is copied.
+ * actually said it. It does not establish whether the turn is still active.
+ * Nothing is copied.
  */
 function* readyInAcpx(acpxRoot: string, fixture: string, since: number): Operation<boolean> {
   const sessions = join(acpxRoot, "sessions");
@@ -278,6 +280,7 @@ function* invoke(
       yield* writeTextFile(stderrPath, stderr.slice(0, 8000));
     });
     let cancelledAfterReady = false;
+    let unacknowledgedAtInterrupt = false;
     let deadline = false;
     const workDeadline = Math.min(
       deadlineAt,
@@ -290,6 +293,11 @@ function* invoke(
           yield* sleep(environment.pollMs);
           if (invocation.cancelOn !== undefined && !cancelledAfterReady && !deadline) {
             if (yield* readyInAcpx(join(environment.home, ".acpx"), invocation.cancelOn, started)) {
+              try {
+                unacknowledgedAtInterrupt = ((yield* readAcknowledged(invocation.journal)) ?? []).length === 0;
+              } catch {
+                // A partial journal line cannot prove the Prompt is unsettled.
+              }
               cancelledAfterReady = true;
               process.kill(child.pid, "SIGINT");
             }
@@ -309,7 +317,7 @@ function* invoke(
       // The join reports an absent code or signal as null.
       ...(typeof status.code === "number" ? { code: status.code } : {}),
       ...(typeof status.signal === "string" ? { signal: status.signal } : {}),
-      ...(invocation.cancelOn === undefined ? {} : { cancelledAfterReady }),
+      ...(invocation.cancelOn === undefined ? {} : { cancelledAfterReady, unacknowledgedAtInterrupt }),
       ...(deadline ? { deadline } : {}),
     };
   });
@@ -525,16 +533,11 @@ function* runScenario(
     prompts,
     scenarioChecks: scenario,
     readback: acknowledged.length > 0 ? check("verified", "canonical-journal-read-back") : check("unavailable", "no-acknowledged-history"),
-    teardown: teardownCheck(selection, observed, plan.length),
+    teardown: teardownCheck(observed, plan.length),
   };
 }
 
-/** Whether this scenario's own expected path ends its one child unsuccessfully. */
-function expectsUnsuccessfulChild(selection: Selection): boolean {
-  return selection.scenario === "failure" || selection.scenario === "cancel";
-}
-
-function teardownCheck(selection: Selection, observed: Observed, planned: number): Check {
+function teardownCheck(observed: Observed, planned: number): Check {
   if (observed.stopped === "unsuccessful-owner") {
     return check("failed", "unsuccessful-owner-stopped-admission");
   }
@@ -549,9 +552,7 @@ function teardownCheck(selection: Selection, observed: Observed, planned: number
   }
   // An expected Agent failure or cancellation exits nonzero like a cleanup
   // failure would: the owner joined, and its cleanup stays unproven.
-  return expectsUnsuccessfulChild(selection)
-    ? check("limited", "joined-cleanup-unproven")
-    : check("unavailable", "joined-cleanup-unproven");
+  return check("unavailable", "joined-cleanup-unproven");
 }
 
 function failedBeforeWork(entry: Acknowledged | undefined): boolean {
@@ -652,9 +653,13 @@ function scenarioChecks(
     case "cancel": {
       const joined = joins[0];
       return {
-        cancelledWhileActive: joined?.cancelledAfterReady === true
-          ? check("verified", "cancelled-after-ready-marker")
-          : check("failed", "ready-marker-not-observed-while-active"),
+        cancelledWhileActive: acknowledged.some((entry) => entry.record.status === "completed")
+          ? check("failed", "prompt-completed-before-cancellation")
+          : joined?.cancelledAfterReady !== true
+            ? check("failed", "ready-marker-not-observed-while-active")
+            : joined.unacknowledgedAtInterrupt === true && acknowledged.length === 1 && acknowledged[0].record.status === "cancelled"
+              ? check("verified", "acknowledged-cancellation-after-ready-marker")
+              : check("unavailable", "active-cancellation-unproven"),
         acknowledgement: acknowledged.length === 1
           ? check("verified", `acknowledged-${acknowledged[0].record.status}-partial`)
           : check("verified", "no-acknowledged-record"),
@@ -693,7 +698,7 @@ function scenarioChecks(
 function verdict(report: Report): "completed" | "limited" | "incomplete" {
   const required = Object.values(report.scenarioChecks);
   const teardown = report.teardown;
-  const joined = teardown.outcome === "verified" || (teardown.outcome === "limited" && teardown.reason === "joined-cleanup-unproven");
+  const joined = teardown.outcome === "verified";
   if (!joined || required.some((item) => item.outcome === "failed" || (item.outcome === "not_run" && item.reason !== "no-subagent-work"))) {
     return "incomplete";
   }

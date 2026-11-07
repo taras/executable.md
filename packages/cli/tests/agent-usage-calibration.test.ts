@@ -518,7 +518,7 @@ describe("Tier UC — usage calibration driver", () => {
     expect(controlReport.reservedPrompts).toBe(2);
   });
 
-  it("UC7: cancellation waits for the ready marker while work is active, then joins the owner", function* () {
+  it("UC7: an interrupt after the ready marker joins cleanup without inventing missing proof", function* () {
     const host = yield* controlled({ "cancel.md": { ready: true, hold: true, cleanupMs: 300 } });
     const ran = yield* runControlled(host, "cancel");
     expect(yield* documents(host)).toEqual([
@@ -528,18 +528,18 @@ describe("Tier UC — usage calibration driver", () => {
     ]);
     const report = JSON.parse(yield* readTextFile(join(ran.output, "report.json")));
     expect(report.scenarioChecks.cancelledWhileActive).toEqual({
-      outcome: "verified",
-      reason: "cancelled-after-ready-marker",
+      outcome: "unavailable",
+      reason: "active-cancellation-unproven",
     });
     expect(report.scenarioChecks.acknowledgement.reason).toBe("no-acknowledged-record");
-    expect(report.teardown).toEqual({ outcome: "limited", reason: "joined-cleanup-unproven" });
+    expect(report.teardown).toEqual({ outcome: "unavailable", reason: "joined-cleanup-unproven" });
     expect([
       report.reservedPrompts,
       report.observedSubmissions,
       report.acknowledgedPrompts,
     ]).toEqual([1, 1, 0]);
-    // Submitted work with no acknowledged record is an accounting gap.
-    expect([ran.status, report.result]).toEqual([0, "limited"]);
+    // Neither a live process nor its expected exit proves active Prompt cancellation or cleanup success.
+    expect([ran.status, report.result]).toEqual([1, "incomplete"]);
   });
 
   it("UC8: the admission deadline interrupts owned work, waits for its held cleanup and admits nothing later", function* () {
@@ -595,6 +595,112 @@ describe("Tier UC — usage calibration driver", () => {
   });
 });
 
+describe("Tier UC — cancellation calibration regressions", () => {
+  it("UC12: failed owning cleanup stays incomplete with or without an acknowledged cancellation", function* () {
+    for (const terminalOnInterrupt of [
+      undefined,
+      "cancelled",
+    ] satisfies Behaviors[string]["terminalOnInterrupt"][]) {
+      const host = yield* controlled({
+        "cancel.md": {
+          ready: true,
+          hold: true,
+          terminalOnInterrupt,
+          exit: 1,
+          cleanupFailure: true,
+        },
+      });
+      const ran = yield* runControlled(host, "cancel");
+      const report = JSON.parse(yield* readTextFile(join(ran.output, "report.json")));
+      expect(yield* documents(host)).toEqual([
+        "cancel.md:started",
+        "cancel.md:interrupted",
+        "cancel.md:cleanup-failed",
+      ]);
+      expect([ran.status, report.result]).toEqual([1, "incomplete"]);
+      expect(report.teardown).toEqual({
+        outcome: "unavailable",
+        reason: "joined-cleanup-unproven",
+      });
+      expect(report.scenarioChecks.acknowledgement.reason).toBe(
+        terminalOnInterrupt === undefined
+          ? "no-acknowledged-record"
+          : "acknowledged-cancelled-partial",
+      );
+      expect(yield* readTextFile(join(ran.output, "support/child-0-stderr.txt"))).toContain(
+        "controlled owning-cleanup failure",
+      );
+      expect(ran.stdout).not.toContain("Calibration completed");
+    }
+  });
+
+  it("UC13: a completed Prompt waiting on process cleanup is not cancelled while active", function* () {
+    const host = yield* controlled({
+      "cancel.md": { ready: true, hold: true, completedBeforeReady: true, exit: 0 },
+    });
+    const ran = yield* runControlled(host, "cancel");
+    const report = JSON.parse(yield* readTextFile(join(ran.output, "report.json")));
+    expect(yield* documents(host)).toEqual([
+      "cancel.md:started",
+      "cancel.md:interrupted",
+      "cancel.md:cleaned",
+    ]);
+    expect([ran.status, report.result]).toEqual([1, "incomplete"]);
+    expect(report.teardown.outcome).toBe("verified");
+    expect(report.scenarioChecks.cancelledWhileActive).toEqual({
+      outcome: "failed",
+      reason: "prompt-completed-before-cancellation",
+    });
+    expect(report.scenarioChecks.acknowledgement.reason).toBe("acknowledged-completed-partial");
+  });
+
+  it("UC14: acknowledged active cancellation with successful owner cleanup remains a valid experiment", function* () {
+    const host = yield* controlled({
+      "cancel.md": {
+        ready: true,
+        hold: true,
+        terminalOnInterrupt: "cancelled",
+        cleanupMs: 200,
+        exit: 0,
+      },
+    });
+    const ran = yield* runControlled(host, "cancel");
+    const report = JSON.parse(yield* readTextFile(join(ran.output, "report.json")));
+    expect(yield* documents(host)).toEqual([
+      "cancel.md:started",
+      "cancel.md:interrupted",
+      "cancel.md:cleaned",
+    ]);
+    expect(ran.elapsedMs).toBeGreaterThanOrEqual(200);
+    expect([ran.status, report.result]).toEqual([0, "limited"]);
+    expect(report.teardown).toEqual({ outcome: "verified", reason: "owner-cleanup-succeeded" });
+    expect(report.scenarioChecks.cancelledWhileActive).toEqual({
+      outcome: "verified",
+      reason: "acknowledged-cancellation-after-ready-marker",
+    });
+    expect(report.scenarioChecks.acknowledgement.reason).toBe("acknowledged-cancelled-partial");
+    expect(report.prompts[0].status).toBe("cancelled");
+    expect(report.prompts[0].checks.usage.outcome).toBe("unavailable");
+  });
+
+  it("UC15: expected Agent failure preserves its outcome but cannot prove failed owner cleanup", function* () {
+    for (const exit of [1, 0]) {
+      const host = yield* controlled({
+        "failure.md": { failedRecord: "controlled Agent failure", deniedWrite: true, exit },
+      });
+      const ran = yield* runControlled(host, "failure");
+      const report = JSON.parse(yield* readTextFile(join(ran.output, "report.json")));
+      expect(yield* documents(host)).toEqual(["failure.md:started"]);
+      expect(report.prompts[0].status).toBe("failed");
+      expect(report.scenarioChecks.attemptedWriteRefused.outcome).toBe("verified");
+      expect(report.scenarioChecks.nothingWritten.outcome).toBe("verified");
+      expect([ran.status, report.result, report.teardown.outcome]).toEqual(
+        exit === 0 ? [0, "limited", "verified"] : [1, "incomplete", "unavailable"],
+      );
+    }
+  });
+});
+
 function usageWith(tokens: Record<string, number>): PromptUsage {
   return {
     provenance: { host: "compiled", xmd: {}, runtime: {}, adapter: {} },
@@ -619,6 +725,10 @@ interface Behaviors {
     readonly blockReport?: boolean;
     /** Acknowledge one failed Prompt with this error before doing anything else. */
     readonly failedRecord?: string;
+    readonly completedBeforeReady?: boolean;
+    readonly terminalOnInterrupt?: "cancelled";
+    readonly cleanupFailure?: boolean;
+    readonly deniedWrite?: boolean;
   };
 }
 
@@ -658,17 +768,25 @@ const prop = (name) => args[args.indexOf("--props-" + name) + 1];
 const note = (event) => fs.appendFileSync(config.log, JSON.stringify({ document, event }) + "\\n");
 note("started");
 const behavior = config.behaviors[document] ?? { exit: 0 };
-if (behavior.failedRecord) {
+function acknowledge(status, error) {
   const event = {
     type: "yield",
     coroutineId: "root",
     description: { type: "agent_prompt", name: "prompt:controlled#0", input: "controlled" },
     result: {
       status: "ok",
-      value: { sequence: 0, agent: "codex", sessionKey: "controlled", status: "failed", text: "", error: { message: behavior.failedRecord } },
+      value: { sequence: 0, agent: "codex", sessionKey: "controlled", status, text: "", ...(behavior.deniedWrite ? { permissions: [{
+        toolCallId: "controlled-write", kind: "edit", options: [], outcome: { outcome: "cancelled" },
+      }] } : {}), ...(error ? { error: { message: error } } : {}) },
     },
   };
   fs.writeFileSync(journal, JSON.stringify(event) + "\\n");
+}
+if (behavior.failedRecord) {
+  acknowledge("failed", behavior.failedRecord);
+}
+if (behavior.completedBeforeReady) {
+  acknowledge("completed");
 }
 if (behavior.blockReport) {
   fs.mkdirSync(path.join(path.dirname(journal), "report.json"), { recursive: true });
@@ -687,9 +805,15 @@ if (behavior.ready) {
 if (behavior.hold) {
   process.on("SIGINT", () => {
     note("interrupted");
+    if (behavior.terminalOnInterrupt) {
+      acknowledge(behavior.terminalOnInterrupt);
+    }
     setTimeout(() => {
-      note("cleaned");
-      process.exit(130);
+      note(behavior.cleanupFailure ? "cleanup-failed" : "cleaned");
+      if (behavior.cleanupFailure) {
+        console.error("controlled owning-cleanup failure");
+      }
+      process.exit(behavior.exit ?? 130);
     }, behavior.cleanupMs ?? 0);
   });
   setInterval(() => {}, 1000);
