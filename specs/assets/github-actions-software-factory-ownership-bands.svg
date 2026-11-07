@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" role="img" aria-labelledby="title description">
+  <title id="title">AI Software Factory ownership bands</title>
+  <desc id="description">A pyramid with User as the bottom band, Architect above User, Planner above Architect, and Implement Issue at the apex. Forward work ascends the left side from Issue Backlog and validation descends the right side to Closed PR.</desc>
+
+  <defs>
+    <marker id="prepare-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#2f81f7"/>
+    </marker>
+    <marker id="review-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L10 5L0 10Z" fill="#d97706"/>
+    </marker>
+    <style>
+      .band { stroke: #8c959f; stroke-width: 2; }
+      .implementor { fill: #24415f; }
+      .planner { fill: #355c7d; }
+      .architect { fill: #725538; }
+      .user { fill: #286454; }
+      .role { fill: #ffffff; font: 700 19px ui-sans-serif, system-ui, sans-serif; letter-spacing: 2px; text-anchor: middle; }
+      .prompt { fill: #ffffff; font: 650 24px ui-sans-serif, system-ui, sans-serif; }
+      .right-prompt { text-anchor: end; }
+      .stage { fill: #ffffff; font: 750 18px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
+      .stage-circle { fill: #1f2328; stroke: #ffffff; stroke-width: 2; }
+      .endpoint { fill: #24292f; stroke: #8c959f; stroke-width: 2; }
+      .endpoint-text { fill: #ffffff; font: 650 22px ui-sans-serif, system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
+      .prepare-flow { fill: none; stroke: #2f81f7; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#prepare-arrow); }
+      .review-flow { fill: none; stroke: #d97706; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#review-arrow); }
+      .side-label { font: 650 18px ui-sans-serif, system-ui, sans-serif; letter-spacing: 1px; }
+      .prepare-label { fill: #2f81f7; }
+      .review-label { fill: #d97706; text-anchor: end; }
+    </style>
+  </defs>
+
+  <text class="side-label prepare-label" x="40" y="86">PREPARE</text>
+  <text class="side-label review-label" x="1160" y="86">VALIDATE</text>
+
+  <path class="prepare-flow" d="M132 674C106 632 120 586 166 546"/>
+  <path class="prepare-flow" d="M184 524C205 483 234 443 277 416"/>
+  <path class="prepare-flow" d="M300 393C322 350 355 311 397 286"/>
+  <path class="prepare-flow" d="M424 262C446 221 477 188 520 166"/>
+
+  <path class="review-flow" d="M680 166C723 188 754 221 776 262"/>
+  <path class="review-flow" d="M803 286C845 311 878 350 900 393"/>
+  <path class="review-flow" d="M923 416C966 443 995 483 1016 524"/>
+  <path class="review-flow" d="M1034 546C1080 586 1094 632 1068 674"/>
+
+  <polygon class="band implementor" points="500,100 700,100 760,220 440,220"/>
+  <circle class="stage-circle" cx="526" cy="160" r="18"/>
+  <text class="stage" x="526" y="160">4</text>
+  <text class="prompt" x="559" y="168">Implement Issue</text>
+  <text class="role" x="600" y="132">IMPLEMENTOR</text>
+
+  <polygon class="band planner" points="400,232 800,232 870,352 330,352"/>
+  <circle class="stage-circle" cx="405" cy="292" r="18"/>
+  <text class="stage" x="405" y="292">3</text>
+  <text class="prompt" x="438" y="300">Prepare Issue</text>
+  <text class="role" x="600" y="268">PLANNER</text>
+  <text class="prompt right-prompt" x="808" y="300">Review PR</text>
+  <circle class="stage-circle" cx="842" cy="292" r="18"/>
+  <text class="stage" x="842" y="292">5</text>
+
+  <polygon class="band architect" points="290,364 910,364 980,484 220,484"/>
+  <circle class="stage-circle" cx="295" cy="424" r="18"/>
+  <text class="stage" x="295" y="424">2</text>
+  <text class="prompt" x="328" y="432">Review Issue</text>
+  <text class="role" x="600" y="400">ARCHITECT</text>
+  <text class="prompt right-prompt" x="918" y="432">Review PR</text>
+  <circle class="stage-circle" cx="952" cy="424" r="18"/>
+  <text class="stage" x="952" y="424">6</text>
+
+  <polygon class="band user" points="180,496 1020,496 1090,616 110,616"/>
+  <circle class="stage-circle" cx="185" cy="556" r="18"/>
+  <text class="stage" x="185" y="556">1</text>
+  <text class="prompt" x="218" y="564">Assign Issue</text>
+  <text class="role" x="600" y="532">USER</text>
+  <text class="prompt right-prompt" x="1028" y="564">Review PR</text>
+  <circle class="stage-circle" cx="1062" cy="556" r="18"/>
+  <text class="stage" x="1062" y="556">7</text>
+
+  <rect class="endpoint" x="58" y="668" width="236" height="64" rx="12"/>
+  <circle class="stage-circle" cx="88" cy="700" r="18"/>
+  <text class="stage" x="88" y="700">0</text>
+  <text class="endpoint-text" x="193" y="700">Issue Backlog</text>
+
+  <rect class="endpoint" x="906" y="668" width="236" height="64" rx="12"/>
+  <text class="endpoint-text" x="1007" y="700">Closed PR</text>
+  <circle class="stage-circle" cx="1112" cy="700" r="18"/>
+  <text class="stage" x="1112" y="700">8</text>
+</svg>
