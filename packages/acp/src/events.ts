@@ -14,6 +14,12 @@
  * as a property on the event, which every holder of the event could read and
  * every builder of one could write. A turn that was cancelled, failed, or
  * refused by the host names nothing.
+ *
+ * Usage is read on the same pass, by the same reader: a live update is offered
+ * to the turn's collector as it arrives, and the terminal result — whichever
+ * way the turn ended — settles it before the terminal event is sent. The
+ * collector never throws, and it is consulted outside the failure handling
+ * below, so observing a turn cannot cancel, close or fail it.
  */
 
 import { each, race, stream, until } from "effection";
@@ -23,6 +29,7 @@ import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "./acpx-runtime.ts";
 import { checkpointFromResult } from "./checkpoint.ts";
 import { XmdResponse, XMD_RESPONSE, xmdPromptEvent } from "./xmd-response.ts";
 import type { Registration } from "./permission-bridge.ts";
+import type { TurnUsage } from "./usage.ts";
 
 export interface TurnIdentity {
   agent: string;
@@ -56,14 +63,17 @@ export function* consumeTurn(
   checkpoint?: TurnCheckpoint,
   inputs?: Registration,
   closeFailed?: () => Operation<void>,
+  usage?: TurnUsage,
 ): Operation<void> {
   yield* channel.send({ type: "started", agent: identity.agent, session: identity.session });
   let text = "";
   let terminal: AgentPromptEvent;
   let named: AgentPromptCheckpoint | undefined;
+  let settled: AcpRuntimeTurnResult | undefined;
   try {
     const reading = function* (): Operation<void> {
       for (const event of yield* each(stream(turn.events))) {
+        usage?.observe(event);
         if (event.type === "text_delta" && (event.stream ?? "output") === "output") {
           text += event.text;
           yield* channel.send({ type: "text_delta", text: event.text });
@@ -100,6 +110,7 @@ export function* consumeTurn(
       ]);
     }
     const result = yield* until(turn.result);
+    settled = result;
     terminal = mapResult(result, turn.requestId);
     // Read from the result rather than from the mapped event: a turn ACP
     // reported as completed under a stop reason this host treats as a failure
@@ -112,7 +123,9 @@ export function* consumeTurn(
     const cleanup: Error[] = [];
     for (const finish of [
       () => until(turn.cancel()),
-      () => until(turn.result),
+      function* (): Operation<void> {
+        settled = yield* until(turn.result);
+      },
       ...(closeFailed === undefined ? [] : [closeFailed]),
     ]) {
       try {
@@ -140,6 +153,7 @@ export function* consumeTurn(
   if (named !== undefined) {
     checkpoint?.(terminal, named);
   }
+  usage?.settle(settled);
   yield* channel.send(terminal);
   markCompleted();
   yield* channel.close(text);

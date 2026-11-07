@@ -36,6 +36,12 @@ const DERIVED_SCOPE = "https://github.com/taras/executable.md/issues/144";
 
 const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
+    path: "packages/cli/tests/agent-usage-calibration.test.ts",
+    reason:
+      "runs examples/agent-usage/calibrate.ts as `deno run` and its source host as the Deno CLI entrypoint; the subject is that Deno-hosted calibration driver, and the Node and Bun shards have no `deno` on PATH",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/build-npm.test.ts",
     reason:
       "subject is scripts/build-npm.ts, a dnt build that only runs under Deno; the test calls Deno.execPath()",
@@ -459,6 +465,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     path: "packages/cli/tests/workflow-agent-sessions.test.ts",
     reason:
       "runs a document with two same-named <Session> sites against a real node:sqlite WorkflowRun database, with the run's Workspace attached and the mapping table read back across attachments; the store and the DOFS Workspace under it are both the Deno adapter's",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
+    path: "packages/cli/tests/prompt-usage-hosts.test.ts",
+    reason:
+      "its workflow row publishes a real Prompt into a real node:sqlite WorkflowRun database through the Deno storage adapter and the run's DOFS Workspace, beside the other host assemblies that row shares a file with",
     issue: "https://github.com/taras/executable.md/issues/367",
   },
   {

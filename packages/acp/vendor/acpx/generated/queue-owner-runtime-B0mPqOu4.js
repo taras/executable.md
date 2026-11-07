@@ -6709,7 +6709,9 @@ function recoveredSessionResult(response, conversation, promptMessageId) {
 	return {
 		stopReason: response.stopReason,
 		source: "session",
-		...responseMetaField(response._meta)
+		...responseMetaField(response._meta),
+		// XMD prompt usage: the recovered response's own usage, for the runtime to select.
+		...response.usage === void 0 ? {} : { usage: response.usage }
 	};
 }
 function abortTimedOutRequests(error, lifetime) {
@@ -6739,7 +6741,9 @@ async function runPromptTurn(params) {
 		return {
 			stopReason: response.stopReason,
 			source: "rpc",
-			...responseMetaField(response._meta)
+			...responseMetaField(response._meta),
+			// XMD prompt usage: the response's own usage, for the runtime to select.
+			...response.usage === void 0 ? {} : { usage: response.usage }
 		};
 	} catch (error) {
 		abortTimedOutRequests(error, lifetime);

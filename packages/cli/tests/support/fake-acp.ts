@@ -187,6 +187,12 @@ export interface ScriptedTurn {
    * turns answer.
    */
   readonly turnId?: string;
+  /**
+   * What the runtime retained about this turn's usage, on whichever result it
+   * settles with — the identities and selected readings the vendored runtime
+   * attaches to every terminal result.
+   */
+  readonly usage?: AcpRuntimeTurnResult["usage"];
 }
 
 /** One value a scripted agent offers for a setting. */
@@ -898,15 +904,17 @@ export function createFakeAcp(): FakeAcp {
           } else {
             void allowed.then(
               () => {
+                const usage = turn.usage === undefined ? {} : { usage: turn.usage };
                 if (turn.failure !== undefined) {
                   settled.resolve({
                     status: "failed",
                     error: { message: turn.failure, ...turn.failureFacts },
+                    ...usage,
                   });
                   return;
                 }
                 if (turn.cancelled === true) {
-                  settled.resolve({ status: "cancelled" });
+                  settled.resolve({ status: "cancelled", ...usage });
                   return;
                 }
                 settled.resolve({
@@ -915,6 +923,7 @@ export function createFakeAcp(): FakeAcp {
                   ...(turn.turnId === undefined
                     ? {}
                     : { _meta: { codex: { turnId: turn.turnId } } }),
+                  ...usage,
                 });
               },
               (error) => {
