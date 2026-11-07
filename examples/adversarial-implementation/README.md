@@ -363,10 +363,21 @@ checked when read:
 | `predecessor` | The completed envelope's confirmed `continuation` descriptor. |
 | `feedback` | The original `delivery/feedback.json`, which must name A. |
 | `purpose`, `delta` | `"measured-test-weights"` and `["test-weights.json"]`. |
-| `authority` | The `kind` (`delegated-coordinator-selection` or `direct-human-approval`) and the document recording that selection. |
+| `authority` | The `kind` (`delegated-coordinator-selection` or `direct-human-approval`) and a `delivery-amendment-authority.v1` JSON document repeating `work`, `repository`, `revision`, `predecessor`, `feedback`, purpose `measured-test-weights` and the exact `targetConfiguration` below. A prose document no longer authorizes evaluation. |
 | `measurement` | The hosted `run` (commit A, run URL, attempt, runner), the three retained `test-weights-<runtime>-attempt-<n>.json` records, the downloaded `test-weights` artifact and a `weights-acquisition.v1` document naming that run and the digests of the records and artifact. |
 | `workflow.old` | A retained `workflow-launch.v1` document for this ticket: its work, directory, launch workflow revision and the selected files with digests. |
 | `workflow.new` | The `select` output above, unchanged. |
+| `targetConfiguration` | `purpose` `evaluate-target-runtime-exclusions`, `evaluate: true`, `module` (the bytes of the target's tracked `scripts/runtime-test-exclusions.ts` at A), `snapshot` (an absolute retained copy of the same bytes) and `runtimeDependencies: []`. |
+
+The target's applicable corpus comes from its own exclusions, never this
+workflow's. Admission therefore evaluates the selected target module, which is
+trusted application code: it must be self-contained and deterministic, with no
+imports or effects, and must export `exclusions` as `deno`, `node` and `bun`
+arrays of `{path, reason, issue}`. Evaluation is not a sandbox. It runs through
+the installed module loader at the module's path in the target checkout, only
+after every other grant, source, allowance and workflow check has passed, and
+its loading finishes before anything is reserved. A target that excludes
+nothing still commits an explicit empty module before A.
 
 Admit it from the source checkout, then continue the returned envelope:
 
@@ -389,7 +400,9 @@ moved or changed, the allowance has no remaining slot, the records do not
 assemble through the repository's weights assembly into exactly the retained
 artifact for the corpus at A, the acquisition evidence names another run or
 digest, the old launch evidence lacks digests or disagrees with the ticket's
-preparation receipts, the running sources differ from `workflow.new`, protected
+preparation receipts, the target exclusion module is missing, untracked,
+different from its selected bytes or snapshot, or exports malformed data, no
+module loader is installed, source changes while it is evaluated, the running sources differ from `workflow.new`, protected
 text fails secret scanning, or the successor would exceed continuation capacity.
 History that cannot show which workflow bytes launched a ticket refuses that
 ticket's admission; it is never reconstructed from current files.
@@ -409,7 +422,9 @@ disposition write cannot be continued.
 Continuation checks the disposition and the selected sources again before the
 Implementor's prompt. Settlement accepts the import only when B is a signed
 single-parent child of A, the cumulative change since A is exactly
-`test-weights.json`, and its bytes equal the artifact the records assemble into;
+`test-weights.json`, the selected target module still has its admitted bytes and
+yields the admitted corpus, and the imported bytes equal the artifact the
+records assemble into for that corpus;
 otherwise it holds with the canonical reply preserved. Changing CI shard counts
 is outside this operation: it refuses here and needs the separately scoped
 qualification described in the repository instructions. A genuine later

@@ -3,6 +3,7 @@ import { amendment } from "./control.ts";
 import { describe, read } from "./text-storage.ts";
 import { verified } from "./admission.ts";
 import { assembledWeights } from "./measured-weights.ts";
+import { selectedSource, targetApplicability } from "./target-configuration.ts";
 
 export const props = {
   type: "object",
@@ -14,8 +15,20 @@ export const props = {
     parents: { type: "string" },
     descends: { type: "boolean" },
     paths: { type: "array", items: { type: "string" } },
+    targetTree: { type: "string" },
+    targetBlob: { type: ["string", "null"] },
   },
-  required: ["amendment", "repository", "revision", "previous", "parents", "descends", "paths"],
+  required: [
+    "amendment",
+    "repository",
+    "revision",
+    "previous",
+    "parents",
+    "descends",
+    "paths",
+    "targetTree",
+    "targetBlob",
+  ],
   additionalProperties: false,
 };
 const input = z
@@ -27,6 +40,8 @@ const input = z
     parents: z.string(),
     descends: z.boolean(),
     paths: z.array(z.string()),
+    targetTree: z.string(),
+    targetBlob: z.string().nullable(),
   })
   .strict();
 
@@ -67,7 +82,21 @@ export default function* AmendmentSettle(value: unknown) {
   if ((yield* verified(admitted.measurement.artifact, "The retained weights artifact")) !== imported) {
     throw new Error("The retained weights artifact differs from the imported bytes.");
   }
-  if ((yield* assembledWeights(selected.repository, admitted.measurement)) !== imported) {
+  const configuration = yield* selectedSource(
+    selected.repository,
+    admitted.targetConfiguration,
+    selected.targetTree,
+    selected.targetBlob,
+  );
+  const corpus = yield* targetApplicability(
+    selected.repository,
+    admitted.targetConfiguration,
+    configuration,
+  );
+  if (JSON.stringify(corpus) !== JSON.stringify(admitted.targetCorpus)) {
+    throw new Error("The target corpus differs from the one admitted at " + admitted.base + ".");
+  }
+  if ((yield* assembledWeights(admitted.measurement, corpus)) !== imported) {
     throw new Error("The retained runtime records no longer assemble into the imported weights.");
   }
   return {
@@ -76,5 +105,6 @@ export default function* AmendmentSettle(value: unknown) {
     parents,
     paths: selected.paths,
     weights: observed,
+    targetCorpus: corpus,
   };
 }

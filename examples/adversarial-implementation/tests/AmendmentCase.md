@@ -11,8 +11,14 @@ props:
 <Let as="scenario" value={input.scenario} />
 <Let as="fixture" value={input.fixture} />
 <Let as="quote" value={"'\"'\"'"} />
-<Let as="work" value={{refusals:"amend-refusals",publication:"amend-publication",disposition:"amend-disposition","disposition-unknown":"amend-disposition-unknown","feedback-unknown":"amend-feedback-unknown",sources:"amend-sources",correction:"amend-correction",exhausted:"amend-correction"}[scenario] ?? scenario} />
-<Fixture.Completed fixture={fixture} work={work} maxCorrections={scenario === "exhausted" ? 1 : 2} as="completed" />
+<Let as="work" value={{refusals:"amend-refusals",publication:"amend-publication",disposition:"amend-disposition","disposition-unknown":"amend-disposition-unknown","feedback-unknown":"amend-feedback-unknown",sources:"amend-sources","config-settlement":"amend-config","target-excludes":"amend-target-excludes",correction:"amend-correction",exhausted:"amend-correction"}[scenario] ?? scenario} />
+<Let as="targetOnly" value={[{path:"packages/a/tests/a.test.ts",reason:"Target-only fixture exclusion.",issue:"https://example.invalid/fixture-target-exclusion"}]} />
+<Let as="configurations" value={{"missing-config":null,"malformed-config":"export const exclusions = { deno: [], node: [{ path: 1 }] };","sentinel":"throw new Error(\"SENTINEL target configuration body ran\");\nexport const exclusions = { deno: [], node: [], bun: [] };"}} />
+<If condition={Object.hasOwn(configurations,scenario)}>
+<Fixture.Completed fixture={fixture} work={"amend-" + scenario} configuration={configurations[scenario]} as="completed" />
+<Else>
+<Fixture.Completed fixture={fixture} work={work} maxCorrections={scenario === "exhausted" ? 1 : 2} exclusions={scenario === "target-excludes" ? {deno:[],node:targetOnly,bun:targetOnly} : {deno:[],node:[],bun:[]}} as="completed" />
+</Else></If>
 <Let as="delivery" value={completed.delivery} />
 <Let as="original" value={completed.revision} />
 <Let as="reservation" value={delivery.directory + "/amendment"} />
@@ -45,10 +51,12 @@ Refusals happen before any reservation, slot debit or role prompt.
  {name:"path-only",expected:"utf8Bytes"},
  {name:"stale-source",expected:"selected new workflow sources differ"},
  {name:"secret",expected:"did not clear enabled protection"},
+ {name:"prose-authority",expected:"delivery-amendment-authority.v1"},
+ {name:"absent-loader",expected:"No ComponentModuleLoader is installed"},
  {name:"padded",record:paddedTerminal,expected:"exceeds continuation capacity"}
 ]} let="refusal">
 <Let as="record" value={refusal.record ?? completed.envelope} />
-<Fixture.Grant completed={completed} predecessor={record.continuation} variant={["wrong-predecessor","missing-acquisition","partial","mixed","wrong-commit","digest","omit","path-only","stale-source","secret"].includes(refusal.name) ? refusal.name : "valid"} name={refusal.name} as="grant" />
+<Fixture.Grant completed={completed} predecessor={record.continuation} variant={["wrong-predecessor","missing-acquisition","partial","mixed","wrong-commit","digest","omit","path-only","stale-source","secret","prose-authority"].includes(refusal.name) ? refusal.name : "valid"} name={refusal.name} as="grant" />
 <Dir path={fixture.repository}>
 <If condition={refusal.name === "dirty"}><File path="api.sh">An uncommitted change at A.</File></If>
 <If condition={refusal.name === "advanced"}>
@@ -57,7 +65,8 @@ git commit -q --allow-empty -m 'external advance'
 ```
 </If>
 </Dir>
-<Ticket.Capture as="refused"><Ticket.Amend record={record} grant={refusal.name === "absent" ? grant.directory + "/absent.json" : grant.path} as="unexpected" /><Json value={unexpected} /></Ticket.Capture>
+<Let as="loads" value={fixture.root + "/loads-" + refusal.name + ".json"} />
+<Ticket.Capture as="refused"><Fixture.Loader events={loads} reservation={reservation} mode={refusal.name === "absent-loader" ? "absent" : "observe"}><Ticket.Amend record={record} grant={refusal.name === "absent" ? grant.directory + "/absent.json" : grant.path} as="unexpected" /></Fixture.Loader><Json value={unexpected} /></Ticket.Capture>
 <Dir path={fixture.repository}>
 ```bash exec as="restored"
 git reset -q --hard {original}
@@ -68,6 +77,11 @@ git reset -q --hard {original}
 test -e {quotedReservation} -o -L {quotedReservation} -o -e {nextAttempt}
 ```
 <AssertEquals actual={[refusal.name,reserved.exitCode === 0]} expected={[refusal.name,false]} />
+<Let as="quotedLoads" value={"'" + loads.replaceAll("'",quote) + "'"} />
+```bash exec as="evaluated"
+test -e {quotedLoads}
+```
+<AssertEquals actual={[refusal.name,evaluated.exitCode === 0]} expected={[refusal.name,["partial","mixed","omit","padded"].includes(refusal.name)]} />
 </Each>
 <Ticket.Load record={completed.envelope} as="unchanged" />
 <AssertEquals actual={unchanged} expected={terminal} />
@@ -137,7 +151,7 @@ test -e {nextAttempt}
 <AssertEquals actual={[repeated.status,repeated.publication]} expected={["hold","held"]} />
 </If>
 
-<If condition={scenario !== "refusals" && scenario !== "publication" && scenario !== "disposition" && scenario !== "disposition-unknown"}>
+<If condition={!["refusals","publication","disposition","disposition-unknown","missing-config","malformed-config","sentinel","target-excludes"].includes(scenario)}>
 <Ticket.Amend record={completed.envelope} grant={grant.path} as="admitted" />
 <AssertEquals actual={[admitted.status,admitted.publication]} expected={["running","confirmed"]} />
 <Ticket.Load record={admitted} as="successor" />
@@ -201,6 +215,73 @@ selected as delivery feedback.
 <Dir path={fixture.root}><Delivery.Status delivery={delivery} number={7} as="unknownStatus" /></Dir>
 <AssertEquals actual={[unknownStatus.status,unknownStatus.nextAction]} expected={["amendment_hold","reconcile_amendment"]} />
 <If condition={!unknownStatus.reason.includes("never acknowledged")}><Fail message={"Status held for another reason: " + unknownStatus.reason} /></If>
+</If>
+
+<If condition={["missing-config","malformed-config","sentinel"].includes(scenario)}>
+Required target inputs refuse with no fallback corpus, and permission and
+selected bytes are checked before the selected module body can run.
+
+<Let as="cases" value={scenario === "sentinel" ? [{variant:"wrong-purpose",expected:"incomplete or unsupported"},{variant:"module-mismatch",expected:"differs from its selected bytes"}] : [{variant:"valid",expected:scenario === "missing-config" ? "is missing at the admitted revision" : "must export exclusions"}]} />
+<Each in={cases} let="refusal">
+<Fixture.Grant completed={completed} variant={refusal.variant} name={scenario + "-" + refusal.variant} as="grant" />
+<Let as="loads" value={fixture.root + "/loads-" + refusal.variant + ".json"} />
+<Ticket.Capture as="refused"><Fixture.Loader events={loads} reservation={reservation}><Ticket.Amend record={completed.envelope} grant={grant.path} as="unexpected" /></Fixture.Loader><Json value={unexpected} /></Ticket.Capture>
+<If condition={refused.status !== "failed" || !refused.failure.includes(refusal.expected) || refused.failure.includes("SENTINEL")}><Fail message={scenario + " " + refusal.variant + " was not refused as expected: " + refused.output + (refused.failure ?? "")} /></If>
+```bash exec as="reserved"
+test -e {quotedReservation} -o -L {quotedReservation} -o -e {nextAttempt}
+```
+<AssertEquals actual={reserved.exitCode === 0} expected={false} />
+<Let as="quotedLoads" value={"'" + loads.replaceAll("'",quote) + "'"} />
+```bash exec as="evaluations"
+cat {quotedLoads} 2>/dev/null || printf '[]'
+```
+<Parse schema={{type:"array"}} as="events">{evaluations.stdout}</Parse>
+<AssertEquals actual={events} expected={scenario === "malformed-config" ? [{event:"load",reserved:false},{event:"cleanup",reserved:false}] : []} />
+</Each>
+</If>
+
+<If condition={scenario === "target-excludes"}>
+The target's own exclusions decide applicability: records built from the
+workflow's table refuse, and records for the target's corpus admit and settle.
+
+<Fixture.Grant completed={completed} corpus={{deno:["packages/a/tests/a.test.ts","scripts/tests/build-npm.test.ts"],node:["packages/a/tests/a.test.ts"],bun:["packages/a/tests/a.test.ts"]}} name="workflow-derived" as="borrowed" />
+<Ticket.Capture as="refused"><Ticket.Amend record={completed.envelope} grant={borrowed.path} as="unexpected" /><Json value={unexpected} /></Ticket.Capture>
+<If condition={refused.status !== "failed" || !refused.failure.includes("cannot be assembled")}><Fail message={"Workflow-derived records were not refused: " + refused.output + (refused.failure ?? "")} /></If>
+```bash exec as="reserved"
+test -e {quotedReservation} -o -L {quotedReservation}
+```
+<AssertEquals actual={reserved.exitCode === 0} expected={false} />
+<Fixture.Grant completed={completed} corpus={{deno:["packages/a/tests/a.test.ts","scripts/tests/build-npm.test.ts"],node:["scripts/tests/build-npm.test.ts"],bun:["scripts/tests/build-npm.test.ts"]}} name="target" as="targetGrant" />
+<Fixture.Loader events={fixture.root + "/loads-target.json"} reservation={reservation}><Ticket.Amend record={completed.envelope} grant={targetGrant.path} as="admitted" /></Fixture.Loader>
+<AssertEquals actual={[admitted.status,admitted.publication]} expected={["running","confirmed"]} />
+<Ticket.Text path={fixture.root + "/loads-target.json"} as="loadText" />
+<Parse schema={{type:"array"}} as="events">{loadText}</Parse>
+<AssertEquals actual={events} expected={[{event:"load",reserved:false},{event:"cleanup",reserved:false}]} />
+<Ticket.Load record={admitted} as="successor" />
+<AssertEquals actual={successor.checkpoint.amendment.targetCorpus.applicable} expected={{deno:["packages/a/tests/a.test.ts","scripts/tests/build-npm.test.ts"],node:["scripts/tests/build-npm.test.ts"],bun:["scripts/tests/build-npm.test.ts"]}} />
+<Ticket.Continue record={admitted} maxSteps={2} as="finishedReturn" />
+<Ticket.Load record={finishedReturn} as="finished" />
+<AssertEquals actual={finished.checkpoint.status} expected="feedback_ready" />
+<Ticket.Text path={reservation + "/feedback.json"} as="finalText" />
+<Parse schema={{type:"object"}} as="finalFeedback">{finalText}</Parse>
+<AssertEquals actual={finalFeedback.revision} expected={finished.checkpoint.revision} />
+</If>
+
+<If condition={scenario === "config-settlement"}>
+Settlement rechecks the selected configuration bytes before evaluating again.
+
+<Fixture.Loader events={fixture.root + "/loads-settlement.json"} reservation={reservation}><Fixture.Override match="/scripts/runtime-test-exclusions.ts" mode="read" content="export const exclusions = { deno: [], node: [], bun: [] }; // changed" flag={fixture.root + "/sources-changed.flag"}><Ticket.Continue record={admitted} maxSteps={1} as="settledReturn" /></Fixture.Override></Fixture.Loader>
+<Ticket.Load record={settledReturn} as="settled" />
+<AssertEquals actual={[settled.checkpoint.status,settled.checkpoint.hold?.kind,settled.calls.at(-1).status]} expected={["hold","verification_failure","rejected"]} />
+<If condition={!settled.checkpoint.hold.reason.includes("differs from its selected bytes")}><Fail message={"Settlement held for another reason: " + settled.checkpoint.hold.reason} /></If>
+<Ticket.Read path={settled.calls.at(-1).result} as="canonical" />
+<Parse schema={{type:"object"}} as="retained">{canonical}</Parse>
+<AssertEquals actual={retained.outcome} expected="complete" />
+<Let as="settlementTraces" value={[fixture.root + "/loads-settlement.json",reservation + "/feedback.json"].map(path => "'" + path.replaceAll("'",quote) + "'")} />
+```bash exec as="secondEvaluation"
+test -e {settlementTraces[0]} -o -e {settlementTraces[1]}
+```
+<AssertEquals actual={secondEvaluation.exitCode === 0} expected={false} />
 </If>
 
 <If condition={scenario === "sources"}>

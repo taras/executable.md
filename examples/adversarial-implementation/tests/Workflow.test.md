@@ -310,3 +310,15 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 </TempDir>
 </Each>
 </Test>
+
+<Test name="T2 T3 T4 T5 T6 the admitted target's own configuration decides its corpus, evaluated only after permission" timeout="200s">
+<Each in={["target-excludes","missing-config","malformed-config","sentinel","config-settlement"]} let="scenario">
+<TempDir>
+<Fixture.Repository as="fixture" />
+<Fixture.Entry entry="amendment-case" value={{scenario,fixture,runner,root:suiteRoot}} repository={fixture.repository} command={runner} root={suiteRoot} as="child" />
+<If condition={child.exitCode !== 0}><Fail message={scenario + ": " + (child.stderr || child.stdout)} /></If>
+<Parse schema={{type:"object"}} as="ran">{child.stdout}</Parse>
+<AssertEquals actual={ran.scenario} expected={scenario} />
+</TempDir>
+</Each>
+</Test>

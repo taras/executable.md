@@ -2,7 +2,16 @@ import { parseFilesFailure } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { amendment, envelope, measurement, programFile, selection, state } from "./control.ts";
+import {
+  amendment,
+  envelope,
+  measurement,
+  programFile,
+  selection,
+  state,
+  targetConfiguration,
+  targetCorpus,
+} from "./control.ts";
 import { describe, descriptor, read, stateLimit, textLimit } from "./text-storage.ts";
 
 type Descriptor = z.infer<typeof descriptor>;
@@ -30,6 +39,7 @@ export const program = [
   example + "components/Ticket/AmendmentFeedback.ts",
   example + "components/Ticket/admission.ts",
   example + "components/Ticket/measured-weights.ts",
+  example + "components/Ticket/target-configuration.ts",
   example + "components/Ticket/Continue.md",
   example + "components/Ticket/Walk.md",
   example + "components/Ticket/Step.md",
@@ -59,6 +69,20 @@ export const authorization = z
       .strict(),
     measurement,
     workflow: z.object({ old: descriptor, new: selection }).strict(),
+    targetConfiguration,
+  })
+  .strict();
+
+export const authority = z
+  .object({
+    schema: z.literal("delivery-amendment-authority.v1"),
+    work: z.string().min(1),
+    repository: z.string().startsWith("/"),
+    revision: commit,
+    predecessor: descriptor,
+    feedback: descriptor,
+    purpose: z.literal("measured-test-weights"),
+    targetConfiguration,
   })
   .strict();
 
@@ -107,6 +131,8 @@ export const request = z
     measurement,
     weights: descriptor,
     workflow: z.object({ old: descriptor, launch: selection, new: selection }).strict(),
+    targetConfiguration,
+    targetCorpus,
     round: z
       .object({
         before: z.number().int().nonnegative(),

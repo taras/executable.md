@@ -3,6 +3,7 @@ import { envelope, state } from "./control.ts";
 import { describe, read, textLimit } from "./text-storage.ts";
 import {
   acquisition,
+  authority,
   authorization,
   json,
   launch,
@@ -14,6 +15,7 @@ import {
   workflowRoot,
 } from "./admission.ts";
 import { assembledWeights } from "./measured-weights.ts";
+import { selectedSource, targetApplicability } from "./target-configuration.ts";
 import { RUNTIMES } from "../../../../scripts/runtime-test-exclusions.ts";
 
 export const props = {
@@ -25,8 +27,19 @@ export const props = {
     checkout: { type: "object" },
     workflowRevision: { type: ["string", "null"] },
     occupied: { type: "boolean" },
+    targetTree: { type: "string" },
+    targetBlob: { type: ["string", "null"] },
   },
-  required: ["record", "saved", "grant", "checkout", "workflowRevision", "occupied"],
+  required: [
+    "record",
+    "saved",
+    "grant",
+    "checkout",
+    "workflowRevision",
+    "occupied",
+    "targetTree",
+    "targetBlob",
+  ],
   additionalProperties: false,
 };
 const input = z
@@ -37,6 +50,8 @@ const input = z
     checkout: z.object({ head: z.string(), clean: z.boolean() }).strict(),
     workflowRevision: z.string().nullable(),
     occupied: z.boolean(),
+    targetTree: z.string(),
+    targetBlob: z.string().nullable(),
   })
   .strict();
 const receipt = z.object({ workflow: z.object({ revision: z.string() }) });
@@ -113,7 +128,27 @@ export default function* AmendmentPrepare(value: unknown) {
   if (feedback.revision !== base) {
     refuse("The original delivery feedback describes another revision.");
   }
-  yield* verified(granted.authority.document, "The authorization source");
+  const authorityText = yield* verified(granted.authority.document, "The authorization source");
+  let authorityValue: unknown;
+  try {
+    authorityValue = JSON.parse(authorityText);
+  } catch {
+    authorityValue = undefined;
+  }
+  const authorizedBy = authority.safeParse(authorityValue);
+  if (
+    !authorizedBy.success ||
+    authorizedBy.data.work !== granted.work ||
+    authorizedBy.data.repository !== granted.repository ||
+    authorizedBy.data.revision !== granted.revision ||
+    !same(authorizedBy.data.predecessor, granted.predecessor) ||
+    !same(authorizedBy.data.feedback, granted.feedback) ||
+    !same(authorizedBy.data.targetConfiguration, granted.targetConfiguration)
+  ) {
+    refuse(
+      "The authorization source must be a delivery-amendment-authority.v1 record selecting this work, revision, predecessor, feedback and exact target configuration evaluation.",
+    );
+  }
   const measured = granted.measurement;
   if (measured.run.commit !== base) {
     refuse("The measurement must be taken at the original feedback revision " + base + ".");
@@ -136,10 +171,6 @@ export default function* AmendmentPrepare(value: unknown) {
   const artifact = yield* verified(measured.artifact, "The retained weights artifact");
   if (acquired.weights.sha256 !== measured.artifact.sha256) {
     refuse("The retained weights artifact differs from the acquired test-weights artifact.");
-  }
-  const assembled = yield* assembledWeights(saved.manifest.assignment.repository, measured);
-  if (assembled !== artifact) {
-    refuse("The retained runtime records do not assemble into the retained weights artifact.");
   }
   const launched = launch.parse(
     json(
@@ -175,6 +206,17 @@ export default function* AmendmentPrepare(value: unknown) {
   if (round.after > round.max) {
     refuse("The ticket's source-correction allowance is exhausted (" + round.max + ").");
   }
+  const repository = saved.manifest.assignment.repository;
+  const configuration = yield* selectedSource(
+    repository,
+    granted.targetConfiguration,
+    selected.targetTree,
+    selected.targetBlob,
+  );
+  const corpus = yield* targetApplicability(repository, granted.targetConfiguration, configuration);
+  if ((yield* assembledWeights(measured, corpus)) !== artifact) {
+    refuse("The retained runtime records do not assemble into the retained weights artifact.");
+  }
   const reservation = delivery + "/amendment";
   const weights = describe("test-weights.json", artifact);
   const grantRecord = describe(selected.grant, grantText);
@@ -190,6 +232,8 @@ export default function* AmendmentPrepare(value: unknown) {
     measurement: measured,
     weights,
     workflow: { old: granted.workflow.old, launch: launched.selection, new: observed },
+    targetConfiguration: granted.targetConfiguration,
+    targetCorpus: corpus,
     round,
   });
   const requestDescriptor = describe(reservation + "/request.json", JSON.stringify(recorded));
@@ -205,6 +249,8 @@ export default function* AmendmentPrepare(value: unknown) {
     weights,
     measurement: measured,
     workflow: observed,
+    targetConfiguration: granted.targetConfiguration,
+    targetCorpus: corpus,
   };
   const instructions = [
     "Delivery amendment: import the measured test-weights.json for this completed ticket.",

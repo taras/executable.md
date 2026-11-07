@@ -55,7 +55,7 @@ export function* runAdversarialJourney(suite: string) {
           : suite === "Friction" || suite === "Implementation"
             ? 180_000
             : suite === "Workflow"
-              ? 300_000
+              ? 420_000
               : 120_000,
       env: {
         XMD_EXAMPLE_COMMAND: workflowCommand,

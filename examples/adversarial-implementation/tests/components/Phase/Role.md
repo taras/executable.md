@@ -27,7 +27,7 @@ props:
 <Let as="revision" value={assignment.revision} />
 <Dir path={assignment.artifactDirectory}><File path="called.json"><Json value={{session:props.session,role:props.role,initialize:props.initialize,revision,request:assignment.request,phase:assignment.phase,inputPaths:props.inputs.map(input => input.path)}} /></File></Dir>
 <If condition={props.role === "implementor"}>
-<If condition={assignment.work === "amend-sources"}><Dir path={assignment.repository.slice(0,assignment.repository.lastIndexOf("/"))}><File path="sources-changed.flag">The selected sources change after dispatch.</File></Dir></If>
+<If condition={["amend-sources","amend-config"].includes(assignment.work)}><Dir path={assignment.repository.slice(0,assignment.repository.lastIndexOf("/"))}><File path="sources-changed.flag">The selected sources change after dispatch.</File></Dir></If>
 <Let as="artifact" value={assignment.request.includes("\nArtifact: ") ? assignment.request.split("\nArtifact: ")[1].split(" ")[0] : ""} />
 <Let as="quotedArtifact" value={"'" + artifact.replaceAll("'","'\"'\"'") + "'"} />
 <Let as="mode" value={assignment.request === "amendment-correct" ? "correct" : assignment.work} />

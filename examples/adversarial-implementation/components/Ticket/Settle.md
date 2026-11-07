@@ -17,7 +17,8 @@ Every discovery disposition retains a source observation before any successor.
 Discovery requires clean unchanged launch source; implementation feedback retains
 its signed commit and focused evidence requirements. An admitted delivery
 amendment additionally rechecks its selected workflow sources, the import's
-parentage, its cumulative weights-only delta and the exact measured bytes.
+parentage, its cumulative weights-only delta, the selected target configuration
+and corpus, and the exact measured bytes.
 
 <Let as="pending" value={props.pending} />
 <Loop max={1}>
@@ -100,9 +101,15 @@ git rev-list --parents -n 1 {revision}
 ```bash exec as="amendedAncestry"
 git merge-base --is-ancestor {pending.checkpoint.revision} {revision}
 ```
+```bash exec as="targetTree"
+git ls-tree {revision} -- scripts/runtime-test-exclusions.ts
+```
+```bash exec as="targetBlob"
+git hash-object -- scripts/runtime-test-exclusions.ts
+```
   </Dir>
   <Ticket.ChangedPaths repository={pending.call.assignment.repository} base={pending.checkpoint.amendment.base} head={revision} as="amendedChanges" />
-  <Ticket.AmendmentSettle amendment={pending.checkpoint.amendment} repository={pending.call.assignment.repository} revision={revision} previous={pending.checkpoint.revision} parents={amendedParents.stdout} descends={amendedAncestry.exitCode === 0} paths={amendedChanges.paths} as="amendmentReceipt" />
+  <Ticket.AmendmentSettle amendment={pending.checkpoint.amendment} repository={pending.call.assignment.repository} revision={revision} previous={pending.checkpoint.revision} parents={amendedParents.stdout} descends={amendedAncestry.exitCode === 0} paths={amendedChanges.paths} targetTree={targetTree.exitCode === 0 ? targetTree.stdout : ""} targetBlob={targetBlob.exitCode === 0 ? targetBlob.stdout : null} as="amendmentReceipt" />
   <Dir path={pending.call.record}><File path="amendment.json"><Json value={amendmentReceipt} /></File></Dir>
   </If>
   </If>

@@ -5,27 +5,36 @@ props:
     fixture: {type: object}
     work: {type: string}
     maxCorrections: {type: integer, default: 2}
+    exclusions: {type: object, default: {deno: [], node: [], bun: []}}
+    configuration: {type: [string, 'null']}
   required: [fixture, work]
   additionalProperties: false
 returns: {type: object}
 ---
 
 Settle a genuinely completed ticket at A through the production Ticket owners,
-with the fixture role boundary. The committed corpus is a private two-file
-workspace; its weights come from synthetic fixture records, never a runner.
+with the fixture role boundary. The committed corpus is a private workspace
+whose two tests include `scripts/tests/build-npm.test.ts`, a path the workflow's
+own exclusions omit under Node and Bun. The target commits its own explicit
+exclusions module; `configuration` replaces that source and `null` omits it.
+Its weights come from synthetic fixture records, never a runner.
 
 <Let as="fixture" value={props.fixture} />
 <Let as="workspace" value={"'" + JSON.stringify({workspace:["packages/*"]}) + "'"} />
+<Let as="configurationText" value={props.configuration === undefined ? "export const exclusions = " + JSON.stringify(props.exclusions) + ";" : props.configuration} />
+<Let as="hasConfiguration" value={configurationText === null ? "no" : "yes"} />
+<Let as="quotedConfiguration" value={"'" + (configurationText ?? "").replaceAll("'","'\"'\"'") + "'"} />
 <Dir path={fixture.repository}>
 <File path="api.sh">format() { printf '%s' "$1"; }
 </File>
 ```bash exec as="base"
 set -e
-mkdir -p packages/a/tests
+mkdir -p packages/a/tests scripts/tests
 printf '%s\n' {workspace} > deno.json
 printf '%s\n' 'Deno.test("a", () => undefined);' > packages/a/tests/a.test.ts
-printf '%s\n' 'Deno.test("b", () => undefined);' > packages/a/tests/b.test.ts
-git add api.sh deno.json packages
+printf '%s\n' 'Deno.test("build", () => undefined);' > scripts/tests/build-npm.test.ts
+if test {hasConfiguration} = yes; then printf '%s\n' {quotedConfiguration} > scripts/runtime-test-exclusions.ts; fi
+git add api.sh deno.json packages scripts
 git commit -qm 'existing API and corpus'
 git rev-parse HEAD
 ```

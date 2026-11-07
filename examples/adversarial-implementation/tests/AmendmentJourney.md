@@ -73,6 +73,7 @@ The real entry admits once and dispatches nothing.
 <AssertEquals actual={[admitted.status,admitted.publication,admitted.revision,admitted.nextAction]} expected={["running","confirmed",original,{entry:"continue.md",gate:"implementation",action:"continue_feedback"}]} />
 <Ticket.Load record={admitted} as="successor" />
 <AssertEquals actual={successor.checkpoint.round} expected={terminal.checkpoint.round + 1} />
+<AssertEquals actual={successor.checkpoint.amendment.targetCorpus.applicable} expected={{deno:["packages/a/tests/a.test.ts","scripts/tests/build-npm.test.ts"],node:["packages/a/tests/a.test.ts","scripts/tests/build-npm.test.ts"],bun:["packages/a/tests/a.test.ts","scripts/tests/build-npm.test.ts"]}} />
 <AssertEquals actual={successor.manifest} expected={terminal.manifest} />
 <AssertEquals actual={successor.calls} expected={terminal.calls} />
 <AssertEquals actual={successor.deliveredInputs} expected={terminal.deliveredInputs} />

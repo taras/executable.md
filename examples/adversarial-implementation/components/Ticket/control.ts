@@ -39,6 +39,22 @@ export const measurement = z
     acquisition: descriptor,
   })
   .strict();
+export const targetConfiguration = z
+  .object({
+    purpose: z.literal("evaluate-target-runtime-exclusions"),
+    evaluate: z.literal(true),
+    module: descriptor.extend({ path: z.literal("scripts/runtime-test-exclusions.ts") }).strict(),
+    snapshot: descriptor.extend({ path: z.string().startsWith("/") }).strict(),
+    runtimeDependencies: z.tuple([]),
+  })
+  .strict();
+const paths = z.array(z.string().min(1));
+export const targetCorpus = z
+  .object({
+    discovered: paths,
+    applicable: z.object({ deno: paths, node: paths, bun: paths }).strict(),
+  })
+  .strict();
 export const amendment = z
   .object({
     schema: z.literal("delivery-amendment.v1"),
@@ -52,6 +68,8 @@ export const amendment = z
     weights: descriptor.extend({ path: z.literal("test-weights.json") }).strict(),
     measurement,
     workflow: selection,
+    targetConfiguration,
+    targetCorpus,
   })
   .strict();
 const provider = z.enum(["codex", "claude"]);

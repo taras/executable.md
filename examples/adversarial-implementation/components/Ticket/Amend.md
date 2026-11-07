@@ -15,7 +15,10 @@ returns: {type: object}
 
 The original feedback owns exactly one reservation, `delivery/amendment`. A
 repeated admission returns the first confirmed disposition, and an incomplete
-reservation holds. A disposition counts only beside the acknowledgment written
+reservation holds. First admission evaluates the explicitly selected target
+`scripts/runtime-test-exclusions.ts` through the installed module loader, only
+after every grant, source, allowance and workflow check has passed, to derive
+the target corpus. A disposition counts only beside the acknowledgment written
 after its own write returned, so complete bytes from an unknown write still hold; neither prepares, publishes nor dispatches again. Validation
 precedes the reservation, so a refusal spends nothing.
 
@@ -43,7 +46,16 @@ for slot in {slots}; do test -e "$slot" -o -L "$slot" && exit 0; done; exit 1
 ```bash exec as="workflow"
 git -C {workflowQuoted} rev-parse HEAD
 ```
-<Ticket.AmendmentPrepare record={props.record} saved={saved} grant={props.grant} checkout={{head:checkout.head,clean:checkout.clean}} workflowRevision={workflow.exitCode === 0 ? workflow.stdout.trim() : null} occupied={occupied.exitCode === 0} as="prepared" />
+<Let as="targetQuoted" value={"'" + saved.manifest.assignment.repository.replaceAll("'","'\"'\"'") + "'"} />
+```bash exec as="targetTree"
+git -C {targetQuoted} ls-tree {saved.checkpoint.revision} -- scripts/runtime-test-exclusions.ts
+```
+```bash exec as="targetBlob"
+git -C {targetQuoted} hash-object -- scripts/runtime-test-exclusions.ts
+```
+<Ticket.AmendmentPrepare record={props.record} saved={saved} grant={props.grant} checkout={{head:checkout.head,clean:checkout.clean}} workflowRevision={workflow.exitCode === 0 ? workflow.stdout.trim() : null} occupied={occupied.exitCode === 0} targetTree={targetTree.exitCode === 0 ? targetTree.stdout : ""} targetBlob={targetBlob.exitCode === 0 ? targetBlob.stdout : null} as="prepared" />
+<Ticket.Checkout repository={saved.manifest.assignment.repository} as="afterEvaluation" />
+<If condition={afterEvaluation.head !== saved.checkpoint.revision || !afterEvaluation.clean}><Fail message="Source changed while the selected target configuration was evaluated. No reservation was made, no source slot was spent and no role was dispatched; reconcile the source before another admission." /></If>
 <Let as="successor" value={prepared.successor} />
 <Ticket.Capacity name="successor" as="fits" />
 <If condition={!fits}><Fail message="The amended successor exceeds continuation capacity. No reservation was made, no source slot was spent and no role was dispatched." /></If>

@@ -1,4 +1,4 @@
-import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { z } from "zod";
 import { assembleTestWeights } from "../../../../../scripts/lib/measure-weights.ts";
 import {
@@ -17,6 +17,7 @@ export const props = {
     completed: { type: "object" },
     predecessor: { type: ["object", "null"], default: null },
     variant: { type: "string", default: "valid" },
+    corpus: { type: ["object", "null"], default: null },
     name: { type: "string" },
   },
   required: ["completed", "name"],
@@ -46,11 +47,18 @@ const input = z
       "secret",
       "path-only",
       "stale-source",
+      "wrong-purpose",
+      "module-mismatch",
+      "prose-authority",
     ]),
+    corpus: z
+      .object({ deno: z.array(z.string()), node: z.array(z.string()), bun: z.array(z.string()) })
+      .strict()
+      .nullable(),
     name: z.string().regex(/^[A-Za-z0-9-]+$/),
   })
   .strict();
-const corpus = ["packages/a/tests/a.test.ts", "packages/a/tests/b.test.ts"];
+const discovered = ["packages/a/tests/a.test.ts", "scripts/tests/build-npm.test.ts"];
 
 function* save(path: string, text: string) {
   yield* writeTextFile(path, text);
@@ -63,7 +71,7 @@ function* save(path: string, text: string) {
  * coherence comes only from the production formatter and assembly.
  */
 export default function* Grant(value: unknown) {
-  const { completed, predecessor, variant, name } = input.parse(value);
+  const { completed, predecessor, variant, corpus, name } = input.parse(value);
   const directory = completed.delivery.directory.replace(/\/delivery$/, "") + "-evidence-" + name;
   yield* ensureDir(directory);
   const run = {
@@ -73,7 +81,12 @@ export default function* Grant(value: unknown) {
     runner: "synthetic-fixture-runner",
   };
   const toolchain = { deno: "fixture-deno", node: "fixture-node", bun: "fixture-bun" };
-  const recorded = variant === "omit" ? corpus.slice(0, 1) : corpus;
+  const selected = corpus ?? { deno: discovered, node: discovered, bun: discovered };
+  const recorded: Record<Runtime, string[]> = {
+    deno: variant === "omit" ? selected.deno.slice(0, -1) : selected.deno,
+    node: variant === "omit" ? selected.node.slice(0, -1) : selected.node,
+    bun: variant === "omit" ? selected.bun.slice(0, -1) : selected.bun,
+  };
   const measurement = (
     runtime: Runtime,
     status: RuntimeMeasurement["status"],
@@ -82,8 +95,11 @@ export default function* Grant(value: unknown) {
     runtime,
     status,
     source: { ...run, ...toolchain, attempt },
-    applicable: recorded,
-    measured: recorded.map((file, index) => ({ file, ms: 100 * (index + 1) + runtime.length })),
+    applicable: recorded[runtime],
+    measured: recorded[runtime].map((file, index) => ({
+      file,
+      ms: 100 * (index + 1) + runtime.length,
+    })),
     failure: null,
   });
   const measurements = {
@@ -94,7 +110,7 @@ export default function* Grant(value: unknown) {
   const weights = formatTestWeights(
     assembleTestWeights(
       run,
-      { deno: recorded, node: recorded, bun: recorded },
+      recorded,
       {
         deno: measurement("deno", "complete", 1),
         node: measurement("node", "complete", 1),
@@ -129,9 +145,39 @@ export default function* Grant(value: unknown) {
     variant === "missing-acquisition"
       ? { path: directory + "/absent-acquisition.json", utf8Bytes: 2, sha256: "0".repeat(64) }
       : yield* save(directory + "/acquisition.json", JSON.stringify(acquisitionValue));
+  const modulePath = completed.delivery.repository + "/scripts/runtime-test-exclusions.ts";
+  const moduleText = (yield* exists(modulePath)) ? yield* readTextFile(modulePath) : "";
+  const snapshot = yield* save(directory + "/target-runtime-test-exclusions.ts", moduleText);
+  const module = describe("scripts/runtime-test-exclusions.ts", moduleText);
+  const targetConfiguration = {
+    purpose:
+      variant === "wrong-purpose"
+        ? "evaluate-arbitrary-target-code"
+        : "evaluate-target-runtime-exclusions",
+    evaluate: true,
+    module: variant === "module-mismatch" ? { ...module, sha256: "0".repeat(64) } : module,
+    snapshot,
+    runtimeDependencies: [],
+  };
+  const feedback = completed.delivery.directory + "/feedback.json";
+  const feedbackRecord = describe(feedback, yield* readTextFile(feedback));
+  const continuation = predecessor ?? completed.envelope.continuation;
+  const boundPredecessor =
+    variant === "wrong-predecessor" ? { ...continuation, sha256: "0".repeat(64) } : continuation;
   const authority = yield* save(
-    directory + "/authority.md",
-    "Synthetic fixture: the coordinator selects this measured-weights amendment under delegated authority.",
+    directory + "/authority.json",
+    variant === "prose-authority"
+      ? "Synthetic fixture: the coordinator selects this measured-weights amendment under delegated authority."
+      : JSON.stringify({
+          schema: "delivery-amendment-authority.v1",
+          work: completed.delivery.work,
+          repository: completed.delivery.repository,
+          revision: completed.revision,
+          predecessor: boundPredecessor,
+          feedback: feedbackRecord,
+          purpose: "measured-test-weights",
+          targetConfiguration,
+        }),
   );
   const launchText = yield* readTextFile(completed.launch);
   const old =
@@ -148,16 +194,13 @@ export default function* Grant(value: unknown) {
         )
       : describe(completed.launch, launchText);
   const files = yield* observeProgram();
-  const feedback = completed.delivery.directory + "/feedback.json";
-  const continuation = predecessor ?? completed.envelope.continuation;
   const authorization = {
     schema: "delivery-amendment-authorization.v1",
     work: completed.delivery.work,
     repository: completed.delivery.repository,
     revision: completed.revision,
-    predecessor:
-      variant === "wrong-predecessor" ? { ...continuation, sha256: "0".repeat(64) } : continuation,
-    feedback: describe(feedback, yield* readTextFile(feedback)),
+    predecessor: boundPredecessor,
+    feedback: feedbackRecord,
     purpose: "measured-test-weights",
     delta: ["test-weights.json"],
     authority: { kind: "delegated-coordinator-selection", document: authority },
@@ -174,6 +217,7 @@ export default function* Grant(value: unknown) {
             : files,
       },
     },
+    targetConfiguration,
   };
   const path = directory + "/authorization.json";
   yield* writeTextFile(path, JSON.stringify(authorization));
