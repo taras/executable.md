@@ -354,25 +354,26 @@ const review = JSON.stringify({
   findings: [],
 });
 const outcome = z.object({
-  stage: z.string(),
-  catalog: z
-    .object({
-      state: z.string(),
-      model: z.string().nullable(),
-      advertised: z.array(z.string()).nullable(),
-    })
-    .nullable(),
+  catalog: z.object({
+    state: z.string(),
+    model: z.string().nullable(),
+    advertised: z.array(z.string()).nullable(),
+  }),
   turn: z
     .object({
       state: z.string(),
+      stage: z.string().optional(),
       reply: z.string().optional(),
       partial: z.string().optional(),
       configuration: z.object({ reason: z.string(), setting: z.string() }).nullable().optional(),
     })
     .nullable(),
-  configuration: z.object({ reason: z.string(), setting: z.string() }).nullable(),
 });
 const execution = z.strictObject({
+  status: z.enum(["completed", "failed"]),
+  failure: z.string().nullable(),
+});
+const captured = z.strictObject({
   status: z.enum(["completed", "failed"]),
   output: z.string(),
   failure: z.string().nullable(),
@@ -454,7 +455,7 @@ function* reviewWorld(fake: FakeAcp, create = fake.create): Operation<ReviewWorl
 }
 
 const roleSource =
-  '<Delivery.Role delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} choices={props.choices} position={0} attempt={props.attempt} as="outcome" /><Json value={outcome} />';
+  "<Delivery.Role delivery={props.delivery} revision={props.revision} reviewer={props.reviewer} choices={props.choices} position={0} attempt={props.attempt} />";
 const reviewSource =
   '<Delivery.Review delivery={props.delivery} revision={props.revision} as="result" /><Json value={result} />';
 
@@ -500,8 +501,9 @@ describe(
           attempt,
         });
         expect(ran.ok).toBe(true);
-        const settled = outcome.parse(JSON.parse(ran.text));
-        expect(settled.stage).toBe("settled");
+        const settled = outcome.parse(
+          JSON.parse(yield* readTextFile(join(attempt, "outcome.json"))),
+        );
         expect(settled.catalog).toEqual({
           state: "selected",
           model: "fable",
@@ -522,9 +524,6 @@ describe(
           model: "fable",
           effort: effort ?? undefined,
         });
-        expect(JSON.parse(yield* readTextFile(join(attempt, "outcome.json")))).toEqual(
-          JSON.parse(ran.text),
-        );
         expect(fake.closes.length).toBeGreaterThan(0);
       }
     });
@@ -552,10 +551,11 @@ describe(
           attempt,
         });
         expect(ran.ok).toBe(true);
-        const settled = outcome.parse(JSON.parse(ran.text));
+        const settled = outcome.parse(
+          JSON.parse(yield* readTextFile(join(attempt, "outcome.json"))),
+        );
         expect(fake.prompts).toEqual([]);
         if (variant === "missing") {
-          expect(settled.stage).toBe("settled");
           expect(settled.catalog).toEqual({
             state: "unavailable",
             model: null,
@@ -563,13 +563,13 @@ describe(
           });
           expect(settled.turn).toBe(null);
         } else {
-          const configuration =
-            settled.stage === "session" ? settled.configuration : settled.turn?.configuration;
-          expect(configuration).toEqual({ reason: "selector-unavailable", setting: "effort" });
+          expect(settled.turn).toMatchObject({
+            state: "failed",
+            partial: "",
+            configuration: { reason: "selector-unavailable", setting: "effort" },
+          });
         }
-        expect(JSON.parse(yield* readTextFile(join(attempt, "catalog.json")))).toMatchObject({
-          model: variant === "missing" ? null : "fable",
-        });
+        expect(settled.catalog.model).toBe(variant === "missing" ? null : "fable");
       }
     });
 
@@ -619,10 +619,9 @@ describe(
         JSON.parse(yield* readTextFile(join(attempt, "execution.json"))),
       );
       expect(primary.status).toBe("completed");
-      expect(outcome.parse(JSON.parse(primary.output)).turn).toMatchObject({
-        state: "failed",
-        partial: "",
-      });
+      expect(
+        outcome.parse(JSON.parse(yield* readTextFile(join(attempt, "outcome.json")))).turn,
+      ).toMatchObject({ state: "failed", stage: "turn", partial: "" });
       const sessions = z.object({ name: z.string(), attempted: z.boolean() });
       for (const name of ["independent", "independent-astra"]) {
         expect(
@@ -638,33 +637,32 @@ describe(
       expect(harness.asked).toHaveLength(1);
     });
 
-    it("holds without Astra when the failed Fable owner's real ACP close rejects", function* () {
+    it("ends the run without Astra or a hold when the failed Fable owner's real ACP close rejects", function* () {
       const fake = createFakeAcp();
       fake.configuration(catalog(["fable", "gpt-6-astra"]));
       fake.script({ failure: "The Fable provider turn failed." });
       fake.closeFailure = new Error("the review provider would not close");
       const harness = yield* reviewWorld(fake);
       const ran = yield* harness.run(reviewSource, { delivery: harness.delivery, revision });
-      expect(ran.ok).toBe(true);
+      expect(ran.ok).toBe(false);
+      expect(ran.text).toContain("agent provider teardown failed");
+      expect(fake.closes).toContain("scope teardown");
       expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude"]);
       const attempt = join(harness.delivery.directory as string, `review-${revision}`);
-      const primary = execution.parse(
-        JSON.parse(yield* readTextFile(join(attempt, "execution.json"))),
-      );
-      expect(primary.status).toBe("failed");
-      expect(primary.failure).toContain("agent provider teardown failed");
-      expect(fake.closes).toContain("scope teardown");
       expect(
         outcome.parse(JSON.parse(yield* readTextFile(join(attempt, "outcome.json")))).turn,
-      ).toMatchObject({ state: "failed" });
-      const hold = z.object({
-        summary: z.string(),
-        attempts: z.array(z.object({ state: z.string() })),
-      });
-      const held = hold.parse(JSON.parse(yield* readTextFile(join(attempt, "hold.json"))));
-      expect(held.attempts.map((item) => item.state)).toEqual(["unjoined"]);
-      expect(held.summary).toContain("uncertain");
-      expect(harness.asked).toHaveLength(1);
+      ).toMatchObject({ state: "failed", stage: "turn" });
+      const retained: string[] = [];
+      for (const file of ["execution.json", "hold.json", "replacement/assignment.json"]) {
+        try {
+          yield* readTextFile(join(attempt, file));
+          retained.push(file);
+        } catch {
+          continue;
+        }
+      }
+      expect(retained).toEqual([]);
+      expect(harness.asked).toHaveLength(0);
     });
   },
 );
@@ -742,11 +740,11 @@ describe(
         });
       }
       const live = new InMemoryStream();
-      const first = execution.parse(JSON.parse(yield* perform(live)));
+      const first = captured.parse(JSON.parse(yield* perform(live)));
       const prefix = live
         .snapshot()
         .filter((event) => !(event.type === "close" && event.coroutineId === "root"));
-      const continued = execution.parse(JSON.parse(yield* perform(new InMemoryStream(prefix))));
+      const continued = captured.parse(JSON.parse(yield* perform(new InMemoryStream(prefix))));
       expect(calls).toBe(1);
       expect(first.status).toBe("completed");
       expect(JSON.parse(first.output)).toMatchObject({
@@ -831,8 +829,7 @@ describe(
       expect(fake.turns.map((_, index) => agentOf(fake, index))).toEqual(["claude", "codex"]);
       const held = yield* evidence();
       expect(JSON.parse(held["outcome.json"]!)).toMatchObject({
-        stage: "settled",
-        turn: { state: "failed", partial: "" },
+        turn: { state: "failed", stage: "turn", partial: "" },
       });
       expect(asked).toContain("Every eligible independent reviewer failed without a valid review.");
 

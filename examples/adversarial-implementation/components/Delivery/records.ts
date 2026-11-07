@@ -8,7 +8,7 @@ export const reviewerSchema = z.strictObject({
   session: z.string().min(1),
 });
 
-const catalogSchema = z.strictObject({
+export const catalogSchema = z.strictObject({
   state: z.enum(["selected", "unavailable", "failed"]),
   choices: z.array(z.string().min(1)).min(1),
   model: z.string().min(1).nullable(),
@@ -20,32 +20,24 @@ const turnSchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("reply"), reply: z.string() }),
   z.strictObject({
     state: z.literal("failed"),
+    stage: z.enum(["session", "turn"]),
     failure: z.string(),
     partial: z.string(),
     configuration: configurationSchema,
   }),
 ]);
 
-export const settledSchema = z.strictObject({
+export const outcomeSchema = z.strictObject({
+  schema: z.literal("delivery-review-outcome.v1"),
+  reviewer: reviewerSchema,
   catalog: catalogSchema,
   turn: turnSchema.nullable(),
 });
 
-export const outcomeSchema = z.strictObject({
-  schema: z.literal("delivery-review-outcome.v1"),
-  reviewer: reviewerSchema,
-  stage: z.enum(["settled", "session", "other"]),
-  catalog: catalogSchema.nullable(),
-  turn: turnSchema.nullable(),
-  failure: z.string().nullable(),
-  configuration: configurationSchema,
-});
-
-export const executionSchema = z.strictObject({
-  status: z.enum(["completed", "failed"]),
-  output: z.string(),
-  failure: z.string().nullable(),
-});
+export const executionSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("completed"), failure: z.null() }),
+  z.strictObject({ status: z.literal("failed"), failure: z.string() }),
+]);
 
 const entrySchema = z.strictObject({
   reviewer: reviewerSchema,
@@ -68,7 +60,7 @@ export const attemptSchema = z.strictObject({
   position: z.number().int().min(0).max(1),
   reviewer: reviewerSchema,
   model: z.string().nullable(),
-  state: z.enum(["reserved", "unjoined", "review", "eligible", "held"]),
+  state: z.enum(["reserved", "review", "eligible", "held"]),
   reason: z.string().min(1),
   evidence: z.array(z.string().startsWith("/")),
 });

@@ -13,8 +13,8 @@ returns: {type: object}
 
 Only the retained selection's attempt can supply the receipt: the original
 reviewer, or its replacement after a retained transition from an eligible
-failure. A joined execution whose raw reply was never saved is completed from
-that execution.
+failure. A joined reply that was never saved as `raw.txt` is completed from the
+attempt's retained outcome.
 
 <Delivery.Schema as="schemas" />
 <Delivery.Attempts delivery={props.delivery} revision={props.revision} as="read" />
@@ -26,8 +26,9 @@ that execution.
 <If condition={JSON.stringify(assignment) !== JSON.stringify(assigned)}><Fail message="The original review assignment or response schema differs from the recorded delivery requirement. Preserve the original rejection; schema changes require an explicit applicable amendment decision outside this action. This reconciliation action starts no provider prompt." /></If>
 <If condition={read.state.effective === null}><Fail message={"The selected review attempt has no joined review reply: " + read.state.attempts[read.state.candidate.position].reason + " This reconciliation action starts no provider prompt."} /></If>
 <Ticket.Text path={attempt + "/execution.json"} as="executionText" />
-<Parse schema={{type:"object",properties:{status:{const:"completed"},output:{type:"string"},failure:{type:"null"}},required:["status","output","failure"],additionalProperties:false}} as="execution">{executionText}</Parse>
-<Parse schema={{type:"object",properties:{stage:{const:"settled"},turn:{type:"object",properties:{state:{const:"reply"},reply:{type:"string"}},required:["state","reply"],additionalProperties:false}},required:["stage","turn"]}} as="returned">{execution.output}</Parse>
+<Parse schema={{type:"object",properties:{status:{const:"completed"},failure:{type:"null"}},required:["status","failure"],additionalProperties:false}} as="execution">{executionText}</Parse>
+<Ticket.Text path={attempt + "/outcome.json"} as="outcomeText" />
+<Parse schema={{type:"object",properties:{turn:{type:"object",properties:{state:{const:"reply"},reply:{type:"string"}},required:["state","reply"],additionalProperties:false}},required:["turn"]}} as="returned">{outcomeText}</Parse>
 <Dir path={attempt}><Glob include={["raw.txt","receipt.json"]} as="derived" /></Dir>
 <If condition={!derived.includes("raw.txt")}>
 <If condition={!props.publish}><Fail message="The joined review has no saved raw reply. Use the explicit reconcile action; do not repeat the review." /></If>

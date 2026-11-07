@@ -1,5 +1,5 @@
 ---
-description: 'Review one exact commit independently in a provider scope of its own. Use <Delivery.Role delivery={delivery} revision={revision} reviewer={reviewer} choices={["fable"]} position={0} attempt={directory} as="outcome" />.'
+description: 'Review one exact commit independently in a provider scope of its own. Use <Delivery.Role delivery={delivery} revision={revision} reviewer={reviewer} choices={["fable"]} position={0} attempt={directory} />.'
 props:
   type: object
   properties:
@@ -11,12 +11,11 @@ props:
     attempt: {type: string, pattern: '^/'}
   required: [delivery, revision, reviewer, choices, position, attempt]
   additionalProperties: false
-returns: {type: object}
 ---
 
-The registered provider is installed for this attempt alone, so its resources
-are released before the outcome returns. Its option inspection, configuration
-and turn outcome are retained in the attempt directory before that release.
+The registered provider is installed for this attempt alone and released when
+the role finishes. The option inspection and the provider's turn outcome are
+saved to `outcome.json` before that release, including when the turn fails.
 
 <Delivery.Schema as="schemas" />
 <Let as="instructions">
@@ -37,6 +36,11 @@ Return exactly one JSON object satisfying this schema. acceptance lists every cl
 <Dir path={props.delivery.directory}><Glob include={[props.position === 0 ? "review-*/assignment.json" : "review-*/replacement/assignment.json"]} as="priorReviews" /></Dir>
 <Let as="own" value={props.attempt.slice(props.delivery.directory.length + 1) + "/assignment.json"} />
 <Let as="continuation" value={props.delivery.sessionEstablished === true || priorReviews.some(path => path !== own)} />
-<Let as="owned"><AgentProvider name="acpx" defaultAgent={props.reviewer.provider}><Delivery.Classify reviewer={props.reviewer} as="inner"><Dir path={props.delivery.repository}><Agent name={props.reviewer.provider}><Delivery.Inspect agent={props.reviewer.provider} choices={props.choices} as="catalog" /><Dir path={props.attempt}><File path="catalog.json"><Json value={catalog} /></File></Dir><If condition={catalog.state === "selected"}><Session name={props.reviewer.session} model={catalog.model} effort={props.reviewer.effort ?? undefined}><Phase.Session directory={props.delivery.directory + "/sessions"} name={props.reviewer.session} requireExisting={continuation}><Delivery.Turn as="turn"><Prompt throwOnError={true}>{instructions}</Prompt></Delivery.Turn><Json value={{catalog,turn}} /></Phase.Session></Session><Else><Json value={{catalog,turn:null}} /></Else></If></Agent></Dir></Delivery.Classify><Dir path={props.attempt}><File path="outcome.json"><Json value={inner} /></File></Dir><Json value={inner} /></AgentProvider></Let>
-<Parse schema={{type:"object"}} as="outcome">{owned}</Parse>
-<Return value={outcome} />
+<AgentProvider name="acpx" defaultAgent={props.reviewer.provider}><Dir path={props.delivery.repository}>
+<Delivery.Inspect agent={props.reviewer.provider} choices={props.choices} as="catalog" />
+<Let as="turn" value={null} />
+<Try>
+<If condition={catalog.state === "selected"}><Delivery.Turn as="turn"><Agent name={props.reviewer.provider}><Session name={props.reviewer.session} model={catalog.model} effort={props.reviewer.effort ?? undefined}><Phase.Session directory={props.delivery.directory + "/sessions"} name={props.reviewer.session} requireExisting={continuation}><Prompt throwOnError={true}>{instructions}</Prompt></Phase.Session></Session></Agent></Delivery.Turn></If>
+<Finally><Dir path={props.attempt}><File path="outcome.json"><Json value={{schema:"delivery-review-outcome.v1",reviewer:props.reviewer,catalog,turn}} /></File></Dir></Finally>
+</Try>
+</Dir></AgentProvider>

@@ -3,6 +3,7 @@ import type { Operation } from "effection";
 import { z } from "zod";
 import { describeFailure, isFilesFailure } from "./failure.ts";
 import { retained } from "./observation.ts";
+import { catalogSchema } from "./records.ts";
 
 export const props = {
   type: "object",
@@ -13,14 +14,6 @@ export const props = {
   required: ["agent", "choices"],
   additionalProperties: false,
 };
-
-const catalogSchema = z.strictObject({
-  state: z.enum(["selected", "unavailable", "failed"]),
-  choices: z.array(z.string()),
-  model: z.string().nullable(),
-  advertised: z.array(z.string()).nullable(),
-  failure: z.string().nullable(),
-});
 
 const input = z.strictObject({
   agent: z.string().min(1),

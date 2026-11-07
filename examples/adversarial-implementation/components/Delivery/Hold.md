@@ -36,13 +36,12 @@ Choose hold to leave delivery waiting, or reconcile to read and validate the exi
 <Dir path={read.directory}><File path="disposition.json"><Json value={{schema:"delivery-review-disposition.v1",hold,answer}} /></File></Dir>
 <Let as="result" value={{status:"held",hold,answer,receipt:null,reconciliation:null}} />
 <If condition={answer.disposition === "reconcile"}>
-<Ticket.Capture as="reading"><Delivery.Reconcile delivery={props.delivery} revision={props.revision} publish={true} as="receipt" /><Json value={receipt} /></Ticket.Capture>
-<If condition={reading.status === "completed"}>
-<Parse schema={{type:"object"}} as="receipt">{reading.output}</Parse>
-<Let as="result" value={{...result,status:"reconciled",receipt}} />
+<Try>
+<Delivery.Reconcile delivery={props.delivery} revision={props.revision} publish={true} as="receipt" />
+<Return value={{...result,status:"reconciled",receipt}} />
+<Catch as="error"><Return value={{...result,reconciliation:error.message}} /></Catch>
+</Try>
 <Else>
-<Let as="result" value={{...result,reconciliation:reading.failure.split("\n")[0]}} />
+<Return value={result} />
 </Else>
 </If>
-</If>
-<Return value={result} />

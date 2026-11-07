@@ -2,7 +2,13 @@ import { Agent, Component } from "@executablemd/core/api";
 import type { AgentPromptEvent } from "@executablemd/core/api";
 import type { Operation, Stream } from "effection";
 import { z } from "zod";
-import { configurationOf, configurationSchema, describeFailure, isFilesFailure } from "./failure.ts";
+import {
+  causedBy,
+  configurationOf,
+  configurationSchema,
+  describeFailure,
+  isFilesFailure,
+} from "./failure.ts";
 import { retained } from "./observation.ts";
 
 export const props = { type: "object", properties: {}, additionalProperties: false };
@@ -11,25 +17,41 @@ const observationSchema = z.discriminatedUnion("provider", [
   z.strictObject({ provider: z.literal(false) }),
   z.strictObject({
     provider: z.literal(true),
+    stage: z.enum(["session", "turn"]),
     failure: z.string(),
     partial: z.string(),
     configuration: configurationSchema,
   }),
 ]);
 
+/**
+ * A failure is the provider's only when its own session or turn produced it:
+ * a refusal thrown by the session operation, or a turn the provider stream
+ * failed or reported failed. Everything else, including a workflow guard in
+ * this content, is rethrown.
+ */
 export default function* Turn(): Operation<unknown> {
+  const sessionFailures = new Set<unknown>();
   let requested = false;
-  let providerFailure: { error: unknown } | undefined;
+  let streamFailure: { error: unknown } | undefined;
   let terminal: { status: string; error: Error | undefined } | undefined;
   let produced = "";
   yield* Agent.around({
+    *session(args, next) {
+      try {
+        return yield* next(...args);
+      } catch (error) {
+        sessionFailures.add(error);
+        throw error;
+      }
+    },
     *prompt(args, next) {
       requested = true;
       let stream: Stream<AgentPromptEvent, string>;
       try {
         stream = yield* next(...args);
       } catch (error) {
-        providerFailure = { error };
+        streamFailure = { error };
         throw error;
       }
       const observed: Stream<AgentPromptEvent, string> = {
@@ -49,13 +71,13 @@ export default function* Turn(): Operation<unknown> {
                   }
                   return event;
                 } catch (error) {
-                  providerFailure = { error };
+                  streamFailure = { error };
                   throw error;
                 }
               },
             };
           } catch (error) {
-            providerFailure ??= { error };
+            streamFailure ??= { error };
             throw error;
           }
         },
@@ -72,25 +94,31 @@ export default function* Turn(): Operation<unknown> {
     throw failure;
   }
   const observed = yield* retained("delivery-review-turn", observationSchema, function* () {
+    if (causedBy(failure, sessionFailures)) {
+      return {
+        provider: true,
+        stage: "session",
+        failure: describeFailure(failure),
+        partial: "",
+        configuration: configurationOf(failure),
+      };
+    }
+    const raw = streamFailure?.error;
     const reported = terminal !== undefined && terminal.status !== "completed";
-    if (!requested || (providerFailure === undefined && !reported)) {
+    if (!requested || (raw === undefined && !reported) || isFilesFailure(raw)) {
       return { provider: false };
     }
-    const cause = providerFailure?.error ?? terminal?.error;
     return {
       provider: true,
+      stage: "turn",
       failure: describeFailure(failure),
       partial: produced,
-      configuration: configurationOf(cause) ?? configurationOf(failure),
+      configuration: configurationOf(raw ?? terminal?.error) ?? configurationOf(failure),
     };
   });
   if (!observed.provider) {
     throw failure;
   }
-  return {
-    state: "failed",
-    failure: observed.failure,
-    partial: observed.partial,
-    configuration: observed.configuration,
-  };
+  const { provider: _provider, ...turn } = observed;
+  return { state: "failed", ...turn };
 }

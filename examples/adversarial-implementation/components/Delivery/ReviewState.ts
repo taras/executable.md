@@ -70,7 +70,7 @@ function* attempt(
   reviewer: Reviewer,
   assignment: unknown,
 ): Operation<Attempt> {
-  const files = ["assignment.json", "catalog.json", "outcome.json", "execution.json"];
+  const files = ["assignment.json", "outcome.json", "execution.json"];
   const texts: Record<string, string | null> = {};
   for (const file of files) {
     texts[file] = yield* read(directory, file);
@@ -78,11 +78,15 @@ function* attempt(
   const evidence = files
     .filter((file) => texts[file] !== null)
     .map((file) => `${directory}/${file}`);
-  const catalog = parsed(z.object({ model: z.string().nullable() }), texts["catalog.json"]);
+  const outcome = parsed(outcomeSchema, texts["outcome.json"]);
+  const turn = outcome?.turn ?? null;
+  const configured =
+    turn !== null &&
+    (turn.state === "reply" || (turn.stage === "turn" && turn.configuration === null));
   const result = (state: Attempt["state"], reason: string): Attempt => ({
     position,
     reviewer,
-    model: catalog?.model ?? null,
+    model: configured ? (outcome?.catalog.model ?? null) : null,
     state,
     reason,
     evidence,
@@ -105,73 +109,45 @@ function* attempt(
   if (execution === null) {
     return result("held", "The retained execution record is malformed.");
   }
-  if (execution.status !== "completed") {
-    return result(
-      "unjoined",
-      `The review owner did not complete normally, so provider release is unproven: ${firstLine(execution.failure)}`,
-    );
-  }
-  const outcome = parsed(outcomeSchema, execution.output);
-  if (
-    outcome === null ||
-    !same(outcome.reviewer, reviewer) ||
-    !same(parsed(z.unknown(), texts["outcome.json"]), outcome)
-  ) {
-    return result("held", "The joined execution has no matching retained outcome.");
-  }
-  if (outcome.stage === "other") {
+  if (execution.status === "failed") {
     return result(
       "held",
-      `The attempt failed outside the provider operation: ${firstLine(outcome.failure)}`,
+      `The attempt failed outside the provider operation: ${firstLine(execution.failure)}`,
     );
   }
-  if (outcome.stage === "session") {
-    return outcome.configuration === null
-      ? result(
-          "eligible",
-          `The provider could not establish the review session: ${firstLine(outcome.failure)}`,
-        )
-      : result(
-          "eligible",
-          `The provider refused the ${outcome.configuration.setting} configuration (${outcome.configuration.reason}) before the review turn.`,
-        );
+  if (outcome === null || !same(outcome.reviewer, reviewer)) {
+    return result("held", "The joined execution has no matching retained outcome.");
   }
-  const settled = outcome.catalog;
-  if (settled === null) {
-    return result("held", "The settled outcome has no option inspection.");
+  const catalog = outcome.catalog;
+  if (catalog.state === "failed") {
+    return result("eligible", `Option inspection failed: ${firstLine(catalog.failure)}`);
   }
-  const inspected = { ...result("held", "pending"), model: settled.model };
-  if (settled.state === "failed") {
-    return { ...inspected, state: "eligible", reason: `Option inspection failed: ${firstLine(settled.failure)}` };
+  if (catalog.state === "unavailable") {
+    return result(
+      "eligible",
+      `The advertised catalog offers none of ${catalog.choices.join(", ")} (advertised: ${catalog.advertised === null ? "no model choice" : catalog.advertised.join(", ") || "none"}). No review prompt was sent.`,
+    );
   }
-  if (settled.state === "unavailable") {
-    return {
-      ...inspected,
-      state: "eligible",
-      reason: `The advertised catalog offers none of ${settled.choices.join(", ")} (advertised: ${settled.advertised === null ? "no model choice" : settled.advertised.join(", ") || "none"}). No review prompt was sent.`,
-    };
-  }
-  const turn = outcome.turn;
   if (turn === null) {
-    return { ...inspected, reason: "The selected model has no retained turn outcome." };
+    return result("held", "The selected model has no retained turn outcome.");
   }
   if (turn.state === "reply") {
-    return { ...inspected, state: "review", reason: "The reviewer returned a joined reply." };
+    return result("review", "The reviewer returned a joined reply.");
   }
   if (turn.partial.trim() !== "") {
-    return {
-      ...inspected,
-      reason: "The failed turn produced partial review output; it is retained for reconciliation.",
-    };
+    return result(
+      "held",
+      "The failed turn produced partial review output; it is retained for reconciliation.",
+    );
   }
-  return {
-    ...inspected,
-    state: "eligible",
-    reason:
-      turn.configuration === null
-        ? `The provider turn failed without review output: ${firstLine(turn.failure)}`
-        : `The provider refused the ${turn.configuration.setting} configuration (${turn.configuration.reason}) before the review turn.`,
-  };
+  return result(
+    "eligible",
+    turn.configuration !== null
+      ? `The provider refused the ${turn.configuration.setting} configuration (${turn.configuration.reason}) before the review turn.`
+      : turn.stage === "session"
+        ? `The provider could not establish the review session: ${firstLine(turn.failure)}`
+        : `The provider turn failed without review output: ${firstLine(turn.failure)}`,
+  );
 }
 
 function assignmentFor(selection: Selection, reviewer: Reviewer) {

@@ -269,8 +269,11 @@ review from Fable is final: findings go to the normal repair path, never to
 another reviewer. A policy that already names Astra is the final reviewer, and
 any other reviewer remains the only one.
 
-When no eligible reviewer produced a review, or the first attempt is uncertain
-(its owner did not close, it streamed partial output, or it failed outside the
+Each attempt runs inside `<Try>`: its provider scope is released before Catch or
+the next step runs, and `execution.json` records that release. A release that
+fails ends the run, leaving the attempt reserved for reconciliation without a
+replacement or a hold. When no eligible reviewer produced a review, or the first
+attempt cannot be replaced (it streamed partial output, or it failed outside the
 provider), the action writes `review-<sha>/hold.json` and then asks through
 `<Elicit>` with the actual identities and reasons. The answer is `hold` or
 `reconcile`, retained in `disposition.json` before it acts: `hold` leaves
