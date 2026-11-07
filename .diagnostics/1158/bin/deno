@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+import os, sys, subprocess, json, time, signal
+log="/private/tmp/xmd-1158-authenticated-work/attempts/0000/children.jsonl"
+a=sys.argv[1:]
+for i,x in enumerate(a):
+    if x.endswith("/packages/cli/src/deno.ts"):
+        a[i+1:i+1]=[]
+        a += ["--plugin", "/private/tmp/xmd-1158-authenticated-work/attempts/0000/progress-plugin.mjs"]
+        break
+def note(v):
+    with open(log,"a") as f: f.write(json.dumps(dict(time=time.time(),wrapper=os.getpid(),**v))+"\n")
+child=subprocess.Popen(["/private/tmp/xmd-1158-authenticated-work/attempts/0000/deno-2.9.5/deno",*a])
+def forward(sig,frame):
+    child.send_signal(sig)
+signal.signal(signal.SIGTERM,forward)
+signal.signal(signal.SIGINT,forward)
+note(dict(kind="child-start",pid=child.pid,argv=a))
+code=child.wait()
+note(dict(kind="child-waited",pid=child.pid,code=code))
+sys.exit(code if code>=0 else 128-code)
