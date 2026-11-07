@@ -96,10 +96,19 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
   });
 
   it("DT9: a failing single document prints one diagnostic", function* () {
-    const { code, stderr } = yield* runCli(["test", fixture("mixed", "broken.test.md")]).join();
+    const document = fixture("mixed", "broken.test.md");
+    const { code, stderr } = yield* runCli(["test", document]).join();
     expect(code).toBe(1);
-    expect(stderr).not.toContain("broken.test.md:");
+    // Progress names source locations, so the directory-style `path:` prefix
+    // is looked for only in what is not progress.
+    const lines = stderr.split("\n");
+    const progress = lines.filter((line) => line.startsWith("[xmd test] "));
+    const diagnostic = lines.filter((line) => !line.startsWith("[xmd test] ")).join("\n");
+    expect(diagnostic).not.toContain("broken.test.md:");
     expect(stderr.match(/tests failed:/g)).toEqual(["tests failed:"]);
+    expect(progress).toContain(
+      `[xmd test] fail test "mixed suite failing document" at ${document}:3:1 (assertion)`,
+    );
   });
 
   it("DT10: --journal is rejected for a directory before anything runs", function* () {

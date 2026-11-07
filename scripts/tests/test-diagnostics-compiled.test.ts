@@ -84,4 +84,72 @@ describe("compiled xmd test diagnostics", () => {
       "compiled-child-failure",
     );
   });
+
+  it("attributes each invocation of a repeated test to the operation it interrupted", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+    const directory = yield* useTempDirectory("xmd-compiled-repeated-");
+    // One `<Test>`, written once at line 8, invoked twice; "first" blocks at
+    // line 11 and "second" at line 18 until the 1s deadline interrupts it.
+    yield* writeTextFile(
+      path.join(directory, "Repeated.md"),
+      [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    which: { type: string }",
+        "  required: [which]",
+        "---",
+        '<Test name={props.which} timeout="1s">',
+        '<If condition={props.which === "first"}>',
+        "",
+        "```sh exec",
+        "sleep 10",
+        "```",
+        "",
+        "</If>",
+        '<If condition={props.which === "second"}>',
+        "",
+        "```sh exec",
+        "sleep 10",
+        "```",
+        "",
+        "</If>",
+        "</Test>",
+        "",
+      ].join("\n"),
+    );
+    yield* writeTextFile(
+      path.join(directory, "suite.test.md"),
+      '<Repeated which="first" />\n\n<Repeated which="second" />\n',
+    );
+    const environment: Record<string, string> = {};
+    for (const [name, value] of Object.entries(process.env)) {
+      if (value !== undefined) {
+        environment[name] = value;
+      }
+    }
+    const run = yield* timebox(TIMEOUT, () =>
+      exec(BINARY, {
+        arguments: ["test", "suite.test.md"],
+        cwd: directory,
+        env: { ...environment, XMD_TEST_ARTIFACTS: path.join(directory, "artifacts") },
+      }).join(),
+    );
+    if (run.timeout) {
+      throw new Error(`dist/xmd test did not finish within ${TIMEOUT}ms`);
+    }
+    expect(run.value.code).toBe(1);
+    const outcomes = run.value.stderr
+      .split("\n")
+      .filter((line) => /^\[xmd test\] (pass|fail) test/.test(line));
+    expect(outcomes).toEqual([
+      '[xmd test] fail test "first" at Repeated.md:8:1 (timeout; interrupted sh exec at Repeated.md:11:1)',
+      '[xmd test] fail test "second" at Repeated.md:8:1 (timeout; interrupted sh exec at Repeated.md:18:1)',
+    ]);
+    expect(run.value.stderr).toContain('[xmd test] start test "first" at Repeated.md:8:1');
+    expect(run.value.stderr).toContain('[xmd test] start test "second" at Repeated.md:8:1');
+  });
 });

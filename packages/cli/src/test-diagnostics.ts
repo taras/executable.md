@@ -182,16 +182,21 @@ interface ObservedTest {
  * has already unwound. Every request is delegated once, as it arrived.
  */
 function* observe(owner: Scope, report: (line: string) => void): Operation<void> {
-  const tests = new Map<string, ObservedTest>();
+  // A location is where a test was written, and a component can run the same
+  // `<Test>` more than once. Results arrive in discovery order, each after the
+  // next invocation has started, so each location keeps its starts in order
+  // and a result consumes the oldest one.
+  const pending = new Map<string, ObservedTest[]>();
   let current: ObservedTest | undefined;
 
-  const interrupted = (what: string): void => {
-    if (current !== undefined && current.interrupted === undefined) {
-      current.interrupted = what;
+  const interrupted = (test: ObservedTest | undefined, what: string): void => {
+    if (test !== undefined && test.interrupted === undefined) {
+      test.interrupted = what;
     }
   };
 
   const watch = (what: string, request: ComponentExpansionRequest): void => {
+    const test = current;
     owner.run(function* () {
       let started = false;
       for (const phase of yield* each(request.phases)) {
@@ -202,7 +207,7 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
         if (phase.phase === "complete") {
           report(`${phase.result.ok ? "done" : "failed"} ${what}`);
         } else if (phase.phase === "cancelled") {
-          interrupted(what);
+          interrupted(test, what);
           report(`cancelled ${what}`);
         }
         yield* each.next();
@@ -211,6 +216,7 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
   };
 
   function* block<T>(what: string, work: () => Operation<T>): Operation<T> {
+    const test = current;
     report(`start ${what}`);
     let settled = false;
     try {
@@ -224,15 +230,18 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
       throw error;
     } finally {
       if (!settled) {
-        interrupted(what);
+        interrupted(test, what);
         report(`cancelled ${what}`);
       }
     }
   }
 
   const finished = (result: TestResult): void => {
-    const test = tests.get(result.location);
-    tests.delete(result.location);
+    const started = pending.get(result.location);
+    const test = started?.shift();
+    if (started !== undefined && started.length === 0) {
+      pending.delete(result.location);
+    }
     if (test === current) {
       current = undefined;
     }
@@ -274,7 +283,7 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
         const location = located((yield* getExpansion()).position);
         const name = typeof props.name === "string" ? ` ${JSON.stringify(props.name)}` : "";
         const test: ObservedTest = {};
-        tests.set(location, test);
+        pending.set(location, [...(pending.get(location) ?? []), test]);
         current = test;
         report(`start test${name} at ${location}`);
       }
