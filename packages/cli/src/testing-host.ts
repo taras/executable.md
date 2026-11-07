@@ -14,9 +14,11 @@ import type { HostFilesAccess } from "@executablemd/runtime";
  * elicitation provider, the same native service adapter this entrypoint
  * installs, the same root loader and target resolver, and the same
  * `executeInstalled()` call. What it does not get is process
- * presentation — no journal file, no `--verbose` echo, no terminal formatting,
- * no stdout of its own. Its rendered output goes back to the document that ran
- * it, which is the only reader it has.
+ * presentation — no `--journal` file, no `--verbose` echo, no terminal
+ * formatting, no stdout of its own. Its rendered output goes back to the
+ * document that ran it, which is the only reader it has. When the command
+ * running the test supplied diagnostics, the child also reports its progress
+ * there and its journal is saved as a host-private file if it fails.
  *
  * The child runs in the isolated scope the harness created for it, so nothing
  * this module installs here reaches the test that asked, and nothing the test
@@ -25,6 +27,8 @@ import type { HostFilesAccess } from "@executablemd/runtime";
 
 import type { MarkdownComponent } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { withFailureJournal } from "@executablemd/testing";
+import type { ExecutionDiagnostics, TestDiagnostics } from "./test-diagnostics.ts";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -89,6 +93,15 @@ export interface ChildPlanDeclaration {
 
 /** What the entrypoint already decided, and a child must not decide again. */
 export interface TestingHostSettings {
+  /**
+   * The `xmd test` command's progress report and failure journals.
+   *
+   * Absent for a host that runs no test command. A child observed through it
+   * reports under its own label and saves its own journal when it fails, even
+   * when the test binds that failure as assertion data. It selects no authored
+   * journal and changes no process-output retention.
+   */
+  readonly diagnostics?: TestDiagnostics;
   readonly fileAccess?: HostFilesAccess;
   readonly componentModuleLoader?: ComponentModuleLoader;
   /** The component search path this run resolves names through. */
@@ -269,9 +282,36 @@ function* useChildPlanWriterRoot(): Operation<string> {
   return root;
 }
 
-function* runProfileChild(
+/**
+ * Run one child, saving its journal when it fails if this command keeps
+ * diagnostics.
+ *
+ * The whole assembly runs inside the protected operation, so the journal is
+ * read only after every provider this child installed has been torn down.
+ */
+function runProfileChild(
   invocation: ChildInvocation,
   settings: TestingHostSettings,
+): Operation<ChildSettlement> {
+  const request = invocation.request;
+  const diagnostics = settings.diagnostics?.execution("child", request.target ?? "<eval>");
+  if (diagnostics === undefined) {
+    return assembleChild(invocation, settings, new InMemoryStream(), undefined);
+  }
+  return withFailureJournal(
+    diagnostics.journal(
+      (settlement: ChildSettlement) =>
+        settlement.outcome.kind === "settled" && !settlement.outcome.result.ok,
+    ),
+    (stream) => assembleChild(invocation, settings, stream, diagnostics),
+  );
+}
+
+function* assembleChild(
+  invocation: ChildInvocation,
+  settings: TestingHostSettings,
+  stream: InMemoryStream,
+  observed: ExecutionDiagnostics | undefined,
 ): Operation<ChildSettlement> {
   const request = invocation.request;
   yield* ComponentModuleLoader.set(settings.componentModuleLoader);
@@ -298,11 +338,14 @@ function* runProfileChild(
   const root = rootOf(request);
   // `--journal` is the only thing that asks `xmd run` for a diagnostic record,
   // and a declaration is the only thing that asks a child for one. Neither
-  // keeps anything because output was displayed.
+  // keeps process output because output was displayed, and a failure journal
+  // the test host saves does not either.
   const diagnostic = request.journal === "diagnostic";
-  const stream = new InMemoryStream();
   const { testAgent, answers } = selectConfiguration(request);
 
+  if (observed !== undefined) {
+    yield* observed.observe();
+  }
   yield* installDocumentComponents({ testing: false }, false);
   // The run profile, assembled in this child's own scope: the bundled Plugin
   // first, then whatever the operator selected, and all of them told they are

@@ -632,6 +632,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
       "drives the compiled `dist/xmd` through a real terminal: it starts a REPL inside a seeded checkout, leaves at a question and reopens the printed location to prove the binary carries the same entry host the source does. Only `deno compile` produces it and no test shard builds it, so it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
     issue: "https://github.com/taras/executable.md/issues/567",
   },
+  {
+    path: "scripts/tests/test-diagnostics-compiled.test.ts",
+    reason:
+      "runs a failing Markdown test with the compiled `dist/xmd` to prove its stderr progress and failure journals survive `deno compile` through the actual entrypoint. Only `deno compile` produces the binary and no test shard builds it, so it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
+    issue: "https://github.com/taras/executable.md/issues/1169",
+  },
 ];
 
 /**

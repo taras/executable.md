@@ -22,6 +22,7 @@ const RELEASE_WORKFLOW = new URL("../../.github/workflows/release.yml", import.m
 const SMOKE_DOCUMENTATION = "deno run --allow-all --frozen scripts/smoke-documentation.ts";
 
 interface Step {
+  if?: string;
   env?: Record<string, string>;
   name?: string;
   run?: string;
@@ -35,6 +36,7 @@ interface Strategy {
 }
 
 interface Job {
+  env?: Record<string, string>;
   if?: string;
   name?: string;
   needs?: string[];
@@ -77,6 +79,7 @@ function steps(value: unknown, label: string): Step[] {
   return value.map((entry, index) => {
     const step = object(entry, `${label}[${index}]`);
     return {
+      if: "if" in step ? string(step.if, `${label}[${index}].if`) : undefined,
       env: "env" in step ? stringRecord(step.env, `${label}[${index}].env`) : undefined,
       name: "name" in step ? string(step.name, `${label}[${index}].name`) : undefined,
       run: "run" in step ? string(step.run, `${label}[${index}].run`) : undefined,
@@ -95,6 +98,7 @@ function strategy(value: unknown, label: string): Strategy {
 function job(value: unknown, label: string): Job {
   const record = object(value, label);
   return {
+    env: "env" in record ? stringRecord(record.env, `${label}.env`) : undefined,
     if: "if" in record ? string(record.if, `${label}.if`) : undefined,
     name: "name" in record ? string(record.name, `${label}.name`) : undefined,
     needs: "needs" in record ? strings(record.needs, `${label}.needs`) : undefined,
@@ -328,6 +332,56 @@ describe("the CI smoke job", () => {
     // Against the binary the README's Build target produced, which is the one
     // this job has: no argument, so the script's own default names it.
     expect(smoke.steps.some((step) => step.run?.trim() === SMOKE_DOCUMENTATION)).toBe(true);
+  });
+});
+
+describe("failed test journals", () => {
+  const JOURNAL_JOBS: Record<string, string> = {
+    "test-deno": "test-journals-deno-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
+    "test-node": "test-journals-node-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
+    "test-bun": "test-journals-bun-${{ matrix.shard }}-attempt-${{ github.run_attempt }}",
+    smoke: "test-journals-smoke-attempt-${{ github.run_attempt }}",
+  };
+
+  /**
+   * `xmd test` saves a failed execution's journal beneath XMD_TEST_ARTIFACTS,
+   * and a test that launches the CLI does so from directories of its own. A
+   * job-wide absolute root is what every one of those processes inherits, and
+   * the upload is the last step so a failed command before it still has its
+   * journals collected.
+   */
+  it("uploads the journals each runtime shard and compiled smoke saves after failure", function* () {
+    const jobs = yield* workflow();
+    const names = new Set<string>();
+    for (const [id, name] of Object.entries(JOURNAL_JOBS)) {
+      const selected = matrixJob(jobs, id);
+      const root = selected.env?.XMD_TEST_ARTIFACTS;
+      expect(root).toBe("${{ github.workspace }}/.xmd/test-artifacts");
+      const upload = selected.steps.at(-1);
+      expect(upload?.uses).toBe("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+      expect(upload?.if).toBe("${{ failure() || cancelled() }}");
+      expect(upload?.with?.path).toBe("${{ env.XMD_TEST_ARTIFACTS }}");
+      expect(upload?.with?.["if-no-files-found"]).toBe("ignore");
+      expect(upload?.with?.name).toBe(name);
+      names.add(upload?.with?.name ?? "");
+      const tests = selected.steps.findIndex((step) => step.name === "Test");
+      if (id !== "smoke") {
+        expect(tests).toBeGreaterThan(-1);
+        expect(tests).toBeLessThan(selected.steps.length - 1);
+      }
+    }
+    expect(names.size).toBe(Object.keys(JOURNAL_JOBS).length);
+  });
+
+  it("runs the compiled test-diagnostics regression after the binary is built", function* () {
+    const smoke = matrixJob(yield* workflow(), "smoke");
+    const runs = smoke.steps.map((step) => step.run ?? "");
+    const build = runs.findIndex((run) => run.includes("README.md#Build"));
+    const diagnostics = runs.findIndex((run) =>
+      run.includes("scripts/tests/test-diagnostics-compiled.test.ts"),
+    );
+    expect(build).toBeGreaterThan(-1);
+    expect(diagnostics).toBeGreaterThan(build);
   });
 });
 

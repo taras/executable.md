@@ -105,3 +105,7 @@ export type {
   WorkflowRunScope,
 } from "./src/execution-host.ts";
 export type { Testing } from "./src/use-testing.ts";
+// A harness keeps an execution's journal in memory and saves it through its
+// own host only when the work it protects fails, times out or is cancelled.
+export { withFailureJournal } from "./src/failure-journal.ts";
+export type { FailureJournalHost } from "./src/failure-journal.ts";

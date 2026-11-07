@@ -86,6 +86,7 @@ describe("runtime exclusions", () => {
       "scripts/tests/repl-issues-compiled.test.ts",
       "scripts/tests/repl-push-compiled.test.ts",
       "scripts/tests/repl-repositories-compiled.test.ts",
+      "scripts/tests/test-diagnostics-compiled.test.ts",
     ]);
   });
 

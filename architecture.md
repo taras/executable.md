@@ -1477,13 +1477,21 @@ upstream is refused by the gate like any other run that would persist one.
 Output that is never retained is never scanned, because there is nothing to
 persist and nothing was accumulated for a scanner to inspect.
 
-Which host paths retain is a property of the path, stated where the run starts:
-`xmd run` and `xmd test` retain when the caller asked for a diagnostic trace and
-keep nothing otherwise; a workflow retains, because it owns its journal and a
-resumed procedure reads its process results back rather than re-running the
-commands that produced them; programmatic execution retains unless its trusted
-caller selects transient execution. A shared runner never decides this from what
-it was given.
+Which host paths retain process output is a property of the path, stated where
+the run starts: `xmd run` and `xmd test` retain process channels when the caller
+asked for a diagnostic trace and otherwise keep exit status alone; a workflow
+retains process output because resumed work reads its recorded results;
+programmatic execution retains unless its trusted caller selects transient
+execution. A shared runner never infers this choice from a stream
+implementation, a pathname or automatic artifact saving.
+
+A testing host may keep admitted execution events in memory and save them as
+host-private diagnostic files when the enclosing test owner fails, times out or
+is cancelled. Saving follows that owner's assertions and joined append-capable
+teardown. It does not enable process-output retention, bypass secret or
+protected-input enforcement, authorize authored journal collection, or make the
+file continuation input. Successful owners make no automatic persistence call.
+Abrupt termination that bypasses cleanup saves nothing.
 
 A channel is the operation the boundary receives bytes on, and nothing below it
 reclassifies anything: no path hands one channel's bytes to the other channel's
@@ -5538,10 +5546,15 @@ the scan ends where it is written. A structural declaration is recognized only
 where canonical grammar owns it; a same-named repository file cannot become
 one.
 
-Journal configuration and journal observation are separate. A run without a
-diagnostic declaration retains nothing and allocates no journal because output
-was displayed; observation grants no retention, and asking to observe a journal
-nothing selected is malformed configuration that fails before the root import.
+Authored journal configuration and authored observation remain separate.
+Without `<DiagnosticJournal>`, a `run` child selects no authored diagnostic
+journal and keeps no process channels merely because output was displayed.
+`<CollectJournal>` grants no retention; without authored journal selection it is
+malformed configuration and fails before root import. Separately, the trusted
+test host may keep admitted child execution events in memory and save that
+child's partial journal on failure, timeout or owned cancellation after joined
+teardown. A host-private failure file grants no collection or continuation
+rights and changes no process-output retention setting.
 
 A `run` child may receive deterministic Agent behavior and elicitation answers
 through two more declarations in that same prefix. `<TestAgent>` contains only
