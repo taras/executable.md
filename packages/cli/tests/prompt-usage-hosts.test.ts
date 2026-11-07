@@ -19,6 +19,7 @@ import { ensureDir, rm } from "@effectionx/fs";
 import { ensure } from "effection";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { useHostFiles } from "@executablemd/runtime";
 import { agentIdentityComponents, collect, retainedSource } from "@executablemd/core";
@@ -68,13 +69,31 @@ function stackAt(root: string, defaultAgent = "claude"): AgentStack {
   };
 }
 
+/**
+ * The controlled native leaf: the scripted runtime, and the child environment it
+ * would launch with.
+ *
+ * The host's own environment fact resolves a real Claude executable from this
+ * machine, which a turn served by the scripted runtime never starts. Stating the
+ * child environment here keeps the row independent of what the machine has
+ * installed, and everything above the leaf is the product's own assembly.
+ */
 function leaf(stack: AgentStack, fake: FakeAcp): AcpxProviderDependencies {
   return {
     ...hostAcpDependencies(stack),
     createRuntime: fake.create,
     sessionStore: makeStore(),
+    // deno-lint-ignore require-yield
+    *agentProcessEnv() {
+      return { CLAUDE_CODE_EXECUTABLE: CONTROLLED_CLAUDE };
+    },
   };
 }
+
+/** The controlled native Claude fixture, named but never started by the scripted runtime. */
+const CONTROLLED_CLAUDE = fileURLToPath(
+  new URL("../../acp/tests/fixtures/fake-claude-cli.cjs", import.meta.url),
+);
 
 function usageIn(events: readonly DurableEvent[]): (PromptUsage | undefined)[] {
   return events.flatMap((event) =>
