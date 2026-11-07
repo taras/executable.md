@@ -22,11 +22,17 @@ export function* runAdversarialJourney(suite: string) {
   const workflowCommand = [...executableCommand, "run", "--allow-absolute"]
     .map(shellQuote)
     .join(" ");
-  const workflowTestCommand = [...executableCommand, "test"].map(shellQuote).join(" ");
+  const preparationPlugin = fileURLToPath(
+    new URL("../fixtures/preparation-profile.ts", import.meta.url),
+  );
+  const profileArguments = suite === "Preparation" ? ["--plugin", preparationPlugin] : [];
+  const workflowTestCommand = [...executableCommand, "test", ...profileArguments]
+    .map(shellQuote)
+    .join(" ");
   const source = yield* readTextFile(`examples/adversarial-implementation/tests/${suite}.test.md`);
   const preparationAdapterTimeout = 180_000 + 120_000 + 30_000;
   const preparationTimeout = preparationAdapterTimeout + 3 * 20_000 + 30_000;
-  yield* runCli(
+  const result = yield* runCli(
     [
       ...(testedSuites.includes(suite)
         ? [
@@ -50,6 +56,7 @@ export function* runAdversarialJourney(suite: string) {
         : "examples/adversarial-implementation/tests/components",
       "--include",
       "examples/adversarial-implementation/components",
+      ...profileArguments,
     ],
     {
       timeout:
@@ -69,4 +76,10 @@ export function* runAdversarialJourney(suite: string) {
       },
     },
   ).expect();
+  if (suite === "Preparation") {
+    console.error(
+      "[preparation-profile-envelope] " +
+        JSON.stringify({ stdout: result.stdout, stderr: result.stderr, exitCode: result.code }),
+    );
+  }
 }
