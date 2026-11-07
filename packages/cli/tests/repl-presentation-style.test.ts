@@ -4092,7 +4092,14 @@ describe("REPL kernel — ordinary column shares and pane bodies", () => {
     for (const share of SHARES) {
       for (const tab of [
         { name: "Sidekick", sidekick: true, select: (state: ReplState) => state },
-        { name: "Bindings", sidekick: false, select: inspecting },
+        {
+          name: "Bindings",
+          sidekick: false,
+          select: (state: ReplState): ReplState => ({
+            ...inspecting(state),
+            bindingsView: "output",
+          }),
+        },
       ]) {
         const where = `${share.name} ${tab.name}`;
         yield* scoped(function* (): Operation<void> {
@@ -4200,7 +4207,7 @@ describe("REPL kernel — ordinary column shares and pane bodies", () => {
               // No inset body is published for this reading at all, which is
               // what leaves the measured body width the pane's own.
               expect([where, inside]).toEqual([where, undefined]);
-              const binding = observed.boundsOf("binding:kept");
+              const binding = observed.boundsOf("output:kept");
               if (binding === undefined) {
                 throw new Error(`${where} drew no binding row to measure`);
               }

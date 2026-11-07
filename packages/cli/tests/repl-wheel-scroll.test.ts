@@ -268,6 +268,9 @@ describe("wheel real consumers", () => {
     yield* page.press("1. [");
     yield* page.until("entry selected", (one) => !one.shows("[close]"));
     yield* page.press("BINDINGS");
+    // The entry's own result is its Output; the pane opens on its Input.
+    yield* page.until("binding views", (one) => one.shows("entry-1 Input"));
+    yield* page.press("Output", { rightOf: "BINDINGS" });
     yield* page.until("binding opener", (one) => one.shows("retained ="));
     yield* page.press("retained =");
     yield* page.until(
@@ -310,6 +313,9 @@ describe("wheel real consumers", () => {
     yield* page.press("1. [");
     yield* page.until("string entry selected", (one) => !one.shows("[close]"));
     yield* page.press("BINDINGS");
+    // The entry's own result is its Output; the pane opens on its Input.
+    yield* page.until("string views", (one) => one.shows("entry-1 Input"));
+    yield* page.press("Output", { rightOf: "BINDINGS" });
     yield* page.until("string opener", (one) => one.shows("retained ="));
     yield* page.press("retained =");
     yield* page.until(

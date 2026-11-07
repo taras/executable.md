@@ -224,6 +224,9 @@ function screenPlacement(
     key === "sidekick:back" ||
     key.startsWith("sidekick:retry:") ||
     key.startsWith("binding:") ||
+    key.startsWith("bindings-view:") ||
+    key.startsWith("input:") ||
+    key.startsWith("output:") ||
     key.startsWith("elicit:")
   ) {
     return { region: reading };
@@ -254,6 +257,7 @@ function screenPlacement(
   }
   if (
     key === "follow" ||
+    key === "sidekick:recovery" ||
     key === "sidekick:answer" ||
     key === "sidekick:send" ||
     key === "sidekick:stop" ||
