@@ -38,6 +38,18 @@ Independent review: {status.review.result.verdict}
 </Each>
 </If>
 
+<If condition={status.reviewAttempts != null}>
+Review selection: {status.reviewAttempts.chain}
+
+<Each in={status.reviewAttempts.attempts} let="attempt">
+<Let as="attemptRole" value={attempt.position === 0 ? "Primary reviewer" : "Replacement reviewer"} />
+<Let as="attemptModel" value={attempt.model ?? "not configured"} />
+<Let as="attemptEffort" value={attempt.reviewer.effort ?? "provider default"} />
+<Let as="attemptEvidence" value={attempt.evidence.join(", ")} />
+- {attemptRole}: {attempt.reviewer.provider}, requested model {attempt.reviewer.model}, configured model {attemptModel}, effort {attemptEffort}, conversation {attempt.reviewer.session}. {attempt.state}: {attempt.reason} Evidence: {attemptEvidence}
+</Each>
+</If>
+
 Evidence: closeout.json retains the complete status, selected CI and main-health evidence, and review references.
 
 This report starts no model call, publishes nothing and grants no merge permission.

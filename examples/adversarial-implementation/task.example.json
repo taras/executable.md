@@ -41,7 +41,7 @@
     "repository": "taras/executable.md",
     "reviewer": {
       "provider": "claude",
-      "model": "claude-fable-5-1[1m]",
+      "model": "fable",
       "effort": null,
       "session": "bounded-parser-fix-independent-review"
     },
