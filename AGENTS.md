@@ -447,13 +447,21 @@ smallest one for which five consecutive runs on one fixed head keep every shard
 increments that runtime by one and starts a fresh sequence of five. Narrowing
 the corpus or enabling in-shard concurrency is not an answer to a miss.
 
-## MUST READ
+## Task-scoped reading
 
-- https://github.com/thefrontside/effection/blob/v4/AGENTS.md
-- [`architecture.md`](architecture.md) — read fully. Its [reading map](architecture.md#reading-this-architecture)
-  locates current invariants and their feature-interface owners; it does not
-  replace the full reading.
-- `specs/executable-mdx-spec.md` — read the sections your change touches
+Read the guidance and contracts relevant to the task. Reading entire specification
+or architecture files is not a prerequisite.
+
+- Use the [architecture reading map](architecture.md#reading-this-architecture)
+  to find the shared invariants and feature boundaries governing the affected
+  execution paths. Read those sections and their relevant dependencies.
+- Read the sections of `specs/executable-mdx-spec.md` and the owning feature
+  specifications that define the syntax, behavior and conformance being changed.
+- For Effection-based code, consult the relevant
+  [Effection guidance](https://github.com/thefrontside/effection/blob/v4/AGENTS.md).
+
+Expand the reading scope when a dependency, ambiguity or cross-cutting change
+requires it; do not require unrelated sections to be read as a delivery gate.
 
 ## Code Rules
 
