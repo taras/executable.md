@@ -103,6 +103,18 @@ ensures ordinary host `/`, and only its own Unit allows children there. Scope
 exit restores `/reference` and its source. On Windows, component-changing document
 spellings refuse before provider work; native SOURCE paths keep native spelling.
 
+The execution carries an immutable private authored/actual directory frame
+beside its expansion environment through ordinary bodies, projections and
+admitted generated work. No Context publishes that frame. Canonical Dir prepares
+its effective request and candidate frame together; only its own validated
+ensure Unit, after applicable acknowledgement, admits the candidate's children.
+
+Conversion of interpreted document paths preserves their components. On Windows,
+document backslashes, colons and components ending in a dot or space refuse
+before an effective request or child frame exists. Plain `.` and `..` remain
+document navigation, and the captured host drive root supplies an unmapped
+document root. Native SOURCE spelling remains native.
+
 Everything that can be refused is refused in this order, and each step happens
 before anything the next one would touch:
 
@@ -359,6 +371,14 @@ feedback acknowledgement retain. A profile without that value has no checklist
 service, declaration or documentation, and leaves other contributions
 untouched. [Selected Plugin session
 services](#selected-plugin-session-services) owns when each part runs.
+
+The held turn's private turn-local terminal validates the unchanged selected
+agent, exact checked Session and timeout, bypasses ancestor minimum-priority
+routing/default handlers, and calls the captured provider with its retained
+receiver. Before native prompt subscription, core fixes the final XMD-composed
+input in the pending canonical description and acknowledges matching feedback
+intent. Canonical publication follows joined owning cleanup; middleware return
+and `stream.done` establish no canonical outcome.
 
 ## Testing session components
 
@@ -650,6 +670,14 @@ exact object the expression or the component produced, so the entry goes on
 using it the way it always has; a change it makes to that object before it
 settles is part of what the entry hands on, and a change made to a copy a later
 entry received reaches nothing.
+
+Initial bare bindings enter only through the trusted `executeInstalled()` input
+exported from `@executablemd/core/host`, not ordinary `execute()`, Context,
+component, middleware, document props or a durable-record input. Before any
+installation or document code, core parses and name-validates the whole record
+and recursively detaches its values. The recipient's copies remain ordinarily
+mutable. The REPL derives the input exclusively from values durably retained
+before that entry's admission, so replay derives it from the same retained bytes.
 
 ### Values that stay in the entry that made them
 
@@ -949,6 +977,12 @@ conversations you are not reading — a turn starting, text streaming, a record
 appending — moves neither the route, the history position nor the focused
 control.
 
+A conversation filter key must have applicable evidence from its own owner.
+A key this live owner genuinely observed remains known for that owner's
+lifetime, including after Stop; saved files do not establish those ephemeral
+observations. A key with no applicable evidence refuses, and cold reopening
+refuses a selector supported only by an observation the former owner lost.
+
 ## Reading a previous chat
 
 Activating a Sidekick turn opens the chat that contains it and brings that turn
@@ -1043,6 +1077,10 @@ shows the audit without offering to decide anything. Ending the command answers
 nothing: a torn-down process does not fabricate a denial, a selection or a
 cancelled audit on the person's behalf.
 
+Permission composition runs outermost first: core's audit observer, this
+session's authoritative policy, document/provider composition, then base denial.
+One private grant ledger belongs to each inherited Prompt scope.
+
 ## Move between regions and edit within them
 
 From Draft, one Tab enters the tabs at Bindings without selecting it. Continue
@@ -1063,6 +1101,24 @@ vertical group from its anchor; Left returns to that anchor. A group always
 enters its first admitted child. Local edges stop, and Alt+Up/Down walks the
 region's controls in their described order without wrapping. No region remembers
 its last focused child.
+
+Navigation topology is derived from the active focus root's mounted controls
+in canonical order whenever navigation is requested. A focusable description
+may declare a region key, Tab rank, axis and recovery preference, nested groups,
+innermost-group anchor status and entry preference. Covered or unmounted
+controls are not destinations, and the mounted tree remains the one focus store.
+Conflicting region declarations, conflicting group axes and multiple anchors
+for one group refuse validation.
+
+Tab and Backtab belong to the tree and enter the next or previous region at its
+fixed entry. Other navigation keys first reach the focused control's ancestry;
+unhandled keys navigate along the declared axis, into a group from its anchor,
+back to that anchor, or through an anchorless group to its parent. Alt+Up/Down
+uses the region's depth-first order. A pushed modal enters its first region's
+entry. Survivor recovery for a removed or uncovered control tries its own
+neighbours, ancestor anchors, its region's entry, then the lowest recovery
+preference; it never substitutes the first control on the screen. The profile's
+fixed entries and narrow recovery above remain applicable.
 
 Draft, Message, entry-answer values, Sidekick-answer values and Configure Agent
 show a caret. Left/Right and Backspace use grapheme boundaries; insertion and
@@ -1409,6 +1465,10 @@ returns after actual root, socket and process cleanup joins. Ending the parent
 performs the same cleanup. Unknown/ended IDs refuse. Cold retained-history opening
 is a separate operation and does not reopen an ended resource.
 
+Parent registration waits until the child's root, exact selected Sidekick
+conversation and private endpoint are ready. Before that transfer, creator
+cancellation joins startup rather than leaving an unregistered child alive.
+
 Activating `[exit]`, pressing Control-C, Escape on the too-small refusal, EOF, a
 renderer that cannot present, a terminal that fails mid-read and a cancelled
 command scope all end the same way: the owner cancels and joins every Prompt, provider task, pending
@@ -1452,6 +1512,12 @@ Leaving takes no further keystroke. The terminal's bytes arrive on a stream the
 command owns, and releasing it cancels the read it was holding rather than asking
 the terminal to finish one: a release that waited for the next key would make
 leaving cost the very thing the person has stopped doing.
+
+The terminal-input resource arms release before acquisition can suspend.
+Release actively cancels and joins the outstanding native read, is idempotent,
+and leaves no reader, listener, task or unsettled promise behind. EOF closes
+the stream normally; read failure is a terminal failure; owner cancellation
+is neither an EOF nor a read failure.
 
 The location it prints is the one it was showing, minus the drawers only a running
 process could have mounted: a waiting question and a pending request are in no
@@ -1633,8 +1699,8 @@ moment a person's keystrokes reach nothing.
 
 One row says it, and it says the state first. That row is the contextual guidance
 at the top of the surface being read — not a new row, and not one of the
-footer's. The footer is unchanged and still holds exactly what it held: its
-action row, the five History rows, and the draft.
+footer's. The footer holds one compact History row with its contextual controls and one
+row of guidance; the Draft stays with the selected work.
 
 The state comes first because the row is as wide as the region it is drawn in and
 that region decides where it stops. A sentence cut after "Entry 1 running" still told somebody
@@ -1666,6 +1732,11 @@ goes rather than contradicting the sentence above it. A document that cannot be
 admitted and an answer a schema rejected are refusals of the thing itself: they
 stay until the thing changes, and the schema's complaint stays under the field it
 is about rather than in the row that says what the execution is doing.
+
+The session marks readiness refusals when raising them with a namespaced,
+nonenumerable own property carrying its normalized sentence. Across loaded
+copies, the screen obtains both classification and displayed text from that
+same mark, never from a writable error name or an independent member.
 
 **A failed entry says what it failed with.** The reason the Journal recorded is
 drawn beside the compact outcome, on its own row, flattened to one line and cut to
@@ -1714,8 +1785,8 @@ than as the first line of it. The rule between two columns and the rule that
 closes a header or opens the footer are different readings and are drawn
 differently. A header's own edge is a row of the screen, taken out of the band
 the title sits in and measured there, so a column with a title holds one row
-fewer of its reading than a column without one — and the footer keeps its seven
-rows at every size, because that edge is the header's and not the footer's. None of this is needed to operate the screen. Where
+fewer of its reading than a column without one — and the footer keeps its compact History and guidance
+rows at every supported size, because that edge is the header's and not the footer's. None of this is needed to operate the screen. Where
 focus is, what the execution is doing and which of the two inputs you are typing
 into are each said in text as well, so a terminal that ignores colour loses
 nothing you need. The two pane tabs are the one exception: which of them is
@@ -1757,6 +1828,29 @@ append-only journal. There is no concurrent entry, no submission queue, no fork
 from a history position, no renaming, deleting, reordering, importing or
 exporting an entry, no snapshot and no sidecar file. Two processes writing one
 execution is unsupported.
+
+An entry's segment begins at its root `import_component` admission and ends at
+that root's Close; only the final segment may be unfinished. Before projecting
+any entry, the whole acknowledged prefix is partitioned and validated. Work
+before admission, nested or repeated admission in an unfinished segment, a
+Close without an open segment, work between Close and the next admission, a
+second unfinished segment, or a segment the entry reader cannot parse refuses
+the model whole rather than yielding a partial catalog.
+
+Each execution receives a private view of exactly its segment. It delegates
+appends to the physical stream and advances its acknowledged state only after
+append acknowledgement. A closed or nonfinal segment cannot write. Repeated
+root names and coroutine IDs therefore cannot correlate across entries. The
+CLI owns the range and marker conversion; core receives no physical offsets and
+`DurableStream` gains no physical-offset API. Later entries namespace their
+segment-local markers by entry key; the first entry's existing marker spelling
+stays unchanged.
+
+A retained file operation's name is the digest of record version, operation
+kind and complete authored request, without filesystem canonicalization for
+naming. Equal requests share a name and are distinguished by durable-engine
+position within that entry's segment, never by searching names or adding an
+entry label to the record.
 
 The Sessions surface presents the Agent work every entry did, in its own
 **Entry agents** section, and an execution with no Agent work has one that says
@@ -1958,6 +2052,10 @@ overlay, or the Sidekick's own question and Configure drawers, which belong to
 the process that is asking. A copied location restores the chat somebody
 selected and promises no row of it.
 
+`view` and `right` use their closed location grammar: unknown, empty or
+repeated values refuse before layout interpretation rather than surviving as
+arbitrary strings.
+
 ### The files an entry wrote in the checkout you are standing in
 
 Mapped File reads retain their composed values even outside checkout/session
@@ -1980,6 +2078,21 @@ work, not insertion at an old slot. Legacy physical-only history remains physica
 malformed or inconsistent association refuses before live work rather than
 falling back. Current paths still require provider permission, actual containment
 and disclosure checks.
+
+The closed `repl_mount_file/v1` association for a mapped read or already-covered
+mapped ensure contains the independent authored occurrence, form and operands,
+original binding, existing physical result and original coverage. Replay checks
+the authored expectations before original physical attribution; admission and
+replay both validate the original component conversion, physical fingerprint
+and result. Only the engine consumes a slot; abandoned replay authorizes no
+live fallback.
+
+Canonical read/ensure calls enter the shared recorder directly. Its live
+continuation collects the ordinary Files chain in the invoking scope, excludes
+only its own registration, and preserves every other middleware, terminal,
+Context change and resource lifetime inline. Completed replay collects none
+of that chain. Raw calls use the same recording body and validators, and an
+uncertain append establishes no saved value or Unit.
 
 Start the REPL inside a Git checkout and an entry's file work is retained too,
 under the ordinary physical records. The prospective mapped class above uses its
@@ -2035,6 +2148,20 @@ they point. The lexical path rules and the permission a `<File>` already answers
 to are unchanged, and they are not checkout validation: a path this run may not
 read or write is refused the same way it is anywhere else.
 
+Sidekick entries additionally retain those same four file operations inside
+the host-captured project, assets and components roots, including an ensure of
+a root itself, through the shared local-operation records. This portable
+coverage needs no Git provider and grants no additional file authority beyond
+[Project and session file contexts](#project-and-session-file-contexts).
+
+For new work, the most specific managed placement routes first, then the
+captured ambient checkout, then owned-root coverage when neither checkout
+covers the target. Live root and target use the same canonical path basis;
+restored operations perform no canonicalization and answer before current live
+permission or root checks. Work covered only by owned roots takes no Git lease.
+Glob and path checks remain unrecorded; no filesystem/journal transaction or
+file snapshot is promised.
+
 One entry at a time *changes* one repository. A second entry — in this process
 or another — whose next new write, deletion or directory is in a checkout
 somebody else is changing is told so immediately rather than waiting:
@@ -2053,6 +2180,24 @@ Starting outside a checkout without an owned workspace retains none of this: the
 entry performs ordinary file work, exactly as it would anywhere else, and never
 looks for a repository twice. Selecting a Repository is a separate matter and
 works from anywhere, which is the next section.
+
+The shared-Git-directory mutation hold is a kernel-released exclusive lock on
+a hashed sidecar outside every checkout. Independently opened handles exclude
+one another, including two in one process. The native descriptor is the live
+resource, with no substitutable acquisition token or holder table. The entry
+acquires it lazily through single-flight acquisition, arms release before
+opening the descriptor, and retains it until joined entry teardown. This
+exclusion applies only to participating sidecar users, not arbitrary Git tools
+or external file edits.
+
+Mutation contention refuses before changes and is fatal and unrecorded rather
+than a completed file/Git outcome. Managed-slot contention likewise refuses
+before selection recording begins. The first new file operation in a restored
+placement, including a read, reacquires its slot without rerunning the selector
+or inspecting the checkout; reacquisition contention is fatal stale state, not
+that operation's saved result. When both placement and mutation holds are
+needed, the slot is acquired first. New Worktree selection takes mutation
+ownership before running its selector.
 
 ### The repositories and worktrees an entry selected
 
@@ -2105,6 +2250,19 @@ The file work inside them answers from its own records exactly as the ambient
 section describes, and the write after the question happens for the first time
 when you answer.
 
+The routing record contains the canonical managed root, checkout root, common
+Git directory, credential-free repository identity, display name and owner
+checkout. A root-level Worktree records its ambient Repository owner as its
+own answer. No origin, publication evidence, object source, Git session,
+authentication, lock or opaque selection identifier is retained.
+
+Historical validation uses pure slot arithmetic against the root the record
+itself carries and holds the result to its request; it never recanonicalizes
+that root against today's disk. The entry passively registers the placement
+privately and mints a fresh selection for this execution. Native operations
+authenticate that selection against the entry's private membership rather than
+trusting an editable Repository Context.
+
 A completed selection says where the entry was working. It is not a claim that
 the checkout is still there. Remove it between leaving and coming back and the
 entry still continues — the selection answers, the completed reads and writes
@@ -2126,8 +2284,15 @@ shares, and a new write, deletion or directory takes it too. Neither hold is
 taken to answer a completed selection or a completed file operation, and a read
 takes only the ownership of the checkout it is reading in.
 
-Publication remains unavailable here; the exclusions below say which components
-those are. The two sections after this one say what else an entry retains: the
+Clone authentication and per-selection native children are torn down and
+joined before placement acknowledgement, path binding or body expansion.
+Cleanup failure is fatal and publishes no successful selection. Native
+selection that finished without acknowledgement runs live on continuation
+under the ordinary strict partial-creation adoption policy; an acknowledged
+placement never re-enters that path. Publication failure follows the language
+spec's persistence fence, without a success result or compensating Close.
+
+Publication and pull-request work follow their retained contracts below. The sections after this one say what else an entry retains: the
 Git work it did in these checkouts, and the issues it filed and read, which need
 no checkout at all.
 
@@ -2157,6 +2322,11 @@ That saved id describes the earlier commit. It is not today's HEAD, and nothing
 re-resolves it. A *new* entry that stages and commits commits what the checkout
 holds now.
 
+Retention is installed at the ordinary Git implementation slot. Upstream
+middleware may answer, refuse, or transform and delegate; the request received
+at that slot is the one recorded. A wholly substituted answer retains nothing.
+Each reached call has exactly one durable operation and no outer envelope.
+
 The same body works inside a lexical `<Repository>` and inside a selected
 `<Worktree>`, including a self-closing Worktree's captured path entered through
 `<Dir>` while the enclosing Repository stays the owner. A new `<Git.Switch>`
@@ -2180,10 +2350,22 @@ commit really runs. An entry that commits nothing, and a reopened entry whose
 commit is already recorded, ask nothing about who you are. Hooks, signing,
 filesystem monitors and repository credential helpers stay disabled.
 
+The local-Git result records the selected checkout, branch, commit, HEAD tree
+and index tree before and after the operation. Operation-specific evidence is
+Add's ordered pathspecs; Switch's requested and resolved branch and base; or
+Commit's message digest and byte length, parent, tree, commit and second. The
+raw message is not retained a second time. Records contain no file list,
+checkout contents, Git output or credential.
+
 What an entry writes down, it can read back. A result this build cannot parse,
 or one that does not describe the operation it stands at, ends the entry before
 anything is recorded rather than becoming a saved answer no continuation can
 use.
+
+The received invocation is captured once before the first suspension.
+Per-call native children finish and close before the result is validated
+against the request and entry registrations and before acknowledgement. A
+cancellation joins those children before the entry settles.
 
 Native completion and acknowledgement are different moments, and the gap is
 real. Interrupt an entry after the commit object exists and before its result is
@@ -2485,6 +2667,11 @@ returns:
 XMD
 ```
 
+Interruption handling has its subscription and receiver ready before input or
+socket acquisition can block. Before remote interaction it cancels and joins
+local acquisition; after interaction begins it keeps the exact interaction's
+reader and connection observed through Stop settlement.
+
 The command reads stdin successfully to EOF before beginning a source transfer.
 The child collects the complete program before reserving its shared entry/test
 slot. It submits exactly once, using the child's captured ordinary entry profile,
@@ -2558,6 +2745,10 @@ refuse attachment and selection but retain the owning parent's Shutdown authorit
 over the same child. Shutdown through either owned reference ends all its
 associations; saved ended IDs recreate nothing.
 
+Replacement handoff keeps an acknowledged, canonically selected association
+even if its continuation fails. An association that was never selected is
+retired instead.
+
 The entry composition `Agent name="xmd"` with a canonical Session starts a
 parent-owned headless child before `XMD.Session` reads its exact `{sessionId}`.
 Reading sends no Prompt; Session names remain labels and distinct declarations
@@ -2565,12 +2756,35 @@ have distinct identities. The shipped Guide.Children chapter and REPL.Syntax
 describe startup, later selection, `xmd repl --attach <sessionId>`, detach and
 Shutdown using ordinary host facts. No provider-private file is required.
 
+Before document code, entry assembly captures the child manager and identity
+setup. The factory-delivered setup associates preparation with the exact
+opaque request and the genuine finished Session object with its child. Labels,
+Context, copied Session properties and JSON references establish no parent
+Shutdown authority.
+
+Canonical `Agent name="xmd"` Session placement records
+`{type:"xmd_session", name: sessionIdentity + "/xmd-child"}` with result exactly
+`{sessionId}` in the issuing document's journal before acquiring child
+resources. Only the live allocation body permits fresh startup. Trusted setup
+forwards the original construction configuration to genuine activation, returns
+its original failure without acquisition, and acquires only after its successful
+Result. Genuine finish settles the provider-issued Session unchanged. An
+unfinished document restores allocation and performs exact live lookup; an
+ended original refuses without recreation.
+
 The child's private endpoint validates its exact live owner/execution/conversation/cwd
 association. A symlinked temporary path resolves to a validated canonical private
 location; an unsafe location refuses with an actionable directory requirement.
 Its ACP/UI question and permission response capability belongs to this child
 connection. The prepared Sidekick attachment described below retains its original
 rights and still cannot answer questions.
+
+A headless child's opaque address association contains only `version`,
+`transport`, `socket`, `owner`, `execution`, `conversation` and `cwd`. The public
+sessionId binds the live root and its exact selected conversation; outer ACP
+session IDs are connection mappings. Native publication and cleanup preserve
+ownership, mode, no-follow and identity-checked protection, including after
+canonicalizing a symlinked temporary input.
 
 A POSIX REPL can initialize its Sidekick and publish a private attachment without
 UI input:
@@ -2676,12 +2890,27 @@ is unavailable, rather than reconstructed from a saved preview or text.
 
 ## Selected Plugin session services
 
+`xmd repl` assembles the same bundled `@executablemd/git` Plugin value with its
+own entry-history admission rather than installing it directly. Git contributes
+the vocabulary and its two domain admissions. The command contributes its
+entry-history admission from inside the same contribution, so admission runs
+within each execution's own journal read rather than being attached outside it.
+The assembly keeps the bundled Plugin's name, identity-based deduplication and
+place in Plugin order, and delegates every other command untouched.
+
 Selected Plugins may return a CLI-owned `repl` contribution from
 `@executablemd/cli/api`. `initialize({ workspace })` runs once per live logical
 session after route and history validation; its resources end with that session.
 A child initializes independently in its own workspace. UI attachment, detachment
 and history inspection initialize nothing. Failure or cancellation joins prior
 setup before entry work, conversation work or attachment publication begins.
+
+The CLI exports `Repl` and `ReplApi` with an `initialize` operation using that
+same argument. The logical session owner applies selected callbacks through this
+operation in selection order. Extension objects and callbacks are retained before
+session work; malformed contributions refuse, and extension-only installations
+remain selected. The first selected initializer is outermost and cleanup unwinds
+in reverse order.
 
 `repl.components` declares identity components once. The ordinary entry vocabulary
 and eligible Sidekick forms derive from those declarations; absent generated
@@ -2702,6 +2931,15 @@ a cancelled call leaves intent unmatched, while an ordinary failed call retains
 its known outcome. A response Stop does not classify every invocation as cancelled.
 The Plugin receives no private journal. Syntax, Submit, Elicit and builtin controls
 keep their existing feedback and recording ownership.
+
+The Sidekick recorder receives its protected-return projection closure
+directly from the conversation-owned privacy installation and retains that
+installation through joined cleanup. Projection changes only the recorder's
+observation, leaving the selected Result and live binding intact.
+
+Recording correlates intent and outcome by the exact observation object and
+keeps the response owner selected through joined cleanup. Ordinary entries
+attach no host invocation observer.
 
 ## Who owns what
 
@@ -2795,6 +3033,26 @@ so a keystroke cannot reach the file except through the one place that owns the
 product's state. Focus belongs to the mounted tree: Tab and Backtab traverse its regions,
 a drawer contains it while it is open, and the control that has it is marked.
 
+**Keyed commit and mounted lifetime.** A parent offers its complete child set.
+The tree validates all of it before any mutation, applies additions and updates
+before removals, sets canonical order, and acknowledges only after commit.
+Identity is parent, key and type: redescription preserves the node and its
+running lifetime; a changed key or type replaces it.
+
+Validation is synchronous and effect-free. It attaches, updates, draws and
+removes nothing, moves no focus and advances no frame. Commit repeats the same
+predicate over the actual apply inputs; validation is no reservation and need
+not have been called first. Children must be descriptions issued by the tree,
+sibling keys must be unique, at most one child may request focus, and requested
+focus must lie inside the innermost modal. There is no caller-supplied layout
+policy or second validator; layout belongs to the parent. An absent description
+leaves no mounted node, input, focus, frame contribution or output.
+
+Construction is synchronous inside commit. Ongoing work belongs to the node's
+scope; render bodies own no resources. Event dispatch walks the target's own
+mounted ancestry and the first handler produces the typed action. An unhandled
+normalized event is an explicit failure.
+
 Normalized input is decided once, at the host, which names an event shape and a
 position and never an action. Text is its own event and goes to whichever field
 has focus, and to nothing at all when a control has it rather than a field — so a
@@ -2810,6 +3068,11 @@ its coordinates, so a stale frame, a node that has gone and a target behind a
 drawer all reach nothing — and activating a control with a pointer produces the
 same action as pressing Enter on it.
 
+Hit-testing is half-open on both axes. Bounds must be whole terminal cells;
+fractional bounds refuse rather than being rounded into a different target.
+Published frame bytes, bounds and target maps remain immutable across later
+renders and renderer recovery, so a held older frame keeps its original answers.
+
 Wheel input carries decoded direction and coordinates. The presented frame
 resolves those coordinates to a live mounted viewport owner independently of
 control activation targets. Dispatch uses that frame's tree revision and the
@@ -2819,6 +3082,27 @@ top modal reaches nothing. A wheel event never means a click or focus request.
 Presentation time has one owner: a single acknowledged frame stream, advanced only
 once every subscriber has applied the previous timestamp. A settled screen
 schedules no timer.
+
+A frame subscription owns its demand; cancellation removes that demand without
+acknowledging an unapplied timestamp. With no subscriber there is no frame
+timer. An animation spanning components belongs to their nearest common mounted
+ancestor, and ends with that ancestor rather than independent descendant clocks.
+Presentation time changes no journal, route, model selection or execution pause
+state. A measurement requested for an action creates no frame subscription or
+acknowledgement.
+
+Frame preparation revalidates terminal size on every attempt. A size change
+abandons and rebuilds the preparation. Rebuilding is bounded per frame, with no
+final attempt exempt from validation: exhausting that budget releases the
+subscription without applying its timestamp and defers to the next frame,
+rather than presenting contradicted geometry or ending the command.
+
+Each connected UI numbers presentations locally and acknowledges only after the
+exact bytes have applied at matching dimensions. The root preserves this order:
+frame subscription, tick, current size, commit/layout/render, presentation,
+then acknowledgement. Refused resize redraws without acknowledging unapplied
+geometry or accepting stale targets. Slow or failed connections release their
+own lease and frame work; a detached root holds no screen frame demand.
 
 Submitting is not on the input loop. Validating a document and starting an entry
 both suspend, and the keyboard belongs to the person throughout: the draft keeps
@@ -2914,6 +3198,12 @@ No read starts an entry, resumes one or waits for one: a running entry's window
 is a truthful snapshot of what it has printed so far rather than a promise of
 more.
 
+A live `HostExecution.bindings()` read uses the original execution's captured
+disclosure policy, including the exact scanner its journal gate adopted; a
+later same-name Context cannot replace it. A secret refuses the read whole.
+After a suspending read, the session revalidates the exact running entry before
+layering those live values over retained head values.
+
 A reply's own vocabulary and an entry's are described separately, because they
 differ: a construct that is ordinary in an entry can be unavailable in a reply.
 What a reply may write is the compact surface derived from what is admitted; what
@@ -2984,6 +3274,11 @@ record issued after the history's bytes have been copied is held until the
 writer has moved, so nothing lands in the file the pair superseded and the
 history the pair names is the whole of it. Typing, Send and Stop stay usable
 while a record waits.
+
+Storage handoff arms release before the entry-writer hold can wait for an
+in-flight append. Held appends resume on the published entries file after
+successful publication, or on the original file after refusal or cancellation;
+cancellation during acquisition cannot strand the writer hold.
 
 The screen is drawn again whenever the Sidekick's own reading or busy state
 moves, not only when somebody presses a key: a reply arriving, an automatic
@@ -3059,6 +3354,25 @@ or asked of the agent, and the reason is said in the drawer that was pressed. A
 preference Apply is the one action admitted beside a message already running,
 because saving a preference is a record of this history rather than work the
 conversation does.
+
+Preference saving captures the active conversation and scalar settings before
+any suspension. A save during first setup with no active conversation refuses
+rather than waiting to attach itself to whichever setup wins. Saving reads no
+provider handle or options and sends no turn.
+
+After retaining a message or feedback and applying its acknowledgement, the
+response reads the latest acknowledged preference for its own conversation
+immediately before Prompt handoff. No suspension intervenes between that choice
+and `prompt`; an unreadable preference refuses rather than falling back. A save
+acknowledged before handoff belongs to that turn; one acknowledged after belongs
+to the next.
+
+The shared chat writer serializes physical append and in-memory publication as
+one operation for messages, feedback, controls, canonical turn events and
+preferences. Callers queue in arrival order. A cancelled waiter removes only
+its own place; the current holder keeps ownership and transfers it directly to
+the longest-waiting caller. The hold is never kept across a Prompt, evaluation,
+question, entry completion, inspection or setup.
 
 An agent that advertises more choices than the drawer can draw is read with the
 wheel or Content paging keys. A choice below the window remains available;
@@ -3193,6 +3507,19 @@ classes it may draw on. Two conversations are two captures, and a control a
 reply names that the capture did not seal reaches no body. What is still each
 response's own is where a control's pair is filed and which slot a Submit binds,
 and that is given up only once the response's work and its cleanup have joined.
+
+Live preview uses the canonical turn's optional snapshot-observation protocol
+in `executable-mdx-spec.md`. Before a candidate leaves core, the originating
+execution clears the accumulated source prefix through its authenticated
+disclosure policy, so secrets split across pieces are checked together. A
+finding or an absent, foreign or failed policy sends `null` once and withdraws
+preview for the rest of that turn. This screen decision neither replaces the
+pre-append gate nor serializes the scan failure as an Agent terminal.
+
+The owner registers its response before handing over the request. Canonical
+begin consumes that registration and returns the fresh opaque observation
+object; every subsequent update belongs to that exact response/object pair.
+Updates for stopped, replaced or already-answered registrations change nothing.
 
 A provider turn that failed, was cancelled or stopped early runs no control at
 all — it is source nobody finished writing — and nothing is written down for it.
@@ -3391,6 +3718,9 @@ old slice no longer fits. Fresh ordinary queries keep the default when no budget
 is supplied. The exact formatter shape is recognized through strict JSON and complete formatter equality;
 edited or noncanonical queries keep ordinary evaluator semantics. A generated
 window for another entry refuses. Journal takes no `offset` or `limit` props.
+
+Both evaluations needed for a recognized generated Journal window use the same
+captured complete input.
 
 `entry` and `prompt` are nonzero whole numbers. A positive entry number is
 immutable admission order counting from one, and a positive prompt number is a
@@ -3698,15 +4028,16 @@ resolved against the frame that published its coordinates.
   do not open the same location twice for writing. The hold on a checkout is a
   different thing: it says one entry at a time may mutate one repository, and it
   says nothing about who may write this execution's history.
-- Pull requests are not part of this. `<PullRequest>` refuses in a REPL entry
-  exactly as it does under any host that installs no provider for it, and
-  neither a retained local result nor a retained publication authorizes one.
+- A retained local Git result does not authorize a pull request. The entry's
+  own acknowledged publication admits retained pull-request work on the terms of
+  [the pull-request contract](#the-pull-request-an-entry-opened-and-the-feedback-it-read).
   What an entry retains is `<Repository>` and `<Worktree>` selection, the file
   and directory work inside those checkouts and the one it was started in,
   `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in them, the page each of
   `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>`, `<Git.File>` and a `<Git.Commit
   ref>` read answered with,
-  the branch `<Git.Push />` published, and the issues it filed and read. A
+  the branch `<Git.Push />` published, the pull request it opened and the feedback
+  it read, and the issues it filed and read. A
   runtime that installs no repository provider — Node and Bun — refuses the Git
   components, the five reads and publication included, before any native
   operation or remote contact, while ordinary `<File>` and `<Dir>` work keeps

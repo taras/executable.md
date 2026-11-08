@@ -5,11 +5,11 @@
  * Two diagnostics, both owned by the command and neither part of the report a
  * document renders:
  *
- * - **Progress** is a stream of plain lines on stderr, written as work starts
- *   and settles: each test, each executable element and each command block,
- *   named and located, then the test's final outcome once its teardown has
- *   joined. It names things and places; it never carries a captured value, a
- *   prop, command text or anything a document rendered.
+ * - **Progress** reports each test's start and recorded outcome after teardown,
+ *   accepted Execution invocations as they start and settle, and interrupted
+ *   operations on timeout or cancellation. Ordinary elements and blocks are
+ *   observed without their own lines. It names things and places; it never
+ *   carries a captured value, a prop, command text or rendered content.
  * - **Failure journals** are the in-memory journals of a failed root document
  *   and of each failed nested `<Execution>` child, saved as JSONL once that
  *   execution's owner has unwound. A passing run creates no file.
@@ -32,7 +32,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { Test, testing } from "@executablemd/testing";
 import type { FailureJournalHost, TestResult } from "@executablemd/testing";
 import { randomUUID } from "node:crypto";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { deliverWhole } from "./stdout-delivery.ts";
 import type { DeliverySink } from "./stdout-delivery.ts";
 
@@ -79,11 +79,11 @@ export interface ExecutionDiagnostics {
  * saved. A fresh directory per invocation keeps concurrent commands sharing
  * one artifact root from writing over each other.
  */
-function* artifactDirectory(): Operation<string> {
+function* artifactDirectory(working: string): Operation<string> {
   const configured = yield* env(TEST_ARTIFACTS_VARIABLE);
   const base =
     configured !== undefined && configured.length > 0 ? configured : DEFAULT_TEST_ARTIFACTS;
-  const root = isAbsolute(base) ? base : resolve(yield* cwd(), base);
+  const root = isAbsolute(base) ? base : resolve(working, base);
   const stamp = new Date().toISOString().replaceAll(":", "-");
   return join(root, `${stamp}-${randomUUID()}`);
 }
@@ -97,7 +97,9 @@ function* artifactDirectory(): Operation<string> {
  */
 export function useTestDiagnostics(sink: DeliverySink): Operation<TestDiagnostics> {
   return resource(function* (provide) {
-    const directory = yield* artifactDirectory();
+    const working = yield* cwd();
+    const directory = yield* artifactDirectory(working);
+    const shown = relativeTo(working);
     const owner = yield* useScope();
     const lines = createQueue<string, void>();
     let delivery: Result<void> = Ok(undefined);
@@ -128,19 +130,20 @@ export function useTestDiagnostics(sink: DeliverySink): Operation<TestDiagnostic
         counts[kind] += 1;
         const label = `${kind} ${counts[kind]}`;
         const file = join(directory, `${kind}-${counts[kind]}.jsonl`);
-        const context = kind === "root" ? "" : `${label} ${source}: `;
+        const named = `${label} ${shown(source)}`;
+        const context = kind === "root" ? "" : `${named}: `;
         return {
-          observe: () => observe(owner, (line) => emit(`${context}${line}`)),
+          observe: () => observe(owner, shown, (line) => emit(`${context}${line}`)),
           journal: <T>(failed: (value: T) => boolean): FailureJournalHost<T> => ({
             failed,
             *save(events: readonly DurableEvent[]) {
               yield* ensureDir(directory);
               yield* writeTextFile(file, events.map(serializeDurableEvent).join(""));
-              emit(`journal saved: ${file} (${label} ${source})`);
+              emit(`journal saved: ${file} (${named})`);
             },
             // deno-lint-ignore require-yield
             *reportSaveFailure(error: Error) {
-              emit(`journal not saved for ${label} ${source}: ${error.message}`);
+              emit(`journal not saved for ${named}: ${error.message}`);
             },
           }),
         };
@@ -150,13 +153,29 @@ export function useTestDiagnostics(sink: DeliverySink): Operation<TestDiagnostic
   });
 }
 
+/** Display in-root absolute paths relative to the command's captured directory. */
+function relativeTo(working: string): (path: string) => string {
+  return (path) => {
+    if (!isAbsolute(path)) {
+      return path;
+    }
+    const inside = relative(working, path);
+    const outside =
+      inside === "" || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside);
+    return outside ? path : inside;
+  };
+}
+
 /** `path:line:column`, `line:column`, or `unknown`, as test results write it. */
-function located(position: Readonly<SourcePosition> | undefined): string {
+function located(
+  position: Readonly<SourcePosition> | undefined,
+  shown: (path: string) => string = (path) => path,
+): string {
   if (position === undefined) {
     return "unknown";
   }
   const at = `${position.line}:${position.column}`;
-  return position.path ? `${position.path}:${at}` : at;
+  return position.path ? `${shown(position.path)}:${at}` : at;
 }
 
 /** A command block, by its language and modifier words — never its body or parameters. */
@@ -171,6 +190,9 @@ function blockName(
 
 /** One test being observed, from its start to its recorded outcome. */
 interface ObservedTest {
+  name: string | undefined;
+  shown: string;
+  recorded?: boolean;
   interrupted?: string;
 }
 
@@ -181,29 +203,38 @@ interface ObservedTest {
  * element's terminal phase is published after the handler that saw it begin
  * has already unwound. Every request is delegated once, as it arrived.
  */
-function* observe(owner: Scope, report: (line: string) => void): Operation<void> {
-  const tests = new Map<string, ObservedTest>();
+function* observe(
+  owner: Scope,
+  shown: (path: string) => string,
+  report: (line: string) => void,
+): Operation<void> {
+  const tests = new Map<string, ObservedTest[]>();
   let current: ObservedTest | undefined;
 
-  const interrupted = (what: string): void => {
-    if (current !== undefined && current.interrupted === undefined) {
-      current.interrupted = what;
+  const interrupted = (test: ObservedTest | undefined, what: string): void => {
+    if (test !== undefined && test.interrupted === undefined) {
+      test.interrupted = what;
     }
   };
 
-  const watch = (what: string, request: ComponentExpansionRequest): void => {
+  const watch = (what: string, request: ComponentExpansionRequest, milestone: boolean): void => {
+    const test = current;
     owner.run(function* () {
-      let started = false;
+      let active = false;
       for (const phase of yield* each(request.phases)) {
-        if (!started) {
-          started = true;
+        if (milestone && phase.phase === "active") {
+          active = true;
           report(`start ${what}`);
         }
         if (phase.phase === "complete") {
-          report(`${phase.result.ok ? "done" : "failed"} ${what}`);
+          if (active) {
+            report(`${phase.result.ok ? "done" : "failed"} ${what}`);
+          }
         } else if (phase.phase === "cancelled") {
-          interrupted(what);
-          report(`cancelled ${what}`);
+          interrupted(test, what);
+          if (active) {
+            report(`cancelled ${what}`);
+          }
         }
         yield* each.next();
       }
@@ -211,41 +242,45 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
   };
 
   function* block<T>(what: string, work: () => Operation<T>): Operation<T> {
-    report(`start ${what}`);
+    const test = current;
     let settled = false;
     try {
       const value = yield* work();
       settled = true;
-      report(`done ${what}`);
       return value;
     } catch (error) {
       settled = true;
-      report(`failed ${what}`);
       throw error;
     } finally {
       if (!settled) {
-        interrupted(what);
-        report(`cancelled ${what}`);
+        interrupted(test, what);
       }
     }
   }
 
   const finished = (result: TestResult): void => {
-    const test = tests.get(result.location);
-    tests.delete(result.location);
-    if (test === current) {
-      current = undefined;
+    const observed = tests.get(result.location);
+    // A predecessor can record after the next same-site test has run. Match
+    // its name too; identical names at that site record in discovery order.
+    const index = observed?.findIndex((test) => test.name === result.name) ?? -1;
+    const test = index < 0 ? undefined : observed?.splice(index, 1)[0];
+    if (test !== undefined) {
+      test.recorded = true;
+    }
+    if (observed?.length === 0) {
+      tests.delete(result.location);
     }
     const name = result.name === undefined ? "test" : `test ${JSON.stringify(result.name)}`;
+    const where = test?.shown ?? shown(result.location);
     if (result.status === "pass") {
-      report(`pass ${name} at ${result.location}`);
+      report(`pass ${name} at ${where}`);
       return;
     }
     const why = [
       result.error?.kind ?? "error",
       ...(test?.interrupted === undefined ? [] : [`interrupted ${test.interrupted}`]),
     ];
-    report(`fail ${name} at ${result.location} (${why.join("; ")})`);
+    report(`fail ${name} at ${where} (${why.join("; ")})`);
   };
 
   yield* Component.around({
@@ -253,16 +288,20 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
       // `<Test>` is reported by its behavior and its recorded result, which
       // know whether it is a test at all and how it finally ended.
       if (request.expansion.name !== "Test") {
-        watch(`${request.expansion.name} at ${located(request.expansion.position)}`, request);
+        watch(
+          `${request.expansion.name} at ${located(request.expansion.position, shown)}`,
+          request,
+          request.expansion.name === "Execution",
+        );
       }
       yield* next(request);
     },
     *applyModifiers([modifiers, context], next) {
-      const what = `${blockName(modifiers, context, false)} at ${located(context.position)}`;
+      const what = `${blockName(modifiers, context, false)} at ${located(context.position, shown)}`;
       return yield* block(what, () => next(modifiers, context));
     },
     *applyBoundModifiers([modifiers, context], next) {
-      const what = `${blockName(modifiers, context, true)} at ${located(context.position)}`;
+      const what = `${blockName(modifiers, context, true)} at ${located(context.position, shown)}`;
       return yield* block(what, () => next(modifiers, context));
     },
   });
@@ -271,12 +310,33 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
       // The same two answers the behavior reads before it runs anything: a
       // test that is skipped or nested inside another is not a test start.
       if ((yield* testing) && !(yield* Test.operations.inTest)) {
-        const location = located((yield* getExpansion()).position);
-        const name = typeof props.name === "string" ? ` ${JSON.stringify(props.name)}` : "";
-        const test: ObservedTest = {};
-        tests.set(location, test);
+        const position = (yield* getExpansion()).position;
+        const location = located(position);
+        const name = typeof props.name === "string" ? props.name : undefined;
+        const test: ObservedTest = { name, shown: located(position, shown) };
+        const observed = tests.get(location) ?? [];
+        observed.push(test);
+        tests.set(location, observed);
+        const previous = current;
         current = test;
-        report(`start test${name} at ${location}`);
+        const named = name === undefined ? "test" : `test ${JSON.stringify(name)}`;
+        report(`start ${named} at ${test.shown}`);
+        let settled = false;
+        try {
+          const value = yield* next(props);
+          settled = true;
+          return value;
+        } catch (error) {
+          settled = true;
+          throw error;
+        } finally {
+          current = previous;
+          if (!settled && !test.recorded) {
+            const detail =
+              test.interrupted === undefined ? "" : ` (interrupted ${test.interrupted})`;
+            report(`cancelled ${named} at ${test.shown}${detail}`);
+          }
+        }
       }
       return yield* next(props);
     },

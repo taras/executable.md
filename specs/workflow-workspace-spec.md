@@ -69,7 +69,7 @@ every other invocation does.
 - Agent permissions remain caller-selected.
 
 Repository operations are part of that environment under Deno and inside the
-compiled binary. The ordinary provider gives a document the same twelve
+compiled binary. The ordinary provider gives a document the same sixteen
 repository components a workflow run has, over the caller's own filesystem:
 
 - The **ambient Repository** is the Git checkout the command was run in,
@@ -103,7 +103,7 @@ repository components a workflow run has, over the caller's own filesystem:
 - `<Issue>` and the pull-request evidence reads reach the same configured
   transports under the same host ceilings, retaining nothing.
 
-Node and Bun register the same twelve declarations and install no operational
+Node and Bun register the same sixteen declarations and install no operational
 repository provider, so `xmd syntax` describes one language everywhere and
 every repository operation there reports an absent provider before a lock, a
 credential, a subprocess or a request exists. `<Dir>` is canonical core's
@@ -275,6 +275,10 @@ answer, so resuming re-enters the section the run actually executed rather than
 whatever the same glob would name against a later checkout.
 
 ### 3.1 Source is proved before the lifecycle moves
+
+`start` derives the logical entrypoint from the supplied file's NFC-normalized
+final filename segment. Git provenance is acquired opportunistically as optional
+metadata; failure to obtain it cannot fail a start.
 
 Every source check happens under the executor lock and **before** stale
 recovery, a new document-execution record, Workspace attachment, journal replay
@@ -682,6 +686,50 @@ owning the same run lifecycle remotely. `export` produces the immutable portable
 evidence contract in `specs/xmd-artifact-spec.md`; it does not expose the live
 run database.
 
+The shared lifecycle interface names outcomes and retained data rather than a
+transport. Its inspection result shapes are defined in §4.
+
+```ts
+interface ExecutorLock {
+  readonly runId: string;
+}
+
+type ExecutorAcquisition =
+  | { readonly kind: "acquired"; readonly lock: ExecutorLock }
+  | { readonly kind: "already-running" };
+
+interface WorkflowDeletion {
+  readonly removed: readonly ("run-storage" | "provider-sessions")[];
+}
+
+interface WorkflowLifecycleApi {
+  acquireExecutor(runId: string): Operation<Result<ExecutorAcquisition>>;
+  inspect(runId: string): Operation<Result<WorkflowLifecycleSnapshot>>;
+  list(): Operation<Result<readonly WorkflowLifecycleSnapshot[]>>;
+  history(runId: string): Operation<Result<readonly WorkflowHistoryEntry[]>>;
+  inspectArtifact(path: string): Operation<Result<WorkflowArtifactSnapshot>>;
+  historyArtifact(path: string): Operation<Result<WorkflowArtifactHistory>>;
+  cancel(runId: string): Operation<Result<WorkflowRunRecord>>;
+  delete(runId: string): Operation<Result<WorkflowDeletion>>;
+  export(request: WorkflowExportRequest): Operation<Result<WorkflowExportResult>>;
+}
+```
+
+Export reads one committed retained snapshot and writes a separate sealed
+container containing that snapshot, every retained Workspace root and byte it
+references, and the complete workflow definition source closure. Host paths,
+lock sidecars, rollback journals, open connections, retrieval metadata,
+credentials and provider-owned session directories are excluded. The initial
+container encoding is SQLite, but its tables and SQLite schema are private;
+the public artifact contract is owned by `specs/xmd-artifact-spec.md` under the
+current-format policy.
+
+Export acquires the executor lock before choosing the artifact frontier and
+refuses while a live workflow executor owns it, so a later committed event cannot
+race the chosen frontier. Required crash recovery uses a private copy under
+inspection recovery coordination. Export performs no lifecycle transition and
+changes neither the source run's retained state nor its authority over itself.
+
 ### 3.9 What is shipped
 
 The lifecycle above is the whole design, including §3.7's rule that a status
@@ -760,6 +808,9 @@ retained failure, and that does not make the run eligible for `resume`.
   attachment, installs no native foreground launcher, refuses an inherited
   `API.Service` provider rather than delegating to it, and refuses
   `temporaryDirectory` rather than answering with a host directory.
+- Every `start` and `resume` execution installs the nondelegating
+  `useWorkflowServiceDenial()` provider inside its execution scope before
+  importing the root document.
 - A function-component root is not supported in this subset and fails before the
   run executes. A bundled component is Markdown for the same reason: a `.ts`
   module, an extensionless path, a directory, a glob, a URL, a package
@@ -802,6 +853,56 @@ effect classes (§8.4): a fragment observes under `read` and mutates the run's
 own Workspace under `write`.
 
 ## 4. Inspection commands
+
+Retained-run and artifact inspection share the facts a run says about itself:
+
+```ts
+interface WorkflowForkLineage {
+  readonly sourceRunId: string;
+  readonly checkpointEventId: string;
+  readonly checkpointWorkspaceRootId: string;
+}
+
+interface WorkflowInspectionSnapshot {
+  readonly record: WorkflowRunRecord;
+  readonly executions: readonly DocumentExecutionRecord[];
+  readonly journalFrontier?: {
+    readonly eventId: string;
+    readonly workspaceRootId: string;
+  };
+  readonly currentWorkspaceRootId: string;
+  readonly lineage?: WorkflowForkLineage;
+}
+
+interface WorkflowLifecycleSnapshot extends WorkflowInspectionSnapshot {
+  readonly retrieval?: DefinitionRetrieval;
+}
+
+interface XmdArtifactFrontier {
+  readonly sourceRunId: string;
+  readonly finalEventId?: string;
+  readonly currentWorkspaceRootId: string;
+}
+
+interface WorkflowArtifactIdentity {
+  readonly identity: string;
+  readonly frontier: XmdArtifactFrontier;
+}
+
+interface WorkflowArtifactSnapshot extends WorkflowInspectionSnapshot {
+  readonly artifact: WorkflowArtifactIdentity;
+}
+
+interface WorkflowArtifactHistory {
+  readonly artifact: WorkflowArtifactIdentity;
+  readonly entries: readonly WorkflowHistoryEntry[];
+}
+```
+
+Only a retained-run snapshot adds `retrieval`; only an artifact snapshot adds
+artifact identity and frontier. Neither shape extends the other, and no result
+contains the artifact path, so copies of one artifact answer identically. The
+artifact operations need no retained run to exist in this host's storage.
 
 ### 4.1 Status and list
 
@@ -853,8 +954,26 @@ copy and leaves the retained database and journal unchanged. It processes one
 candidate at a time and returns success only after removing its scratch copy.
 Failure to produce or remove that copy is an inspection-recovery refusal,
 separate from damage revealed in the recovered run. Recovery obtains neither an
-executor lock nor lifecycle ownership. [Read-only lifecycle inspection](../architecture.md#read-only-lifecycle-inspection)
-owns coordination, recognition and teardown ordering.
+executor lock nor lifecycle ownership.
+
+The Deno provider first attempts ordinary read-only recognition. Only the exact
+`SQLITE_READONLY_ROLLBACK` condition selects recovery; any other read-only
+failure is reported as itself. Recovery acquires the separate inspection
+coordination lock of §13 and retries the retained database read-only. If a
+write-capable owner already recovered it, that ordinary source snapshot is the
+answer. If it remains hot, inspection copies the database and rollback journal
+together while holding coordination, then releases the retained source and
+lets SQLite recover only the private copy.
+
+The copy keeps the candidate's exact database name and passes the same strict
+schema, retained-content, live/current and location recognition as an ordinary
+snapshot. Recovery discards only the uncommitted transaction. Scratch cleanup
+joins before a successful snapshot becomes observable.
+
+Inspection scratch is owner-private and belongs to the inspection scope.
+Teardown makes bounded attempts at complete removal on success, failure and
+cancellation; it never retries removal indefinitely or starts background
+cleanup. Known scratch residue cannot accompany a successful inspection.
 
 ### 4.2 History
 
@@ -982,6 +1101,9 @@ in a replaceable metadata boundary, free of credentials, reauthorized by the
 host before use, excluded from the comparison that decides whether a reused run
 ID addresses the same run, and never read back to find the source.
 
+The current definition descriptor carries neither a version discriminator nor
+a kind discriminator; only its one current shape is admitted.
+
 The bundle is a member of the descriptor rather than a version past it, so a
 definition closed over no components identifies exactly that; an empty array is
 not a second spelling of it and is refused. A repository locator is part of
@@ -1015,6 +1137,31 @@ one table and every other object stays required. A table that is present is held
 to its exact declaration; a partial, altered or look-alike one is damage on the
 same terms as any other object.
 
+Subject to the Prompt-checkpoint-table exception above, schema version 1
+contains the run records, filtered journal, pinned Cloudflare DOFS version-5
+structure, immutable Workspace-root tables, current-root state and Repository
+and Worktree creation records. Every journal event has a non-null Workspace-root
+association. A fresh run has one content-addressed root manifest describing only
+the root directory, empty root-to-manifest and root-to-blob reference sets, and
+the corresponding root-only DOFS frontier.
+
+`workflow_run` has no `base` column. Two source tables retain content keyed by
+its SHA-256 with its byte length, and one manifest row per descriptor entry
+mapping a logical path to that hash. Content is stored as BLOB bytes, never as
+text or re-encoded JSON; paths with identical content reference one blob.
+
+A new run is written at `user_version = 1`; initialization never upgrades an
+existing database. Recognition reads the application ID before the schema
+version and requires the exact inventory, including the optional-table rule
+above. An XMD database at version zero is corruption; any other schema version
+is unsupported. An altered or extra schema object is corruption.
+
+Before exposing a run, recognition requires the retained manifest to equal the
+descriptor's `sources`, every referenced source BLOB to exist, both stored
+lengths to equal the BLOB's actual byte length, and no source BLOB to be
+unreferenced. The content and bundle authentication of §9 applies to that complete
+retained source.
+
 Document-execution records are not attempts. An attempt is one execution of a
 retried operation or region and belongs to the journal.
 
@@ -1030,6 +1177,9 @@ storage are separate reported conditions. None of them is repaired in place: an
 incompatible or damaged database is described and left exactly as found, and a
 lookup that finds nothing creates nothing. A host never claims to continue a
 run whose history it has just replaced.
+
+Storage diagnostics repeat neither retained props nor journal payloads,
+including their member names as well as their values.
 
 ## 6. Repository and Worktree
 
@@ -1050,6 +1200,14 @@ and never resets, cleans, fetches, repairs or deletes; and a Worktree written
 outside a lexical `<Repository>` belongs to the ambient Repository the command
 was run in. Nothing there is retained, replayed or forkable, and none of the
 durability this section states applies to it.
+
+The ordinary managed selector publishes its sidecar by writing an exclusive
+temporary sibling and atomically renaming it only after the checkout is complete
+and verified. A metadata-free slot is adopted only after proving the exact owner
+and locator, the branch and base this request resolves to, the creation commit
+still being HEAD, the object format, linked-worktree registration where
+applicable, and that the slot contains nothing but the checkout. Otherwise
+selection refuses and leaves every byte unchanged.
 
 A REPL entry selects through that same ordinary selector, and records the answer
 rather than the checkout (§2.3). The hold lasts for the entry rather than for
@@ -1158,6 +1316,11 @@ be used, the base names no commit, the remote has no default branch, the name is
 already this run's for a different configuration — and never carry a Git message
 or a host path.
 
+The immutable Repository creation record contains its Workspace-local name,
+locator fingerprint, requested base or its absence, pinned creation commit,
+initial primary branch, object format and stable Workspace-relative checkout
+path. The admitted locator is retained beside the record as described above.
+
 ### 6.2 Additional Worktrees
 
 `<Worktree>` creates an additional linked checkout inside an enclosing lexical
@@ -1194,6 +1357,12 @@ Worktree has no repository locator, path, force or detached-head controls.
 Its lexical and self-closing path behavior matches Repository. A branch the
 remote published counts as existing, so naming one checks it out rather than
 recreating it at another commit.
+
+The immutable Worktree creation record contains its Repository's name, its own
+name, requested branch, requested base or its absence, creation commit and
+checkout path. These records describe creation alone. Current HEAD, refs, index,
+checkout and linked-worktree administration live solely in the versioned
+Workspace filesystem, with no competing unversioned current-commit column.
 
 The pairing that both binds a path and renders descendants is a self-closing
 Worktree captured with `as`, followed by a lexical `<Dir>` inside the enclosing
@@ -1301,6 +1470,10 @@ invoking user's own effective identity, and a host that can name none refuses
 rather than substituting one. Push keeps the
 observe/adopt/fast-forward/refuse rules and, instead of a reconciliation
 record, leaves private evidence in the provider instance that verified it.
+
+An ordinary Commit reads the written Git object back to verify that its author
+and committer identities match the invoking user's captured effective identity.
+Message-byte verification alone does not establish that identity.
 
 A REPL entry performs Add, Switch and Commit through those same ordinary
 performers and keeps a historical record of what each produced (§2.3). The
@@ -1992,6 +2165,9 @@ neither of which admits anything — so a `<Dir>` inside a selected `<Worktree>`
 reads that worktree, and a read written outside every Repository has nothing to
 read.
 
+A selected-checkout `GitQuery` read reaches the same provider instance and the
+same implementation slot as the corresponding `Git` transitions.
+
 `<Git.Files>` lists the tracked paths the selected checkout's index holds,
 sorted, deduplicated and relative to its repository root. An untracked file is
 not in it, the contents of a nested or sibling checkout are not in it, and a
@@ -2318,7 +2494,7 @@ Every term must match exactly in canonical order: the selected classes, and the
 admitted spellings with the identity each runs under and the class that admitted
 it. Only the classes the selection reached participate, so changing a writing
 spelling a read-only admission never drew on does not invalidate it.
-[Generated admission and continuation](../architecture.md#agent-permissions-and-generated-xmd)
+[Generated admission and continuation](#admission)
 owns the retained policy's shape.
 
 The run's own progress is deliberately not a term. A committed mutation retains
@@ -2346,7 +2522,7 @@ capture rather than acquiring a grant from the selection that named it.
 name and spelling before the first effect; canonical dispatch then holds the
 body to that selection before any provider is reached. An admitted reading
 `<File />` cannot become a write, an admitted writing `<File>…</File>` cannot
-become a read, and only self-closing `<File.Delete />` is admitted. The [generated-XMD boundary](../architecture.md#agent-permissions-and-generated-xmd)
+become a read, and only self-closing `<File.Delete />` is admitted. The [generated-XMD boundary](./executable-mdx-spec.md#invocation-form-dispatch)
 owns the engine-authenticated form check; replaceable `Component.hasContent()`
 answers and caller-created invocation objects cannot decide it.
 
@@ -2448,7 +2624,7 @@ host path to name.
 **Each occurrence owns its durable operation.** Canonical execution
 authenticates the Evaluate invocation; a Context, contextual Api answer,
 import wrapper or reused implementation cannot substitute another element's
-identity or another run's storage. [Generated execution ownership](../architecture.md#agent-permissions-and-generated-xmd)
+identity or another run's storage. [Generated execution ownership](./executable-mdx-spec.md#invocation-form-dispatch)
 owns the claimant and cross-attachment checks that keep two sites from replaying
 one another's admission.
 
@@ -2463,7 +2639,7 @@ generated name or later middleware result supplies or widens it. Protection
 fixes the component, while contextual Files and Permissions still govern its
 operations.
 
-The [canonical protected tier](../architecture.md#the-canonical-protected-tier)
+The [canonical protected tier](./executable-mdx-spec.md#532-evaluate-the-protected-evaluation-component)
 owns import enforcement: middleware may observe, delegate or refuse the import,
 but cannot replace Evaluate. Generated source resolves only through its closed
 admission tables; naming `Evaluate` there is an unadmitted-component refusal.
@@ -2553,7 +2729,7 @@ provider-internal summaries, hidden context or tool state.
 identified by the engine-derived Agent/Session expansion identity. The
 authored `<Session name>` is descriptive: two sibling
 `<Session name="review">` elements are two sessions, even if a handler gives
-them the same display name. [Agent session ownership](../architecture.md#agent-permissions-and-generated-xmd)
+them the same display name. [Agent session ownership](./executable-mdx-spec.md#invocation-form-dispatch)
 owns authenticated placement and provider routing. The public `Agent.session()`
 chain may change the name; it cannot choose the durable identity.
 
@@ -2572,6 +2748,11 @@ owns a session, how it was constructed and which executable build accepted its
 identity; a workflow session is named by the row below instead, and an agent
 served here is served over ACP alone. Composing the two is a separate design.
 
+The workflow host separately selects its installed Claude launcher and supplies
+its path only through the retained adapter child's transient environment. This
+selection grants no native-session capability and performs no executable-build
+admission.
+
 **The mapping lives in the run.** Its database row commits in the run's
 transaction and is part of the initial schema. Provider session stores and empty
 working directories beside the run are disposable attachment state, not retained
@@ -2587,7 +2768,7 @@ its ordinary record and supplies the ACP loading target. Prefer
 A pending strong record asserts nothing; the next attempt creates rather than
 resumes. An ACP loading target grants no native handoff or backend-acceptance
 proof. A later assertion of a different kind refuses rather than changing the
-mapping's kind. [Agent session ownership](../architecture.md#agent-permissions-and-generated-xmd)
+mapping's kind. [Agent session ownership](#85-agent-session-continuity)
 owns the acceptance, assertion and publication ordering.
 
 An ordinary mapping can commit before its first prompt. If the process stops in
@@ -2846,6 +3027,10 @@ their providers. If input is still absent, no request or answer event is added;
 the new document execution tears down and retains `suspended` again.
 
 ## 10. Effect transactions
+
+The default live coordinator supplies no generic durable-validation hook.
+Validation owned by a caller or provider happens before it constructs the
+durable effect.
 
 ### 10.1 Workspace-local effects
 
@@ -3214,6 +3399,10 @@ component, owns this deployment choice. A nested context replaces the whole
 target for its descendants; parent and child members are never merged, and
 leaving the nested context restores the enclosing one whole.
 
+IssueTracker URL canonicalization refuses credentials, a query and a fragment
+rather than stripping them, so normalization cannot silently change the authored
+target.
+
 `provider` is the explicit discriminator. Provider names are stable lower-case
 strings; the initial names are `github` and `atlassian`.
 
@@ -3472,6 +3661,8 @@ it never attaches the artifact as writable storage or depends on its path after
 admission. An embedded candidate definition is copied into the new run's
 retained definition state for the same reason.
 
+The artifact remains byte-identical before, during and after the fork.
+
 ### 11.2 What compatibility means
 
 Any definition or prop change that alters expansion before the checkpoint causes
@@ -3610,6 +3801,9 @@ is host arrangement rather than retained run state. An absent run is an error ra
 than idempotent success. A host pruning operation may select explicit statuses
 and ages. Documents cannot delete workflow runs.
 
+Deleting a run closes its cached connection before recognizing it. Recognition
+therefore never waits for a connection only deletion itself would close.
+
 Deletion does not undo pushes, pull requests or other remote effects. Forks and
 retained runs keep the Workspace roots they reference; garbage collection may
 remove an unreferenced historical root only after those references disappear.
@@ -3636,6 +3830,40 @@ is outside the initial local capability set; Worker Shell follows §10.4. A late
 Cloudflare-hosted or workerd-backed provider may install the same Workspace and
 lifecycle contracts; documents do not choose that topology.
 
+A storage handle is a lease owned by the scope that opened it. Teardown
+invalidates that handle without closing the physical connection or invalidating
+another lease. The Deno provider owns one authoritative SQLite/DOFS connection
+per canonical workflow-run database path and closes it at provider-scope teardown
+after its child scopes finish. The public handle carries no raw connection
+association: the provider keeps an exact-object lease registration privately and
+refuses foreign, fabricated, closed or stale handles before they reach SQLite.
+
+A Workspace root's canonical format-1 JSON includes `/` and every reachable
+absolute POSIX path in UTF-8 byte order, with kind, mode and observable mtime,
+file size and DOFS manifest identity for files, symbolic-link targets, and
+deterministic file-hardlink groups. Its ID is the lowercase SHA-256 of
+`xmd-workspace-root\0v1\0` followed by those exact canonical bytes. Mutable inode
+numbers, revisions, tombstones and cache state do not participate in the identity.
+
+The root tables are authoritative checkpoints; DOFS node, dirent and chunk tables
+materialize the current root. File bytes remain solely in DOFS
+content-addressed blobs. Normalized root-to-manifest and root-to-blob rows equal
+the root's exact transitive content and prevent retained content from being
+deleted.
+
+Opening a run validates every root and referenced manifest and blob, then takes
+a read-only snapshot of the live frontier and requires it to equal
+`current_root`. Schema structure, retained content, that comparison and the run
+row are read through one explicit SQLite snapshot. Recognition is not a
+caller-owned Workspace transaction and enables no DOFS savepoints.
+
+Every unsuccessful caller-owned transaction attempts top-level SQLite rollback
+and then invalidates both caches on the provider-owned DOFS wrapper before
+releasing its serialized connection turn. This includes body failure,
+cancellation, teardown or final-validation failure, and commit failure, so the
+surviving wrapper cannot answer from uncommitted positive or negative cache
+entries after rollback.
+
 An ordinary `xmd run` has a topology of its own beside this one. Managed
 checkouts live under `~/.xmd/repositories`, in `repositories/<digest>/` and
 `worktrees/<digest>/<digest>/` slots holding a `checkout/` directory and a
@@ -3646,6 +3874,9 @@ the same host authentication and the same `XMD_WORKFLOW_GITHUB_ISSUES` and
 `XMD_WORKFLOW_GITHUB_PULL_REQUESTS` configurations, which belong to the GitHub
 adapter inside `@executablemd/git` and are read when an invoked GitHub-backed
 operation needs one.
+
+For each ordinary document execution, its repository provider mints a fresh
+opaque random invocation identity and keeps it in its private closure.
 
 The local lifecycle adapter owns a non-blocking exclusive advisory lock on one
 deterministic sidecar per run. The open file belongs to the workflow executor's
@@ -3700,7 +3931,9 @@ asynchronous continuation after mutation teardown. It distinguishes a documented
 refusal from infrastructure failure and cancellation, and activates the durable
 fail-stop fence for infrastructure failures. `<File>`, `<Glob>` and every other
 `API.Files` operation route to it through the transaction-bound Files provider.
-Workflow start, resume and the history commands do not reach it in this slice.
+`xmd workflow start` and `xmd workflow resume` install that provider around each
+document execution. History remains read-only and does not invoke the Workspace
+materializer (§4).
 
 That boundary holds across processes as well as within one. A host killed
 between the mutation and the commit publishes nothing, and a process that
@@ -3887,6 +4120,36 @@ There is no public `Git.Fetch` here. The shipped Git scope is Repository clone
 and its remote reads, plus `Git.Push` observation and mutation; a future public
 fetch operation requires its own language and durability contract.
 
+### 13.2 Git package boundaries
+
+`@executablemd/git/api` is the sole export route for the contextual APIs
+`Repository`, `RepositoryContext`, `Git`, `GitQuery`, `PullRequestAPI`, `IssueApi`,
+`IssueTrackerContext` and `GitHost`, their named interfaces and identities, base
+refusals, direct operations and accessors, and interface types. The package root
+exports the Plugin and its profile predicate, component registrations and
+definitions, workflow installation, durable effect identifiers, errors and record
+parsers. `@executablemd/git/deno` exports the host adapters;
+`@executablemd/git/credential-helper` is the standalone program spawned by Git.
+Each API is published from exactly one route and is not re-exported from another.
+
+The repository and local Git seams have these identities and operation members:
+
+| API | Contextual identity | Operations |
+| --- | --- | --- |
+| `Repository` | `executablemd.git.repository` | `select`, `worktree`, `ambient` |
+| `RepositoryContext` | `executablemd.git.repository.current` | `current` |
+| `Git` | `executablemd.git` | `switch`, `add`, `commit`, `push` |
+| `GitQuery` | `executablemd.git.query` | `resolve`, `root`, `format`, `read`, `files`, `changes`, `diff`, `file` |
+
+The pull-request and Issue identities and `read`/`upsert` members remain those
+of §§7.7 and 10.3. `IssueTrackerContext` supplies the `current` accessor under the
+identity in §10.3; `GitHost` supplies `route` under the identity in §10.2.
+
+Retired public Git import names do not resolve, and retired contextual identities
+intercept no operations; neither has a compatibility alias. Existing internal
+`Composition` provider-installer, error-class and serialized-refusal names remain
+unchanged.
+
 ## 14. Contract inventory
 
 | Contract | Status at this design revision |
@@ -3897,7 +4160,7 @@ fetch operation requires its own language and durability contract.
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; mandatory directory ensure is specified by #643 for both providers; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | Repository and Worktree built by #293, Deno provider only; `<Dir>`'s mandatory `API.Files.ensureDirectory` is specified by #643 as one transactional `workspace_file` mutation followed by lexical cwd installation |
-| the same twelve declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document. `<Dir>` left that array when canonical core took the name, and is present under every runtime without it |
+| the same sixteen declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document. `<Dir>` left that array when canonical core took the name, and is present under every runtime without it |
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
 | `<Repository>` and `<Worktree>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary managed selector above, with what it answered retained as a small routing record so a completed selection restores without a selector, a clone, a `worktree add`, a sidecar read, a credential or a lock — and only new work meets the current filesystem. One entry at a time owns a managed slot, held until the entry is torn down and reacquired lazily by the first new operation inside a restored placement; that hold is distinct from the shared Git directory's mutation lease. Nothing is inventoried, snapshotted, restored or deleted, and Node and Bun install no operational provider |
 | `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary performers above against the checkout the entry is working in, with what each produced retained as fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products. A completed operation is answered from that record with no `git` invocation of any kind, and a completed Commit's object id names the commit that was made then rather than today's HEAD. A live Commit reads the invoking person's own author and committer once per entry and only when a commit runs, captures the clock after deciding the index is nonempty, and commits exactly that index. A live operation takes the selected placement's slot and then the shared Git directory's mutation lease and keeps both until teardown; a completed one takes neither. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add keeps what it staged and claims no rollback; native completion and acknowledgement are separate, so an unacknowledged operation may run again and answer differently. No transaction, no rollback, no exactly-once local effect, and no publication evidence |
@@ -3917,7 +4180,7 @@ fetch operation requires its own language and durability contract.
 | Agent session portability evidence in an artifact | specified in `specs/xmd-artifact-spec.md` §2.5; the format and its complete verifier are built. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
 | workflow Agent session retention | built by #302; [§8.5](#85-agent-session-continuity) owns logical session identity, compatibility, first-turn publication and reattachment/refusal behavior |
-| generated-XMD admission | built by #369 through `@executablemd/core/host`; the workflow policy wrapper is internal. [§8.4](#84-generated-xmd) owns the workflow tables and selected classes; [architecture](../architecture.md#agent-permissions-and-generated-xmd) owns admission and continuation mechanics |
+| generated-XMD admission | built by #369 through `@executablemd/core/host`; the workflow policy wrapper is internal. [§8.4](#84-generated-xmd) owns the workflow tables and selected classes; [language specification](./executable-mdx-spec.md#532-evaluate-the-protected-evaluation-component) owns admission and continuation mechanics |
 | `<Evaluate>` and the authored loop | built by #302 and #369, canonical since #713; [§8.4](#the-authored-loop-and-where-it-is-written) owns text/paired inputs, the closed `text`/`allow` schema, rendered-string output and authored iteration/approval. The host supplies a captured ceiling; core supplies the protected component |
 | generated-XMD mutation-proposal admission | built by #369 and #567, amended by #643; [§8.4](#mutation-proposal-admission) owns the ordered write profile, the identity each admitted spelling runs under, ordinary effect transactions and authored approval. Evaluate returns rendered text, with no result envelope or mutation receipt |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |

@@ -83,23 +83,35 @@ order, with completed records replaying in place.
 
 ### Progress and failure journals
 
-While `xmd test` runs, it writes a progress report to stderr, one line per
-change, so a pipe or a CI log shows where a run is before it finishes:
+While `xmd test` runs, it writes a short progress report to stderr, so a pipe or
+CI log shows which test is running and which operation a timeout interrupted:
 
 ```text
 [xmd test] start test "held" at suite.test.md:1:1
-[xmd test] start sh exec at suite.test.md:3:1
-[xmd test] cancelled sh exec at suite.test.md:3:1
 [xmd test] fail test "held" at suite.test.md:1:1 (timeout; interrupted sh exec at suite.test.md:3:1)
 [xmd test] journal saved: /work/.xmd/test-artifacts/2026-…-6f1c…/root-1.jsonl (root 1 suite.test.md)
 ```
 
 A test's start is reported when its behavior begins and its outcome once its
 result is recorded, which follows the test's teardown — a component that
-expanded successfully is not a passing test. Between them each executable
-element and command block reports its start and how it settled, so a timeout
-names the operation it interrupted. Work inside a nested `<Execution>` child is
-labelled with that child, for example `child 1 ./child.md:`. The report names
+expanded successfully is not a passing test. An `<Execution>` invocation reports
+its start only after resolution and validation accept it, then reports how that
+invocation settles. These milestones do not claim that a child launched or
+passed. An invocation stopped before activation reports no milestone. Ordinary
+components and command blocks produce no start or terminal lines, including on
+failure or cancellation; their observations still identify the operation a test
+timeout interrupted. The CLI's terminal failure summary is unchanged.
+
+When command cancellation unwinds a test before a result is recorded, progress
+reports `cancelled test` with its name, location and interrupted operation when
+one exists. This notice is not a pass/fail verdict and creates no test result.
+It follows the delegated test work's unwind.
+
+Work inside a nested `<Execution>` child is labelled with that child, for example
+`child 1 ./child.md:`. Absolute source paths inside the command's captured working
+directory are displayed relative to it; authored relative paths and absolute
+paths outside that directory retain their spelling. Canonical result and
+journal locations keep their original identities. The report names
 tests, elements, command languages and modifier words, locations and states. It
 never carries a captured value, a prop, command or prompt text, an assertion's
 operands or anything a document rendered, and the rendered report on stdout is
@@ -398,6 +410,12 @@ child exists raises directly and binds nothing.
 valid only as direct children of `<Execution>` and only before assertion content.
 They are installed for the whole child lifetime, before the child's root is
 imported; malformed or conflicting declarations fail before it too.
+
+The harness reads its children in two passes. First it expands the declaration
+prefix in a scan that stops where assertion content begins. After the child
+execution is over, the ordinary pass runs: declarations answer with what they
+observed, and the assertions run. An ordinary repository component that shadows
+a declaration ends the scan where it is written.
 
 `<CollectOutput as="…">` accumulates the child's rendered output for assertions.
 It is passive: the child's output is displayed progressively either way, and

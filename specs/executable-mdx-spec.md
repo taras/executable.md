@@ -9,9 +9,9 @@
 ## 1. Overview
 
 Use this specification for authored syntax, interfaces and conformance. Start
-with [a document running](../architecture.md#a-document-running) for ordinary
-execution, retained workflows and replay; the [architecture reading map](../architecture.md#reading-this-architecture)
-routes implementation questions to their owning rules.
+with [execution](#81-execute) for ordinary
+execution, retained workflows and replay; the [contract sections](#registration-and-resolution-order)
+route implementation questions to their owning rules.
 
 An executable MDX document is a markdown file containing embedded JSX
 component invocations and annotated code blocks. The system treats each
@@ -551,6 +551,32 @@ type Middleware<TArgs extends unknown[], TReturn> = (
   next: (...args: TArgs) => TReturn,
 ) => TReturn;
 ```
+
+#### Before and after hooks
+
+`createHooks<"expand", TArgs, TResult>(...)` composes `createApi` without
+changing it and returns the callable `expand` plus independent `beforeExpand`
+and `afterExpand` registration functions. Both handlers return `Operation<void>`.
+Before observes the arguments; after observes those arguments and one preselected
+Effection `Result<TResult>`. Neither receives a continuation or returns replacement
+data, and the adapter keeps its middleware private. APIs that offer continuation
+control retain `.around(...)`.
+
+A before hook returning normally lets the owner proceed; throwing prevents the
+underlying operation from starting. Success supplies `Ok(value)` to after hooks;
+a before rejection or implementation failure supplies `Err(error)`. Cancellation
+supplies `Err` containing a dedicated cancellation error as notification while
+the call continues to unwind as cancellation. Every after hook receives that
+same outcome, selected before any after hook runs.
+
+Before hooks run outer to inner; after hooks run inner to outer on success,
+failure or cancellation, including a before-hook rejection. Registrations need
+not form matching pairs, and one failing after hook does not prevent the rest
+from running. An after failure converts success into a hook failure without
+changing the completed operation or its saved result. If both fail, the
+operation's failure stays primary and the hook failure accompanies it. No hook
+failure repeats completed work. The call owns and joins all hook work and
+cleanup; an interrupted before hook cleans up what it acquired.
 
 #### Code block context
 
@@ -1093,13 +1119,13 @@ components and several blocks, and every foreground block inside it writes its
 stdout into the binding rather than to the reader. Streaming and capturing at
 once is not implied.
 
-```md
+````md
 <Let as="buildOutput">
 ```bash exec
 deno task build
 ```
 </Let>
-```
+````
 
 **Retention.** What a run keeps is the host's explicit choice, carried by
 `ExecuteSettings.retainProcessOutput` and defaulting to keeping output so an
@@ -1112,6 +1138,19 @@ no shared runner infers it from whether a journal pathname was named.
 | `xmd run --journal <path>` | unchanged | exit status, stdout, and stderr — diagnostic persistence of what the configured execution environment forwarded |
 | `xmd workflow start`, `xmd workflow resume` | unchanged | exit status, stdout, and stderr |
 | programmatic `execute()` | unchanged | exit status, stdout, and stderr |
+
+A diagnostic-traced `xmd test` also retains exit status, stdout and stderr on
+the same terms as `xmd run --journal`; without that selection it retains exit
+status alone.
+
+A trusted testing host may retain admitted child execution events privately in
+memory and save a partial journal as a host-private diagnostic artifact when its
+owner fails, times out or is cancelled. Saving follows the owner's assertions
+and joined append-capable cleanup. It neither enables process-channel retention
+nor bypasses secret or protected-input enforcement, grants authored journal
+collection rights, or creates continuation input. A successful owner makes no
+automatic save; abrupt termination that bypasses cleanup saves nothing. Automatic
+artifact saving is never a reason to infer retention.
 
 `xmd run --journal` writes diagnostic history; `xmd run` has no command or
 option that reopens that file as continuation input. Runtime replay semantics
@@ -1256,13 +1295,18 @@ succeeded: later executable blocks do not run and the execution fails, with no
 `<Output>` declaration required. `<Output>` selects rendered document content and nothing else.
 `silent` hides output; it does not convert a failure into success.
 
-Exactly one thing recovers a checked failure: an explicit error-handling
-construct written in the document, which is `<PrintErrors>`. `printErrors(fn)`,
+Recovery of a checked failure requires an explicit error-handling construct
+written in the document: `<PrintErrors>`, or an authored `<Try>` whose `<Catch>`
+handles its ordinary checked failure after clean settlement. `printErrors(fn)`,
 built-in printing boundaries such as `<File>` and `<TempDir>`, component failure
 middleware, and a component that catches the `ContentError` its projected
 content raised all decide how their own failure is reported and none of them
 recovers a checked command failure: the run fails, nothing is written or
 replaced, required cleanup still runs, and no later executable work begins.
+
+Unauthorized checked failures remain in an execution-owned ledger passed
+directly through canonical calls. Printing or catching a projected failure does
+not clear that ledger.
 
 `<PrintErrors>` recovers. A checked failure inside an invocation of `<Test>` is
 *contained* instead, which is a different outcome: it becomes that test's failed
@@ -1273,6 +1317,27 @@ installation confers it, and a repository `Test` selected ahead of core's
 default receives none. What a test does is supplied by the testing package
 through a contextual operation that names no component; see
 `specs/testing-spec.md`.
+
+**Testing activation admission.** The public `testing` boolean and its
+recording middleware are composable policy, not activation. Activation requires
+a private one-use request, a live private boundary credential and acceptance by
+a terminal created for that call. The credential belongs to its session or
+element scope and expires when that owner ends.
+
+Canonical core takes this decision before creating the harness or dispatching
+the testing behavior chain. It uses a private per-invocation terminal through
+the guard seam installed by the testing package. A chain that never reaches the
+terminal refuses the invocation; with no guard installed, the terminal is
+reached directly so core-only behavior remains available. Public behavior
+middleware may answer without delegation and cannot bypass this admission.
+
+Any refusal during decision dispatch is a composition configuration failure,
+not a test outcome: no body effect occurs and no result is staged, journaled,
+recorded or reported. Canonical core marks the failure by dispatch position,
+preserves the refuser's message and carries the original as `cause`. After
+searching for fatal infrastructure causes, that same canonical copy propagates
+the marked refusal before dispatching any component-failure handler. No exported
+predicate or separately loaded copy decides whether it is such a refusal.
 
 That same invocation is the only thing that may run *another* document as a
 root. A Markdown test writes `<Execution host="run" …>` to execute a referenced
@@ -2488,6 +2553,19 @@ only the direct selected source is retained. Native hooks and object URLs belong
 to the canonical execution, survive namespace return and remain available for
 later module use. Cancellation joins native loading before releasing them.
 
+The Context's stable key is `@executablemd/core/ComponentModuleLoader` and its
+default is `undefined`. The compiled entrypoint installs the Deno loader. Direct
+TypeScript transformation preserves source maps and module exports as well as
+logical origin. Deno and Node allocate owned native hooks; Bun allocates an
+owned JavaScript object URL.
+
+Each load has a separate canonical-owned scope-eval worker, and independent
+loads are not serialized. Cancellation before namespace transfer halts and
+joins that worker's hosting task; after transfer, canonical completion owns the
+transferred host. Native import work joins before hooks are deregistered or
+object URLs revoked. The transformer is imported lazily by the actual load;
+neutral imports and adapter installation evaluate no Babel code.
+
 ```typescript
 // components/Greeting.ts
 import type { Json } from "@executablemd/core";
@@ -2842,7 +2920,7 @@ A component name is resolved in tiers, and the first tier that answers wins:
    unconditionally before every host or author tier. Protection fixes the
    implementation and grants no permission; the filesystem components still use
    contextual `API.Files` and effective `Permissions`. See
-   [the canonical protected tier](../architecture.md#the-canonical-protected-tier).
+   [registration and resolution order](#registration-and-resolution-order).
 3. **a host claiming the name** — a reserved registration protecting a language
    or security invariant, or a *declared Markdown component*: exact first-party
    Markdown a trusted host handed this execution. Both claim the name rather
@@ -3051,8 +3129,26 @@ complete descriptive profile of its own with
 providers without reading the source. `ExecutionInstallation` carries no symbols
 provider and no descriptive provider count rule: ordinary middleware
 composition decides the live answer. How the defaults, the execution's own
-fallback and a narrowing boundary rank against each other is
-[the syntax symbols boundary](../architecture.md#the-syntax-symbols-boundary).
+fallback and a narrowing boundary rank against each other is defined under
+[Syntax description precedence](#syntax-description-precedence).
+
+<a id="syntax-description-precedence"></a>
+
+**Syntax description precedence.**
+
+The execution's private fallback derives from the selection inputs captured
+before any installation, middleware or document code: includes, initial
+registry, host-declared identity components and exact Markdown, and the workflow
+component bundle when present. Bundled names are described from the retained
+bytes already in hand, at their canonical logical retained-source paths with
+the sources' own content hashes. Description imports or executes nothing and
+rereads no bundled source file.
+
+This reference is bound as the Syntax API fallback rather than inner
+middleware, so it does not shadow an enclosing host profile. `useSyntax(source)`
+snapshots the documentation contributions already in its calling scope and
+installs its lazy symbols and documentation providers at minimum priority,
+without reading the source.
 
 Default text renders the effective contextual symbols, and text middleware may
 transform or replace that answer. Default named lookup retains its enclosing
@@ -3127,7 +3223,8 @@ is assembled: an ordinary document execution, `xmd syntax`, `xmd plan`'s
 validation and generation, a workflow action that executes a document, and
 `xmd repl` — which assembles that same bundled value with its own entry-history
 admission rather than installing it directly, and so declares these names
-through it.
+through it, as specified in
+[specs/repl-spec.md](./repl-spec.md#selected-plugin-session-services).
 
 Six of them reach something no local transaction encloses — `Git.Push`,
 `PullRequest`, its three evidence reads and `Issue` — and each has exactly one
@@ -3149,6 +3246,12 @@ nothing. What each name *does* is decided by whichever repository provider the
 command installed (§8.1), and a host that installed none still resolves every
 one of them.
 
+For retained external repository work, the feature-owned handoff authenticates
+the actual invocation once in the engine frame where the component was entered,
+before its body projects any content. It gives that authenticated site only to
+the host's own policy; no operation returns it, no public request carries it and
+no Context holds it.
+
 The bundle tier exists only inside a workflow run, and such a run searches no
 repository directories at all — so a declared name resolves to the exact
 retained source and to nothing beside it in a mutable checkout. Core's
@@ -3160,11 +3263,15 @@ outside a workflow run learns that a bundle exists.
 
 #### The run profile's review declarations
 
-Forty-one names are the code-review agent's, and the `run` profile installs all
-of them: thirty-five declared Markdown components — twenty-eight review
+Forty-one names are the code-review agent's, and an explicitly selected review
+Plugin installs all of them into the `run` profile: thirty-five declared Markdown components — twenty-eight review
 components, five policies and review-owned copies of `Sample` and `Instruction` —
 and six reserved registrations, `CommentReviewData`, `CommentReviewState`,
 `Doctor`, `OxlintDiagnostics`, `RepositoryInventory` and `ReviewContext`.
+
+Regression coverage keeps the review-owned `Sample.md` and `Instruction.md`
+copies byte-identical to core's until an explicit divergence decision in the
+code-review package.
 
 Both tiers mean the same thing here: the host claims the name. A review is the
 one program that must not be answerable by the thing it is reviewing, so a
@@ -3180,12 +3287,21 @@ across a source checkout, an installed `node_modules` tree and a compiled binary
 that has no file for it at all, and all three are the same component. The six
 registrations report the package itself.
 
-The graph is installed wherever the `run` profile is assembled: ordinary
-non-testing execution, a nested `<Execution host="run">`, `xmd syntax` and
-`<Syntax />`, structural validation, and the validation `<Plan>` and `xmd plan`
-perform on a candidate — so a program is checked against the vocabulary the
-later run actually supplies. `xmd test` is a different profile at its root and
-claims none of these names; the run child it can launch claims all of them.
+When the review Plugin is explicitly selected, its graph is installed wherever
+that selected `run` profile is assembled: ordinary non-testing execution, a
+nested `<Execution host="run">`, `xmd syntax` and `<Syntax />`, structural
+validation, and the validation `<Plan>` and `xmd plan` perform on a candidate —
+so a program is checked against the vocabulary the later run actually supplies.
+An unselected review Plugin contributes no names to execution or inspection.
+`xmd test` is a different profile at its root and claims none of these names; a
+run child claims them only when its Plugin selection includes the review Plugin.
+
+`@executablemd/code-review-agent` owns assembly;
+`packages/code-review-agent/src/review-components.ts` is the only assembly boundary. Its component and policy
+Markdown is loaded from `src/documents/components/` and `src/documents/policies/`
+relative to that module's own URL across source, published-package and compiled
+distributions. These reads use the Effection filesystem directly, bypassing
+`API.Fs` and document-facing `Files` middleware.
 
 Claiming a name is not the same as narrowing discovery. A caller's `--include`
 and a repository's own components resolve exactly as they did before, for every
@@ -3804,7 +3920,7 @@ chooses for every other name — and returns it as a versioned value:
 
 ```typescript
 interface SyntaxSymbols {
-  readonly version: 1;
+  readonly version: 2;
   readonly categories: readonly [
     { readonly kind: "structural"; readonly entries: readonly StructuralSyntaxEntry[] },
     { readonly kind: "built-in"; readonly entries: readonly CompleteComponentSyntaxEntry[] },
@@ -3847,6 +3963,9 @@ A repository `.ts` component is `inspectability: "origin-only"` and carries no
 contract field at all — no props, forms, captures, return or documentation.
 Reading its contract would import the module, which describing an environment
 must not do, so the absence is stated rather than rendered as an empty contract.
+
+Markdown labels a schema it cannot faithfully summarize rather than inventing
+a type for it.
 
 **Enumeration contributes names; selection decides.** Candidates come from the
 structural table, from the effective registrations, and from repository paths
@@ -4171,7 +4290,7 @@ list of components: adding a component cannot make validation effectful.
 
 Validation reports structure without executing a document. Import below is the
 execution boundary: it records the selected implementation and source for replay.
-The [canonical selection rules](../architecture.md#the-canonical-protected-tier)
+The [canonical selection rules](#registration-and-resolution-order)
 keep protected names fixed across both phases.
 
 Which implementation a name resolves to is an observation of the environment —
@@ -4510,6 +4629,10 @@ keeps its own imports, declarations, bindings, providers, working directory and
 error mode; and it is not published through `ActiveProjection`, so nothing else
 in the execution can obtain or influence it.
 
+The same immunity governs Plan's recovery wrapper composition around a child
+`<Evaluate>` invocation. Neither public content middleware nor an operation
+supplied by another loaded copy can author that projection.
+
 **Protected answers survive only canonical wrapping.** A trusted provider may
 delegate canonical self-closing `<Syntax>` and claim that exact answer for a
 component-answer profile entry. Profile sealing projects its lifetime wrapper
@@ -4718,6 +4841,10 @@ outer cancellation. The tag is per throw site rather than per error class, so a
 `GeneratedXmdError` is not by itself such a marker and no consumer may read one
 by matching its message.
 
+An ordinary admitted component's generated-request refusal derives its safe
+normalized reason from the admitted effect and authored path, never from text
+the fragment produced.
+
 **A refusal that must survive replay is retained as a value, not as an error.** A
 failure crossing a durable boundary is rebuilt without its class and without any
 non-enumerable property, so a classification applied to the error is lost on
@@ -4730,10 +4857,38 @@ never acted on, and the persistence, journal or secret-publication failure stays
 terminal and unclassified. Records written for a successful result are unchanged.
 
 **One occurrence is one durable decision.** A continuation restores the
-admission rather than making it again, and refuses before any effect if the run
-now offers different text, or states ceilings — effect classes, Workspace roots,
-admitted spellings with their identities and effects, or requests — the admission
-was not granted under.
+admission rather than making it again and checks its exact source, selected
+classes and admitted spellings with their identities, forms and effects before
+any effect. Workspace roots and request inventories are not retained comparison
+terms: Workspace progress and destination policy are live, and policy is asked
+where the request is performed.
+
+##### Generated evaluation admission
+
+Before public replay policy or reuse of any completed invocation or root, core
+validates the closed retained evaluation records for both successes and refusals.
+Their structural fingerprint binds exact root source and inputs, candidate
+source, read selection, ordered selected profile identities and authored forms,
+protected Syntax identity, lexical documentation-reference identity and Files
+scope/policy identity. Only selected classes and spellings that admission used
+participate; no bound value is compared. Missing, malformed, extra or
+inconsistent records, including a refusal for different source, fail closed
+before another turn or effect. Public replay middleware cannot bypass this
+check, and extra description fields alone do not enforce it.
+
+Completed replay requires fresh installation and immutable identity attestation.
+Custom symbols providers state an immutable `identity`; captured Files state a
+frozen `{ scope, policy }` `replayIdentity`. These identify permission rather
+than today's documentation, file contents or paths. Records hold data only,
+never providers, live references, projection handles or callables. Missing or
+invalid current attestation refuses before any generated effect; an expired
+attestation is never reused.
+
+Unchanged replay restores historical output and findings without repeating
+fragment bodies, Syntax documentation lookup, File reads or Glob traversal. A
+changed structural identity is stale; current information is not refreshed to
+validate history. Workspace progress and destination policy remain live as
+specified above and in `workflow-workspace-spec.md`, §8.4.
 
 #### 5.3.3 Ordinary generated composition
 
@@ -4854,9 +5009,22 @@ refusal, failure or cancellation does not roll them back. Partial continuation
 restores them and resumes at the first unrecorded effect.
 
 Evaluate returns only after its generated projection and all teardown finish.
-The [generated-work ownership and admission rules](../architecture.md#agent-permissions-and-generated-xmd)
-and [typed recovery boundary](../architecture.md#typed-candidate-recovery-around-evaluate)
+The [generated evaluation admission rules](#generated-evaluation-admission)
+and [generated recovery settlement](#generated-recovery-settlement)
 own the identity, publication and settlement mechanics.
+
+Generated-fragment evaluation remains an ordinary `Operation` and must not be
+wrapped in `ephemeral()`, which is reserved for intentionally nondurable work.
+
+<a id="generated-recovery-settlement"></a>
+
+**Generated recovery settlement.**
+
+A trusted recovery projection reports owning cleanup failure before a
+recoverable candidate outcome can escape. Cleanup failure therefore cannot
+authorize another attempt. This precedence is local to the composed projection;
+caller cancellation remains control flow and ordinary execution retains its
+existing failure ranking.
 
 **A generated root is owned the same way, by the execution that evaluates it.**
 Each explicit `evaluateGeneratedXmdRoot()` call runs on a durable sequence of
@@ -5089,6 +5257,28 @@ provider before any transaction. This wrapper qualifies — core installs it
 before any document code exists and it delegates every append to the exact
 stream it was handed — and it transfers only the witness that source already
 has, establishing none.
+
+**Weak journal provenance.** `JournalProvenance` is a non-operational,
+equality-only witness that the live publication stream descends from the exact
+journal backend selected for one workflow run. The provider retains its witness
+and requires exact equality; the witness grants no append, read, execution,
+publication or reconciliation capability.
+
+The canonical durable-streams module keeps the association in a module-local
+`WeakMap` keyed by exact stream objects. Keys are weak and nonenumerable: the
+association cannot keep a stream alive or outlive it. Structural properties and
+stable Contexts expose no association, and a separately loaded module copy can
+neither read nor transfer it. Only canonical `establishJournalProvenance()` and
+`preserveJournalProvenance()` establish or preserve it, with one fresh witness
+per stream and duplicate establishment refused.
+
+Preservation is permitted only at trusted wrapping sites installed before code
+the journal's content could influence and delegating to the exact supplied
+stream: the secret filter and execution-owned admission wrapper. Admission
+requirements join that wrapper rather than adding wrapping sites reachable by
+middleware. Each wrapper preserves only what its source already has; no
+unproven source can acquire provenance. The association retains no execution,
+lifecycle, journal content or provider state.
 
 It runs ahead of public guard policy, of any retained event reaching execution,
 of a retained terminal result being reused, of authored work, and of any append.
@@ -5479,6 +5669,11 @@ composes with:
 xmd plan "Prepare the release program." | xmd run -
 ```
 
+Each runtime entrypoint passes its stdin-reading operation directly as a value
+into shared CLI orchestration. It is exposed through no Context, contextual
+API, public export, syntax entry, component or document capability; authored
+code cannot name, replace or invoke that reader.
+
 The sentinel is one exact argument on one command form, decided by fixed grammar
 before anything is read. Only an invocation that explicitly names `run` and
 whose document argument is exactly `-` selects it. Every other spelling keeps
@@ -5782,8 +5977,7 @@ The same property means a descendant may bind that name, and its own
 descendants read what it bound, exactly as with any context value.
 
 It is therefore not a permission boundary: security enforcement and durable
-identity never trust replaceable context state (architecture.md, *State across
-loaded copies*). What a document can rebind, it can rebind.
+identity never trust replaceable context state (§5.6). What a document can rebind, it can rebind.
 
 **The identifier.** `id` is derived from the root document and the structural
 path that reached the element. Each step contributes a frame — an authored
@@ -5920,7 +6114,7 @@ authored name.
 The identity behind it is answered by a
 **claimant**, and a claimant reaches only one place: the factory a trusted host
 **declared** to this execution, called once with the claimant this execution
-minted for that component (§5.3, architecture.md *Trusted host orchestration*).
+minted for that component (§5.3 and this invocation contract).
 The claimant is the argument of that call — not published, not named, not
 reachable from a document, and not derivable from anything a handler holds. A
 component nobody declared cannot name a durable operation after its invocation
@@ -7415,6 +7609,25 @@ the complete combined causes. Otherwise the first unhandled ordinary failure
 stays primary; a later finalizer failure remains alongside it. A successful Catch
 retires its handled failure; failing Finally then becomes the new failure.
 
+Canonical execution captures the durable root's shared failure slot before
+document preparation or middleware and passes its activation closure through
+the private ledger. Actual owning release failure and terminal infrastructure
+failure activate it before a durable child can serialize an ordinary error
+Close, including Prompt failure normalization. Later Context replacement cannot
+redirect activation, and failed release yields no recoverable failed-turn record.
+
+Canonical Test contains ordinary joined teardown in its private invocation
+reporting domain: nested Try stops while Testing may classify the failed test
+and run the next independent test. Infrastructure still activates the root, and
+retained child publication retains that activation inside the Test domain.
+Core preserves an independently selected failure already present in the
+captured root slot, including an ordinary Error selected by ReplayGuard;
+owned-slot presence, not a name or class, identifies that decision.
+Once the combined terminal failure is selected, no later effect or append is
+admitted. Each phase checks the combined terminal failure before entering an
+unentered Finally. Both requirements apply to every independently selected
+failure, including an ordinary Error selected by ReplayGuard.
+
 Entitled rendered prefix stands, followed by executed Catch and Finally content.
 Captures, documentation, value and string-projection buffers stay private. Output
 is discovered from source in all branches and selected only when entered, under
@@ -7431,6 +7644,11 @@ workflow interruption joins physical cleanup and leaves unentered Finally pendin
 An entered forward-path finalizer resumes acknowledged effects without repeating
 them. In-memory pause or UI detach alone unwinds nothing. All sibling abandonment
 runs Finally, while propagated resumable unwind does not terminalize its children.
+
+Accepted exact Stop selects terminal cancellation before halt. The
+combinator's effective cancellation read is passed directly into child
+expansion and selects both finalization and child Close; Context replacement
+or error naming selects neither.
 
 Try adds no durable wrapper or event. Completed stopped replay expands no body,
 provider or finalizer. A terminal append already begun wins over refused Stop.
@@ -7487,6 +7705,9 @@ child's own later work, and reach neither a sibling nor the work after
 `</All>`. Children do not communicate through bindings, and `<All>` takes no
 `as` and produces no value. A retained resource is released when its child ends.
 
+Incoming bindings and the live overlay are snapshotted for each child. Each
+also receives a separate checked-failure ledger and a copied hide set.
+
 **Output.** Each child expands into a private buffer. After every child
 succeeds, `<All>` emits their renderings in authored order; before that it emits
 none of them. Scheduling may decide when a child's durable records append, and
@@ -7524,6 +7745,9 @@ reopened; All refuses before live child work unless a retained failed direct
 sibling can settle that join. Completed root replay still executes nothing. No task,
 subscription, retained resource or output buffer survives its spawn.
 
+Low-level combinators not enrolled in core's cancellation classification retain
+the terminal-on-halt default.
+
 **Control flow.** `<Spawn>` is a boundary. A `<Return>` inside one cannot select
 a value owned outside the `<All>`, and a `<Break>` inside one cannot exit a
 `<Loop>` written outside it; both are refused from source, before anything runs.
@@ -7540,6 +7764,13 @@ merging nothing back — before the fragment performs its first effect.
 ### 6.6 Eval binding interpolation
 
 A protected leaf interpolated directly into built-in exec remains a private program segment with its canonical block language until the process terminal. Public block context and descriptions contain fixed replacements. Prose uses a safe view. Unsupported string conversions, ordinary JSON props and custom modifier chains refuse before dependent commands or recipients run. Earlier acknowledged effects remain completed after a later conversion failure. Ordinary interpolation and escaping retain their behavior.
+
+The protected language/program-segment pair is immutable and private. Public
+command arguments and previews use the safe view before truncation. Only the
+uncompleted built-in exec callback resolves protected leaves and calls
+`buildCommand` and Process. Independent received-channel filters project bytes
+before forwarding, capture or retention, and host output stays protected through
+joined cleanup. The channel-routing and pump-tail limits of §3.6 remain in force.
 
 Bare `{name}` references (no namespace prefix) resolve against
 `env.values` — the eval binding environment populated by preceding
@@ -7922,6 +8153,11 @@ that boundary's own author gated. Printing it at a component's own declaration,
 in a region that does not print, would resume what the *region's* author gated —
 so that one passes outward instead.
 
+A failure explicitly distinguishes an account of an already-decided content
+failure from a new failure owned by the component. Cause-graph reachability does
+not decide that ownership: a component that recovers and then fails on its own
+terms owns the new failure even when its causes still include the content error.
+
 ### 6.8.2 Stopping deliberately: `<Fail>`
 
 A document that has decided it cannot go on has something to say about why:
@@ -8099,7 +8335,7 @@ The reader validates one complete current saved-result shape. Obsolete
 incompatible Spawn results refuse clearly; a journal is not invalidated solely
 because it is older. Stored bytes are preserved. There is no version tag,
 negotiation, legacy reader, migration, adapter or compatibility branch, following
-the [prerelease persistence policy](../architecture.md#internal-persistence-during-prerelease).
+the [current saved-result contract](#components-transformations-and-capture).
 
 #### Execution order and error behavior
 
@@ -8144,8 +8380,9 @@ Each construct installs one mode for its own region, and the nearest one governs
 
 The first two rows are the same rule read twice: a mode is inherited from the
 enclosing structure, and what encloses a root's body is the root, which is
-fail-capable. `print` is what a printing boundary establishes; nothing
-establishes it by default.
+fail-capable. `print` is what a printing boundary establishes; nothing inside root execution
+establishes it by default. Outside root execution, `print` is the low-level
+Context default used by direct expansion and component-level harnesses.
 
 Because a mode is read from the enclosing structure, wrapping a printing
 boundary around a component whose own body declares `<Output>` changes nothing
@@ -8169,6 +8406,9 @@ ambient error mode — printed into the document, or thrown as a failure.
 A documentation chunk and an `<Output>` region select the error mode by value
 rather than by installing reporting middleware, so what an error becomes depends
 only on where it was raised.
+
+Raise middleware is observation-only: it cannot replace the error, change the
+raise decision or control whether the region prints or fails.
 
 **Whoever creates an `ErrorSegment` reports it.** `Component.raise` is called at
 the point the failure is decided, and a printed error that reaches the document
@@ -8194,6 +8434,29 @@ the content provider projects structured segments and presents `ContentError` at
 the `content()` call — and a component that does not recover is replaced by what
 the projection already reported, under `print`, or by the failure a `throw` or
 `output` decision already made.
+
+#### Recovery before raise
+
+Lexically composed error middleware has a closed, journalable action set: retry
+(including after repairing an input), suspend for input and retry, explicitly
+capture a Result, or decline and let the error reach raise. Successful recovery
+prevents the original raise and its error output.
+
+`<Result as>` captures before raise and binds the Effection `Result` shape:
+`{ ok: true, value }` with the successful value by reference, or
+`{ ok: false, error }`. This explicit capture is distinct from an ordinary
+binding accepting a body that printed an error. A component's more general
+"result object" is the value it binds instead of failing, shaped as
+`{ ok: true, value }` or `{ ok: false, … }`; each component declares its own
+failure members rather than sharing one universal failure-member schema.
+
+The declared authored `<Retry max timeout>` construct retries a region until
+it completes, using this pre-raise recovery path.
+
+Every attempt is retained in full and replay restores its outcome without
+re-execution. Rendered output shows the winning attempt with brief summaries
+of failed attempts; verbose rendering expands their detail. On final failure,
+the last attempt's partial output renders and document execution fails.
 
 #### Partial output
 
@@ -8627,6 +8890,9 @@ it into an ordinary failure. Ordinary failures inside a `<TempDir>` are
 unaffected: they are still decided by the region the element is written in, and
 this rule adds only that no error mode may decide a stale replay.
 
+The term "divergence" is reserved for replay departing from the recorded
+journal.
+
 **Divergence errors are rethrown on the same terms.** A `DivergenceError`, a
 `TerminalDivergenceError` or its `EarlyReturnDivergenceError` specialization,
 and a `ContinuePastCloseDivergenceError` all say the journal no longer describes
@@ -8644,6 +8910,14 @@ error. Its cause is the storage adapter's error, and neither case writes a
 compensating `Close(err)` that would misstate the persistence failure as a
 document outcome. Pre-persistence policy rejection remains the policy's
 ordinary failure and may be recorded by a separately admitted `Close(err)`.
+
+The first durability failure — including persistence, divergence and stale
+input — is shared by the root and every durable child. Durable entry fails with
+that exact error before replay or execution; the ordered append boundary
+rechecks it immediately before storage. Work already executing may
+finish, but its not-yet-started append is fenced. A backing-stream rejection is
+a persistence failure regardless of its error class. A pre-persistence policy
+rejection is marked before backing append and does not activate fail-stop.
 
 **Durability discovery traverses the whole cause graph.** No wrapper keeps a
 durability failure from being found, including a content failure a component
@@ -9243,6 +9517,9 @@ Three things are not, and none of them becomes a printed error:
   data for a consumer deciding what to fence rather than text: the category is
   never interpolated into the message.
 
+The serialized Files invariant category value `"authority"` stays exactly as
+written; loaded copies recognize it by exact match.
+
 All three **end the execution** (§6.11's rules for a durability failure apply
 here too): no printed error, no `<File>` output, no root or child `Close`, and
 no later sibling runs. A missing provider is an installation fault, and a
@@ -9503,13 +9780,10 @@ restores its recorded outcome and removes nothing a second time, even where the
 path exists again; a partial replay continues live from the retained Workspace
 frontier and performs the first unrecorded deletion once.
 
-Under the interactive `xmd repl` the three mutation replays differ again, and
-only where the entry is standing in a Git checkout. The host retains what its
-provider answered, so continuing an interrupted entry answers a completed
-deletion from its record and removes nothing — including where the path exists
-again, because nothing is compared with the live filesystem
-(`specs/repl-spec.md`). Outside that checkout nothing is retained and the
-`xmd run` rules above apply as written. The component is the same component in
+Under interactive `xmd repl`, deletion retention, coverage and replay are owned
+by [specs/repl-spec.md](./repl-spec.md#the-files-an-entry-wrote-in-the-checkout-you-are-standing-in).
+
+The component is the same component in
 all three: form dispatch, failed-child behavior, containment, the atomic native
 semantics, the printed and fatal failure split, and generated admission are
 unchanged by which host is beneath it.
@@ -10692,6 +10966,9 @@ An invalid expression and an evaluation failure refuse with the engine's own
 failure as the cause. Refusals follow ordinary component error policy (§6.8),
 so a printed diagnostic does not make a rejected selection successful.
 
+Query and Yaml demand-load the same already-ready query engine in the invocation
+that needs it. Loading is ordinary work owned by that invocation.
+
 The engine reaches nothing of the host. It is evaluated with an empty
 environment and an empty file map and with no clock, so `strenv` reads an empty
 string, `load` and `now` refuse, and no process is started.
@@ -10720,6 +10997,10 @@ refuses, then a missing `value` refuses, and only then is the operand evaluated
 and serialized. `JSON.stringify` runs once; a value with no JSON text and a
 serialization that threw are different refusals, and the thrown value is
 preserved as the cause.
+
+Yaml supplies the engine with empty environment and file maps and omits the
+clock, on the same terms as Query (§6.22): environment reads are empty, file and
+clock access refuse, and no process starts.
 
 The text is the query engine's own rendering of that value with an identity
 expression and YAML output: two-space indentation, no document separators,
@@ -10766,7 +11047,7 @@ ordinary middleware, installs its live dependencies there and delegates with
 the trusted host contributions are copied and their revocation armed, before
 installation callbacks, documentation capture and public `Execution.execute`
 policy — is
-[capability-backed execution](../architecture.md#capability-backed-execution).
+the [execution initialization contract](#execution-initialization).
 The generated profile's provider-bound definitions are resolved during document
 assembly.
 
@@ -10786,7 +11067,7 @@ The REPL expansion controller does not pause at initialization.
 
 #### The host's repository provider
 
-[Ordinary repository ownership](../architecture.md#ordinary-repository-ownership)
+[Repository and Worktree](workflow-workspace-spec.md#6-repository-and-worktree)
 owns the distinction between execution-owned resources and persistent checkout
 bytes. The contracts below describe the two providers a document can reach.
 
@@ -11191,6 +11472,16 @@ kinds of root, and for a value root it is observability rather than a second
 return value. Late and repeated subscribers receive the full sequence, and the
 stream closes with the full (or partial) output as its close value.
 
+`HostExecution.stop()` is an owned `Operation` that reaches the still-running
+document, halts it and joins every teardown before answering. It adds no
+execution owner and retains only one status-only cancelled root Close, with no
+invented answer, outcome or successful payload. Repeated Stop or completion
+observation writes no second ending. Initialization and invocation installations
+remain execution-owned and whole-document failure ranking is unchanged. A
+persistence failure while writing that ending is returned by exact identity;
+owned teardown is still attempted and joined, and no compensating record is
+appended.
+
 `HostExecution.disclose(data: JsonObject)` returns `Operation<Result<JsonObject>>`.
 The selected handle invokes `Execution.disclose` through the existing contextual
 Api. Trusted middleware may replace arguments, return a replacement Result without
@@ -11347,28 +11638,9 @@ interface ReplPluginInstallation extends PluginInstallation {
 }
 ```
 
-Selected Plugins may return a CLI-owned `repl` contribution from
-`@executablemd/cli/api`. `initialize({ workspace })` runs once per live logical
-session after route and history validation; its resources end with that session.
-A child initializes independently in its own workspace. UI attachment, detachment
-and history inspection initialize nothing. Failure or cancellation joins prior
-setup before entry work, conversation work or attachment publication begins.
-
-`repl.components` declares identity components once. The ordinary entry vocabulary
-and eligible Sidekick forms derive from those declarations; absent generated
-metadata offers no generated form. Canonical identity, form dispatch and effect
-permissions still decide execution. `repl.sidekick()` runs once per live
-conversation after its provider is installed and before capture, sharing initialized
-session state. Its resources and provider decorations end with that conversation;
-entry Prompts inherit none of them. Command installation contributes package
-documentation through the existing documentation helpers and starts no session
-service. Documentation lookup grants no execution authority.
-The CLI exports `Repl` and `ReplApi` with an `initialize` operation using that
-same argument. The logical session owner applies selected callbacks through this
-operation in selection order. Extension objects and callbacks are retained before
-session work; malformed contributions refuse, and extension-only installations
-remain selected. The first selected initializer is outermost and cleanup unwinds
-in reverse order.
+The initialization, declarations, Sidekick lifetimes and callback ordering of
+CLI REPL contributions are owned by
+[specs/repl-spec.md](./repl-spec.md#selected-plugin-session-services).
 
 #### The contextual APIs a Plugin composes through
 
@@ -11379,6 +11651,9 @@ publishes `Plugin`, those three APIs and their direct operations, and the
 contract types the accepted interfaces are written in; the declaration
 constructors and the module admission a *host* uses stay on
 `@executablemd/core/host`.
+
+The `/api` entrypoints of `@executablemd/core` and `@executablemd/runtime` are
+additive: both packages preserve every existing package-root export.
 
 The three APIs are published under stable namespaced keys —
 `executablemd.core.plugin.document`, `executablemd.core.plugin.root-metadata`
@@ -11450,7 +11725,7 @@ request nor the expansion, so a handler may recover and delegate a valid one.
 
 A refusal stops later work and is retained as the root's terminal outcome.
 Already completed preparation effects remain history; a second delegation starts
-no second expansion. The [document-expansion contract](../architecture.md#capability-backed-document-expansion)
+no second expansion. The [document-expansion contract](#the-document-expansion)
 defines refusal ordering and complete-terminal admission.
 
 A failure raised before the root import may be any value. Canonical core safely
@@ -11461,21 +11736,41 @@ core-owned name and message.
 Pre-import failures are published as core-owned, repeatedly readable errors.
 Safe diagnostics remain subject to the journal's secret policy; hostile accessors
 cannot publish their trap text. Only durability and Files infrastructure failures
-cross by exact identity. The [provenance rule](../architecture.md#capability-backed-document-expansion)
+cross by exact identity. The [pre-import failure rule](#the-document-expansion)
 defines this boundary.
 
 A canonical protocol refusal keeps its original reason even if middleware
 mutates and rethrows its error object. Completion reports a fresh
-`DocumentProtocolError`; [core's private refusal provenance](../architecture.md#capability-backed-document-expansion)
+`DocumentProtocolError`; [core's private refusal provenance](#the-document-expansion)
 never relies on the object's current members.
 
 An identical root source and target may replay a retained pre-import failure
 without preparation, policy, import, authored work or append. A changed root or
 an unreadable binding refuses. Partial history restores completed preparation
 effects and continues live. Reuse requires the
-[complete canonical terminal](../architecture.md#capability-backed-document-expansion),
+[complete canonical terminal](#pre-import-terminal-admission),
 not a copied binding on an otherwise invalid result.
 
+
+<a id="pre-import-terminal-admission"></a>
+
+**Pre-import terminal admission.**
+
+A retained pre-import failure is the exception to §5.4's root-import requirement.
+Reuse requires the complete canonical terminal, not a binding copied onto
+another result: exactly one recorded completion on the root coroutine, no root
+import, and an outer protocol settlement returned successfully rather than
+thrown, enclosing a document result whose status is `err`.
+
+That inner failure uses the canonical description of §6.9: error name and
+message and the failed segment's message, plus source metadata, cause text and
+aggregate members only when applicable. Its error and segment message fields
+must agree, the failure shape is closed and admits no extra member, and rendered
+output is empty. Exactly one well-formed root binding must match the requested
+root source and target, with no missing, extra, mistyped or conflicting binding
+member and no duplicate completion. Every other terminal form yields the fixed,
+cause-free unreadable-root diagnostic without quoting retained data. A recorded
+success with an otherwise valid binding is not reusable here.
 
 Terminal acceptance stores a **detached** structural copy of the accepted props:
 objects and arrays are recursively copied and frozen, `"__proto__"` is carried
@@ -11836,7 +12131,7 @@ leave the default in place. The shared command path reads the value and imports
 no adapter. What the Context holds is inert code and configuration, with no
 provider, lease, session or identity in it: the native variant delegates the
 neutral Plugin's whole install and adds ordinary initialization middleware for a
-run, so every runtime registers the same twelve declarations either way, `xmd
+run, so every runtime registers the same sixteen declarations either way, `xmd
 syntax` describes one language everywhere, and a runtime that operates none of
 it reports an absent provider before a lock, a credential, a subprocess or a
 request exists (§5.3, §8.1). `<Dir>` is canonical core's rather than one of
@@ -13246,7 +13541,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 
 | # | Test | Verify |
 |---|------|--------|
-| SY1/SY2 | Versioned shape | `version` is 1, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
+| SY1/SY2 | Versioned shape | `version` is 2, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
 | SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers` and `Answer` carry the frozen forms, and `as` applies to `Let`, `Each` and branch-local `Catch` |
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
 | SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
@@ -13386,7 +13681,7 @@ component that observes one at an authored site.
 | SYN24 | One description | Inspection and validation describe the component identically, from one declaration |
 | SYN26 | Another loaded copy | A protected implementation built by a second loaded copy answers for nothing in the active execution |
 | SYN27 | Protected provenance | The symbols report the component under the `protected` origin kind in both the structured entry and the rendered Markdown, and never as a reserved registration; `inspectComponent` agrees |
-| SYN28 | Pinned provenance | A workflow-bundle component is reported at its path *and* blob object id, under the `workflow` origin kind, and stays in the user-provided category |
+| SYN28 | Pinned provenance | A workflow-bundle component is reported at its canonical logical retained-source path *and* the retained source's own content hash, under the `workflow` origin kind, and stays in the user-provided category |
 | SYN29 | The named form | Selected entries render their metadata and documentation once each in symbol order, not request order, with nothing else of the symbols; `as` binds identical text |
 | SYN30 | Availability and absence | Each entry states whether it is available in the current evaluation; a selected entry with no authored documentation renders its metadata and says so |
 | SYN31 | Atomic refusal | An unknown name, an empty list, a duplicate, a non-string member, a non-array value and an undeclared prop each refuse with no successful retained result |
@@ -13439,7 +13734,7 @@ through the captured capability because there is no other way to reach it.
 | FE17 | Actual cancellation stops active work, waits for cleanup, and records no false success. |
 | FE18 | One closed current record shape, marked as itself; a record an earlier build wrote is refused as unreadable history before the admission it would have restored performs anything. |
 | FE19 | Canonical `text` produces identical output across fresh workflow executions without warnings; `source` and `program` refuse before fragment effects under every profile. |
-| FE20 | Exact trusted Fetch limits are retained and narrowed; missing or changed limits refuse before requests. |
+| FE20 | Admission retains no Workspace basis or request inventory; continuation checks the exact source and selected classes and spellings with their identities, forms and effects, while destination policy is asked live where each request is performed. |
 | FE21 | Ordinary and workflow hosts exercise the same fragment evaluator rather than separate semantic implementations. |
 | FE22 | `xmd plan` output remains ordinary text usable at the command boundary and acquires no special complete-root type. |
 | FE23 | An evaluation lacking write permission refuses the write before effects, including when the write component appears in trusted symbols. **Receives the Evaluate clause of #758's SY21**; the half that stays in #759 is that symbols text alone registers, resolves and authorizes nothing. |
@@ -13670,7 +13965,7 @@ Provider-neutral, and portable across every runtime. Defined in
 |---|------|--------|
 | WD1 | Round trip | A descriptor parses, serializes and parses back to the same value |
 | WD2/WD3 | Closed shape | An undeclared member is refused, and so is anything that is not an object |
-| WD4/WD5/WD6 | Object identity | Only the versions the descriptor defines and the git kind; an object ID of the length its format requires, in lowercase hexadecimal |
+| WD4/WD5/WD6 | Descriptor identity | The current source-bundle descriptor carries neither a version nor a kind discriminator; extra discriminator members refuse, and source hashes have the length and lowercase hexadecimal form required by the declared hash algorithm |
 | WD7/WD8 | Root document path | Absolute, backslashed, NUL-bearing, empty, `.`, `..` and unnormalized paths are refused; ordinary nested paths are not |
 | WD9 | No echo | A refusal never quotes the value it refused |
 | WD10/WD11/WD12 | Stored shapes | Exactly six statuses; both stop-reason variants, and neither a mixture nor a message |
@@ -15108,7 +15403,7 @@ user's own `~/.xmd/repositories`.
 
 | # | Test | Verify |
 |---|------|--------|
-| ORC1 | One declaration surface | All twelve names appear in the symbols with complete contracts; a repository file of one of those names shadows the default; `<Dir>` is described once, with canonical core's own origin; symbol construction performs no ambient discovery, lock, Git, credential or network operation |
+| ORC1 | One declaration surface | All sixteen names appear in the symbols with complete contracts; a repository file of one of those names shadows the default; `<Dir>` is described once, with canonical core's own origin; symbol construction performs no ambient discovery, lock, Git, credential or network operation |
 | ORC2 | Runtime declaration parity | The same symbols assertion holds under Deno, Node and Bun; on a runtime that installs no operational repository provider, representative Repository, Worktree, Git, Issue and PullRequest forms each report an absent provider with zero mutation, while `<Dir>` remains operational through that runtime's host `API.Files` provider |
 | ORC3 | Ambient primary checkout | From a normal repository, root Switch/Add/Commit select the ambient Repository and the contextual checkout; outside Git, a root Worktree, Git operation or PullRequest refusal names how to run inside one |
 | ORC4 | Ambient linked worktree | Invoked from a linked worktree, Repository identity follows the canonical common directory, Git acts on that worktree's root, and the primary checkout is untouched |

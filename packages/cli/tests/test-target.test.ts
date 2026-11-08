@@ -106,8 +106,9 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
     const diagnostic = lines.filter((line) => !line.startsWith("[xmd test] ")).join("\n");
     expect(diagnostic).not.toContain("broken.test.md:");
     expect(stderr.match(/tests failed:/g)).toEqual(["tests failed:"]);
+    const shown = path.relative(path.resolve(), document);
     expect(progress).toContain(
-      `[xmd test] fail test "mixed suite failing document" at ${document}:3:1 (assertion)`,
+      `[xmd test] fail test "mixed suite failing document" at ${shown}:3:1 (assertion)`,
     );
   });
 
