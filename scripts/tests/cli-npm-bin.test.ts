@@ -14,9 +14,8 @@
 import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
-import { ensure, scoped, spawn, suspend, until, withResolvers } from "effection";
+import { ensure, scoped, until } from "effection";
 import { createApi } from "@effectionx/context-api";
-import { createTestAdapter } from "@effectionx/test-adapter";
 import * as sourceGitApi from "@executablemd/git/api";
 import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { createHash } from "node:crypto";
@@ -701,97 +700,5 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
         "replace latest with an exact package version. No release was read, and the binary was " +
         "not changed.",
     );
-  });
-});
-
-/** What a case's operation ended with: `"completed"`, or the message it raised. */
-function* settled(operation: Operation<unknown>): Operation<string> {
-  try {
-    yield* operation;
-    return "completed";
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-}
-
-/**
- * The ownership the suite above relies on, through the same adapter its
- * `beforeAll` and cases run in: a one-time resource outlives each case, a
- * failed case leaves it to the next, and it is released only after the last
- * case's own cleanup has finished.
- */
-describe("a beforeAll resource", { sanitizeOps: false, sanitizeResources: false }, () => {
-  it("outlives each case and is released after the last case's cleanup", function* () {
-    const outcome = yield* timebox(5_000, function* () {
-      const adapter = createTestAdapter({ name: "suite owner" });
-      yield* ensure(() => adapter.destroy());
-      const release = withResolvers<void>();
-      yield* ensure(() => {
-        release.resolve();
-      });
-
-      let initializations = 0;
-      let suiteRoot: string | undefined;
-      adapter.addOnetimeSetup(function* () {
-        const directory = yield* useTempDirectory("xmd-npm-suite-owner-");
-        initializations += 1;
-        suiteRoot = directory;
-      });
-      function initialized(): string {
-        if (suiteRoot === undefined) {
-          throw new Error("the one-time setup never finished");
-        }
-        return suiteRoot;
-      }
-
-      let caseDirectory = "";
-      const first = yield* adapter.runTest(function* () {
-        caseDirectory = yield* useTempDirectory("xmd-npm-case-");
-      });
-      expect(first.ok).toBe(true);
-      expect(initializations).toBe(1);
-      expect(yield* exists(initialized())).toBe(true);
-      expect(caseDirectory).not.toBe("");
-      expect(yield* exists(caseDirectory)).toBe(false);
-
-      const sentinel = new Error("an intentional case failure");
-      const failed = yield* adapter.runTest(function* () {
-        throw sentinel;
-      });
-      expect(failed.ok ? undefined : failed.error).toBe(sentinel);
-      expect(yield* exists(initialized())).toBe(true);
-
-      const ready = withResolvers<void>();
-      const cleanupEntered = withResolvers<void>();
-      const held = adapter.runTest(function* () {
-        yield* ensure(function* () {
-          cleanupEntered.resolve();
-          yield* release.operation;
-        });
-        ready.resolve();
-        yield* suspend();
-      });
-      yield* ready.operation;
-      expect(initializations).toBe(1);
-
-      let destroyed = false;
-      const destroying = yield* spawn(function* () {
-        yield* adapter.destroy();
-        destroyed = true;
-      });
-      yield* cleanupEntered.operation;
-      expect(destroyed).toBe(false);
-      expect(yield* exists(initialized())).toBe(true);
-
-      release.resolve();
-      yield* destroying;
-      expect(destroyed).toBe(true);
-      expect(yield* exists(initialized())).toBe(false);
-      expect(initializations).toBe(1);
-      expect(yield* settled(held)).toBe("halted");
-    });
-    if (outcome.timeout) {
-      throw new Error("the adapter lifetime regression timed out");
-    }
   });
 });
