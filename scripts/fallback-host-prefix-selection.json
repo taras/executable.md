@@ -1,0 +1,37 @@
+{
+  "schema": "fallback-prefix-selection.v1",
+  "recordedAt": "2026-11-08T04:25:45.294635+00:00",
+  "runtime": "bun",
+  "product": "35749f4267d42449f26b6a18c4911a0ab7222923",
+  "sourceRecord": {
+    "run": 42442393754,
+    "attempt": 1,
+    "path": "/private/tmp/xmd-1169-1170-delegation/composed-delivery/weights-delivery-bun-first-record.json",
+    "sha256": "85852ab6d5147fee945bfbc5abd4d3bd65f086e066708a8968d4a8710a60e515"
+  },
+  "files": [
+    "packages/acp/tests/acceptance.test.ts",
+    "packages/acp/tests/acpx-checkpoint-meta.test.ts",
+    "packages/acp/tests/acpx-materialization.test.ts",
+    "packages/acp/tests/acpx-session-save.test.ts",
+    "packages/acp/tests/acpx-transient-env.test.ts",
+    "packages/acp/tests/adapter-materialization.test.ts",
+    "packages/acp/tests/adapter-protocol.test.ts",
+    "packages/acp/tests/agent-certification-report.test.ts",
+    "packages/acp/tests/agent-certification.test.ts",
+    "packages/acp/tests/codex-surfaces.test.ts",
+    "packages/acp/tests/host-conversation.test.ts",
+    "packages/acp/tests/native-launch.test.ts",
+    "packages/acp/tests/permission-bridge.test.ts",
+    "packages/acp/tests/provider.test.ts",
+    "packages/acp/tests/released-runtime.test.ts",
+    "packages/acp/tests/serial-queue.test.ts",
+    "packages/acp/tests/session-key.test.ts",
+    "packages/acp/tests/terminal-screen.test.ts",
+    "packages/cli/tests/adversarial-artifact-return-recovery.test.ts",
+    "packages/cli/tests/adversarial-artifact-return.test.ts"
+  ],
+  "target": "packages/cli/tests/adversarial-delivery.test.ts",
+  "purpose": "One diagnostic replay of actual preceding files/order, retaining raw status/output. No weights record, timing calibration or assembled artifact is produced.",
+  "qualification": "Recorded file programs/order are replayed; machine/cache/timing effects are not guaranteed identical."
+}

@@ -11,10 +11,8 @@ import { join } from "node:path";
 const product = "35749f4267d42449f26b6a18c4911a0ab7222923";
 const fixture = "examples/adversarial-implementation/tests/components/Fixture/Fallback.md";
 const allowed = [
-  fixture,
-  ...["CaptureCase.ts", "TraceAssertion.ts", "capture-state.ts"].map(
-    (name) => "examples/adversarial-implementation/tests/components/Fixture/" + name,
-  ),
+  "packages/cli/tests/fixtures/failure-attribution-plugin.mjs",
+  "examples/adversarial-implementation/tests/components/Fixture/Entry.md",
 ];
 const command = [
   "timeout",
@@ -68,10 +66,13 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
   let returned = false;
   let failed = false;
   yield* scoped(function* () {
-    const root = join(Deno.env.get("RUNNER_TEMP") ?? "/missing-runner-temp", "fallback-capture");
+    const root = join(
+      Deno.env.get("RUNNER_TEMP") ?? "/missing-runner-temp",
+      "fallback-host-attribution",
+    );
     const evidence = join(root, "evidence");
     const channels = join(evidence, "channels");
-    const capture = join(evidence, "journals");
+    const capture = join(evidence, "capture");
     const checkout = join(root, "checkout");
     const envelope = Deno.env.get("GITHUB_WORKSPACE") ?? "";
     yield* ensureDir(evidence);
@@ -83,7 +84,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       consumerExecutions: 0,
       started: new Date().toISOString(),
       qualification:
-        "Instrumentation changes timing; preceding measurement files are not replayed. No original-run flake or cause claim.",
+        "The fixed recorded programs/order are replayed before overlays; machine/cache/timing equality is not promised. Observations are not proof of terminal attribution or historical cause.",
       channels: "absent",
       journals: [],
       snapshots: "not produced",
@@ -94,7 +95,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
     }
     yield* ensureDir(capture);
     yield* ensureDir(channels);
-    if (mode === "consume" || mode === "prepare") {
+    if (mode !== "preflight") {
       Object.assign(
         manifest,
         z
@@ -117,8 +118,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
             item !== null &&
             "path" in item &&
             typeof item.path === "string" &&
-            item.path.includes("/fallback/cases/") &&
-            !item.path.includes("/objects/"),
+            item.path.includes("/failure-attribution/"),
         );
         const captureErrors = captured.filter(
           (item) =>
@@ -129,7 +129,16 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
             item.path.endsWith("capture-error.json"),
         );
         manifest.captureErrors = captureErrors;
-        if (captureErrors.length) {
+        if (
+          captureErrors.length ||
+          captured.some(
+            (item) =>
+              typeof item === "object" &&
+              item !== null &&
+              "incomplete" in item &&
+              item.incomplete === true,
+          )
+        ) {
           if (selected === 0) {
             selected = 1;
             reason = "capture-fault";
@@ -157,44 +166,63 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         !returned && !failed ? "owner-cancelled; signal status belongs to Effection main" : reason;
       yield* save();
     });
-    try {
-      if (mode === "consume") {
-        if (manifest.phase !== "prelaunch" || manifest.consumerExecutions !== 0) {
-          throw new Error("Missing admitted prelaunch or execution already reserved; no retry");
+    let verification = 0;
+    function* verifyProduct(overlaid: boolean): Operation<void> {
+      if ((yield* output(["git", "rev-parse", "HEAD"], checkout)) !== product) {
+        throw new Error("Product HEAD changed");
+      }
+      const original = z
+        .record(z.string(), z.string())
+        .parse(JSON.parse(yield* readTextFile(join(evidence, "original-hashes.json"))));
+      const overlays = overlaid
+        ? z
+            .record(z.string(), z.string())
+            .parse(JSON.parse(yield* readTextFile(join(evidence, "instrumented-hashes.json"))))
+        : {};
+      for (const [path, expected] of Object.entries({ ...original, ...overlays })) {
+        if (hash(yield* until(readFile(join(checkout, path)))) !== expected) {
+          throw new Error("Product source changed: " + path);
         }
-        if (childArgv === command && manifest.preflights !== "passed") {
-          throw new Error("Linux preflights required before full consumer reservation");
+      }
+      const changed = (yield* output(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        checkout,
+      ))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.slice(3))
+        .sort();
+      if (JSON.stringify(changed) !== JSON.stringify(overlaid ? [...allowed].sort() : [])) {
+        throw new Error("Unexpected product path inventory: " + changed.join(", "));
+      }
+      const dependencies = z.record(z.string(), z.string()).parse(manifest.dependencies);
+      for (const [path, expected] of Object.entries(dependencies)) {
+        if (hash(yield* until(readFile(join(checkout, path)))) !== expected) {
+          throw new Error("Prepared dependency fact changed: " + path);
         }
-        manifest.consumerExecutions = 1;
-        manifest.phase = "consumer-running";
-        yield* save();
-        const consumer = yield* retainedProcess(
-          childArgv,
-          checkout,
-          evidence,
-          channels,
-          "consumer",
+      }
+      yield* writeTextFile(
+        join(evidence, mode + "-baseline-proof-" + ++verification + ".json"),
+        JSON.stringify(
           {
-            TMPDIR: join(root, "tmp"),
-            XMD_TEST_ARTIFACTS: capture,
+            product,
+            overlaid,
+            sourceFiles: Object.keys(original).length,
+            overlays,
+            dependencies,
+            status: changed,
           },
-        );
-        manifest.consumer = consumer;
-        selected = consumer.code;
-        reason = consumer.code === 0 ? "consumer-success" : "consumer-nonzero";
-        manifest.phase = "stopped";
-        manifest.stop = "Return evidence once; no retry, source fix, flake claim or measurement";
-        yield* save();
-        returned = true;
-        return;
+          null,
+          2,
+        ),
+      );
+    }
+    try {
+      if (!["preflight", "prepare", "prefix", "overlay", "consume"].includes(mode)) {
+        throw new Error("Expected preflight, prepare, prefix, overlay or consume");
       }
-      if (mode !== "prepare" && mode !== "preflight") {
-        throw new Error("Expected prepare or consume");
-      }
-      if (mode === "prepare" && manifest.operationalStatus !== 0) {
-        throw new Error(
-          "Successful outer preflight finalization required before product preparation",
-        );
+      if (mode !== "preflight" && manifest.operationalStatus !== 0) {
+        throw new Error("Successful previous outer finalization required");
       }
       const facts: Record<string, unknown> = {
         timestamp: new Date().toISOString(),
@@ -214,6 +242,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         ["node", ["node", "--version"]],
         ["paths", ["bash", "-c", "command -v bun deno node pnpm timeout setsid"]],
         ["envelope", ["git", "rev-parse", "HEAD"]],
+        ["envelopeStatus", ["git", "status", "--porcelain=v1"]],
       ];
       facts.osRelease = yield* readTextFile("/etc/os-release");
       for (const [name, argv] of probes) {
@@ -222,7 +251,10 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         } catch (error) {
           facts[name] = { error: String(error) };
         }
-        yield* writeTextFile(join(evidence, "provenance.json"), JSON.stringify(facts, null, 2));
+        yield* writeTextFile(
+          join(evidence, mode + "-provenance.json"),
+          JSON.stringify(facts, null, 2),
+        );
       }
       const refusals = [];
       if (facts.attempt !== "1") {
@@ -252,11 +284,138 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       if (facts.envelope !== Deno.env.get("GITHUB_SHA")) {
         refusals.push("diagnostic envelope SHA");
       }
+      if (facts.envelopeStatus !== "") {
+        refusals.push("diagnostic envelope dirty");
+      }
       manifest.admission = { accepted: refusals.length === 0, refusals };
-      manifest.phase = "admission";
       yield* save();
       if (refusals.length) {
         throw new Error("Admission refused: " + refusals.join(", "));
+      }
+      if (mode === "consume") {
+        yield* verifyProduct(true);
+        if (manifest.phase !== "prelaunch" || manifest.consumerExecutions !== 0) {
+          throw new Error("Missing admitted prelaunch or execution already reserved; no retry");
+        }
+        if (childArgv === command && manifest.preflights !== "passed") {
+          throw new Error("Linux preflights required before full consumer reservation");
+        }
+        manifest.consumerExecutions = 1;
+        manifest.phase = "consumer-running";
+        yield* save();
+        const consumer = yield* retainedProcess(
+          childArgv,
+          checkout,
+          evidence,
+          channels,
+          "consumer",
+          {
+            TMPDIR: join(root, "tmp"),
+            XMD_TEST_ARTIFACTS: capture,
+          },
+        );
+        manifest.consumer = consumer;
+        selected = consumer.code;
+        reason = consumer.code === 0 ? "consumer-success" : "consumer-nonzero";
+        manifest.phase = "stopped";
+        manifest.stop = "Return evidence once; no retry, source fix, flake claim or measurement";
+        yield* save();
+        returned = true;
+        return;
+      }
+      if (mode === "prefix") {
+        if (manifest.phase !== "baseline-prepared" || manifest.prefixExecutions !== undefined) {
+          throw new Error("Unmodified baseline required; prefix cannot repeat");
+        }
+        yield* verifyProduct(false);
+        manifest.prefixExecutions = 1;
+        manifest.phase = "prefix-running";
+        yield* save();
+        const prefix = yield* retainedProcess(
+          [
+            "timeout",
+            "--signal=TERM",
+            "--kill-after=20s",
+            "480s",
+            "deno",
+            "run",
+            "--allow-all",
+            "--node-modules-dir=none",
+            "--cached-only",
+            "--frozen",
+            join(envelope, "scripts/fallback-host-prefix-deno.ts"),
+            checkout,
+            evidence,
+            channels,
+          ],
+          checkout,
+          evidence,
+          channels,
+          "prefix",
+          { TMPDIR: join(root, "tmp") },
+        );
+        manifest.prefix = prefix;
+        selected = prefix.code;
+        if (selected !== 0) {
+          reason = "prefix-nonzero";
+          throw new Error("Prefix failed; no overlay or target");
+        }
+        yield* verifyProduct(false);
+        manifest.phase = "prefix-passed-unmodified";
+        returned = true;
+        yield* save();
+        return;
+      }
+      if (mode === "overlay") {
+        if (manifest.phase !== "prefix-passed-unmodified" || manifest.prefixExecutions !== 1) {
+          throw new Error("Successful unmodified prefix required before either overlay");
+        }
+        yield* verifyProduct(false);
+        const original = z
+          .record(z.string(), z.string())
+          .parse(JSON.parse(yield* readTextFile(join(evidence, "original-hashes.json"))));
+        const patch = yield* output(["git", "diff", product, "HEAD", "--", ...allowed], envelope);
+        yield* writeTextFile(join(evidence, "instrumentation.patch"), patch + "\n");
+        const instrumented: Record<string, string> = {};
+        for (const path of allowed) {
+          const bytes = yield* until(readFile(join(envelope, path)));
+          yield* until(writeFile(join(checkout, path), bytes));
+          instrumented[path] = hash(bytes);
+          yield* until(writeFile(join(evidence, path.split("/").at(-1) ?? "missing"), bytes));
+        }
+        const actual = (yield* output(
+          ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+          checkout,
+        ))
+          .split("\n")
+          .map((line) => line.slice(3));
+        if (actual.some((path) => !allowed.includes(path))) {
+          throw new Error("Unexpected instrumentation path");
+        }
+        for (const path of Object.keys(original).filter((path) => !allowed.includes(path))) {
+          if (hash(yield* until(readFile(join(checkout, path)))) !== original[path]) {
+            throw new Error("Unexpected source mismatch: " + path);
+          }
+        }
+        yield* writeTextFile(
+          join(evidence, "instrumented-hashes.json"),
+          JSON.stringify(instrumented, null, 2),
+        );
+        manifest.phase = "prelaunch";
+        manifest.launch = {
+          argv: command,
+          cwd: checkout,
+          env: { TMPDIR: join(root, "tmp"), XMD_TEST_ARTIFACTS: capture },
+          deadlineSeconds: 300,
+          terminationJoinSeconds: 20,
+          wrapperMs: 300000,
+          bunMs: 300000,
+          authoredAH: "420s",
+        };
+        yield* verifyProduct(true);
+        returned = true;
+        yield* save();
+        return;
       }
       if (mode === "preflight") {
         yield* ensureDir(channels);
@@ -271,6 +430,8 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         );
         manifest.diagnosticSetup = setup;
         if (setup.code !== 0) {
+          selected = setup.code;
+          reason = "setup-nonzero";
           throw new Error("Diagnostic setup failed; no retry");
         }
         for (const [name, argv] of [
@@ -284,7 +445,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
               "deno",
               "task",
               "test",
-              "scripts/tests/fallback-capture-preflight.test.ts",
+              "scripts/tests/failure-attribution-plugin.test.ts",
             ],
           ],
           [
@@ -297,7 +458,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
               "bun",
               "test",
               "--timeout=90000",
-              "scripts/tests/fallback-capture-preflight.test.ts",
+              "scripts/tests/failure-attribution-plugin.test.ts",
             ],
           ],
         ] satisfies [string, string[]][]) {
@@ -307,16 +468,18 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
           manifest[name] = result;
           yield* save();
           if (result.code !== 0) {
+            selected = result.code;
+            reason = name + "-nonzero";
             throw new Error(name + " failed; consumer remains unreserved");
           }
         }
         manifest.preflights = "passed";
-        manifest.phase = "preflights-passed-consumer-not-authorized";
+        manifest.phase = "preflights-passed";
         returned = true;
         yield* save();
         return;
       }
-      if (manifest.preflights !== "passed") {
+      if (manifest.preflights !== "passed" || manifest.phase !== "preflights-passed") {
         throw new Error("Preflight proof required before product preparation");
       }
       yield* output(["git", "clone", "--no-hardlinks", "--no-checkout", envelope, checkout]);
@@ -371,6 +534,8 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       manifest.setup = setup;
       yield* save();
       if (setup.code !== 0) {
+        selected = setup.code;
+        reason = "setup-nonzero";
         throw new Error("Setup failed; no retry");
       }
       for (const path of tracked) {
@@ -378,33 +543,6 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
           throw new Error("Setup changed source: " + path);
         }
       }
-      const patch = yield* output(["git", "diff", product, "HEAD", "--", ...allowed], envelope);
-      yield* writeTextFile(join(evidence, "instrumentation.patch"), patch + "\n");
-      const instrumented: Record<string, string> = {};
-      for (const path of allowed) {
-        const bytes = yield* until(readFile(join(envelope, path)));
-        yield* until(writeFile(join(checkout, path), bytes));
-        instrumented[path] = hash(bytes);
-        yield* until(writeFile(join(evidence, path.split("/").at(-1) ?? "missing"), bytes));
-      }
-      const actual = (yield* output(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        checkout,
-      ))
-        .split("\n")
-        .map((line) => line.slice(3));
-      if (actual.some((path) => !allowed.includes(path))) {
-        throw new Error("Unexpected instrumentation path");
-      }
-      for (const path of tracked.filter((path) => !allowed.includes(path))) {
-        if (hash(yield* until(readFile(join(checkout, path)))) !== original[path]) {
-          throw new Error("Unexpected source mismatch: " + path);
-        }
-      }
-      yield* writeTextFile(
-        join(evidence, "instrumented-hashes.json"),
-        JSON.stringify(instrumented, null, 2),
-      );
       manifest.dependencies = [];
       const dependencyHashes: Record<string, string> = {};
       for (const path of [
@@ -418,27 +556,19 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       manifest.dependencies = dependencyHashes;
       yield* ensureDir(join(root, "tmp"));
       yield* ensureDir(capture);
-      manifest.phase = "prelaunch";
-      manifest.launch = {
-        argv: command,
-        cwd: checkout,
-        env: { TMPDIR: join(root, "tmp"), XMD_TEST_ARTIFACTS: capture },
-        deadlineSeconds: 300,
-        terminationJoinSeconds: 20,
-        wrapperMs: 300000,
-        bunMs: 300000,
-        authoredAH: "420s",
-      };
+      manifest.phase = "baseline-prepared";
+      yield* verifyProduct(false);
       returned = true;
       yield* save();
     } catch (error) {
-      selected = 1;
+      if (selected === 0) {
+        selected = 1;
+        reason = "setup-admission-or-launch-failure";
+      }
       failed = true;
-      reason = "setup-admission-or-launch-failure";
       manifest.failure = String(error);
       manifest.phase = "stopped-with-failure";
       yield* save();
-      throw error;
     }
   });
   return selected;
@@ -450,7 +580,7 @@ if (import.meta.main) {
   });
 }
 
-function retainedProcess(
+export function retainedProcess(
   argv: string[],
   cwd: string,
   evidence: string,
