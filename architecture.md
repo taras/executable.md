@@ -47,6 +47,9 @@ The [Workflow Workspace specification](specs/workflow-workspace-spec.md) owns co
 the [Plan command specification](specs/plan-command-spec.md) owns Plan
 production and diagnostic journals.
 
+Plan produces a program, Run executes a program from the host/CLI, and
+composition decides whether and when a planned program runs.
+
 ### Expansion and outcomes
 
 A document execution evaluates one root, producing an output stream and a completion result. Source acquisition and target selection precede authored effects. The selected source and exact target identify what executes.
