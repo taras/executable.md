@@ -6,6 +6,8 @@ Source: Syntax symbols version 1, through the same boundary as `<Syntax />` and 
 
 A non-normative table of the selected public vocabulary. In props, `?` marks an optional prop and `capture` marks a component-evaluated prop with no declared schema.
 
+## Engine structural syntax
+
 | Construct | Kind | Origin package | Declared props summary | Returns summary |
 | --- | --- | --- | --- | --- |
 | <code>All</code> | <code>structural</code> | <code>not declared</code> | <code>not declared in symbols</code> | <code>not declared in symbols</code> |
@@ -27,10 +29,55 @@ A non-normative table of the selected public vocabulary. In props, `?` marks an 
 | <code>Spawn</code> | <code>structural</code> | <code>not declared</code> | <code>not declared in symbols</code> | <code>not declared in symbols</code> |
 | <code>Switch</code> | <code>structural</code> | <code>not declared</code> | <code>not declared in symbols</code> | <code>not declared in symbols</code> |
 | <code>Try</code> | <code>structural</code> | <code>not declared</code> | <code>not declared in symbols</code> | <code>not declared in symbols</code> |
+
+## The canonical protected tier
+
+| Construct | Kind | Origin package | Declared props summary | Returns summary |
+| --- | --- | --- | --- | --- |
+| <code>Dir</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
+| <code>Evaluate</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>text?: string; allow?: array</code> | <code>text: string</code> |
+| <code>File</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
+| <code>File.Delete</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
+| <code>Syntax</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>names?: array</code> | <code>text: string</code> |
+
+## Ordinary defaults
+
+### @executablemd/cli
+
+| Construct | Kind | Origin package | Declared props summary | Returns summary |
+| --- | --- | --- | --- | --- |
+| <code>Verbose</code> | <code>default component</code> | <code>@executablemd/cli</code> | <code>no individual props declared</code> | <code>text: string</code> |
+
+### @executablemd/core
+
+| Construct | Kind | Origin package | Declared props summary | Returns summary |
+| --- | --- | --- | --- | --- |
 | <code>Agent</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>name?: string</code> | <code>text: string</code> |
 | <code>AgentProvider</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>name: string; defaultAgent?: string; timeout?: string</code> | <code>text: string</code> |
 | <code>ApproveAll</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>no individual props declared</code> | <code>text: string</code> |
 | <code>AskPermission</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>no individual props declared</code> | <code>text: string</code> |
+| <code>CodeBlock</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: string; language?: string</code> | <code>text: string</code> |
+| <code>Cwd</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>no individual props declared</code> | <code>text: string</code> |
+| <code>Elicit</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>schema: schema</code> | <code>value: schema</code> |
+| <code>Fail</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>message: string</code> | <code>text: string</code> |
+| <code>Fetch</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>url: string; method?: string; headers?: object; timeout?: string</code> | <code>text: string</code> |
+| <code>Glob</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>include: array; exclude?: array</code> | <code>value: array</code> |
+| <code>Json</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: capture</code> | <code>text: string</code> |
+| <code>Parse</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>schema: schema</code> | <code>value: schema</code> |
+| <code>Prompt</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>text?: string; agent?: string; session?: string; timeout?: string; throwOnError?: boolean</code> | <code>text: string</code> |
+| <code>Query</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: schema; yq: string</code> | <code>text: string</code> |
+| <code>SafeParse</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>schema: schema</code> | <code>value: schema</code> |
+| <code>Session</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>name?: string; model?: string; effort?: string</code> | <code>text: string</code> |
+| <code>Session.Launch</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>agent?: string; session?: string</code> | <code>text: string</code> |
+| <code>Slice</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>offset?: integer; length?: integer</code> | <code>text: string</code> |
+| <code>TempDir</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>no individual props declared</code> | <code>text: string</code> |
+| <code>Test</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>name?: string; timeout?: string</code> | <code>text: string</code> |
+| <code>Yaml</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: capture</code> | <code>text: string</code> |
+
+### @executablemd/testing
+
+| Construct | Kind | Origin package | Declared props summary | Returns summary |
+| --- | --- | --- | --- | --- |
 | <code>Assert</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>msg?: string; expr: capture</code> | <code>text: string</code> |
 | <code>AssertEquals</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>msg?: string; actual: capture; expected: capture</code> | <code>text: string</code> |
 | <code>AssertExists</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>msg?: string; actual: capture</code> | <code>text: string</code> |
@@ -46,19 +93,23 @@ A non-normative table of the selected public vocabulary. In props, `?` marks an 
 | <code>AssertStrictEquals</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>msg?: string; actual: capture; expected: capture</code> | <code>text: string</code> |
 | <code>AssertStringIncludes</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>msg?: string; actual: capture; expected: capture</code> | <code>text: string</code> |
 | <code>AssertThrows</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>message: capture</code> | <code>text: string</code> |
-| <code>CodeBlock</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: string; language?: string</code> | <code>text: string</code> |
 | <code>CollectJournal</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>no individual props declared</code> | <code>text: string</code> |
 | <code>CollectOutput</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>no individual props declared</code> | <code>text: string</code> |
-| <code>Cwd</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>no individual props declared</code> | <code>text: string</code> |
 | <code>DiagnosticJournal</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>no individual props declared</code> | <code>text: string</code> |
-| <code>Dir</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
-| <code>Elicit</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>schema: schema</code> | <code>value: schema</code> |
-| <code>Evaluate</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>text?: string; allow?: array</code> | <code>text: string</code> |
 | <code>Execution</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>host: string; target?: string; source?: string; action?: string; props?: object</code> | <code>text: string</code> |
-| <code>Fail</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>message: string</code> | <code>text: string</code> |
-| <code>Fetch</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>url: string; method?: string; headers?: object; timeout?: string</code> | <code>text: string</code> |
-| <code>File</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
-| <code>File.Delete</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>path: string</code> | <code>text: string</code> |
+| <code>Testing</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>no individual props declared</code> | <code>text: string</code> |
+| <code>WorkflowRun</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>id?: string</code> | <code>text: string</code> |
+
+### @executablemd/web
+
+| Construct | Kind | Origin package | Declared props summary | Returns summary |
+| --- | --- | --- | --- | --- |
+| <code>WebForm</code> | <code>default component</code> | <code>@executablemd/web</code> | <code>schema: schema; uiSchema?: schema</code> | <code>value: schema</code> |
+
+### @executablemd/workflow
+
+| Construct | Kind | Origin package | Declared props summary | Returns summary |
+| --- | --- | --- | --- | --- |
 | <code>Git.Add</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>paths: schema</code> | <code>text: string</code> |
 | <code>Git.Changes</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>compare: schema; base?: string; head?: string; paths?: array; limit?: integer; cursor?: string</code> | <code>value: object</code> |
 | <code>Git.Commit</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>message?: string; ref?: string; verify?: boolean; yq?: string; maxBytes?: integer</code> | <code>value: schema</code> |
@@ -67,29 +118,17 @@ A non-normative table of the selected public vocabulary. In props, `?` marks an 
 | <code>Git.Files</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>prefix?: string; limit?: integer; cursor?: string</code> | <code>value: object</code> |
 | <code>Git.Push</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>no individual props declared</code> | <code>text: string</code> |
 | <code>Git.Switch</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>branch: string; base?: string</code> | <code>text: string</code> |
-| <code>Glob</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>include: array; exclude?: array</code> | <code>value: array</code> |
 | <code>Issue</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>url?: string; title?: string; tags?: array; assignee?: string; provider?: string</code> | <code>value: schema</code> |
 | <code>IssueTracker</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>url: string; provider?: string</code> | <code>text: string</code> |
-| <code>Json</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: capture</code> | <code>text: string</code> |
-| <code>Parse</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>schema: schema</code> | <code>value: schema</code> |
-| <code>Plan</code> | <code>declared Markdown</code> | <code>@executablemd/cli</code> | <code>session?: string</code> | <code>text: string</code> |
-| <code>Prompt</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>text?: string; agent?: string; session?: string; timeout?: string; throwOnError?: boolean</code> | <code>text: string</code> |
 | <code>PullRequest</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>number?: integer; title: string; base?: string; draft?: boolean</code> | <code>value: object</code> |
 | <code>PullRequest.Checks</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>url: string; provider?: string</code> | <code>value: array</code> |
 | <code>PullRequest.Comments</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>url: string; provider?: string</code> | <code>value: array</code> |
 | <code>PullRequest.Reviews</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>url: string; provider?: string</code> | <code>value: array</code> |
-| <code>Query</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: schema; yq: string</code> | <code>text: string</code> |
 | <code>Repository</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>name: string; url: string; base?: string</code> | <code>text: string</code> |
-| <code>SafeParse</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>schema: schema</code> | <code>value: schema</code> |
-| <code>Session</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>name?: string; model?: string; effort?: string</code> | <code>text: string</code> |
-| <code>Session.Launch</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>agent?: string; session?: string</code> | <code>text: string</code> |
-| <code>Slice</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>offset?: integer; length?: integer</code> | <code>text: string</code> |
-| <code>Syntax</code> | <code>protected</code> | <code>@executablemd/core</code> | <code>names?: array</code> | <code>text: string</code> |
-| <code>TempDir</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>no individual props declared</code> | <code>text: string</code> |
-| <code>Test</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>name?: string; timeout?: string</code> | <code>text: string</code> |
-| <code>Testing</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>no individual props declared</code> | <code>text: string</code> |
-| <code>Verbose</code> | <code>default component</code> | <code>@executablemd/cli</code> | <code>no individual props declared</code> | <code>text: string</code> |
-| <code>WebForm</code> | <code>default component</code> | <code>@executablemd/web</code> | <code>schema: schema; uiSchema?: schema</code> | <code>value: schema</code> |
-| <code>WorkflowRun</code> | <code>default component</code> | <code>@executablemd/testing</code> | <code>id?: string</code> | <code>text: string</code> |
 | <code>Worktree</code> | <code>default component</code> | <code>@executablemd/workflow</code> | <code>name: string; branch: string; base?: string</code> | <code>text: string</code> |
-| <code>Yaml</code> | <code>default component</code> | <code>@executablemd/core</code> | <code>value: capture</code> | <code>text: string</code> |
+
+## Declared Markdown
+
+| Construct | Kind | Origin package | Declared props summary | Returns summary |
+| --- | --- | --- | --- | --- |
+| <code>Plan</code> | <code>declared Markdown</code> | <code>@executablemd/cli</code> | <code>session?: string</code> | <code>text: string</code> |

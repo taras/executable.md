@@ -36,17 +36,62 @@ function renderConstructInventory(symbols: SyntaxSymbols): string {
       "an optional prop and `capture` marks a component-evaluated prop with no " +
       "declared schema.",
     "",
-    "| Construct | Kind | Origin package | Declared props summary | Returns summary |",
-    "| --- | --- | --- | --- | --- |",
   ];
+  const structural: Entry[] = [];
+  const protectedComponents: Entry[] = [];
+  const defaults = new Map<string, Entry[]>();
+  const markdown: Entry[] = [];
   for (const category of symbols.categories) {
     for (const entry of category.entries) {
-      lines.push(
-        `| ${[entry.name, kind(entry), origin(entry), props(entry), returns(entry)].map(cell).join(" | ")} |`,
-      );
+      switch (kind(entry)) {
+        case "structural":
+          structural.push(entry);
+          break;
+        case "protected":
+          protectedComponents.push(entry);
+          break;
+        case "default component": {
+          const packageName = origin(entry);
+          const entries = defaults.get(packageName) ?? [];
+          entries.push(entry);
+          defaults.set(packageName, entries);
+          break;
+        }
+        case "declared Markdown":
+          markdown.push(entry);
+          break;
+        default:
+          throw new Error(`inventory profile contains an unexpected component: ${entry.name}`);
+      }
     }
   }
+  lines.push(
+    "## Engine structural syntax",
+    "",
+    ...table(structural),
+    "",
+    "## The canonical protected tier",
+    "",
+    ...table(protectedComponents),
+    "",
+    "## Ordinary defaults",
+  );
+  for (const packageName of [...defaults.keys()].toSorted()) {
+    lines.push("", `### ${packageName}`, "", ...table(defaults.get(packageName) ?? []));
+  }
+  lines.push("", "## Declared Markdown", "", ...table(markdown));
   return `${lines.join("\n")}\n`;
+}
+
+function table(entries: readonly Entry[]): string[] {
+  return [
+    "| Construct | Kind | Origin package | Declared props summary | Returns summary |",
+    "| --- | --- | --- | --- | --- |",
+    ...entries.map(
+      (entry) =>
+        `| ${[entry.name, kind(entry), origin(entry), props(entry), returns(entry)].map(cell).join(" | ")} |`,
+    ),
+  ];
 }
 
 function kind(entry: Entry): string {
