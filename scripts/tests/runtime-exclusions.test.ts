@@ -155,6 +155,7 @@ describe("the applicable corpus", () => {
     const wrappers = [
       "adversarial-artifact-return-recovery",
       "adversarial-artifact-return",
+      "adversarial-decision-resolution",
       "adversarial-delivery",
       "adversarial-friction",
       "adversarial-implementation",

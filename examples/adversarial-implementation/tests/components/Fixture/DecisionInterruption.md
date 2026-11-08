@@ -1,0 +1,157 @@
+---
+description: >-
+  Repeat, contend for and interrupt decision resolution, publication and continuation.
+  Use <Fixture.DecisionInterruption root={root} />.
+props:
+  type: object
+  properties:
+    root: {type: string}
+  required: [root]
+  additionalProperties: false
+---
+
+```bash exec as="commandSetting"
+printf '%s' "$XMD_EXAMPLE_COMMAND"
+```
+<Let as="runner" value={commandSetting.stdout || "deno run --allow-all --node-modules-dir=manual --cached-only --frozen '" + props.root.replaceAll("'","'\"'\"'") + "/packages/cli/src/deno.ts' run --allow-absolute"} />
+<Let as="quote" value={"'"} />
+
+<TempDir>
+<Fixture.DecisionHold root={props.root} scenario="decision" as="held" />
+<Let as="ticket" value={held.saved.manifest.directory} />
+<Let as="reservation" value={ticket + "/decisions/" + held.work.continuation.sha256} />
+<Fixture.DecisionRequest held={held} name="a" as="a" />
+<Fixture.DecisionRequest held={held} name="b" disposition="amend" as="b" />
+<Dir path={ticket}>
+```bash exec as="uncertain"
+mkdir attempts/0001
+```
+</Dir>
+<Fixture.Execution entry="resolve-decision" value={held.work} decision={a.path} repository={held.fixture.repository} root={props.root} as="child" />
+<Fixture.Refused output={child.stdout} continuation={held.work.continuation} expected="Call 0001 already has retained or uncertain work" as="refused" />
+<Dir path={ticket}>
+```bash exec as="cleared"
+rmdir attempts/0001
+test ! -e decisions
+```
+</Dir>
+<AssertEquals actual={[uncertain.exitCode,cleared.exitCode]} expected={[0,0]} />
+<Dir path={held.fixture.root}><File path="held.json"><Json value={held.work} /></File></Dir>
+<Dir path={ticket}><Glob include={["continuations/*.json"]} as="initial" /></Dir>
+<Let as="entry" value={[props.root + "/examples/adversarial-implementation/resolve-decision.md","--props-record",held.fixture.root + "/held.json","--props-decision",a.path,"--raw","--include",props.root + "/examples/adversarial-implementation/tests/components","--include",props.root + "/examples/adversarial-implementation/components"].map(value => quote + value.replaceAll(quote,quote + '"' + quote + '"' + quote) + quote).join(" ")} />
+<Let as="output" value={quote + held.fixture.root.replaceAll(quote,quote + '"' + quote + '"' + quote) + quote} />
+<Dir path={held.fixture.repository}>
+```bash exec as="contended"
+{runner} {entry} > {output}/first.json 2> {output}/first.err &
+first=$!
+{runner} {entry} > {output}/second.json 2> {output}/second.err &
+second=$!
+wait "$first"; firstStatus=$?
+wait "$second"; secondStatus=$?
+printf '%s %s' "$firstStatus" "$secondStatus"
+```
+</Dir>
+<AssertEquals actual={contended.stdout} expected="0 0" />
+<Ticket.Text path={held.fixture.root + "/first.json"} as="firstText" />
+<Ticket.Text path={held.fixture.root + "/second.json"} as="secondText" />
+<Parse schema={{type:"object"}} as="first">{firstText}</Parse>
+<Parse schema={{type:"object"}} as="second">{secondText}</Parse>
+<Let as="contenders" value={[first,second]} />
+<Let as="winners" value={contenders.filter(entry => entry.publication === "confirmed")} />
+<AssertEquals actual={winners.length >= 1 && winners.every(entry => JSON.stringify(entry.continuation) === JSON.stringify(winners[0].continuation))} expected={true} />
+<AssertEquals actual={contenders.filter(entry => entry.publication !== "confirmed").every(entry => entry.status === "hold" && JSON.stringify(entry.continuation) === JSON.stringify(held.work.continuation) && entry.hold.includes(reservation))} expected={true} />
+<Let as="successor" value={winners[0]} />
+<Dir path={ticket}><Glob include={["continuations/*.json"]} as="published" /></Dir>
+<AssertEquals actual={published.length} expected={initial.length + 1} />
+<Ticket.Text path={reservation + "/receipt.json"} as="receiptText" />
+<Fixture.Execution entry="resolve-decision" value={held.work} decision={a.path} repository={held.fixture.repository} root={props.root} as="child" />
+<Parse schema={{type:"object"}} as="repeated">{child.stdout}</Parse>
+<AssertEquals actual={[repeated.publication,repeated.continuation]} expected={["confirmed",successor.continuation]} />
+<Fixture.Execution entry="resolve-decision" value={held.work} decision={b.path} repository={held.fixture.repository} root={props.root} as="child" />
+<Fixture.Refused output={child.stdout} continuation={held.work.continuation} expected="already has a different recorded decision" as="conflicting" />
+<Fixture.Execution entry="resolve-decision" value={successor} decision={a.path} repository={held.fixture.repository} root={props.root} as="child" />
+<Fixture.Refused output={child.stdout} continuation={successor.continuation} expected="stale continuation" as="stale" />
+<Ticket.Text path={reservation + "/receipt.json"} as="receiptAfter" />
+<AssertEquals actual={receiptAfter === receiptText} expected={true} />
+<Dir path={ticket}><Glob include={["continuations/*.json"]} as="published" /></Dir>
+<AssertEquals actual={published.length} expected={initial.length + 1} />
+<Dir path={held.fixture.root}><Glob include={["**/called.json"]} as="calls" /></Dir>
+<AssertEquals actual={calls.length} expected={1} />
+<Fixture.Execution entry="continue" value={successor} repository={held.fixture.repository} steps={1} root={props.root} as="child" />
+<Parse schema={{type:"object"}} as="continued">{child.stdout}</Parse>
+<AssertEquals actual={continued.publication} expected="confirmed" />
+<Fixture.Execution entry="continue" value={successor} repository={held.fixture.repository} steps={1} root={props.root} as="child" />
+<Parse schema={{type:"object"}} as="again">{child.stdout}</Parse>
+<AssertEquals actual={[again.publication,again.continuation]} expected={["held",successor.continuation]} />
+<AssertStringIncludes actual={again.hold} expected="already has retained work" />
+<Fixture.Execution entry="resolve-decision" value={held.work} decision={a.path} repository={held.fixture.repository} root={props.root} as="child" />
+<Parse schema={{type:"object"}} as="replayed">{child.stdout}</Parse>
+<AssertEquals actual={[replayed.publication,replayed.continuation]} expected={["confirmed",successor.continuation]} />
+<Fixture.Execution entry="continue" value={replayed} repository={held.fixture.repository} steps={1} root={props.root} as="child" />
+<Parse schema={{type:"object"}} as="resent">{child.stdout}</Parse>
+<AssertEquals actual={resent.publication} expected="held" />
+<Dir path={held.fixture.root}><Glob include={["**/called.json"]} as="calls" /></Dir>
+<AssertEquals actual={calls.length} expected={2} />
+</TempDir>
+
+<TempDir>
+<Fixture.DecisionHold root={props.root} scenario="decision" as="held" />
+<Let as="ticket" value={held.saved.manifest.directory} />
+<Let as="cuts" value={[
+  {name:"publish-before",mode:"before",match:"/continuations/",outcome:"completed",successor:false},
+  {name:"publish-after",mode:"after",match:"/continuations/",outcome:"completed",successor:true},
+  {name:"after-reservation",mode:"before",match:"/snapshots/",outcome:"failed",successor:false},
+  {name:"receipt-before",mode:"before",match:"/receipt.json",outcome:"failed",successor:true}
+]} />
+<Each in={cuts} let="cut">
+<Let as="variant" value={{...held.saved,checkpoint:{...held.saved.checkpoint,hold:{...held.saved.checkpoint.hold,reason:held.saved.checkpoint.hold.reason + " Isolated cut: " + cut.name}}}} />
+<Ticket.Publish record={variant} as="variantReturn" />
+<Ticket.Text path={variantReturn.continuation.path} as="variantText" />
+<Let as="reservation" value={ticket + "/decisions/" + variantReturn.continuation.sha256} />
+<Fixture.DecisionRequest held={{...held,work:variantReturn}} name={cut.name} as="request" />
+<Dir path={ticket}><Glob include={["continuations/*.json"]} as="before" /></Dir>
+<Dir path={held.fixture.root}><File path={cut.name + ".json"}><Json value={variantReturn} /></File></Dir>
+<Let as="cutArguments" value={[props.root + "/examples/adversarial-implementation/tests/decision-cut.md","--props-record",held.fixture.root + "/" + cut.name + ".json","--props-decision",request.path,"--plugin",props.root + "/packages/cli/tests/fixtures/decision-cut.mjs","--raw","--include",props.root + "/examples/adversarial-implementation/tests/components","--include",props.root + "/examples/adversarial-implementation/components"].map(value => quote + value.replaceAll(quote,quote + '"' + quote + '"' + quote) + quote).join(" ")} />
+<Dir path={held.fixture.repository}>
+```bash exec as="child"
+XMD_DECISION_CUT_MODE={cut.mode} XMD_DECISION_CUT_MATCH={cut.match} {runner} {cutArguments}
+```
+</Dir>
+<If condition={child.exitCode !== 0}><Fail message={child.stderr || child.stdout} /></If>
+<Parse schema={{type:"object"}} as="interrupted">{child.stdout}</Parse>
+<AssertEquals actual={[cut.name,interrupted.status]} expected={[cut.name,cut.outcome]} />
+<If condition={cut.outcome === "completed"}>
+<Parse schema={{type:"object"}} as="returned">{interrupted.output}</Parse>
+<AssertEquals actual={[returned.publication,returned.continuation]} expected={["held",variantReturn.continuation]} />
+<AssertEquals actual={[returned.failure.name,returned.failure.data.operation,returned.failure.data.phase]} expected={["FilesError","write","commit"]} />
+<Else><AssertStringIncludes actual={interrupted.failure} expected="Files operation failed" /></Else>
+</If>
+<Dir path={ticket}><Glob include={["continuations/*.json"]} as="after" /></Dir>
+<AssertEquals actual={[cut.name,after.length - before.length]} expected={[cut.name,cut.successor ? 1 : 0]} />
+<Dir path={reservation}><Glob include={["*"]} as="reserved" /></Dir>
+<AssertEquals actual={[cut.name,reserved]} expected={[cut.name,["request.json"]]} />
+<Fixture.Execution entry="resolve-decision" value={variantReturn} decision={request.path} repository={held.fixture.repository} root={props.root} as="repeat" />
+<Parse schema={{type:"object"}} as="repeated">{repeat.stdout}</Parse>
+<AssertEquals actual={[cut.name,repeated.publication,repeated.continuation]} expected={[cut.name,"held",variantReturn.continuation]} />
+<AssertStringIncludes actual={repeated.hold} expected="without a confirmed receipt" />
+<Ticket.Text path={variantReturn.continuation.path} as="variantAfter" />
+<AssertEquals actual={variantAfter === variantText} expected={true} />
+<Dir path={ticket}><Glob include={["continuations/*.json"]} as="repeatedAfter" /></Dir>
+<AssertEquals actual={repeatedAfter.length} expected={after.length} />
+</Each>
+<Ticket.Publish record={{...held.saved,checkpoint:{...held.saved.checkpoint,hold:{...held.saved.checkpoint.hold,reason:held.saved.checkpoint.hold.reason + " Isolated uncertain call."}}}} as="variantReturn" />
+<Fixture.DecisionRequest held={{...held,work:variantReturn}} name="uncertain-call" as="request" />
+<Fixture.Execution entry="resolve-decision" value={variantReturn} decision={request.path} repository={held.fixture.repository} root={props.root} as="child" />
+<Parse schema={{type:"object"}} as="resolved">{child.stdout}</Parse>
+<AssertEquals actual={resolved.publication} expected="confirmed" />
+<Dir path={ticket}>
+```bash exec as="uncertain"
+mkdir calls/0001
+```
+</Dir>
+<Fixture.Execution entry="continue" value={resolved} repository={held.fixture.repository} steps={1} root={props.root} as="child" />
+<Parse schema={{type:"object"}} as="withheld">{child.stdout}</Parse>
+<AssertEquals actual={[uncertain.exitCode,withheld.publication,withheld.continuation]} expected={[0,"held",resolved.continuation]} />
+<Dir path={held.fixture.root}><Glob include={["**/called.json"]} as="calls" /></Dir>
+<AssertEquals actual={calls.length} expected={1} />
+</TempDir>

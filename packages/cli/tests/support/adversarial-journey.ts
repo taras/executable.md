@@ -57,7 +57,7 @@ export function* runAdversarialJourney(suite: string) {
           ? preparationTimeout
           : suite === "Friction" || suite === "Implementation"
             ? 180_000
-            : suite === "Delivery"
+            : suite === "Delivery" || suite === "DecisionResolution"
               ? 300_000
               : 120_000,
       env: {

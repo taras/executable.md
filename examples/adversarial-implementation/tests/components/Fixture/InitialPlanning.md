@@ -80,7 +80,7 @@ git rev-parse HEAD
 <Ticket.Load record={held} as="heldState" />
 <AssertEquals actual={heldState.calls} expected={saved.calls} />
 <AssertEquals actual={heldState.checkpoint} expected={saved.checkpoint} />
-<AssertEquals actual={held.nextAction.action} expected="resolve_feedback_hold" />
+<AssertEquals actual={held.nextAction.action} expected={scenario === "decision" ? "resolve_decision" : "resolve_feedback_hold"} />
 <If condition={["wrong-request","wrong-gap","revision"].includes(scenario)}>
 <Ticket.Text path={saved.calls[0].attempt + "/response-rejection-0000.json"} as="text" />
 <Parse schema={{type:"object"}} as="rejection">{text}</Parse>

@@ -43,6 +43,8 @@ export const envelope = z
         record: z.string().optional(),
         gate: z.string().nullable().optional(),
         action: z.string(),
+        result: z.string().optional(),
+        input: z.literal("ticket-decision.v1").optional(),
       })
       .strict()
       .optional(),
@@ -97,7 +99,12 @@ export const state = z
           .object({ architect: z.boolean(), planner: z.boolean(), implementor: z.boolean() })
           .strict(),
         hold: z
-          .object({ kind: z.string(), reason: z.string(), receipt: z.string().optional() })
+          .object({
+            kind: z.string(),
+            reason: z.string(),
+            receipt: z.string().optional(),
+            next: z.object({ phase: z.string(), role: role.nullable() }).strict().optional(),
+          })
           .strict()
           .nullable(),
         plannerCall: z.string().startsWith("/").nullable().optional(),
@@ -105,6 +112,7 @@ export const state = z
         discovery: z.array(jsonObject).optional(),
         exactApproval: z.json().optional(),
         exactReview: z.json().optional(),
+        decisions: z.array(z.string()).optional(),
       })
       .strict(),
     calls: z.array(
@@ -195,6 +203,15 @@ export function confirmLinks(saved: z.infer<typeof state>, selected: z.infer<typ
           "/receipt.json")
   ) {
     throw new Error("Ticket preparation hold names another call.");
+  }
+  const decisions = saved.manifest.directory + "/decisions/";
+  for (const reservation of saved.checkpoint.decisions ?? []) {
+    if (
+      !reservation.startsWith(decisions) ||
+      !/^[0-9a-f]{64}$/.test(reservation.slice(decisions.length))
+    ) {
+      throw new Error("Ticket decision receipt names another ticket.");
+    }
   }
   for (const [key, document] of Object.entries(saved.documents)) {
     if (key !== document.path) {

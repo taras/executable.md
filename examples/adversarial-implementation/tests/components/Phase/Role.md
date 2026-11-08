@@ -41,7 +41,7 @@ printf '%s' 'Evidence B: mutable original after planning.' > {evidencePath}
 <File path="legacy.fixture">Changed during read-only discovery.</File>
 </If>
 <If condition={ordinary && ["provider-failure","source-absent"].includes(scenario)}><Fail message="The provider stopped without a canonical reply; reconcile the original execution." /></If>
-<Let as="decision" value={assignment.request.includes("unanswered-plan-decision") || ["decision","source-decision"].includes(scenario)} />
+<Let as="decision" value={assignment.request.includes("unanswered-plan-decision") || ["decision","source-decision"].includes(scenario) || scenario === "architect-decision" && props.role === "architect"} />
 <Let as="blocked" value={scenario === "blocked"} />
 <Let as="discovery" value={ordinary && props.role === "planner" && (props.initialize || scenario === "again") && scenario !== "source-complete"} />
 <Let as="outcome" value={decision ? "needs_decision" : blocked ? "blocked" : discovery ? "needs_discovery" : "complete"} />
@@ -55,6 +55,9 @@ git rev-parse HEAD^
 <Let as="gap" value={{request:{...request,role:scenario === "wrong-gap" ? "architect" : props.role},searched:[planPath],status:"resolved",evidence:[planPath],toolCalls:null,elapsedMs:null}} />
 <Let as="contract" value={{work:assignment.work,sourceRevision:revision,scope:"Retain original sessions and exact source.",sections:[]}} />
 <Json value={{schema:"phase-result.v2",phase:assignment.phase,work:assignment.work,outcome,revision,summary:assignment.request.includes("oversized-summary") ? "x".repeat(1201) : "The ordinary plan and focused evidence are saved.",handoff:handoffCase ? "handoff-retention implement" : decision ? "ROOT: resolve the newly discovered material choice." : ordinary ? "#1084:" + scenario + " Implement the selected plan using the accepted format API; retire legacy.fixture." : "Implement the selected ordinary plan using the accepted format API; retire legacy.fixture.",handoffInputs:[...new Set([planPath,...(ordinary ? assignment.handoffInputs ?? [] : [])])],artifacts:[planPath],evidence:[],findings:[],assessment:assignment.assessment,discoveryRequests:discovery ? [request] : [],discoveryGaps:discovery ? [gap] : [],...(props.role === "architect" ? {contract} : {}),...(blocked ? {blocker:{kind:"permission",reason:"Source permission is unavailable.",unblockCondition:"Restore the existing source permission.",evidence:[planPath]}} : {}),next:decision || blocked ? {phase:"hold",role:null} : discovery ? {phase:"discovery",role:"architect"} : assignment.continuation}} />
+<Else>
+<If condition={props.role === "implementor" && assignment.request.includes("#1084:all-owner")}>
+<Json value={{schema:"phase-result.v2",phase:assignment.phase,work:assignment.work,outcome:"needs_discovery",revision,summary:"The accepted plan conflicts with an All-owner boundary; no source was edited.",handoff:"Architect: settle the All-owner boundary before implementation.",artifacts:[],evidence:[],findings:[],assessment:assignment.assessment,discoveryRequests:[],discoveryGaps:[],next:{phase:"discovery",role:"architect"}}} />
 <Else>
 <If condition={props.role === "implementor"}>
 <If condition={conflict}>
@@ -113,6 +116,8 @@ git rev-parse HEAD
 </Dir>
 </If>
 <Json value={{schema:"phase-result.v2",...(assignment.request === "omitted-metadata" ? {} : {phase:assignment.phase,work:assignment.work,revision}),outcome,summary:["oversized-summary","uncorrectable-summary"].includes(assignment.request) ? "x".repeat(1201) : "The fake role ran the assigned consumer.",handoff:handoffCase ? props.role === "implementor" ? assignment.request === "handoff-retention correct" ? "handoff-retention corrected-review" : "handoff-retention review" : outcome === "changes_required" ? "handoff-retention correct" : assignment.request : conflict ? "Planner: add and validate resize for the remaining consumer." : "Original owner: inspect the completed consumer migration.",artifacts:selectedHandoff ? [receipt,handoffPath] : [receipt],evidence:[{revision:assignment.request === "short-revision" ? revision.slice(0,8) : revision,command:conflict ? "resize narrow" : "inspect the assigned commit",outcome:conflict ? "failed" : "passed",artifact:receipt}],findings:[],assessment:assignment.assessment,...(selectedHandoff ? {handoffInputs:[handoffPath,...(assignment.request === "handoff-retention correct" ? assignment.handoffInputs ?? [] : [])]} : assignment.request.includes("#1084:") ? {handoffInputs:assignment.handoffInputs ?? []} : {}),discoveryRequests:[],discoveryGaps:[],...(assignment.request === "omitted-metadata" ? {} : {next:conflict ? {phase:"discovery",role:"planner"} : outcome === "changes_required" ? {phase:"implementation",role:"implementor"} : assignment.continuation}),...(conflict ? {apiConflict:{expected:"The API can resize a remaining consumer.",observed:"resize is unavailable.",reproducer:"Source api.sh and run resize narrow.",artifact:receipt}} : {})}} />
+</Else>
+</If>
 </Else>
 </If>
 </Else>
