@@ -40,7 +40,8 @@ import { AssertionError } from "./assert.ts";
 import { AssertionReport } from "./assertions.ts";
 import { persistTestResult } from "./journal.ts";
 import { inTest, record, Test, testing } from "./test-api.ts";
-import type { TestResult } from "./test-api.ts";
+import { publishLifecycle } from "./test-lifecycle.ts";
+import type { TestInvocation, TestResult } from "./test-api.ts";
 
 /** An ErrorSegment raised anywhere inside a test body. */
 export class RaisedSegmentError extends Error {
@@ -65,6 +66,7 @@ export class TeardownError extends Error {
 
 /** A result computed but not yet journaled — see the module note. */
 interface StagedResult {
+  invocation?: TestInvocation;
   location: string;
   result: TestResult;
   /** Where the element was written, carried to the journal with the result. */
@@ -106,7 +108,9 @@ export function* flushStaged(): Operation<void> {
     if (!next) {
       break;
     }
-    yield* record(yield* persistTestResult(next.result, next.position));
+    const result = yield* persistTestResult(next.result, next.position);
+    yield* record(result);
+    yield* publishLifecycle({ kind: "recorded", invocation: next.invocation, result });
   }
 }
 
@@ -122,13 +126,14 @@ export function* stageResult(
   location: string,
   result: TestResult,
   position?: Readonly<SourcePosition>,
+  invocation?: TestInvocation,
 ): Operation<void> {
   yield* flushStaged();
   const queue = yield* stagingQueue();
   if (!queue) {
     return;
   }
-  queue.staged.push({ location, result, position });
+  queue.staged.push({ location, result, position, invocation });
 }
 
 /**
@@ -280,6 +285,10 @@ export function testBehavior(timeoutMs: number) {
         : timeoutMs;
     const expansion = yield* getExpansion();
     const location = formatLocation(expansion);
+    const invocation: TestInvocation = Object.freeze({
+      location,
+      ...(name === undefined ? {} : { name }),
+    });
     const parentEnv = yield* env;
     // The invocation's own scope, read before any nested invocation can shadow
     // it, and published as `testScope` so anything however deeply nested still
@@ -294,7 +303,11 @@ export function testBehavior(timeoutMs: number) {
 
     yield* Component.around({ env: () => testEnv }, { at: "min" });
     yield* Test.around(
-      { inTest: () => true, ...(scope ? { testScope: () => scope } : {}) },
+      {
+        inTest: () => true,
+        invocation: () => invocation,
+        ...(scope ? { testScope: () => scope } : {}),
+      },
       { at: "min" },
     );
     // ErrorSegments fail the test. Installed at "min" — nearest answers first —
@@ -317,6 +330,8 @@ export function testBehavior(timeoutMs: number) {
     let bodyError: unknown;
     let timedOut = false;
 
+    yield* publishLifecycle({ kind: "started", invocation });
+
     if (yield* hasContent()) {
       const boxed = yield* timebox(timeout, function* () {
         // Partial output plus the failure that ended it: what the body rendered
@@ -332,7 +347,7 @@ export function testBehavior(timeoutMs: number) {
     }
 
     const result = classify(name, location, bodyError, timedOut, timeout);
-    yield* stageResult(location, result, expansion.position);
+    yield* stageResult(location, result, expansion.position, invocation);
 
     if (result.status === "fail") {
       // Containment: a completed test returns only text. A returned ErrorSegment

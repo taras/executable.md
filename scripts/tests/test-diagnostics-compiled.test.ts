@@ -16,6 +16,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
+import { sleep, spawn } from "effection";
 import { timebox } from "@effectionx/timebox";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import path from "node:path";
@@ -151,5 +152,124 @@ describe("compiled xmd test diagnostics", () => {
     ]);
     expect(run.value.stderr).toContain('[xmd test] start test "first" at Repeated.md:8:1');
     expect(run.value.stderr).toContain('[xmd test] start test "second" at Repeated.md:8:1');
+  });
+  it("attributes concurrent repeated tests when completion order reverses start order", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run deno task build`);
+    }
+    const directory = yield* useTempDirectory("xmd-compiled-concurrent-");
+    yield* writeTextFile(
+      path.join(directory, "Repeated.md"),
+      [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    which: { type: string }",
+        "    timeout: { type: string }",
+        "  required: [which, timeout]",
+        "---",
+        "<Test name={props.which} timeout={props.timeout}>",
+        '<If condition={props.which === "first"}>',
+        "",
+        "```sh exec",
+        "touch first-ready; while [ ! -f never-created ]; do sleep 0.05; done",
+        "```",
+        "",
+        "</If>",
+        '<If condition={props.which === "second"}>',
+        "",
+        "```sh exec",
+        "touch second-ready; while [ ! -f never-created ]; do sleep 0.05; done",
+        "```",
+        "",
+        "</If>",
+        "</Test>",
+        "",
+      ].join("\n"),
+    );
+    yield* writeTextFile(
+      path.join(directory, "suite.test.md"),
+      [
+        "<All>",
+        "<Spawn>",
+        "```sh exec",
+        "while [ ! -f second-ready ]; do sleep 0.05; done",
+        "```",
+        '<Repeated which="first" timeout="1s" />',
+        "</Spawn>",
+        '<Spawn><Repeated which="second" timeout="3s" /></Spawn>',
+        "</All>",
+        "",
+      ].join("\n"),
+    );
+    const environment: Record<string, string> = {};
+    for (const [name, value] of Object.entries(process.env)) {
+      if (value !== undefined) {
+        environment[name] = value;
+      }
+    }
+    const child = yield* exec(BINARY, {
+      arguments: ["test", "suite.test.md"],
+      cwd: directory,
+      env: { ...environment, XMD_TEST_ARTIFACTS: path.join(directory, "artifacts") },
+    });
+    let stderr = "";
+    let stdout = "";
+    const output = yield* child.stdout;
+    const outputReader = yield* spawn(function* () {
+      const decoder = new TextDecoder();
+      for (let item = yield* output.next(); !item.done; item = yield* output.next()) {
+        stdout += decoder.decode(item.value, { stream: true });
+      }
+    });
+    const subscription = yield* child.stderr;
+    const reader = yield* spawn(function* () {
+      const decoder = new TextDecoder();
+      for (let item = yield* subscription.next(); !item.done; item = yield* subscription.next()) {
+        stderr += decoder.decode(item.value, { stream: true });
+      }
+    });
+    const readiness = yield* timebox(TIMEOUT, function* () {
+      while (
+        !(yield* exists(path.join(directory, "first-ready"))) ||
+        !(yield* exists(path.join(directory, "second-ready")))
+      ) {
+        yield* sleep(10);
+      }
+    });
+    expect(readiness.timeout).toBe(false);
+    expect(
+      stderr
+        .split("\n")
+        .filter((line) =>
+          /^\[xmd test\] (done|failed|cancelled) sh exec at Repeated\.md:(12|19):1$/.test(line),
+        ),
+    ).toEqual([]);
+    expect(
+      stderr.split("\n").filter((line) => /^\[xmd test\] (pass|fail) test/.test(line)),
+    ).toEqual([]);
+    const joined = yield* timebox(TIMEOUT, () => child.join());
+    if (joined.timeout) {
+      throw new Error("compiled concurrent CLI did not finish");
+    }
+    yield* reader;
+    yield* outputReader;
+    expect(joined.value.code).toBe(1);
+    const lines = stderr
+      .split("\n")
+      .filter((line) => line.startsWith("[xmd test] "))
+      .map((line) => line.slice(11));
+    expect(lines.filter((line) => /^start test/.test(line))).toEqual([
+      'start test "second" at Repeated.md:9:1',
+      'start test "first" at Repeated.md:9:1',
+    ]);
+    const operations = ["start sh exec at Repeated.md:19:1", "start sh exec at Repeated.md:12:1"];
+    expect(lines.filter((line) => operations.includes(line))).toEqual(operations);
+    expect(lines.filter((line) => /^(pass|fail) test/.test(line))).toEqual([
+      'fail test "first" at Repeated.md:9:1 (timeout; interrupted sh exec at Repeated.md:12:1)',
+      'fail test "second" at Repeated.md:9:1 (timeout; interrupted sh exec at Repeated.md:19:1)',
+    ]);
+    expect(stdout).not.toContain("[xmd test]");
   });
 });

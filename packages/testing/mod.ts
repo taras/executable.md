@@ -59,7 +59,15 @@
  */
 
 export { Test, testing, record, results, TestFailureError } from "./src/test-api.ts";
-export type { TestApi, TestResult, BoundaryOutcome } from "./src/test-api.ts";
+export type {
+  TestApi,
+  TestResult,
+  BoundaryOutcome,
+  TestInvocation,
+  TestStarted,
+  TestRecorded,
+  TestLifecycle,
+} from "./src/test-api.ts";
 export {
   installTestingComponents,
   TESTING_REGISTRATIONS,

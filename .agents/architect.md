@@ -75,6 +75,16 @@ needs a new protocol. Compare the actual baseline and the smaller alternatives
 before preparing a member-by-member proposal. Keep the approval rules below for
 a necessary unresolved boundary.
 
+When a proposal or an existing surface names an observer, a callback, a
+listener or an `observe` registration, inventory the capability before the
+transport: what the consumer tracks, which owner's lifecycle produces it, who
+mints the identity that correlates its records, and how long the consumer must
+live to receive the last one. Select stream, middleware, hook or handle from
+that inventory under architecture rules 23–25 and 33–43, and show the inventory
+in **Assessment** before **Proposed**. A member whose only purpose is to carry a
+callback to a record proposes the wrong layer: return the owner's missing record
+or stream instead.
+
 ### Route system boundaries to a dedicated interview
 
 During **Assessment**, before proposing a decision, explicitly trigger the

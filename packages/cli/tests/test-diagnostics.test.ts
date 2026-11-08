@@ -368,6 +368,84 @@ describe("xmd test live progress", () => {
     ]);
   });
 
+  it("attributes concurrent repeated tests when completion order reverses start order", function* () {
+    const directory = yield* useProject({
+      "Repeated.md": [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    which: { type: string }",
+        "    timeout: { type: string }",
+        "  required: [which, timeout]",
+        "---",
+        "<Test name={props.which} timeout={props.timeout}>",
+        '<If condition={props.which === "first"}>',
+        "",
+        "```sh exec",
+        "touch first-ready; while [ ! -f never-created ]; do sleep 0.05; done",
+        "```",
+        "",
+        "</If>",
+        '<If condition={props.which === "second"}>',
+        "",
+        "```sh exec",
+        "touch second-ready; while [ ! -f never-created ]; do sleep 0.05; done",
+        "```",
+        "",
+        "</If>",
+        "</Test>",
+        "",
+      ].join("\n"),
+      "suite.test.md": [
+        "<All>",
+        "<Spawn>",
+        "```sh exec",
+        "while [ ! -f second-ready ]; do sleep 0.05; done",
+        "```",
+        '<Repeated which="first" timeout="1s" />',
+        "</Spawn>",
+        '<Spawn><Repeated which="second" timeout="3s" /></Spawn>',
+        "</All>",
+        "",
+      ].join("\n"),
+    });
+    const live = yield* launch(directory, ["suite.test.md"], join(directory, "artifacts"));
+    const readiness = yield* timebox(RUN_TIMEOUT, function* () {
+      while (
+        !(yield* exists(join(directory, "first-ready"))) ||
+        !(yield* exists(join(directory, "second-ready")))
+      ) {
+        yield* sleep(10);
+      }
+    });
+    expect(readiness.timeout).toBe(false);
+    expect(
+      progress(live.stderr()).filter((line) =>
+        /^(done|failed|cancelled) sh exec at Repeated\.md:(12|19):1$/.test(line),
+      ),
+    ).toEqual([]);
+    expect(progress(live.stderr()).filter((line) => /^(pass|fail) test/.test(line))).toEqual([]);
+    const joined = yield* timebox(RUN_TIMEOUT, () => live.join());
+    expect(joined.timeout).toBe(false);
+    if (joined.timeout) {
+      throw new Error("concurrent CLI did not finish");
+    }
+    expect(joined.value.code).toBe(1);
+    const lines = progress(live.stderr());
+    expect(lines.filter((line) => /^start test/.test(line))).toEqual([
+      'start test "second" at Repeated.md:9:1',
+      'start test "first" at Repeated.md:9:1',
+    ]);
+    const operations = ["start sh exec at Repeated.md:19:1", "start sh exec at Repeated.md:12:1"];
+    expect(lines.filter((line) => operations.includes(line))).toEqual(operations);
+    expect(lines.filter((line) => /^(pass|fail) test/.test(line))).toEqual([
+      'fail test "first" at Repeated.md:9:1 (timeout; interrupted sh exec at Repeated.md:12:1)',
+      'fail test "second" at Repeated.md:9:1 (timeout; interrupted sh exec at Repeated.md:19:1)',
+    ]);
+    expect(live.stdout()).not.toContain("[xmd test]");
+  });
+
   it("keeps earlier progress and reports each failure once, naming an interrupted operation", function* () {
     const directory = yield* useProject({
       "waits.md": doc(...gate("never-created")),

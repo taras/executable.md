@@ -163,6 +163,7 @@ import type { CommandPlugins } from "./plugin-host.ts";
 import { selectPlugins } from "./plugin-selection.ts";
 import type { PluginSelection } from "./plugin-selection.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
+import type { Testing } from "@executablemd/testing";
 import { useTestDiagnostics } from "./test-diagnostics.ts";
 import type { ExecutionDiagnostics, TestDiagnostics } from "./test-diagnostics.ts";
 import { testingExecutionHost } from "./testing-host.ts";
@@ -1360,7 +1361,11 @@ export type HostServiceInstaller = () => Operation<void>;
  * presentation — the journal file, the verbose echo, terminal formatting, the
  * value root's stdout — stays with the command that owns those streams.
  */
-export function* installDocumentComponents(mode: DocumentMode, verbose: boolean): Operation<void> {
+export function* installDocumentComponents(
+  mode: DocumentMode,
+  verbose: boolean,
+): Operation<Testing | undefined> {
+  let session: Testing | undefined;
   // What `<Verbose>` reads, seeded from the flag this invocation already
   // resolved. `min` is what lets a component installed further in override
   // verbosity for its own content, the way a block's own `timeout=` outranks
@@ -1380,7 +1385,7 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // explicit <Testing> boundaries affect the outcome), while `xmd test`
   // additionally activates root testing through a useTesting() session.
   if (mode.testing) {
-    yield* useTesting({ verbose });
+    session = yield* useTesting({ verbose });
     // TestAgent installs before the agent components so its <Prompt>
     // interceptor runs first.
     yield* installTestAgentComponents();
@@ -1417,6 +1422,7 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   if (mode.agent) {
     yield* installRunAgentStack(mode.agent);
   }
+  return session;
 }
 
 /**
@@ -1536,7 +1542,10 @@ function* runDocument(
   if (mode.observed !== undefined) {
     yield* mode.observed.observe();
   }
-  yield* installDocumentComponents(mode, verbose);
+  const session = yield* installDocumentComponents(mode, verbose);
+  if (session !== undefined && mode.observed !== undefined) {
+    yield* mode.observed.lifecycle(session);
+  }
 
   // `xmd test` reports on stdout, so the JSON result contract is `xmd run`'s
   // alone. Reading the mode costs no document effects.

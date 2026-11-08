@@ -7,6 +7,11 @@ import { TestFailureError } from "../src/test-api.ts";
 import { failureOf, runDoc } from "./helpers.ts";
 import type { DocRun, RunDocOptions } from "./helpers.ts";
 import type { Operation } from "effection";
+import { scoped, useScope, withResolvers } from "effection";
+import { useStubFs } from "@executablemd/runtime/test";
+import { execute } from "@executablemd/core";
+import { useTesting } from "../src/use-testing.ts";
+import type { TestLifecycle, TestResult } from "../src/test-api.ts";
 
 interface LiveAndReplay {
   live: DocRun;
@@ -31,6 +36,46 @@ function* liveThenReplay(
 }
 
 describe("testing replay", () => {
+  it("restores full-replay results through record without publishing live lifecycle events", function* () {
+    const owner = yield* useScope();
+    const liveStream = new InMemoryStream();
+    const allResults: (readonly TestResult[])[] = [];
+    for (const stream of [liveStream, new InMemoryStream()]) {
+      if (stream !== liveStream) {
+        for (const event of yield* liveStream.readAll()) {
+          yield* stream.append(event);
+        }
+      }
+      const events: TestLifecycle[] = [];
+      const run = yield* scoped(function* () {
+        yield* useStubFs({ "README.md": '<Test name="one" />' });
+        const session = yield* useTesting();
+        const ready = withResolvers<void>();
+        const reader = owner.run(function* () {
+          const subscription = yield* session.lifecycle;
+          ready.resolve();
+          for (
+            let item = yield* subscription.next();
+            !item.done;
+            item = yield* subscription.next()
+          ) {
+            events.push(item.value);
+          }
+        });
+        yield* ready.operation;
+        const result = yield* yield* execute({ path: "README.md", stream });
+        return { result, results: yield* session.results, reader };
+      });
+      yield* run.reader;
+      expect(run.result.ok).toBe(true);
+      allResults.push(run.results);
+      expect(events.map((event) => event.kind)).toEqual(
+        stream === liveStream ? ["started", "recorded"] : [],
+      );
+    }
+    expect(allResults[1]).toEqual(allResults[0]);
+  });
+
   it("a passing useTesting run preserves its outcome and results on full replay", function* () {
     const { live, replay, replayStream } = yield* liveThenReplay(
       { "README.md": '<Test name="one"><Assert expr={true} /></Test>\n' },

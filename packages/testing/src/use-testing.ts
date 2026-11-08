@@ -21,17 +21,31 @@
  * ```
  */
 
-import type { Operation } from "effection";
+import { createSignal, ensure } from "effection";
+import type { Operation, Stream } from "effection";
 import { Execution } from "@executablemd/core";
 import { sessionActive, Test, TestFailureError } from "./test-api.ts";
 import { activateTesting } from "./activation.ts";
-import type { TestResult } from "./test-api.ts";
+import type { TestLifecycle, TestResult } from "./test-api.ts";
 import { installTestingComponents } from "./components.ts";
+import { LifecyclePublisher } from "./test-lifecycle.ts";
 import { flushStaged } from "./test-component.ts";
 
 export interface Testing {
   /** Immutable snapshot of completed tests, in discovery order. */
   readonly results: Operation<readonly TestResult[]>;
+  /**
+   * This session's tests as they start and as their results are recorded.
+   *
+   * Published by the session for every test it activates, including tests
+   * inside a nested `<Testing>` boundary. `started` is sent before the body
+   * runs; `recorded` is sent after the result was journaled and every
+   * collector delegated, so `results` already holds it. A run that is halted
+   * before it stages a result sends no `recorded`. The stream closes when the
+   * session's scope ends; each subscription belongs to the subscriber's scope
+   * and ends with it. Full replay publishes nothing.
+   */
+  readonly lifecycle: Stream<TestLifecycle, void>;
 }
 
 export function* useTesting(options?: { verbose?: boolean }): Operation<Testing> {
@@ -41,6 +55,12 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
     );
   }
   yield* Test.around({ sessionActive: () => true });
+
+  const lifecycle = createSignal<TestLifecycle, void>();
+  yield* ensure(() => {
+    lifecycle.close();
+  });
+  yield* LifecyclePublisher.set((event) => lifecycle.send(event));
 
   yield* installTestingComponents(options);
 
@@ -122,6 +142,7 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
   yield* activateTesting();
 
   return {
+    lifecycle,
     results: {
       *[Symbol.iterator]() {
         return Object.freeze([...collected]);

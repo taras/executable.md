@@ -626,6 +626,33 @@ failures — or an empty boundary — into an `Err` outcome for the execution.
 reached under it refuses before its body expands, as *Registration, mode, and
 activation* describes.
 
+`record` middleware receives the parsed result after it was journaled, not the
+live invocation that produced it, and a staged result is recorded after its own
+test has torn down — by the next test, by the enclosing `<Testing>` boundary or
+by the session's final flush. Inside a test, `testScope` identifies the live
+invocation. A result restored by replay has no live invocation. Matching a
+recorded result to live work by name, source location or arrival order is not
+supported: the same authored `<Test>` runs concurrently under `<All>` and
+`<Spawn>`, and results from one location may be recorded in a different order
+than their tests started.
+
+The test lifecycle connects a live invocation to its recorded
+result. `TestInvocation` is one frozen, data-only value per live
+run of a `<Test>`, minted before the test's own middleware is installed;
+identity is the object reference, and `location` plus an optional `name` are
+for a reader. `TestApi.invocation` answers the current run's value from
+anywhere inside the test and `undefined` outside one. `useTesting()` returns
+`lifecycle: Stream<TestLifecycle, void>` beside `results`. `started` carries the
+invocation and is sent before the body runs. `recorded` carries the invocation
+and the recorded `TestResult`, and is sent after the result is journaled and
+every collector has delegated. `recorded.invocation` is `undefined` only for a
+result the failure handler staged for a run that died before staging one. A run
+halted before it stages sends no `recorded`; the stream closes when the session
+scope ends. Subscribe before `execute`; a subscription is owned by its own
+scope. Full replay restores results through `record` and publishes nothing.
+`TestResult`, the journal, staging order and the completion policy are
+unchanged, and a `<Testing>` boundary without a session has no stream.
+
 Several documents share fixtures, never sessions. Fixture and provider state
 that spans a suite is installed in an enclosing scope, and each document runs
 in a child scope holding one `useTesting()` session and one execution. A

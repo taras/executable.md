@@ -47,6 +47,9 @@ the system itself; this file governs how new architecture is designed.
 38. A call owns its hooks and waits for their cleanup; after hooks observe cancellation explicitly and cancellation remains cancellation.
 39. createHooks uses unchanged createApi and returns the named operation plus independent before/after registration functions.
 40. After hooks receive Effection Result<T>; cancellation carries a dedicated cancellation error while the call continues to unwind as cancelled.
+41. Observation registrations are owned resources whose cleanup runs automatically when their owning scope ends.
+42. Review an observation API's capability and ownership before choosing its name.
+43. Name what a consumer tracks and which owner produces it before choosing a stream, middleware, hook or handle for it.
 
 Rules 23–25 choose the API by ownership and intended composition. A captured
 service keeps provider selection fixed for its consumer's lifetime; its mutable
@@ -116,6 +119,40 @@ rejection or implementation failure. Cancellation uses the same `Err` channel
 with a dedicated error type. This is the after-hook notification; it does not
 turn cancellation into an ordinary returned failure. All after hooks receive
 the outcome selected before they run, independent of other after-hook failures.
+
+Rules 41–43 follow the Product Owner's direction on the `xmd test` progress
+report (PR 1172): an API described as observation signals that the API which
+tracks what the consumer cares about is missing. Apply them in this order.
+
+1. Write down what the consumer tracks, which owner's lifecycle produces it,
+   who mints the identity that correlates its records, and how long the
+   consumer must live to receive the last one. Do this before naming a member.
+2. Choose the mechanism from those answers, as
+   [capability and ownership before mechanism](../architecture.md#capability-and-ownership-before-mechanism)
+   describes: ongoing owner-produced records are a stream; intended per-call
+   control is middleware; per-call observation without continuation is a hook
+   under rules 33–40; instance operations are a handle. Two signals name the
+   missing piece: a callback that delivers domain records indicates a missing
+   stream, and an `observe` registration indicates a missing middleware, hook
+   or owner-supplied record.
+3. Bind every registration to its owner with Effection's `resource()` or
+   `ensure()`, release established before the registration is exposed. Do not
+   assume a public `Resource` type exists. A registration that must receive a
+   deferred final record belongs to an owner that survives until the record
+   settles and retains data, never the producing invocation's live resources.
+4. Let the lifecycle owner mint correlation identity and carry it with every
+   record it publishes. A consumer that matches records by start order, source
+   location, name, elapsed time or parsed-object identity is reconstructing
+   what the owner has not exposed; return that missing record to the owner's
+   design rather than hardening the match.
+
+Common mistake: proposing a void callback carried beside a record so one
+consumer can be told when the record settles. That is a stream of the owner's
+records, or a hook on the owner's call, with the owner left out; it inherits
+none of the hook contract's failure, cancellation or cleanup semantics. The
+correct alternative is the owner-published record under rule 43, reviewed as a
+cross-package member. Renaming `observe` repairs nothing; these rules ban no
+word.
 
 The Architect applies these rules without another approval when they settle a
 design. A new concept, ambiguous fit, conflict or proposed exception returns to

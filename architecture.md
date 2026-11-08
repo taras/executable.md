@@ -25,6 +25,7 @@ The documents have different jobs:
 | Who owns a native Agent handoff, and what if its executable changes? | [Native Agent sessions](#native-agent-sessions) | [Native ownership](specs/native-agent-session-launch-spec.md#ownership-and-concurrency) and [build binding](specs/native-agent-session-launch-spec.md#executable-build-binding) |
 | When does an installed structural region run, and who cancels it? | [Installed structural syntax](#the-installed-structural-syntax-boundary) | [Structural interfaces](specs/executable-mdx-spec.md#declared-structural-syntax) and [SR conformance](specs/executable-mdx-spec.md#tier-sr--expanding-installed-structural-syntax-53) |
 | Why can Plan retry a refused candidate but stop on cleanup failure? | [Typed candidate recovery](#typed-candidate-recovery-around-evaluate) | [Plan failures](specs/plan-command-spec.md#failures) |
+| Does a consumer need a stream, middleware, a hook or a handle, and who owns the identity it correlates on? | [Capability and ownership before mechanism](#capability-and-ownership-before-mechanism) | [Architecture rules 23–25 and 33–43](.agents/architecture-rules.md) and [Test API](specs/testing-spec.md#test-api) |
 | Which rules are current, and which explain earlier choices? | [Changing these rules](#changing-these-rules) | [Decisions](specs/decisions.md) and [vision](specs/markdown-agents-vision.md) |
 
 ## A document running
@@ -190,6 +191,47 @@ explicitly, and cancellation remains cancellation.
 The call owns all hook work and waits for its cleanup. A before hook
 interrupted partway through uses its own Effection cleanup for anything it
 acquired.
+
+#### Capability and ownership before mechanism
+
+A design that reaches for an observer, a callback parameter, a listener or a
+function named `observe` has usually skipped a question. Answer four things
+before choosing how a consumer is told anything: what the consumer tracks,
+which owner's lifecycle produces it, who mints the identity that correlates one
+record with another, and how long the consumer must live to receive the last
+record. The answers select the mechanism; the mechanism never substitutes for
+them.
+
+- A **stream** carries ongoing domain records an owner produces over its
+  lifetime: expansion phases, a session's test results, frames. The producing
+  owner bounds the stream; each consumer's subscription is owned by the
+  consumer's scope and ends with it. A callback parameter that delivers a
+  domain record is a stream, or a hook, written without its owner.
+- **Middleware** is an intended per-call extension point: a handler may
+  delegate, transform, refuse or repeat where the owning API permits it.
+- **Hooks** observe one call without continuation, under the contract above.
+  A registration whose body wraps a delegation only to report that the call
+  started and how it settled is a hook written as middleware; where the hook
+  primitive is unavailable, the owner's documentation says so and the
+  middleware delegates the exact request once.
+- A **handle** carries operations tied to one instance.
+
+Every registration is an owned resource: acquired inside the owner's scope,
+released by that scope's teardown, with the release established before the
+registration is exposed. A consumer that must receive a record published after
+an invocation has unwound — a result flushed later, a terminal phase published
+after the handler's frame is gone — belongs to an owner that survives until that
+record settles, and retains data rather than the invocation's live resources.
+
+Correlation identity belongs to the lifecycle owner. The owner that starts,
+settles and records a unit of work mints whatever identifies it and carries that
+identity with every record it publishes about it. A consumer never reconstructs
+identity from start order, source location, a name, elapsed time or the
+identity of an object the owner parsed into a new one. When a consumer finds
+itself holding a current pointer or a queue in order to decide which unit a
+record belongs to, the owner has not exposed the record that is wanted; file the
+missing primitive rather than growing the reconstruction, as
+[Changing these rules](#changing-these-rules) requires.
 
 ### Three axes
 
@@ -1465,6 +1507,60 @@ wrapper it did not apply and hand it to a handler, which is exactly the
 containment being prevented. So nothing outside that copy is asked, no predicate
 crosses a package boundary, and the refusal travels on unchanged, after the
 fatal search and before any handler is dispatched.
+
+The testing package owns a test result's whole lifecycle: the behavior that runs
+the body, the staged entry, a teardown failure folded into that entry, durable
+persistence and the final `record`. `TestBehavior` middleware runs inside the
+live invocation and receives props, never a result; inside that invocation,
+`testScope` identifies the live test however deeply nested. `record` middleware
+receives the parsed record after persistence, never the live invocation, and a
+staged result is flushed by the next test or by the session, after its own
+invocation has unwound. A restored record has no live invocation at all. A host
+that reports a recorded result against work it saw inside the test depends on
+an identity this owner supplies, never on one it infers from start order or
+source location under
+[capability and ownership before mechanism](#capability-and-ownership-before-mechanism);
+the same authored `<Test>` runs concurrently under `<All>` and `<Spawn>`, so
+neither order nor location identifies an invocation.
+
+The test lifecycle supplies that identity. The testing package mints one `TestInvocation` per live
+run of a `<Test>`, before the test's own middleware is installed: a frozen,
+data-only value whose identity is the object reference, carrying `location` and
+an optional `name` for a reader and no scope, task, resource or permission.
+Inside the run, `TestApi.invocation` answers that value from anywhere, beside
+`testScope`, and is `undefined` outside a test. The staged entry keeps the
+invocation through a teardown failure that replaces its result. A `useTesting()`
+session publishes `Testing.lifecycle`, a `Stream<TestLifecycle, void>` of two
+record kinds: `started`, sent before the body runs, and `recorded`, sent after
+the result is journaled and every collector has delegated, so `results` already
+holds it. `recorded.invocation` is `undefined` only for a result the failure
+handler staged for a run that died before staging one. A run halted before it
+stages sends no `recorded`. The session closes the stream when its scope ends;
+each subscription is owned by the subscriber's scope, is created before
+execution begins, and ends with that scope. Full replay restores results through
+`record` alone and publishes no lifecycle record; the durable and replay
+identity remains the journaled `location`, and `TestResult`, the journal and
+staged-record timing are unchanged. `Testing` is a value returned to the caller
+that created the session; `TestApi.invocation` is replaceable composition data
+under the stable name `Test` that describes a run and grants nothing.
+
+That contract identifies results; it does not choose staged entries. The
+failure handler that folds a teardown failure into a staged result still finds
+the entry by source location, because a `ComponentFailure` names no run, and
+two concurrent runs of one location remain ambiguous there. That is recorded
+debt, not something this contract silently repairs.
+
+The `xmd test` progress report and failure journals have two owners with two
+lifetimes. The command owns the sink, the writer that serializes progress
+lines, the artifact directory and the element-phase subscription tasks; these
+live in the command's scope, which outlives every document and nested child it
+reports on, and the command drains and joins them before it returns. Each
+execution owns the middleware registrations that report on it: they are
+installed in that root document's or nested child's scope and are released
+with it, while the phase subscriptions they start run on in the command's scope
+until each element's terminal phase. Both owners are trusted host values
+captured before document code runs; a document reaches neither through a
+Context, a profile or the request its middleware can read.
 
 #### Output security and host retention
 

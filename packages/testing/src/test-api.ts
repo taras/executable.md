@@ -34,6 +34,33 @@ export interface TestResult {
   };
 }
 
+/**
+ * One run of one `<Test>`, minted by the testing package when the test's
+ * behavior begins and retired when its result is recorded.
+ *
+ * Identity is the object itself: two runs of the same authored test are two
+ * distinct values that compare unequal, and the same value is handed to
+ * everything inside the live run and carried to its recorded result. The
+ * fields describe the run for a reader; they do not identify it. It is never
+ * journaled, never restored by replay, and holds no scope, task or resource.
+ */
+export interface TestInvocation {
+  /** "path:line:column" ("line:column" for dynamically scanned sources). */
+  readonly location: string;
+  readonly name?: string;
+}
+
+export interface TestStarted {
+  readonly kind: "started";
+  readonly invocation: TestInvocation;
+}
+export interface TestRecorded {
+  readonly kind: "recorded";
+  readonly invocation: TestInvocation | undefined;
+  readonly result: Readonly<TestResult>;
+}
+export type TestLifecycle = TestStarted | TestRecorded;
+
 /** Aggregate outcome of one `<Testing>` boundary. */
 export interface BoundaryOutcome {
   tests: number;
@@ -55,6 +82,16 @@ export interface TestApi {
    * rather than re-created, and gives that state the test's lifetime.
    */
   testScope: EvalScope | undefined;
+  /**
+   * The run of the `<Test>` being expanded, or undefined outside one.
+   *
+   * Minted before the test's own middleware is installed and published at
+   * "min" beside `testScope`, so anything inside the run — a component, an
+   * executable block, middleware around either — reads this run's value even
+   * when another run of the same test is executing concurrently. Describes the
+   * run; grants nothing.
+   */
+  invocation: TestInvocation | undefined;
   /** Whether assertion reports render during regular execution. */
   verbose: boolean;
   /** Whether a useTesting() session is already active in this scope. */
@@ -71,6 +108,7 @@ export const Test: Api<TestApi> = createApi<TestApi>("Test", {
   testing: false,
   inTest: false,
   testScope: undefined,
+  invocation: undefined,
   verbose: false,
   sessionActive: false,
   // deno-lint-ignore require-yield

@@ -20,17 +20,27 @@
  * document can reach selects them.
  */
 
-import { createQueue, each, ensure, Ok, resource, spawn, useScope } from "effection";
+import {
+  createQueue,
+  each,
+  ensure,
+  Ok,
+  resource,
+  spawn,
+  suspend,
+  useScope,
+  withResolvers,
+} from "effection";
 import type { Operation, Result, Scope } from "effection";
 import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { cwd, env } from "@executablemd/runtime";
-import { Component, getExpansion, TestBehavior } from "@executablemd/core";
+import { Component } from "@executablemd/core";
 import type { CodeBlockContext, Modifier, SourcePosition } from "@executablemd/core";
 import type { ComponentExpansionRequest } from "@executablemd/core/api";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { Test, testing } from "@executablemd/testing";
-import type { FailureJournalHost, TestResult } from "@executablemd/testing";
+import { Test } from "@executablemd/testing";
+import type { FailureJournalHost, TestInvocation, Testing } from "@executablemd/testing";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, resolve } from "node:path";
 import { deliverWhole } from "./stdout-delivery.ts";
@@ -68,6 +78,8 @@ export interface ExecutionDiagnostics {
    * installed nearer the document would never be reached.
    */
   observe(): Operation<void>;
+  /** Subscribe to this root session before its execution begins. */
+  lifecycle(session: Testing): Operation<void>;
   /** Saves this execution's journal when `failed` says its outcome failed. */
   journal<T>(failed: (value: T) => boolean): FailureJournalHost<T>;
 }
@@ -129,8 +141,11 @@ export function useTestDiagnostics(sink: DeliverySink): Operation<TestDiagnostic
         const label = `${kind} ${counts[kind]}`;
         const file = join(directory, `${kind}-${counts[kind]}.jsonl`);
         const context = kind === "root" ? "" : `${label} ${source}: `;
+        const tests = new Map<TestInvocation, ObservedTest>();
+        const report = (line: string) => emit(`${context}${line}`);
         return {
-          observe: () => observe(owner, (line) => emit(`${context}${line}`)),
+          observe: () => observe(owner, report, tests),
+          lifecycle: (session) => attachLifecycle(owner, report, tests, session),
           journal: <T>(failed: (value: T) => boolean): FailureJournalHost<T> => ({
             failed,
             *save(events: readonly DurableEvent[]) {
@@ -174,6 +189,64 @@ interface ObservedTest {
   interrupted?: string;
 }
 
+function observation(
+  tests: Map<TestInvocation, ObservedTest>,
+  invocation: TestInvocation | undefined,
+): ObservedTest | undefined {
+  if (invocation === undefined) {
+    return undefined;
+  }
+  let test = tests.get(invocation);
+  if (test === undefined) {
+    test = {};
+    tests.set(invocation, test);
+  }
+  return test;
+}
+
+function* attachLifecycle(
+  owner: Scope,
+  report: (line: string) => void,
+  tests: Map<TestInvocation, ObservedTest>,
+  session: Testing,
+): Operation<void> {
+  const ready = withResolvers<void>();
+  owner.run(function* () {
+    const subscription = yield* session.lifecycle;
+    const reader = yield* spawn(function* () {
+      for (let item = yield* subscription.next(); !item.done; item = yield* subscription.next()) {
+        const event = item.value;
+        if (event.kind === "started") {
+          observation(tests, event.invocation);
+          const name =
+            event.invocation.name === undefined ? "" : ` ${JSON.stringify(event.invocation.name)}`;
+          report(`start test${name} at ${event.invocation.location}`);
+        } else {
+          const test = event.invocation === undefined ? undefined : tests.get(event.invocation);
+          if (event.invocation !== undefined) {
+            tests.delete(event.invocation);
+          }
+          const result = event.result;
+          const name = result.name === undefined ? "test" : `test ${JSON.stringify(result.name)}`;
+          if (result.status === "pass") {
+            report(`pass ${name} at ${result.location}`);
+          } else {
+            const why = [
+              result.error?.kind ?? "error",
+              ...(test?.interrupted === undefined ? [] : [`interrupted ${test.interrupted}`]),
+            ];
+            report(`fail ${name} at ${result.location} (${why.join("; ")})`);
+          }
+        }
+      }
+    });
+    yield* ensure(() => reader);
+    ready.resolve();
+    yield* suspend();
+  });
+  yield* ready.operation;
+}
+
 /**
  * Observe one execution, reporting through `report`.
  *
@@ -181,22 +254,22 @@ interface ObservedTest {
  * element's terminal phase is published after the handler that saw it begin
  * has already unwound. Every request is delegated once, as it arrived.
  */
-function* observe(owner: Scope, report: (line: string) => void): Operation<void> {
-  // A location is where a test was written, and a component can run the same
-  // `<Test>` more than once. Results arrive in discovery order, each after the
-  // next invocation has started, so each location keeps its starts in order
-  // and a result consumes the oldest one.
-  const pending = new Map<string, ObservedTest[]>();
-  let current: ObservedTest | undefined;
-
+function* observe(
+  owner: Scope,
+  report: (line: string) => void,
+  tests: Map<TestInvocation, ObservedTest>,
+): Operation<void> {
   const interrupted = (test: ObservedTest | undefined, what: string): void => {
     if (test !== undefined && test.interrupted === undefined) {
       test.interrupted = what;
     }
   };
 
-  const watch = (what: string, request: ComponentExpansionRequest): void => {
-    const test = current;
+  const watch = (
+    what: string,
+    request: ComponentExpansionRequest,
+    test: ObservedTest | undefined,
+  ): void => {
     owner.run(function* () {
       let started = false;
       for (const phase of yield* each(request.phases)) {
@@ -215,8 +288,11 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
     });
   };
 
-  function* block<T>(what: string, work: () => Operation<T>): Operation<T> {
-    const test = current;
+  function* block<T>(
+    what: string,
+    test: ObservedTest | undefined,
+    work: () => Operation<T>,
+  ): Operation<T> {
     report(`start ${what}`);
     let settled = false;
     try {
@@ -236,64 +312,25 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
     }
   }
 
-  const finished = (result: TestResult): void => {
-    const started = pending.get(result.location);
-    const test = started?.shift();
-    if (started !== undefined && started.length === 0) {
-      pending.delete(result.location);
-    }
-    if (test === current) {
-      current = undefined;
-    }
-    const name = result.name === undefined ? "test" : `test ${JSON.stringify(result.name)}`;
-    if (result.status === "pass") {
-      report(`pass ${name} at ${result.location}`);
-      return;
-    }
-    const why = [
-      result.error?.kind ?? "error",
-      ...(test?.interrupted === undefined ? [] : [`interrupted ${test.interrupted}`]),
-    ];
-    report(`fail ${name} at ${result.location} (${why.join("; ")})`);
-  };
-
   yield* Component.around({
     *expand([request], next) {
-      // `<Test>` is reported by its behavior and its recorded result, which
-      // know whether it is a test at all and how it finally ended.
+      const test = observation(tests, yield* Test.operations.invocation);
       if (request.expansion.name !== "Test") {
-        watch(`${request.expansion.name} at ${located(request.expansion.position)}`, request);
+        watch(`${request.expansion.name} at ${located(request.expansion.position)}`, request, test);
       }
       yield* next(request);
     },
     *applyModifiers([modifiers, context], next) {
       const what = `${blockName(modifiers, context, false)} at ${located(context.position)}`;
-      return yield* block(what, () => next(modifiers, context));
+      return yield* block(what, observation(tests, yield* Test.operations.invocation), () =>
+        next(modifiers, context),
+      );
     },
     *applyBoundModifiers([modifiers, context], next) {
       const what = `${blockName(modifiers, context, true)} at ${located(context.position)}`;
-      return yield* block(what, () => next(modifiers, context));
-    },
-  });
-  yield* TestBehavior.around({
-    *test([props], next) {
-      // The same two answers the behavior reads before it runs anything: a
-      // test that is skipped or nested inside another is not a test start.
-      if ((yield* testing) && !(yield* Test.operations.inTest)) {
-        const location = located((yield* getExpansion()).position);
-        const name = typeof props.name === "string" ? ` ${JSON.stringify(props.name)}` : "";
-        const test: ObservedTest = {};
-        pending.set(location, [...(pending.get(location) ?? []), test]);
-        current = test;
-        report(`start test${name} at ${location}`);
-      }
-      return yield* next(props);
-    },
-  });
-  yield* Test.around({
-    *record([result], next) {
-      finished(result);
-      yield* next(result);
+      return yield* block(what, observation(tests, yield* Test.operations.invocation), () =>
+        next(modifiers, context),
+      );
     },
   });
 }
