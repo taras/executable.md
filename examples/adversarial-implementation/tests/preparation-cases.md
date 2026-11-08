@@ -4,8 +4,8 @@ pwd -P
 <Let as="root" value={location.stdout.trim()} />
 <Let as="clause" value={'Keep the accepted scope. If validation fails, hold; except the named read-only case. Unresolved: preserve finding U. Run `deno task test focused.test.ts`. Review identity: exact-sha-123.\n'} />
 
-<Test name="R D H P: production preparation continues only the unstarted successor and bounds unsuccessful reduction" timeout="180s">
 <Each in={["success","validation","overage","missing","uncertain","identity"]} let="variant">
+<Test name={"R D H P " + variant + ": production preparation continues only the unstarted successor and bounds unsuccessful reduction"} timeout="180s">
 <TempDir>
 ```bash exec as="repositoryPrepared"
 set -eu
@@ -132,8 +132,8 @@ git rev-parse HEAD
 </Else>
 </If>
 </TempDir>
-</Each>
 </Test>
+</Each>
 
 <Test name="D C: pre-Prompt and uncertain failures preserve delivery; standalone uses the same admission" timeout="120s">
 <Each in={["preprompt","uncertain","standalone-fit","standalone-overage"]} let="variant">

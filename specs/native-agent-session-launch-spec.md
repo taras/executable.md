@@ -93,7 +93,7 @@ selects Claude Code, Codex, or another compatible agent without changing what
 
 ## Existing semantics
 
-[Native Agent sessions](../architecture.md#native-agent-sessions) own the shared
+[Native Agent sessions](#ownership-and-concurrency) own the shared
 lifetime and enforcement rules. This specification owns the launch interfaces,
 phase records, compatibility exceptions and provider proof requirements. The
 feature reuses these contracts unchanged:
@@ -1225,6 +1225,9 @@ history. The XMD journal remains authoritative for deterministic preparation,
 the handoff identity, and whether the launch completed.
 
 ## Failure boundaries
+
+The serialized `LaunchFailureClass` value `"directory-authority"` stays exactly
+as written; retained launch records are parsed against it by exact match.
 
 Preparation failure creates or launches nothing on behalf of
 `Session.Launch`. Provider availability already resolved by an enclosing

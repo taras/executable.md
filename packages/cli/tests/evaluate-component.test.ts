@@ -9,7 +9,8 @@
  *
  * It also fixes the spellings. `text` is the canonical one; `source` is the
  * workflow's alone and is refused here; `program` was never released and is
- * refused everywhere.
+ * refused everywhere. Those two refusals are rows of the checked-in Markdown
+ * suite `document-suites/evaluate/Evaluate.test.md`, which this file runs once.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -28,6 +29,7 @@ import {
   useOrdinaryGeneratedSelection,
 } from "../src/evaluation-profile.ts";
 import { syntaxSymbols } from "../src/syntax.ts";
+import { runMarkdownTier } from "./support/run-markdown-tier.ts";
 
 const NOTE = "the retained note\n";
 
@@ -183,36 +185,17 @@ describe("Tier FE — the ordinary selection is middleware, and it delegates", (
 });
 
 describe("Tier FE — the one spelling this host accepts", () => {
-  it("FE19: every profile refuses `source`, which is no longer a spelling", function* () {
-    yield* useWorkspace(
-      {
-        "notes.md": NOTE,
-        "doc.md": `<Evaluate source={'<File path="notes.md" />\\n'} />\n`,
-      },
-      function* (dir) {
-        const result = yield* runCli(["run", join(dir, "doc.md")], { cwd: dir }).join();
-        // The schema is closed on `text`, so the retired alias is refused by
-        // prop validation rather than reaching the body under a host flag.
-        expect(result.code).not.toBe(0);
-        expect(`${result.stdout}${result.stderr}`).toMatch(/source|additional/i);
-      },
+  it("runs Evaluate.test.md once under the production run host", function* () {
+    const run = yield* runMarkdownTier(
+      "packages/cli/tests/document-suites/evaluate/Evaluate.test.md",
     );
-  });
-
-  it("FE19: every profile refuses `program`, which was never released", function* () {
-    yield* useWorkspace(
-      {
-        "notes.md": NOTE,
-        "doc.md": `<Evaluate program={'<File path="notes.md" />\\n'} />\n`,
-      },
-      function* (dir) {
-        const result = yield* runCli(["run", join(dir, "doc.md")], { cwd: dir }).join();
-        // The schema is closed, so an unreleased spelling is refused by prop
-        // validation rather than reaching the body.
-        expect(result.code).not.toBe(0);
-        expect(`${result.stdout}${result.stderr}`).toMatch(/program|additional/i);
-      },
-    );
+    if (!run.completion.ok) {
+      throw run.completion.error;
+    }
+    expect(run.results.length).toBeGreaterThan(0);
+    for (const result of run.results) {
+      expect(result.status).toBe("pass");
+    }
   });
 });
 

@@ -159,9 +159,20 @@ function* launch(directory: string, args: string[], artifacts: string): Operatio
 function gate(file: string, ...modifiers: string[]): string[] {
   return [
     ["```sh", "exec", ...modifiers].join(" "),
-    `while [ ! -f ${file} ]; do sleep 0.05; done`,
+    `: > ${file}.waiting; while [ ! -f ${file} ]; do sleep 0.05; done`,
     "```",
   ];
+}
+
+function* arrived(directory: string, file: string): Operation<void> {
+  const waited = yield* timebox(RUN_TIMEOUT, function* () {
+    while (!(yield* exists(join(directory, file)))) {
+      yield* sleep(20);
+    }
+  });
+  if (waited.timeout) {
+    throw new Error(`${file} was never created in ${directory}`);
+  }
 }
 
 const FAILING_CHILD = '<Fail message="nested-journal-failure" />\n';
@@ -295,24 +306,71 @@ describe("xmd test failure journals", () => {
 });
 
 describe("xmd test live progress", () => {
-  it("reports a waiting test and its operation before the work is released", function* () {
+  it("keeps interruption ownership when named tests repeat one authored location", function* () {
+    const directory = yield* useProject({
+      "suite.test.md": doc(
+        '<Each in={["before", "interrupted", "after"]} let="variant">',
+        '<Test name={variant} timeout="1s">',
+        '<If condition={variant === "interrupted"}>',
+        ...gate("never-created"),
+        "</If>",
+        "</Test>",
+        "</Each>",
+      ),
+    });
+    const artifacts = join(directory, "artifacts");
+    const run = yield* launch(directory, ["suite.test.md"], artifacts);
+    yield* arrived(directory, "never-created.waiting");
+    const status = yield* run.join();
+    expect(status.code).toBe(1);
+    const lines = progress(run.stderr());
+    expect(lines.filter((line) => /^(pass|fail) test/.test(line))).toEqual([
+      'pass test "before" at suite.test.md:2:1',
+      'fail test "interrupted" at suite.test.md:2:1 (timeout; interrupted sh exec at suite.test.md:4:1)',
+      'pass test "after" at suite.test.md:2:1',
+    ]);
+    expect(lines).not.toContain("cancelled sh exec at suite.test.md:4:1");
+    expect(lines).not.toContain("start sh exec at suite.test.md:4:1");
+    expect(lines.indexOf('start test "interrupted" at suite.test.md:2:1')).toBeLessThan(
+      lines.indexOf('pass test "before" at suite.test.md:2:1'),
+    );
+    const saved = yield* journals(artifacts);
+    expect(fileNames(saved)).toEqual(["root-1.jsonl"]);
+    const records = [...saved.values()]
+      .flat()
+      .flatMap((event) =>
+        event.type === "yield" &&
+        event.description.type === "test_result" &&
+        event.result.status === "ok"
+          ? [event.result.value]
+          : [],
+      );
+    expect(records).toEqual([
+      { name: "before", location: "suite.test.md:2:1", status: "pass" },
+      {
+        name: "interrupted",
+        location: "suite.test.md:2:1",
+        status: "fail",
+        error: { kind: "timeout", message: "test timed out after 1 seconds" },
+      },
+      { name: "after", location: "suite.test.md:2:1", status: "pass" },
+    ]);
+  });
+
+  it("reports a waiting test before release without ordinary operation chatter", function* () {
     const directory = yield* useProject({
       "suite.test.md": doc('<Test name="held">', "", ...gate("release"), "", "</Test>"),
     });
     const artifacts = join(directory, "artifacts");
     const run = yield* launch(directory, ["suite.test.md"], artifacts);
-    yield* run.waitFor("start sh exec at suite.test.md:3:1");
-    expect(progress(run.stderr())).toEqual([
-      'start test "held" at suite.test.md:1:1',
-      "start sh exec at suite.test.md:3:1",
-    ]);
+    yield* arrived(directory, "release.waiting");
+    yield* run.waitFor('start test "held" at suite.test.md:1:1');
+    expect(progress(run.stderr())).toEqual(['start test "held" at suite.test.md:1:1']);
     yield* writeTextFile(join(directory, "release"), "");
     const status = yield* run.join();
     expect(status.code).toBe(0);
     expect(progress(run.stderr())).toEqual([
       'start test "held" at suite.test.md:1:1',
-      "start sh exec at suite.test.md:3:1",
-      "done sh exec at suite.test.md:3:1",
       'pass test "held" at suite.test.md:1:1',
     ]);
     expect(yield* exists(artifacts)).toBe(false);
@@ -352,11 +410,17 @@ describe("xmd test live progress", () => {
       'fail test "times out" at suite.test.md:9:1 (timeout; interrupted Execution at suite.test.md:10:1)',
       'fail test "bound wait" at suite.test.md:13:1 (timeout; interrupted sh exec as at suite.test.md:15:1)',
     ]);
-    expect(lines).toContain("child 1 ./waits.md: start sh exec at ./waits.md:1:1");
-    expect(lines).toContain("child 1 ./waits.md: cancelled sh exec at ./waits.md:1:1");
+    expect(lines).toContain("start Execution at suite.test.md:10:1");
     expect(lines).toContain("cancelled Execution at suite.test.md:10:1");
-    expect(lines).toContain("start sh exec as at suite.test.md:15:1");
-    expect(lines).toContain("cancelled sh exec as at suite.test.md:15:1");
+    expect(
+      lines.some((line) =>
+        /^journal saved: .*child-1\.jsonl \(child 1 \.\/waits\.md\)$/.test(line),
+      ),
+    ).toBe(true);
+    expect(
+      lines.filter((line) => /^(start|done|failed|cancelled) (?!test\b|Execution\b)/.test(line)),
+    ).toEqual([]);
+    expect(lines.some((line) => line.startsWith("child "))).toBe(false);
     // Everything a test started is still there after the run failed.
     for (const name of ["asserts", "raises", "times out", "bound wait"]) {
       expect(lines.filter((line) => line.startsWith(`start test "${name}"`))).toHaveLength(1);
@@ -378,12 +442,7 @@ describe("xmd test live progress", () => {
     });
     const artifacts = join(directory, "artifacts");
     const run = yield* launch(directory, ["suite.test.md", "--include", FIXTURES], artifacts);
-    const started = yield* timebox(RUN_TIMEOUT, function* () {
-      while (!(yield* exists(join(directory, "teardown-started")))) {
-        yield* sleep(20);
-      }
-    });
-    expect(started.timeout).toBe(false);
+    yield* arrived(directory, "teardown-started");
     expect(progress(run.stderr()).filter((line) => /^(pass|fail) test/.test(line))).toEqual([]);
     yield* writeTextFile(join(directory, "release-teardown"), "");
     const status = yield* run.join();
@@ -396,7 +455,7 @@ describe("xmd test live progress", () => {
     expect(lines).toContain('start test "later" at suite.test.md:6:1');
   });
 
-  it("names elements and nested children without printing captured or rendered content", function* () {
+  it("reports accepted Executions without ordinary chatter or declaration scan failures", function* () {
     const directory = yield* useProject({
       "child.md": doc(
         '<Let as="hidden">canary-child-let</Let>',
@@ -421,6 +480,13 @@ describe("xmd test live progress", () => {
         "<AssertEquals actual={child.result.ok} expected={true} />",
         "</Execution>",
         '<AssertEquals actual={captured} expected={"canary-let-content"} />',
+        '<Execution host="run" target="./child.md" as="blockChild">',
+        "",
+        "```sh exec",
+        "true",
+        "```",
+        "",
+        "</Execution>",
         "</Test>",
       ),
     });
@@ -444,13 +510,15 @@ describe("xmd test live progress", () => {
     expect(result.stdout).toContain('expected: "canary-let-content"');
     expect(result.stdout).not.toContain("canary-slice-text");
     expect(result.stdout).not.toContain("canary-child-let");
-    const lines = progress(result.stderr);
-    expect(lines).toContain("start sh exec as at suite.test.md:4:1");
-    expect(lines).toContain("start Slice at suite.test.md:8:1");
-    expect(lines).toContain("start Execution at suite.test.md:10:1");
-    expect(lines).toContain("child 1 ./child.md: start sh exec at ./child.md:3:1");
-    expect(lines).toContain("child 1 ./child.md: done Slice at ./child.md:7:1");
-    expect(lines.at(-1)).toBe('pass test "private" at suite.test.md:1:1');
+    expect(progress(result.stderr)).toEqual([
+      'start test "private" at suite.test.md:1:1',
+      "start Execution at suite.test.md:10:1",
+      "done Execution at suite.test.md:10:1",
+      "start Execution at suite.test.md:14:1",
+      "done Execution at suite.test.md:14:1",
+      'pass test "private" at suite.test.md:1:1',
+    ]);
+    expect(yield* exists(artifacts)).toBe(false);
   });
 
   it("keeps delivered progress and saves a partial journal when the run is cancelled", function* () {
@@ -459,19 +527,23 @@ describe("xmd test live progress", () => {
     });
     const artifacts = join(directory, "artifacts");
     const run = yield* launch(directory, ["suite.test.md"], artifacts);
-    yield* run.waitFor("start sh exec at suite.test.md:3:1");
+    yield* arrived(directory, "never-created.waiting");
+    yield* run.waitFor('start test "cancelled" at suite.test.md:1:1');
     process.kill(run.pid, "SIGINT");
     yield* run.join();
     const lines = progress(run.stderr());
     expect(lines.slice(0, 2)).toEqual([
       'start test "cancelled" at suite.test.md:1:1',
-      "start sh exec at suite.test.md:3:1",
+      'cancelled test "cancelled" at suite.test.md:1:1 (interrupted sh exec at suite.test.md:3:1)',
     ]);
-    expect(lines).toContain("cancelled sh exec at suite.test.md:3:1");
+    expect(lines.filter((line) => /^(pass|fail) test/.test(line))).toEqual([]);
     const saved = yield* journals(artifacts);
     expect(fileNames(saved)).toEqual(["root-1.jsonl"]);
     const [events] = [...saved.values()];
     expect(events!.length).toBeGreaterThan(0);
+    expect(
+      events!.some((event) => event.type === "yield" && event.description.type === "test_result"),
+    ).toBe(false);
     expect(lines.at(-1)).toMatch(/^journal saved: .*root-1\.jsonl \(root 1 suite\.test\.md\)$/);
     const delivered = run.stderr();
     yield* sleep(200);
