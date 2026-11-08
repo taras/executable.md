@@ -73,8 +73,8 @@ function parseSymbols(text: string): SyntaxSymbols {
   }
   const version = Reflect.get(parsed, "version");
   const categories = Reflect.get(parsed, "categories");
-  if (version !== 2 || !Array.isArray(categories) || categories.length !== 3) {
-    throw new Error("the symbols are not the version-2 shape");
+  if (version !== 1 || !Array.isArray(categories) || categories.length !== 3) {
+    throw new Error("the symbols are not the version-1 shape");
   }
   return { version, categories: readCategories(categories) };
 }
@@ -114,7 +114,7 @@ function names(entries: readonly { name: string }[]): string[] {
 /** One built-in entry carrying `props`, for a renderer row that supplies its own. */
 function symbolsWith(props: PropsSchema): SyntaxSymbols {
   return {
-    version: 2,
+    version: 1,
     categories: [
       { kind: "structural", entries: [] },
       {
@@ -588,7 +588,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
     expect(command.stdout.length).toBeGreaterThan(400);
   });
 
-  it("SX10: writes markdown by default and version-2 JSON with --json", function* () {
+  it("SX10: writes markdown by default and version-1 JSON with --json", function* () {
     yield* useWorkspace(WORKSPACE, function* (cwd) {
       const markdown = yield* runCli(["syntax", "--include", "first"], { cwd }).expect();
       expect(markdown.stdout).toContain("## Built-in structural syntax");
@@ -597,7 +597,7 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
 
       const json = yield* runCli(["syntax", "--json", "--include", "first"], { cwd }).expect();
       const catalog = parseSymbols(json.stdout);
-      expect(catalog.version).toBe(2);
+      expect(catalog.version).toBe(1);
       expect(names(catalog.categories[2].entries)).toEqual(["Shared"]);
     });
   });
@@ -720,7 +720,7 @@ describe(
 
         expect(piped).toBe(redirected);
         const catalog = parseSymbols(piped);
-        expect(catalog.version).toBe(2);
+        expect(catalog.version).toBe(1);
         expect(names(catalog.categories[2].entries)).toContain("ZBeyondTheBuffer");
         expect(piped.lastIndexOf(`"ZBeyondTheBuffer"`)).toBeGreaterThan(PIPE_BUFFER);
       });

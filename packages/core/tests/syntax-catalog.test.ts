@@ -261,10 +261,10 @@ const DOCUMENTED = [
 ].join("\n");
 
 describe("Tier SY: the versioned shape", () => {
-  it("SY1: reports version 2 and the three categories in a fixed order", function* () {
+  it("SY1: reports version 1 and the three categories in a fixed order", function* () {
     const catalog = yield* catalogFor({ components: { kind: "directory" } }, ["components"]);
 
-    expect(catalog.version).toBe(2);
+    expect(catalog.version).toBe(1);
     expect(catalog.categories.map((category) => category.kind)).toEqual([
       "structural",
       "built-in",
@@ -345,7 +345,7 @@ describe("Tier SY: structural vocabulary", () => {
     const catalog = yield* catalogFor({}, []);
     const entries = engineEntries(catalog);
 
-    expect(catalog.version).toBe(2);
+    expect(catalog.version).toBe(1);
     expect(find(entries, "Switch")).toEqual({
       kind: "structural",
       name: "Switch",
@@ -1562,13 +1562,11 @@ describe("Tier ED — declared structural syntax", () => {
     }
   });
 
-  it("ED7: version 2 carries the construct and its region in the structural category", function* () {
+  it("ED7: version 1 carries the construct and its region in the structural category", function* () {
     const catalog = yield* declaredCatalogFor([DECK, PANEL]);
     const entries = structural(catalog);
 
-    // The version is unchanged: the categories, their order and every existing
-    // member are what a version-2 reader was promised.
-    expect(catalog.version).toBe(2);
+    expect(catalog.version).toBe(1);
     expect(catalog.categories.map((category) => category.kind)).toEqual([
       "structural",
       "built-in",

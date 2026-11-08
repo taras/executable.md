@@ -339,16 +339,11 @@ const BOTH_FORMS: readonly InvocationForm[] = ["self-closing", "paired"];
  * received. The three categories are a fixed tuple in a fixed order, so a reader
  * indexes them and a renderer walks them without sorting.
  *
- * **Version 2** adds two origin kinds, `protected` and `workflow`, and that is
- * why it is a new version rather than an addition to version 1. A version-1
- * reader was promised a closed set of origins; quietly emitting a kind it has
- * never seen would break it, and quietly *reusing* an existing kind — which is
- * what version 1 did for both of these — told it something untrue. See
- * `ComponentOrigin`. Nothing else about the shape changed, so a reader that
- * switches exhaustively on `kind` needs two new arms and no other work.
+ * Version 1 distinguishes `protected` and `workflow` origins from ordinary
+ * registrations and repository files. See `ComponentOrigin`.
  */
 export interface SyntaxSymbols {
-  readonly version: 2;
+  readonly version: 1;
   readonly categories: readonly [
     {
       readonly kind: "structural";
@@ -465,10 +460,10 @@ export interface CompleteComponentSyntaxEntry {
   /**
    * What kind of thing supplied the contract above.
    *
-   * `protected` and `workflow-markdown` are version 2's additions. Both were
-   * previously folded into a neighbour — `registered` and `markdown` — which
-   * made a symbols reader unable to tell core's own component from a host's
-   * registration, or a pinned bundle member from a file on disk.
+   * Version 1 distinguishes `protected` and `workflow-markdown` from
+   * `registered` and `markdown`, so a symbols reader can tell core's own
+   * component from a host's registration, and a pinned bundle member from a
+   * file on disk.
    */
   readonly sourceKind:
     | "registered"
@@ -646,7 +641,7 @@ export function* inspectSyntax(options: InspectSyntaxOptions): Operation<SyntaxS
   }
 
   return {
-    version: 2,
+    version: 1,
     categories: [
       { kind: "structural", entries: structural },
       { kind: "built-in", entries: builtIn },

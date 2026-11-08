@@ -22,7 +22,7 @@ import { selecting } from "./support/generated-selection.ts";
 
 function symbolsOf(...names: string[]): SyntaxSymbols {
   return {
-    version: 2,
+    version: 1,
     categories: [
       { kind: "structural", entries: [] },
       {

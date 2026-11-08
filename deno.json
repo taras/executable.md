@@ -64,6 +64,7 @@
     "deps": "deno run --allow-all scripts/deps.ts",
     "deps:target": "deno run --allow-all scripts/deps-target.ts",
     "validate:docs": "deno run --allow-all scripts/validate-documentation.ts",
+    "docs:inventory": "deno run --allow-all scripts/generate-construct-inventory.ts",
     "build": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/validate-documentation.ts && deno task build:web && deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/compile.ts --output dist/xmd",
     "build:web": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/preflight.ts scripts/build-web-client.ts",
     "gen:publish-workflow": "deno run --allow-all packages/cli/src/deno.ts run scripts/gen-publish-workflow.md",
