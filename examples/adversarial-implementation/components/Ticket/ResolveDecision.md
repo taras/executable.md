@@ -25,7 +25,9 @@ delivered inputs, source anchor and correction count stay unchanged.
 The reservation under the hold's continuation digest admits one resolution. A
 confirmed repeat returns the recorded successor, and a different decision for that
 hold refuses. A reservation without its confirmed receipt stays held: matching
-files do not establish an unknown earlier write. A held call whose execution
+files do not establish an unknown earlier write. The repeat uses the evidence the
+successor retained, so later changes to the decision's original files do not
+affect it. A held call whose execution
 record is failed, missing or uncertain refuses, even when its result was saved.
 
 <Ticket.Load record={props.record} as="saved" />
@@ -50,8 +52,11 @@ if test -e {quoted}/receipt.json; then printf confirmed; elif test -e {quoted} |
 <Parse schema={{type:"object",properties:{schema:{const:"ticket-decision-receipt.v1"},status:{const:"confirmed"},request:{type:"object"},file:{type:"object"},call:{type:"string"},route:{type:"object"},reservation:{type:"string"},successor:{type:"object"}},required:["schema","status","request","file","call","route","reservation","successor"],additionalProperties:false}} as="receipt">{receiptText}</Parse>
 <If condition={JSON.stringify(receipt.request) !== JSON.stringify(bound.request)}><Fail message={"This hold already has a different recorded decision at " + reservation + ". The recorded resolution stands; continue its successor."} /></If>
 <Ticket.Envelope value={receipt.successor} as="successor" />
+<Ticket.Load record={successor} as="recorded" />
+<Ticket.Selected repository={repository} documents={Object.fromEntries(bound.references.map(path => [path,recorded.documents[path]]))} as="retained" />
 <Return value={successor} /><Break />
 </If>
+<Ticket.DecisionInputs descriptors={bound.descriptors} documents={saved.documents} as="observed" />
 <If condition={!(state.status === "hold" && !state.dispatchable && ["needs_decision","needs_discovery"].includes(state.hold?.kind) && call?.status === "accepted")}>
 <Fail message={"Decision resolution covers an accepted decision or discovery hold; this " + (state.hold?.kind ?? state.status) + " checkpoint keeps its existing recovery path."} />
 </If>

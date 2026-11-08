@@ -605,7 +605,9 @@ input also refuse. A refusal returns a held envelope carrying the failure and
 leaves the managed ticket unchanged; keep the original envelope.
 
 Repeating the same request against the same hold returns its recorded successor
-without publishing again. A different decision for a resolved hold refuses. If
+without publishing again. The repeat checks the evidence the successor retained,
+under current File permission and protection; it does not reread the decision's
+original files, so they may later change or disappear. A different decision for a resolved hold refuses. If
 reservation, publication or the receipt is interrupted, the hold stays held and
 its reservation directory preserves the first failure for operator disposition. A
 matching successor file alone does not confirm the interrupted write. Repeated

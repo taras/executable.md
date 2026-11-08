@@ -70,6 +70,29 @@ printf '%s %s' "$firstStatus" "$secondStatus"
 <Fixture.Execution entry="resolve-decision" value={held.work} decision={a.path} repository={held.fixture.repository} root={props.root} as="child" />
 <Parse schema={{type:"object"}} as="repeated">{child.stdout}</Parse>
 <AssertEquals actual={[repeated.publication,repeated.continuation]} expected={["confirmed",successor.continuation]} />
+<Ticket.Load record={successor} as="recorded" />
+<Let as="decisionSnapshot" value={recorded.documents[a.request.decision.path].snapshot} />
+<Let as="decisionOrigin" value={"'" + a.request.decision.path.replaceAll("'","'\"'\"'") + "'"} />
+<Let as="provenanceOrigin" value={"'" + a.request.provenance.path.replaceAll("'","'\"'\"'") + "'"} />
+<Let as="retainedDecision" value={"'" + decisionSnapshot.replaceAll("'","'\"'\"'") + "'"} />
+```bash exec as="origins"
+set -e
+printf 'The original pathname was reused after the confirmed resolution.' > {decisionOrigin}
+rm -- {provenanceOrigin}
+```
+<Fixture.Execution entry="resolve-decision" value={held.work} decision={a.path} repository={held.fixture.repository} root={props.root} as="child" />
+<Parse schema={{type:"object"}} as="originRepeat">{child.stdout}</Parse>
+<If condition={origins.exitCode !== 0 || originRepeat.publication !== "confirmed" || JSON.stringify(originRepeat.continuation) !== JSON.stringify(successor.continuation)}><Fail message={"A confirmed repeat must return its recorded successor after its origins change: " + JSON.stringify({origins,originRepeat})} /></If>
+```bash exec as="corrupted"
+cp -- {retainedDecision} {retainedDecision}.retained
+printf 'altered retained decision' > {retainedDecision}
+```
+<Fixture.Execution entry="resolve-decision" value={held.work} decision={a.path} repository={held.fixture.repository} root={props.root} as="child" />
+<Fixture.Refused output={child.stdout} continuation={held.work.continuation} expected="Retained ticket text changed" as="corruptedRepeat" />
+```bash exec as="retainedRestored"
+mv -- {retainedDecision}.retained {retainedDecision}
+```
+<AssertEquals actual={[corrupted.exitCode,retainedRestored.exitCode]} expected={[0,0]} />
 <Fixture.Execution entry="resolve-decision" value={held.work} decision={b.path} repository={held.fixture.repository} root={props.root} as="child" />
 <Fixture.Refused output={child.stdout} continuation={held.work.continuation} expected="already has a different recorded decision" as="conflicting" />
 <Fixture.Execution entry="resolve-decision" value={successor} decision={a.path} repository={held.fixture.repository} root={props.root} as="child" />
