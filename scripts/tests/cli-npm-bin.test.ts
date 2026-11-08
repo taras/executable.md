@@ -11,10 +11,10 @@
  * what used to type-check a branch against the *previous* release — green until
  * a branch changed a shared API, then red for a reason the branch could not fix.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, beforeEach, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
-import { scoped, until } from "effection";
+import { ensure, scoped, until } from "effection";
 import { createApi } from "@effectionx/context-api";
 import * as sourceGitApi from "@executablemd/git/api";
 import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
@@ -170,12 +170,10 @@ function* readEmittedManifest(root: string): Operation<Manifest> {
   return JSON.parse(yield* readTextFile(path.join(root, PKG_DIR, "npm/package.json")));
 }
 
-/** Run the built bin under Node, the way an `npm i -g @executablemd/cli` user would. */
-function runEmittedBin(root: string, args: string[]): Operation<ProcessResult> {
-  return runEmittedBinIn(root, root, args);
-}
-
-/** The same, from a working directory the caller chooses. */
+/**
+ * Run the built bin under Node, the way an `npm i -g @executablemd/cli` user
+ * would, from a working directory the caller chooses.
+ */
 function* runEmittedBinIn(root: string, cwd: string, args: string[]): Operation<ProcessResult> {
   const result = yield* timebox<ProcessResult>(TIMEOUT, function* () {
     return yield* exec("node", {
@@ -190,15 +188,48 @@ function* runEmittedBinIn(root: string, cwd: string, args: string[]): Operation<
   return result.value;
 }
 
+/** The finished build every case reads, and the version its manifest named. */
+interface BuiltPackage {
+  root: string;
+  version?: string;
+}
+
 describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, () => {
-  it("relaunches its test-agent worker under Node", function* () {
+  let built: BuiltPackage | undefined;
+
+  // One build answers every case: each reads the emitted package and writes
+  // only beneath directories of its own, so a failed build fails them all
+  // rather than being retried by the next.
+  beforeAll(function* () {
+    yield* ensure(() => {
+      built = undefined;
+    });
     const root = yield* useNpmWorkspace();
     const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
-
-    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
-    if (built.code !== 0) {
-      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
+    const result = yield* scoped(() => buildCliPackage(root, version ?? "0.0.0-dev"));
+    if (result.code !== 0) {
+      throw new Error(`build-npm.ts exited ${result.code}\n${result.stderr}`);
     }
+    built = { root, version };
+  });
+
+  // Children narrate as they run; each case reads only their captured results.
+  beforeEach(function* () {
+    yield* Stdio.around({
+      *stdout() {},
+      *stderr() {},
+    });
+  });
+
+  function builtPackage(): BuiltPackage {
+    if (!built) {
+      throw new Error("the npm CLI package was not built");
+    }
+    return built;
+  }
+
+  it("relaunches its test-agent worker under Node", function* () {
+    const { root } = builtPackage();
 
     const consumer = yield* useTempDirectory("xmd-npm-module-consumer-");
     yield* until(
@@ -239,7 +270,8 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     expect({ code: moduleResult.code, stderr: moduleResult.stderr }).toMatchObject({ code: 0 });
     expect(moduleResult.stdout).toContain("npm-typed-component");
 
-    const run = yield* runEmittedBin(root, [
+    const smokeCwd = yield* useTempDirectory("xmd-npm-smoke-");
+    const run = yield* runEmittedBinIn(root, smokeCwd, [
       "test",
       path.join(root, "smoke-test/test-agent/README.md"),
     ]);
@@ -264,7 +296,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // `<WhenPrompt>` answers only a prompt carrying the selected documentation,
     // so a package missing the documentation assets or the protected tier gets
     // no Plan written at all rather than a weaker one.
-    const planned = yield* runEmittedBin(root, [
+    const planned = yield* runEmittedBinIn(root, smokeCwd, [
       "test",
       path.join(root, "smoke-test/plan-information/README.md"),
       "--raw",
@@ -277,7 +309,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     expect(planned.stdout).not.toContain("ERROR");
     // And nothing ran it: `<Plan>` renders program text, so the file that
     // program names is still nobody's.
-    expect(yield* exists(path.join(root, "planned.txt"))).toBe(false);
+    expect(yield* exists(path.join(smokeCwd, "planned.txt"))).toBe(false);
 
     // The Markdown this package executes itself ships beside the module that
     // reads it. dnt emits the module graph only, so an asset nothing imports is
@@ -317,12 +349,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * route — the one an operator drives.
    */
   it("publishes contextual Git APIs that compose across copies and loads a named Plugin", function* () {
-    const root = yield* useNpmWorkspace();
-    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
-    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
-    if (built.code !== 0) {
-      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
-    }
+    const { root } = builtPackage();
 
     // Both halves of the subpath, for both packages a Plugin imports from.
     for (const pkg of ["packages/core", "packages/runtime"]) {
@@ -445,12 +472,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * way a caller composes it rather than through argv.
    */
   it("runs a complete program piped into the emitted bin", function* () {
-    const root = yield* useNpmWorkspace();
-    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
-    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
-    if (built.code !== 0) {
-      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
-    }
+    const { root } = builtPackage();
 
     // Run from a directory that is not the package, so nothing the program
     // renders could have come from a file beside the bin.
@@ -499,12 +521,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * works locally and names directories npm would reject.
    */
   it("leaves every manifest in the closure publishable", function* () {
-    const root = yield* useNpmWorkspace();
-    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
-    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
-    if (built.code !== 0) {
-      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
-    }
+    const { root, version } = builtPackage();
 
     const source = yield* readManifest(root, PKG_DIR, "package.json");
     const internal = Object.keys(source.dependencies ?? {}).filter((name) =>
@@ -536,12 +553,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
   });
 
   it("reports the same <Plan> Component identity the source tree ships", function* () {
-    const root = yield* useNpmWorkspace();
-    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
-    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
-    if (built.code !== 0) {
-      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
-    }
+    const { root } = builtPackage();
 
     const source = yield* readTextFile(path.join(root, PKG_DIR, "src/documents/Plan.md"));
     const digest = createHash("sha256").update(source, "utf8").digest("hex");
@@ -677,7 +689,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // provenance refusal runs ahead of the block that imports semver, ahead of
     // any release lookup, and ahead of touching a file — which is what makes
     // the npm package safe to publish without the eval block ever resolving.
-    const refused = yield* runEmittedBin(root, ["upgrade", "--status"]);
+    const refused = yield* runEmittedBinIn(root, elsewhere, ["upgrade", "--status"]);
     expect(refused.code).toBe(1);
     // The document is the output, so even a refused host renders its heading.
     // What matters is that the npm package answered at all: the transcript
