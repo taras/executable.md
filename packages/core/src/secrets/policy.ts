@@ -76,6 +76,8 @@ abstract class ExecutionDetection {
   #brand = true;
 
   abstract readonly enabled: boolean;
+  /** The producing execution's protected inputs, captured when its policy was selected. */
+  abstract readonly inputs: InputValues | undefined;
 
   static authentic(value: unknown): value is ExecutionDetection {
     // `#brand in value` throws on a primitive rather than answering false.
@@ -89,19 +91,23 @@ abstract class ExecutionDetection {
 class EnabledDetection extends ExecutionDetection {
   readonly enabled = true;
   readonly scanner: SecretScanner;
+  readonly inputs: InputValues | undefined;
 
-  constructor(scanner: SecretScanner) {
+  constructor(scanner: SecretScanner, inputs: InputValues | undefined) {
     super();
     this.scanner = scanner;
+    this.inputs = inputs;
     Object.freeze(this);
   }
 }
 
 class DisabledDetection extends ExecutionDetection {
   readonly enabled = false;
+  readonly inputs: InputValues | undefined;
 
-  constructor() {
+  constructor(inputs: InputValues | undefined) {
     super();
+    this.inputs = inputs;
     Object.freeze(this);
   }
 }
@@ -253,6 +259,47 @@ export function* clearsLiveOutput(content: string): Operation<boolean> {
   }
 }
 
+/**
+ * Whether one optional string the running execution observed may be retained.
+ *
+ * Answered by the execution's own authenticated policy binding and the
+ * protected inputs captured with it when the policy was selected — never by a
+ * same-name Context installed later, which could remove the protection by
+ * removing a value. A protected input is refused whether or not detection is
+ * enabled, because a scanner opt-out does not waive it. Doubt withholds: an
+ * absent or unauthentic binding, a projection that changes the value, a finding
+ * and a scanner that failed all answer `false`.
+ *
+ * Package-private, like {@link clearsLiveOutput}: it is a question about this
+ * execution's own optional observations, answered inside that execution.
+ */
+export function* retainsOptionalText(value: string): Operation<boolean> {
+  let detection: ExecutionDetection;
+  try {
+    detection = yield* currentDetection();
+  } catch {
+    return false;
+  }
+  const inputs = detection.inputs;
+  if (inputs !== undefined) {
+    if (inputs.contains(value)) {
+      return false;
+    }
+    const shown = inputs.display(value);
+    if (!shown.ok || shown.value !== value) {
+      return false;
+    }
+  }
+  if (!(detection instanceof EnabledDetection)) {
+    return true;
+  }
+  try {
+    return (yield* detection.scanner.scan(value)).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 function projectInputEvent(received: DurableEvent, inputs: InputValues): DurableEvent {
   const serialized = parseDurableEvent(serializeDurableEvent(received));
   if (!serialized.ok) {
@@ -350,13 +397,13 @@ export function* useSecretDetection(
       return yield* disclose(parseJsonObject(safe.value));
     };
   if (requested === false) {
-    yield* CurrentDetection.set(new DisabledDetection());
+    yield* CurrentDetection.set(new DisabledDetection(inputs));
     return { journal: stream, disclose: projectedDisclosure(discloseFreely) };
   }
 
   const create = (yield* CurrentScannerFactory.get()) ?? createSecretScanner;
   const scanner = create();
-  yield* CurrentDetection.set(new EnabledDetection(scanner));
+  yield* CurrentDetection.set(new EnabledDetection(scanner, inputs));
   return {
     journal: guardWithSecretDetection(stream, scanner),
     disclose: projectedDisclosure(discloseThrough(scanner)),

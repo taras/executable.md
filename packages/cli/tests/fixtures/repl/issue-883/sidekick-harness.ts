@@ -1,3 +1,4 @@
+import type { PromptUsageHost } from "@executablemd/acp";
 import { useNodeReplProjectAccess } from "../../../../src/node-repl-project-access.ts";
 import { testForSidekick } from "../../../../src/repl/sidekick/admission.ts";
 import { pairedLocation } from "../../../../src/repl/sidekick/history.ts";
@@ -129,6 +130,8 @@ export function* useHarness(
      * only way to observe what Stop waits for.
      */
     readonly fill?: (source: string) => Operation<Result<void>>;
+    /** The host's own build facts, for a case about the Prompt usage it retains. */
+    readonly promptUsageHost?: PromptUsageHost;
   } = {},
 ): Operation<Harness> {
   // An entry's eval block compiles through a module this host has to supply, so
@@ -176,6 +179,7 @@ export function* useHarness(
         createRuntime: fake.create,
         sessionStore: makeStore(),
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+        ...(extra.promptUsageHost === undefined ? {} : { promptUsageHost: extra.promptUsageHost }),
       },
       // The scripted agent, named to the profile rather than left to the
       // environment: the Sidekick assembly is built with it, and a conversation

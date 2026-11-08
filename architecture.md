@@ -134,6 +134,8 @@ External mutations cannot join that transaction. Their owning provider contract 
 
 Git-host effects, Issue effects, and Agent Prompts have distinct provider contracts. Completed records restore their historical outcomes without contacting those providers. Live attempts acquire authentication for their own invocation.
 
+Agent Prompt usage is retained with the acknowledged Prompt under the producing execution's disclosure policy. Observation neither authorizes execution nor publishes an independent record. The [ACP client specification](specs/acp-client-spec.md#prompt-usage) owns the receiver's subscription lifetime and retained data.
+
 A compatible history fork creates another run from a retained prefix and checkpoint. It preserves inherited evidence and does not rewind external systems. An XMD artifact exports immutable evidence rather than a writable continuation of its source run.
 
 Command display and command retention are separate. Retained channels describe bytes received after enclosing host middleware; downstream display suppression does not alter that record.

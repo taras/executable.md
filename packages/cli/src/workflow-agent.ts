@@ -96,6 +96,7 @@ import {
   embeddedAdapterDependencies,
 } from "@executablemd/acp/embedded-adapters";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
+import type { PromptUsageHost } from "@executablemd/acp";
 import {
   installAgentComponents,
   installPermissionMode,
@@ -221,6 +222,8 @@ export interface WorkflowAgentProfileOptions {
    * without a real install.
    */
   readonly adapters?: EmbeddedAdapters;
+  /** What this host states about its own build, for the Prompt usage its turns retain. */
+  readonly promptUsageHost?: PromptUsageHost;
 }
 
 /**
@@ -437,6 +440,7 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
     ...embeddedAdapterDependencies(adapters),
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
     ...(options.agentProcessEnv === undefined ? {} : { agentProcessEnv: options.agentProcessEnv }),
+    ...(options.promptUsageHost === undefined ? {} : { promptUsageHost: options.promptUsageHost }),
     // ACP-only, stated rather than inherited. A workflow session belongs to a
     // run, not to this machine: it is named by a row in the run's own database,
     // arranged in the run's own sidecar, and continued by reattaching that row.

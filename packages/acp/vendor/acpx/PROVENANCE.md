@@ -137,6 +137,30 @@ and neither origin nor a retryable hint establishes acceptance or permits resend
 Remove the correction only when a published runtime retains the same selected facts
 and passes those deterministic consumers and offline vendor verification.
 
+## Selected Prompt usage (#1159)
+
+The released runtime records a response's `usage` into the session's saved
+conversation and returns only its stop reason and `_meta`; a failed or
+finalization-failed result keeps neither. Its turn exposes the host request ID,
+but not the user-message ID `recordPromptSubmission` generated for that turn.
+
+The generated correction, bounded by the uniquely named `XMD prompt usage:` seam,
+attaches one `usage` member to every terminal result: the generated
+`promptMessageId`, its owning `acpxRecordId`, the ACP `sessionId` the turn was
+prompted in, the response's selected token counters and the selected
+`_meta.quota` `token_count`/`model_usage` counters. Only finite nonnegative
+numbers under their original names cross; `null` stays `null`, and a missing or
+malformed value stays absent. Timeout-drain recovery carries the recovered
+response's own usage, and a failed finalization keeps the readings already
+observed. `runPromptTurn` in `queue-owner-runtime-B0mPqOu4.js` hands the
+response's `usage` to the runtime for that selection; `runtime.d.ts` declares
+the member. Persisted session state, reducer behavior and the user-message
+identity ACPX saves are unchanged.
+
+Remove the correction only when a published runtime exposes the same per-turn
+identities and selected readings on every ending and passes the same
+deterministic consumers and offline vendor verification.
+
 ## Released environment seam (#566)
 
 The released runtime snapshots `agentProcessEnv`, delivers it to every child and

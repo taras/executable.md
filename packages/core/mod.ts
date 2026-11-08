@@ -398,6 +398,17 @@ export type {
 export { AgentLaunchProtocolError } from "./src/agent/launch-request.ts";
 export type { AgentLaunchRequest } from "./src/agent/launch-request.ts";
 export type { AgentLaunchPhases, AgentLaunchCoordinator } from "./src/agent/launch-coordinator.ts";
+// What a provider reports through the coordinator's optional usage receiver,
+// and what a canonical Prompt record retains of it.
+export type {
+  PromptUsage,
+  PromptUsageReporter,
+  ReportedTokens,
+  UsageBuild,
+  UsageCoverage,
+  UsageProvenance,
+  UsageReading,
+} from "./src/agent/usage.ts";
 // What settles one session setup. A provider receives the handle through the
 // coordinator delivered to its factory; the types are here so it can name them.
 export type {

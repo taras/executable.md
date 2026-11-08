@@ -25,7 +25,7 @@ import {
   ADVERTISED_NATIVE_LAUNCH,
   createDenoSessionRouteStore,
 } from "@executablemd/acp";
-import type { AgentSessionRouteStore } from "@executablemd/acp";
+import type { AgentSessionRouteStore, PromptUsageHost } from "@executablemd/acp";
 
 export function sessionCoordinatorRoot(): string {
   return join(homedir(), ".acpx", "xmd-native-sessions", "v1");
@@ -48,6 +48,8 @@ export interface MachineSessionAssembly {
   executableObserver?: ExecutableObserver;
   advertiseNativeLaunch: readonly string[];
   advertiseClientNativeAttachment: readonly string[];
+  /** What this host states about its own build, for the Prompt usage its turns retain. */
+  usage?: PromptUsageHost;
 }
 
 /** This host's session coordinator, or nothing when it cannot provide one. */

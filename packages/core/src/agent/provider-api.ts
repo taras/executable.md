@@ -167,6 +167,9 @@ function deliveryOf(value: unknown): {
   const sessionSetup = Reflect.get(launchCoordinator, "sessionSetup");
   const checkpoint = Reflect.get(launchCoordinator, "checkpoint");
   const sessionUse = Reflect.get(launchCoordinator, "sessionUse");
+  // Optional, and deliberately outside the check below: a coordinator that
+  // offers no usage observation still coordinates everything a turn needs.
+  const promptUsage = Reflect.get(launchCoordinator, "promptUsage");
   const registerSessionConfiguration = Reflect.get(
     launchCoordinator,
     "registerSessionConfiguration",
@@ -194,6 +197,9 @@ function deliveryOf(value: unknown): {
         Reflect.apply(checkpoint, launchCoordinator, [terminal, token]);
       },
       sessionUse: (routed) => Reflect.apply(sessionUse, launchCoordinator, [routed]),
+      ...(typeof promptUsage === "function"
+        ? { promptUsage: () => Reflect.apply(promptUsage, launchCoordinator, []) }
+        : {}),
     },
   };
 }
