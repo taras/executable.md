@@ -271,11 +271,14 @@ Shared code remains runtime-neutral. A missing required provider fails closed ra
 Independently loaded package copies compose through stable namespaced Context and Api names. Shared composition data is structural; package-instance identity cannot substitute for that compatibility boundary.
 
 String names and metadata keys that cross loaded copies are compatibility
-contracts; changing one is a breaking change. Symbol-keyed properties do not cross
-copies. Any further exception for shared global state requires an explicit
+contracts; changing one is a breaking change. A module-local symbol is unreachable to another
+loaded copy; a registry symbol is reachable but unowned, and offers nothing a
+namespaced string does not. Any further exception for shared global state requires an explicit
 architecture decision.
 
-Runtime state stays with its owning scope. Module-evaluation metadata stays on the author-owned value; the one narrowly defined exception — the weak association from a journal to
+Runtime state stays with its owning scope: no module-scoped registries — not
+as collections, not hidden inside library objects that accumulate.
+Module-evaluation metadata stays on the author-owned value; the one narrowly defined exception — the weak association from a journal to
 its provenance, owned by the [Language specification](specs/executable-mdx-spec.md) —
 supplies no general exception for global registries.
 
@@ -297,14 +300,20 @@ the local database and construct a consistent replacement history.
 
 Internal prerelease records are current-format only: no version branches, no
 migrations, no compatibility adapters, and no manually invoked upgrade paths.
-Third-party protocols and public artifacts keep their separately stated
-compatibility contracts.
+A retained schema label is not a promise to accept
+another shape. Third-party protocols and public artifacts keep their
+separately stated compatibility contracts.
 
 Paths and ordinary error details are not inherently secret; explicitly
 identified secrets are protected. Defensive complexity — and the tests that
 exercise it — must be justified by an in-scope threat or a supported
 reliability contract, using the simplest sufficient implementation and
 evidence; additional adversarial tests cover distinct failure paths only.
+Security tests exercise inputs their boundary can receive — missing fields and
+invalid values in a response are relevant, while deliberately malicious
+executable values fall under the trusted-extension assumption. Trusted code
+can still contain bugs: supported API behavior remains part of each feature's
+contract.
 
 A second implementation preserves the shared parsing, selection and
 validation rules and their observable outcomes, rather than merely
