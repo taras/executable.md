@@ -498,7 +498,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * closure has to be publishable afterwards — not a verification artifact that
    * works locally and names directories npm would reject.
    */
-  it("leaves every manifest in the closure publishable", function* () {
+  it("leaves every manifest in the closure publishable and reports the same <Plan> Component identity the source tree ships", function* () {
     const root = yield* useNpmWorkspace();
     const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
     const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
@@ -506,8 +506,8 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
       throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
     }
 
-    const source = yield* readManifest(root, PKG_DIR, "package.json");
-    const internal = Object.keys(source.dependencies ?? {}).filter((name) =>
+    const sourceManifest = yield* readManifest(root, PKG_DIR, "package.json");
+    const internal = Object.keys(sourceManifest.dependencies ?? {}).filter((name) =>
       name.startsWith("@executablemd/"),
     );
     // Non-vacuous: the CLI is the deepest closure in the workspace.
@@ -532,15 +532,6 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
           local: false,
         });
       }
-    }
-  });
-
-  it("reports the same <Plan> Component identity the source tree ships", function* () {
-    const root = yield* useNpmWorkspace();
-    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
-    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
-    if (built.code !== 0) {
-      throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
     }
 
     const source = yield* readTextFile(path.join(root, PKG_DIR, "src/documents/Plan.md"));
