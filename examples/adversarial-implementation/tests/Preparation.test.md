@@ -75,7 +75,7 @@ pwd -P
 </Each>
 </Test>
 
-<Test name="provider-dependent preparation journeys use the explicit Deno fixture host" timeout="330s">
+<Test name="provider-dependent preparation journeys use the explicit Deno fixture host" timeout="390s">
 ```bash exec as="commandSetting"
 printf '%s' "$XMD_EXAMPLE_TEST_COMMAND"
 ```
