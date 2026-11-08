@@ -597,7 +597,9 @@ The original task, sessions, calls, results, delivered inputs, source anchor and
 correction count are unchanged; resolution grants no further corrections. Every
 other hold refuses, including an Architect amendment, an API conflict routed to
 the Planner, execution failure, uncertain native work, changed input, source
-mismatch, an exhausted correction bound and publication failure. A dirty or moved
+mismatch, an exhausted correction bound and publication failure. A held result
+whose phase execution failed after the result was saved also refuses; resolution
+requires the call's execution record to show completion. A dirty or moved
 checkout, prior implementation feedback, a stale or foreign binding and a changed
 input also refuse. A refusal returns a held envelope carrying the failure and
 leaves the managed ticket unchanged; keep the original envelope.

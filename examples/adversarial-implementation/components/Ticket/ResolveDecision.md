@@ -25,7 +25,8 @@ delivered inputs, source anchor and correction count stay unchanged.
 The reservation under the hold's continuation digest admits one resolution. A
 confirmed repeat returns the recorded successor, and a different decision for that
 hold refuses. A reservation without its confirmed receipt stays held: matching
-files do not establish an unknown earlier write.
+files do not establish an unknown earlier write. A held call whose execution
+record is failed, missing or uncertain refuses, even when its result was saved.
 
 <Ticket.Load record={props.record} as="saved" />
 <Ticket.Decision path={props.decision} record={props.record} saved={saved} as="bound" />
@@ -54,6 +55,10 @@ if test -e {quoted}/receipt.json; then printf confirmed; elif test -e {quoted} |
 <If condition={!(state.status === "hold" && !state.dispatchable && ["needs_decision","needs_discovery"].includes(state.hold?.kind) && call?.status === "accepted")}>
 <Fail message={"Decision resolution covers an accepted decision or discovery hold; this " + (state.hold?.kind ?? state.status) + " checkpoint keeps its existing recovery path."} />
 </If>
+<Ticket.Capture as="executionRead"><Ticket.Read path={call.execution} limit={1048576} as="executionText" /><Json value={executionText} /></Ticket.Capture>
+<Let as="execution" value={null} />
+<If condition={executionRead.status === "completed"}><Parse schema={{type:"string"}} as="executionJson">{executionRead.output}</Parse><SafeParse schema={{type:"object",properties:{status:{const:"completed"},failure:{const:null}},required:["status","failure"]}} as="execution">{executionJson}</SafeParse></If>
+<If condition={execution === null || !execution.ok}><Fail message={"The held call's execution at " + call.execution + " is failed, missing or uncertain. Execution failure keeps its existing recovery path; a decision does not authorize successor work."} /></If>
 <If condition={state.revision !== launch || state.feedback.length !== 0 || Object.keys(state.reviews).length !== 0 || (state.exactApproval ?? null) !== null}>
 <Fail message="Decision resolution covers holds before implementation feedback at the launch revision. Post-feedback amendments are unsupported; prior review validity is unchanged." />
 </If>

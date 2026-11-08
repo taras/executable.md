@@ -93,6 +93,7 @@ export default function* Publish(value: unknown) {
     record.checkpoint.status === "hold" &&
     record.checkpoint.revision === record.manifest.assignment.revision &&
     record.checkpoint.feedback.length === 0 &&
+    hold?.execution === undefined &&
     last?.status === "accepted" &&
     typeof last.result === "string" &&
     ((hold?.kind === "needs_decision" &&

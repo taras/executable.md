@@ -12,6 +12,7 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
   {name:"DR3 A2 accepting an Architect decision returns to that Architect before the retained Planner",fixture:'<Fixture.DecisionJourney root={ROOT} scenario="architect-decision" disposition="accept" route={["architect","planner","implementor"]} />'},
   {name:"DR4 A3 an Implementor discovery hold at clean source routes Architect, retained Planner, original Implementor",fixture:'<Fixture.DecisionJourney root={ROOT} scenario="all-owner" disposition="accept" route={["architect","planner","implementor"]} />'},
   {name:"DR5 A4 A6 stale, foreign, unsupported and excluded resolutions refuse without dispatch or managed change",fixture:'<Fixture.DecisionRefusal root={ROOT} />'},
+  {name:"DR5 A4 a saved decision result whose phase execution then failed refuses before reservation",fixture:'<Fixture.DecisionFailedExecution root={ROOT} />'},
   {name:"DR6 A5 repeats, contenders and interrupted publication never duplicate or adopt effects",fixture:'<Fixture.DecisionInterruption root={ROOT} />'},
   {name:"DR7 A6 decision inputs keep snapshot, descriptor, protection, permission and capacity boundaries",fixture:'<Fixture.DecisionBoundary root={ROOT} />'}
 ]} />

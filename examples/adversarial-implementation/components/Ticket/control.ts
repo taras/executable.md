@@ -104,6 +104,7 @@ export const state = z
             reason: z.string(),
             receipt: z.string().optional(),
             next: z.object({ phase: z.string(), role: role.nullable() }).strict().optional(),
+            execution: z.literal("failed").optional(),
           })
           .strict()
           .nullable(),
