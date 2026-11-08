@@ -34,7 +34,7 @@ function renderConstructInventory(symbols: SyntaxSymbols): string {
     "",
     "A non-normative table of the selected public vocabulary. In props, `?` marks " +
       "an optional prop and `capture` marks a component-evaluated prop with no " +
-      "declared schema.",
+      "declared schema. Declared origins are stable retained identities, not source ownership.",
     "",
   ];
   const structural: Entry[] = [];
@@ -51,10 +51,10 @@ function renderConstructInventory(symbols: SyntaxSymbols): string {
           protectedComponents.push(entry);
           break;
         case "default component": {
-          const packageName = origin(entry);
-          const entries = defaults.get(packageName) ?? [];
+          const declaredOrigin = origin(entry);
+          const entries = defaults.get(declaredOrigin) ?? [];
           entries.push(entry);
-          defaults.set(packageName, entries);
+          defaults.set(declaredOrigin, entries);
           break;
         }
         case "declared Markdown":
@@ -76,8 +76,8 @@ function renderConstructInventory(symbols: SyntaxSymbols): string {
     "",
     "## Ordinary defaults",
   );
-  for (const packageName of [...defaults.keys()].toSorted()) {
-    lines.push("", `### ${packageName}`, "", ...table(defaults.get(packageName) ?? []));
+  for (const declaredOrigin of [...defaults.keys()].toSorted()) {
+    lines.push("", `### ${declaredOrigin}`, "", ...table(defaults.get(declaredOrigin) ?? []));
   }
   lines.push("", "## Declared Markdown", "", ...table(markdown));
   return `${lines.join("\n")}\n`;
@@ -85,7 +85,7 @@ function renderConstructInventory(symbols: SyntaxSymbols): string {
 
 function table(entries: readonly Entry[]): string[] {
   return [
-    "| Construct | Kind | Origin package | Declared props summary | Returns summary |",
+    "| Construct | Kind | Declared origin | Declared props summary | Returns summary |",
     "| --- | --- | --- | --- | --- |",
     ...entries.map(
       (entry) =>
@@ -118,7 +118,7 @@ function origin(entry: Entry): string {
   if (!("origin" in entry.origin)) {
     return "not declared";
   }
-  return /^(@[^/]+\/[^/]+)(?:\/|$)/.exec(entry.origin.origin)?.[1] ?? entry.origin.origin;
+  return entry.origin.origin;
 }
 
 function props(entry: Entry): string {
