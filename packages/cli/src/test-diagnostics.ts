@@ -171,6 +171,7 @@ function blockName(
 
 /** One test being observed, from its start to its recorded outcome. */
 interface ObservedTest {
+  name: string | undefined;
   interrupted?: string;
 }
 
@@ -182,16 +183,17 @@ interface ObservedTest {
  * has already unwound. Every request is delegated once, as it arrived.
  */
 function* observe(owner: Scope, report: (line: string) => void): Operation<void> {
-  const tests = new Map<string, ObservedTest>();
+  const tests = new Map<string, ObservedTest[]>();
   let current: ObservedTest | undefined;
 
-  const interrupted = (what: string): void => {
-    if (current !== undefined && current.interrupted === undefined) {
-      current.interrupted = what;
+  const interrupted = (test: ObservedTest | undefined, what: string): void => {
+    if (test !== undefined && test.interrupted === undefined) {
+      test.interrupted = what;
     }
   };
 
   const watch = (what: string, request: ComponentExpansionRequest): void => {
+    const test = current;
     owner.run(function* () {
       let started = false;
       for (const phase of yield* each(request.phases)) {
@@ -202,7 +204,7 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
         if (phase.phase === "complete") {
           report(`${phase.result.ok ? "done" : "failed"} ${what}`);
         } else if (phase.phase === "cancelled") {
-          interrupted(what);
+          interrupted(test, what);
           report(`cancelled ${what}`);
         }
         yield* each.next();
@@ -211,6 +213,7 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
   };
 
   function* block<T>(what: string, work: () => Operation<T>): Operation<T> {
+    const test = current;
     report(`start ${what}`);
     let settled = false;
     try {
@@ -224,17 +227,20 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
       throw error;
     } finally {
       if (!settled) {
-        interrupted(what);
+        interrupted(test, what);
         report(`cancelled ${what}`);
       }
     }
   }
 
   const finished = (result: TestResult): void => {
-    const test = tests.get(result.location);
-    tests.delete(result.location);
-    if (test === current) {
-      current = undefined;
+    const observed = tests.get(result.location);
+    // A predecessor can record after the next same-site test has run. Match
+    // its name too; identical names at that site record in discovery order.
+    const index = observed?.findIndex((test) => test.name === result.name) ?? -1;
+    const test = index < 0 ? undefined : observed?.splice(index, 1)[0];
+    if (observed?.length === 0) {
+      tests.delete(result.location);
     }
     const name = result.name === undefined ? "test" : `test ${JSON.stringify(result.name)}`;
     if (result.status === "pass") {
@@ -272,11 +278,19 @@ function* observe(owner: Scope, report: (line: string) => void): Operation<void>
       // test that is skipped or nested inside another is not a test start.
       if ((yield* testing) && !(yield* Test.operations.inTest)) {
         const location = located((yield* getExpansion()).position);
-        const name = typeof props.name === "string" ? ` ${JSON.stringify(props.name)}` : "";
-        const test: ObservedTest = {};
-        tests.set(location, test);
+        const name = typeof props.name === "string" ? props.name : undefined;
+        const test: ObservedTest = { name };
+        const observed = tests.get(location) ?? [];
+        observed.push(test);
+        tests.set(location, observed);
+        const previous = current;
         current = test;
-        report(`start test${name} at ${location}`);
+        report(`start test${name === undefined ? "" : ` ${JSON.stringify(name)}`} at ${location}`);
+        try {
+          return yield* next(props);
+        } finally {
+          current = previous;
+        }
       }
       return yield* next(props);
     },

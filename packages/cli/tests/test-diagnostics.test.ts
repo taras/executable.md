@@ -295,6 +295,56 @@ describe("xmd test failure journals", () => {
 });
 
 describe("xmd test live progress", () => {
+  it("keeps interruption ownership when named tests repeat one authored location", function* () {
+    const directory = yield* useProject({
+      "suite.test.md": doc(
+        '<Each in={["before", "interrupted", "after"]} let="variant">',
+        '<Test name={variant} timeout="1s">',
+        '<If condition={variant === "interrupted"}>',
+        ...gate("never-created"),
+        "</If>",
+        "</Test>",
+        "</Each>",
+      ),
+    });
+    const artifacts = join(directory, "artifacts");
+    const run = yield* launch(directory, ["suite.test.md"], artifacts);
+    yield* run.waitFor("start sh exec at suite.test.md:4:1");
+    const status = yield* run.join();
+    expect(status.code).toBe(1);
+    const lines = progress(run.stderr());
+    expect(lines.filter((line) => /^(pass|fail) test/.test(line))).toEqual([
+      'pass test "before" at suite.test.md:2:1',
+      'fail test "interrupted" at suite.test.md:2:1 (timeout; interrupted sh exec at suite.test.md:4:1)',
+      'pass test "after" at suite.test.md:2:1',
+    ]);
+    expect(lines).toContain("cancelled sh exec at suite.test.md:4:1");
+    expect(lines.indexOf('start test "interrupted" at suite.test.md:2:1')).toBeLessThan(
+      lines.indexOf('pass test "before" at suite.test.md:2:1'),
+    );
+    const saved = yield* journals(artifacts);
+    expect(fileNames(saved)).toEqual(["root-1.jsonl"]);
+    const records = [...saved.values()]
+      .flat()
+      .flatMap((event) =>
+        event.type === "yield" &&
+        event.description.type === "test_result" &&
+        event.result.status === "ok"
+          ? [event.result.value]
+          : [],
+      );
+    expect(records).toEqual([
+      { name: "before", location: "suite.test.md:2:1", status: "pass" },
+      {
+        name: "interrupted",
+        location: "suite.test.md:2:1",
+        status: "fail",
+        error: { kind: "timeout", message: "test timed out after 1 seconds" },
+      },
+      { name: "after", location: "suite.test.md:2:1", status: "pass" },
+    ]);
+  });
+
   it("reports a waiting test and its operation before the work is released", function* () {
     const directory = yield* useProject({
       "suite.test.md": doc('<Test name="held">', "", ...gate("release"), "", "</Test>"),
