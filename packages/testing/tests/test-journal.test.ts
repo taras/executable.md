@@ -6,7 +6,7 @@
 
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, Err, Ok, resource, scoped, sleep, spawn, suspend, withResolvers } from "effection";
+import { ensure, Err, Ok, resource, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { timebox } from "@effectionx/timebox";
 import { useStubFs } from "@executablemd/runtime/test";
@@ -155,7 +155,8 @@ describe("withFailureJournal", () => {
   it("joins teardown before saving a cancelled owner, including events teardown commits", function* () {
     const { host, saves } = recordingHost(failedResult);
     const gate = withResolvers<void>();
-    let tearingDown = false;
+    const ready = withResolvers<void>();
+    const tearingDown = withResolvers<void>();
     let continued = false;
     const TEARDOWN_EVENT: DurableEvent = {
       type: "yield",
@@ -168,22 +169,23 @@ describe("withFailureJournal", () => {
         const outcome = yield* runTests(PASSING, stream);
         yield* resource<void>(function* (provide) {
           yield* ensure(function* () {
-            tearingDown = true;
+            tearingDown.resolve();
             yield* gate.operation;
             yield* stream.append(TEARDOWN_EVENT);
           });
           yield* provide();
         });
+        // The document has run and the cleanup is registered and acquired, so
+        // a halt from here on is a halt of an owner that has teardown to join.
+        ready.resolve();
         yield* suspend();
         continued = true;
         return outcome;
       }),
     );
-    yield* sleep(50);
+    yield* ready.operation;
     const halting = yield* spawn(() => owner.halt());
-    while (!tearingDown) {
-      yield* sleep(5);
-    }
+    yield* tearingDown.operation;
     expect(saves).toEqual([]);
     gate.resolve();
     yield* halting;
