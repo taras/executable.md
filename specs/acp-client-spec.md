@@ -1,22 +1,134 @@
 # Executable.md ACP Client
 
-The `Agent` Api, the `<Agent>` / `<Session>` / `<Prompt>` components, prompt
-journaling and replay, the provider-factory seam, and the `Config` timeouts are
-implemented in `@executablemd/core`. A provider is supplied through
-the `rootProvider` factory seam described below. This specification owns the
-public operations, configuration and retained record shapes.
-[Agent permissions and generated work](../architecture.md#agent-permissions-and-generated-xmd)
+The `Agent` Api, the Agent / Session / Prompt components, prompt journaling and
+replay, the provider-factory seam, and the `Config` timeouts are implemented in
+`@executablemd/core`. A provider is supplied through the `rootProvider` factory
+seam (§The provider-factory seam). This specification owns the public operations,
+configuration and retained record shapes.
+[Agent permissions and generated work](./workflow-workspace-spec.md#8-agents-inspect-xmd-mutates)
 own workflow isolation and mapping publication;
-[native Agent sessions](../architecture.md#native-agent-sessions) own the shared
+[native Agent sessions](./native-agent-session-launch-spec.md#ownership-and-concurrency) own the shared
 session lifetime and enforcement rules. Exact native handoff interfaces and
 compatibility exceptions remain in the
 [native launch specification](./native-agent-session-launch-spec.md).
 
+## Vocabulary
+
+Each term is defined once, in its owning section; this list is a map, not a
+second statement of the rules.
+
+- **Agent** — a resolvable agent name (a string, an ACP agent command).
+  Resolution and defaults: §The Agent Api.
+- **Session** — the value naming one conversation:
+  `{ sessionKey; cwd; agentSessionId?; readonly identity? }`. Issued by the installed provider; a configured use is Core-issued. §Sessions: ownership, routes and attachment.
+- **Configured use** — `AgentSessionUse`, a Core-issued opaque carrier of one
+  configured use of a conversation. §Session configuration.
+- **Turn** — one journaled prompt: one subscription of the cold stream
+  `prompt()` returns. §The Agent Api, §Journaling and replay.
+- **Construction route** — the durable record of how a session was constructed
+  (`acp-first` or `client-native`; bound to an executable build, or unbound).
+  §Sessions: ownership, routes and attachment.
+- **Ownership** — exclusive acquisition of an advertised session through the
+  host's coordinator before any operation acts on it. §Sessions.
+- **Advertised agent** — an agent advertised for native launch or
+  client-native attachment through the host-owned dependency lists (built-in
+  defaults: `claude`, `codex`). §Sessions.
+- **Held conversation** — a conversation a trusted host holds open outside any
+  document. §A conversation a trusted host holds open.
+
+## Components: the document surface
+
+`installAgentComponents()` registers six components for the installing scope
+(executable-mdx-spec §5.3): AgentProvider, Agent, Session.Launch, Prompt,
+ApproveAll and AskPermission. Session is the seventh agent word and is supplied
+separately, because its implementation names durable work after its own
+invocation: a host declares it to the execution through the identity-bearing
+installation described in executable-mdx-spec §5.6, and the execution builds it
+from the claimant it minted. `agentIdentityComponents()` is what a host
+declares; a host that declares none has no Session component at all, which is
+why `installAgentComponents()` alone leaves the name unresolved.
+
+All seven are ordinary function components and non-reserved **defaults**: a
+repository component with one of these names is chosen ahead of them, and the
+engine owns their expression props, schema validation, `as` capture, content
+projection and invocation lifetime exactly as for any other `.ts` component.
+Props take string and boolean values, from a literal or from an expression that
+resolves to one.
+
+A canonical Markdown test may configure one nested `host="run"` execution with
+a direct TestAgent declaration (testing-spec.md). That declaration carries only
+detached scenario data. The trusted child host installs the controlled root
+provider and launcher in the isolated child, registers these six defaults and
+declares Session before root import. The provider and every logical session
+belong to that exact child; a sibling nested execution receives fresh state.
+Ordinary component resolution remains in force, so configuring the provider does not force any of these defaults to win over a repository component.
+
+What is not ordinary is which of their failures end the document. An unknown
+provider, a missing default agent, an unusable duration, an unavailable agent,
+a session that cannot be established, and a Prompt replaying a recorded
+`raised` marker all stop the execution rather than rendering a diagnostic and
+letting later siblings run as though the agent had answered. AgentProvider
+extends that to the resources its factory installs, whose cleanup the
+invocation boundary runs after the component has returned.
+
+- **AgentProvider** resolves a registered provider by its `name` prop and
+  installs it for its body. Optional `defaultAgent` overrides the inherited
+  default agent for that body; optional `timeout` declares how long each prompt
+  in that body may take. A prompt nobody bounded has no timeout: the run
+  deadline bounds the run, not each prompt inside it. The permission mode is
+  **inherited and has no prop** — it always reaches the factory unchanged.
+
+  ```md
+  <AgentProvider name="acpx" defaultAgent="codex" timeout="30s">
+    <Prompt text="Review this change" />
+  </AgentProvider>
+  ```
+
+  An unknown provider name, or no default agent configured, **fails the
+  execution before the body expands**: neither the body nor any later content
+  renders.
+- **Agent (optional `name`)** resolves its explicit name, or the
+  current/default agent when `name` is omitted, and for its body pins that
+  resolved agent onto nested prompts and launches. Self-closing performs the
+  same resolution and availability validation, then renders nothing; it does
+  not create a session or run a turn.
+- **Session (required `name`)** resolves a session and pins it onto nested
+  prompts and launches; optional `model` and `effort` props are owned by
+  §Session configuration. Self-closing validates only.
+- **Session.Launch** prepares one durable session from its rendered body and
+  hands the provider's native UI the terminal for it, rendering nothing itself
+  and returning only after that UI exits
+  (native-agent-session-launch-spec.md). Its props are exactly `agent` and
+  `session`, mirroring Prompt; no executable name, native session id, argv or
+  instruction-channel selection appears on the document surface. The dotted
+  name addresses a subdirectory, so a repository override for it is
+  `components/Session/Launch.md`.
+- **Prompt** sends one prompt and renders the reply.
+  - Content is the rendered children; a self-closing form uses the `text` prop
+    instead.
+  - `agent`, `session`, and `timeout` props override the enclosing scope for
+    that prompt; `timeout` accepts a duration string.
+  - `as="name"` captures the reply into the eval environment instead of
+    emitting it.
+  - `throwOnError` aborts the document on failure; without it, a failed prompt
+    renders its partial text, the document continues, and the failure is
+    aggregated into the execution completion as an `AggregateError` of
+    `AgentPromptError`s ("N agent prompt(s) failed"), ordered by execution
+    sequence.
+- **ApproveAll** answers each request in its body by selecting an allow option,
+  and denies when none is offered.
+- **AskPermission** asks for every request in its body, and denies without an
+  interactive TTY or a valid choice.
+
+  Both apply to their body only; the enclosing policy applies again after the
+  closing tag. They change which policy answers requests — not the provider's
+  `permissionMode`, which a provider factory still receives as inherited.
+
 ## The Agent Api
 
 `Agent` is an Effection Api (`@executablemd/core`) for stateful coding-agent
-sessions, distinct from the stateless Sample Api. It has exactly six
-contextual operations:
+sessions, distinct from the stateless Sample Api. It has exactly six contextual
+operations:
 
 ```ts
 interface AgentApi {
@@ -29,7 +141,25 @@ interface AgentApi {
 }
 ```
 
-The caller-facing native-launch operation is separate from that request-only
+- `Agent` is a resolvable agent name (a string). `Session` is
+  `{ sessionKey; cwd; agentSessionId?; readonly identity? }`.
+  `PromptOptions` is `{ agent?; session?: string | Session; timeout? }`.
+- `AgentPromptEvent` is `started` → zero or more `text_delta` → one `terminal`
+  (`{ status: "completed" | "failed" | "cancelled"; stopReason?; error? }`).
+
+**Base behavior:** with no provider installed, `agent()`, `session()`,
+`prompt()`, and `launch()` report a missing provider; `prompt()` reports it
+**coldly** — the returned stream is handed back without starting a turn, and
+the failure surfaces only when it is subscribed. `requestPermission` has a
+working base that **denies**: it selects `reject_once`, then `reject_always`,
+and otherwise returns `{ outcome: "cancelled" }`.
+
+`prompt()` has one signature and two dispatches. An ordinary document call
+composes routing through the installed provider chain, unchanged. A canonical
+held-conversation call routes as §A conversation a trusted host holds open
+specifies — that section owns the held-turn routing contract.
+
+The caller-facing native-launch operation is separate from the request-only
 route:
 
 ```ts
@@ -56,127 +186,119 @@ interface SessionLaunchResult {
 callers supply instructions and receive a result, while public Agent middleware
 routes an opaque request and cannot manufacture that result.
 
-`prompt()` has one signature and two dispatches. An ordinary document call
-composes routing through the installed provider chain, unchanged. A canonical
-held-conversation call uses outer max prompt middleware for content and
-transparent stream composition, then a turn-local min terminal bound to its
-captured provider, selected agent and exact checked Session; ancestor min
-routing and default handlers are not dispatched. A held handler forwards checked
-options unchanged, selects per-turn content inside the returned stream's
-subscription, and delegates once. A wrapper may observe events and own cleanup
-while forwarding events, order and returned text unchanged; its return value and
-`stream.done` establish no canonical completion.
+`launch()` routes one frozen, one-use `AgentLaunchRequest` and answers nothing.
+`launchAgentSession(instructions, options)` is the canonical operation that
+issues that request, retains the launch's phases, and derives its
+`SessionLaunchResult`; the route is where public middleware sees the ask, and
+the right to perform it reaches the installed provider directly rather than
+travelling on this chain (native-agent-session-launch-spec.md). A launch
+performs no model turn except the one materialization turn an adapter may
+require to make a freshly created conversation resumable at all, and a provider
+that answers `prompt()` does not thereby answer it: native session launch is
+its own capability, installed on its own.
 
-- `Agent` is a resolvable agent name (a string). `Session` is
-  `{ sessionKey; cwd; agentSessionId?; readonly identity? }`. `PromptOptions` is
-  `{ agent?; session?: string | Session; timeout? }`.
-- `AgentSessionUse` is an opaque nominal subtype of `Session`: one Core-issued
-  configured use of a conversation, carrying the exact provider Session that
-  finished the final opaque request and its configuration in Core-owned
-  identity state. One configured
-  `<Session>` issues one use and selects that same object for its nested
-  operations. Core freezes the carrier and its copied configuration; it does not
-  copy or freeze the provider Session.
-  `sessionOf()`, `configurationOf()` and `isSessionUse()` inspect an authentic
-  value. No public operation wraps an existing Session with arbitrary settings,
-  so a structural copy, a foreign loaded-copy carrier or the real Session paired
-  with substituted settings authorizes no configured operation. The provider
-  retains no desired-configuration association; the final authentic use routed
-  to an operation supplies its own settings.
-- `AgentPromptEvent` is `started` → zero or more `text_delta` → one `terminal`
-  (`{ status: "completed" | "failed" | "cancelled"; stopReason?; error? }`).
-- `launch()` routes one frozen, one-use `AgentLaunchRequest` and answers
-  nothing. `launchAgentSession(instructions, options)` is the canonical
-  operation that issues that request, retains the launch's phases, and derives
-  its `SessionLaunchResult`; the route is where public middleware sees the ask,
-  and the right to perform it reaches the installed provider directly rather
-  than travelling on this chain
-  (specs/native-agent-session-launch-spec.md). A launch performs no model turn
-  except the one materialization turn an adapter may require to make a freshly
-  created conversation resumable at all, and a provider that answers `prompt()`
-  does not thereby answer it: native session launch is its own capability,
-  installed on its own.
-- Built-in **`claude` and `codex` are advertised** for native launch, and
-  `claude` additionally for attaching ACP to a session a native process
-  constructed. Claude's sessions are named by XMD and created by the native
-  process; Codex names its own and reports it back
-  (specs/native-agent-session-launch-spec.md). So the ownership,
-  construction-route and executable-observation requirements below apply to them
-  on every host, and only the hosts that assemble all three — Deno and the
-  compiled binary — can serve them.
-- Every operation that can act on an **advertised** session — `session()`, a
-  subscribed `prompt()` stream, a launch, and an incomplete launch replay —
-  takes exclusive ownership of it first, through the session coordinator its
-  host passed into the provider. Coverage follows the agent's capability, not
-  the operation. Resolving an agent and placing a session own nothing.
-  Acquisition never waits: contention refuses, and a host that installs no
-  coordinator refuses every one of them before contacting an agent. Node and Bun
-  install none, so default Claude session work refuses there before any provider
-  effect — no availability probe, no runtime, no route read, no identity, no
-  child. An agent that is not advertised keeps ordinary ACP behavior on every
-  host.
-- Exact-target session ownership inspection and explicit operator force are
-  separate CLI capabilities. They never enter provider dependencies. Default
-  acquisition remains conservative; force compares exact record bytes under the
-  same lock and records backend quiescence unproved and interrupted outcome
-  unknown. A live owner stays busy. The one current ownership shape retains
-  the latest forced-release marker across ordinary ownership. Obsolete shapes
-  refuse; there is no ownership format selection or compatibility reader.
-  Recovery sends no provider request and repairs no identity, route or journal.
-- The host also passes in a **construction-route store** and an **executable
-  observer**, directly and from the same trusted root as the coordinator. Both
-  are required only for an advertised agent whose adapter binds a build. Which
-  side chose the identity does not decide that: whoever named the session, the
-  name resolves to one conversation only beside the build that issued or
-  accepted it, so an adapter that pins a build needs a route to say how the
-  session was constructed and an observer to say which build that was. An
-  adapter that binds nothing keeps its behavior unchanged on a host that
-  has neither. A host missing either refuses that agent before any provider
-  effect, on the same terms as a missing coordinator. The observer is not a
-  contextual Api for the same reason the coordinator is not: executable
-  validation decides which retained history may be accepted.
-- While ownership is held and before any provider construction effect, the
-  provider reconciles the route. A fresh `session()` places the session and
-  publishes no route. The first subscribed consuming `prompt()` publishes or
-  adopts `acp-first` before runtime creation, `ensureSession()` or a turn; an
-  established `session()` reconciles its retained route eagerly. An ensure that
-  fails afterwards leaves that route standing. A
-  launch by an adapter that names its own sessions publishes `client-native`
-  under an identity that adapter allocated, unless existing durable ACPX state
-  or an existing route says the session was constructed through ACP — in which
-  case it publishes or adopts `acp-first` and retains `identity-unavailable`. A
-  launch by an adapter that binds a build and lets the provider name the session
-  publishes or adopts the **bound** `acp-first` form, carrying the build it just
-  observed, before ACP creates anything; an existing unbound `acp-first` record
-  refuses rather than gaining the current executable. Publication is
-  create-once, so the loser of either order adopts the winner, and no route
-  converts.
-- A `session()` or subscribed `prompt()` meeting a **bound** `client-native`
-  route **attaches** to it. Under the same ownership it reobserves the build and
-  compares the binding exactly, requires any retained ACP arrangement to assert
-  that route's identity, selects the runtime for `(resolved agent command,
-  binding)`, calls `ensureSession()` with `resumeSessionId` equal to that
-  identity, and requires the returned canonical assertion to equal it before a
-  turn. The observed executable path reaches only that runtime's transient child
-  environment. A legacy unbound `client-native` route, an agent this host has
-  not advertised for attachment, build drift, a disagreeing arrangement and a
-  differing returned identity each refuse before a turn and create no substitute
-  conversation.
-- `withSessionRoute` remains routing only: it selects which partition serves a
-  call and carries no permission to construct, own or answer.
-- **Base behavior:** with no provider installed, `agent()`, `session()`,
-  `prompt()`, and `launch()` report a missing provider; `prompt()` reports it
-  **coldly** — the
-  returned stream is handed back without starting a turn, and the failure
-  surfaces only when it is subscribed. `requestPermission` has a working base
-  that **denies**: it selects `reject_once`, then `reject_always`, and otherwise
-  returns `{ outcome: "cancelled" }`.
+### Agent selection and directories
 
-### Confirmed Session information
+Agent's `name` prop is optional. Omitting it asks `Agent.agent(undefined)` to
+resolve the current agent: an enclosing Agent element when one is active,
+otherwise the installed provider's `defaultAgent`. An explicit name overrides
+that selection for the element's body.
+
+`defaultAgent` names an ACP agent command, not a model. Which model and effort
+level a conversation runs under is said by the Session that owns it, and by
+nothing else — Agent, Prompt and Session.Launch have no such prop, and model
+routing on the stateless Sample Api is a different contract.
+
+The current ordinary-run Agent surface grants the resolved contextual cwd and
+defines no directory-registration component. In particular, `Agent.AddDir` is
+not registered or specified, and native launch's `additionalDirectories` value
+is the explicit empty ordered list. A future directory-registration feature
+must first define path resolution, ordering and access modes here; until then
+native launch cannot claim or widen any additional root. Filesystem
+accessibility and rendered agent instructions remain separate: the cwd is not
+injected as text, and rendered instructions grant no directory.
+
+## Sessions: ownership, routes and attachment
+
+Built-in **`claude` and `codex` are advertised** for native launch, and
+`claude` additionally for attaching ACP to a session a native process
+constructed. Claude's sessions are named by XMD and created by the native
+process; Codex names its own and reports it back
+(native-agent-session-launch-spec.md). The ownership, construction-route and
+executable-observation requirements below therefore apply to them on every
+host, and only the hosts that assemble all three — Deno and the compiled
+binary — can serve them. An agent that is not advertised keeps ordinary ACP
+behavior on every host.
+
+Every operation that can act on an advertised session — `session()`, a
+subscribed `prompt()` stream, a launch, and an incomplete launch replay — takes
+exclusive ownership of it first, through the session coordinator its host
+passed into the provider. Coverage follows the agent's capability, not the
+operation. Resolving an agent and placing a session own nothing. Acquisition
+never waits: contention refuses, and a host that installs no coordinator
+refuses every one of them before contacting an agent. Node and Bun install
+none, so default Claude session work refuses there before any provider
+effect — no availability probe, no runtime, no route read, no identity, no
+child.
+
+Exact-target session ownership inspection and explicit operator force are
+separate CLI capabilities. They never enter provider dependencies. Default
+acquisition remains conservative; force compares exact record bytes under the
+same lock and records backend quiescence unproved and interrupted outcome
+unknown. A live owner stays busy. The one current ownership shape retains the
+latest forced-release marker across ordinary ownership. Obsolete shapes refuse;
+there is no ownership format selection or compatibility reader. Recovery sends
+no provider request and repairs no identity, route or journal.
+
+The host also passes in a **construction-route store** and an **executable
+observer**, directly and from the same trusted root as the coordinator. Both
+are required only for an advertised agent whose adapter binds a build. Which
+side chose the identity does not decide that: whoever named the session, the
+name resolves to one conversation only beside the build that issued or
+accepted it, so an adapter that pins a build needs a route to say how the
+session was constructed and an observer to say which build that was. An
+adapter that binds nothing keeps its behavior unchanged on a host that has
+neither. A host missing either refuses that agent before any provider effect,
+on the same terms as a missing coordinator. The observer is not a contextual
+Api for the same reason the coordinator is not: executable validation decides
+which retained history may be accepted.
+
+While ownership is held and before any provider construction effect, the
+provider reconciles the route. A fresh `session()` places the session and
+publishes no route. The first subscribed consuming `prompt()` publishes or
+adopts `acp-first` before runtime creation, `ensureSession()` or a turn; an
+established `session()` reconciles its retained route eagerly. An ensure that
+fails afterwards leaves that route standing. A launch by an adapter that names
+its own sessions publishes `client-native` under an identity that adapter
+allocated, unless existing durable ACPX state or an existing route says the
+session was constructed through ACP — in which case it publishes or adopts
+`acp-first` and retains `identity-unavailable`. A launch by an adapter that
+binds a build and lets the provider name the session publishes or adopts the
+**bound** `acp-first` form, carrying the build it just observed, before ACP
+creates anything; an existing unbound `acp-first` record refuses rather than
+gaining the current executable. Publication is create-once, so the loser of
+either order adopts the winner, and no route converts.
+
+A `session()` or subscribed `prompt()` meeting a **bound** `client-native`
+route **attaches** to it. Under the same ownership it reobserves the build and
+compares the binding exactly, requires any retained ACP arrangement to assert
+that route's identity, selects the runtime for (resolved agent command,
+binding), calls `ensureSession()` with `resumeSessionId` equal to that
+identity, and requires the returned canonical assertion to equal it before a
+turn. The observed executable path reaches only that runtime's transient child
+environment. A legacy unbound `client-native` route, an agent this host has not
+advertised for attachment, build drift, a disagreeing arrangement and a
+differing returned identity each refuse before a turn and create no substitute
+conversation.
+
+`withSessionRoute` remains routing only: it selects which partition serves a
+call and carries no permission to construct, own or answer.
+
+## Confirmed Session information
 
 Read `Session.identity` to record which conversation performed work without
-opening provider-private storage. Core exports `SessionIdentity` beside `Session`
-from `@executablemd/core/api` and its root type surface:
+opening provider-private storage. Core exports `SessionIdentity` beside
+`Session` from `@executablemd/core/api` and its root type surface:
 
 ```ts
 interface SessionIdentity {
@@ -186,11 +308,11 @@ interface SessionIdentity {
 ```
 
 The optional readonly property is absent until the provider confirms an
-association. ACPX reports `acpx.agentSessionId` for an asserted native identity,
-otherwise `acpx.acpSessionId` for the confirmed ACP loading target. Values keep
-the provider's exact opaque spelling. Native assertion takes precedence when
-both exist; `agentSessionId` remains native-only. Other providers may omit the
-property and Core defines no closed kind catalog.
+association. ACPX reports `acpx.agentSessionId` for an asserted native
+identity, otherwise `acpx.acpSessionId` for the confirmed ACP loading target.
+Values keep the provider's exact opaque spelling. Native assertion takes
+precedence when both exist; `agentSessionId` remains native-only. Other
+providers may omit the property and Core defines no closed kind catalog.
 
 Each read observes the latest confirmation for that exact Session. Its returned
 pair is frozen: `const saved = session.identity` keeps that reading even if the
@@ -198,16 +320,17 @@ Session later confirms another association. Compare both kind and value within
 the relevant Session/provider association; the strings promise no global
 uniqueness. A configured Session forwards both public observations live through
 own enumerable accessors. JSON omits undefined observations and serializes a
-present pair as `{kind,value}`; a spread or saved JSON is data, with no right to
-execute the Session. Private configuration and provider ownership stay private.
+present pair as `{kind,value}`; a spread or saved JSON is data, with no
+right to execute the Session. Private configuration and provider ownership stay
+private.
 
-For example, install `installAgentComponents` with the ACP provider factory and
-execute `<Agent name="scribe"><Session name="review" model="selected"
-effort="xhigh"><Prompt text="hello" /></Session></Agent>` with
-`agentIdentityComponents()`. Ordinary `Agent.around` middleware can retain the
-resolved Session before the first Prompt. At that Prompt's actual `started`
-event, the same configured use exposes confirmation and verified settings,
-including when the installing Core is a separate loaded copy:
+For example, install `installAgentComponents` with the ACP provider factory,
+declare `agentIdentityComponents()`, and execute an Agent element named
+`scribe` holding a Session named `review` with model and effort set, holding a
+Prompt. Ordinary `Agent.around` middleware can retain the resolved Session
+before the first Prompt. At that Prompt's actual `started` event, the same
+configured use exposes confirmation and verified settings, including when the
+installing Core is a separate loaded copy:
 
 ```ts
 const saved = session.identity;
@@ -220,29 +343,170 @@ if (saved !== undefined &&
 ```
 
 These are synchronous data reads. They create no conversation and perform no
-ensure, load, storage read, configuration, journal append, prompt or model call.
-Existing eager Session resolution retains its documented effects. Transport
-close preserves the last confirmed pair without retaining executable resources;
-reading it does not revive the provider. Exact-object admission, continuation
-validation and host mapping remain with their current owners.
+ensure, load, storage read, configuration, journal append, prompt or model
+call. Existing eager Session resolution retains its documented effects.
+Transport close preserves the last confirmed pair without retaining executable
+resources; reading it does not revive the provider. Exact-object admission,
+continuation validation and host mapping remain with their current owners.
 
-### The provider-factory seam
+## Session configuration
 
-The CLI REPL entry assembly uses this delivered coordinator for its XMD-only
-headless child integration. The canonical document Session remains the issuer.
-Its requestSession callback prepares and journals an opaque address before native
-acquisition. A setup decorator calls genuine activate with the original provider,
-command and construction configuration, returns its original Err immediately,
-and acquires only after genuine Ok. It forwards finish with the actual Session
-and new/existing configuration operation, retaining the original result and
-failures. No public Context or authored name supplies this authority.
+Session accepts optional `model` and `effort` props:
 
-The ordinary document journal owns the xmd_session allocation. Only its live body
-permits acquisition; replay looks up the exact original child and refuses absence.
-Parent registration occurs synchronously after the root, selected Sidekick
-association and private endpoint are ready. Creator cancellation joins startup
-before registration; afterwards the parent owns the child independently of the
-entry provider's finalizers.
+```md
+<Agent name="codex">
+  <Session name="architect" model="gpt-5.4" effort="high">
+    <Prompt>Review the design.</Prompt>
+  </Session>
+</Agent>
+```
+
+Values are exact provider ids — whatever the agent advertises, spelled the way
+it spells them. XMD translates no alias and substitutes no near value.
+
+Omission is not a value. With neither prop the conversation keeps whatever it
+is already using and nothing is read or written about either setting; with only
+`model` the effort level is left alone; with only `effort` it applies to the
+model the conversation is already on.
+
+Configuration is not an `Agent.session()` argument. Session middleware receives
+only a name or opaque request and returns the Session selected by its final
+route. The request's Core-private issuance carries its frozen configuration;
+only the coordinator delivered directly to the provider factory can read that
+issuance and complete it with the provider's exact Session. Core issues a
+configured use only from that completion.
+
+`request.with({ name })` keeps the same issuance and configuration.
+Replacing it with another live request selects that request's configuration and
+optional durable identity. Replacing it with a raw string, or returning an
+already-issued raw Session without finishing a setup, selects the unconfigured
+path. Returning another authentic configured use selects that use. The
+configuration therefore moves only with its whole opaque route; middleware
+never receives a separate setting it can combine with another route.
+
+`useConfiguredSession(name, configuration)` accepts a string, omission or live
+session request and returns `Operation<Session>`. A live request receives the
+frozen configuration before routing. A string or omission opens one fresh
+operation-local request issuance with no durable component identity, routes
+that request, and closes it in `finally`. The result is an `AgentSessionUse`
+only when the final route finished a configured request; middleware may instead
+select an unconfigured route.
+
+`AgentSessionUse` is an opaque nominal subtype of `Session`: one Core-issued
+configured use of a conversation, carrying the exact provider Session that
+finished the final opaque request and its configuration in Core-owned identity
+state. One configured Session element issues one use and selects that same
+object for its nested operations. Core freezes the carrier and its copied
+configuration; it does not copy or freeze the provider Session. `sessionOf()`,
+`configurationOf()` and `isSessionUse()` inspect an authentic value. No public
+operation wraps an existing Session with arbitrary settings, so a structural
+copy, a foreign loaded-copy carrier or the real Session paired with substituted
+settings authorizes no configured operation. The provider retains no
+desired-configuration association; the final authentic use routed to an
+operation supplies its own settings.
+
+Public identity and the native-only projection stay live on an already issued
+use. A first `started` event keeps that final routed configured use rather than
+substituting its raw provider Session to expose confirmation.
+
+The settings travel inside that frozen use when a prompt or launch names the
+conversation. Only Core and the installed provider can read them — a spread, a
+descriptor copy, the real Session presented as configured, or a use from
+another installation or loaded copy refuses rather than being treated as
+configured. Middleware may inspect, delegate or replace the whole Session. The
+final routed value decides the work: an authentic configured use applies its
+configuration; another authentic use applies that other use's configuration;
+and a raw Session, name or absence follows the unconfigured path with no
+configuration read or write. A copied or foreign value that claims to be
+configured refuses before provider work.
+`AgentLaunchRequest.with({ session })` follows the same rule and does not
+consult prompt state.
+
+What a durable record says the operation ran under is read from the final
+authentic use the provider consumed. If middleware selected an unconfigured
+route, the record carries no configuration. The journal therefore describes the
+turn or launch that actually ran rather than the enclosing element's earlier
+selection.
+
+The settings are applied in a live operation, under that session's existing
+serialization and ownership, and verified before the operation continues:
+
+1. read what the agent advertises;
+2. validate and apply `model`;
+3. refresh, because effort choices belong to a model;
+4. validate and apply `effort`;
+5. verify that both are exactly what was asked for.
+
+Only then does a prompt turn begin or a native UI open. A value the agent does
+not advertise, a rejected write, a readback naming something else, or an agent
+that cannot report or change its configuration all fail the operation before
+the turn — and never by substituting another setting or another conversation.
+
+A write that may have landed and then failed is put back, model first, and the
+original rejection is what the caller is told. A restoration that cannot be
+verified leaves a conversation whose configuration nobody can state: that exact
+session is refused for the rest of the run, before any later status read,
+write, prompt, detach or native process.
+
+Reconfiguring an existing session preserves its exact provider identity and its
+history. A provider that cannot reconfigure that conversation in place refuses.
+
+The configured-session carrier is issued by Core after `session()` resolves an
+exact value registered by the installed provider. A Core-owned
+resolve-and-issue operation supplies the programmatic path; middleware can
+inspect, delegate or reroute the resulting use but cannot mint or rebuild one.
+The private context used by Session only selects the enclosing lexical use for
+nested components. It is not admission and carries no second configuration
+value.
+
+Configuration refusals may carry the optional namespaced observational data
+`error["executablemd.acp.configuration-failure"]`: exactly
+`{ reason, setting }`, where `reason` is `selector-unavailable` or
+`configuration-mismatch`, and `setting` is `model` or `effort`. The
+configuration owner supplies initial selector absence separately from readback
+mismatch. This data grants no configuration completion, permission or identity.
+Restoration failure retains its existing unusable wrapper and takes failure
+precedence. Consumers parse the closed payload at the eager Session or cold
+Prompt subscription boundary, without matching diagnostic text or serializing
+the error.
+
+## Option discovery
+
+`Agent.options()` reports what one agent advertises, in provider order:
+
+```ts
+interface AgentOption {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string | null;
+  readonly group: { readonly id: string; readonly name: string } | null;
+}
+
+interface AgentOptionSet {
+  readonly selected: string;
+  readonly options: readonly AgentOption[];
+}
+
+interface AgentOptions {
+  readonly agent: string;
+  readonly model: AgentOptionSet | null;
+  readonly effort: AgentOptionSet | null;
+}
+```
+
+A setting the agent does not offer is `null` rather than an empty set. Groups
+are flattened, with the group repeated on each of its members and `null` on a
+choice the provider offered directly. `AgentOptionsRequest` is
+`{ model? }`, which asks about a model other than the current one —
+because effort choices belong to a model.
+
+Reading is strict about the selector it recognized and incurious about the
+rest. A selector with the wrong type, two equally preferred candidates, a
+duplicate value id, a missing id or name, or a current value the agent does not
+offer fails the operation rather than reading as "this agent offers you
+nothing".
+
+## The provider-factory seam
 
 A provider is a factory that installs `Agent` middleware for its scope, and —
 if it serves saved conversations — one provider object for them. Core delivers
@@ -302,50 +566,40 @@ interface AgentConversationProvider {
 }
 ```
 
-A provider that serves saved conversations installs an `AgentConversationProvider`
-in its own provider scope, through the Context of that same name on
-`@executablemd/core/api`, alongside whatever `Agent` middleware it provides. The
-factory signature is unchanged. The object carries no coordinator, permission
-flag, configuration approval, history mapping or completion receipt: it is
-trusted behavior a conversation selects, and everything it is held to stays with
-Core.
-
-A held turn composes content and its cold stream through outer max
-`Agent.prompt` middleware, then ends at a private turn-local min terminal bound
-to this captured provider, the selected agent and the exact checked Session.
-Ancestor min routing and default handlers are not dispatched in held mode, and
-there is no fallback to an ordinary provider terminal. The terminal visibly
-refuses a changed or missing selected agent, exact Session or timeout before
-native prompt work, rather than silently repairing routing; an originally absent
-timeout remains absent. Composition belongs to that conversation and preserves
-subscription-owned work and cleanup. Ordinary document routing is unchanged, and
-later provider selection cannot replace the captured behavior.
+A provider that serves saved conversations installs an
+`AgentConversationProvider` in its own provider scope, through the Context of
+that same name on `@executablemd/core/api`, alongside whatever `Agent`
+middleware it provides. The factory signature is unchanged. The object carries
+no coordinator, permission flag, configuration approval, history mapping or
+completion receipt: it is trusted behavior a conversation selects, and
+everything it is held to stays with Core. How a held turn routes through it is
+owned by §A conversation a trusted host holds open.
 
 Each of the four operations takes explicitly what the public chain supplied
 implicitly. `agent` resolves through this provider rather than through
-`Agent.agent`. `session` accepts the genuine opaque request — a name, a `Session`
-or a structural look-alike names no conversation here — and an explicit agent, so
-the setup the coordinator delivers is reached and the agent cannot be answered
-for by anything else. `options` inspects through the same object. `prompt`
-returns a cold stream for the exact `Session` the conversation supplies; its
-liveness check and its native work belong to the subscription, so obtaining a
-stream starts nothing.
+`Agent.agent`. `session` accepts the genuine opaque request — a name, a
+`Session` or a structural look-alike names no conversation here — and an
+explicit agent, so the setup the coordinator delivers is reached and the agent
+cannot be answered for by anything else. `options` inspects through the same
+object. `prompt` returns a cold stream for the exact `Session` the conversation
+supplies; its liveness check and its native work belong to the subscription, so
+obtaining a stream starts nothing.
 
 The object has its installing provider's lifetime. Its methods resolve that
 provider's concrete state at the moment of use, so a reference kept past the
 provider's teardown refuses rather than reaching state that is gone. A provider
-that selects its state per dispatch does not by itself supply one: a host serving
-a saved conversation installs an object for one concrete state in that
+that selects its state per dispatch does not by itself supply one: a host
+serving a saved conversation installs an object for one concrete state in that
 conversation's scope.
 
 `sessionSetup()` accepts one exact live opaque session request. Its handle
 exposes the optional durable component identity, authorizes provider work once,
-and settles that request once.
-For a new Session, `finish()` issues the configured use without reading or
-writing provider configuration. For an existing Session, it invokes the
-provider's stable `configure` operation, requires the returned canonical value
-to equal the requested members exactly, and issues the use with that returned
-value. An unconfigured request returns the provider's exact raw Session.
+and settles that request once. For a new Session, `finish()` issues the
+configured use without reading or writing provider configuration. For an
+existing Session, it invokes the provider's stable `configure` operation,
+requires the returned canonical value to equal the requested members exactly,
+and issues the use with that returned value. An unconfigured request returns
+the provider's exact raw Session.
 
 `activate()` is asked before anything is reattached, created or prompted, and
 `finish()` refuses until it has answered `Ok`. The provider names itself, names
@@ -356,27 +610,26 @@ replacement, addition or explicit `null`. Every member is required: an input
 this host left to the agent's own default is not an empty one, so a provider
 that cannot state all four states none, and a conversation that requires one
 refuses rather than comparing against a value nobody supplied. Those values are
-built from the same inputs construction uses — detached once from the host's own
-containers — so a configuration this provider declared and a session it then
-created cannot differ.
+built from the same inputs construction uses — detached once from the host's
+own containers — so a configuration this provider declared and a session it
+then created cannot differ.
 
-A retained conversation requires the configuration; an ordinary `<Session>` may
-omit it, saves none and keeps its existing behavior. One setup authorizes one
-attempt: a refusal, a cancellation or a closure leaves that handle unable to
-retry or to settle, and a later explicit action asks for a setup of its own. An
-`Ok` authorizes work and asserts nothing about native creation. A delivered
+A retained conversation requires the configuration; an ordinary Session element
+may omit it, saves none and keeps its existing behavior. One setup authorizes
+one attempt: a refusal, a cancellation or a closure leaves that handle unable
+to retry or to settle, and a later explicit action asks for a setup of its own.
+An `Ok` authorizes work and asserts nothing about native creation. A delivered
 setup with no `activate` is refused by the structural adapter rather than read
 as authorized.
 
 One private registration owner is created inside the provider installation's
-operation. Its closure owns liveness, exact Session-to-`configure` registration,
-duplicate detection, one authorization attempt per setup, settling and
-configured-use lookup. The same Session and
-operation may be registered again; a different operation for that Session, a
-second settling, registration after teardown or lookup after teardown
-refuses. Provider teardown runs while the owner is live, then closes it and
-drops its registrations deterministically. Sibling installations and runs have
-distinct owners.
+operation. Its closure owns liveness, exact Session-to-`configure`
+registration, duplicate detection, one authorization attempt per setup,
+settling and configured-use lookup. The same Session and operation may be
+registered again; a different operation for that Session, a second settling,
+registration after teardown or lookup after teardown refuses. Provider teardown
+runs while the owner is live, then closes it and drops its registrations
+deterministically. Sibling installations and runs have distinct owners.
 
 The public request carries only an unreadable private reference to its own
 issuance. Middleware may transfer that whole route but cannot read, edit, copy
@@ -386,12 +639,19 @@ middleware-readable member, return value or Session property. Another loaded
 provider copy composes through the coordinator it received; another loaded Core
 copy cannot manufacture a request or use this owner admits.
 
-`installAgentComponents({ rootProvider: { factory, options } })` owns the root
-provider's lifetime through `Execution.document`: the handler delegates the
-request it was given and returns nothing, and the factory runs inside a scoped
-provider lifetime that surrounds the document's expansion and ends while the
-journal is still live, so the completion resolves **only after the provider's
-finalizers have run**. Rendered output closes independently of
+A provider partition is one complete, independently owned agent-provider state —
+runtime, store, managed sessions, queues, coordinator, teardown — selected by the one
+installed factory at each dispatch. Production is the single-partition case of the same
+path; holding a partition grants work, never permission.
+
+### Root-provider lifetime and completion
+
+`installAgentComponents({ rootProvider: { factory, options } })`
+owns the root provider's lifetime through `Execution.document`: the handler
+delegates the request it was given and returns nothing, and the factory runs
+inside a scoped provider lifetime that surrounds the document's expansion and
+ends while the journal is still live, so the completion resolves **only after
+the provider's finalizers have run**. Rendered output closes independently of
 teardown, and every finalizer runs even if one throws.
 
 Teardown and prompt failures are *additive completion policies*, and completion
@@ -418,200 +678,53 @@ Resolving an unregistered name throws `Unknown agent provider "<name>"`.
 
 Registering a provider only makes a factory **resolvable**; it does not install
 that provider into the `Agent` Api. Operations still report a missing provider
-until one is installed as a root provider or by `<AgentProvider>`.
+until one is installed as a root provider or by AgentProvider.
 
 ### Seeded configuration
 
-`installAgentComponents({ defaultAgent, permissionMode })` seeds the values that
-`<AgentProvider>` inherits. The configuration surfaces are those options, the
-`defaultAgent` and `timeout` props on `<AgentProvider>`, and the permission
-components below; the contextual state holding them is private to the
+`installAgentComponents({ defaultAgent, permissionMode })` seeds the
+values that AgentProvider inherits. The configuration surfaces are those
+options, the `defaultAgent` and `timeout` props on AgentProvider, and the
+permission components; the contextual state holding them is private to the
 components.
 
-### Agent selection, directories, and models
+### The CLI REPL entry assembly
 
-`<Agent>`'s `name` prop is optional. Omitting it asks `Agent.agent(undefined)`
-to resolve the current agent: an enclosing `<Agent>` when one is active,
-otherwise the installed provider's `defaultAgent`. An explicit name overrides
-that selection for the element's body. A self-closing `<Agent />` performs the
-same resolution and availability validation, then renders nothing; it does not
-create a session or run a turn.
+The CLI REPL entry assembly uses this delivered coordinator for its XMD-only
+headless child integration. The canonical document Session remains the issuer.
+Its requestSession callback prepares and journals an opaque address before
+native acquisition. A setup decorator calls genuine activate with the original
+provider, command and construction configuration, returns its original Err
+immediately, and acquires only after genuine Ok. It forwards finish with the
+actual Session and new/existing configuration operation, retaining the original
+result and failures. No public Context or authored name supplies this
+authority.
 
-`defaultAgent` names an ACP agent command, not a model. Which model and effort
-level a conversation runs under is said by the `<Session>` that owns it, and by
-nothing else — `<Agent>`, `<Prompt>` and `<Session.Launch>` have no such prop,
-and model routing on the stateless Sample Api is a different contract.
-
-### Session configuration
-
-`<Session>` accepts optional `model` and `effort` props:
-
-```md
-<Agent name="codex">
-  <Session name="architect" model="gpt-5.4" effort="high">
-    <Prompt>Review the design.</Prompt>
-  </Session>
-</Agent>
-```
-
-Values are exact provider ids — whatever the agent advertises, spelled the way
-it spells them. XMD translates no alias and substitutes no near value.
-
-Omission is not a value. With neither prop the conversation keeps whatever it is
-already using and nothing is read or written about either setting; with only
-`model` the effort level is left alone; with only `effort` it applies to the
-model the conversation is already on.
-
-Configuration is not an `Agent.session()` argument. Session middleware receives
-only a name or opaque request and returns the Session selected by its final
-route. The request's Core-private issuance carries its frozen configuration;
-only the coordinator delivered directly to the provider factory can read that
-issuance and complete it with the provider's exact Session. Core issues a
-configured use only from that completion.
-
-`request.with({ name })` keeps the same issuance and configuration. Replacing it
-with another live request selects that request's configuration and optional
-durable identity. Replacing it with a raw string, or returning an already-issued
-raw Session without finishing a setup, selects the unconfigured path.
-Returning another authentic configured use selects that use. The configuration
-therefore moves only with its whole opaque route; middleware never receives a
-separate setting it can combine with another route.
-
-`useConfiguredSession(name, configuration)` accepts a string, omission or live
-session request and returns `Operation<Session>`. A live request receives the
-frozen configuration before routing. A string or omission opens one fresh
-operation-local request issuance with no durable component identity, routes
-that request, and closes it in `finally`. The result is an
-`AgentSessionUse` only when the final route finished a configured request;
-middleware may instead select an unconfigured route.
-
-Public identity and the native-only projection stay live on an already issued
-use. A first `started` event keeps that final routed configured use rather than
-substituting its raw provider Session to expose confirmation.
-
-The settings then travel inside that frozen use when a prompt or launch names
-the conversation. Only Core and the installed provider can read them — a spread,
-a descriptor copy, the real Session presented as configured, or a use from
-another installation or loaded copy refuses rather than being treated as
-configured. The provider retains no desired settings between operations.
-
-Middleware may inspect, delegate or replace the whole Session. The final routed
-value decides the work: an authentic configured use applies its configuration;
-another authentic use applies that other use's configuration; and a raw Session,
-name or absence follows the unconfigured path with no configuration read or
-write. A copied or foreign value that claims to be configured refuses before
-provider work. `AgentLaunchRequest.with({ session })` follows the same rule and
-does not consult prompt state.
-
-What a durable record says the operation ran under is read from the final
-authentic use the provider consumed. If middleware selected an unconfigured
-route, the record carries no configuration. The journal therefore describes the
-turn or launch that actually ran rather than the enclosing element's earlier
-selection.
-
-The settings are applied in a live operation, under that session's existing
-serialization and ownership, and verified before the operation continues:
-
-1. read what the agent advertises;
-2. validate and apply `model`;
-3. refresh, because effort choices belong to a model;
-4. validate and apply `effort`;
-5. verify that both are exactly what was asked for.
-
-Only then does a prompt turn begin or a native UI open. A value the agent does
-not advertise, a rejected write, a readback naming something else, or an agent
-that cannot report or change its configuration all fail the operation before the
-turn — and never by substituting another setting or another conversation.
-
-A write that may have landed and then failed is put back, model first, and the
-original rejection is what the caller is told. A restoration that cannot be
-verified leaves a conversation whose configuration nobody can state: that exact
-session is refused for the rest of the run, before any later status read, write,
-prompt, detach or native process.
-
-Reconfiguring an existing session preserves its exact provider identity and its
-history. A provider that cannot reconfigure that conversation in place refuses.
-
-The configured-session carrier is issued by Core after `session()` resolves an
-exact value registered by the installed provider. A Core-owned
-resolve-and-issue operation supplies the programmatic path; middleware can
-inspect, delegate or reroute the resulting use but cannot mint or rebuild one.
-The private context used by `<Session>` only selects the enclosing lexical use
-for nested components. It is not admission and carries no second configuration
-value.
-
-Configuration refusals may carry the optional namespaced observational data
-`error["executablemd.acp.configuration-failure"]`: exactly `{ reason, setting }`,
-where `reason` is `selector-unavailable` or `configuration-mismatch`, and
-`setting` is `model` or `effort`. The configuration owner supplies initial
-selector absence separately from readback mismatch. This data grants no
-configuration completion, permission or identity. Restoration failure retains
-its existing unusable wrapper and takes failure precedence. Consumers parse the
-closed payload at the eager Session or cold Prompt subscription boundary,
-without matching diagnostic text or serializing the error.
-
-### Option discovery
-
-`Agent.options()` reports what one agent advertises, in provider order:
-
-```ts
-interface AgentOption {
-  readonly id: string;
-  readonly name: string;
-  readonly description: string | null;
-  readonly group: { readonly id: string; readonly name: string } | null;
-}
-
-interface AgentOptionSet {
-  readonly selected: string;
-  readonly options: readonly AgentOption[];
-}
-
-interface AgentOptions {
-  readonly agent: string;
-  readonly model: AgentOptionSet | null;
-  readonly effort: AgentOptionSet | null;
-}
-```
-
-A setting the agent does not offer is `null` rather than an empty set. Groups
-are flattened, with the group repeated on each of its members and `null` on a
-choice the provider offered directly. `AgentOptionsRequest` is `{ model? }`,
-which asks about a model other than the current one — because effort choices
-belong to a model.
-
-Reading is strict about the selector it recognized and incurious about the rest.
-A selector with the wrong type, two equally preferred candidates, a duplicate
-value id, a missing id or name, or a current value the agent does not offer
-fails the operation rather than reading as "this agent offers you nothing".
-
-The current ordinary-run Agent surface grants the resolved contextual cwd and
-defines no directory-registration component. In particular, `Agent.AddDir` is
-not registered or specified as an available component, and native launch's
-`additionalDirectories` value is the explicit empty ordered list. A future
-directory-registration feature must first define path resolution, ordering and
-access modes here; until then native launch cannot claim or widen any additional
-root. Filesystem accessibility and rendered agent instructions remain separate:
-the cwd is not injected as text, and rendered instructions grant no directory.
+The ordinary document journal owns the xmd_session allocation. Only its live
+body permits acquisition; replay looks up the exact original child and refuses
+absence. Parent registration occurs synchronously after the root, selected
+Sidekick association and private endpoint are ready. Creator cancellation joins
+startup before registration; afterwards the parent owns the child independently
+of the entry provider's finalizers.
 
 ## A conversation a trusted host holds open
 
-The parent and child Sidekicks retain this ordinary constrained provider assembly
-and mailbox. Headless child placement belongs to the separate entry document's
-canonical Session; the child-enabled entry factory is not installed as the root
-provider of a held XMD chat. The held history retains its own construction and
-Prompt ordering. A saved child reference neither replaces that history nor starts
-a fresh conversation after uncertain acceptance. Reconnection first establishes
-the exact original live child; missing identity or outcome remains uncertain and
-never authorizes resend.
-
-`<Session>` and `<Prompt>` are written inside an expansion, with an element to
-name the session and a journal already around them. A host that discusses
-something with an agent has neither: a person is typing into a chat, the
-history outlives the process, and there is no document. `useAgentConversation()`
-on `@executablemd/core/host` is that conversation, and it is the genuine one —
-a canonical agent session, journaled turns, verified configuration, and an
+Session and Prompt are written inside an expansion, with an element to name the
+session and a journal already around them. A host that discusses something with
+an agent has neither: a person is typing into a chat, the history outlives the
+process, and there is no document. `useAgentConversation()` on
+`@executablemd/core/host` is that conversation, and it is the genuine one — a
+canonical agent session, journaled turns, verified configuration, and an
 identity the provider reattaches to.
+
+The parent and child Sidekicks retain this ordinary constrained provider
+assembly and mailbox. Headless child placement belongs to the separate entry
+document's canonical Session; the child-enabled entry factory is not installed
+as the root provider of a held XMD chat. The held history retains its own
+construction and Prompt ordering. A saved child reference neither replaces that
+history nor starts a fresh conversation after uncertain acceptance.
+Reconnection first establishes the exact original live child; missing identity
+or outcome remains uncertain and never authorizes resend.
 
 ```ts
 const opened = yield* useAgentConversation({
@@ -622,8 +735,8 @@ const opened = yield* useAgentConversation({
 });
 ```
 
-The `agent` a host names is the conversation's own for the life of it. Each turn
-resolves it through the conversation's own provider before allocating its
+The `agent` a host names is the conversation's own for the life of it. Each
+turn resolves it through the conversation's own provider before allocating its
 session, and then states it to both of that turn's operations — so the session
 the request is resolved into and the prompt that is sent are the same agent's,
 and a conversation runs under an agent that is not the host's default. The
@@ -633,44 +746,51 @@ it could read or replace.
 The handle is provided by a resource owned by the caller's scope and offers
 three members: `prompt(input, configuration?)`, which sends one journaled turn
 and answers with its completed reply; `options(request?)`, which inspects the
-selected agent's advertised choices; and
-`evaluateGeneratedXmdRoot(request)`, which evaluates one complete generated root
-under this conversation's own execution. Stop is scope cancellation rather than
-a fourth member.
+selected agent's advertised choices; and `evaluateGeneratedXmdRoot(request)`,
+which evaluates one complete generated root under this conversation's own
+execution. Stop is scope cancellation rather than a fourth member.
 
 `prompt` returns source and runs none of it. A host that means to run what came
-back decides that itself and asks here, because a generated root is evaluated by
-the execution whose captured package documentation and canonical protected
+back decides that itself and asks here, because a generated root is evaluated
+by the execution whose captured package documentation and canonical protected
 dispatch it reads — and that execution is this conversation's. Evaluating sends
 no provider prompt and changes no configuration. The element obtains the actual
 method on its own execution's handle through a Core-private readiness bridge
-before the conversation is announced ready, so a handle that reports itself open
-is open for all three things it offers; the bridge carries that bound operation
-and nothing behind it, and `AgentConversationHost` stays an ordinary declaration
-local to the synthetic root.
+before the conversation is announced ready, so a handle that reports itself
+open is open for all three things it offers; the bridge carries that bound
+operation and nothing behind it, and `AgentConversationHost` stays an ordinary
+declaration local to the synthetic root.
 
 **It does its work through one installed provider, directly.** The conversation
-reads the `AgentConversationProvider` its host installed once, in its own scope,
-after installation and before it reports itself ready, and every agent, session,
-options and prompt operation of that chat goes to that object. Reading selects;
-it probes no agent, creates no runtime, ensures no session, sends no turn and
-saves nothing, so a cold opening and a replay reach none of its four methods.
-A later selection cannot reach a conversation that is already open.
+reads the `AgentConversationProvider` its host installed once, in its own
+scope, after installation and before it reports itself ready, and every agent,
+session, options and prompt operation of that chat goes to that object. Reading
+selects; it probes no agent, creates no runtime, ensures no session, sends no
+turn and saves nothing, so a cold opening and a replay reach none of its four
+methods. A later selection cannot reach a conversation that is already open.
 
-A held turn's content and its cold stream are composed by outer `max`
-`Agent.prompt` middleware, and the turn then ends at a private turn-local `min`
-terminal bound to this captured provider, the selected agent and the exact
-checked Session. Ancestor `min` routing and default handlers are not dispatched
-in held mode, and there is no fallback to them. The terminal visibly refuses a
-changed or missing agent, exact Session or timeout before native prompt work —
-the timeout against the primitive copied before any handler saw the options,
-because a value middleware can change in place cannot be compared against
-itself. One subscription is one turn: entering that stream a second time is
+**Held-turn routing.** A held turn's content and its cold stream are composed
+by outer `max` `Agent.prompt` middleware, and the turn then ends at a private
+turn-local `min` terminal bound to the captured provider, the selected agent
+and the exact checked Session. Ancestor `min` routing and default handlers are
+not dispatched in held mode, and there is no fallback to an ordinary provider
+terminal. The terminal visibly refuses a changed or missing selected agent,
+exact Session or timeout before native prompt work, rather than silently
+repairing routing — the timeout checked against the primitive copied before any
+handler saw the options, because a value middleware can change in place cannot
+be compared against itself; an originally absent timeout remains absent. A held
+handler forwards checked options unchanged, selects per-turn content inside the
+returned stream's subscription, and delegates once. A wrapper may observe
+events and own cleanup while forwarding events, order and returned text
+unchanged; its return value and `stream.done` establish no canonical
+completion. One subscription is one turn: entering that stream a second time is
 refused before a second input is retained, a second turn announced or the
 provider asked again. The native stream's own terminal outcome, settlement and
 returned text are read on that same forwarding path, so a composition that
 catches a native failure or ends early does not make a turn complete. Later
-provider selection cannot replace the captured behavior.
+provider selection cannot replace the captured behavior; composition belongs to
+that conversation and preserves subscription-owned work and cleanup. Ordinary
+document routing is unchanged.
 
 Content is the only thing composition decides, and that is deliberate: a
 handler that forwarded a request's descriptive name instead of the request
@@ -682,48 +802,49 @@ for a held conversation at all, and the prompt terminal validates what arrives.
 A provider that installs no object refuses the opening with an explicit
 unsupported-conversation error, before the conversation is bound, so no
 configuration record, prompt record or root terminal follows from the refusal.
-Ordinary `<Session>` and `<Prompt>` keep composing through `Agent` exactly as
+Ordinary Session and Prompt elements keep composing through `Agent` exactly as
 before.
 
 Core keeps what it already owned. The one-use request is opened and closed by
-the conversation, the configuration requirement travels inside its issuance, and
-the conversation retains private evidence of the exact `Session` settling that
-request produced: a provider that answers with a session it never settled, or
-with another after settling, is refused before Core asks for a prompt stream.
-That check is not the configuration check — `activate()` still happens inside the
-provider before any native effect — and neither is evidence of native identity,
-which only a turn's own canonical record establishes.
+the conversation, the configuration requirement travels inside its issuance,
+and the conversation retains private evidence of the exact `Session` settling
+that request produced: a provider that answers with a session it never settled,
+or with another after settling, is refused before Core asks for a prompt
+stream. That check is not the configuration check — `activate()` still happens
+inside the provider before any native effect — and neither is evidence of
+native identity, which only a turn's own canonical record establishes.
 
 **It is an element inside its own execution.** A provider and its launch
-coordinator are installed inside `Execution.document`, and a durable preparation
-precedes both, so a conversation opened there could reach neither. The
-conversation is a host-declared identity component in a synthetic root core
+coordinator are installed inside `Execution.document`, and a durable
+preparation precedes both, so a conversation opened there could reach neither.
+The conversation is a host-declared identity component in a synthetic root Core
 owns: canonical resolution selects it, hands its implementation the execution's
 claimant, and the session is placed under the engine's own identity for that
 invocation. The `id` names the history and nothing else — it carries no
 claimant, establishes no native identity and overrides none.
 
 **Its root is never completed.** A durable root that records its terminal
-replays instead of reopening, and reopening a conversation is the ordinary case.
-The element therefore serves turns and does not return; the halt that releases
-the resource appends nothing, because a root records a terminal only on its own
-success or failure. What the history keeps is a partial continuation.
+replays instead of reopening, and reopening a conversation is the ordinary
+case. The element therefore serves turns and does not return; the halt that
+releases the resource appends nothing, because a root records a terminal only
+on its own success or failure. What the history keeps is a partial
+continuation.
 
 **Each turn is its own canonical sequence.** A turn is one journaled Prompt
 under its own durable name, offered in the conversation's sequence exactly as
-`<Prompt>` offers one in a document's, through the same `runPrompt` the
-component uses rather than a copy of it. It runs in a task of its own, so
-cancelling the call halts the turn: its append never lands, the position stays
-free, and the next turn is a new turn rather than that one resumed. Reopening
-re-offers the retained turns in their own order, which replays each from its
-record and reaches no provider.
+Prompt offers one in a document's, through the same `runPrompt` the component
+uses rather than a copy of it. It runs in a task of its own, so cancelling the
+call halts the turn: its append never lands, the position stays free, and the
+next turn is a new turn rather than that one resumed. Reopening re-offers the
+retained turns in their own order, which replays each from its record and
+reaches no provider.
 
 A turn whose outcome the history does not hold refuses the conversation before
-anything opens. Resuming it would re-send a prompt the provider may already have
-accepted, and writing a terminal for it would make an unfinished turn look
-complete; reconciling it belongs to the host, with the provider's own account of
-that turn. Because the refusal happens before the execution exists, it appends
-nothing to the history it refused.
+anything opens. Resuming it would re-send a prompt the provider may already
+have accepted, and writing a terminal for it would make an unfinished turn look
+complete; reconciling it belongs to the host, with the provider's own account
+of that turn. Because the refusal happens before the execution exists, it
+appends nothing to the history it refused.
 
 The history is bound to its conversation by a durable record written on the
 first opening and replayed afterwards. A history established for another `id`
@@ -743,15 +864,16 @@ than by identity or member order, array order is the provider's own, and a
 difference is an unsupported change that refuses before reattachment. The
 conversation, its turns, its native identity and its configuration all stand
 through that refusal, and nothing is created in its place. A reopening on its
-own performs no activation and no provider work at all; the configuration record
-is re-offered in its own position so the turns written after it replay in order.
+own performs no activation and no provider work at all; the configuration
+record is re-offered in its own position so the turns written after it replay
+in order.
 
 These are configuration, not identity. A future supported change applies and
 verifies on the same native conversation and is saved before anything relies on
 it; this build records and compares the initial configuration and has no
-live-update protocol. An absent Prompt outcome is never permission to replace an
-existing configuration, and the configuration is never a native identity: that
-remains the canonical assertion a turn records.
+live-update protocol. An absent Prompt outcome is never permission to replace
+an existing configuration, and the configuration is never a native identity:
+that remains the canonical assertion a turn records.
 
 **What a turn ran under is the provider's own account.** A request is made per
 turn, because a request settles what it asks before it is routed and is good
@@ -765,143 +887,52 @@ to restore a pane.
 
 A used history requires an existing provider record on its next explicit turn.
 Use means a retained turn has nonempty agent output, non-failed status, a stop
-reason, or an asserted native identity. If setup would create, it refuses before
-`session/new`, names a new conversation as the remedy, preserves retained turns and output, and leaves
-the conversation usable. Failed-before-answer history may still create.
-A turn naming no native identity establishes none; it does not permit replacing
-a conversation the history already used.
+reason, or an asserted native identity. If setup would create, it refuses
+before `session/new`, names a new conversation as the remedy, preserves
+retained turns and output, and leaves the conversation usable.
+Failed-before-answer history may still create. A turn naming no native identity
+establishes none; it does not permit replacing a conversation the history
+already used.
 
 **The native conversation an established history names.** A completed turn
 retains the exact conversation the provider said it ran in, so the retained
 records are what establish a chat's native identity; there is no mapping record
 beside them. A provider that resolves a different conversation refuses the next
 turn before it is sent, a provider that names a different one only after the
-turn ran has that turn's outcome refused with the established identity standing,
-and a history whose own turns name two conversations cannot be opened at all.
-The window before any turn has retained one belongs to the provider: ACPX's own
-record asserts an identity before the host's mapping is acknowledged, and the
-next attachment reconciles and commits that same assertion rather than creating
-a replacement (§ACPX provider).
+turn ran has that turn's outcome refused with the established identity
+standing, and a history whose own turns name two conversations cannot be opened
+at all. The window before any turn has retained one belongs to the provider:
+ACPX's own record asserts an identity before the host's mapping is
+acknowledged, and the next attachment reconciles and commits that same
+assertion rather than creating a replacement (§ACPX provider).
 
 One job runs at a time; an overlapping call refuses rather than queuing, and a
 handle kept past the scope that opened it refuses because the conversation it
 addressed has been cancelled. All three members share that one admission guard,
 so an evaluation while a turn is in flight is refused exactly as a second turn
-is, and refusing it performs no component work. Cancelling a call joins the work
-it started: the call finishes once that work and the cleanup inside it have
-finished unwinding, and the conversation stays unavailable to another job until
-then, so a completed cancellation is proof that the work has stopped. A wait
-that can no longer be answered ends on the conversation's own ending rather than
-on nothing — an execution that has ended takes the element serving a job with
-it, and the caller is told so. A refusal before a turn starts — an unavailable
-agent, an identity the provider will not reattach, settings it would not
-honour — is that call's answer and leaves the conversation usable. Only a
-durability failure ends it.
+is, and refusing it performs no component work. Cancelling a call joins the
+work it started: the call finishes once that work and the cleanup inside it
+have finished unwinding, and the conversation stays unavailable to another job
+until then, so a completed cancellation is proof that the work has stopped. A
+wait that can no longer be answered ends on the conversation's own ending
+rather than on nothing — an execution that has ended takes the element serving
+a job with it, and the caller is told so. A refusal before a turn starts — an
+unavailable agent, an identity the provider will not reattach, settings it
+would not honour — is that call's answer and leaves the conversation usable.
+Only a durability failure ends it.
 
 An evaluation gets an execution-owned durable sequence distinct from the
-conversation's turns, allocated past every evaluation the history already holds,
-so one history carries its Prompts and its evaluations side by side without
-either replaying the other and the Prompt records that establish native identity
-are exactly what they were. An ordinary failure of the generated source answers
-`Err` carrying what the reply had rendered; a failure of the run keeps its own
-classification and reaches the caller as itself. It is also this conversation's
-own outcome, and because the conversation's root is never completed there is no
-terminal and no completion for it to travel through: the release that ends the
-conversation raises the same object instead. So catching it on the call cannot
-leave the conversation's own run looking successful.
-
-## Components
-
-`installAgentComponents()` registers six components for the installing scope
-(§5.3): `<AgentProvider>`, `<Agent>`, `<Session.Launch>`, `<Prompt>`,
-`<ApproveAll>` and `<AskPermission>`. `<Session>` is the seventh agent word and
-is supplied separately, because its implementation names durable work after its
-own invocation: a host declares it to the execution through the identity-bearing
-installation described in executable-mdx-spec §5.6, and the execution builds it
-from the claimant it minted. `agentIdentityComponents()` is what a host declares;
-a host that declares none has no `<Session>` at all.
-
-All seven are ordinary function components and non-reserved **defaults**: a
-repository component with one of these names is chosen ahead of them, and the
-engine owns their expression props, schema validation, `as` capture, content
-projection and invocation lifetime exactly as it does for any other `.ts`
-component. Props take string and boolean values, from a literal or from an
-expression that resolves to one.
-
-A canonical Markdown test may configure one nested `host="run"` execution with
-a direct `<TestAgent>` declaration (`testing-spec.md`). That declaration carries
-only detached scenario data. The trusted child host installs the controlled
-root provider and launcher in the isolated child, registers these six defaults
-and declares `<Session>` before root import. The provider and every logical
-session belong to that exact child; a sibling nested execution receives fresh
-state. Ordinary component resolution remains in force, so configuring the
-provider does not force any of these defaults to win over a repository
-component.
-
-What is not ordinary is which of their failures end the document. An unknown
-provider, a missing default agent, an unusable duration, an unavailable agent, a
-session that cannot be established, and a `<Prompt>` replaying a recorded
-`raised` marker all stop the execution rather than rendering a diagnostic and
-letting later siblings run as though the agent had answered. `<AgentProvider>`
-extends that to the resources its factory installs, whose cleanup the invocation
-boundary runs after the component has returned.
-
-- **`<AgentProvider>`** resolves a registered provider by its `name` prop and
-  installs it for its body. The optional `defaultAgent` prop overrides the
-  inherited default agent for that body, and the optional `timeout` prop
-  declares how long each prompt in that body may take. A prompt nobody bounded
-  has no timeout: the run deadline bounds the run, not each prompt inside it.
-  The permission mode is **inherited and has no prop** — it always reaches the
-  factory unchanged.
-
-  ```md
-  <AgentProvider name="acpx" defaultAgent="codex" timeout="30s">
-    <Prompt text="Review this change" />
-  </AgentProvider>
-  ```
-
-  An unknown provider name, or no default agent configured, **fails the
-  execution before the body expands**: neither the body nor any later content
-  renders.
-- **`<Agent name?>`** resolves its explicit name, or the current/default agent
-  when `name` is omitted, and for its body pins that resolved agent onto nested
-  prompts and launches. Self-closing performs the same resolution and
-  availability validation, then renders nothing.
-- **`<Session name>`** resolves a session and pins it onto nested prompts and
-  launches. Self-closing validates only. It is the one agent word a host does
-  not register with the others: its implementation names durable work after its
-  own invocation, so the host **declares** it to the execution and the execution
-  builds it from the claimant it minted (executable-mdx-spec §5.6). A document
-  run by a host that declares none has no `<Session>` at all, which is why
-  `installAgentComponents()` alone leaves the name unresolved.
-- **`<Session.Launch>`** prepares one durable session from its rendered body and
-  hands the provider's native UI the terminal for it, rendering nothing itself
-  and returning only after that UI exits
-  (specs/native-agent-session-launch-spec.md). Its props are exactly `agent` and
-  `session`, which mirror `<Prompt>`; no executable name, native session id,
-  argv or instruction-channel selection appears on the document surface. The
-  dotted name addresses a subdirectory, so a repository override for it is
-  `components/Session/Launch.md`.
-- **`<Prompt>`** sends one prompt and renders the reply.
-  - Content is the rendered children; a self-closing `<Prompt text="…" />` uses
-    the `text` prop instead.
-  - `agent`, `session`, and `timeout` props override the enclosing scope for
-    that prompt; `timeout` accepts a duration string.
-  - `as="name"` captures the reply into the eval environment instead of
-    emitting it.
-  - `throwOnError` aborts the document on failure; without it, a failed prompt
-    renders its partial text, the document continues, and the failure is
-    aggregated into the execution completion as an `AggregateError` of
-    `AgentPromptError`s ("N agent prompt(s) failed"), ordered by execution
-    sequence.
-- **`<ApproveAll>`** answers each request in its body by selecting an allow
-  option, and denies when none is offered.
-- **`<AskPermission>`** asks for every request in its body, and denies without an
-  interactive TTY or a valid choice.
-
-  Both apply to their body only; the enclosing policy applies again after the
-  closing tag. They change which policy answers requests — not the provider's
-  `permissionMode`, which a provider factory still receives as inherited.
+conversation's turns, allocated past every evaluation the history already
+holds, so one history carries its Prompts and its evaluations side by side
+without either replaying the other, and the Prompt records that establish
+native identity are exactly what they were. An ordinary failure of the
+generated source answers `Err` carrying what the reply had rendered; a failure
+of the run keeps its own classification and reaches the caller as itself. It is
+also this conversation's own outcome, and because the conversation's root is
+never completed there is no terminal and no completion for it to travel
+through: the release that ends the conversation raises the same object instead.
+So catching it on the call cannot leave the conversation's own run looking
+successful.
 
 ## Journaling and replay
 
@@ -909,35 +940,36 @@ Each prompt is one durable operation (`agent_prompt`). The record carries the
 prompt's identity and input, the agent and session identity, terminal status,
 stop reason, text (including partial text on failure), any structured failure,
 one optional canonical `configuration`, and one optional list of `permissions`.
-The configuration is retained only
-after the provider emits `started`: a turn that started is one the provider put
-under exactly those settings, while a configuration refusal started no turn
-and retains none. A prompt that starts and later fails or is cancelled retains
-the configuration it ran under. An unconfigured prompt omits it. A `sequence`
-records execution order explicitly, and per-location
-ordinals keep durable identities stable across `<Each>` loops.
+The configuration is retained only after the provider emits `started`: a turn
+that started is one the provider put under exactly those settings, while a
+configuration refusal started no turn and retains none. A prompt that starts
+and later fails or is cancelled retains the configuration it ran under. An
+unconfigured prompt omits it. A `sequence` records execution order explicitly,
+and per-location ordinals keep durable identities stable across Each loops.
 
 For a held conversation the retained `input` is the final composed text the
 turn actually delegated: the turn's own terminal fixes it in the pending
 description and acknowledges matching feedback intent before native prompt
 subscription, so canonical publication and that acknowledgement hold one text.
-A turn that failed before reaching that boundary retains the input it attempted,
-which is not evidence that anything was sent. Completed replay restores the
-retained composed input and result without running composition, reaching a
-provider, calling `begin()` or reconstructing current state.
+A turn that failed before reaching that boundary retains the input it
+attempted, which is not evidence that anything was sent. Completed replay
+restores the retained composed input and result without running composition,
+reaching a provider, calling `begin()` or reconstructing current state.
 
 ### Saved Prompt failure details
 
-A failed owning stream release is terminal before ordinary failure serialization
-and publication. Core preserves initiating work and teardown failures separately
-and activates the existing live publication failure path without a recoverable
-failed-turn record. Authored Catch therefore starts neither replacement work nor
-an unentered finalizer after failed release. Ordinary cleanly released failed
-turns keep the saved record and raised replay marker below, and may be handled
-by explicit authored Catch. Optional diagnostic screening is unchanged.
+A failed owning stream release is terminal before ordinary failure
+serialization and publication. Core preserves initiating work and teardown
+failures separately and activates the existing live publication failure path
+without a recoverable failed-turn record. Authored Catch therefore starts
+neither replacement work nor an unentered finalizer after failed release.
+Ordinary cleanly released failed turns keep the saved record and raised replay
+marker below, and may be handled by explicit authored Catch. Optional
+diagnostic screening is unchanged.
 
-A failed Prompt keeps its readable `message`, optional `name` and cause message.
-Its optional `error.diagnostic` retains selected ACP facts in the same record:
+A failed Prompt keeps its readable `message`, optional `name` and cause
+message. Its optional `error.diagnostic` retains selected ACP facts in the same
+record:
 
 | Field | Meaning |
 | --- | --- |
@@ -949,40 +981,36 @@ Its optional `error.diagnostic` retains selected ACP facts in the same record:
 | `acp` | Optional selected protocol facts: finite numeric `code`, optional nonempty `message`, and optional string `details` extracted only from `data.details`. An explicit empty details string remains empty. |
 
 Conversation correlation stays in the existing `agent`, `sessionKey` and
-`agentSessionId` fields. No raw protocol payload, prompt, environment or unrelated
-history is added. A plain Error has no diagnostic; stream exceptions,
-cancellation and host permission refusal keep their existing paths. A message-only
-upstream failure remains undiagnosed. Diagnostics establish neither backend
-acceptance nor a successful retry and never enter the agent's reply text.
+`agentSessionId` fields. No raw protocol payload, prompt, environment or
+unrelated history is added. A plain Error has no diagnostic; stream exceptions,
+cancellation and host permission refusal keep their existing paths. A
+message-only upstream failure remains undiagnosed. Diagnostics establish
+neither backend acceptance nor a successful retry and never enter the agent's
+reply text.
 
 Core selects these optional facts before constructing the saved failure. With
-secret detection enabled, it screens each optional textual field in its retained
-JSON representation, omits offending fields, then screens the complete selected
-diagnostic. Unsafe secondary text does not discard a safe protocol code. If
-policy authentication or screening fails, the whole optional diagnostic is absent;
-the original message, name, cause, status and partial reply stay unchanged.
-Cancellation remains cancellation. Explicit host-disabled detection is respected.
-The complete event still crosses the unchanged rejection gate: upstream selection
-never repairs an event rejected by that gate.
+secret detection enabled, it screens each optional textual field in its
+retained JSON representation, omits offending fields, then screens the complete
+selected diagnostic. Unsafe secondary text does not discard a safe protocol
+code. If policy authentication or screening fails, the whole optional
+diagnostic is absent; the original message, name, cause, status and partial
+reply stay unchanged. Cancellation remains cancellation. Explicit host-disabled
+detection is respected. The complete event still crosses the unchanged
+rejection gate: upstream selection never repairs an event rejected by that
+gate.
 
-The current reader validates a present diagnostic completely and refuses malformed
-or unknown members. An absent diagnostic preserves message/name/cause-only records
-without a migration or rewrite. Reconstructed thrown and aggregated Prompt failures
-keep the selected diagnostic under `executablemd.agent.prompt-diagnostic`.
-The existing REPL Journal query exposes the saved error as `promptError` after
-cold reopen. Select a returned numeric Prompt locator within its entry:
-
-```xmd
-<REPL.Entry.Journal entry={1} yq={'.records[] | select(.prompt == 1) | .promptError'} as="failure" />
-<Output><Json value={failure} /></Output>
-```
-
-Reading sends no prompt and reads no runtime log or native history.
+The current reader validates a present diagnostic completely and refuses
+malformed or unknown members. An absent diagnostic preserves
+message/name/cause-only records without a migration or rewrite. Reconstructed
+thrown and aggregated Prompt failures keep the selected diagnostic under
+`executablemd.agent.prompt-diagnostic`. The existing REPL Journal query exposes
+the saved error as `promptError` after cold reopen; select a returned numeric Prompt locator within its entry to read it. Reading sends no prompt and
+reads no runtime log or native history.
 
 ### The permission audit a turn retains
 
-`permissions` is the account of what the agent was allowed to do while this turn
-ran. Each member describes one request that was decided:
+`permissions` is the account of what the agent was allowed to do while this
+turn ran. Each member describes one request that was decided:
 
 | Member | Meaning |
 | --- | --- |
@@ -992,8 +1020,8 @@ ran. Each member describes one request that was decided:
 | `outcome` | `{ outcome: "selected", optionId }` or `{ outcome: "cancelled" }` |
 
 Members appear in the order the requests **arrived**, not the order they were
-answered: two overlapping requests settle whenever their policies finish, and an
-order taken from that would report an order the agent did not ask in.
+answered: two overlapping requests settle whenever their policies finish, and
+an order taken from that would report an order the agent did not ask in.
 
 Nothing else crosses the durable boundary. The request's `rawInput`, its
 `Session`, the provider's callbacks and waiters, and any error are absent by
@@ -1003,34 +1031,46 @@ instead of returning was decided by nothing and has no member.
 
 The list is **closed**: a member this specification does not define, an option
 `kind` outside the four, or an outcome that is neither of the two refuses the
-whole prompt record rather than being read past. A turn that answered no request
-omits the member entirely, which is also how every record written before this
-member existed reads. Parsing an older record is unchanged, and nothing rewrites
-one.
+whole prompt record rather than being read past. A turn that answered no
+request omits the member entirely, which is also how every record written
+before this member existed reads. Parsing an older record is unchanged, and
+nothing rewrites one.
 
 The audit observes decisions without granting permission. Each turn has its own
 ledger, and overlapping turns cannot take one another's entries. A request that
-raises or is cancelled before a decision returns contributes no member. The
-[Agent permission-audit boundary](../architecture.md#agent-permissions-and-generated-xmd)
-owns observer placement, per-stream ownership and arrival-order publication.
+raises or is cancelled before a decision returns contributes no member.
+
+The Agent middleware installed with the Agent sits outside every policy
+installed after it. Each `Agent.prompt()` call's returned cold stream is wrapped
+so every event is read under that call's private ledger, and a permission
+request raised while reading inherits that ledger alone. A component installs
+nothing to be audited.
+
+The observer reserves a place in request-arrival order, delegates once, then
+copies the decided outcome returned by that delegation into the reserved place.
+The retained audit publishes completed places in arrival order, not completion
+order. An unfinished place publishes nothing rather than an invented denial;
+the ledger supplies no authority to answer a request.
+
+### Replay
 
 On a **full replay** (the journal already holds the root `Close`), completed
 records are restored from the journal without contacting any provider —
 producing identical output and identical aggregated failures. A prompt failure
 that was thrown through `throwOnError` is marked `raised`; a partial replay
-re-throws it, while a full replay omits it from aggregate restoration because it
-was already handled where it occurred.
+re-throws it, while a full replay omits it from aggregate restoration because
+it was already handled where it occurred.
 
 A native session launch is not a prompt and does not reuse `agent_prompt`. It
 retains its own `agent_session_launch` records, one per completed phase, so an
 interrupted launch resumes the provider session it already prepared rather than
 creating a replacement; the shape is specified in
-specs/native-agent-session-launch-spec.md.
+native-agent-session-launch-spec.md.
 
 Prompt records keep the existing native-only `agentSessionId` from the Session
 that actually started, including its first configured turn. Passive tagged
-information adds no PromptRecord member, persistence format or interpretation of
-historical records.
+information adds no PromptRecord member, persistence format or interpretation
+of historical records.
 
 A completed replay contacts no provider, so it neither reads nor applies any
 configuration. A successful prepared launch reapplies its one canonical
@@ -1042,8 +1082,8 @@ never from a requested/effective pair.
 ## Config
 
 `Config` (`@executablemd/runtime`, re-exported from `@executablemd/core`) is the
-shared execution config. It carries three optional timeouts in milliseconds, and
-**there is no timeout by default**: each is `undefined` until something
+shared execution config. It carries three optional timeouts in milliseconds,
+and **there is no timeout by default**: each is `undefined` until something
 configures it, and `undefined` means the operation is not bounded. It carries
 one boolean besides, which bounds nothing.
 
@@ -1052,60 +1092,60 @@ one boolean besides, which bounds nothing.
 | `timeout` | `undefined` | the entire run, preparation and execution together | the outer run boundary |
 | `timeoutExec` | `undefined` | each exec block | exec blocks and the built-in `timeout` modifier |
 | `timeoutFetch` | `undefined` | each Fetch | Fetch |
-| `verbose` | `false` | whether the reading scope renders verbose-only content | `<Verbose>` |
+| `verbose` | `false` | whether the reading scope renders verbose-only content | Verbose |
 
 Override a field for a scope with
-`yield* Config.around({ timeoutExec: () => 30_000 }, { at: "min" })`. Installing
-at `min` is what lets a nested override win. Omitting a field inherits the
-enclosing value; it does not clear it. The validated `timeout`, `timeoutExec`
-and `timeoutFetch` operations each return a positive, finite number of
-milliseconds or `undefined`, and throw on any other value (zero, negative, NaN,
-Infinity, or a non-number) before the operation they would bound starts.
+`yield* Config.around({ timeoutExec: () => 30_000 }, { at: "min" })`.
+Installing at `min` is what lets a nested override win. Omitting a field
+inherits the enclosing value; it does not clear it. The validated `timeout`,
+`timeoutExec` and `timeoutFetch` operations each return a positive, finite
+number of milliseconds or `undefined`, and throw on any other value (zero,
+negative, NaN, Infinity, or a non-number) before the operation they would bound
+starts.
 
 `verbose` is not a timeout and is owned by nothing the three timeouts are owned
 by. It is `false` rather than absent — a scope either renders verbose-only
 content or it does not — and it is installed and overridden exactly the way a
-timeout is, so `yield* Config.around({ verbose: () => true }, { at: "min" })`
-decides what the installing scope's descendants render and leaves every
-enclosing scope and every following sibling reading the value they already had.
-The validated `verbose` operation returns that boolean and throws on any other
-value, including one an untyped JavaScript consumer installs, at the point a
-reader asks rather than as truthiness. Configuring it moves no timeout, and
-configuring a timeout does not move it.
+timeout is, so an `at: "min"` override decides what the installing scope's
+descendants render and leaves every enclosing scope and every following sibling
+reading the value they already had. The validated `verbose` operation returns
+that boolean and throws on any other value, including one an untyped JavaScript
+consumer installs, at the point a reader asks rather than as truthiness.
+Configuring it moves no timeout, and configuring a timeout does not move it.
 
 Ownership is strict, and nothing falls back to a field it does not own. A
 per-call `timeout` always wins where one is supported; otherwise Fetch resolves
 `timeoutFetch`, and an exec block resolves `timeoutExec` at the block and hands
-it to the Process operation explicitly. The Process operation itself consults no
-configuration: what bounds a command is what its caller asked for. Agent prompts
-and service startup are bounded by what a document or caller declared for them,
-never by the run deadline.
+it to the Process operation explicitly. The Process operation itself consults
+no configuration: what bounds a command is what its caller asked for. Agent
+prompts and service startup are bounded by what a document or caller declared
+for them, never by the run deadline.
 
 The run deadline encloses everything above, so a longer exec or Fetch timeout
-cannot outlive it. Its expiry is Effection cancellation rather than a result, so
-structured teardown still completes before the process exits.
+cannot outlive it. Its expiry is Effection cancellation rather than a result,
+so structured teardown still completes before the process exits.
 
 ## Permissions
 
-`PermissionMode` selects the policy that answers `Agent.requestPermission`. It is
-`approve-all`, `approve-reads`, or `deny-all`:
+`PermissionMode` selects the policy that answers `Agent.requestPermission`. It
+is `approve-all`, `approve-reads`, or `deny-all`:
 
 - **approve-all** selects `allow_once`, then `allow_always`.
 - **approve-reads** approves the `read` and `search` tool kinds and asks for
   everything else. Asking prompts only on an interactive TTY.
-- **deny-all** uses the base deny behavior, so it installs no policy of its own.
+- **deny-all** uses the base deny behavior, so it installs no policy of its
+  own.
 
-A policy **decides every request inside its scope**. When it cannot approve — no
-allow option is offered, there is no TTY, or no valid option is selected — it
-denies with the base semantics rather than deferring outward, so a policy nested
-inside a more permissive one can never be overruled by it.
-
-Every permission request therefore receives a concrete decision.
+A policy **decides every request inside its scope**. When it cannot approve —
+no allow option is offered, there is no TTY, or no valid option is selected —
+it denies with the base semantics rather than deferring outward, so a policy
+nested inside a more permissive one can never be overruled by it. Every
+permission request therefore receives a concrete decision.
 
 ### The workflow Agent profile
 
 The retained Claude adapter uses the host-installed CLI through the transient
-child-environment seam. The profile still supplies no machine-session executable
+child-environment seam. The profile supplies no machine-session executable
 observer, coordinator or route store. Its SessionStart confirmation names the
 backend conversation but publishes no mapping until the accepted first turn is
 saved by the provider.
@@ -1117,8 +1157,8 @@ records without contacting a provider at all, so it starts nothing.
 Under that profile an Agent receives no Workspace, checkout, materialized root,
 caller path or ACP `additionalDirectories`. Its process runs in a directory the
 host owns: created empty before the session is established, never written to by
-this host, never read back, and removed when the attachment ends. The runtime is
-created with `mcpServers: []`, each session with `allowedTools: []`, and the
+this host, never read back, and removed when the attachment ends. The runtime
+is created with `mcpServers: []`, each session with `allowedTools: []`, and the
 permission mode is `deny-all` with non-interactive denial.
 
 A fixed session instruction layer states that boundary to the Agent in the same
@@ -1133,7 +1173,6 @@ received.
 
 `allowedTools` and `mcpServers` are stated as empty arrays rather than omitted:
 omission is ACPX's own default, and this host is making a different statement.
-
 The profile states both native capability sets empty for the same reason. A
 workflow session belongs to a run — named by a row in the run's own database,
 arranged in the run's own sidecar, continued by reattaching that row — and the
@@ -1146,18 +1185,19 @@ never consults their namespace.
 
 A native permission request under this profile does not reach
 `Agent.requestPermission`. The provider answers it: a reject option when ACP
-offered one, otherwise cancellation — and the turn the request belonged to fails
-with a fixed diagnostic, whatever the adapter reports afterwards. An authored
-`<ApproveAll>`, or any other public permission handler, composes around nothing
-here, because there is no native tool permission to widen. The diagnostic names
-nothing the request carried: no tool title, raw input, path or command.
+offered one, otherwise cancellation — and the turn the request belonged to
+fails with a fixed diagnostic, whatever the adapter reports afterwards. An
+authored ApproveAll, or any other public permission handler, composes around
+nothing here, because there is no native tool permission to widen. The
+diagnostic names nothing the request carried: no tool title, raw input, path or
+command.
 
-This is what the host asks for and what it refuses. It is not a proof that every
-ACP adapter exposes no tool when asked for none; that portable proof is tracked
-separately and does not widen this ceiling.
+This is what the host asks for and what it refuses. It is not a proof that
+every ACP adapter exposes no tool when asked for none; that portable proof is
+tracked separately and does not widen this ceiling.
 
-Nothing else changes. `<Prompt>` is still exactly one turn, the Agent Api gains
-no workflow-only operation, and `xmd run` keeps its caller-selected cwd, its
+Nothing else changes. Prompt is still exactly one turn, the Agent Api gains no
+workflow-only operation, and `xmd run` keeps its caller-selected cwd, its
 omitted MCP and session options, and its public permission routing.
 
 #### Retained sessions
@@ -1167,27 +1207,28 @@ conversation it was having rather than replaying its transcript into a new one.
 
 **Each Session site owns one conversation.** The engine-derived Agent/Session
 expansion identity names it within the run. Authored names remain descriptive:
-two sibling `<Session name="review">` elements stay distinct even if middleware
+two sibling Session elements named `review` stay distinct even if middleware
 changes their names. Provider and resolved agent command are compatibility
 attributes; changing either refuses reattachment. ACPX's arrangement key does
 not replace this logical identity.
 
 Placement is inert. A strong-declared adapter supplies explicit first-turn
-acceptance and an asserting provider save before the mapping commits. A standard
-adapter supplies the ACP creation/loading target after ordinary ensure. Both
-commit exactly one tagged assertion before first-turn disclosure. Prefer
-`acpx.agentSessionId` when native identity is asserted, otherwise retain
+acceptance and an asserting provider save before the mapping commits. A
+standard adapter supplies the ACP creation/loading target after ordinary
+ensure. Both commit exactly one tagged assertion before first-turn disclosure.
+Prefer `acpx.agentSessionId` when native identity is asserted, otherwise retain
 `acpx.acpSessionId` solely as an ACP loading target. A pending strong record
 asserts nothing. Public identity is published only after the existing provider
 save and required host retention succeed, before `started`. A retention refusal
 publishes no new association, preserves previous confirmation and leaves the
-provider assertion available to existing reconciliation. Failure or interruption
-after confirmation preserves it; an unconfirmed strong attempt stays absent.
-Standard ensure can confirm loading identity even when its subsequent Prompt
-fails. Neither outcome causes automatic resend. An ACP id grants no native
-handoff or backend-acceptance claim. The
-[workflow Agent ownership contract](../architecture.md#agent-permissions-and-generated-xmd)
-owns the opaque invocation claim, mapping transaction and interruption ordering.
+provider assertion available to existing reconciliation. Failure or
+interruption after confirmation preserves it; an unconfirmed strong attempt
+stays absent. Standard ensure can confirm loading identity even when its
+subsequent Prompt fails. Neither outcome causes automatic resend. An ACP id
+grants no native handoff or backend-acceptance claim. The
+[invocation identity contract](./executable-mdx-spec.md#invocation-form-dispatch)
+owns the opaque invocation claim; [workflow Agent session continuity](./workflow-workspace-spec.md#85-agent-session-continuity)
+owns the mapping transaction and interruption ordering.
 
 Continuation is decided before a turn starts:
 
@@ -1219,16 +1260,16 @@ authorship needs — the provider and the default agent. `xmd repl` resolves the
 same five fields from its own command line and installs the provider and
 component half of the stack with its own interactive policy: it presents
 permission requests and elicitations in its own surface, so it installs neither
-readline permission handling nor a foreground launcher, and `<Session.Launch>` is
-unavailable there (`specs/repl-spec.md`). `xmd test` rejects those options,
-driving agents through the deterministic test-agent stack instead.
+readline permission handling nor a foreground launcher, and Session.Launch is
+unavailable there (repl-spec.md). `xmd test` rejects those options, driving
+agents through the deterministic test-agent stack instead.
 
 That division also applies to a nested run profile. The outer `xmd test`
 invocation supplies no live Agent configuration to a child and no contextual
-provider crosses the child's isolation boundary. A direct `<TestAgent>`
-declaration on one `<Execution host="run">` explicitly selects the controlled
-test-agent assembly for that child alone; without one, the child receives no
-Agent provider from the outer test.
+provider crosses the child's isolation boundary. A direct TestAgent declaration
+on one `host="run"` Execution explicitly selects the controlled test-agent
+assembly for that child alone; without one, the child receives no Agent
+provider from the outer test.
 
 | Option | Meaning |
 | --- | --- |
@@ -1238,7 +1279,60 @@ Agent provider from the outer test.
 | `--approve-reads` | approve reads and searches, ask for the rest (default) |
 | `--deny-all` | deny every permission request |
 
-The permission options are mutually exclusive.
+The permission options are mutually exclusive. Invalid options and an unknown
+`--agent-provider` fail before the document executes, with a non-zero exit
+status.
+
+The default agent resolves in order, each entry overriding the ones above it:
+
+1. the ACPX default agent,
+2. the `DEFAULT_AGENT_NAME` environment variable,
+3. `--default-agent`,
+4. an enclosing AgentProvider `defaultAgent`,
+5. an explicit Agent `name`, Prompt `agent`, or Session.Launch `agent`.
+
+The installed provider belongs to the run's `DocumentExecution` scope and
+closes during its teardown.
+
+Both commands also take the three timeout options:
+
+| Option | Establishes |
+| --- | --- |
+| `--timeout <duration>` | the deadline for the whole run |
+| `--timeout-exec <duration>` | the default timeout for each exec block |
+| `--timeout-fetch <duration>` | the default timeout for each Fetch |
+
+An option nobody writes leaves its field absent, which is no timeout. Each
+value is a **duration**: a whole number with an optional unit — `500ms`, `30s`,
+`5min`, `20min` — where bare digits are milliseconds. The value is greater than
+zero. Empty, zero, negative, signed, hexadecimal, scientific-notation,
+`Infinity`, `NaN`, fractional and trailing-text forms are rejected, and the
+whole argument has to match: `30 seconds` is not a duration. The raw argument
+text is what gets validated, because an argument parser may coerce or drop
+these forms before they reach the check. A rejected value fails the invocation
+before it prepares a document.
+
+### Adapter snapshots
+
+Both commands resolve `codex` and `claude` to the ACP adapter this build
+carries, the way the workflow attachment does, and every other agent to the
+command ACPX resolves for it. The snapshot is installed under
+`~/.xmd/adapters/<sha256>` at the provider's availability probe — the first
+point either command would run an agent — so an invocation that asks for no
+agent installs nothing, and a second one runs what the first put there. An
+embedded agent never falls through to the published adapter ACPX's own table
+pins: a snapshot that cannot be verified or materialized refuses that agent.
+
+Claude's snapshot is generated during `deno task deps` from exact public
+adapter source, pinned SDK input and readable source patches. `deno task setup`
+includes that preparation. A source build consumes the complete prepared module
+and refuses missing or stale preparation; it does not fetch source, apply
+patches or compile the adapter at runtime. JSR, npm and compiled distributions
+carry that same generated snapshot. The installed Claude payload contains one
+patched SDK runtime and no original SDK dependency or platform executable. Its
+host executable selection, identity confirmation, first-turn acceptance and
+cleanup behavior retain their existing contracts. Codex retains its existing
+snapshot and every other provider retains ordinary registry resolution.
 
 ### `xmd agent options`
 
@@ -1253,22 +1347,22 @@ xmd agent options codex --model gpt-5.4 --json
 ```
 
 `options` is the one action. The grammar is fixed: one optional agent name,
-`--model <id>`, `--json`, and nothing else. Another action, a second agent name,
-an unknown option, an empty option value or a value on `--json` is refused
-before an agent is resolved — because asking costs a conversation in that
-agent's own history, and a wrong command line must not.
+`--model <id>`, `--json`, and nothing else. Another action, a second agent
+name, an unknown option, an empty option value or a value on `--json` is
+refused before an agent is resolved — because asking costs a conversation in
+that agent's own history, and a wrong command line must not.
 
 Omitting the agent resolves the one an `xmd run` that supplied no
 `--default-agent` would use. An explicit name is this invocation's agent and
-becomes no document-level default. `--model` selects a model for this inspection
-alone, so the command can report that model's effort choices.
+becomes no document-level default. `--model` selects a model for this
+inspection alone, so the command can report that model's effort choices.
 
-Some providers reveal their configuration only through a session, so the command
-may create one: it connects, creates the provider session, reads it, and closes
-without sending a prompt. The command creates no document run, model turn, XMD
-journal or durable XMD session, and the provider may keep that empty
-conversation in its own history — which `xmd agent options --help` states before
-the command is run.
+Some providers reveal their configuration only through a session, so the
+command may create one: it connects, creates the provider session, reads it,
+and closes without sending a prompt. The command creates no document run, model
+turn, XMD journal or durable XMD session, and the provider may keep that empty
+conversation in its own history — which `xmd agent options --help` states
+before the command is run.
 
 Human output preserves provider order and grouping, puts exact ids before
 display names and descriptions, and marks the selected value:
@@ -1300,9 +1394,9 @@ Effort choices are unavailable for model "gpt-5.4".
 `null` — not an empty list — for a setting the agent does not offer.
 
 The whole rendering is built before a byte is written. An unknown agent, a
-failed inspection, a malformed response or a rejected value exits unsuccessfully
-and writes no partial output. Neither rendering carries a path, a provider
-session identity, provider history or a credential. Selection diagnostics are:
+failed inspection, a malformed response or a rejected value exits
+unsuccessfully and writes no partial output. Neither rendering carries a path,
+a provider session identity, provider history or a credential. Selection diagnostics are:
 
 ```text
 Unknown model "gpt-x" for agent "codex".
@@ -1314,50 +1408,6 @@ Invalid effort level "extreme" for model "gpt-5.4".
 Available options are: low, medium, high
 ```
 
-Both commands also take the three timeout options, which belong to them in the
-same way:
-
-| Option | Establishes |
-| --- | --- |
-| `--timeout <duration>` | the deadline for the whole run |
-| `--timeout-exec <duration>` | the default timeout for each exec block |
-| `--timeout-fetch <duration>` | the default timeout for each Fetch |
-
-An option nobody writes leaves its field absent, which is no timeout. Each value
-is a **duration**: a whole number with an optional unit — `500ms`, `30s`,
-`5min`, `20min` — where bare digits are milliseconds. The value is greater than
-zero. Empty, zero, negative, signed, hexadecimal, scientific-notation,
-`Infinity`, `NaN`, fractional and trailing-text forms are rejected, and the
-whole argument has to match: `30 seconds` is not a duration. The raw argument
-text is what gets validated, because an argument parser may coerce or drop these
-forms before they reach the check. A rejected value fails the invocation before
-it prepares a document.
-
-Invalid options and an unknown `--agent-provider` fail before the document
-executes, with a non-zero exit status.
-
-The default agent resolves in order, each entry overriding the ones above it:
-
-1. the ACPX default agent,
-2. the `DEFAULT_AGENT_NAME` environment variable,
-3. `--default-agent`,
-4. an enclosing `<AgentProvider defaultAgent>`,
-5. an explicit `<Agent name>`, `<Prompt agent>`, or `<Session.Launch agent>`.
-
-The installed provider belongs to the run's `DocumentExecution` scope and closes
-during its teardown.
-
-Both commands resolve `codex` and `claude` to the ACP adapter this build carries,
-the way the workflow attachment does, and every other agent to the command ACPX
-resolves for it. The snapshot is installed under `~/.xmd/adapters/<sha256>` at the
-provider's availability probe — the first point either command would run an agent
-— so an invocation that asks for no agent installs nothing, and a second one runs
-what the first put there. An embedded agent never falls through to the published
-adapter ACPX's own table pins: a snapshot that cannot be verified or materialized
-refuses that agent.
-
-Claude's snapshot is generated during `deno task deps` from exact public adapter source, pinned SDK input and readable source patches. `deno task setup` includes that preparation. A source build consumes the complete prepared module and refuses missing or stale preparation; it does not fetch source, apply patches or compile the adapter at runtime. JSR, npm and compiled distributions carry that same generated snapshot. The installed Claude payload contains one patched SDK runtime and no original SDK dependency or platform executable. Its host executable selection, identity confirmation, first-turn acceptance and cleanup behavior retain their existing contracts. Codex retains its existing snapshot and every other provider retains ordinary registry resolution.
-
 ### The `xmd plan` Plan writer profile
 
 Host Claude selection and adapter preparation run in the command's owning scope
@@ -1367,8 +1417,8 @@ host selection; native attachment keeps the host's retained adapter registry.
 `xmd plan` resolves that configuration once, for the one document it executes:
 the plan command document that writes the Plan. It starts no program, so there
 is no second consumer and no permission mode to settle — `--approve-all`,
-`--approve-reads` and `--deny-all` are `xmd run`'s and are refused by name here.
-What is settled is the provider name, the default agent with its
+`--approve-reads` and `--deny-all` are `xmd run`'s and are refused by name
+here. What is settled is the provider name, the default agent with its
 `DEFAULT_AGENT_NAME` precedence, the adapters this build carries and the host's
 own machine-session assembly, all before any catalog is built or any document
 executes, so an unknown provider fails first. `DEFAULT_AGENT_NAME` is read once
@@ -1387,30 +1437,26 @@ assembled for that one document and not readable from the command line:
 
 `"strict"` answers the request inside the provider: the request is denied, the
 turn it belongs to fails, and no public Agent handler is consulted or can
-intervene. So `--approve-all`, `--approve-reads` and `--deny-all` cannot widen a
-ceiling that has nothing in it; they configure the approved document later. A
+intervene. So `--approve-all`, `--approve-reads` and `--deny-all` cannot widen
+a ceiling that has nothing in it; they configure the approved document later. A
 provider that cannot establish this ceiling refuses before session
 materialization or a turn.
 
 The [Plan writer profile](./plan-command-spec.md#agent-permissions-under-the-plan-writer-profile)
 refuses document mutations, commands, services and XMD-mediated network access.
-Reads retain the ordinary host provider, middleware and effective `Permissions`;
-the frame grants no read permission of its own. A failing `<Prompt>` ends the
-whole authorship execution, so a turn that streamed text and then failed
-presents nothing.
+Reads retain the ordinary host provider, middleware and effective
+`Permissions`; the frame grants no read permission of its own. A failing Prompt
+ends the whole authorship execution, so a turn that streamed text and then
+failed presents nothing.
 
 Those refusals are installed on a scope holding the document execution and
-nothing else, so what the ceiling covers is what it says it covers.
-
-It cannot tell the host's own acts from the document's on its own. A call carries
-no mark saying who made it, and a provider's work happens inside the execution
-that reached it — core constructs a root provider from within the document — so a
-refusal over that scope covers both parties. Two things the command does are the
-host's, and both run a command: installing this build's adapter, and opening the
-review form in a browser. The command therefore takes its own scope before it
-installs the ceiling and states those two acts as its own; they run there, and
-everything else stays refused. An ended command takes an unfinished install with
-it, and a failed open stays a warning beside the printed URL.
+nothing else, so what the ceiling covers is what it says it covers. It cannot tell the host's own acts from the document's on its own: a call carries no mark saying who made it, and a provider's work happens inside the execution that reached it — core constructs a root provider from within the document — so a refusal over that scope covers both parties. Two things the command
+does are the host's, and both run a command: installing this build's adapter,
+and opening the review form in a browser. The command therefore takes its own
+scope before it installs the ceiling and states those two acts as its own; they
+run there, and everything else stays refused. An ended command takes an
+unfinished install with it, and a failed open stays a warning beside the
+printed URL.
 
 The [Plan session-directory contract](./plan-command-spec.md#agent-permissions-under-the-plan-writer-profile)
 owns establishment, named versus invocation-unique lifetime and cleanup. The
@@ -1419,30 +1465,31 @@ non-empty directory refuses before provider construction; an invocation-unique
 leaf that gains content or disappears at cleanup is preserved as found and
 fails authorship terminally. No caller or document selects its host dependency.
 
-Only the profile's provider receives `newSessionOptions.systemPrompt`. It carries
-one fixed statement — that an answer belongs to the message that asked for it —
-and nothing else. Which shape any particular message wants, a Plan or an
-explanation of why there is not one, is that message's own business, and every
-message is the command document's to send in its own turns
+Only the profile's provider receives `newSessionOptions.systemPrompt`. It
+carries one fixed statement — that an answer belongs to the message that asked
+for it — and nothing else. Which shape any particular message wants, a Plan or
+an explanation of why there is not one, is that message's own business, and
+every message is the command document's to send in its own turns
 ([`xmd plan`](./plan-command-spec.md)). ACPX applies those options when it
 creates a session and ignores them when it reuses a record. Without `--session`
-the command places a name unique to the invocation, so each invocation is a fresh
-conversation created under those instructions; `--session <name>` selects an
-existing one under ordinary continuation semantics.
+the command places a name unique to the invocation, so each invocation is a
+fresh conversation created under those instructions; `--session <name>` selects
+an existing one under ordinary continuation semantics.
 
-That document's scope closes before the structural admission and before whichever
-sink the caller asked for: the source on stdout, or the `--output` file. A
-teardown failure fails the command and no later phase happens. A later `xmd run`
-of the approved Plan is an ordinary invocation with its own root provider and its
-own lifetime: it inherits neither the assistant session nor its instruction
-layer, because nothing passes between the two commands but the source.
+That document's scope closes before the structural admission and before
+whichever sink the caller asked for: the source on stdout, or the `--output`
+file. A teardown failure fails the command and no later phase happens. A later
+`xmd run` of the approved Plan is an ordinary invocation with its own root
+provider and its own lifetime: it inherits neither the assistant session nor
+its instruction layer, because nothing passes between the two commands but the
+source.
 
 ### Availability
 
 Installing a provider starts nothing. The **first** Agent API use validates the
-selected agent, and `<Agent>`, `<Prompt>` and `<Session.Launch>` resolve the agent
-through the Agent API before a turn or launch begins. A document that never uses
-an agent therefore never probes one, and a confirmed full replay restores its
+selected agent, and Agent, Prompt and Session.Launch resolve the agent through
+the Agent API before a turn or launch begins. A document that never uses an
+agent therefore never probes one, and a confirmed full replay restores its
 completed work without re-checking availability.
 
 A failed availability check aborts expansion where it occurs: the content after
@@ -1460,93 +1507,94 @@ their own selection, and completed replay performs no selection or launch.
 
 ## ACPX provider
 
-`@executablemd/acp` implements the `rootProvider` seam over the ACPX 0.21.1
-runtime source closure. The explicit first-turn materialization barrier remains
-a local patch; the released `promptStarted` transport acknowledgement is not
-backend acceptance.
-`createAcpxProvider()` returns an `AgentProviderFactory` supplied directly to
-`installAgentComponents({ rootProvider: { factory: createAcpxProvider(), options } })`;
-`useAcpxProvider` exposes the same operations without the Agent install, so
-several independent providers can run in sibling scopes. The provider owns
-every resource it starts and creates the shared runtime lazily on first use with
-the contextual cwd — nothing spawns at install, and no timeout is invented for a
-prompt nobody bounded. A prompt carries the duration its caller supplied, from
-`<Prompt timeout>` or the enclosing `<AgentProvider timeout>`, and otherwise
-none.
+`@executablemd/acp` implements the `rootProvider` seam over the ACPX 0.21.1 runtime source closure (the explicit first-turn materialization
+barrier remains a local patch, recorded with what removes it in
+`packages/acp/vendor/acpx/PROVENANCE.md`). The released `promptStarted`
+transport acknowledgement is not backend acceptance. `createAcpxProvider()`
+returns an `AgentProviderFactory` supplied directly to
+`installAgentComponents`; `useAcpxProvider` exposes the same operations without
+the Agent install, so several independent providers can run in sibling scopes.
+The provider owns every resource it starts and creates the shared runtime
+lazily on first use with the contextual cwd — nothing spawns at install, and no
+timeout is invented for a prompt nobody bounded. A prompt carries the duration
+its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
+`timeout`, and otherwise none.
 
 - **Availability.** The first use of an agent validates it through a disposable
   probe runtime's `doctor()`; a non-ok report throws with the agent's code and
   details. Results are cached per agent.
 - **Sessions.** `session()` places a session by (agent, logical session,
-  contextual cwd): resolution walks from the cwd up to the Git root and reuses the
-  nearest existing record for the same agent command and cwd, otherwise names the
-  exact cwd. The resolved `sessionKey` — not the caller cwd — keys the session
-  queue.
+  contextual cwd): resolution walks from the cwd up to the Git root and reuses
+  the nearest existing record for the same agent command and cwd, otherwise
+  names the exact cwd. The resolved `sessionKey` — not the caller cwd — keys
+  the session queue.
 
-  A session is **new** or **existing**. New says where a session
-  will live and nothing more, and `session()` returns it having contacted no
-  backend, published no construction route, built no runtime, written no record
-  and started no turn — so a `<Session.Launch>` nested inside that `<Session>`
-  still gets to choose how the session is constructed. Existing says the
-  route and the durable identity already exist, and `session()` keeps its eager
-  behavior for one: it takes ownership where the agent needs it, reconciles the
-  retained route, ensures through the bound runtime, validates the exact identity
-  and host mapping, releases the handle, and starts no turn.
+  A session is **new** or **existing**. New says where a session will live and
+  nothing more, and `session()` returns it having contacted no backend,
+  published no construction route, built no runtime, written no record and
+  started no turn — so a Session.Launch nested inside that Session still gets
+  to choose how the session is constructed. Existing says the route and the
+  durable identity already exist, and `session()` keeps its eager behavior for
+  one: it takes ownership where the agent needs it, reconciles the retained
+  route, ensures through the bound runtime, validates the exact identity and
+  host mapping, releases the handle, and starts no turn.
 
   Directory resolution classifies a record still carrying ACPX's own pending
-  marker as new, and a record without one — including every
-  record written before deferred creation existed — as existing. A
-  retained client-native route is existing even before ACPX has attached to
-  it. A published `acp-first` route is not: it is what a first turn writes down
-  before it runs, and a first turn nobody accepted leaves exactly that behind.
+  marker as new, and a record without one — including every record written
+  before deferred creation existed — as existing. A retained client-native
+  route is existing even before ACPX has attached to it. A published
+  `acp-first` route is not: it is what a first turn writes down before it runs,
+  and a first turn nobody accepted leaves exactly that behind.
 
   A `Session` value must come from this provider's `session()`, and the test is
-  the exact object it issued rather than the key inside it: a structural copy, a
-  value another provider copy produced, and one whose provider scope has been
+  the exact object it issued rather than the key inside it: a structural copy,
+  a value another provider copy produced, and one whose provider scope has been
   torn down are all refused before any provider work, as is a value used with a
   different resolved agent. The provider keeps that object for the session's
-  life, so a second `<Session>` naming the same session is answered with it and
-  a `<Prompt>` given it is acting on the thing that was pinned.
+  life, so a second Session element naming the same session is answered with it
+  and a Prompt given it is acting on the thing that was pinned.
 
-- **Creation.** The first subscribed `<Prompt>` constructs a new ACP session.
-  An adapter declaring `acceptance: "first-turn-acceptance"` uses the stronger
-  barrier below; Codex and Claude declare it through the existing native adapter
-  table. Literal commands and undeclared adapters use ordinary ensure instead.
-  Strong construction ensures with
+- **Creation.** The first subscribed Prompt constructs a new ACP session. An
+  adapter declaring `acceptance: "first-turn-acceptance"` uses the stronger
+  barrier below; Codex and Claude declare it through the existing native
+  adapter table. Literal commands and undeclared adapters use ordinary ensure
+  instead. Strong construction ensures with
   `materialization: "first-turn-acceptance"`, which makes ACPX persist a
-  provisional record: the key is occupied and the serialized `agentSessionId` is
-  absent, so the record is occupancy rather than an assertion.
+  provisional record: the key is occupied and the serialized `agentSessionId`
+  is absent, so the record is occupancy rather than an assertion.
   `AcpRuntimeTurn.materialized` settles when the session no longer awaits its
   first accepted turn — at once for a record that already asserts, and on the
   adapter's explicit signal for one that does not.
 
   The retained Claude adapter confirms its Query's backend `session_id` from a
   successful early `system/hook_response` for SessionStart, enabled by a fixed
-  internal no-op command hook installed in settings before startup. It preserves
-  user settings and hooks, selects the startup/resume matcher, and keeps one
-  owned stream reader with unrelated messages buffered for normal handling.
-  Its new/load/resume response carries `_meta.agentSessionId`; absent, failed,
-  conflicting or mismatched confirmation refuses. Exact resume loads the retained
-  history before another user prompt. Confirmation alone never promotes the
-  provisional record or changes native allocation provenance.
+  internal no-op command hook installed in settings before startup. It
+  preserves user settings and hooks, selects the startup/resume matcher, and
+  keeps one owned stream reader with unrelated messages buffered for normal
+  handling. Its new/load/resume response carries `_meta.agentSessionId`;
+  absent, failed, conflicting or mismatched confirmation refuses. Exact resume
+  loads the retained history before another user prompt. Confirmation alone
+  never promotes the provisional record or changes native allocation
+  provenance.
 
   The signal is one exact versioned key,
-  `executablemd.session-materialization/v1`, carried as `{"state": "accepted"}`
-  in the update metadata of a standard ACP `session_info_update`. It is control
-  data: ACPX consumes it, and it is never appended to the conversation, published
-  as an event, exposed as prompt text or retained as a checkpoint token. Nothing
-  else promotes a record — not a returning `ensureSession()`, a `startTurn()`
-  that returned, a synthesized `started` event, a first text delta, a terminal
-  result, checkpoint metadata, an error code or a diagnostic.
+  `executablemd.session-materialization/v1`, carried as
+  `{"state": "accepted"}` in the update metadata of a standard ACP
+  `session_info_update`. It is control data: ACPX consumes it, and it is never
+  appended to the conversation, published as an event, exposed as prompt text
+  or retained as a checkpoint token. Nothing else promotes a record — not a
+  returning `ensureSession()`, a `startTurn()` that returned, a synthesized
+  `started` event, a first text delta, a terminal result, checkpoint metadata,
+  an error code or a diagnostic.
 
   On acceptance ACPX promotes a copy of the live record by installing the
   identity the handle privately carries and removing the pending marker, saves
   that asserting record through the store's own atomic operation, updates the
   in-memory record only after that save returns, and then resolves
   `materialized`. Promotion is serialized against live-checkpoint writes, so a
-  promotion that failed is not later overwritten by finalization as though it had
-  succeeded. `materialized` rejects when the turn fails, is cancelled, or ends
-  without the marker, and the runtime observes that rejection itself so a
+  promotion that failed is not later overwritten by finalization as though it
+  had succeeded. `materialized` rejects when the turn fails, is cancelled, or
+  ends without the marker, and the runtime observes that rejection itself so a
   consumer using only `runTurn()` creates no unhandled rejection.
 
   The durable order is therefore: route, provisional non-asserting record,
@@ -1554,109 +1602,109 @@ none.
   the turn produced. If materialization fails the provider removes no route,
   publishes no identity, calls no host mapping, gives up the handle so the next
   attempt creates rather than resumes, and leaves the exact `Session` value
-  pending for a retry. If it succeeds and the turn then fails, the session stays
-  established: acceptance, not successful terminal text, is the boundary.
-  `packages/acp/vendor/acpx/PROVENANCE.md` records the vendored patch this rests
-  on and what removes it.
+  pending for a retry. If it succeeds and the turn then fails, the session
+  stays established: acceptance, not successful terminal text, is the boundary.
   Standard construction saves the ordinary ACP record, then calls the host
   identity callback with optional `acpSessionId` and asserted `agentSessionId`.
   The ACP id is a loading target, never `Session.agentSessionId`. Configuration
   and permission routing precede execution, and started/deltas/terminal reflect
   the actual turn without private acceptance. A standard peer may independently
-  assert native identity. A strong adapter that omits its marker never downgrades.
+  assert native identity. A strong adapter that omits its marker never
+  downgrades.
 
   Reopening loads/resumes the exact stored ACP id. No load/resume capability
   refuses even an unused record. Failed loading never replaces a used or
   uncertain record; the released `-32603` fallback remains only for a provably
   never-prompted record. Supported resume-required errors become
-  `SessionResumeRequiredError`, naming the Session and a different `<Session>`
-  as the remedy, before `started`. Prior messages, identity and configuration
-  stand; a refused user attempt and lifecycle changes may be retained locally.
-  A later successful reopen sends only the new request.
+  `SessionResumeRequiredError`, naming the Session and a different Session
+  element as the remedy, before `started`. Prior messages, identity and
+  configuration stand; a refused user attempt and lifecycle changes may be
+  retained locally. A later successful reopen sends only the new request.
 
 - **Prompts.** `prompt()` returns a cold stream; each subscription is one turn
   owned by the subscriber. Events are normalized to one `started`, `text_delta`
-  for output-stream deltas only (thought/status/tool/usage stay private), and one
-  `terminal`, then the stream closes with the full concatenated text (including
-  partial text on failure). A completed turn with an absent stop reason is treated
-  as `end_turn`; any other stop reason is a failure. The completing response
-  carries its own opaque `_meta`, including a real response arriving during
-  timeout drain. A deadline that receives no response fails and supplies no
-  checkpoint. Released cancelled results can carry raw response metadata; XMD
-  associates a checkpoint only with a successful completed terminal in
-  `checkpoint.ts` and `events.ts`. Cancellation and failure never acquire one,
-  and no local runtime metadata patch remains.
-  The pinned in-process runtime preserves normalized origin and selected protocol
-  code/message/details at `failRuntimeTurn`; arbitrary `acp.data` remains excluded.
-  The shared/queue result projection is unchanged. The generated correction and
-  its matching declaration are recorded in vendor provenance and offline Tier AV.
+  for output-stream deltas only (thought/status/tool/usage stay private), and
+  one `terminal`, then the stream closes with the full concatenated text
+  (including partial text on failure). A completed turn with an absent stop
+  reason is treated as `end_turn`; any other stop reason is a failure. The
+  completing response carries its own opaque `_meta`, including a real response
+  arriving during timeout drain. A deadline that receives no response fails and
+  supplies no checkpoint. Released cancelled results can carry raw response
+  metadata; XMD associates a checkpoint only with a successful completed
+  terminal in `checkpoint.ts` and `events.ts`. Cancellation and failure never
+  acquire one, and no local runtime metadata patch remains. The pinned
+  in-process runtime preserves normalized origin and selected protocol
+  code/message/details at `failRuntimeTurn`; arbitrary `acp.data` remains
+  excluded. The shared/queue result projection is unchanged. The generated correction and its matching declaration are recorded in vendor provenance and offline Tier AV.
 - **Serialization.** Prompts for one session run FIFO on that session's queue;
   different sessions run concurrently. A subscription enters that queue before
   any route, ensure or runtime creation for its session, and re-reads the
   session's state once the queue grants — so two concurrent first prompts on
   one session perform exactly one backend creation and the waiter continues the
   conversation its predecessor established. `withSessionRoute` — the hook an
-  embedder supplies through `AcpxProviderDependencies` — wraps registry-dependent
-  work (preparation, ensure/start) and is not held across turn consumption or
-  across the wait on a session's own queue. The queues that serialize this are
-  internal to the package.
+  embedder supplies through `AcpxProviderDependencies` — wraps
+  registry-dependent work (preparation, ensure/start) and is not held across
+  turn consumption or across the wait on a session's own queue. The queues that
+  serialize this are internal to the package.
 - **Permissions.** ACPX permission requests are routed — keyed by the record's
-  live ACP session id, refreshed on demand — to the in-flight prompt's scope and
-  answered through `Agent.requestPermission`; an ambiguous or unknown request
-  fails closed. The permission callback always returns a concrete outcome and
-  therefore never delegates to ACPX's fallback resolver. ACPX's own
+  live ACP session id, refreshed on demand — to the in-flight prompt's scope
+  and answered through `Agent.requestPermission`; an ambiguous or unknown
+  request fails closed. The permission callback always returns a concrete
+  outcome and therefore never delegates to ACPX's fallback resolver. ACPX's own
   Promise-returning leaves are consumed with `until`; the provider's only
-  Promise-producing adapter is the `onPermissionRequest` callback, and the bridge
-  itself is operation-based.
+  Promise-producing adapter is the `onPermissionRequest` callback, and the
+  bridge itself is operation-based.
 - **Runtime partitions.** ACP-first work with a host child-environment selector
-  uses one runtime per selected agent and resolved command. Its selected environment stays
-  fixed until its handles and in-flight reservations are released. ACP-first
-  work without that selector uses one unbound runtime. A
-  bound attachment uses one runtime per `(resolved agent command, executable
-  build binding)`, created with the observed path in `agentProcessEnv` and torn
-  down when its last handle closes. Acquiring a runtime to ensure through claims
-  the partition, and an `ensureSession()` that rejects gives that claim up — so
-  the next attempt observes again rather than inheriting a live path nothing is
-  holding, while a sibling ensure still in flight keeps the partition alive.
-  Eviction requires no handles and no work in flight. A handle that came back is
-  owned from that moment, on a provider-returned launch as much as on an
-  attachment, and survives every later refusal — identity mismatch, a host that
-  cannot retain the session, and a status read that fails all close it through
-  its creator. A cancellation with an ensure still in flight
-  waits for its answer rather than walking away from it — the call runs whether
-  or not anybody is waiting — releasing the claim on a rejection and closing a
-  returned handle through its creator before quiescence. A close that failed
-  decrements nothing, evicts nothing, forgets nothing and withholds quiescence,
-  which an operation answers from that ownership account rather than from the
-  sessions a caller can reach. A managed session retains the partition that
-  created its handle, and every turn, close, detach and teardown goes through
-  that one — reaching for "the" runtime afterwards would open a second child for
-  a session the first already owns. The released runtime snapshots the
-  child-only `agentProcessEnv`. Protected authentication values outrank session
-  and transient overlays; `CLAUDE_CODE_EXECUTABLE` remains a transient binding
-  that outranks a session value. No local environment patch remains.
+  uses one runtime per selected agent and resolved command. Its selected
+  environment stays fixed until its handles and in-flight reservations are
+  released. ACP-first work without that selector uses one unbound runtime. A
+  bound attachment uses one runtime per (resolved agent command, executable
+  build binding), created with the observed path in `agentProcessEnv` and torn
+  down when its last handle closes. Acquiring a runtime to ensure through
+  claims the partition, and an `ensureSession()` that rejects gives that claim
+  up — so the next attempt observes again rather than inheriting a live path
+  nothing is holding, while a sibling ensure still in flight keeps the
+  partition alive. Eviction requires no handles and no work in flight. A handle
+  that came back is owned from that moment, on a provider-returned launch as
+  much as on an attachment, and survives every later refusal — identity
+  mismatch, a host that cannot retain the session, and a status read that fails
+  all close it through its creator. A cancellation with an ensure still in
+  flight waits for its answer rather than walking away from it — the call runs
+  whether or not anybody is waiting — releasing the claim on a rejection and
+  closing a returned handle through its creator before quiescence. A close that
+  failed decrements nothing, evicts nothing, forgets nothing and withholds
+  quiescence, which an operation answers from that ownership account rather
+  than from the sessions a caller can reach. A managed session retains the
+  partition that created its handle, and every turn, close, detach and teardown
+  goes through that one — reaching for "the" runtime afterwards would open a
+  second child for a session the first already owns. The released runtime
+  snapshots the child-only `agentProcessEnv`. Protected authentication values
+  outrank session and transient overlays; `CLAUDE_CODE_EXECUTABLE` remains a
+  transient binding that outranks a session value. No local environment patch
+  remains.
 - **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
   rather than a document, decides: `advertiseNativeLaunch` and
   `advertiseClientNativeAttachment` are two separate lists, and a profile whose
   session capabilities differ from ordinary `xmd run` states both explicitly
-  rather than inheriting the package's defaults by omission;
-  `agentProcessEnv` lazily selects transient child inputs for the resolved
-  agent command on the availability probe and live runtime. The embedded Claude
-  default applies only to its retained command; another provider or deliberate
-  custom command receives no default Claude overlay. A native-bound operation's
-  observed executable takes precedence. The inputs never enter durable session
-  records or global process environment. `executableObserver` says how this host observes the build behind an
-  executable; `agentCwd` answers with the directory an Agent runs in when the
-  contextual one is not a directory an agent process could stand in; `mcpServers` and `newSessionOptions` are passed to runtime creation and to
-  `ensureSession()` exactly as given; `permissions: "strict"` selects the
-  workflow profile's permission path; and `sessions` replaces directory-walk
-  resolution with a host's own, answering with the session's `state` as well as
-  its key and directory, and is where a retained session this host cannot
-  continue is refused. `sessions.recordSessionIdentity()` is called where an assertion
-  exists and not before: after the ensure that validated a reattachment, and
-  after ordinary ensure for standard construction, and after explicit acceptance
-  for strong construction. Every one of
-  them defaults to the `xmd run` behavior above.
+  rather than inheriting the package's defaults by omission; `agentProcessEnv`
+  lazily selects transient child inputs for the resolved agent command on the
+  availability probe and live runtime. The embedded Claude default applies only
+  to its retained command; another provider or deliberate custom command
+  receives no default Claude overlay. A native-bound operation's observed
+  executable takes precedence. The inputs never enter durable session records
+  or global process environment. `executableObserver` says how this host
+  observes the build behind an executable; `agentCwd` answers with the
+  directory an Agent runs in when the contextual one is not a directory an
+  agent process could stand in; `mcpServers` and `newSessionOptions` are passed
+  to runtime creation and to `ensureSession()` exactly as given;
+  `permissions: "strict"` selects the workflow profile's permission path; and
+  `sessions` replaces directory-walk resolution with a host's own, answering
+  with the session's `state` as well as its key and directory, and is where a
+  retained session this host cannot continue is refused.
+  `sessions.recordSessionIdentity()` is called where an assertion exists and
+  not before: after the ensure that validated a reattachment, after ordinary
+  ensure for standard construction, and after explicit acceptance for strong
+  construction. Every one of them defaults to the `xmd run` behavior above.
 - **A session host is both of its methods.** `sessions` stays optional and its
   absence stays the ordinary walk, with no host database and nothing to record.
   Supplied, it answers both: a host that decides where every session lives is
@@ -1670,44 +1718,46 @@ none.
   refuses, and the provider's own assertion stands for the next attachment to
   reconcile.
 - **Teardown.** Provider-scope teardown cancels active turns and closes each
-  distinct runtime handle with an all-settled strategy, throwing a single error or
-  an `AggregateError` from the provider scope. Handle release joins accepted
+  distinct runtime handle with an all-settled strategy, throwing a single error
+  or an `AggregateError` from the provider scope. Handle release joins accepted
   promotion and turn cleanup before giving up ownership. The join precedes the
-  manager lock needed by finalization; accepted identity and history remain saved.
-
+  manager lock needed by finalization; accepted identity and history remain
+  saved.
 
 ## The CLI Sidekick attachment as an ACP backend
 
 The headless XMD child backend uses the same live dispatch and original input
 owners through its separately admitted child connection. `xmd repl --attach
-<sessionId>` attaches a UI to the same root and selected conversation. Its opaque
-child ID is distinct from every outer ACP attachment mapping. ACP cancel/close
-joins its exact exchange, while UI detachment and ACP connection loss leave the
-parent-owned child alive. Shutdown and parent termination join actual cleanup;
-reply text, accepted input, saved acknowledgement and joined round are distinct.
+<sessionId>` attaches a UI to the same root and selected conversation. Its
+opaque child ID is distinct from every outer ACP attachment mapping. ACP
+cancel/close joins its exact exchange, while UI detachment and ACP connection
+loss leave the parent-owned child alive. Shutdown and parent termination join
+actual cleanup; reply text, accepted input, saved acknowledgement and joined
+round are distinct.
 
-Questions use standard `elicitation/create`, mode `form`, with the actual message
-and standard requestedSchema. Optional metadata is exactly
-`_meta["executablemd.xmd-question/v1"] = {requestId, presentationId, schema}`:
-the owner-held request ID, this callback presentation ID, and the complete
-normalized schema. For a decision approve/reject where approve requires a reason
-of at least eight characters, standard required contains only decision; readable
-text describes the condition and the complete schema retains if/then. The entire
-question and rules appear as standard tool content before callback or capability
-refusal. A generic client can read them without interpreting metadata.
+Questions use standard `elicitation/create`, mode `form`, with the actual
+message and standard requestedSchema. Optional metadata is exactly
+`_meta["executablemd.xmd-question/v1"] =
+{requestId, presentationId, schema}`: the owner-held request ID, this
+callback presentation ID, and the complete normalized schema. For a decision
+approve/reject where approve requires a reason of at least eight characters,
+standard required contains only decision; readable text describes the condition
+and the complete schema retains if/then. The entire question and rules appear
+as standard tool content before callback or capability refusal. A generic
+client can read them without interpreting metadata.
 
-Permissions keep standard `session/request_permission`, actual offered options and
-existing policy. Optional `_meta["executablemd.xmd-permission/v1"]` contains exactly
-requestId and presentationId. Each callback submits to the captured exact original
-owner with no suspension between current-owner check and settlement. Invalid
-responses keep it pending; corrections receive a fresh presentation. No answer or
-permission is supplied automatically.
+Permissions keep standard `session/request_permission`, actual offered options
+and existing policy. Optional `_meta["executablemd.xmd-permission/v1"]`
+contains exactly requestId and presentationId. Each callback submits to the
+captured exact original owner with no suspension between current-owner check
+and settlement. Invalid responses keep it pending; corrections receive a fresh
+presentation. No answer or permission is supplied automatically.
 
 A presentation starts as standard tool_call, kind other, readable XMD title,
 in_progress status and actual request content. Its response or retirement is a
-standard tool_call_update with the same toolCallId, kind/title, readable content
-and sole rawOutput member `executablemd.xmd-response/v1`. That closed payload
-contains kind, requestId and presentationId plus:
+standard tool_call_update with the same toolCallId, kind/title, readable
+content and sole rawOutput member `executablemd.xmd-response/v1`. That closed
+payload contains kind, requestId and presentationId plus:
 
 | event | Outcome/detail | Final presentation status |
 | --- | --- | --- |
@@ -1718,23 +1768,25 @@ contains kind, requestId and presentationId plus:
 | response | invalid, reason response-format | failed |
 | retired | reason request-ended | completed |
 
-No answer values, retained history or receipt sequence are added. Each presentation
-classifies at most one response and receives at most one retirement while open.
-Retirement and a later in-flight stale response are separate facts. Final status
-ends the presentation only. Acceptance proves original-owner acceptance, not
-publication, successful Prompt, completed round or cleanup. Missing matching
-response after submission stays unknown even if retirement or terminal arrives.
-Connection loss promises no delivery and authorizes no resend or receipt replay.
+No answer values, retained history or receipt sequence are added. Each
+presentation classifies at most one response and receives at most one
+retirement while open. Retirement and a later in-flight stale response are
+separate facts. Final status ends the presentation only. Acceptance proves
+original-owner acceptance, not publication, successful Prompt, completed round
+or cleanup. Missing matching response after submission stays unknown even if
+retirement or terminal arrives. Connection loss promises no delivery and
+authorizes no resend or receipt replay.
 
-The trusted embedded XMD runtime advertises only form elicitation before initialize.
-Its private callback re-enters the exact subscriber scope already registered by
-the permission bridge and calls Core prepareElicitation/runPreparedElicitation
-with the actual message and complete schema. Core validates the parent input;
-the original child validator decides final acceptance. Abort, Prompt teardown or
-exact presentation retirement halts and joins that callback, removing parent
-input through existing signals without inventing a child denial or dismissal.
-Callback/parse/publication failure retains its cause and cancels/joins the local
-runtime before terminal and stream completion; it does not shut down the child.
+The trusted embedded XMD runtime advertises only form elicitation before
+initialize. Its private callback re-enters the exact subscriber scope already
+registered by the permission bridge and calls Core
+prepareElicitation/runPreparedElicitation with the actual message and complete
+schema. Core validates the parent input; the original child validator decides
+final acceptance. Abort, Prompt teardown or exact presentation retirement halts
+and joins that callback, removing parent input through existing signals without
+inventing a child denial or dismissal. Callback/parse/publication failure
+retains its cause and cancels/joins the local runtime before terminal and
+stream completion; it does not shut down the child.
 
 The single native event reader maps responses into only two transient Prompt
 variants: question_answer_result carries questionId/inputId/result, and
@@ -1745,52 +1797,57 @@ The existing live-turn/root view shows these separately from reply text. Core
 reply and durable Prompt records retain their text and terminal facts only;
 ordinary providers need not emit these notices.
 
-Stock ACPX 0.21.1 provides no form input. It receives complete readable question
-content followed by a precise capability refusal, with the child still pending.
-A capable client or attached UI can answer that same original. Standard text/JSON
-notices remain useful without metadata; quiet output supplies no complete
-interaction receipt. Stock permission handling retains actual policy and gains no
-auto-approval flags. The older prepared Sidekick backend below still cannot answer
-questions and retains its existing configuration and permission limits.
+Stock ACPX 0.21.1 provides no form input. It receives complete readable
+question content followed by a precise capability refusal, with the child still
+pending. A capable client or attached UI can answer that same original.
+Standard text/JSON notices remain useful without metadata; quiet output
+supplies no complete interaction receipt. Stock permission handling retains
+actual policy and gains no auto-approval flags. The older prepared Sidekick
+backend still cannot answer questions and retains its existing configuration
+and permission limits.
 
 `xmd sidekick acp --attach FILE` serves the existing live REPL Sidekick over
 ACP protocol 1. Its session ID and `agentSessionId` metadata name the issued
-outer attachment mapping, not the underlying provider's native identity.
-The REPL's `--sidekick-acp` startup sends and joins one real initialization
-message only when no conversation is selected; it reports initialization failure
-before publishing an endpoint. Existing selected history is reused without a
-duplicate message. This uses the captured provider configuration and ordinary
-admission, uncertain-effect and scoped-cleanup rules. Once the endpoint exists,
-outer ACP session creation and exact load perform no provider turn. The mapping remains
+outer attachment mapping, not the underlying provider's native identity. The
+REPL's `--sidekick-acp` startup sends and joins one real initialization message
+only when no conversation is selected; it reports initialization failure before
+publishing an endpoint. Existing selected history is reused without a duplicate
+message. This uses the captured provider configuration and ordinary admission,
+uncertain-effect and scoped-cleanup rules. Once the endpoint exists, outer ACP
+session creation and exact load perform no provider turn. The mapping remains
 bound to one live owner, execution, conversation and cwd; a failed exact load
 fences fallback session creation on that bridge.
 
-The `executablemd.session-materialization/v1` accepted update is sent only after
-the root acknowledges the actual saved message. It establishes outer XMD-owner
-acceptance, independently of uncertain acceptance by the Sidekick's provider.
-A successful completing RPC carries `executablemd.sidekick-exchange/v1` metadata
-with owner, execution, conversation, message reference and joined completion.
-Cancellation returns only after that exact exchange joins. Failed endings retain
-safe partial facts and fail the RPC. Text, previews and the embedded runtime's
-timeout fallback `end_turn` without completing-RPC metadata establish no joined
-exchange result. A consumer can read/follow the known owner reference without
-another prompt; it cannot infer or resend missing acceptance.
+The `executablemd.session-materialization/v1` accepted update is sent only
+after the root acknowledges the actual saved message. It establishes outer
+XMD-owner acceptance, independently of uncertain acceptance by the Sidekick's
+provider. A successful completing RPC carries
+`executablemd.sidekick-exchange/v1` metadata with owner, execution,
+conversation, message reference and joined completion. Cancellation returns
+only after that exact exchange joins. Failed endings retain safe partial facts
+and fail the RPC. Text, previews and the embedded runtime's timeout fallback
+`end_turn` without completing-RPC metadata establish no joined exchange result.
+A consumer can read/follow the known owner reference without another prompt; it
+cannot infer or resend missing acceptance.
 
 ## Shared local-agent qualification
 
 [`examples/agent-certification/`](../examples/agent-certification/README.md)
-uses the ordinary literal-command ACPX path for local configurations and ordinary
-orchestration. Its thirteen separate capability outcomes require measured evidence;
-expectations and availability establish no passing capability. The ordinary production availability probe remains in force. Successfully joined
-stages permit independent later stages while exact native cleanup remains
-unverified. Pending joins, actual teardown failure and production ownership
-refusal stop admission. Existing owners still join teardown. Cancellation attribution alone establishes no cleanup pass,
-and the report grants neither durable identity nor a broader permission.
+uses the ordinary literal-command ACPX path for local configurations and
+ordinary orchestration. Its thirteen separate capability outcomes require
+measured evidence; expectations and availability establish no passing
+capability. The ordinary production availability probe remains in force.
+Successfully joined stages permit independent later stages while exact native
+cleanup remains unverified. Pending joins, actual teardown failure and
+production ownership refusal stop admission. Existing owners still join
+teardown. Cancellation attribution alone establishes no cleanup pass, and the
+report grants neither durable identity nor a broader permission.
 
-Qualification reports basic authentication, streaming and completion independently
-of `acceptance` and `identity`. A started seed from a strong-declared adapter
-proves gated acceptance; a standard seed reports unsupported/acceptance-unavailable.
-Identity requires the started Session's actual native assertion, independently
-of strength. Durable certification additionally requires both stronger rows.
-Missing evidence does not erase an independently measured basic pass. Local join
-and cancellation alone still prove no remote backend termination.
+Qualification reports basic authentication, streaming and completion
+independently of `acceptance` and `identity`. A started seed from a
+strong-declared adapter proves gated acceptance; a standard seed reports
+unsupported/acceptance-unavailable. Identity requires the started Session's
+actual native assertion, independently of strength. Durable certification
+additionally requires both stronger rows. Missing evidence does not erase an
+independently measured basic pass. Local join and cancellation alone still
+prove no remote backend termination.

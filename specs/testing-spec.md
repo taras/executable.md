@@ -399,6 +399,12 @@ valid only as direct children of `<Execution>` and only before assertion content
 They are installed for the whole child lifetime, before the child's root is
 imported; malformed or conflicting declarations fail before it too.
 
+The harness reads its children in two passes. First it expands the declaration
+prefix in a scan that stops where assertion content begins. After the child
+execution is over, the ordinary pass runs: declarations answer with what they
+observed, and the assertions run. An ordinary repository component that shadows
+a declaration ends the scan where it is written.
+
 `<CollectOutput as="…">` accumulates the child's rendered output for assertions.
 It is passive: the child's output is displayed progressively either way, and
 collection changes neither routing nor completion. When the child fails or is

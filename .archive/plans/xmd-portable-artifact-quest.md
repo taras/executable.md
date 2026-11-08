@@ -380,7 +380,7 @@ frozen matrix.
   `43e4a8a0e30530972333a350b89791d818dfd4b6`
 - **Review target:** the exact commit containing this file, supplied in the
   Planner handoff.
-- **Produced artifact:** `plans/xmd-portable-artifact-quest.md`
+- **Produced artifact:** `.archive/plans/xmd-portable-artifact-quest.md`
 - **Settled decisions:** the artifact specification and architecture amendment;
   no CI publication/attestation story in this execution-contract quest; explicit
   destination reuse compares artifact identity; export owns closure
