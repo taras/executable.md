@@ -56,10 +56,13 @@ printf '%s %s' "$firstStatus" "$secondStatus"
 <Ticket.Text path={held.fixture.root + "/second.json"} as="secondText" />
 <Parse schema={{type:"object"}} as="first">{firstText}</Parse>
 <Parse schema={{type:"object"}} as="second">{secondText}</Parse>
+<Ticket.Text path={held.fixture.root + "/first.err"} as="firstError" />
+<Ticket.Text path={held.fixture.root + "/second.err"} as="secondError" />
 <Let as="contenders" value={[first,second]} />
+<Let as="diagnostic" value={JSON.stringify({first,second,firstError,secondError})} />
 <Let as="winners" value={contenders.filter(entry => entry.publication === "confirmed")} />
-<AssertEquals actual={winners.length >= 1 && winners.every(entry => JSON.stringify(entry.continuation) === JSON.stringify(winners[0].continuation))} expected={true} />
-<AssertEquals actual={contenders.filter(entry => entry.publication !== "confirmed").every(entry => entry.status === "hold" && JSON.stringify(entry.continuation) === JSON.stringify(held.work.continuation) && entry.hold.includes(reservation))} expected={true} />
+<If condition={!(winners.length >= 1 && winners.every(entry => JSON.stringify(entry.continuation) === JSON.stringify(winners[0].continuation)))}><Fail message={"Contenders must confirm one successor: " + diagnostic} /></If>
+<If condition={!contenders.filter(entry => entry.publication !== "confirmed").every(entry => entry.status === "hold" && JSON.stringify(entry.continuation) === JSON.stringify(held.work.continuation) && entry.hold.includes(reservation))}><Fail message={"Unconfirmed contenders must retain the held reservation: " + diagnostic} /></If>
 <Let as="successor" value={winners[0]} />
 <Dir path={ticket}><Glob include={["continuations/*.json"]} as="published" /></Dir>
 <AssertEquals actual={published.length} expected={initial.length + 1} />
@@ -72,7 +75,7 @@ printf '%s %s' "$firstStatus" "$secondStatus"
 <Fixture.Execution entry="resolve-decision" value={successor} decision={a.path} repository={held.fixture.repository} root={props.root} as="child" />
 <Fixture.Refused output={child.stdout} continuation={successor.continuation} expected="stale continuation" as="stale" />
 <Ticket.Text path={reservation + "/receipt.json"} as="receiptAfter" />
-<AssertEquals actual={receiptAfter === receiptText} expected={true} />
+<AssertEquals actual={receiptAfter} expected={receiptText} />
 <Dir path={ticket}><Glob include={["continuations/*.json"]} as="published" /></Dir>
 <AssertEquals actual={published.length} expected={initial.length + 1} />
 <Dir path={held.fixture.root}><Glob include={["**/called.json"]} as="calls" /></Dir>
@@ -135,7 +138,7 @@ XMD_DECISION_CUT_MODE={cut.mode} XMD_DECISION_CUT_MATCH={cut.match} {runner} {cu
 <AssertEquals actual={[cut.name,repeated.publication,repeated.continuation]} expected={[cut.name,"held",variantReturn.continuation]} />
 <AssertStringIncludes actual={repeated.hold} expected="without a confirmed receipt" />
 <Ticket.Text path={variantReturn.continuation.path} as="variantAfter" />
-<AssertEquals actual={variantAfter === variantText} expected={true} />
+<AssertEquals actual={[cut.name,variantAfter]} expected={[cut.name,variantText]} />
 <Dir path={ticket}><Glob include={["continuations/*.json"]} as="repeatedAfter" /></Dir>
 <AssertEquals actual={repeatedAfter.length} expected={after.length} />
 </Each>
