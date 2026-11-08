@@ -1,7 +1,7 @@
 name: One fallback attribution capture
 on:
   push:
-    branches: [codex/fallback-attribution-recovery-35749f4]
+    branches: [codex/fallback-attribution-owner-35749f4]
 permissions:
   contents: read
 jobs:
@@ -29,12 +29,25 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.4.0
-      - name: Admit runner and run diagnostic preflights only
+      - name: Admit runner and complete outer diagnostic preflights
         run: |
           runner_binary="$(readlink -f "/proc/$PPID/exe")"
           printf '%s\n' "$runner_binary" > "$RUNNER_TEMP/fallback-capture/evidence/runner-worker-path.txt"
           export CAPTURE_RUNNER_VERSION="$("$(dirname "$runner_binary")/Runner.Listener" --version)"
           deno run --allow-all --node-modules-dir=none --frozen scripts/fallback-capture-deno.ts preflight
+          cp "$RUNNER_TEMP/fallback-capture/evidence/manifest.json" "$RUNNER_TEMP/fallback-capture/evidence/preflight-manifest.json"
+          cp "$RUNNER_TEMP/fallback-capture/evidence/provenance.json" "$RUNNER_TEMP/fallback-capture/evidence/preflight-provenance.json"
+      - name: Prepare exact product after successful outer preflight
+        run: |
+          runner_binary="$(readlink -f "/proc/$PPID/exe")"
+          printf '%s\n' "$runner_binary" > "$RUNNER_TEMP/fallback-capture/evidence/runner-worker-prepare-path.txt"
+          export CAPTURE_RUNNER_VERSION="$("$(dirname "$runner_binary")/Runner.Listener" --version)"
+          deno run --allow-all --node-modules-dir=none --frozen scripts/fallback-capture-deno.ts prepare
+          cp "$RUNNER_TEMP/fallback-capture/evidence/manifest.json" "$RUNNER_TEMP/fallback-capture/evidence/prepare-manifest.json"
+          cp "$RUNNER_TEMP/fallback-capture/evidence/provenance.json" "$RUNNER_TEMP/fallback-capture/evidence/prepare-provenance.json"
+      - name: Capture complete original consumer once after successful preparation
+        timeout-minutes: 6
+        run: deno run --allow-all --node-modules-dir=none --frozen scripts/fallback-capture-deno.ts consume
       - name: Retain partial evidence after every terminal outcome
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

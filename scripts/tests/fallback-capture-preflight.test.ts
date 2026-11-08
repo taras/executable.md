@@ -42,7 +42,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { createHash } from "node:crypto";
-import { realpath } from "node:fs/promises";
+import { realpath, readFile } from "node:fs/promises";
 import { captureCase } from "../../examples/adversarial-implementation/tests/components/Fixture/capture-state.ts";
 import type { Capture } from "../../examples/adversarial-implementation/tests/components/Fixture/capture-state.ts";
 
@@ -528,10 +528,141 @@ describe("bounded diagnostic capture preflights", () => {
         })(),
         5000,
       ));
+    for (const [variant, expectedCode, rawCode] of [
+      ["zero", 0, 0],
+      ["fault", 1, 0],
+      ["seven", 7, 7],
+    ] satisfies [string, number, number][]) {
+      it(`P4 Linux enclosing ${variant} owns authority and retains nested negative evidence`, () =>
+        bounded(
+          (function* () {
+            const nested = yield* syntheticRoot(0);
+            const nestedResult = yield* launcher(nested, "fault").join();
+            yield* archive(join(nested, "fallback-capture"), "p4-nested");
+            expect(nestedResult.code).toBe(1);
+            const negative = yield* manifest(nested);
+            expect(negative.operationalStatus).toBe(1);
+            expect(negative.operationalReason).toBe("capture-fault");
+            const nestedEvidence = join(nested, "fallback-capture/evidence");
+            const marker = join(nestedEvidence, "journals/fault/capture-error.json");
+            expect(yield* readTextFile(marker)).toBe("{}");
+            const nestedReceipt = z
+              .object({ code: z.number() })
+              .parse(JSON.parse(yield* readTextFile(join(nestedEvidence, "consumer-status.json"))));
+            expect(nestedReceipt.code).toBe(0);
+            expect(yield* readTextFile(join(nested, "fallback-capture/child-cleaned"))).toBe(
+              "joined",
+            );
+            function* bytes(
+              directory: string,
+              prefix = "",
+            ): Operation<{ path: string; sha256: string }[]> {
+              const files: { path: string; sha256: string }[] = [];
+              for (const name of (yield* readdir(directory)).sort()) {
+                const path = join(directory, name);
+                const info = yield* lstat(path);
+                if (info.isDirectory() && !info.isSymbolicLink()) {
+                  files.push(...(yield* bytes(path, join(prefix, name))));
+                } else if (info.isFile()) {
+                  files.push({
+                    path: join(prefix, name),
+                    sha256: createHash("sha256")
+                      .update(yield* until(readFile(path)))
+                      .digest("hex"),
+                  });
+                }
+              }
+              return files;
+            }
+            const originalBytes = yield* bytes(join(nested, "fallback-capture"));
+            const outer = yield* syntheticRoot(0);
+            const outerEvidence = join(outer, "fallback-capture/evidence");
+            const retained = yield* archive(
+              join(nested, "fallback-capture"),
+              crypto.randomUUID(),
+              join(outerEvidence, crypto.randomUUID(), "fallback/cases"),
+            );
+            if (!retained) {
+              throw new Error("P4 retained subtree is absent");
+            }
+            expect(yield* bytes(retained)).toEqual(originalBytes);
+            const ownCapture = join(outerEvidence, "journals");
+            let ownMarker = join(ownCapture, "fault/capture-error.json");
+            if (variant === "seven") {
+              const directory = join(ownCapture, crypto.randomUUID(), crypto.randomUUID());
+              yield* ensureDir(directory);
+              ownMarker = join(directory, "capture-error.json");
+              yield* writeTextFile(ownMarker, "{}");
+            }
+            const result = yield* launcher(outer, variant).join();
+            yield* archive(join(outer, "fallback-capture"), "p4-outer-" + variant);
+            expect(result.code).toBe(expectedCode);
+            const final = yield* manifest(outer);
+            expect(final.operationalStatus).toBe(expectedCode);
+            expect(final.consumerExecutions).toBe(1);
+            expect(final.operationalReason).toBe(
+              variant === "zero"
+                ? "consumer-success"
+                : variant === "fault"
+                  ? "capture-fault"
+                  : "consumer-nonzero",
+            );
+            const owned = z
+              .object({
+                files: z.array(
+                  z.object({ path: z.string(), sha256: z.string().optional() }).passthrough(),
+                ),
+                channels: z.array(z.object({ path: z.string() }).passthrough()),
+                captureErrors: z.array(z.object({ path: z.string() }).passthrough()),
+                snapshots: z.array(z.unknown()),
+                journals: z.array(z.unknown()),
+              })
+              .parse(final);
+            expect(owned.channels.map((item) => item.path).sort()).toEqual(
+              [
+                join(outerEvidence, "channels/consumer.stderr"),
+                join(outerEvidence, "channels/consumer.stdout"),
+              ].sort(),
+            );
+            expect(owned.snapshots).toEqual([]);
+            expect(owned.journals).toEqual([]);
+            expect(owned.captureErrors.map((item) => item.path)).toEqual(
+              variant === "zero" ? [] : [ownMarker],
+            );
+            expect(yield* readTextFile(join(outerEvidence, "channels/consumer.stdout"))).toBe(
+              "synthetic-out\n",
+            );
+            expect(yield* readTextFile(join(outerEvidence, "channels/consumer.stderr"))).toBe(
+              "synthetic-err\n",
+            );
+            expect(
+              z
+                .object({ code: z.number() })
+                .parse(JSON.parse(yield* readTextFile(join(outerEvidence, "consumer-status.json"))))
+                .code,
+            ).toBe(rawCode);
+            expect(yield* readTextFile(join(outer, "fallback-capture/child-cleaned"))).toBe(
+              "joined",
+            );
+            expect(yield* bytes(retained)).toEqual(originalBytes);
+            for (const file of originalBytes) {
+              expect(
+                owned.files.find((item) => item.path === join(retained, file.path))?.sha256,
+              ).toBe(file.sha256);
+            }
+            const retainedNegative = z
+              .object({ operationalStatus: z.number(), operationalReason: z.string() })
+              .parse(JSON.parse(yield* readTextFile(join(retained, "evidence/manifest.json"))));
+            expect(retainedNegative.operationalStatus).toBe(1);
+            expect(retainedNegative.operationalReason).toBe("capture-fault");
+          })(),
+        ));
+    }
   } else {
     it(
       "P3 Linux setsid/timeout7/0/fault1/SIGTERM143/join boundaries UNPROVEN on this runtime/host",
     );
+    it("P4 Linux enclosing owner composition UNPROVEN on this runtime/host");
   }
 });
 function* syntheticRoot(reservation: number) {
@@ -580,8 +711,11 @@ function* waitFile(path: string): Operation<void> {
   }
 }
 
-function* archive(directory: string, label: string): Operation<void> {
-  const destination = process.env.XMD_TEST_ARTIFACTS;
+function* archive(
+  directory: string,
+  label: string,
+  destination = process.env.XMD_TEST_ARTIFACTS,
+): Operation<string | undefined> {
   if (!destination) {
     return;
   }
@@ -599,4 +733,5 @@ function* archive(directory: string, label: string): Operation<void> {
     }
   }
   yield* copy(directory, target);
+  return target;
 }

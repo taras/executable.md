@@ -70,6 +70,8 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
   yield* scoped(function* () {
     const root = join(Deno.env.get("RUNNER_TEMP") ?? "/missing-runner-temp", "fallback-capture");
     const evidence = join(root, "evidence");
+    const channels = join(evidence, "channels");
+    const capture = join(evidence, "journals");
     const checkout = join(root, "checkout");
     const envelope = Deno.env.get("GITHUB_WORKSPACE") ?? "";
     yield* ensureDir(evidence);
@@ -90,7 +92,8 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
     function save(): Operation<void> {
       return writeTextFile(join(evidence, "manifest.json"), JSON.stringify(manifest, null, 2));
     }
-    yield* ensureDir(join(evidence, "journals"));
+    yield* ensureDir(capture);
+    yield* ensureDir(channels);
     if (mode === "consume" || mode === "prepare") {
       Object.assign(
         manifest,
@@ -106,15 +109,9 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       try {
         const files = yield* inventory(evidence);
         manifest.files = files;
-        manifest.channels = files.filter(
-          (item) =>
-            typeof item === "object" &&
-            item !== null &&
-            "path" in item &&
-            typeof item.path === "string" &&
-            item.path.includes("/channels/"),
-        );
-        manifest.snapshots = files.filter(
+        manifest.channels = yield* inventory(channels);
+        const captured = yield* inventory(capture);
+        manifest.snapshots = captured.filter(
           (item) =>
             typeof item === "object" &&
             item !== null &&
@@ -123,7 +120,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
             item.path.includes("/fallback/cases/") &&
             !item.path.includes("/objects/"),
         );
-        const captureErrors = files.filter(
+        const captureErrors = captured.filter(
           (item) =>
             typeof item === "object" &&
             item !== null &&
@@ -140,7 +137,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         }
         manifest.cleanup =
           "launcher finalizer reached; inventories describe present or incomplete files";
-        manifest.journals = (yield* inventory(join(evidence, "journals"))).filter(
+        manifest.journals = captured.filter(
           (item) =>
             typeof item === "object" &&
             item !== null &&
@@ -171,10 +168,17 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         manifest.consumerExecutions = 1;
         manifest.phase = "consumer-running";
         yield* save();
-        const consumer = yield* retainedProcess(childArgv, checkout, evidence, "consumer", {
-          TMPDIR: join(root, "tmp"),
-          XMD_TEST_ARTIFACTS: join(evidence, "journals"),
-        });
+        const consumer = yield* retainedProcess(
+          childArgv,
+          checkout,
+          evidence,
+          channels,
+          "consumer",
+          {
+            TMPDIR: join(root, "tmp"),
+            XMD_TEST_ARTIFACTS: capture,
+          },
+        );
         manifest.consumer = consumer;
         selected = consumer.code;
         reason = consumer.code === 0 ? "consumer-success" : "consumer-nonzero";
@@ -186,6 +190,11 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       }
       if (mode !== "prepare" && mode !== "preflight") {
         throw new Error("Expected prepare or consume");
+      }
+      if (mode === "prepare" && manifest.operationalStatus !== 0) {
+        throw new Error(
+          "Successful outer preflight finalization required before product preparation",
+        );
       }
       const facts: Record<string, unknown> = {
         timestamp: new Date().toISOString(),
@@ -250,13 +259,14 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         throw new Error("Admission refused: " + refusals.join(", "));
       }
       if (mode === "preflight") {
-        yield* ensureDir(join(evidence, "channels"));
+        yield* ensureDir(channels);
         manifest.phase = "diagnostic-setup";
         yield* save();
         const setup = yield* retainedProcess(
           ["deno", "task", "setup"],
           envelope,
           evidence,
+          channels,
           "diagnostic-setup",
         );
         manifest.diagnosticSetup = setup;
@@ -291,7 +301,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
             ],
           ],
         ] satisfies [string, string[]][]) {
-          const result = yield* retainedProcess(argv, envelope, evidence, name, {
+          const result = yield* retainedProcess(argv, envelope, evidence, channels, name, {
             XMD_TEST_ARTIFACTS: join(evidence, name + "-artifacts"),
           });
           manifest[name] = result;
@@ -347,11 +357,17 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         join(evidence, "Fallback.original.md"),
         yield* readTextFile(join(checkout, fixture)),
       );
-      yield* ensureDir(join(evidence, "channels"));
+      yield* ensureDir(channels);
       manifest.phase = "setup";
       manifest.setup = { command: ["deno", "task", "setup"], count: 1, status: "started" };
       yield* save();
-      const setup = yield* retainedProcess(["deno", "task", "setup"], checkout, evidence, "setup");
+      const setup = yield* retainedProcess(
+        ["deno", "task", "setup"],
+        checkout,
+        evidence,
+        channels,
+        "setup",
+      );
       manifest.setup = setup;
       yield* save();
       if (setup.code !== 0) {
@@ -401,12 +417,12 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       }
       manifest.dependencies = dependencyHashes;
       yield* ensureDir(join(root, "tmp"));
-      yield* ensureDir(join(evidence, "journals"));
+      yield* ensureDir(capture);
       manifest.phase = "prelaunch";
       manifest.launch = {
         argv: command,
         cwd: checkout,
-        env: { TMPDIR: join(root, "tmp"), XMD_TEST_ARTIFACTS: join(evidence, "journals") },
+        env: { TMPDIR: join(root, "tmp"), XMD_TEST_ARTIFACTS: capture },
         deadlineSeconds: 300,
         terminationJoinSeconds: 20,
         wrapperMs: 300000,
@@ -438,6 +454,7 @@ function retainedProcess(
   argv: string[],
   cwd: string,
   evidence: string,
+  channels: string,
   name: string,
   env?: Record<string, string>,
 ) {
@@ -460,10 +477,10 @@ function retainedProcess(
       }
     });
     stdout = yield* until(
-      Deno.open(join(evidence, "channels", name + ".stdout"), { createNew: true, write: true }),
+      Deno.open(join(channels, name + ".stdout"), { createNew: true, write: true }),
     );
     stderr = yield* until(
-      Deno.open(join(evidence, "channels", name + ".stderr"), { createNew: true, write: true }),
+      Deno.open(join(channels, name + ".stderr"), { createNew: true, write: true }),
     );
     let child: Deno.ChildProcess | undefined;
     let joined = false;
