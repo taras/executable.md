@@ -166,6 +166,37 @@ function gate(file: string, ...modifiers: string[]): string[] {
 
 const FAILING_CHILD = '<Fail message="nested-journal-failure" />\n';
 
+/**
+ * One `<Test>`, written once at line 8, that a suite invokes twice. Each
+ * invocation blocks at its own fence — line 11 for "first", line 18 for
+ * "second" — until its deadline interrupts it.
+ */
+const REPEATED = doc(
+  "---",
+  "props:",
+  "  type: object",
+  "  properties:",
+  "    which: { type: string }",
+  "  required: [which]",
+  "---",
+  '<Test name={props.which} timeout="1s">',
+  '<If condition={props.which === "first"}>',
+  "",
+  "```sh exec",
+  "sleep 10",
+  "```",
+  "",
+  "</If>",
+  '<If condition={props.which === "second"}>',
+  "",
+  "```sh exec",
+  "sleep 10",
+  "```",
+  "",
+  "</If>",
+  "</Test>",
+);
+
 describe("xmd test failure journals", () => {
   it("saves the root and a failed nested child as separate journals", function* () {
     const directory = yield* useProject({
@@ -316,6 +347,25 @@ describe("xmd test live progress", () => {
       'pass test "held" at suite.test.md:1:1',
     ]);
     expect(yield* exists(artifacts)).toBe(false);
+  });
+
+  it("attributes each invocation of a repeated test to the operation it interrupted", function* () {
+    const directory = yield* useProject({
+      "Repeated.md": REPEATED,
+      "suite.test.md": doc('<Repeated which="first" />', "", '<Repeated which="second" />'),
+    });
+    const artifacts = join(directory, "artifacts");
+    const result = yield* runTest(directory, ["suite.test.md"], artifacts);
+    expect(result.code).toBe(1);
+    const lines = progress(result.stderr);
+    expect(lines.filter((line) => /^start test/.test(line))).toEqual([
+      'start test "first" at Repeated.md:8:1',
+      'start test "second" at Repeated.md:8:1',
+    ]);
+    expect(lines.filter((line) => /^(pass|fail) test/.test(line))).toEqual([
+      'fail test "first" at Repeated.md:8:1 (timeout; interrupted sh exec at Repeated.md:11:1)',
+      'fail test "second" at Repeated.md:8:1 (timeout; interrupted sh exec at Repeated.md:18:1)',
+    ]);
   });
 
   it("keeps earlier progress and reports each failure once, naming an interrupted operation", function* () {
