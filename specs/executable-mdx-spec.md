@@ -7623,8 +7623,10 @@ retained child publication retains that activation inside the Test domain.
 Core preserves an independently selected failure already present in the
 captured root slot, including an ordinary Error selected by ReplayGuard;
 owned-slot presence, not a name or class, identifies that decision.
-Once the combined terminal failure is selected, no later effect or append is
-admitted. Each phase checks the combined terminal failure before entering an
+A failure escaping that boundary reaches its enclosing owner with the
+original causes, and initiating and teardown failures remain separate. Once
+the combined terminal failure is selected, no later effect or append is
+admitted. Cleanup success grants no retry or resend. Each phase checks the combined terminal failure before entering an
 unentered Finally. Both requirements apply to every independently selected
 failure, including an ordinary Error selected by ReplayGuard.
 
