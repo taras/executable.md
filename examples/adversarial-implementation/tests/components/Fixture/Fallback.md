@@ -3,7 +3,6 @@ props: {type: object, properties: {scenario: {type: string}, fixture: {type: obj
 ---
 <Let as="scenario" value={props.scenario} />
 <Let as="fixture" value={props.fixture} />
-<Fixture.CaptureCase scenario={scenario} fixture={fixture}>
 ```bash exec as="identity"
 git rev-parse HEAD
 git symbolic-ref --short HEAD
@@ -42,19 +41,19 @@ git symbolic-ref --short HEAD
 }[scenario]} />
 <If condition={expected === undefined}><Fail message={"Unknown fallback scenario " + scenario} /></If>
 <Delivery.Status delivery={delivery} number={7} as="before" />
-<Fixture.TraceAssertion line={44} element="AssertEquals"><AssertEquals actual={[before.status,before.nextAction]} expected={["review_pending","review"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[before.status,before.nextAction]} expected={["review_pending","review"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0044:AssertEquals" />
 
 <If condition={scenario === "reserved"}>
 <Delivery.Selection delivery={delivery} revision={revision} as="selection" />
 <Dir path={attempt}><File path="selection.json"><Json value={selection} /></File><File path="assignment.json"><Json value={{work:delivery.work,revision,reviewer:fable,acceptance:policy.acceptance,responseSchema:selection.responseSchema}} /></File></Dir>
 <Dir path={delivery.directory + "/sessions"}><File path="independent.json"><Json value={{schema:"phase-session.v2",agent:"claude",name:"independent",sessionKey:"independent",cwd:fixture.repository,identity:null,attempted:true,started:null}} /></File></Dir>
 <Delivery.Status delivery={delivery} number={7} as="reservedStatus" />
-<Fixture.TraceAssertion line={51} element="AssertEquals"><AssertEquals actual={[reservedStatus.status,reservedStatus.reviewAttempts.attempts[0].state]} expected={["reconciliation_required","reserved"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[reservedStatus.status,reservedStatus.reviewAttempts.attempts[0].state]} expected={["reconciliation_required","reserved"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0051:AssertEquals" />
 ```bash exec as="reservedEntry"
 {props.runner} {entry} --props-action review
 ```
-<Fixture.TraceAssertion line={55} element="AssertEquals"><AssertEquals actual={reservedEntry.exitCode === 0} expected={false} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={56} element="AssertStringIncludes"><AssertStringIncludes actual={reservedEntry.stderr} expected="do not start another review" /></Fixture.TraceAssertion>
+<AssertEquals actual={reservedEntry.exitCode === 0} expected={false} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0055:AssertEquals" />
+<AssertStringIncludes actual={reservedEntry.stderr} expected="do not start another review" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0056:AssertStringIncludes" />
 </If>
 <Let as="execution" value={null} />
 <If condition={scenario === "interrupted"}>
@@ -74,7 +73,7 @@ kill -TERM "$child"
 wait "$child"
 printf '%s' "$reached"
 ```
-<Fixture.TraceAssertion line={76} element="AssertEquals"><AssertEquals actual={interrupted.stdout} expected="0" /></Fixture.TraceAssertion>
+<AssertEquals actual={interrupted.stdout} expected="0" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0076:AssertEquals" />
 <Else>
 <If condition={scenario !== "reserved"}>
 <Ticket.Capture as="execution"><Fixture.Elicitation record={record} hold={attempt + "/hold.json"} mode={scenario === "exhausted-failure" ? "fail" : "answer"} answer={{disposition:scenario === "exhausted-reconcile" ? "reconcile" : "hold"}}><Delivery.Review delivery={delivery} revision={revision} as="receipt" /><Json value={receipt} /></Fixture.Elicitation></Ticket.Capture>
@@ -87,69 +86,69 @@ printf '%s' "$reached"
 </If>
 <Delivery.Status delivery={delivery} number={7} as="after" />
 <If condition={after.status !== expected.status}><Fail message={scenario + ": status " + after.status + " " + JSON.stringify(after.reviewAttempts)} /></If>
-<If condition={expected.next !== undefined}><Fixture.TraceAssertion line={89} element="AssertEquals"><AssertEquals actual={after.nextAction} expected={expected.next} /></Fixture.TraceAssertion></If>
+<If condition={expected.next !== undefined}><AssertEquals actual={after.nextAction} expected={expected.next} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0089:AssertEquals" /></If>
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="observed" />
-<Fixture.TraceAssertion line={91} element="AssertEquals"><AssertEquals actual={observed.calls.length} expected={expected.calls} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={92} element="AssertEquals"><AssertEquals actual={observed.elicitations.length} expected={expected.elicits} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={93} element="AssertEquals"><AssertEquals actual={observed.calls.map(call => call.revision)} expected={observed.calls.map(() => revision)} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={94} element="AssertEquals"><AssertEquals actual={observed.calls.map(call => call.reviewer)} expected={[reviewer,astra].slice(0,expected.calls)} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={95} element="AssertEquals"><AssertEquals actual={observed.calls.map(call => call.position)} expected={[0,1].slice(0,expected.calls)} /></Fixture.TraceAssertion>
-<If condition={expected.prompted !== undefined}><Fixture.TraceAssertion line={96} element="AssertEquals"><AssertEquals actual={observed.calls.map(call => call.prompted)} expected={expected.prompted} /></Fixture.TraceAssertion></If>
+<AssertEquals actual={observed.calls.length} expected={expected.calls} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0091:AssertEquals" />
+<AssertEquals actual={observed.elicitations.length} expected={expected.elicits} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0092:AssertEquals" />
+<AssertEquals actual={observed.calls.map(call => call.revision)} expected={observed.calls.map(() => revision)} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0093:AssertEquals" />
+<AssertEquals actual={observed.calls.map(call => call.reviewer)} expected={[reviewer,astra].slice(0,expected.calls)} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0094:AssertEquals" />
+<AssertEquals actual={observed.calls.map(call => call.position)} expected={[0,1].slice(0,expected.calls)} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0095:AssertEquals" />
+<If condition={expected.prompted !== undefined}><AssertEquals actual={observed.calls.map(call => call.prompted)} expected={expected.prompted} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0096:AssertEquals" /></If>
 <Ticket.Text path={delivery.directory + "/requirements.json"} as="requirementsAfter" />
-<Fixture.TraceAssertion line={98} element="AssertEquals"><AssertEquals actual={requirementsAfter} expected={requirementsBefore} /></Fixture.TraceAssertion>
+<AssertEquals actual={requirementsAfter} expected={requirementsBefore} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0098:AssertEquals" />
 <Ticket.Checkout repository={fixture.repository} as="source" />
-<Fixture.TraceAssertion line={100} element="AssertEquals"><AssertEquals actual={[source.head,source.clean]} expected={[revision,true]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[source.head,source.clean]} expected={[revision,true]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0100:AssertEquals" />
 
 <If condition={expected.calls !== 0}>
 <Ticket.Text path={attempt + "/selection.json"} as="selectionText" />
 <Parse schema={{type:"object"}} as="retainedSelection">{selectionText}</Parse>
-<Fixture.TraceAssertion line={105} element="AssertEquals"><AssertEquals actual={[retainedSelection.revision,retainedSelection.policy,retainedSelection.inputs,retainedSelection.chain]} expected={[revision,policy,delivery.inputs,scenario === "astra-final" ? "astra-final" : "fable-astra"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[retainedSelection.revision,retainedSelection.policy,retainedSelection.inputs,retainedSelection.chain]} expected={[revision,policy,delivery.inputs,scenario === "astra-final" ? "astra-final" : "fable-astra"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0105:AssertEquals" />
 <Ticket.Text path={attempt + "/assignment.json"} as="primaryText" />
 <Parse schema={{type:"object"}} as="primaryAssignment">{primaryText}</Parse>
-<Fixture.TraceAssertion line={108} element="AssertEquals"><AssertEquals actual={primaryAssignment} expected={{work:delivery.work,revision,reviewer,acceptance:policy.acceptance,responseSchema:retainedSelection.responseSchema}} /></Fixture.TraceAssertion>
+<AssertEquals actual={primaryAssignment} expected={{work:delivery.work,revision,reviewer,acceptance:policy.acceptance,responseSchema:retainedSelection.responseSchema}} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0108:AssertEquals" />
 <If condition={expected.calls === 2}>
 <Ticket.Text path={attempt + "/replacement/assignment.json"} as="replacementText" />
 <Parse schema={{type:"object"}} as="replacementAssignment">{replacementText}</Parse>
-<Fixture.TraceAssertion line={112} element="AssertEquals"><AssertEquals actual={replacementAssignment} expected={{...primaryAssignment,reviewer:astra}} /></Fixture.TraceAssertion>
+<AssertEquals actual={replacementAssignment} expected={{...primaryAssignment,reviewer:astra}} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0112:AssertEquals" />
 <Ticket.Text path={attempt + "/replacement/transition.json"} as="transitionText" />
 <Parse schema={{type:"object"}} as="transition">{transitionText}</Parse>
-<Fixture.TraceAssertion line={115} element="AssertEquals"><AssertEquals actual={[transition.from,transition.to,transition.reason]} expected={[fable,astra,after.reviewAttempts.attempts[0].reason]} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={116} element="AssertEquals"><AssertEquals actual={after.reviewAttempts.attempts.map(item => item.state)} expected={expected.effective === "replacement" ? ["eligible","review"] : ["eligible","eligible"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[transition.from,transition.to,transition.reason]} expected={[fable,astra,after.reviewAttempts.attempts[0].reason]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0115:AssertEquals" />
+<AssertEquals actual={after.reviewAttempts.attempts.map(item => item.state)} expected={expected.effective === "replacement" ? ["eligible","review"] : ["eligible","eligible"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0116:AssertEquals" />
 </If>
 </If>
 
 <If condition={expected.effective !== undefined}>
-<Fixture.TraceAssertion line={121} element="AssertEquals"><AssertEquals actual={after.review.attempt} expected={expected.effective === "primary" ? attempt : attempt + "/replacement"} /></Fixture.TraceAssertion>
+<AssertEquals actual={after.review.attempt} expected={expected.effective === "primary" ? attempt : attempt + "/replacement"} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0121:AssertEquals" />
 <Ticket.Text path={after.review.attempt + "/receipt.json"} as="receiptText" />
 <Parse schema={{type:"object"}} as="receipt">{receiptText}</Parse>
-<Fixture.TraceAssertion line={124} element="AssertEquals"><AssertEquals actual={[receipt.reviewer,receipt.revision,receipt.acceptance,receipt.result.verdict]} expected={[expected.effective === "primary" ? fable : astra,revision,policy.acceptance,"pass"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[receipt.reviewer,receipt.revision,receipt.acceptance,receipt.result.verdict]} expected={[expected.effective === "primary" ? fable : astra,revision,policy.acceptance,"pass"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0124:AssertEquals" />
 <Fixture.Inventory directory={attempt} as="joined" />
 <Delivery.Closeout delivery={delivery} number={7} as="closeout" />
-<Fixture.TraceAssertion line={127} element="AssertEquals"><AssertEquals actual={closeout.status} expected="ready_for_merge" /></Fixture.TraceAssertion>
+<AssertEquals actual={closeout.status} expected="ready_for_merge" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0127:AssertEquals" />
 <Ticket.Text path={delivery.directory + "/closeout.md"} as="report" />
-<Fixture.TraceAssertion line={129} element="AssertStringIncludes"><AssertStringIncludes actual={report} expected={"Primary reviewer: claude, requested model fable, configured model " + (["unavailable","configuration"].includes(scenario) ? "not configured" : "fable") + ", effort provider default, conversation independent. " + (expected.effective === "primary" ? "review" : "eligible")} /></Fixture.TraceAssertion>
+<AssertStringIncludes actual={report} expected={"Primary reviewer: claude, requested model fable, configured model " + (["unavailable","configuration"].includes(scenario) ? "not configured" : "fable") + ", effort provider default, conversation independent. " + (expected.effective === "primary" ? "review" : "eligible")} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0129:AssertStringIncludes" />
 <If condition={expected.effective === "replacement"}>
-<Fixture.TraceAssertion line={131} element="AssertStringIncludes"><AssertStringIncludes actual={report} expected="Replacement reviewer: codex, requested model gpt-6-astra, configured model gpt-6-astra, effort provider default, conversation independent-astra. review" /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={132} element="AssertStringIncludes"><AssertStringIncludes actual={report} expected={attempt + "/execution.json"} /></Fixture.TraceAssertion>
+<AssertStringIncludes actual={report} expected="Replacement reviewer: codex, requested model gpt-6-astra, configured model gpt-6-astra, effort provider default, conversation independent-astra. review" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0131:AssertStringIncludes" />
+<AssertStringIncludes actual={report} expected={attempt + "/execution.json"} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0132:AssertStringIncludes" />
 </If>
 <Fixture.Inventory directory={attempt} as="reported" />
-<Fixture.TraceAssertion line={135} element="AssertEquals"><AssertEquals actual={reported} expected={joined} /></Fixture.TraceAssertion>
+<AssertEquals actual={reported} expected={joined} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0135:AssertEquals" />
 </If>
 
 <If condition={expected.hold !== undefined}>
 <Ticket.Text path={attempt + "/hold.json"} as="holdText" />
 <Parse schema={{type:"object"}} as="hold">{holdText}</Parse>
-<Fixture.TraceAssertion line={141} element="AssertEquals"><AssertEquals actual={[hold.revision,hold.chain,hold.attempts.length]} expected={[revision,scenario === "astra-final" ? "astra-final" : "fable-astra",expected.calls]} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={142} element="AssertStringIncludes"><AssertStringIncludes actual={hold.summary} expected={expected.hold === "exhausted" ? "Every eligible independent reviewer failed" : "is uncertain"} /></Fixture.TraceAssertion>
+<AssertEquals actual={[hold.revision,hold.chain,hold.attempts.length]} expected={[revision,scenario === "astra-final" ? "astra-final" : "fable-astra",expected.calls]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0141:AssertEquals" />
+<AssertStringIncludes actual={hold.summary} expected={expected.hold === "exhausted" ? "Every eligible independent reviewer failed" : "is uncertain"} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0142:AssertStringIncludes" />
 <Let as="question" value={observed.elicitations[0]} />
-<Fixture.TraceAssertion line={144} element="AssertEquals"><AssertEquals actual={question.held} expected={true} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={145} element="AssertEquals"><AssertEquals actual={question.schema} expected={{type:"object",properties:{disposition:{type:"string",enum:["hold","reconcile"],title:"Delivery decision",description:"hold leaves delivery waiting. reconcile reads and validates the existing attempt evidence once."}},required:["disposition"],additionalProperties:false}} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={146} element="AssertStringIncludes"><AssertStringIncludes actual={question.message} expected={revision} /></Fixture.TraceAssertion>
+<AssertEquals actual={question.held} expected={true} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0144:AssertEquals" />
+<AssertEquals actual={question.schema} expected={{type:"object",properties:{disposition:{type:"string",enum:["hold","reconcile"],title:"Delivery decision",description:"hold leaves delivery waiting. reconcile reads and validates the existing attempt evidence once."}},required:["disposition"],additionalProperties:false}} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0145:AssertEquals" />
+<AssertStringIncludes actual={question.message} expected={revision} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0146:AssertStringIncludes" />
 <Each in={hold.attempts} let="held">
-<Fixture.TraceAssertion line={148} element="AssertStringIncludes"><AssertStringIncludes actual={question.message} expected={held.reviewer.provider + " " + held.reviewer.model + " in conversation " + held.reviewer.session + ": " + held.state + ". " + held.reason} /></Fixture.TraceAssertion>
+<AssertStringIncludes actual={question.message} expected={held.reviewer.provider + " " + held.reviewer.model + " in conversation " + held.reviewer.session + ": " + held.state + ". " + held.reason} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0148:AssertStringIncludes" />
 </Each>
 <Dir path={attempt}><Glob include={["disposition.json","receipt.json","replacement/receipt.json"]} as="answered" /></Dir>
-<Fixture.TraceAssertion line={151} element="AssertEquals"><AssertEquals actual={answered} expected={["exhausted-failure","interrupted"].includes(scenario) ? [] : ["disposition.json"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={answered} expected={["exhausted-failure","interrupted"].includes(scenario) ? [] : ["disposition.json"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0151:AssertEquals" />
 <Fixture.Inventory directory={attempt} as="held" />
 
 Status, closeout and explicit reconciliation of a hold read evidence only.
@@ -169,42 +168,42 @@ if test {probeReview} = yes; then
   cat review.err
 fi
 ```
-<Fixture.TraceAssertion line={171} element="AssertStringIncludes"><AssertStringIncludes actual={heldEntries.stdout} expected={expected.next === "report_review_hold" ? "0 0 1 1 " : "0 0 1 "} /></Fixture.TraceAssertion>
-<If condition={expected.next === "report_review_hold"}><Fixture.TraceAssertion line={172} element="AssertStringIncludes"><AssertStringIncludes actual={heldEntries.stdout} expected="The next action is report_review_hold; do not start another review." /></Fixture.TraceAssertion></If>
+<AssertStringIncludes actual={heldEntries.stdout} expected={expected.next === "report_review_hold" ? "0 0 1 1 " : "0 0 1 "} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0171:AssertStringIncludes" />
+<If condition={expected.next === "report_review_hold"}><AssertStringIncludes actual={heldEntries.stdout} expected="The next action is report_review_hold; do not start another review." msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0172:AssertStringIncludes" /></If>
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="readOnly" />
-<Fixture.TraceAssertion line={174} element="AssertEquals"><AssertEquals actual={[readOnly.calls.length,readOnly.elicitations.length]} expected={[expected.calls,expected.elicits]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[readOnly.calls.length,readOnly.elicitations.length]} expected={[expected.calls,expected.elicits]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0174:AssertEquals" />
 <Fixture.Inventory directory={attempt} as="unchanged" />
-<Fixture.TraceAssertion line={176} element="AssertEquals"><AssertEquals actual={unchanged} expected={held} /></Fixture.TraceAssertion>
+<AssertEquals actual={unchanged} expected={held} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0176:AssertEquals" />
 </If>
 
 <If condition={scenario === "exhausted-reconcile"}>
 <Parse schema={{type:"object"}} as="reconciled">{execution.output}</Parse>
-<Fixture.TraceAssertion line={181} element="AssertEquals"><AssertEquals actual={[reconciled.status,reconciled.answer,reconciled.receipt]} expected={["held",{disposition:"reconcile"},null]} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={182} element="AssertStringIncludes"><AssertStringIncludes actual={reconciled.reconciliation} expected="no joined review reply" /></Fixture.TraceAssertion>
+<AssertEquals actual={[reconciled.status,reconciled.answer,reconciled.receipt]} expected={["held",{disposition:"reconcile"},null]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0181:AssertEquals" />
+<AssertStringIncludes actual={reconciled.reconciliation} expected="no joined review reply" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0182:AssertStringIncludes" />
 </If>
 
 <If condition={["exhausted","exhausted-failure","interrupted"].includes(scenario)}>
 <Ticket.Text path={attempt + "/hold.json"} as="holdBefore" />
 <Ticket.Capture as="again"><Fixture.Elicitation record={record} hold={attempt + "/hold.json"} mode="answer" answer={{disposition:"hold"}}><Delivery.Review delivery={delivery} revision={revision} as="againReceipt" /><Json value={againReceipt} /></Fixture.Elicitation></Ticket.Capture>
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="represented" />
-<Fixture.TraceAssertion line={189} element="AssertEquals"><AssertEquals actual={represented.calls.length} expected={2} /></Fixture.TraceAssertion>
+<AssertEquals actual={represented.calls.length} expected={2} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0189:AssertEquals" />
 <If condition={scenario === "exhausted"}>
-<Fixture.TraceAssertion line={191} element="AssertEquals"><AssertEquals actual={again.status} expected="failed" /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={192} element="AssertStringIncludes"><AssertStringIncludes actual={again.failure} expected="already exists or cannot be reserved" /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={193} element="AssertEquals"><AssertEquals actual={represented.elicitations.length} expected={1} /></Fixture.TraceAssertion>
+<AssertEquals actual={again.status} expected="failed" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0191:AssertEquals" />
+<AssertStringIncludes actual={again.failure} expected="already exists or cannot be reserved" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0192:AssertStringIncludes" />
+<AssertEquals actual={represented.elicitations.length} expected={1} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0193:AssertEquals" />
 <Else>
 <If condition={again.status !== "completed"}><Fail message={scenario + ": " + again.failure} /></If>
-<Fixture.TraceAssertion line={196} element="AssertEquals"><AssertEquals actual={represented.elicitations.length} expected={2} /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={197} element="AssertEquals"><AssertEquals actual={represented.elicitations[1].message} expected={represented.elicitations[0].message} /></Fixture.TraceAssertion>
+<AssertEquals actual={represented.elicitations.length} expected={2} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0196:AssertEquals" />
+<AssertEquals actual={represented.elicitations[1].message} expected={represented.elicitations[0].message} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0197:AssertEquals" />
 <Ticket.Text path={attempt + "/disposition.json"} as="dispositionText" />
 <Parse schema={{type:"object"}} as="disposition">{dispositionText}</Parse>
-<Fixture.TraceAssertion line={200} element="AssertEquals"><AssertEquals actual={disposition.answer} expected={{disposition:"hold"}} /></Fixture.TraceAssertion>
+<AssertEquals actual={disposition.answer} expected={{disposition:"hold"}} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0200:AssertEquals" />
 <Delivery.Status delivery={delivery} number={7} as="answered" />
-<Fixture.TraceAssertion line={202} element="AssertEquals"><AssertEquals actual={[answered.status,answered.nextAction]} expected={["review_held","report_review_hold"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[answered.status,answered.nextAction]} expected={["review_held","report_review_hold"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0202:AssertEquals" />
 </Else>
 </If>
 <Ticket.Text path={attempt + "/hold.json"} as="holdAfter" />
-<Fixture.TraceAssertion line={206} element="AssertEquals"><AssertEquals actual={holdAfter} expected={holdBefore} /></Fixture.TraceAssertion>
+<AssertEquals actual={holdAfter} expected={holdBefore} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0206:AssertEquals" />
 </If>
 
 <If condition={scenario === "partial"}>
@@ -213,10 +212,10 @@ fi
 <Let as="strayOutcome" value={{schema:"delivery-review-outcome.v1",reviewer:astra,catalog:{state:"selected",choices:["gpt-6-astra"],model:"gpt-6-astra",advertised:["gpt-6-astra"],failure:null},turn:{state:"reply",reply:JSON.stringify(stray)}}} />
 <Dir path={attempt + "/replacement"}><File path="assignment.json"><Json value={{work:delivery.work,revision,reviewer:astra,acceptance:policy.acceptance,responseSchema:schemas.review}} /></File><File path="outcome.json"><Json value={strayOutcome} /></File><File path="execution.json"><Json value={{status:"completed",failure:null}} /></File><File path="raw.txt">{JSON.stringify(stray)}</File><File path="receipt.json"><Json value={{work:delivery.work,revision,reviewer:astra,acceptance:policy.acceptance,responseSchema:schemas.review,result:stray,execution:attempt + "/replacement/execution.json"}} /></File></Dir>
 <Delivery.Status delivery={delivery} number={7} as="strayStatus" />
-<Fixture.TraceAssertion line={215} element="AssertEquals"><AssertEquals actual={[strayStatus.status,strayStatus.review]} expected={["review_held",null]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[strayStatus.status,strayStatus.review]} expected={["review_held",null]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0215:AssertEquals" />
 <Ticket.Capture as="strayReconcile"><Delivery.Reconcile delivery={delivery} revision={revision} publish={true} as="strayReceipt" /></Ticket.Capture>
-<Fixture.TraceAssertion line={217} element="AssertEquals"><AssertEquals actual={strayReconcile.status} expected="failed" /></Fixture.TraceAssertion>
-<Fixture.TraceAssertion line={218} element="AssertStringIncludes"><AssertStringIncludes actual={strayReconcile.failure} expected="No selected review attempt can supply a receipt" /></Fixture.TraceAssertion>
+<AssertEquals actual={strayReconcile.status} expected="failed" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0217:AssertEquals" />
+<AssertStringIncludes actual={strayReconcile.failure} expected="No selected review attempt can supply a receipt" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0218:AssertStringIncludes" />
 </If>
 
 <If condition={scenario === "fable-pass"}>
@@ -224,10 +223,10 @@ fi
 <Parse schema={{type:"object"}} as="selected">{originalSelection}</Parse>
 <Dir path={attempt}><File path="selection.json"><Json value={{...selected,inputs:[{path:"accepted.md",content:"A different source."}]}} /></File></Dir>
 <Delivery.Status delivery={delivery} number={7} as="mismatched" />
-<Fixture.TraceAssertion line={226} element="AssertEquals"><AssertEquals actual={[mismatched.status,mismatched.reviewAttempts.selection]} expected={["reconciliation_required","mismatch"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[mismatched.status,mismatched.reviewAttempts.selection]} expected={["reconciliation_required","mismatch"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0226:AssertEquals" />
 <Dir path={attempt}><File path="selection.json">{originalSelection}</File></Dir>
 <Delivery.Status delivery={delivery} number={7} as="restored" />
-<Fixture.TraceAssertion line={229} element="AssertEquals"><AssertEquals actual={restored.status} expected="ready_for_merge" /></Fixture.TraceAssertion>
+<AssertEquals actual={restored.status} expected="ready_for_merge" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0229:AssertEquals" />
 </If>
 
 <If condition={scenario === "turn-failed"}>
@@ -235,30 +234,30 @@ Reopen after the replacement joined but before its derived raw reply and receipt
 
 <Dir path={attempt + "/replacement"}><File.Delete path="raw.txt" /><File.Delete path="receipt.json" /></Dir>
 <Delivery.Status delivery={delivery} number={7} as="underived" />
-<Fixture.TraceAssertion line={237} element="AssertEquals"><AssertEquals actual={[underived.status,underived.nextAction]} expected={["reconciliation_required","reconcile_original_review"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[underived.status,underived.nextAction]} expected={["reconciliation_required","reconcile_original_review"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0237:AssertEquals" />
 ```bash exec as="reconcileEntry"
 {props.runner} {entry} --props-action reconcile
 ```
 <If condition={reconcileEntry.exitCode !== 0}><Fail message={reconcileEntry.stderr + reconcileEntry.stdout} /></If>
 <Parse schema={{type:"object"}} as="reconcileStatus">{reconcileEntry.stdout}</Parse>
-<Fixture.TraceAssertion line={243} element="AssertEquals"><AssertEquals actual={reconcileStatus.status} expected="ready_for_merge" /></Fixture.TraceAssertion>
+<AssertEquals actual={reconcileStatus.status} expected="ready_for_merge" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0243:AssertEquals" />
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="afterReconcile" />
-<Fixture.TraceAssertion line={245} element="AssertEquals"><AssertEquals actual={afterReconcile.calls.length} expected={2} /></Fixture.TraceAssertion>
+<AssertEquals actual={afterReconcile.calls.length} expected={2} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0245:AssertEquals" />
 
 Reopen with a replacement reservation whose outcome never joined.
 
 <Fixture.Inventory directory={attempt} as="beforeCut" />
 <Dir path={attempt + "/replacement"}><File.Delete path="execution.json" /><File.Delete path="outcome.json" /><File.Delete path="raw.txt" /><File.Delete path="receipt.json" /></Dir>
 <Delivery.Status delivery={delivery} number={7} as="unjoined" />
-<Fixture.TraceAssertion line={252} element="AssertEquals"><AssertEquals actual={[unjoined.status,unjoined.reviewAttempts.attempts[1].state]} expected={["reconciliation_required","reserved"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[unjoined.status,unjoined.reviewAttempts.attempts[1].state]} expected={["reconciliation_required","reserved"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0252:AssertEquals" />
 <Ticket.Capture as="heldReplacement"><Delivery.Review delivery={delivery} revision={revision} as="unexpected" /></Ticket.Capture>
-<Fixture.TraceAssertion line={254} element="AssertEquals"><AssertEquals actual={heldReplacement.status} expected="failed" /></Fixture.TraceAssertion>
+<AssertEquals actual={heldReplacement.status} expected="failed" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0254:AssertEquals" />
 ```bash exec as="heldEntry"
 {props.runner} {entry} --props-action review
 ```
-<Fixture.TraceAssertion line={258} element="AssertStringIncludes"><AssertStringIncludes actual={heldEntry.stderr} expected="do not start another review" /></Fixture.TraceAssertion>
+<AssertStringIncludes actual={heldEntry.stderr} expected="do not start another review" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0258:AssertStringIncludes" />
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="afterHeld" />
-<Fixture.TraceAssertion line={260} element="AssertEquals"><AssertEquals actual={afterHeld.calls.length} expected={2} /></Fixture.TraceAssertion>
+<AssertEquals actual={afterHeld.calls.length} expected={2} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0260:AssertEquals" />
 
 Reopen after the primary failure was retained but before the replacement was reserved, from two overlapping review actions.
 
@@ -267,7 +266,7 @@ Reopen after the primary failure was retained but before the replacement was res
 rm -r -- {quotedReplacement}
 ```
 <Delivery.Status delivery={delivery} number={7} as="resumable" />
-<Fixture.TraceAssertion line={269} element="AssertEquals"><AssertEquals actual={[resumable.status,resumable.nextAction]} expected={["review_pending","review"]} /></Fixture.TraceAssertion>
+<AssertEquals actual={[resumable.status,resumable.nextAction]} expected={["review_pending","review"]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0269:AssertEquals" />
 ```bash exec as="overlap"
 {props.runner} {entry} --props-action review > first.out 2> first.err &
 first=$!
@@ -279,13 +278,11 @@ wait "$second"
 secondExit=$?
 printf '%s %s' "$firstExit" "$secondExit"
 ```
-<Fixture.TraceAssertion line={281} element="AssertEquals" overlap={overlap}><AssertEquals actual={overlap.stdout.split(" ").filter(code => code === "0").length} expected={1} /></Fixture.TraceAssertion>
+<AssertEquals actual={overlap.stdout.split(" ").filter(code => code === "0").length} expected={1} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0281:AssertEquals" />
 <Fixture.Observed delivery={delivery.directory} root={fixture.root} as="afterOverlap" />
-<Fixture.TraceAssertion line={283} element="AssertEquals"><AssertEquals actual={afterOverlap.calls.map(call => call.position)} expected={[0,1,1]} /></Fixture.TraceAssertion>
+<AssertEquals actual={afterOverlap.calls.map(call => call.position)} expected={[0,1,1]} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0283:AssertEquals" />
 <Delivery.Status delivery={delivery} number={7} as="resumed" />
-<Fixture.TraceAssertion line={285} element="AssertEquals"><AssertEquals actual={resumed.status} expected="ready_for_merge" /></Fixture.TraceAssertion>
+<AssertEquals actual={resumed.status} expected="ready_for_merge" msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0285:AssertEquals" />
 <Fixture.Inventory directory={attempt} as="afterCut" />
-<Fixture.TraceAssertion line={287} element="AssertEquals"><AssertEquals actual={Object.keys(afterCut).filter(path => !path.includes("/replacement/")).map(path => afterCut[path])} expected={Object.keys(beforeCut).filter(path => !path.includes("/replacement/")).map(path => beforeCut[path])} /></Fixture.TraceAssertion>
+<AssertEquals actual={Object.keys(afterCut).filter(path => !path.includes("/replacement/")).map(path => afterCut[path])} expected={Object.keys(beforeCut).filter(path => !path.includes("/replacement/")).map(path => beforeCut[path])} msg="XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0287:AssertEquals" />
 </If>
-
-</Fixture.CaptureCase>

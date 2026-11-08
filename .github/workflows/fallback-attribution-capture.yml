@@ -1,7 +1,7 @@
 name: One fallback attribution capture
 on:
   push:
-    branches: [codex/fallback-host-plugin-35749f4]
+    branches: [codex/fallback-static-label-35749f4]
 permissions:
   contents: read
 jobs:
@@ -11,10 +11,10 @@ jobs:
     steps:
       - name: Retain initial envelope before checkout or runtime setup
         run: |
-          mkdir -p "$RUNNER_TEMP/fallback-host-attribution/evidence"
-          printf '{"schema":"fallback-initial.v1","consumerExecutions":0,"status":"before-checkout-and-setup","envelope":"%s","run":"%s","attempt":"%s","image":"%s","runner":"%s"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$ImageVersion" "$RUNNER_NAME" > "$RUNNER_TEMP/fallback-host-attribution/evidence/initial-manifest.json"
-          uname -a > "$RUNNER_TEMP/fallback-host-attribution/evidence/initial-uname.txt"
-          cat /etc/os-release > "$RUNNER_TEMP/fallback-host-attribution/evidence/initial-os-release.txt"
+          mkdir -p "$RUNNER_TEMP/fallback-static-label/evidence"
+          printf '{"schema":"fallback-initial.v1","consumerExecutions":0,"status":"before-checkout-and-setup","envelope":"%s","run":"%s","attempt":"%s","image":"%s","runner":"%s"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$ImageVersion" "$RUNNER_NAME" > "$RUNNER_TEMP/fallback-static-label/evidence/initial-manifest.json"
+          uname -a > "$RUNNER_TEMP/fallback-static-label/evidence/initial-uname.txt"
+          cat /etc/os-release > "$RUNNER_TEMP/fallback-static-label/evidence/initial-os-release.txt"
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           fetch-depth: 0
@@ -32,41 +32,41 @@ jobs:
       - name: Admit runner and complete outer diagnostic preflights
         run: |
           runner_binary="$(readlink -f "/proc/$PPID/exe")"
-          printf '%s\n' "$runner_binary" > "$RUNNER_TEMP/fallback-host-attribution/evidence/runner-worker-path.txt"
+          printf '%s\n' "$runner_binary" > "$RUNNER_TEMP/fallback-static-label/evidence/runner-worker-path.txt"
           export CAPTURE_RUNNER_VERSION="$("$(dirname "$runner_binary")/Runner.Listener" --version)"
           deno run --allow-all --node-modules-dir=none --frozen scripts/fallback-capture-deno.ts preflight
-          cp "$RUNNER_TEMP/fallback-host-attribution/evidence/manifest.json" "$RUNNER_TEMP/fallback-host-attribution/evidence/preflight-manifest.json"
+          cp "$RUNNER_TEMP/fallback-static-label/evidence/manifest.json" "$RUNNER_TEMP/fallback-static-label/evidence/preflight-manifest.json"
       - name: Prepare exact product after successful outer preflight
         run: |
           runner_binary="$(readlink -f "/proc/$PPID/exe")"
-          printf '%s\n' "$runner_binary" > "$RUNNER_TEMP/fallback-host-attribution/evidence/runner-worker-prepare-path.txt"
+          printf '%s\n' "$runner_binary" > "$RUNNER_TEMP/fallback-static-label/evidence/runner-worker-prepare-path.txt"
           export CAPTURE_RUNNER_VERSION="$("$(dirname "$runner_binary")/Runner.Listener" --version)"
           deno run --allow-all --node-modules-dir=none --frozen scripts/fallback-capture-deno.ts prepare
-          cp "$RUNNER_TEMP/fallback-host-attribution/evidence/manifest.json" "$RUNNER_TEMP/fallback-host-attribution/evidence/prepare-manifest.json"
-      - name: Replay fixed original prefix before either overlay
+          cp "$RUNNER_TEMP/fallback-static-label/evidence/manifest.json" "$RUNNER_TEMP/fallback-static-label/evidence/prepare-manifest.json"
+      - name: Replay fixed original prefix before label overlay
         timeout-minutes: 9
         run: |
           runner_binary="$(readlink -f "/proc/$PPID/exe")"
           export CAPTURE_RUNNER_VERSION="$("$(dirname "$runner_binary")/Runner.Listener" --version)"
           deno run --allow-all --node-modules-dir=none --frozen scripts/fallback-capture-deno.ts prefix
-          cp "$RUNNER_TEMP/fallback-host-attribution/evidence/manifest.json" "$RUNNER_TEMP/fallback-host-attribution/evidence/prefix-manifest.json"
-      - name: Apply two overlays after prefix and baseline proof
+          cp "$RUNNER_TEMP/fallback-static-label/evidence/manifest.json" "$RUNNER_TEMP/fallback-static-label/evidence/prefix-manifest.json"
+      - name: Apply one label overlay after prefix and baseline proof
         run: |
           runner_binary="$(readlink -f "/proc/$PPID/exe")"
           export CAPTURE_RUNNER_VERSION="$("$(dirname "$runner_binary")/Runner.Listener" --version)"
           deno run --allow-all --node-modules-dir=none --frozen scripts/fallback-capture-deno.ts overlay
-          cp "$RUNNER_TEMP/fallback-host-attribution/evidence/manifest.json" "$RUNNER_TEMP/fallback-host-attribution/evidence/overlay-manifest.json"
+          cp "$RUNNER_TEMP/fallback-static-label/evidence/manifest.json" "$RUNNER_TEMP/fallback-static-label/evidence/overlay-manifest.json"
       - name: Capture complete original consumer once after successful preparation
         timeout-minutes: 6
         run: |
           runner_binary="$(readlink -f "/proc/$PPID/exe")"
           export CAPTURE_RUNNER_VERSION="$("$(dirname "$runner_binary")/Runner.Listener" --version)"
-          deno run --allow-all --node-modules-dir=none --frozen scripts/fallback-capture-deno.ts consume
+          env -u XMD_TEST_ARTIFACTS deno run --allow-all --node-modules-dir=none --frozen scripts/fallback-capture-deno.ts consume
       - name: Retain partial evidence after every terminal outcome
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: fallback-host-attribution-35749f4-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/fallback-host-attribution/evidence
+          name: fallback-static-label-35749f4-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fallback-static-label/evidence
           include-hidden-files: true
           if-no-files-found: error

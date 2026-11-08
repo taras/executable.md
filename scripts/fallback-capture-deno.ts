@@ -10,10 +10,7 @@ import { join } from "node:path";
 
 const product = "35749f4267d42449f26b6a18c4911a0ab7222923";
 const fixture = "examples/adversarial-implementation/tests/components/Fixture/Fallback.md";
-const allowed = [
-  "packages/cli/tests/fixtures/failure-attribution-plugin.mjs",
-  "examples/adversarial-implementation/tests/components/Fixture/Entry.md",
-];
+const allowed = [fixture];
 const command = [
   "timeout",
   "--signal=TERM",
@@ -60,6 +57,63 @@ function validJson(bytes: Uint8Array): boolean {
   }
 }
 
+function verifyLabelOverlay(original: Uint8Array, labelled: Uint8Array, value: unknown): void {
+  const coverage = z
+    .object({
+      product: z.literal(product),
+      path: z.literal(fixture),
+      sourceSha256: z.literal("79f4093788f45f0c4fb9ddc3023d17966ae0c662007ab240507bc812d6bf7c0f"),
+      predictedOverlaySha256: z.literal(
+        "3b3b90325f38f01b6612bb97d0200997376cd2b1dc0251d7673034a2c770855e",
+      ),
+      entries: z
+        .array(
+          z.object({
+            originalStartUtf8Byte: z.number().int().nonnegative(),
+            originalElementUtf8Bytes: z.number().int().positive(),
+            originalElementSha256: z.string(),
+            proposedInsertion: z.object({
+              attributeText: z.string(),
+              prospectiveAttributeUtf8ByteOffset: z.number().int().nonnegative(),
+            }),
+          }),
+        )
+        .length(65),
+    })
+    .parse(value);
+  if (
+    hash(original) !== coverage.sourceSha256 ||
+    hash(labelled) !== coverage.predictedOverlaySha256
+  ) {
+    throw new Error("Pinned original/labelled Fallback hash mismatch");
+  }
+  let restored = labelled;
+  for (const entry of [...coverage.entries].reverse()) {
+    const start = entry.originalStartUtf8Byte;
+    if (
+      hash(original.slice(start, start + entry.originalElementUtf8Bytes)) !==
+      entry.originalElementSha256
+    ) {
+      throw new Error("Original assertion element mismatch");
+    }
+    const { attributeText, prospectiveAttributeUtf8ByteOffset: at } = entry.proposedInsertion;
+    const attribute = new TextEncoder().encode(attributeText);
+    if (!attribute.every((byte, index) => restored[at + index] === byte)) {
+      throw new Error("Exact admitted label span missing");
+    }
+    const without = new Uint8Array(restored.length - attribute.length);
+    without.set(restored.subarray(0, at));
+    without.set(restored.subarray(at + attribute.length), at);
+    restored = without;
+  }
+  if (
+    restored.length !== original.length ||
+    !restored.every((byte, index) => original[index] === byte)
+  ) {
+    throw new Error("Deleting admitted spans does not recover original Git bytes");
+  }
+}
+
 export function* captureProgram(mode: string, childArgv = command): Operation<number> {
   let selected = 0;
   let reason = "success";
@@ -68,7 +122,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
   yield* scoped(function* () {
     const root = join(
       Deno.env.get("RUNNER_TEMP") ?? "/missing-runner-temp",
-      "fallback-host-attribution",
+      "fallback-static-label",
     );
     const evidence = join(root, "evidence");
     const channels = join(evidence, "channels");
@@ -84,7 +138,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       consumerExecutions: 0,
       started: new Date().toISOString(),
       qualification:
-        "The fixed recorded programs/order are replayed before overlays; machine/cache/timing equality is not promised. Observations are not proof of terminal attribution or historical cause.",
+        "The fixed recorded programs/order are replayed before overlays; machine/cache/timing equality is not promised. Labels identify future authored sites, not scenarios, invocations, historical identity or cause.",
       channels: "absent",
       journals: [],
       snapshots: "not produced",
@@ -174,6 +228,14 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       const original = z
         .record(z.string(), z.string())
         .parse(JSON.parse(yield* readTextFile(join(evidence, "original-hashes.json"))));
+      const modes = z
+        .record(z.string(), z.number())
+        .parse(JSON.parse(yield* readTextFile(join(evidence, "original-modes.json"))));
+      for (const [path, expected] of Object.entries(modes)) {
+        if (((yield* lstat(join(checkout, path))).mode & 0o777) !== expected) {
+          throw new Error("Product mode changed: " + path);
+        }
+      }
       const overlays = overlaid
         ? z
             .record(z.string(), z.string())
@@ -208,6 +270,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
             product,
             overlaid,
             sourceFiles: Object.keys(original).length,
+            modeFiles: Object.keys(modes).length,
             overlays,
             dependencies,
             status: changed,
@@ -293,6 +356,14 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         throw new Error("Admission refused: " + refusals.join(", "));
       }
       if (mode === "consume") {
+        const artifactAbsent = Deno.env.get("XMD_TEST_ARTIFACTS") === undefined;
+        manifest.targetArtifactEnvironment = {
+          absent: artifactAbsent,
+          checkedAt: new Date().toISOString(),
+        };
+        if (!artifactAbsent) {
+          throw new Error("Target requires absent XMD_TEST_ARTIFACTS before reservation");
+        }
         yield* verifyProduct(true);
         if (manifest.phase !== "prelaunch" || manifest.consumerExecutions !== 0) {
           throw new Error("Missing admitted prelaunch or execution already reserved; no retry");
@@ -311,7 +382,6 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
           "consumer",
           {
             TMPDIR: join(root, "tmp"),
-            XMD_TEST_ARTIFACTS: capture,
           },
         );
         manifest.consumer = consumer;
@@ -368,12 +438,35 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       }
       if (mode === "overlay") {
         if (manifest.phase !== "prefix-passed-unmodified" || manifest.prefixExecutions !== 1) {
-          throw new Error("Successful unmodified prefix required before either overlay");
+          throw new Error("Successful unmodified prefix required before label overlay");
         }
         yield* verifyProduct(false);
         const original = z
           .record(z.string(), z.string())
           .parse(JSON.parse(yield* readTextFile(join(evidence, "original-hashes.json"))));
+        const coverageText = yield* readTextFile(
+          join(envelope, "scripts/fallback-static-label-coverage.json"),
+        );
+        const originalFallback = yield* until(readFile(join(checkout, fixture)));
+        const labelledFallback = yield* until(readFile(join(envelope, fixture)));
+        verifyLabelOverlay(originalFallback, labelledFallback, JSON.parse(coverageText));
+        yield* writeTextFile(join(evidence, "label-coverage.json"), coverageText);
+        yield* writeTextFile(
+          join(evidence, "label-overlay-proof.json"),
+          JSON.stringify(
+            {
+              product,
+              path: fixture,
+              originalSha256: hash(originalFallback),
+              labelledSha256: hash(labelledFallback),
+              admittedSpans: 65,
+              exactWholeBlobInverse: true,
+              coverageSha256: hash(new TextEncoder().encode(coverageText)),
+            },
+            null,
+            2,
+          ),
+        );
         const patch = yield* output(["git", "diff", product, "HEAD", "--", ...allowed], envelope);
         yield* writeTextFile(join(evidence, "instrumentation.patch"), patch + "\n");
         const instrumented: Record<string, string> = {};
@@ -405,7 +498,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
         manifest.launch = {
           argv: command,
           cwd: checkout,
-          env: { TMPDIR: join(root, "tmp"), XMD_TEST_ARTIFACTS: capture },
+          env: { TMPDIR: join(root, "tmp") },
           deadlineSeconds: 300,
           terminationJoinSeconds: 20,
           wrapperMs: 300000,
@@ -445,7 +538,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
               "deno",
               "task",
               "test",
-              "scripts/tests/failure-attribution-plugin.test.ts",
+              "scripts/tests/fallback-static-label.test.ts",
             ],
           ],
           [
@@ -458,7 +551,7 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
               "bun",
               "test",
               "--timeout=90000",
-              "scripts/tests/failure-attribution-plugin.test.ts",
+              "scripts/tests/fallback-static-label.test.ts",
             ],
           ],
         ] satisfies [string, string[]][]) {
@@ -494,14 +587,20 @@ export function* captureProgram(mode: string, childArgv = command): Operation<nu
       }
       yield* writeTextFile(join(evidence, "product.json"), JSON.stringify(source, null, 2));
       const tracked = (yield* output(["git", "ls-files"], checkout)).split("\n");
+      if (tracked.length !== 2298) {
+        throw new Error("Original tracked file count mismatch: " + tracked.length);
+      }
       const original: Record<string, string> = {};
+      const modes: Record<string, number> = {};
       for (const path of tracked) {
         original[path] = hash(yield* until(readFile(join(checkout, path))));
+        modes[path] = (yield* lstat(join(checkout, path))).mode & 0o777;
       }
       yield* writeTextFile(
         join(evidence, "original-hashes.json"),
         JSON.stringify(original, null, 2),
       );
+      yield* writeTextFile(join(evidence, "original-modes.json"), JSON.stringify(modes, null, 2));
       const exampleFiles = tracked.filter((path) =>
         path.startsWith("examples/adversarial-implementation/"),
       );

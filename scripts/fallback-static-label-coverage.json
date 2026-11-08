@@ -1,0 +1,1236 @@
+{
+  "schema": "static-assertion-label-coverage-proposal.v1",
+  "status": "proposal-only; static inventory and in-memory insertion/restoration arithmetic, no overlay file created or runtime executed",
+  "product": "35749f4267d42449f26b6a18c4911a0ab7222923",
+  "path": "examples/adversarial-implementation/tests/components/Fixture/Fallback.md",
+  "sourceSha256": "79f4093788f45f0c4fb9ddc3023d17966ae0c662007ab240507bc812d6bf7c0f",
+  "sourceBytes": 22706,
+  "assertionCount": 65,
+  "kinds": {
+    "AssertEquals": 52,
+    "AssertStringIncludes": 13
+  },
+  "authoredMsgCount": 0,
+  "uniqueLabels": 65,
+  "oneAssertionPerAuthoredLine": true,
+  "unmatchedAssertionOpenings": 0,
+  "newlinesAdded": 0,
+  "staticInMemorySpanRoundTrip": true,
+  "predictedOverlaySha256": "3b3b90325f38f01b6612bb97d0200997376cd2b1dc0251d7673034a2c770855e",
+  "predictedOverlayBytes": 33275,
+  "predictedHashIsNotAnImplementedCandidateOrRuntimeWitness": true,
+  "labelSemantics": "authored source site only; no scenario/invocation/actual/expected/historical-failure identity",
+  "entries": [
+    {
+      "ordinal": 1,
+      "element": "AssertEquals",
+      "originalLine": 44,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 4581,
+      "originalElementUtf8Bytes": 98,
+      "originalElementSha256": "9c75221e57fc668bfa9caec65e52846f4f55cb7a3e185d4084d80be4d06cb369",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0044:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 4676,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0044:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 4676
+      }
+    },
+    {
+      "ordinal": 2,
+      "element": "AssertEquals",
+      "originalLine": 51,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 5382,
+      "originalElementUtf8Bytes": 147,
+      "originalElementSha256": "5117e703f988251d386479c7dc681cc7a127f21f99dc8d945ec80f7725ff1bc2",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0051:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 5526,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0051:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 5687
+      }
+    },
+    {
+      "ordinal": 3,
+      "element": "AssertEquals",
+      "originalLine": 55,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 5611,
+      "originalElementUtf8Bytes": 71,
+      "originalElementSha256": "2aaf04c9350fc1d553637dac54b151e321769e591cab9688ec979b13c37e706d",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0055:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 5679,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0055:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 6001
+      }
+    },
+    {
+      "ordinal": 4,
+      "element": "AssertStringIncludes",
+      "originalLine": 56,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 5683,
+      "originalElementUtf8Bytes": 93,
+      "originalElementSha256": "42148566a65f1068d16b5c1475433e30ab91f39108c3486703bf504de120964b",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0056:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 5773,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0056:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 6256
+      }
+    },
+    {
+      "ordinal": 5,
+      "element": "AssertEquals",
+      "originalLine": 76,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 6735,
+      "originalElementUtf8Bytes": 57,
+      "originalElementSha256": "77ea3f2d1aa5f83c64fe8578ed2a25a85da825c6f09842b5ff7a4c40e8aafe0c",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0076:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 6789,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0076:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 7441
+      }
+    },
+    {
+      "ordinal": 6,
+      "element": "AssertEquals",
+      "originalLine": 89,
+      "originalColumn": 45,
+      "originalStartUtf8Byte": 7854,
+      "originalElementUtf8Bytes": 67,
+      "originalElementSha256": "282d5312aee5edfc12e3df987cef650aa36586f9688c2bf7f82e729ebf90dde7",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0089:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 7918,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0089:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 8731
+      }
+    },
+    {
+      "ordinal": 7,
+      "element": "AssertEquals",
+      "originalLine": 91,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 8012,
+      "originalElementUtf8Bytes": 73,
+      "originalElementSha256": "c7937f9bd8b79a46bb137d69c74b74cdf6971b67e3bcec6abcbc27e3672de134",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0091:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 8082,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0091:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 9056
+      }
+    },
+    {
+      "ordinal": 8,
+      "element": "AssertEquals",
+      "originalLine": 92,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 8086,
+      "originalElementUtf8Bytes": 82,
+      "originalElementSha256": "01a016c1857e88765b1d431b31955abf083d2b107495384c80740e41a95458b6",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0092:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 8165,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0092:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 9300
+      }
+    },
+    {
+      "ordinal": 9,
+      "element": "AssertEquals",
+      "originalLine": 93,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 8169,
+      "originalElementUtf8Bytes": 113,
+      "originalElementSha256": "dec21d83732b8e28c016dd3ebf90946b3e9060f7c0e10ee019a093909c9eb021",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0093:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 8279,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0093:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 9575
+      }
+    },
+    {
+      "ordinal": 10,
+      "element": "AssertEquals",
+      "originalLine": 94,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 8283,
+      "originalElementUtf8Bytes": 119,
+      "originalElementSha256": "07e9607257816d98c2f02b92de7b0bdb93c8c42ea87d4dadd00a48a30ff935de",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0094:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 8399,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0094:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 9856
+      }
+    },
+    {
+      "ordinal": 11,
+      "element": "AssertEquals",
+      "originalLine": 95,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 8403,
+      "originalElementUtf8Bytes": 108,
+      "originalElementSha256": "a3aa27a359bd320acd40ae8356e81dcbaac1b12af5ac01c395d17697fc334880",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0095:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 8508,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0095:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 10126
+      }
+    },
+    {
+      "ordinal": 12,
+      "element": "AssertEquals",
+      "originalLine": 96,
+      "originalColumn": 49,
+      "originalStartUtf8Byte": 8560,
+      "originalElementUtf8Bytes": 96,
+      "originalElementSha256": "11cc2b1fa48fc826b47d0522c51451eeb4d7d8838f120d2fbe99d685ec8cd2dc",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0096:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 8653,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0096:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 10432
+      }
+    },
+    {
+      "ordinal": 13,
+      "element": "AssertEquals",
+      "originalLine": 98,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 8750,
+      "originalElementUtf8Bytes": 73,
+      "originalElementSha256": "cea95f92abca511351b3383bb341ec9767e6dd452f46f02e93b8af463b35277c",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0098:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 8820,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0098:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 10760
+      }
+    },
+    {
+      "ordinal": 14,
+      "element": "AssertEquals",
+      "originalLine": 100,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 8888,
+      "originalElementUtf8Bytes": 79,
+      "originalElementSha256": "88e9637a5a36c5f8eda5f669b12bc60b0169b9322d6cf897e5e64fca84e23e71",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0100:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 8964,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0100:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 11065
+      }
+    },
+    {
+      "ordinal": 15,
+      "element": "AssertEquals",
+      "originalLine": 105,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 9156,
+      "originalElementUtf8Bytes": 232,
+      "originalElementSha256": "b2a73a371f88092d9f9e1a5d2824e9ffb7d14c17310ccd316f1fc00f008f7916",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0105:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 9385,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0105:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 11647
+      }
+    },
+    {
+      "ordinal": 16,
+      "element": "AssertEquals",
+      "originalLine": 108,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 9535,
+      "originalElementUtf8Bytes": 170,
+      "originalElementSha256": "d7a770d70c41bd8b4698c876328c4cbfd4aa6ada97b79b524e0b4801bc4e7ed1",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0108:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 9702,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0108:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 12125
+      }
+    },
+    {
+      "ordinal": 17,
+      "element": "AssertEquals",
+      "originalLine": 112,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 9914,
+      "originalElementUtf8Bytes": 96,
+      "originalElementSha256": "717682376c8302b625bfea604de5748dec798e6ffe3249d955d83d3ef7200e05",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0112:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 10007,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0112:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 12591
+      }
+    },
+    {
+      "ordinal": 18,
+      "element": "AssertEquals",
+      "originalLine": 115,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 10168,
+      "originalElementUtf8Bytes": 140,
+      "originalElementSha256": "12b146840cdbc1e870b2e9e432a4ea05988f4dbf5193390bd69a0d8be53cc083",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0115:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 10305,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0115:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 13050
+      }
+    },
+    {
+      "ordinal": 19,
+      "element": "AssertEquals",
+      "originalLine": 116,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 10309,
+      "originalElementUtf8Bytes": 177,
+      "originalElementSha256": "00a6328fc8640713055f2b5bbf5bf57f08b59347d9d6217c1c70e81385491f5b",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0116:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 10483,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0116:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 13389
+      }
+    },
+    {
+      "ordinal": 20,
+      "element": "AssertEquals",
+      "originalLine": 121,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 10550,
+      "originalElementUtf8Bytes": 127,
+      "originalElementSha256": "82a45a1d75394ab3551864e6f55f7a771d90d913841667972c9ac6f80738a527",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0121:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 10674,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0121:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 13741
+      }
+    },
+    {
+      "ordinal": 21,
+      "element": "AssertEquals",
+      "originalLine": 124,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 10824,
+      "originalElementUtf8Bytes": 199,
+      "originalElementSha256": "43dd4fecf6998f37813cb681c2cad48dd12249b08420e2020a51979c9971c78e",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0124:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 11020,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0124:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 14248
+      }
+    },
+    {
+      "ordinal": 22,
+      "element": "AssertEquals",
+      "originalLine": 127,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 11145,
+      "originalElementUtf8Bytes": 68,
+      "originalElementSha256": "d63e483690f4742df79cf7451c19d22090bb1e1bdfc9819c2cb40a657f5b0596",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0127:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 11210,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0127:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 14599
+      }
+    },
+    {
+      "ordinal": 23,
+      "element": "AssertStringIncludes",
+      "originalLine": 129,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 11285,
+      "originalElementUtf8Bytes": 323,
+      "originalElementSha256": "f44aebe66e04beaea0f5eac48542bbf1e389786f9c2782c224d4cc74026a1f77",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0129:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 11605,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0129:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 15155
+      }
+    },
+    {
+      "ordinal": 24,
+      "element": "AssertStringIncludes",
+      "originalLine": 131,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 11663,
+      "originalElementUtf8Bytes": 203,
+      "originalElementSha256": "da22b67629e6200a9158f07244d8b001f910c4eb30e0272bcc5fbdafe9f44b8c",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0131:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 11863,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0131:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 15582
+      }
+    },
+    {
+      "ordinal": 25,
+      "element": "AssertStringIncludes",
+      "originalLine": 132,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 11867,
+      "originalElementUtf8Bytes": 79,
+      "originalElementSha256": "a8b16ab1b95e0ef306dc86c40aea7c9029148b9fabc37fb1f407de8f1eab93b4",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0132:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 11943,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0132:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 15831
+      }
+    },
+    {
+      "ordinal": 26,
+      "element": "AssertEquals",
+      "originalLine": 135,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 12009,
+      "originalElementUtf8Bytes": 52,
+      "originalElementSha256": "d28f222b6d3b0f52fcd2e82e04c56f4a673c2b0dfa7d6c67fd0763d1dd6c57cd",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0135:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 12058,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0135:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 16115
+      }
+    },
+    {
+      "ordinal": 27,
+      "element": "AssertEquals",
+      "originalLine": 141,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 12235,
+      "originalElementUtf8Bytes": 169,
+      "originalElementSha256": "49e53f2dcc2e0b1134b080132c43949fe08a2ef4078b2df1bca39c9df916b4e3",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0141:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 12401,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0141:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 16619
+      }
+    },
+    {
+      "ordinal": 28,
+      "element": "AssertStringIncludes",
+      "originalLine": 142,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 12405,
+      "originalElementUtf8Bytes": 151,
+      "originalElementSha256": "5e8c919c8e9eff2b11cd9755d8c7ee44f3c63c80de04d46de15de5e07322a29c",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0142:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 12553,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0142:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 16932
+      }
+    },
+    {
+      "ordinal": 29,
+      "element": "AssertEquals",
+      "originalLine": 144,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 12612,
+      "originalElementUtf8Bytes": 55,
+      "originalElementSha256": "3003f46ebc2be2bb9fb8fb29ce030d5fffcdd03fb2f7752cb6707146613f20a7",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0144:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 12664,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0144:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 17212
+      }
+    },
+    {
+      "ordinal": 30,
+      "element": "AssertEquals",
+      "originalLine": 145,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 12668,
+      "originalElementUtf8Bytes": 323,
+      "originalElementSha256": "e25b92db48acbe258c60eb4d03df5cd0017f6a297bed2c010abce209694734d3",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0145:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 12988,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0145:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 17697
+      }
+    },
+    {
+      "ordinal": 31,
+      "element": "AssertStringIncludes",
+      "originalLine": 146,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 12992,
+      "originalElementUtf8Bytes": 70,
+      "originalElementSha256": "7f3ce318a93cfa77f274da12bf6de30c7bb624899c580bcb0943292e7559ded9",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0146:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 13059,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0146:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 17929
+      }
+    },
+    {
+      "ordinal": 32,
+      "element": "AssertStringIncludes",
+      "originalLine": 148,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 13100,
+      "originalElementUtf8Bytes": 199,
+      "originalElementSha256": "1fc69ac95e70c8a66e26032233302ba27391ba67df4fdc64d40b0e8a23c9e9c3",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0148:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 13296,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0148:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 18335
+      }
+    },
+    {
+      "ordinal": 33,
+      "element": "AssertEquals",
+      "originalLine": 151,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 13430,
+      "originalElementUtf8Bytes": 128,
+      "originalElementSha256": "693403b24b5ccdc9e2dc7c99549e0e567127eb6355cb235e5d13c4c33ec3a908",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0151:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 13555,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0151:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 18763
+      }
+    },
+    {
+      "ordinal": 34,
+      "element": "AssertStringIncludes",
+      "originalLine": 171,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 14249,
+      "originalElementUtf8Bytes": 126,
+      "originalElementSha256": "a9c5fae289b3440b12217371dd7ba794d648890f4055094b59fb95b60ff49196",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0171:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 14372,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0171:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 19741
+      }
+    },
+    {
+      "ordinal": 35,
+      "element": "AssertStringIncludes",
+      "originalLine": 172,
+      "originalColumn": 56,
+      "originalStartUtf8Byte": 14431,
+      "originalElementUtf8Bytes": 131,
+      "originalElementSha256": "635494766e8acfc35a10b2a4c1c35ebb654842f18cba25682ef057c84f11e3f6",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0172:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 14559,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0172:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 20097
+      }
+    },
+    {
+      "ordinal": 36,
+      "element": "AssertEquals",
+      "originalLine": 174,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 14653,
+      "originalElementUtf8Bytes": 123,
+      "originalElementSha256": "322c916ac9cb7e9c0cc4a3c2b53cfc81bf8ee7df2bca77981578c9c08f0b1cf2",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0174:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 14773,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0174:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 20480
+      }
+    },
+    {
+      "ordinal": 37,
+      "element": "AssertEquals",
+      "originalLine": 176,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 14834,
+      "originalElementUtf8Bytes": 51,
+      "originalElementSha256": "2a92cc3e6d405f18bfa9d60a793b6f926e7b3b8d3d3dafa1241f4c73ab4bd8a9",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0176:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 14882,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0176:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 20750
+      }
+    },
+    {
+      "ordinal": 38,
+      "element": "AssertEquals",
+      "originalLine": 181,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 15020,
+      "originalElementUtf8Bytes": 133,
+      "originalElementSha256": "8b22ed04297a3e7e9590fcf1d4b247b71e46764732d08d4d814fc70a30ff43f6",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0181:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 15150,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0181:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 21179
+      }
+    },
+    {
+      "ordinal": 39,
+      "element": "AssertStringIncludes",
+      "originalLine": 182,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 15154,
+      "originalElementUtf8Bytes": 93,
+      "originalElementSha256": "e403657bbe62f95bea501e7f9da5dcfec2e5fb8388eb719e670689e820ed6d84",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0182:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 15244,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0182:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 21434
+      }
+    },
+    {
+      "ordinal": 40,
+      "element": "AssertEquals",
+      "originalLine": 189,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 15773,
+      "originalElementUtf8Bytes": 63,
+      "originalElementSha256": "ee4b4f607a9edb5fb83eefa7f42c0715e13e820876d55fab1b5e69d527a9dafc",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0189:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 15833,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0189:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 22192
+      }
+    },
+    {
+      "ordinal": 41,
+      "element": "AssertEquals",
+      "originalLine": 191,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 15879,
+      "originalElementUtf8Bytes": 56,
+      "originalElementSha256": "fc0461f712d416fd6f24149cbb39a40c1d39ba35062889ceb19d13809cbec20c",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0191:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 15932,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0191:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 22452
+      }
+    },
+    {
+      "ordinal": 42,
+      "element": "AssertStringIncludes",
+      "originalLine": 192,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 15936,
+      "originalElementUtf8Bytes": 95,
+      "originalElementSha256": "5f88560a96664399189b1dad9d1aac54de1c4b994bda6c7ae1906c8f7992a293",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0192:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 16028,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0192:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 22709
+      }
+    },
+    {
+      "ordinal": 43,
+      "element": "AssertEquals",
+      "originalLine": 193,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 16032,
+      "originalElementUtf8Bytes": 70,
+      "originalElementSha256": "99736d733eeedd6df426cd86135c0171b8f13e6d0db40392a070a049823e9d16",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0193:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 16099,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0193:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 22949
+      }
+    },
+    {
+      "ordinal": 44,
+      "element": "AssertEquals",
+      "originalLine": 196,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 16211,
+      "originalElementUtf8Bytes": 70,
+      "originalElementSha256": "3577575e10c1a9daf4cb8f421fb4974a4f9d5e8c88610228c506df2b4d595fa9",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0196:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 16278,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0196:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 23289
+      }
+    },
+    {
+      "ordinal": 45,
+      "element": "AssertEquals",
+      "originalLine": 197,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 16282,
+      "originalElementUtf8Bytes": 108,
+      "originalElementSha256": "aba1523663946d75576744ce41bff361139c157eee9804f8f0da5a0c1655c6cb",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0197:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 16387,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0197:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 23559
+      }
+    },
+    {
+      "ordinal": 46,
+      "element": "AssertEquals",
+      "originalLine": 200,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 16540,
+      "originalElementUtf8Bytes": 76,
+      "originalElementSha256": "2fa733538ba1373cb483cfc21a28c86ab7f95ef7f4b5a1506d56cf3b230aba1b",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0200:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 16613,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0200:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 23946
+      }
+    },
+    {
+      "ordinal": 47,
+      "element": "AssertEquals",
+      "originalLine": 202,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 16682,
+      "originalElementUtf8Bytes": 111,
+      "originalElementSha256": "1a5a538d9a566c5990c048388a429887b5743e850c2c8a5e95f1dd2ad575f722",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0202:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 16790,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0202:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 24284
+      }
+    },
+    {
+      "ordinal": 48,
+      "element": "AssertEquals",
+      "originalLine": 206,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 16869,
+      "originalElementUtf8Bytes": 57,
+      "originalElementSha256": "eddb58e7138ae5f70dd0b69cb05e0413e95fcc6bd0e6953617ba56c536cb808d",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0206:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 16923,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0206:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 24578
+      }
+    },
+    {
+      "ordinal": 49,
+      "element": "AssertEquals",
+      "originalLine": 215,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 18062,
+      "originalElementUtf8Bytes": 97,
+      "originalElementSha256": "ee531d39bddd3333d6a113cc56492af285a116c0d9fd147250c9f2c9b439b360",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0215:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 18156,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0215:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 25972
+      }
+    },
+    {
+      "ordinal": 50,
+      "element": "AssertEquals",
+      "originalLine": 217,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 18309,
+      "originalElementUtf8Bytes": 65,
+      "originalElementSha256": "2be60e58024876da69acae41e140600c32005b138ea89ac0032e437d64e1d7ce",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0217:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 18371,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0217:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 26348
+      }
+    },
+    {
+      "ordinal": 51,
+      "element": "AssertStringIncludes",
+      "originalLine": 218,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 18375,
+      "originalElementUtf8Bytes": 115,
+      "originalElementSha256": "cc92ea2c9b06ebe1bfcdeb88764068d9348afc0a0d003d54ac1e413a0c2699e3",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0218:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 18487,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0218:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 26625
+      }
+    },
+    {
+      "ordinal": 52,
+      "element": "AssertEquals",
+      "originalLine": 226,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 18908,
+      "originalElementUtf8Bytes": 131,
+      "originalElementSha256": "bda3d34795b1eb7f90e8581c0d991da938f271e0a19b73553f5e066b7a33ff7c",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0226:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 19036,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0226:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 27343
+      }
+    },
+    {
+      "ordinal": 53,
+      "element": "AssertEquals",
+      "originalLine": 229,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 19186,
+      "originalElementUtf8Bytes": 68,
+      "originalElementSha256": "4d1d1272a5f8ba86dd4f5588424b69a83cf3bebafd78ba4c367ff2f7c62a0268",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0229:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 19251,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0229:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 27719
+      }
+    },
+    {
+      "ordinal": 54,
+      "element": "AssertEquals",
+      "originalLine": 237,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 19579,
+      "originalElementUtf8Bytes": 132,
+      "originalElementSha256": "9b2c41d5afd4506ae0a17d11cfd01b10d8b5af34e2c23107d26a418b671d297f",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0237:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 19708,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0237:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 28337
+      }
+    },
+    {
+      "ordinal": 55,
+      "element": "AssertEquals",
+      "originalLine": 243,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 19998,
+      "originalElementUtf8Bytes": 75,
+      "originalElementSha256": "71dfd095064d2dbc38dc7d972d79862813a81982e4d598c3a259697fa0626d21",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0243:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 20070,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0243:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 28860
+      }
+    },
+    {
+      "ordinal": 56,
+      "element": "AssertEquals",
+      "originalLine": 245,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 20165,
+      "originalElementUtf8Bytes": 66,
+      "originalElementSha256": "0ee67fc5d8233d61daa9ec23b19deefc28a4e618ad1a44d85639b93154780bd7",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0245:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 20228,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0245:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 29179
+      }
+    },
+    {
+      "ordinal": 57,
+      "element": "AssertEquals",
+      "originalLine": 252,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 20603,
+      "originalElementUtf8Bytes": 135,
+      "originalElementSha256": "1886a76fea41b66b6b5685738513bba68c341e875da6cfa3b9d1fa41d9583711",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0252:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 20735,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0252:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 29847
+      }
+    },
+    {
+      "ordinal": 58,
+      "element": "AssertEquals",
+      "originalLine": 254,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 20869,
+      "originalElementUtf8Bytes": 66,
+      "originalElementSha256": "e734a11496fefdc7f0c03fafaa097a698e6b15ce4c5404f62397b2160607dcfd",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0254:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 20932,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0254:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 30205
+      }
+    },
+    {
+      "ordinal": 59,
+      "element": "AssertStringIncludes",
+      "originalLine": 258,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 21013,
+      "originalElementUtf8Bytes": 89,
+      "originalElementSha256": "5c6fafb10eb3da36f69821a705b92554cccf01c978195b3f6cc880c9e8603580",
+      "originalAuthoredMsg": null,
+      "supportedKind": "string-includes",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0258:AssertStringIncludes",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 21099,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0258:AssertStringIncludes\"",
+        "attributeUtf8Bytes": 169,
+        "prospectiveAttributeUtf8ByteOffset": 30533
+      }
+    },
+    {
+      "ordinal": 60,
+      "element": "AssertEquals",
+      "originalLine": 260,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 21189,
+      "originalElementUtf8Bytes": 61,
+      "originalElementSha256": "0fcd65095e28a14988c51a009011733280c9dece4de28849b351b6c2bc3dddd2",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0260:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 21247,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0260:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 30850
+      }
+    },
+    {
+      "ordinal": 61,
+      "element": "AssertEquals",
+      "originalLine": 269,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 21598,
+      "originalElementUtf8Bytes": 104,
+      "originalElementSha256": "45e618037911606e3a37628a244075cd684a1d509893915e7fc2736727b714fc",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0269:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 21699,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0269:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 31463
+      }
+    },
+    {
+      "ordinal": 62,
+      "element": "AssertEquals",
+      "originalLine": 281,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 21996,
+      "originalElementUtf8Bytes": 100,
+      "originalElementSha256": "36a0330a9942bf5b4c859127ca3303a2998f2c6eaac99ff660881d91582a5db8",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0281:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 22093,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0281:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 32018
+      }
+    },
+    {
+      "ordinal": 63,
+      "element": "AssertEquals",
+      "originalLine": 283,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 22186,
+      "originalElementUtf8Bytes": 90,
+      "originalElementSha256": "aaa8d1aad63591190bc02b66ca920dc91538bd39374f931f10051ca8e698c0e4",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0283:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 22273,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0283:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 32359
+      }
+    },
+    {
+      "ordinal": 64,
+      "element": "AssertEquals",
+      "originalLine": 285,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 22341,
+      "originalElementUtf8Bytes": 67,
+      "originalElementSha256": "05a39eb03e74377f941b3c723ede2abf6c38dd94e7b64d977282524110e3366a",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0285:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 22405,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0285:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 32652
+      }
+    },
+    {
+      "ordinal": 65,
+      "element": "AssertEquals",
+      "originalLine": 287,
+      "originalColumn": 1,
+      "originalStartUtf8Byte": 22465,
+      "originalElementUtf8Bytes": 234,
+      "originalElementSha256": "f75cf2fd43737593b64b8ecfb0e5caa0a5c1734fdeff6740fc206ccb2f029511",
+      "originalAuthoredMsg": null,
+      "supportedKind": "binary-eq",
+      "label": "XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0287:AssertEquals",
+      "proposedInsertion": {
+        "originalUtf8ByteOffset": 22696,
+        "attributeText": " msg=\"XMD-FALLBACK-LABEL:v1:35749f4267d42449f26b6a18c4911a0ab7222923:examples/adversarial-implementation/tests/components/Fixture/Fallback.md:L0287:AssertEquals\"",
+        "attributeUtf8Bytes": 161,
+        "prospectiveAttributeUtf8ByteOffset": 33104
+      }
+    }
+  ],
+  "proofRequirements": [
+    "Exact pinned source hash before transformation.",
+    "Insert only each recorded ASCII attributeText before original space-slash-close bytes at its recorded original byte offset, in descending offset order.",
+    "Validate original and labelled assertion syntax/props with normal component compiler in future focused gates, not a generic regex alone.",
+    "Delete only the65 exact admitted attribute spans at recorded prospective offsets in descending order; require recovered bytes/hash exactly equal original Git blob. Reject duplicate/unknown/interpolated/replaced labels or any extra byte/mode/path change.",
+    "Require all original assertion starts remain on original lines/columns; absolute offsets after earlier insertions change and must not be confused with original offsets.",
+    "Any source revision/message/kind/count collision/change requires hold and explicit plan refresh, not guessed replacement."
+  ],
+  "unchangedSupportingSourceSha256": {
+    "examples/adversarial-implementation/tests/FallbackCase.md": "b9d200c19af3ffd90fd0410b0a9b978533059c246f00f4059199c5fed3328135",
+    "examples/adversarial-implementation/tests/Delivery.test.md": "ae6426ac728e3bacf785a8578a225212f3dae2019c5eb3db27ce5355882cc729",
+    "examples/adversarial-implementation/tests/components/Fixture/Entry.md": "7d1e17d92be85ee61d561621270fbec2efa34d9d7874bd8a3bbc1e9e08544ac2",
+    "packages/cli/tests/adversarial-delivery.test.ts": "8dda4084f2ce77149c563ccb70168469f0a7fa47b4da64413e098d3d713c4e8a",
+    "packages/cli/tests/support/adversarial-journey.ts": "9388fc79f6ecf20aaf95508ecf1b635e16948b6d970319f8bed4418da8f83303"
+  },
+  "originalCaseOrder": [
+    "fable-pass",
+    "unavailable",
+    "configuration",
+    "turn-failed",
+    "exhausted",
+    "exhausted-reconcile",
+    "exhausted-failure",
+    "interrupted",
+    "partial",
+    "unjoined-primary",
+    "outside",
+    "astra-final",
+    "repair",
+    "blocked",
+    "malformed",
+    "reserved"
+  ],
+  "originalDeadlines": {
+    "outerDeliveryWrapperMs": 300000,
+    "authoredAH": "420s",
+    "targetBunMs": 300000,
+    "targetTimeoutSeconds": 300,
+    "targetTerminationJoinSeconds": 20
+  },
+  "allConditionsOperandsAndNonLabelMessagesPreservedByExactWholeFileInverse": true
+}
