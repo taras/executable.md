@@ -4,7 +4,7 @@
 
 Source: Syntax symbols version 1, through the same boundary as `<Syntax />` and `xmd syntax`. This profile explicitly selects `@executablemd/git`, with no repository includes.
 
-This table reports selected public vocabulary, not CLI commands, APIs, build status or unimplemented designs. Origin package is read from the declared origin's package prefix; engine structural symbols declare no package. Reserved registrations are listed separately from protected components. Props list names and types; `?` marks a prop absent from the schema's required list. Captured props are labeled `capture`, with no inferred schema or requiredness. `schema` means no simple type is declared. Summaries omit schema constraints. Returns distinguish the effective text schema from a declared value schema.
+A non-normative table of the selected public vocabulary. In props, `?` marks an optional prop and `capture` marks a component-evaluated prop with no declared schema.
 
 | Construct | Kind | Origin package | Declared props summary | Returns summary |
 | --- | --- | --- | --- | --- |
