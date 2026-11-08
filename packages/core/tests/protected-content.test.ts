@@ -39,7 +39,7 @@ const REFERENCE: SyntaxReference = {
   // deno-lint-ignore require-yield
   *symbols(): Operation<SyntaxSymbols> {
     return {
-      version: 2,
+      version: 1,
       categories: [
         { kind: "structural", entries: [] },
         { kind: "built-in", entries: [] },

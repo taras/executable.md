@@ -480,7 +480,7 @@ const syntaxConfig = object({
     ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
   },
   json: {
-    description: "write the symbols as version-2 JSON instead of markdown",
+    description: "write the symbols as version-1 JSON instead of markdown",
     ...field(z.boolean(), field.default(false)),
   },
 });

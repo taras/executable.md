@@ -440,7 +440,7 @@ export function* planDeclarationHarness(options: {
  * look for without depending on the whole run profile being assembled.
  */
 export const CASE_CATALOG: SyntaxSymbols = {
-  version: 2,
+  version: 1,
   categories: [
     { kind: "structural", entries: [] },
     {

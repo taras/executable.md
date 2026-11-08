@@ -2,7 +2,6 @@ import { Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import type { Json, SyntaxSymbols } from "@executablemd/core";
 import { gitPlugin } from "@executablemd/git";
-import reviewPlugin from "../../packages/code-review-agent/mod.ts";
 import { installPlugins } from "../../packages/cli/src/plugin-host.ts";
 import { syntaxSymbols } from "../../packages/cli/src/syntax.ts";
 
@@ -11,7 +10,7 @@ type Entry = SyntaxSymbols["categories"][number]["entries"][number];
 export function* constructInventory(): Operation<Result<string>> {
   try {
     const symbols = yield* scoped(function* () {
-      const plugins = yield* installPlugins([gitPlugin, reviewPlugin], {
+      const plugins = yield* installPlugins([gitPlugin], {
         command: "syntax",
         args: ["syntax"],
       });
@@ -31,7 +30,7 @@ function renderConstructInventory(symbols: SyntaxSymbols): string {
     "",
     `Source: Syntax symbols version ${symbols.version}, through the same boundary as ` +
       "`<Syntax />` and `xmd syntax`. This profile explicitly selects " +
-      "`@executablemd/git` and `@executablemd/code-review-agent`, with no repository includes.",
+      "`@executablemd/git`, with no repository includes.",
     "",
     "This table reports selected public vocabulary, not CLI commands, APIs, build status " +
       "or unimplemented designs. Origin package is read from the declared origin's package " +

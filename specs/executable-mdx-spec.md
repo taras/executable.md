@@ -3096,7 +3096,7 @@ one of those names, reports the registration it is.
 
 `xmd syntax Elicit` is the same lookup — one selection, one index, one renderer —
 so the command and the component cannot describe one component two ways. The
-compact `xmd syntax` and its version-2 `--json` are unchanged: documentation is
+compact `xmd syntax` and its version-1 `--json` are unchanged: documentation is
 prose rather than a symbol entry, and putting it in routine output would make
 every default Plan prompt unnecessarily large.
 
@@ -3173,10 +3173,8 @@ as a reserved registration, which is a *host's* claim under a name and can be
 absent, replaced or refused where this cannot. A workflow-bundle member is
 reported under the kind `workflow`, carrying its canonical logical path **and**
 the retained source's own hash, so it stays distinguishable from a repository
-candidate, which is whatever that path holds now. Both kinds are
-additions, so the symbols are **version 2**: a version-1 reader was promised a
-closed set of origins, and neither emitting an unknown kind nor reusing a
-neighbouring one would keep that promise. Nothing else about the shape changed.
+candidate, which is whatever that path holds now. Both kinds are part of the
+current **version 1** symbols shape.
 
 **Each occurrence reads once.** It claims the durable identity the execution
 minted for it and performs one `syntax_symbols` durable read. That read retains a
@@ -3920,7 +3918,7 @@ chooses for every other name — and returns it as a versioned value:
 
 ```typescript
 interface SyntaxSymbols {
-  readonly version: 2;
+  readonly version: 1;
   readonly categories: readonly [
     { readonly kind: "structural"; readonly entries: readonly StructuralSyntaxEntry[] },
     { readonly kind: "built-in"; readonly entries: readonly CompleteComponentSyntaxEntry[] },
@@ -4045,7 +4043,7 @@ engine owns, reporting the declared origin under the same `structural` kind
 and carrying the declared forms, props schema, structure, syntax examples,
 description and content sentence. The two structural entry shapes are a closed
 union: an engine entry keeps exactly the fields it always had, and neither shape
-can inhabit a component entry. The symbols stay **version 2** — the categories,
+can inhabit a component entry. The symbols stay **version 1** — the categories,
 their order and every existing member are unchanged, and describing a declared
 construct reaches no handler.
 
@@ -13543,7 +13541,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 
 | # | Test | Verify |
 |---|------|--------|
-| SY1/SY2 | Versioned shape | `version` is 2, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
+| SY1/SY2 | Versioned shape | `version` is 1, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
 | SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers` and `Answer` carry the frozen forms, and `as` applies to `Let`, `Each` and branch-local `Catch` |
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
 | SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
@@ -13775,7 +13773,7 @@ would bind differently — belongs to `EP`, where profile capture is tested.
 | SX4–SX6 | Renderers take a value | Both formats render from a supplied symbols with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no symbols |
-| SX10/SX11 | Formats | Markdown by default, version-2 JSON with `--json`; the symbols are inspection, and `xmd plan` is the command that writes with the same structured value |
+| SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`; the symbols are inspection, and `xmd plan` is the command that writes with the same structured value |
 | SX16 | Named lookup | `xmd syntax Elicit` renders that component's metadata and long-form documentation through the same selection, index and renderer `<Syntax names={…}>` uses; the compact symbols are unchanged and an unknown name refuses whole |
 | SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
 | SX13–SX15 | Delivery | A real pipeline reading symbols larger than one pipe buffer receives the bytes a regular-file redirect receives, in both forms; a consumer that closes early leaves the command reporting on stderr with exit 1 rather than an unhandled write failure |
@@ -15299,7 +15297,7 @@ can be made to fail if it is read.
 | MDK1 | The constructor | `Markdown({…})` returns a fresh shallow object carrying `kind: "component"` written last, leaves the input unchanged, preserves every supplied member, computes no digest, validates nothing, freezes nothing, admits nothing, and hands back the same nested schema, array and private-declaration objects it was given — nested objects included; a kind planted on the input does not survive. A constructed declaration keeps its selection, exact output, private closure, replay, inspection and validation behavior, and the existing suite runs with no changed result |
 | MDK2 | The discriminant is read first | A missing kind, an unknown one, and the superseded `"markdown"` each refuse as `DeclaredMarkdownError` before the root import, with nothing yielded and no output, while every other member of the declaration is rigged to throw if it is read — so the refusal came from the discriminant alone. The same three refuse identically at capture and in the Markdown admission, in one sentence both spell. `"component"` restored is the positive control and runs |
 | MDK3 | Capture reads once | The kind is read exactly once, before the first `install()`, and the admitted kind is that captured value — a counting getter that answers differently afterwards, and an `install()` that deletes the property, change nothing |
-| MDK4 | The existing fixtures | The three direct declarations in the syntax suite are built through the constructor and remain valid, while `SYN27`'s live inspection still reports symbols version 2 |
+| MDK4 | The existing fixtures | The three direct declarations in the syntax suite are built through the constructor and remain valid, while `SYN27`'s live inspection still reports symbols version 1 |
 
 ### Tier SR — Expanding installed structural syntax (§5.3)
 
@@ -15339,7 +15337,7 @@ invokes a handler: this layer captures one and calls none.
 | ED4 | One name, one answer | Distinct names coexist across installations and arms; the same name twice in one arm, across the arms, across installations, and against a private closure name each refuse whichever order they arrive in |
 | ED5 | The name is claimed | A declared construct answers ahead of a repository file of the same name, which answers when nothing is declared; the engine's structural table, the canonical protected tier and a reserved registration cannot be claimed |
 | ED6 | Described from the declaration | `inspectComponent()` reports a construct and a region as `structural`, carrying the declared origin with their forms, props, structure, syntax, description and context, and no handler; a malformed relationship refuses for inspection exactly as it does for a run |
-| ED7 | Version 2, one category, one kind | The symbols stay version 2 with their three categories in order, carry the construct and its regions sorted by code point beside the engine's own, and render the installed contract; both structural selections are `structural` and are told apart by `construct` versus `origin`, neither shape inhabits a component entry, and an engine entry carries no forms, props or structure |
+| ED7 | Version 1, one category, one kind | The symbols stay version 1 with their three categories in order, carry the construct and its regions sorted by code point beside the engine's own, and render the installed contract; both structural selections are `structural` and are told apart by `construct` versus `origin`, neither shape inhabits a component entry, and an engine entry carries no forms, props or structure |
 | ED8 | Structure | A construct holding its declared regions is valid and every region body is walked; a region outside its construct, a region under something else, substantive text, a code block, a foreign element, a refused form and a failed literal schema are deterministic diagnostics with nothing executed, and the foreign element is reported where it was written |
 | ED9 | Opacity | A required prop written as an expression is present and makes the occurrence opaque; a definitely missing required prop still fails, opacity hides no structural error, and the engine's own constructs keep the results they always had |
 | ED10 | Absence | With nothing declared, the new names are unresolved, the structural category holds only the engine's own constructs, and a repository file under one of those names is an ordinary component rather than syntax |
