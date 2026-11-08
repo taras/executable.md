@@ -41,33 +41,11 @@ all runtime state under that opaque identity.
 <AssertStringIncludes actual={output} expected="# Approved program" />
 <AssertStringIncludes actual={output} expected="the approved Plan ran" />
 </Execution>
-</Test>
 
-## An approved Plan is source, not something that ran
-
-The program this scenario approves names a file. Approving it hands the source
-back; it does not run it. The file is therefore the evidence: a child that
-executed what it was given would have created it.
-
-<Test name="the approved source did not run" timeout="120s">
-<Execution host="run" target="packages/cli/tests/document-suites/plan/uses-plan.md" as="run">
-<TestAgent>
-<TestAgent.Scenario session="planner" src="./agents/approved-plan.md" />
-</TestAgent>
-
-<Answers>
-<Answer value={{ decision: "Approve" }} />
-</Answers>
-
-<CollectOutput as="output" />
-
-<AssertEquals actual={run.result.ok} expected={true} />
-<AssertStringIncludes actual={output} expected="the approved Plan ran" />
-</Execution>
-
-The source arrived, and the file it names is nowhere: the child ran in this
-working directory, so a child that executed what it was given would have written
-it here.
+Approving the program hands its source back; it does not run it. The source
+names a file, `planned.txt`, and once the child has finished that file is
+nowhere: the child ran in this working directory, so a child that executed what
+it was given would have written it here.
 
 <Glob include={["planned.txt"]} as="written" />
 <AssertEquals actual={written.length} expected={0} />
