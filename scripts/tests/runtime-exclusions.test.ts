@@ -163,6 +163,7 @@ describe("the applicable corpus", () => {
       "adversarial-preparation",
       "adversarial-production-role",
       "adversarial-session-continuity",
+      "adversarial-submission",
       "adversarial-workflow",
     ].map((name) => `packages/cli/tests/${name}.test.ts`);
     expect(
