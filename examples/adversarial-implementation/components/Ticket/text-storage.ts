@@ -78,3 +78,32 @@ export function unused(repository: string, path: string): Operation<boolean> {
     return !result.ok && parseFilesFailure(result.error)?.reason === "missing";
   });
 }
+
+export function same(
+  left: { path: string; utf8Bytes: number; sha256: string },
+  right: { path: string; utf8Bytes: number; sha256: string },
+) {
+  return (
+    left.path === right.path && left.utf8Bytes === right.utf8Bytes && left.sha256 === right.sha256
+  );
+}
+
+export function* readBounded(path: string, limit: number): Operation<string> {
+  try {
+    return yield* read("/", path, limit);
+  } catch (error) {
+    const failure = parseFilesFailure(error);
+    if (failure === undefined) {
+      throw error;
+    }
+    throw new Error(
+      "Cannot read " +
+        path +
+        " within " +
+        limit +
+        " UTF-8 bytes under current File permission: " +
+        failure.reason +
+        ". No resolution was recorded.",
+    );
+  }
+}

@@ -86,14 +86,41 @@ export default function* Publish(value: unknown) {
           remainingRequiredDeliveryWork: ["independent-review", "required-ci", "main-health"],
         }
       : {};
+  const last = record.calls.at(-1);
+  const hold = record.checkpoint.hold;
+  const decision =
+    !record.checkpoint.dispatchable &&
+    record.checkpoint.status === "hold" &&
+    record.checkpoint.revision === record.manifest.assignment.revision &&
+    record.checkpoint.feedback.length === 0 &&
+    hold?.execution === undefined &&
+    last?.status === "accepted" &&
+    typeof last.result === "string" &&
+    ((hold?.kind === "needs_decision" &&
+      last.assignment.phase === "discovery" &&
+      last.role !== "implementor") ||
+      (hold?.kind === "needs_discovery" &&
+        last.role === "implementor" &&
+        hold.next?.phase === "discovery" &&
+        hold.next.role === "architect"))
+      ? last.result
+      : null;
   const nextAction =
     record.checkpoint.status === "feedback_ready" && typeof deliveryDirectory === "string"
       ? { entry: "delivery.md", record: deliveryDirectory + "/requirements.json", action: "review" }
-      : {
-          entry: "continue.md",
-          gate: record.checkpoint.gate,
-          action: record.checkpoint.dispatchable ? "continue_feedback" : "resolve_feedback_hold",
-        };
+      : decision !== null
+        ? {
+            entry: "resolve-decision.md",
+            gate: record.checkpoint.gate,
+            action: "resolve_decision",
+            result: decision,
+            input: "ticket-decision.v1",
+          }
+        : {
+            entry: "continue.md",
+            gate: record.checkpoint.gate,
+            action: record.checkpoint.dispatchable ? "continue_feedback" : "resolve_feedback_hold",
+          };
   return {
     ...presentation,
     nextAction,

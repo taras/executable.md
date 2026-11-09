@@ -535,6 +535,85 @@ custom/workflow provider storage contract or migration of old inline records.
 External reviewer models and publication use their existing workflows. The
 phase entry retains the implementation workflow's role and model policy.
 
+### Resolve a decision hold
+
+A Planner or Architect that returns `needs_decision`, and an Implementor that
+returns `needs_discovery` naming the Architect, hold the ticket for an accepted
+decision. When the hold is at the clean launch revision before implementation
+feedback, its envelope names the supported operation:
+
+```json
+{"entry": "resolve-decision.md", "gate": "planning", "action": "resolve_decision",
+ "result": "/absolute/path/to/work/attempts/0000/result.json", "input": "ticket-decision.v1"}
+```
+
+Save the decision and its provenance as text files, then save one request that
+binds them to this exact hold. Every field is required and no other field is
+accepted:
+
+```json
+{
+  "schema": "ticket-decision.v1",
+  "work": "selected-task",
+  "continuation": {"path": "/absolute/path/to/work/continuations/HASH.json", "utf8Bytes": 13240, "sha256": "HASH"},
+  "heldResult": {"path": "/absolute/path/to/work/attempts/0000/result.json", "utf8Bytes": 2210, "sha256": "RESULT_HASH"},
+  "disposition": "accept",
+  "decision": {"path": "/absolute/path/to/decision.md", "utf8Bytes": 412, "sha256": "DECISION_HASH"},
+  "provenance": {"path": "/absolute/path/to/provenance.md", "utf8Bytes": 96, "sha256": "PROVENANCE_HASH"},
+  "acceptedInputs": []
+}
+```
+
+`continuation` copies the held envelope's descriptor and `heldResult` the
+retained descriptor of its final call's result. Each artifact descriptor names an
+absolute path and its exact UTF-8 byte length and SHA-256. The decision and
+provenance are always selected for the routed owner, followed by
+`acceptedInputs` in order. A recorded reference keeps its first text; give changed
+text a fresh path. Provenance states the actual authority, such as standing
+coordinator authority. It is evidence for the routed owner; it neither overrides
+a permission nor records a new human answer.
+
+```bash
+deno task xmd run --allow-absolute examples/adversarial-implementation/resolve-decision.md \
+  --props-record /absolute/path/to/held-record.json \
+  --props-decision /absolute/path/to/decision.json \
+  --include examples/adversarial-implementation/components --raw
+```
+
+Resolution calls no role. It validates the held result, records the decision under
+the hold's continuation digest, prepares the original owner and publishes the
+successor. Continue the returned envelope with `continue.md --props-steps 1`; that
+ordinary step dispatches the owner through the existing source, identity, input
+and publication checks:
+
+| Held result | Disposition | Next owner | Then |
+| --- | --- | --- | --- |
+| discovery Planner `needs_decision` | `accept` | original Planner | original Implementor |
+| discovery Planner `needs_decision` | `amend` | original Architect | retained Planner, then original Implementor |
+| discovery Architect `needs_decision` | `accept` | same Architect | retained Planner, then original Implementor |
+| implementation Implementor `needs_discovery` naming the Architect | either | original Architect | retained Planner, then original Implementor |
+
+The original task, sessions, calls, results, delivered inputs, source anchor and
+correction count are unchanged; resolution grants no further corrections. Every
+other hold refuses, including an Architect amendment, an API conflict routed to
+the Planner, execution failure, uncertain native work, changed input, source
+mismatch, an exhausted correction bound and publication failure. A held result
+whose phase execution failed after the result was saved also refuses; resolution
+requires the call's execution record to show completion. A dirty or moved
+checkout, prior implementation feedback, a stale or foreign binding and a changed
+input also refuse. A refusal returns a held envelope carrying the failure and
+leaves the managed ticket unchanged; keep the original envelope.
+
+Repeating the same request against the same hold returns its recorded successor
+without publishing again. The repeat checks the evidence the successor retained,
+under current File permission and protection; it does not reread the decision's
+original files, so they may later change or disappear. A different decision for a resolved hold refuses. If
+reservation, publication or the receipt is interrupted, the hold stays held and
+its reservation directory preserves the first failure for operator disposition. A
+matching successor file alone does not confirm the interrupted write. Repeated
+continuation of an older envelope reuses the existing call reservation and resends
+no role effect.
+
 ## Supervise a live REPL phase
 
 Keep the original ACP call pending, or reconnect passively with the existing
