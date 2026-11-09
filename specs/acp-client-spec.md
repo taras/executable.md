@@ -1277,9 +1277,12 @@ permission request therefore receives a concrete decision.
 
 The retained Claude and Codex adapters use their host-installed CLIs through the
 transient child-environment seam. The profile supplies no machine-session executable
-observer, coordinator or route store. Its SessionStart confirmation names the
-backend conversation but publishes no mapping until the accepted first turn is
-saved by the provider.
+observer, coordinator or route store.
+
+Each adapter names the backend conversation in its own way. Claude's adapter
+confirms it through SessionStart; Codex's adapter reports the App Server thread
+on its session response. Either way, the profile publishes no mapping until the
+provider saves the accepted first turn.
 
 `xmd workflow` installs a stricter profile than `xmd run`, and installs it only
 while a live or partial run is attached. A completed replay restores its Prompt
@@ -1471,7 +1474,8 @@ dependency; fresh materialization contains no Codex CLI or platform executable
 packages. The adapter launches the selected host executable under Availability
 and Host-owned dependencies. Provider identity, first-turn acceptance,
 completed-turn checkpoints and cleanup retain their existing contracts. Every
-other provider retains ordinary registry resolution.
+other provider retains ordinary registry resolution. The trade-offs are recorded
+in [decision 004](decisions/004-host-installed-codex-cli.md).
 
 ### `xmd agent options`
 
@@ -1654,7 +1658,8 @@ default command. Version output and exit status impose no ordinary version
 admission policy. No bundled CLI or download supplies a fallback. Custom
 commands retain their selection; completed replay performs no host selection or
 launch. Native-bound work uses its observed executable under the native
-build-binding contract.
+build-binding contract. [Decision 004](decisions/004-host-installed-codex-cli.md)
+records why Codex runs the host CLI.
 
 ## ACPX provider
 
@@ -1829,10 +1834,11 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   partition that created its handle, and every turn, close, detach and teardown
   goes through that one — reaching for "the" runtime afterwards would open a
   second child for a session the first already owns. The released runtime
-  snapshots the child-only `agentProcessEnv`. Protected authentication values
-  outrank session and transient overlays; `CLAUDE_CODE_EXECUTABLE` remains a
-  transient binding that outranks a session value. No local environment patch
-  remains.
+  snapshots the child-only `agentProcessEnv`. The child environment applies the
+  session environment and then the transient overlay, so a transient
+  `CLAUDE_CODE_EXECUTABLE` or `CODEX_PATH` outranks a session value of the same
+  name. Protected authentication values outrank both overlays. No local
+  environment patch remains.
 - **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
   rather than a document, decides: `advertiseNativeLaunch` and
   `advertiseClientNativeAttachment` are two separate lists, and a profile whose
@@ -1842,9 +1848,11 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   availability probe and live runtime. Each embedded Claude or Codex default
   applies only to its matching retained command; another provider or
   deliberate custom command receives no default overlay for either agent. A
-  native-bound operation's observed executable takes precedence. The inputs never enter durable session records
-  or global process environment. `executableObserver` says how this host
-  observes the build behind an executable; `agentCwd` answers with the
+  native-bound operation's observed executable takes precedence: its runtime
+  receives the bound build's environment in place of the ordinary host
+  selection, which is never consulted for it. The inputs never enter durable
+  session records or global process environment. `executableObserver` says how
+  this host observes the build behind an executable; `agentCwd` answers with the
   directory an Agent runs in when the contextual one is not a directory an
   agent process could stand in; `mcpServers` and `newSessionOptions` are passed
   to runtime creation and to `ensureSession()` exactly as given;
