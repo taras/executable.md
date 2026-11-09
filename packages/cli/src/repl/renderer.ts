@@ -35,7 +35,7 @@
  */
 
 import { Err, Ok, type Operation, resource, type Result, until } from "effection";
-import { createTerm, type Op, type PointerEvent, type Term } from "@bomb.sh/tty";
+import { createTerm, type Op, type PointerEvent, type Term } from "../../generated/tty/mod.js";
 import type { ReplInputEvent } from "./description.ts";
 import type { ReplBounds } from "./layout.ts";
 import type { ReplTerminalSize } from "./terminal.ts";

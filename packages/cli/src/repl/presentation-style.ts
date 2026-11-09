@@ -11,7 +11,7 @@
  * selection keeps `*`, and focus keeps `>`.
  */
 
-import { rgba } from "@bomb.sh/tty";
+import { rgba } from "../../generated/tty/mod.js";
 
 /**
  * What one row is, out of the closed set this screen draws.

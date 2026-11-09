@@ -9,8 +9,9 @@
  * something just as surely. This step owns both:
  *
  * 1. `deno install --frozen` — `node_modules/` and the npm half of the cache.
- * 2. The pinned Claude source/SDK build in private scratch, before any graph
- *    that imports its generated snapshot is cached.
+ * 2. The pinned Claude source/SDK build and the patched tty runtime build, each
+ *    in private scratch, before any graph that imports their generated output
+ *    is cached.
  * 3. `deno install --entrypoint --frozen` over the entry points a build and a
  *    compile walk, so their module graphs are cached and every later phase can
  *    run `--cached-only`.
@@ -33,6 +34,7 @@ import { copyFile, ensureDir, rm } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 
 import { prepareClaude } from "./lib/prepare-claude.ts";
+import { prepareTty } from "./lib/prepare-tty.ts";
 import { PREPARED_INPUTS, PREPARED_MARKER, recordedCopy } from "./lib/prepared.ts";
 import { normalizeEvery, sideEffectFreeManifests } from "./lib/side-effect-free.ts";
 
@@ -87,6 +89,7 @@ export function* installDependencies(): Operation<void> {
   yield* rm(new URL(PREPARED_MARKER, repoRoot), { recursive: true, force: true });
   yield* deno(["install", "--frozen"]);
   yield* prepareClaude(repoRoot);
+  yield* prepareTty(repoRoot);
   yield* deno(["install", "--entrypoint", "--frozen", ...ENTRYPOINTS]);
 
   yield* recordSideEffectFree();

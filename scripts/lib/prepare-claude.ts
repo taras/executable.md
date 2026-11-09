@@ -106,7 +106,7 @@ export function* downloadClaudeInput(pin: {
   return bytes;
 }
 
-function writeScratch(path: string, bytes: string | Uint8Array): Operation<void> {
+export function writeScratch(path: string, bytes: string | Uint8Array): Operation<void> {
   return scoped(function* () {
     let writing: Promise<void> = Promise.resolve();
     yield* ensure(() =>
@@ -122,7 +122,7 @@ function writeScratch(path: string, bytes: string | Uint8Array): Operation<void>
   });
 }
 
-function ensureDirectory(path: string): Operation<void> {
+export function ensureDirectory(path: string): Operation<void> {
   return scoped(function* () {
     // Teardown joins mkdir even when cancellation stops observing its native promise.
     yield* ensure(() => ensureDir(path));

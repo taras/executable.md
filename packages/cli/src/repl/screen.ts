@@ -42,7 +42,7 @@ import {
   progressiveInput,
   type Setting,
   settings,
-} from "@bomb.sh/tty";
+} from "../../generated/tty/mod.js";
 import { ReplTerminal, type ReplTerminalSize } from "./terminal.ts";
 import { ReplClock } from "./frame.ts";
 import { type ReplPhysicalInput, useReplDecoder } from "./input.ts";

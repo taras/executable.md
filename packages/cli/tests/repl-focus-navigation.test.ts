@@ -9,7 +9,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createInput } from "@bomb.sh/tty";
+import { createInput } from "../generated/tty/mod.js";
 import { until } from "effection";
 import type { Operation, Result } from "effection";
 

@@ -23,7 +23,7 @@ import { parseTodo } from "../src/repl/todo/document.ts";
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { close, fit, open, text } from "@bomb.sh/tty";
+import { close, fit, open, text } from "../generated/tty/mod.js";
 import {
   collect,
   Elicitation,

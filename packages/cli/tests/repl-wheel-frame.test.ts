@@ -16,7 +16,7 @@ import type { ReplInputEvent } from "../src/repl/description.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { open, close, fixed } from "@bomb.sh/tty";
+import { open, close, fixed } from "../generated/tty/mod.js";
 import { describe as node } from "../src/repl/description.ts";
 import { VIEWPORT } from "../src/repl/components/viewport.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
