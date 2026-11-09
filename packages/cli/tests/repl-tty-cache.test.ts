@@ -19,6 +19,8 @@ import type { Operation } from "effection";
 
 import { close, createTerm, fit, open, text } from "../generated/tty/mod.js";
 import type { Op, Term } from "../generated/tty/mod.js";
+import { pack } from "../generated/tty/ops.js";
+import { createTermNative } from "../generated/tty/term-native.js";
 import {
   initialState,
   NO_AGENT,
@@ -148,6 +150,43 @@ describe("the engine owns the text its cache compares", () => {
     ];
     expect(measure(term, values).slice(0, 2)).toEqual([57, 91]);
     expect(measure(term, [SHORT, LONG])).toEqual([57, 91]);
+  });
+
+  it("refuses a measurement past its word capacity without writing into its own input", function* () {
+    // Twenty thousand words exceed the measured-word capacity, so creating
+    // that cache entry fails. The 1.1 MB word beside it fits. A key copied
+    // for the failed entry and again on every later lookup once ran past the
+    // key storage into the packed input that follows it.
+    const ops = [
+      open("root", { layout: { width: fit(), height: fit(), direction: "ttb" } }),
+      open("words", NATURAL),
+      text("a ".repeat(20000)),
+      close(),
+      open("long", NATURAL),
+      text("z".repeat(1100000)),
+      close(),
+      close(),
+    ];
+    const native = yield* until(createTermNative(SIZE.columns, SIZE.rows));
+    const length = pack(ops, native.memory.buffer, native.opsBuf, native.memory.buffer.byteLength);
+    const before = new Uint8Array(native.memory.buffer, native.opsBuf, length * 4).slice();
+    native.reduce(native.statePtr, native.opsBuf, length, 0, 1, 0);
+    const after = new Uint8Array(native.memory.buffer, native.opsBuf, length * 4);
+    let changed = 0;
+    for (let at = 0; at < before.length; at++) {
+      if (before[at] !== after[at]) {
+        changed++;
+      }
+    }
+    expect(changed).toBe(0);
+    expect(native.errorCount(native.statePtr)).toBeGreaterThan(0);
+
+    const refused = yield* until(createTerm({ width: SIZE.columns, height: SIZE.rows }));
+    expect(refused.render(ops).errors.map((error) => error.type)).toContain(
+      "TEXT_MEASUREMENT_CAPACITY_EXCEEDED",
+    );
+    const replacement = yield* until(createTerm({ width: SIZE.columns, height: SIZE.rows }));
+    expect(measure(replacement, [SHORT, LONG])).toEqual([57, 91]);
   });
 });
 

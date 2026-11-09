@@ -42,13 +42,22 @@
 -    Clay__MeasureTextCacheItem newCacheItem = { .measuredWordsStartIndex = -1, .id = id, .generation = context->generation };
 +    Clay__MeasureTextCacheItem newCacheItem = {
 +        .measuredWordsStartIndex = -1, .id = id, .generation = context->generation,
-+        .cacheText = { .length = text->length, .chars = clayterm_copy_text_key(text->chars, text->length) },
++        .cacheText = { .length = text->length, .chars = NULL },
 +        .cacheFontId = config->fontId, .cacheFontSize = config->fontSize,
 +        .cacheLetterSpacing = config->letterSpacing
 +    };
      Clay__MeasureTextCacheItem *measured = NULL;
      if (context->measureTextHashMapInternalFreeList.length > 0) {
          newItemIndex = Clay__int32_tArray_GetValue(&context->measureTextHashMapInternalFreeList, context->measureTextHashMapInternalFreeList.length - 1);
+@@ -1771,6 +1788,8 @@
+     measured->unwrappedDimensions.width = measuredWidth;
+     measured->unwrappedDimensions.height = measuredHeight;
+ 
++    // Only an entry linked below can be found again, so only it keeps a key.
++    measured->cacheText.chars = clayterm_copy_text_key(text->chars, text->length);
+     if (elementIndexPrevious != 0) {
+         Clay__MeasureTextCacheItemArray_Get(&context->measureTextHashMapInternal, elementIndexPrevious)->nextIndex = newItemIndex;
+     } else {
 --- a/src/clayterm.c
 +++ b/src/clayterm.c
 @@ -62,7 +62,13 @@
@@ -84,14 +93,18 @@
        .w = w,
        .h = h,
        .front = (Cell *)base,
-@@ -662,6 +671,16 @@
+@@ -662,6 +671,20 @@
    // initialize front buffer with zeros. Every cell will be
    cells_fill(ct->front, w, h, 0, 0, 0);
    return ct;
 +}
 +
 +const char *clayterm_copy_text_key(const char *chars, int length) {
-+  if (ct_active_context->transient_text_keys) {
++  /* A key that does not fit is borrowed from this call's wire bytes, and the
++   * cache is reset once the call has presented. */
++  if (ct_active_context->transient_text_keys ||
++      ct_active_context->text_keys_used + length > TEXT_KEY_CAPACITY) {
++    ct_active_context->transient_text_keys = 1;
 +    return chars;
 +  }
 +  char *key = ct_active_context->text_keys + ct_active_context->text_keys_used;
@@ -101,7 +114,7 @@
  }
  
  void reduce(struct Clayterm *ct, uint32_t *buf, int len, int mode, int row,
-@@ -681,6 +700,13 @@
+@@ -681,6 +704,13 @@
    ct->caret_y = -1;
    ct->has_caret = 0;
  
@@ -115,13 +128,14 @@
    Clay_BeginLayout();
  
    while (i < len) {
-@@ -977,6 +1003,10 @@
+@@ -977,6 +1007,11 @@
      present_cups(ct, row);
    }
  
-+  /* Oversized layouts borrow only the current reduce call and its immutable wire bytes. */
++  /* Borrowed keys point into this call's immutable wire bytes; none outlives it. */
 +  if (ct->transient_text_keys) {
 +    Clay_ResetMeasureTextCache();
++    ct->text_keys_used = 0;
 +  }
    ct_active_context = NULL;
  }
