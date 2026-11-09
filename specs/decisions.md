@@ -15,6 +15,7 @@ conformance belong to [the language specification](executable-mdx-spec.md).
 | Plan information-request delivery | [DEC-017](#dec-017-plan-information-requests--delivery-history) records sequencing; [Plan architecture](../architecture.md#plan-information-requests) and [the Plan interface](plan-command-spec.md) own current behavior. |
 | Main health and verification ownership | [DEC-013](#dec-013-a-red-main-is-reported-as-an-issue-and-gates-pull-requests-no-merge-queue), [DEC-014](#dec-014-composability-proves-ownership-not-correctness-a-second-time), and [contribution verification](../AGENTS.md#verification). |
 | Withdrawn terminal-grid surface | [DEC-016](#dec-016-withdraw-the-unimplemented-terminal-grid-surface); [installed structural syntax](../architecture.md#the-installed-structural-syntax-boundary) remains the extension boundary. |
+| Host-installed Codex CLI for the carried adapter | [DEC-018](#dec-018-the-carried-codex-adapter-runs-the-host-installed-codex-cli); [ACP Availability](acp-client-spec.md#availability), [Adapter snapshots](acp-client-spec.md#adapter-snapshots) and [release §11](release-process-spec.md#11-prepared-claude-adapter) own current behavior. |
 
 ---
 
@@ -884,3 +885,51 @@ selection and user-approval escalation policy. Existing host containment remains
 in force with its stable-namespace limitation; #227 owns concurrent
 path-replacement hardening. Deferring those decisions does not defer File or
 Glob reads. #679 remains separate evaluation work after product delivery.
+
+---
+
+## DEC-018: The carried Codex adapter runs the host-installed Codex CLI
+
+**Status:** Decided
+
+**Date:** 2026-11-08 (issue
+[#1202](https://github.com/taras/executable.md/issues/1202), against
+`9ee1650e2c6fa42cb1d04220faef07c5a02b5e7e`).
+
+### Context
+
+The carried `@agentclientprotocol/codex-acp` 1.6.2 snapshot depended on
+`@openai/codex` 0.148.0 and launched that bundled CLI unless `CODEX_PATH` was
+set. The bundled CLI's model catalog omitted models the host's installed CLI
+advertised. For a configured model missing from its catalog, the adapter
+offered a model choice with no effort selector, so XMD correctly refused an
+explicit effort that the host CLI supports. Claude had the same gap and already
+uses the host-installed CLI.
+
+The maintainer directed: "we had a similar problem with claude and we changed
+it to use whatever version is installed on teh server. We shouldn't bundle
+anything." That direction replaces the alternative of pinning a newer bundled
+CLI.
+
+### Decision
+
+The retained Codex adapter launches the Codex CLI installed on the execution
+host: nonempty `CODEX_PATH`, otherwise `codex` on the host PATH, selected and
+checked for launchability at the runtime host boundary. The adapter carries no
+Codex CLI dependency and no executable fallback. The adapter protocol code stays
+carried because it supplies the turn identity, acceptance and native identity
+metadata no published adapter reports.
+
+Codex keeps its maintained archive and generated snapshot route. A readable
+source patch against the recorded producer commit, with pinned lock and compiler
+inputs, reproduces the shipped executable bytes.
+
+### Consequences
+
+Ordinary Codex availability and the model and effort choices a session offers
+now come from a launchable host CLI; a host without one refuses before
+inference, and no bundled CLI supplies availability or a catalog. Native-bound
+work keeps strict build equality through its observed executable, independently
+of ordinary launchability. The repacked snapshot has a new digest: it neither
+migrates saved records nor equates the old and new snapshot identities.
+

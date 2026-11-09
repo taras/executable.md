@@ -2956,6 +2956,31 @@ describe("Tier CA — client-native attachment", () => {
     expect(JSON.stringify(space.trace.records)).not.toContain(OBSERVED_PATH);
   });
 
+  it("H7: the observed Codex build wins over an ordinary host CODEX_PATH elsewhere", function* () {
+    const codex = nativeAdapterFor("codex");
+    if (codex === undefined || !bindsBuild(codex)) {
+      throw new Error("codex must bind a build");
+    }
+    const space = yield* installAttachment(bound(), {
+      adapters: {
+        claude: {
+          ...adapter(),
+          binding: { ...TEST_BINDING, environment: codex.binding.environment },
+        },
+      },
+      *agentProcessEnv() {
+        return { CODEX_PATH: "/ordinary/host/codex" };
+      },
+    });
+
+    yield* Agent.operations.session();
+
+    expect(space.observer.observed).toEqual(["claude"]);
+    expect(space.harness.createdOptions.at(-1)?.agentProcessEnv).toEqual({
+      CODEX_PATH: OBSERVED_PATH,
+    });
+  });
+
   it("CA2: a subscribed Prompt attaches under the same identity", function* () {
     const space = yield* installAttachment(bound());
 

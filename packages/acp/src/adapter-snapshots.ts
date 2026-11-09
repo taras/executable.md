@@ -26,7 +26,12 @@
 
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { readdir, readFile, rename as renamePath, rm as rmPath, writeFile } from "node:fs/promises";
-import { exec, hostClaudeExecutable, useQuietProcessOutput } from "@executablemd/runtime";
+import {
+  exec,
+  hostClaudeExecutable,
+  hostCodexExecutable,
+  useQuietProcessOutput,
+} from "@executablemd/runtime";
 import { createAgentRegistry } from "./acpx-runtime.ts";
 import type { AcpAgentRegistry } from "./acpx-runtime.ts";
 import type { AcpxProviderDependencies } from "./provider.ts";
@@ -246,8 +251,9 @@ function* contentDigest(directory: string): Operation<string> {
  *
  * A `file:` dependency rather than an unpacked tree, so the adapter's own
  * runtime dependencies are resolved the way they are for anybody installing it
- * from the registry. Claude uses the host CLI; its SDK library remains installed
- * while platform executable optional dependencies are omitted.
+ * from the registry. Both adapters use the host CLI: Codex depends on no CLI
+ * package, and Claude's SDK library remains installed while platform
+ * executable optional dependencies are omitted.
  */
 function* install(
   directory: string,
@@ -734,15 +740,20 @@ export function embeddedAdapterDependencies(
         ? undefined
         : { version: snapshot.version, digest: `sha256:${snapshot.sha256}` };
     },
-    *agentProcessEnv(agentName, agentCommand) {
+    *agentProcessEnv(agentName, agentCommand): Operation<Record<string, string> | undefined> {
       if (
-        agentName !== "claude" ||
         !carriesEmbeddedAdapter(adapters, agentName) ||
         agentCommand !== adapters.command(agentName)
       ) {
         return undefined;
       }
-      return { CLAUDE_CODE_EXECUTABLE: yield* hostClaudeExecutable() };
+      if (agentName === "claude") {
+        return { CLAUDE_CODE_EXECUTABLE: yield* hostClaudeExecutable() };
+      }
+      if (agentName === "codex") {
+        return { CODEX_PATH: yield* hostCodexExecutable() };
+      }
+      return undefined;
     },
     *prepareAgent(agentName: string): Operation<void> {
       if (!carriesEmbeddedAdapter(adapters, agentName)) {

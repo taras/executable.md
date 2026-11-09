@@ -201,4 +201,4 @@ export {
   hasDenoExecutableObserver,
 } from "./deno-executable-observer.ts";
 
-export { hostClaudeExecutable } from "./node-claude-executable.ts";
+export { hostClaudeExecutable, hostCodexExecutable } from "./node-host-agent-executable.ts";

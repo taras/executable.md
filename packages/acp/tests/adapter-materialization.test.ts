@@ -872,3 +872,58 @@ describe("HC fresh Claude materialization", () => {
     expect(names.filter((name) => name.startsWith("@anthropic-ai/claude-agent-sdk-"))).toEqual([]);
   });
 });
+
+describe("H fresh Codex materialization", () => {
+  it("H5: the installed closure carries one adapter and no Codex CLI or platform package", function* () {
+    const root = yield* useRoot();
+    const adapters = createEmbeddedAdapters(root);
+    yield* adapters.materialize("codex");
+    const installed = join(root, digestOf("codex"));
+    const names: string[] = [];
+    function* walk(directory: string): Operation<void> {
+      for (const entry of yield* until(readdir(directory, { withFileTypes: true }))) {
+        if (entry.isDirectory()) {
+          yield* walk(join(directory, entry.name));
+        } else if (entry.name === "package.json") {
+          const value = JSON.parse(yield* until(readFile(join(directory, entry.name), "utf8")));
+          if (typeof value.name === "string" && typeof value.version === "string") {
+            names.push(value.name);
+          }
+        }
+      }
+    }
+    yield* walk(join(installed, "node_modules"));
+    expect(names.filter((name) => name === CODEX_PACKAGE)).toEqual([CODEX_PACKAGE]);
+    expect(names).toContain("@agentclientprotocol/sdk");
+    expect(names).toContain("vscode-jsonrpc");
+    expect(names.filter((name) => name.startsWith("@openai/"))).toEqual([]);
+    const bin = join(installed, "node_modules", ".bin");
+    const linked = (yield* exists(bin)) ? yield* until(readdir(bin)) : [];
+    expect(linked.filter((name) => /^codex(\.|$)/.test(name))).toEqual([]);
+
+    // npm's own account of the tree agrees with what is on disk.
+    const listed = spawnSync("npm", ["ls", "--all", "--json"], {
+      cwd: installed,
+      encoding: "utf8",
+    });
+    expect(listed.status).toBe(0);
+    const tree: string[] = [];
+    const visit = (node: unknown): void => {
+      if (typeof node !== "object" || node === null || !("dependencies" in node)) {
+        return;
+      }
+      const { dependencies } = node;
+      if (typeof dependencies !== "object" || dependencies === null) {
+        return;
+      }
+      for (const [name, child] of Object.entries(dependencies)) {
+        tree.push(name);
+        visit(child);
+      }
+    };
+    visit(JSON.parse(listed.stdout));
+    expect(tree).toContain(CODEX_PACKAGE);
+    expect(tree.filter((name) => name.startsWith("@openai/"))).toEqual([]);
+    expect(tree.every((name) => names.includes(name))).toBe(true);
+  });
+});

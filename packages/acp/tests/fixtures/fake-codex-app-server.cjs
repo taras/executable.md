@@ -30,6 +30,68 @@ function reply(id, result) {
   send({ jsonrpc: "2.0", id, result });
 }
 
+/**
+ * The model catalog and thread configuration this host advertises.
+ *
+ * `FAKE_CODEX_CATALOG=sol` stands for a host CLI whose catalog carries the
+ * configured model with its own effort choices. `no-selector` stands for one
+ * whose catalog omits the model a thread reports, which leaves the adapter no
+ * effort metadata to forward. Unset keeps the single effortless fake model.
+ */
+function model(id, efforts, defaultReasoningEffort, isDefault) {
+  return {
+    id,
+    model: id,
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName: id,
+    description: `${id} from the selected host`,
+    modelSpecialty: null,
+    hidden: false,
+    supportedReasoningEfforts: efforts.map((reasoningEffort) => ({
+      reasoningEffort,
+      description: `${reasoningEffort} reasoning`,
+    })),
+    defaultReasoningEffort,
+    inputModalities: ["text"],
+    supportsPersonality: false,
+    multiAgentVersion: null,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+    isDefault,
+  };
+}
+const CATALOGS = {
+  sol: {
+    data: [
+      model("gpt-6.1-sol", ["low", "medium", "high", "xhigh"], "medium", true),
+      model("gpt-5.6-sol", ["low", "medium"], "medium", false),
+    ],
+    thread: { model: "gpt-6.1-sol", reasoningEffort: "medium" },
+  },
+  "no-selector": {
+    data: [model("gpt-5.6-sol", ["low", "medium"], "medium", true)],
+    thread: { model: "gpt-6.1-sol", reasoningEffort: null },
+  },
+};
+const CATALOG = CATALOGS[process.env.FAKE_CODEX_CATALOG ?? ""] ?? {
+  data: [
+    {
+      id: "fake-model",
+      model: "fake-model",
+      displayName: "Fake",
+      description: null,
+      supportedReasoningEfforts: [],
+      isDefault: true,
+      defaultReasoningEffort: null,
+      defaultServiceTier: null,
+    },
+  ],
+  thread: { model: "fake-model", reasoningEffort: null },
+};
+
 let threads = 0;
 
 /** How many turns each thread has had. One process, one test, one counter. */
@@ -80,20 +142,7 @@ function handle(message) {
       reply(message.id, { data: [] });
       return;
     case "model/list":
-      reply(message.id, {
-        data: [
-          {
-            id: "fake-model",
-            model: "fake-model",
-            displayName: "Fake",
-            description: null,
-            supportedReasoningEfforts: [],
-            isDefault: true,
-            defaultReasoningEffort: null,
-            defaultServiceTier: null,
-          },
-        ],
-      });
+      reply(message.id, { data: CATALOG.data });
       return;
     case "mcpServerStatus/list":
       reply(message.id, { data: [] });
@@ -106,7 +155,7 @@ function handle(message) {
       const threadId = `thread-${threads}`;
       reply(message.id, {
         thread: { id: threadId },
-        model: "fake-model",
+        model: CATALOG.thread.model,
         modelProvider: "fake",
         serviceTier: null,
         cwd: process.cwd(),
@@ -114,7 +163,7 @@ function handle(message) {
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandboxPolicy: { mode: "danger-full-access" },
-        reasoningEffort: null,
+        reasoningEffort: CATALOG.thread.reasoningEffort,
         skills: [],
       });
       return;
@@ -126,7 +175,7 @@ function handle(message) {
       const threadId = message.params?.threadId ?? "thread-1";
       reply(message.id, {
         thread: { id: threadId },
-        model: "fake-model",
+        model: CATALOG.thread.model,
         modelProvider: "fake",
         serviceTier: null,
         cwd: process.cwd(),
@@ -134,7 +183,7 @@ function handle(message) {
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandboxPolicy: { mode: "danger-full-access" },
-        reasoningEffort: null,
+        reasoningEffort: CATALOG.thread.reasoningEffort,
         skills: [],
       });
       return;

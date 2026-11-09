@@ -1275,8 +1275,8 @@ permission request therefore receives a concrete decision.
 
 ### The workflow Agent profile
 
-The retained Claude adapter uses the host-installed CLI through the transient
-child-environment seam. The profile supplies no machine-session executable
+The retained Claude and Codex adapters use their host-installed CLIs through the
+transient child-environment seam. The profile supplies no machine-session executable
 observer, coordinator or route store. Its SessionStart confirmation names the
 backend conversation but publishes no mapping until the accepted first turn is
 saved by the provider.
@@ -1462,8 +1462,16 @@ patches or compile the adapter at runtime. JSR, npm and compiled distributions
 carry that same generated snapshot. The installed Claude payload contains one
 patched SDK runtime and no original SDK dependency or platform executable. Its
 host executable selection, identity confirmation, first-turn acceptance and
-cleanup behavior retain their existing contracts. Codex retains its existing
-snapshot and every other provider retains ordinary registry resolution.
+cleanup behavior retain their existing contracts.
+
+Codex retains its maintained archive and generated snapshot route, with
+readable source changes and reproducible source/build correspondence under
+release-process-spec.md §11. Its runtime package has no `@openai/codex`
+dependency; fresh materialization contains no Codex CLI or platform executable
+packages. The adapter launches the selected host executable under Availability
+and Host-owned dependencies. Provider identity, first-turn acceptance,
+completed-turn checkpoints and cleanup retain their existing contracts. Every
+other provider retains ordinary registry resolution.
 
 ### `xmd agent options`
 
@@ -1635,6 +1643,18 @@ unlaunchable selections refuse with host-install/selection recovery before a
 model prompt; the SDK executable is never a fallback. Version output is
 observation rather than an admission condition. Custom agent commands retain
 their own selection, and completed replay performs no selection or launch.
+
+For the retained embedded Codex adapter, live availability selects nonempty
+`CODEX_PATH`, otherwise `codex` on the host PATH. Relative path selections
+resolve against the host execution directory. Selection resolves to a canonical
+executable regular file and verifies that it can start. Missing or unlaunchable
+selection refuses before inference with guidance to install `codex` on the host
+PATH or correct `CODEX_PATH`. A bad explicit selection does not retry the
+default command. Version output and exit status impose no ordinary version
+admission policy. No bundled CLI or download supplies a fallback. Custom
+commands retain their selection; completed replay performs no host selection or
+launch. Native-bound work uses its observed executable under the native
+build-binding contract.
 
 ## ACPX provider
 
@@ -1819,10 +1839,10 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   session capabilities differ from ordinary `xmd run` states both explicitly
   rather than inheriting the package's defaults by omission; `agentProcessEnv`
   lazily selects transient child inputs for the resolved agent command on the
-  availability probe and live runtime. The embedded Claude default applies only
-  to its retained command; another provider or deliberate custom command
-  receives no default Claude overlay. A native-bound operation's observed
-  executable takes precedence. The inputs never enter durable session records
+  availability probe and live runtime. Each embedded Claude or Codex default
+  applies only to its matching retained command; another provider or
+  deliberate custom command receives no default overlay for either agent. A
+  native-bound operation's observed executable takes precedence. The inputs never enter durable session records
   or global process environment. `executableObserver` says how this host
   observes the build behind an executable; `agentCwd` answers with the
   directory an Agent runs in when the contextual one is not a directory an

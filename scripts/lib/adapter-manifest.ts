@@ -19,7 +19,13 @@ export const AdapterManifest = z.object({
   format: z.literal(1),
   snapshots: z.array(
     z.union([
-      snapshot.extend({ tarball: z.string() }),
+      snapshot.extend({
+        tarball: z.string(),
+        patch: z.string(),
+        patchSha256: z.string(),
+        lockSha256: z.string(),
+        executableSha256: z.string(),
+      }),
       snapshot.extend({ recipe: z.string(), module: z.string() }),
     ]),
   ),

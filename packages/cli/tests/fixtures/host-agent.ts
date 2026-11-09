@@ -22,8 +22,9 @@ const root = process.argv[2];
 if (!root) {
   throw new Error("missing private test root");
 }
-const source =
-  '<Agent name="claude"><Session name="review"><Prompt>HC exact user prompt</Prompt></Session></Agent>';
+const agent = process.argv[3] === "codex" ? "codex" : "claude";
+const sessionAttributes = process.argv[4] ?? "";
+const source = `<Agent name="${agent}"><Session name="review"${sessionAttributes}><Prompt>HC exact user prompt</Prompt></Session></Agent>`;
 const adapters = createEmbeddedAdapters(join(root, "adapters"));
 const environment = { ...process.env };
 
@@ -79,10 +80,16 @@ main(function* () {
       );
     let output;
     let failure;
+    let failureMembers: string[] = [];
     try {
       output = yield* attach(false);
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
+      if (error instanceof AggregateError) {
+        failureMembers = error.errors.map((member) =>
+          member instanceof Error ? member.message : String(member),
+        );
+      }
     }
     const connection = new DatabaseSync(workflowRunPath(root, database.record.runId), {
       readOnly: true,
@@ -116,7 +123,7 @@ main(function* () {
     let replayOutput;
     let replayFailure;
     if (failure === undefined) {
-      yield* rm(join(root, "host bin", "claude"), { force: true });
+      yield* rm(join(root, "host bin", agent), { force: true });
       try {
         replayOutput = yield* attach(true);
       } catch (error) {
@@ -128,6 +135,7 @@ main(function* () {
       JSON.stringify({
         output,
         failure,
+        failureMembers,
         mappings,
         journal,
         records,

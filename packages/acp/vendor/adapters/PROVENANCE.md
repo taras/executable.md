@@ -10,7 +10,9 @@ those instead of the adapter `npx` would resolve.
 | `claude` | `@agentclientprotocol/claude-agent-acp` | 0.70.0 | `_meta.claudeCode.assistantMessageUuid`, `executablemd.session-materialization/v1`, `_meta.agentSessionId` |
 
 `MANIFEST.json` records, for each: the exact upstream base and patched commit,
-the preparation command, snapshot byte length and SHA-256, and complete file list. Codex remains in `generated/snapshots.ts`; deps generates Claude in `packages/acp/generated/claude-snapshot.ts`.
+the preparation command, snapshot byte length and SHA-256, and complete file list.
+For Codex it also records the readable source patch with its SHA-256, the
+patched lockfile and the built executable hashes. Codex remains in `generated/snapshots.ts`; deps generates Claude in `packages/acp/generated/claude-snapshot.ts`.
 
 ## Why this exists
 
@@ -106,13 +108,30 @@ These snapshots are what stands in until both land upstream.
 
 The **adapter** is carried. The **agent** is not: neither snapshot contains the
 `claude` or `codex` binary, and neither would be legitimate to redistribute here.
-Codex installs its provider dependency as before. Claude carries one patched SDK
-runtime and installs only the remaining adapter dependencies. The original SDK
+Both adapters run the CLI installed on the host. Codex depends on no Codex CLI
+package. Claude carries one patched SDK runtime and installs only the remaining
+adapter dependencies. The original SDK
 package and its platform executables are absent from fresh materializations.
 
 ## Preparing the carried modules
 
-Codex retains its maintained archive and module, regenerated with:
+Codex retains its maintained archive and module. `codex/adapter.patch` is the
+readable change against `patchedCommit`: the adapter runs `CODEX_PATH` or the
+host's `codex`, and its package drops the `@openai/codex` dependency and its
+lockfile entries. In private scratch, with `XMD` naming this checkout, the
+archive reproduces byte for byte:
+
+```sh
+git clone https://github.com/taras/codex-acp.git && cd codex-acp
+git checkout e1a15637c13e85cca05cd8ba398c5cef92dcaf33
+git apply "$XMD/packages/acp/vendor/adapters/codex/adapter.patch"
+npm ci --ignore-scripts && npm run build && npm pack --ignore-scripts
+```
+
+The lockfile pins the compiler, esbuild 0.28.2. The reviewed build used Node
+26.5.1 and npm 11.17.0. Every recorded hash in `MANIFEST.json`, from the patch
+through the executable and the archive, must match. The encoder below only
+embeds that verified archive and does not rebuild source:
 
 ```sh
 deno run --allow-all scripts/build-adapter-snapshots.ts
@@ -210,7 +229,19 @@ not. Explicit custom agent commands keep their selection.
 
 Fresh Claude materialization runs npm with `--omit=optional`. Only the remaining adapter dependencies are installed; the original SDK package and its platform executable packages are physically absent. Existing content-addressed
 caches are reused unchanged; the new snapshot has its own digest directory.
-Codex installation policy and snapshot bytes remain unchanged.
+
+### Host Codex and fresh installation
+
+The retained Codex adapter uses the host's nonempty `CODEX_PATH`, or `codex`
+resolved through the host execution environment. A missing or unlaunchable
+selection refuses before inference, and a bad explicit selection never retries
+`codex`. Only the matching child receives the selected path; durable session
+records and parent environment do not. Explicit custom agent commands keep their
+selection, and native-bound work keeps its observed executable.
+
+The Codex package has no `@openai/codex` dependency, so fresh materialization
+installs no Codex CLI or platform executable package. The repacked snapshot has
+its own digest directory; earlier caches are neither migrated nor reused.
 
 ### Claude native close and startup cleanup
 
