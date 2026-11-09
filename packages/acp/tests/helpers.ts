@@ -127,10 +127,10 @@ export interface FakeRuntimeHarness {
   /**
    * Whether each ensure, turn and write said its use names a model, in order.
    *
-   * `<call> <hasExplicitModel>`, with `-` for an omitted member, so a case can
-   * state that the presence travelled with exactly the calls it belongs to.
+   * `<call> <requestedModel>`, with `-` for an omitted member, so a case can
+   * state that the requested model travelled with exactly the calls it belongs to.
    */
-  presence: string[];
+  modelRequests: string[];
   closeCalls: AcpRuntimeHandle[];
   /**
    * Every close, whole.
@@ -375,7 +375,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     doctorCalls: 0,
     ensureCalls: [],
     turns: [],
-    presence: [],
+    modelRequests: [],
     handleIds: [],
     startedTurns(count) {
       return {
@@ -415,7 +415,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           }
           harness.activity?.("ensure");
           harness.ensureCalls.push(input);
-          harness.presence.push(`ensure ${input.hasExplicitModel ?? "-"}`);
+          harness.modelRequests.push(`ensure ${input.requestedModel ?? "-"}`);
           const handleId = `${input.sessionKey}#${harness.handleIds.length}`;
           harness.handleIds.push(handleId);
           // Deferred materialization: the record occupies the key and asserts
@@ -470,7 +470,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
         },
         startTurn(input) {
-          harness.presence.push(`turn ${input.hasExplicitModel ?? "-"}`);
+          harness.modelRequests.push(`turn ${input.requestedModel ?? "-"}`);
           harness.activity?.("turn");
           const script = scripted.shift() ?? {};
           const recordId = input.handle.acpxRecordId ?? input.handle.sessionKey;
@@ -633,9 +633,9 @@ export function createFakeRuntime(): FakeRuntimeHarness {
                 handle: AcpRuntimeHandle;
                 key: string;
                 value: string;
-                hasExplicitModel?: boolean;
+                requestedModel?: string;
               }) {
-                harness.presence.push(`set ${input.key} ${input.hasExplicitModel ?? "-"}`);
+                harness.modelRequests.push(`set ${input.key} ${input.requestedModel ?? "-"}`);
                 harness.activity?.(`set ${input.key}=${input.value}`);
                 harness.configCalls.push(`set ${input.key}=${input.value}`);
                 const failure = harness.writeFailures?.[input.key];

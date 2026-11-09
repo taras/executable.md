@@ -86,13 +86,13 @@ type AcpRuntimeEnsureInput = {
    */
   sessionOptions?: SessionAgentOptions;
   /**
-   * Whether this call belongs to a use that explicitly specifies a model.
+   * XMD requested model: the exact model requested by this call's use.
    *
-   * Applies only to this call's Claude reconnects. Omission is false. It carries
-   * no requested value and does not apply or verify configuration. Shared
-   * runtimes refuse true; a non-boolean refuses.
+   * Applies only to this call's Claude reconnects. Its presence selects the
+   * continuation behavior; it does not apply or verify configuration. Shared
+   * runtimes refuse a supplied model; malformed or empty strings refuse.
    */
-  hasExplicitModel?: boolean;
+  requestedModel?: string;
 };
 type AcpRuntimeTurnAttachment = {
   /**
@@ -121,8 +121,8 @@ type AcpRuntimeTurnInput = AcpControlAuthority & {
   onPermissionRequest?: AcpPermissionHandler;
   /** Handles ACP elicitation requests owned by this prompt turn. */
   onElicitation?: AcpElicitationHandler;
-  /** Whether this turn's use names a model; see `AcpRuntimeEnsureInput.hasExplicitModel`. */
-  hasExplicitModel?: boolean;
+  /** XMD requested model: the model requested by this turn's use; see `AcpRuntimeEnsureInput.requestedModel`. */
+  requestedModel?: string;
 };
 /** Caller-owned snapshot; local mutations do not change runtime capabilities. */
 type AcpRuntimeCapabilities = {
@@ -421,8 +421,8 @@ interface AcpRuntime {
     handle: AcpRuntimeHandle;
     key: string;
     value: string;
-    /** Whether this write's use names a model; see `AcpRuntimeEnsureInput.hasExplicitModel`. */
-    hasExplicitModel?: boolean;
+    /** XMD requested model: the model requested by this write's use; see `AcpRuntimeEnsureInput.requestedModel`. */
+    requestedModel?: string;
   }): Promise<SetSessionConfigOptionResponse | void>;
   doctor?(): Promise<AcpRuntimeDoctorReport>;
   cancel(input: {
@@ -798,8 +798,8 @@ export declare class SharedAcpRuntime {
     handle: AcpRuntimeHandle;
     key: string;
     value: string;
-    /** Whether this write's use names a model; see `AcpRuntimeEnsureInput.hasExplicitModel`. */
-    hasExplicitModel?: boolean;
+    /** XMD requested model: the model requested by this write's use; see `AcpRuntimeEnsureInput.requestedModel`. */
+    requestedModel?: string;
   }): Promise<SetSessionConfigOptionResponse>;
   watchSession(input: {
     handle: AcpRuntimeHandle;
@@ -884,8 +884,8 @@ export declare class AcpxRuntime implements AcpxRuntimeLike {
     handle: AcpRuntimeHandle;
     key: string;
     value: string;
-    /** Whether this write's use names a model; see `AcpRuntimeEnsureInput.hasExplicitModel`. */
-    hasExplicitModel?: boolean;
+    /** XMD requested model: the model requested by this write's use; see `AcpRuntimeEnsureInput.requestedModel`. */
+    requestedModel?: string;
   }): Promise<SetSessionConfigOptionResponse>;
   cancel(input: {
     handle: AcpRuntimeHandle;

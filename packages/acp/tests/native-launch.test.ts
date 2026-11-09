@@ -295,7 +295,7 @@ function traceCoordinator(trace: Trace): AgentLaunchCoordinator {
         ...(requested.sessionIdentity === undefined
           ? {}
           : { sessionIdentity: requested.sessionIdentity }),
-        hasExplicitModel: requested.configuration?.model !== undefined,
+        requestedModel: requested.configuration?.model,
         // This trace's setups carry no retained conversation, so there is
         // nothing to be held to and activation only records what the provider
         // declared it was about to build under. It is still required: a
@@ -5088,7 +5088,11 @@ describe("Tier NC — configured native launch", () => {
       expect(trace.launches[0]?.command).toContain(prepared.nativeSessionId);
       // A fresh creation resumes nothing; both writes belong to this use, which
       // names a model.
-      expect(harness.presence).toEqual(["ensure -", "set model true", "set effort true"]);
+      expect(harness.modelRequests).toEqual([
+        "ensure -",
+        "set model gpt-5.4-mini",
+        "set effort gpt-5.4-mini",
+      ]);
     });
   });
 
@@ -5212,11 +5216,11 @@ describe("Tier NC — configured native launch", () => {
         "exited",
       ]);
       // The owed turn is spent under the launch's own configured use.
-      expect(harness.presence).toEqual([
+      expect(harness.modelRequests).toEqual([
         "ensure -",
-        "set model true",
-        "set effort true",
-        "turn true",
+        "set model gpt-5.4-mini",
+        "set effort gpt-5.4-mini",
+        "turn gpt-5.4-mini",
       ]);
     });
   });
@@ -5330,8 +5334,12 @@ describe("Tier NR — configured incomplete replay", () => {
       expect(harness.ensureCalls[0]?.resumeSessionId).toBe(`agent-session:${SESSION_KEY}`);
       expect(harness.turns.length).toBe(0);
       expect(trace.launches[0]?.command).toContain(`agent-session:${SESSION_KEY}`);
-      // The reacquisition resumes under the retained configuration's presence.
-      expect(harness.presence).toEqual(["ensure true", "set model true", "set effort true"]);
+      // The reacquisition resumes under the retained configuration's requested model.
+      expect(harness.modelRequests).toEqual([
+        "ensure gpt-5.4-mini",
+        "set model gpt-5.4-mini",
+        "set effort gpt-5.4-mini",
+      ]);
     });
   });
 
@@ -5566,7 +5574,7 @@ describe("Tier NR — configured incomplete replay", () => {
       expect(trace.order).toEqual(["prepared", "detached", "spawn", "exited"]);
       expect(harness.ensureCalls).toEqual([]);
       expect(harness.configCalls).toEqual([]);
-      expect(harness.presence).toEqual([]);
+      expect(harness.modelRequests).toEqual([]);
     });
   });
 

@@ -170,18 +170,21 @@ can run. The released runtime has no per-call input for that initialization:
 return without constructing the client a later prompt or control reconnects
 through.
 
-The `hasExplicitModel` seam adds one optional boolean to the in-process ensure,
-turn and `setConfigOption` inputs. The runtime refuses a non-boolean, and the
-shared runtime refuses `true` before any effect. The manager hands the value to
-the clients that call constructs — ensure creation, the cold turn client and
-the cold control client — and to nothing else: no record, saved option, handle
-encoding or retained owner holds it, and a retained live client is reused
-unchanged. `AcpClient.continuationMeta()` merges
-`"executablemd.has-explicit-model/v1": true` into Claude `session/load` and
-`session/resume` metadata for a `true` call; `session/new` and other adapters
-are unchanged. `runtime.js` carries validation and forwarding,
-`queue-owner-runtime-B0mPqOu4.js` the metadata, and `runtime.d.ts` the
-declarations.
+The `XMD requested model:` seam carries an optional `requestedModel` string on
+in-process ensure, turn and `setConfigOption` inputs. The runtime rejects a
+supplied value that is not a non-empty string; the shared runtime rejects any
+supplied model before effects. The manager forwards the exact requested value
+to the clients constructed by that call: ensure creation, cold turns and cold
+controls. Records, creation options, encoded handles and retained owners store
+none of it. A retained live client remains unchanged.
+
+`AcpClient.continuationMeta()` checks presence and derives the existing
+`"executablemd.has-explicit-model/v1": true` marker for Claude `session/load`
+and `session/resume`. The adapter does not receive the requested string or use
+it as a substitute for the resumed backend observation. `session/new`, other
+adapters and the readable Claude producer patch are unchanged. `runtime.js`
+owns validation and forwarding, `queue-owner-runtime-B0mPqOu4.js` derives the
+metadata marker, and `runtime.d.ts` declares the inputs.
 
 ## Exact-model replay (#1177)
 

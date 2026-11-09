@@ -246,7 +246,7 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
    */
   class DeliveredSetup {
     readonly #asked: Asked[];
-    readonly hasExplicitModel = false;
+    readonly requestedModel = undefined;
 
     constructor(asked: Asked[]) {
       this.#asked = asked;
@@ -330,18 +330,18 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
     ]);
   });
 
-  it("SC5: a delivered setup must say whether its request names a model", function* () {
-    for (const presence of [undefined, "true", 1]) {
+  it("SC5: a delivered setup carries a valid requested model member", function* () {
+    for (const presence of [undefined, null, true, 1]) {
       const issuance = openSessionRequest("expansion:1", "review");
       let refusal: Error | undefined;
-      let forwarded: boolean | undefined;
+      let forwarded: string | undefined;
       yield* scoped(function* () {
         yield* registerAgentProvider(
           "probe",
           // deno-lint-ignore require-yield
           function* (_options, launchCoordinator): Operation<void> {
             try {
-              forwarded = launchCoordinator.sessionSetup(issuance.request).hasExplicitModel;
+              forwarded = launchCoordinator.sessionSetup(issuance.request).requestedModel;
             } catch (error) {
               refusal = error instanceof Error ? error : new Error(String(error));
             }
@@ -353,7 +353,11 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
           coordinatorAnswering(() => {
             const handle = new DeliveredSetup([]);
             // An untyped embedder's answer, reached without a cast.
-            Reflect.defineProperty(handle, "hasExplicitModel", { value: presence });
+            if (presence === undefined) {
+              Reflect.deleteProperty(handle, "requestedModel");
+            } else {
+              Reflect.defineProperty(handle, "requestedModel", { value: presence });
+            }
             return handle;
           }),
         );
@@ -361,18 +365,18 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
       // No fallback guesses a missing or malformed fact.
       expect(forwarded).toBe(undefined);
       expect(refusal).toBeInstanceOf(AgentProviderInstallError);
-      expect(refusal?.message).toContain("names a model");
+      expect(refusal?.message).toContain("requested model");
     }
 
-    // A real boolean crosses unchanged.
+    // The exact requested model crosses unchanged.
     const issuance = openSessionRequest("expansion:1", "review");
-    let forwarded: boolean | undefined;
+    let forwarded: string | undefined;
     yield* scoped(function* () {
       yield* registerAgentProvider(
         "probe",
         // deno-lint-ignore require-yield
         function* (_options, launchCoordinator): Operation<void> {
-          forwarded = launchCoordinator.sessionSetup(issuance.request).hasExplicitModel;
+          forwarded = launchCoordinator.sessionSetup(issuance.request).requestedModel;
         },
       );
       yield* installAgentProvider(
@@ -380,12 +384,12 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
         OPTIONS,
         coordinatorAnswering(() => {
           const handle = new DeliveredSetup([]);
-          Reflect.defineProperty(handle, "hasExplicitModel", { value: true });
+          Reflect.defineProperty(handle, "requestedModel", { value: "claude-exact-model" });
           return handle;
         }),
       );
     });
-    expect(forwarded).toBe(true);
+    expect(forwarded).toBe("claude-exact-model");
   });
 
   it("SC5: a delivered setup that authorizes nothing is refused", function* () {
@@ -409,7 +413,7 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
         OPTIONS,
         coordinatorAnswering(() => {
           const handle: AgentSessionSetup = {
-            hasExplicitModel: false,
+            requestedModel: undefined,
             // deno-lint-ignore require-yield
             *activate(): Operation<Result<void>> {
               return Ok(undefined);

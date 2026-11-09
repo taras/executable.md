@@ -136,13 +136,13 @@ function observed(entries: Logged[]) {
 
 const KEY = "cr";
 
-function input(world: World, hasExplicitModel?: boolean): AcpRuntimeEnsureInput {
+function input(world: World, requestedModel?: string): AcpRuntimeEnsureInput {
   return {
     sessionKey: KEY,
     agent: "claude",
     mode: "persistent",
     cwd: world.root,
-    ...(hasExplicitModel === undefined ? {} : { hasExplicitModel }),
+    ...(requestedModel === undefined ? {} : { requestedModel }),
   };
 }
 
@@ -151,10 +151,10 @@ function* ownedTurn(
   world: World,
   runtime: Runtime,
   text: string,
-  hasExplicitModel?: boolean,
+  requestedModel?: string,
 ): Operation<{ status: string }> {
   return yield* scoped(function* () {
-    const handle = yield* until(runtime.ensureSession(input(world, hasExplicitModel)));
+    const handle = yield* until(runtime.ensureSession(input(world, requestedModel)));
     yield* ensure(() =>
       until(runtime.close({ handle, reason: "released after the owned prompt" })),
     );
@@ -163,7 +163,7 @@ function* ownedTurn(
       text,
       mode: "prompt",
       requestId: text,
-      ...(hasExplicitModel === undefined ? {} : { hasExplicitModel }),
+      ...(requestedModel === undefined ? {} : { requestedModel }),
     });
     const result = yield* until(turn.result);
     return { status: result.status };
@@ -176,17 +176,17 @@ function* ownedWrite(
   runtime: Runtime,
   key: string,
   value: string,
-  hasExplicitModel?: boolean,
+  requestedModel?: string,
 ): Operation<AcpRuntimeHandle> {
   return yield* scoped(function* () {
-    const handle = yield* until(runtime.ensureSession(input(world, hasExplicitModel)));
+    const handle = yield* until(runtime.ensureSession(input(world, requestedModel)));
     yield* ensure(() => until(runtime.close({ handle, reason: "released after the owned write" })));
     yield* until(
       runtime.setConfigOption({
         handle,
         key,
         value,
-        ...(hasExplicitModel === undefined ? {} : { hasExplicitModel }),
+        ...(requestedModel === undefined ? {} : { requestedModel }),
       }),
     );
     return handle;
@@ -200,11 +200,11 @@ function* established(
   model: string,
   effort?: string,
 ): Operation<void> {
-  yield* ownedWrite(world, runtime, "model", model, true);
+  yield* ownedWrite(world, runtime, "model", model, model);
   if (effort !== undefined) {
-    yield* ownedWrite(world, runtime, "effort", effort, true);
+    yield* ownedWrite(world, runtime, "effort", effort, model);
   }
-  yield* ownedTurn(world, runtime, "first", true);
+  yield* ownedTurn(world, runtime, "first", model);
 }
 
 describe(
@@ -225,7 +225,7 @@ describe(
         expect(observed(yield* logged(world)).modelWrites).toEqual([EXPLICIT]);
 
         for (const text of ["second", "third", "fourth"]) {
-          expect(yield* ownedTurn(world, runtime, text, true)).toEqual({ status: "completed" });
+          expect(yield* ownedTurn(world, runtime, text, EXPLICIT)).toEqual({ status: "completed" });
         }
 
         const entries = (yield* logged(world)).slice(before);
@@ -258,22 +258,22 @@ describe(
         const runtime = runtimeFor(world);
         yield* ensure(() => until(runtime.shutdown()));
         yield* established(world, runtime, EXPLICIT);
-        yield* ownedWrite(world, runtime, "effort", "high", true);
+        yield* ownedWrite(world, runtime, "effort", "high", EXPLICIT);
         const before = (yield* logged(world)).length;
 
         // A cold control reconnect for another setting writes no model.
-        yield* ownedWrite(world, runtime, "effort", "low", true);
+        yield* ownedWrite(world, runtime, "effort", "low", EXPLICIT);
         expect(observed((yield* logged(world)).slice(before)).modelWrites).toEqual([]);
 
         // A genuine change is written once, exactly, and verified in status
         // before the next prompt — which then runs under it with no write.
-        const changed = yield* ownedWrite(world, runtime, "model", ANOTHER, true);
+        const changed = yield* ownedWrite(world, runtime, "model", ANOTHER, ANOTHER);
         const status = yield* until(runtime.getStatus({ handle: changed }));
         expect(status.models?.currentModelId).toBe(ANOTHER);
         // The new model's effort choices are refreshed, so the configured
         // effort is written for it, as session configuration does.
-        yield* ownedWrite(world, runtime, "effort", "low", true);
-        yield* ownedTurn(world, runtime, "after the change", true);
+        yield* ownedWrite(world, runtime, "effort", "low", ANOTHER);
+        yield* ownedTurn(world, runtime, "after the change", ANOTHER);
         const after = observed((yield* logged(world)).slice(before));
         expect(after.modelWrites).toEqual([ANOTHER]);
         expect(after.prompts.map((prompt) => [prompt.model, prompt.effort])).toEqual([
@@ -315,34 +315,37 @@ describe(
       });
     });
 
-    it("CR4: the presence fact reaches only the reconnect and is never retained", function* () {
+    it("CR4: the requested model reaches only this call and is never retained", function* () {
       const world = yield* useWorld("fable");
       yield* scoped(function* () {
         const runtime = runtimeFor(world);
         yield* ensure(() => until(runtime.shutdown()));
         yield* established(world, runtime, EXPLICIT);
-        yield* ownedTurn(world, runtime, "again", true);
+        yield* ownedTurn(world, runtime, "again", EXPLICIT);
         const durable = JSON.stringify([...world.records.values()]);
         expect(durable).not.toContain("has-explicit-model");
-        expect(durable).not.toContain("hasExplicitModel");
+        expect(durable).not.toContain("requestedModel");
         // It never reaches Claude Code's own options or arguments either.
         const launches = (yield* logged(world)).filter((entry) => entry.argv !== undefined);
         expect(JSON.stringify(launches)).not.toContain("has-explicit-model");
-        const handle = yield* until(runtime.ensureSession(input(world, true)));
+        const handle = yield* until(runtime.ensureSession(input(world, EXPLICIT)));
         expect(JSON.stringify(handle)).not.toContain("xplicit");
         yield* until(runtime.close({ handle, reason: "inspected" }));
 
-        // A malformed fact refuses before any effect.
+        // Malformed values refuse before any native work.
         const starts = (yield* logged(world)).length;
-        const malformed = { ...input(world), hasExplicitModel: "yes" as unknown as boolean };
-        const refusal = yield* until(
-          runtime.ensureSession(malformed).then(
-            () => "",
-            (error: Error) => error.message,
-          ),
-        );
-        expect(refusal).toContain("hasExplicitModel must be a boolean");
-        expect((yield* logged(world)).length).toBe(starts);
+        for (const value of [true, false, 1, "", "  "]) {
+          const malformed = input(world);
+          Reflect.set(malformed, "requestedModel", value);
+          const refusal = yield* until(
+            runtime.ensureSession(malformed).then(
+              () => "",
+              (error: Error) => error.message,
+            ),
+          );
+          expect(refusal).toContain("requestedModel must be a non-empty string");
+          expect((yield* logged(world)).length).toBe(starts);
+        }
       });
     });
 
@@ -359,7 +362,7 @@ describe(
         yield* writeTextFile(conversation, JSON.stringify({ ...persisted, model: ANOTHER }));
 
         const before = (yield* logged(world)).length;
-        yield* ownedTurn(world, runtime, "after native", true);
+        yield* ownedTurn(world, runtime, "after native", EXPLICIT);
         const after = observed((yield* logged(world)).slice(before));
         // The reconnect saw the real change, so the selection is written back
         // once — exactly — and the prompt runs under it in the same conversation.
@@ -387,11 +390,11 @@ describe(
       yield* scoped(function* () {
         const runtime = runtimeFor(world, { FAKE_CLAUDE_MODELS: aliasOnly });
         yield* ensure(() => until(runtime.shutdown()));
-        yield* ownedWrite(world, runtime, "model", "fable", true);
+        yield* ownedWrite(world, runtime, "model", "fable", "fable");
         // The backend reports the concrete model behind the alias. Nothing offered
         // names it exactly, so a use naming its own model refuses rather than
         // inventing that row or reading it as the alias.
-        const refused = yield* refusalOfTurn(world, runtime, "flagged", true);
+        const refused = yield* refusalOfTurn(world, runtime, "flagged", "fable");
         expect(refused).toContain("claude-fable-5-1");
         expect(observed(yield* logged(world)).prompts).toEqual([]);
         // Without the fact, the existing behavior stands.
@@ -406,7 +409,7 @@ describe(
         const failing = runtimeFor(unreadable, { FAKE_CLAUDE_CONTEXT_USAGE: "fail" });
         yield* ensure(() => until(failing.shutdown()));
         const prompts = observed(yield* logged(unreadable)).prompts.length;
-        const refused = yield* refusalOfTurn(unreadable, failing, "flagged", true);
+        const refused = yield* refusalOfTurn(unreadable, failing, "flagged", EXPLICIT);
         expect(refused).toContain("could not report the model it runs");
         expect(observed(yield* logged(unreadable)).prompts.length).toBe(prompts);
       });
@@ -454,24 +457,24 @@ describe(
           agentProcessEnv: { WIRE_LOG: wire },
         });
         yield* ensure(() => until(runtime.shutdown()));
-        const ensureInput = (hasExplicitModel?: boolean): AcpRuntimeEnsureInput => ({
+        const ensureInput = (requestedModel?: string): AcpRuntimeEnsureInput => ({
           sessionKey: "wire",
           agent: "agent",
           mode: "persistent",
           cwd: root,
-          ...(hasExplicitModel === undefined ? {} : { hasExplicitModel }),
+          ...(requestedModel === undefined ? {} : { requestedModel }),
         });
         // Created under a flagged call: session/new never carries it.
-        const created = yield* until(runtime.ensureSession(ensureInput(true)));
+        const created = yield* until(runtime.ensureSession(ensureInput(EXPLICIT)));
         yield* until(runtime.close({ handle: created, reason: "release" }));
-        for (const hasExplicitModel of [true, false, undefined, true]) {
-          const handle = yield* until(runtime.ensureSession(ensureInput(hasExplicitModel)));
+        for (const requestedModel of [EXPLICIT, undefined, undefined, ANOTHER]) {
+          const handle = yield* until(runtime.ensureSession(ensureInput(requestedModel)));
           const turn = runtime.startTurn({
             handle,
             text: "hello",
             mode: "prompt",
-            requestId: `turn-${String(hasExplicitModel)}`,
-            ...(hasExplicitModel === undefined ? {} : { hasExplicitModel }),
+            requestId: `turn-${String(requestedModel)}`,
+            ...(requestedModel === undefined ? {} : { requestedModel }),
           });
           yield* until(turn.result);
           yield* until(runtime.close({ handle, reason: "release" }));
@@ -523,7 +526,7 @@ describe(
             sessionKey: "shared",
             agent: "claude",
             mode: "persistent",
-            hasExplicitModel: true,
+            requestedModel: EXPLICIT,
           }),
         ),
       ).toContain("not supported by shared sessions");
@@ -534,12 +537,12 @@ describe(
             text: "x",
             mode: "prompt",
             requestId: "x",
-            hasExplicitModel: true,
+            requestedModel: EXPLICIT,
           }),
         ),
       ).toContain("not supported by shared sessions");
       const write = yield* until(
-        shared.setConfigOption({ handle, key: "model", value: "m", hasExplicitModel: true }).then(
+        shared.setConfigOption({ handle, key: "model", value: "m", requestedModel: EXPLICIT }).then(
           () => "",
           (error: Error) => error.message,
         ),
@@ -679,10 +682,10 @@ function* refusalOfTurn(
   world: World,
   runtime: Runtime,
   text: string,
-  hasExplicitModel: boolean,
+  requestedModel: string,
 ): Operation<string> {
   return yield* scoped(function* () {
-    const handle = yield* until(runtime.ensureSession(input(world, hasExplicitModel)));
+    const handle = yield* until(runtime.ensureSession(input(world, requestedModel)));
     yield* ensure(() => until(runtime.close({ handle, reason: "refused" })));
     try {
       const turn = runtime.startTurn({
@@ -690,7 +693,7 @@ function* refusalOfTurn(
         text,
         mode: "prompt",
         requestId: text,
-        hasExplicitModel,
+        requestedModel,
       });
       const result = yield* until(turn.result);
       return result.status === "completed" ? "" : JSON.stringify(result);

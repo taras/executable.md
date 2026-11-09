@@ -3065,11 +3065,11 @@ var AcpClient = class {
 		const { command, args } = resolveAgentCommandParts(this.options.agentCommand, this.options.agentArgv);
 		return buildClaudeCodeOptionsMeta(this.options.sessionOptions, isClaudeAcpCommand(command, args));
 	}
-	/** hasExplicitModel: this client's own call names a model; only Claude load/resume hears it, never session/new. */
+	/** XMD requested model: only its presence reaches Claude load/resume metadata, never session/new. */
 	continuationMeta() {
 		const meta = this.sessionMeta();
 		const { command, args } = resolveAgentCommandParts(this.options.agentCommand, this.options.agentArgv);
-		if (this.options.hasExplicitModel !== true || !isClaudeAcpCommand(command, args)) return meta;
+		if (this.options.requestedModel === void 0 || !isClaudeAcpCommand(command, args)) return meta;
 		return {
 			...meta,
 			"executablemd.has-explicit-model/v1": true
@@ -3127,7 +3127,7 @@ var AcpClient = class {
 				sessionId,
 				cwd: sessionCwd,
 				mcpServers: this.options.mcpServers ?? [],
-				// hasExplicitModel
+				// XMD requested model: continuation metadata belongs to this call.
 				_meta: this.continuationMeta()
 			}), options.authority);
 			await this.waitForSessionUpdateDrain(options.replayIdleMs ?? REPLAY_IDLE_MS, options.replayDrainTimeoutMs ?? REPLAY_DRAIN_TIMEOUT_MS);
@@ -3147,7 +3147,7 @@ var AcpClient = class {
 			sessionId,
 			cwd: sessionCwd,
 			mcpServers: this.options.mcpServers ?? [],
-			// hasExplicitModel
+			// XMD requested model: continuation metadata belongs to this call.
 			_meta: this.continuationMeta()
 		}), authority);
 		this.loadedSessionId = sessionId;

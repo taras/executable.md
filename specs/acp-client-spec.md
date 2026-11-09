@@ -455,23 +455,25 @@ history. A provider that cannot reconfigure that conversation in place refuses.
 
 A provider that releases its handle after each owned operation reconnects for
 the next one, and a reconnect initializes the resumed conversation before the
-steps above can run. Each attaching call therefore states, for itself only,
-whether the use it belongs to names a model — `hasExplicitModel` on the ensure,
-turn and configuration-write inputs of the in-process runtime. Eager existing
-resolution takes it from its setup; a prompt or launch from its final authentic
-configuration; a retained launch's reacquisition from its retained
-configuration. A configuration attempt's restoring writes carry the same fact
-as its ordinary ones. Discovery and unconfigured or effort-only uses omit it,
-and omission is false.
+steps above can run. Each attaching call therefore carries its use's explicitly
+requested model as
+`requestedModel` on the ensure, turn and configuration-write inputs of the
+in-process runtime. Eager existing resolution takes the exact string from its
+setup; a prompt or launch from its final authentic configuration; a retained
+launch's reacquisition from its retained configuration. Ordinary and restoring
+writes carry the same request's model. Discovery and unconfigured or effort-only
+uses omit it.
 
-The fact reaches only the client constructions that call itself performs. It is
-never saved in creation options, records, routes, journals, encoded handles or
-any provider state, so a later operation supplies its own; a retained live
-client is not reinitialized for a later use. A non-boolean value refuses, and a
-shared runtime refuses `true` before any effect. A Claude `session/load` or
-`session/resume` for a call that names a model carries
-`_meta["executablemd.has-explicit-model/v1"]: true`; `session/new` and other
-adapters carry nothing.
+The requested value reaches only the client constructions that call itself
+performs. It neither applies configuration nor replaces the resumed model
+observation. It is never saved in creation options, records, routes, journals,
+encoded handles or provider state; a later operation supplies its own value,
+and a retained live client is not reinitialized for a later use. A supplied
+value must be a non-empty string. A shared runtime refuses a supplied model
+before any effect. On Claude `session/load` or `session/resume`, the client
+checks `requestedModel !== undefined` and derives the existing
+`_meta["executablemd.has-explicit-model/v1"]: true` marker. The model string
+stays within the runtime; `session/new` and other adapters carry no marker.
 
 On such a resume the prepared Claude adapter reasserts no environment or
 settings model. It reads the model the resumed backend reports and advertises
@@ -578,7 +580,7 @@ interface ProviderSessionConfiguration {
 
 interface AgentSessionSetup {
   readonly sessionIdentity?: string;
-  readonly hasExplicitModel: boolean;
+  readonly requestedModel: string | undefined;
   activate(
     provider: string,
     agentCommand: string,
@@ -633,15 +635,16 @@ conversation's scope.
 
 `sessionSetup()` accepts one exact live opaque session request. Its handle
 exposes the optional durable component identity, authorizes provider work once,
-and settles that request once. `hasExplicitModel` says whether that final
-request's configuration names a model: true for `model` alone or with
-`effort`, false for omission and `effort` alone. It describes the request only —
-it authorizes nothing, says nothing has been applied, and carries no value; the
-requested settings stay private until `finish()` hands them to `configure`. It
-exists so an eager reattachment can initialize correctly before `finish()`
-(§Session configuration). The structural adapter forwards a real boolean and
-refuses a setup that supplies anything else; public request middleware receives
-no such member. For a new Session, `finish()` issues the
+and settles that request once. `requestedModel` is the exact model string named
+by that final
+request's configuration, or `undefined` for omission and effort-only requests.
+It describes the request only: it authorizes nothing and does not claim that
+configuration has been applied. `finish()` still hands the requested settings
+to `configure` for application and verification. Exposing the requested model
+lets an eager reattachment choose continuation behavior before `finish()`
+(§Session configuration). The structural adapter requires the member, forwards
+a string or `undefined`, and refuses a missing member or another value type;
+public request middleware receives no such member. For a new Session, `finish()` issues the
 configured use without reading or writing provider configuration. For an
 existing Session, it invokes the provider's stable `configure` operation,
 requires the returned canonical value to equal the requested members exactly,
@@ -1716,7 +1719,7 @@ its caller supplied, from Prompt `timeout` or the enclosing AgentProvider
   one: it takes ownership where the agent needs it, reconciles the retained
   route, ensures through the bound runtime, validates the exact identity and
   host mapping, releases the handle, and starts no turn. That ensure carries
-  its setup's `hasExplicitModel` (§A configured conversation that reconnects).
+  its setup's `requestedModel` (§A configured conversation that reconnects).
 
   Directory resolution classifies a record still carrying ACPX's own pending
   marker as new, and a record without one — including every record written

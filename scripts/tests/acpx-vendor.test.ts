@@ -40,7 +40,7 @@ const SEAMS: readonly string[] = [
   "Strict explicit resume:",
   "XMD prompt diagnostic:",
   "XMD prompt usage:",
-  "hasExplicitModel",
+  "XMD requested model:",
   "XMD exact-model replay:",
 ];
 
