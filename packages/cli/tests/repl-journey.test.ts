@@ -2141,6 +2141,64 @@ describe("REPL original complete History and cold catalog", () => {
     expect(yield* readTextFile(hot.path)).toBe(bytes);
     released(page.repl.terminal);
   });
+
+  it("EC2: an entry whose texts once shared one measured width reopens exact, with no work", function* () {
+    // The two prose lines hashed alike in the published engine's measurement
+    // cache, which gave the second one the first one's width (#1216).
+    const short = "synthetic sample synthetic sample synthetic sample 022aa2";
+    const long =
+      "synthetic sample synthetic sample synthetic sample synthetic sample synthetic sample 01fda4";
+    const colliding = `${short}\n\n${long}\n`;
+    const dataRoot = yield* useTemporary("xmd-cold-collision-");
+    const hot = yield* scoped(function* () {
+      const page = yield* referencePageFor(dataRoot);
+      yield* runSource(page, colliding);
+      yield* entrySettles(page, 1, "ok");
+      yield* runSource(page, FIRST_COLD);
+      yield* entrySettles(page, 2, "ok");
+      const expected = expectedPositions(yield* retainedModel(page));
+      yield* selectCatalog(page, "entry-1");
+      return {
+        expected,
+        location: yield* leaveWithLocation(page),
+        path: yield* executionJournal(page),
+      };
+    });
+    const bytes = yield* readTextFile(hot.path);
+    const host = yield* useMountedHost({ dataRoot, includes: [REFERENCE_DIRECTORY] });
+    yield* noNewExecution();
+    const work = yield* performedWork();
+    const page = yield* useReplPage({ host, location: hot.location, size: WIDE });
+    const exact = (one: ScreenReading): boolean =>
+      one.shows("022aa2") && one.shows("01fda4") && trail(one).includes("Entry 1");
+    expect(page.screen().shows("HEAD · SETTLED")).toBe(true);
+    expect(exact(page.screen())).toBe(true);
+    yield* openHistory(page);
+    yield* page.press(hot.expected[0] ?? "");
+    yield* page.until("the first prefix", (one) => one.shows("[live]"));
+    yield* closeDrawer(page);
+    expect(exact(page.screen())).toBe(true);
+    yield* page.press("[live]");
+    yield* page.until("the settled head", (one) => !one.shows("[live]"));
+    yield* selectCatalog(page, "entry-2");
+    expect(trail(page.screen())).toContain("Entry 2");
+    yield* selectCatalog(page, "entry-1");
+    for (const size of [NARROW, { columns: 120, rows: 30 }, WIDE]) {
+      const shown = yield* page.resize(size);
+      expect(shown.rows.filter((row) => row.length > size.columns)).toEqual([]);
+      expect(exact(shown)).toBe(true);
+    }
+    expect((yield* retainedModel(page)).entries.map((one) => one.source)).toEqual([
+      colliding,
+      FIRST_COLD,
+    ]);
+    expect(yield* leaveWithLocation(page)).not.toBe("");
+    expect(work.compiles).toBe(0);
+    expect(work.asked).toBe(0);
+    expect(work.reads.filter((one) => one.endsWith(".md"))).toEqual([]);
+    expect(yield* readTextFile(hot.path)).toBe(bytes);
+    released(page.repl.terminal);
+  });
 });
 function referencePageFor(dataRoot: string): Operation<ReplPage> {
   return useReplPage({ dataRoot, includes: [REFERENCE_DIRECTORY], size: WIDE });

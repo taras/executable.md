@@ -1,5 +1,5 @@
 import { exec, Stdio } from "@effectionx/process";
-import { copyFile, ensureDir, exists } from "@effectionx/fs";
+import { copyFile, ensureDir, exists, readdir } from "@effectionx/fs";
 import { scoped, until } from "effection";
 import type { Operation } from "effection";
 import { symlink } from "node:fs/promises";
@@ -16,10 +16,13 @@ export function* copyPreparedCandidate(destination: string): Operation<void> {
       cwd: fileURLToPath(repo),
     }).expect();
   });
+  const tty = "packages/cli/generated/tty";
+  const runtime = (yield* exists(new URL(tty, repo))) ? yield* readdir(new URL(tty, repo)) : [];
   for (const path of [
     ...listed.stdout.split("\0").filter(Boolean),
     "packages/web/generated/client-bundle.ts",
     "packages/acp/generated/claude-snapshot.ts",
+    ...runtime.map((name) => `${tty}/${name}`),
   ]) {
     if (yield* exists(new URL(path, repo))) {
       yield* ensureDir(dirname(join(destination, path)));
