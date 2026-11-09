@@ -161,6 +161,45 @@ Remove the correction only when a published runtime exposes the same per-turn
 identities and selected readings on every ending and passes the same
 deterministic consumers and offline vendor verification.
 
+## Explicit-model continuation (#1177)
+
+A provider releases its handle after each owned operation, so the next one
+reconnects and the resumed adapter initializes before any client configuration
+can run. The released runtime has no per-call input for that initialization:
+`sessionOptions` are persisted creation inputs, and a compatible ensure may
+return without constructing the client a later prompt or control reconnects
+through.
+
+The `hasExplicitModel` seam adds one optional boolean to the in-process ensure,
+turn and `setConfigOption` inputs. The runtime refuses a non-boolean, and the
+shared runtime refuses `true` before any effect. The manager hands the value to
+the clients that call constructs — ensure creation, the cold turn client and
+the cold control client — and to nothing else: no record, saved option, handle
+encoding or retained owner holds it, and a retained live client is reused
+unchanged. `AcpClient.continuationMeta()` merges
+`"executablemd.has-explicit-model/v1": true` into Claude `session/load` and
+`session/resume` metadata for a `true` call; `session/new` and other adapters
+are unchanged. `runtime.js` carries validation and forwarding,
+`queue-owner-runtime-B0mPqOu4.js` the metadata, and `runtime.d.ts` the
+declarations.
+
+## Exact-model replay (#1177)
+
+On reconnect, `replayDesiredModel` re-applied the saved model selection whenever
+the resumed session advertised models, even when the session already reported
+that model. The `XMD exact-model replay:` seam returns the existing no-replay
+result for a resumed session whose freshly reported `currentModelId` is
+exactly the saved desired id, after the existing support validation and before
+any write. Equality with a resolved alias counterpart does not qualify, and a
+fresh replacement session replays as before. A different id keeps the existing
+write, acknowledgement, record update and failure path; mode and other
+config-option replay are unchanged.
+
+Remove both seams only when a published runtime supplies a per-call
+continuation input and an equal-model replay skip that pass the same
+reconnect regressions (`packages/acp/tests/claude-reconnect.test.ts`) and
+offline vendor verification.
+
 ## Released environment seam (#566)
 
 The released runtime snapshots `agentProcessEnv`, delivers it to every child and

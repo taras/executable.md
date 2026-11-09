@@ -1387,7 +1387,7 @@ var AcpRuntimeManager = class {
 			terminal: this.options.terminal
 		};
 	}
-	async withRuntimeControlSession(record, sessionMode, run, replayOptions, authority) {
+	async withRuntimeControlSession(record, sessionMode, run, replayOptions, authority, hasExplicitModel = false) {
 		await this.retrySessionCleanup(record.acpxRecordId);
 		assertControlAuthority(authority);
 		const owner = await this.readRetainedSessionOwner(record, { consume: false });
@@ -1424,6 +1424,7 @@ var AcpRuntimeManager = class {
 				saveRecord: async () => checkpoint.checkpoint(),
 				createClient: (options) => controlClient = this.createClient({
 					...options,
+					hasExplicitModel,
 					processLifecycle: this.options.processLifecycle,
 					processLaunchScope: {
 						kind: "runtime-session",
@@ -1611,7 +1612,8 @@ var AcpRuntimeManager = class {
 				sessionKey: input.sessionKey
 			},
 			verbose: this.options.verbose,
-			sessionOptions: input.sessionOptions
+			sessionOptions: input.sessionOptions,
+			hasExplicitModel: input.hasExplicitModel === true
 		});
 		const owner = this.createSessionOwner({
 			client,
@@ -1857,7 +1859,8 @@ var AcpRuntimeManager = class {
 	async prepareRuntimeTurnWithOwnership(task) {
 		const { record, retainedOwner, conversation, acpxState, promptMessageId } = await this.prepareRuntimeTurnState(task);
 		try {
-			const client = retainedOwner?.client ?? this.createTurnClient(record);
+			// hasExplicitModel: a retained live client is not reinitialized for a later use.
+			const client = retainedOwner?.client ?? this.createTurnClient(record, task.input.hasExplicitModel === true);
 			const owner = this.resolveRuntimeTurnOwner(task, record, client, retainedOwner);
 			const turn = this.createRunningRuntimeTurn({
 				record,
@@ -1965,7 +1968,7 @@ var AcpRuntimeManager = class {
 		owner.bufferSessionUpdates = false;
 		this.drainPendingSessionUpdates(owner);
 	}
-	createTurnClient(record) {
+	createTurnClient(record, hasExplicitModel = false) {
 		return this.createClient({
 			agentCommand: record.agentCommand,
 			agentArgv: record.agentArgv,
@@ -1986,7 +1989,8 @@ var AcpRuntimeManager = class {
 				sessionKey: record.name ?? record.acpxRecordId
 			},
 			verbose: this.options.verbose,
-			sessionOptions: sessionOptionsFromRecord(record)
+			sessionOptions: sessionOptionsFromRecord(record),
+			hasExplicitModel
 		});
 	}
 	buildRuntimeTurnController(task, turn) {
@@ -2253,11 +2257,11 @@ var AcpRuntimeManager = class {
 			connectedRecord.acpx = applyModelSelection(connectedRecord.acpx, model, response, resolvedModelId);
 		}, { replacingConfigOption: { key: "model" } }, authority);
 	}
-	async setConfigOption(handle, key, value, sessionMode = "persistent", authority) {
+	async setConfigOption(handle, key, value, sessionMode = "persistent", authority, hasExplicitModel = false) {
 		const recordId = handle.acpxRecordId ?? handle.sessionKey;
-		return await this.withManagerLock(this.runtimeOperationLocks, recordId, async () => this.setConfigOptionWithOwnership(handle, key, value, sessionMode, authority), authority);
+		return await this.withManagerLock(this.runtimeOperationLocks, recordId, async () => this.setConfigOptionWithOwnership(handle, key, value, sessionMode, authority, hasExplicitModel), authority);
 	}
-	async setConfigOptionWithOwnership(handle, key, value, sessionMode, authority) {
+	async setConfigOptionWithOwnership(handle, key, value, sessionMode, authority, hasExplicitModel) {
 		const record = await this.requireRecord(handle.acpxRecordId ?? handle.sessionKey);
 		assertControlAuthority(authority);
 		const controller = this.activeControllers.get(record.acpxRecordId);
@@ -2280,7 +2284,7 @@ var AcpRuntimeManager = class {
 		}, { replacingConfigOption: {
 			key,
 			resolve: (connectedRecord) => resolveSupportedConfigOptionId(connectedRecord, key)
-		} }, authority);
+		} }, authority, hasExplicitModel);
 	}
 	async cancel(handle) {
 		await this.activeControllers.get(handle.acpxRecordId ?? handle.sessionKey)?.requestCancelActivePrompt();
@@ -2504,6 +2508,16 @@ const SHARED_BACKEND = "acpx-shared";
 function invalidOption(message) {
 	throw new AcpRuntimeError("ACP_INVALID_RUNTIME_OPTION", message);
 }
+/** hasExplicitModel: a call's own presence fact; omission is false and nothing else is accepted. */
+function hasExplicitModelOf(input) {
+	const hasExplicitModel = input?.hasExplicitModel;
+	if (hasExplicitModel !== void 0 && typeof hasExplicitModel !== "boolean") invalidOption("hasExplicitModel must be a boolean when supplied.");
+	return hasExplicitModel === true;
+}
+/** hasExplicitModel reaches only in-process Claude reconnects; shared sessions refuse it before any effect. */
+function refuseSharedHasExplicitModel(input) {
+	if (hasExplicitModelOf(input)) invalidOption("hasExplicitModel belongs to the in-process runtime and is not supported by shared sessions.");
+}
 function sharedHandle(record) {
 	return {
 		backend: SHARED_BACKEND,
@@ -2599,6 +2613,7 @@ var SharedAcpRuntime = class {
 	}
 	ensureSession(input) {
 		this.assertOpen();
+		refuseSharedHasExplicitModel(input);
 		if (input.mode !== "persistent") invalidOption("Shared sessions require persistent mode; use the in-process runtime for oneshot sessions.");
 		const session = this.sessionOptions(input);
 		return this.track(ensureSession({
@@ -2616,6 +2631,7 @@ var SharedAcpRuntime = class {
 	}
 	startTurn(input) {
 		this.assertOpen();
+		refuseSharedHasExplicitModel(input);
 		if (input.mode !== "prompt" || input.assertActive || input.onPermissionRequest || input.onElicitation) invalidOption("Shared turns support prompt mode and the client's static permission policy; in-process callbacks and steering are unsupported.");
 		if (!input.requestId.trim()) invalidOption("A shared turn requires a requestId.");
 		const sessionId = sharedRecordId(input.handle);
@@ -2763,6 +2779,7 @@ var SharedAcpRuntime = class {
 		}));
 	}
 	async setConfigOption(input) {
+		refuseSharedHasExplicitModel(input);
 		return (await this.dispatchControl(input, "session/set_config_option", async (sessionId, assertAuthority) => {
 			const configId = resolveSupportedConfigOptionId(await resolveSessionRecord(sessionId), input.key);
 			assertAuthority();
@@ -2864,6 +2881,7 @@ var AcpxRuntime = class {
 	}
 	async ensureSession(input) {
 		const { sessionName, agent } = this.resolveSessionIdentity(input);
+		const hasExplicitModel = hasExplicitModelOf(input);
 		const record = await (await this.getManager()).ensureSession({
 			sessionKey: sessionName,
 			agent,
@@ -2871,7 +2889,8 @@ var AcpxRuntime = class {
 			cwd: input.cwd ?? this.options.cwd,
 			resumeSessionId: input.resumeSessionId,
 			sessionOptions: input.sessionOptions,
-			materialization: input.materialization
+			materialization: input.materialization,
+			hasExplicitModel
 		});
 		return this.createSessionHandle({
 			...input,
@@ -2901,6 +2920,7 @@ var AcpxRuntime = class {
 	}
 	startTurn(input) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
+		const hasExplicitModel = hasExplicitModelOf(input);
 		const turnPromise = this.getManager().then((manager) => manager.startTurn({
 			handle,
 			text: input.text,
@@ -2912,7 +2932,8 @@ var AcpxRuntime = class {
 			signal: input.signal,
 			assertActive: input.assertActive,
 			onElicitation: input.onElicitation,
-			onPermissionRequest: input.onPermissionRequest
+			onPermissionRequest: input.onPermissionRequest,
+			hasExplicitModel
 		}));
 		turnPromise.catch(() => {});
 		const sessionMaterialization = turnPromise.then((turn) => turn.materialized);
@@ -2939,6 +2960,7 @@ var AcpxRuntime = class {
 	}
 	async *runTurn(input) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
+		const hasExplicitModel = hasExplicitModelOf(input);
 		yield* (await this.getManager()).runTurn({
 			handle,
 			text: input.text,
@@ -2950,7 +2972,8 @@ var AcpxRuntime = class {
 			signal: input.signal,
 			assertActive: input.assertActive,
 			onElicitation: input.onElicitation,
-			onPermissionRequest: input.onPermissionRequest
+			onPermissionRequest: input.onPermissionRequest,
+			hasExplicitModel
 		});
 	}
 	async getCapabilities(input) {
@@ -2972,7 +2995,8 @@ var AcpxRuntime = class {
 	}
 	async setConfigOption(input) {
 		const { handle, state } = this.resolveManagerHandle(input.handle);
-		return await (await this.getManager()).setConfigOption(handle, input.key, input.value, state.mode, input);
+		const hasExplicitModel = hasExplicitModelOf(input);
+		return await (await this.getManager()).setConfigOption(handle, input.key, input.value, state.mode, input, hasExplicitModel);
 	}
 	async cancel(input) {
 		const { handle } = this.resolveManagerHandle(input.handle);

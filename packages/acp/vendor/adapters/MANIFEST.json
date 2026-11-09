@@ -37,8 +37,8 @@
       "license": "Apache-2.0",
       "contract": "_meta.claudeCode.assistantMessageUuid",
       "materializationContract": "session_info_update _meta[executablemd.session-materialization/v1]",
-      "byteLength": 2004653,
-      "sha256": "773db68c6b94fcf34540d387017247d6893f42359337a167a42baf636eef2685",
+      "byteLength": 2006701,
+      "sha256": "7bb5296c72adb4268f8dc9ed484b53fd2aa6b1b16ab30868d7b8dfb63501257e",
       "files": [
         "package/LICENSE",
         "package/README.md",

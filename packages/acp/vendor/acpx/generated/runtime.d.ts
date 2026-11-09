@@ -85,6 +85,14 @@ type AcpRuntimeEnsureInput = {
    * different sessionKey or prepareFreshSession on the prior record first.
    */
   sessionOptions?: SessionAgentOptions;
+  /**
+   * Whether this call belongs to a use that explicitly specifies a model.
+   *
+   * Applies only to this call's Claude reconnects. Omission is false. It carries
+   * no requested value and does not apply or verify configuration. Shared
+   * runtimes refuse true; a non-boolean refuses.
+   */
+  hasExplicitModel?: boolean;
 };
 type AcpRuntimeTurnAttachment = {
   /**
@@ -113,6 +121,8 @@ type AcpRuntimeTurnInput = AcpControlAuthority & {
   onPermissionRequest?: AcpPermissionHandler;
   /** Handles ACP elicitation requests owned by this prompt turn. */
   onElicitation?: AcpElicitationHandler;
+  /** Whether this turn's use names a model; see `AcpRuntimeEnsureInput.hasExplicitModel`. */
+  hasExplicitModel?: boolean;
 };
 /** Caller-owned snapshot; local mutations do not change runtime capabilities. */
 type AcpRuntimeCapabilities = {
@@ -411,6 +421,8 @@ interface AcpRuntime {
     handle: AcpRuntimeHandle;
     key: string;
     value: string;
+    /** Whether this write's use names a model; see `AcpRuntimeEnsureInput.hasExplicitModel`. */
+    hasExplicitModel?: boolean;
   }): Promise<SetSessionConfigOptionResponse | void>;
   doctor?(): Promise<AcpRuntimeDoctorReport>;
   cancel(input: {
@@ -786,6 +798,8 @@ export declare class SharedAcpRuntime {
     handle: AcpRuntimeHandle;
     key: string;
     value: string;
+    /** Whether this write's use names a model; see `AcpRuntimeEnsureInput.hasExplicitModel`. */
+    hasExplicitModel?: boolean;
   }): Promise<SetSessionConfigOptionResponse>;
   watchSession(input: {
     handle: AcpRuntimeHandle;
@@ -870,6 +884,8 @@ export declare class AcpxRuntime implements AcpxRuntimeLike {
     handle: AcpRuntimeHandle;
     key: string;
     value: string;
+    /** Whether this write's use names a model; see `AcpRuntimeEnsureInput.hasExplicitModel`. */
+    hasExplicitModel?: boolean;
   }): Promise<SetSessionConfigOptionResponse>;
   cancel(input: {
     handle: AcpRuntimeHandle;

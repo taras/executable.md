@@ -1515,7 +1515,10 @@ degrading:
   first live phase — the detach for a launch that never handed over, the spawn
   for one that did — it reconciles its route and build, reattaches by the exact
   retained identity, puts the retained configuration back into force, and
-  relinquishes ACP again without authoring a second detach.
+  relinquishes ACP again without authoring a second detach. That reattachment,
+  and a configured launch's owed materialization turn, state whether their
+  configuration names a model exactly as any other attaching call does
+  ([ACP client §A configured conversation that reconnects](acp-client-spec.md#a-configured-conversation-that-reconnects)).
 - **Released launch model members never become configuration.** A non-empty
   `requestedModel` or top-level observational `model` string is validated and
   discarded while reading an older preparation; a malformed value refuses the

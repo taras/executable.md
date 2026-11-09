@@ -3065,6 +3065,16 @@ var AcpClient = class {
 		const { command, args } = resolveAgentCommandParts(this.options.agentCommand, this.options.agentArgv);
 		return buildClaudeCodeOptionsMeta(this.options.sessionOptions, isClaudeAcpCommand(command, args));
 	}
+	/** hasExplicitModel: this client's own call names a model; only Claude load/resume hears it, never session/new. */
+	continuationMeta() {
+		const meta = this.sessionMeta();
+		const { command, args } = resolveAgentCommandParts(this.options.agentCommand, this.options.agentArgv);
+		if (this.options.hasExplicitModel !== true || !isClaudeAcpCommand(command, args)) return meta;
+		return {
+			...meta,
+			"executablemd.has-explicit-model/v1": true
+		};
+	}
 	async createSession(cwd = this.options.cwd, authority) {
 		assertControlAuthority(authority);
 		const connection = this.getConnection();
@@ -3117,7 +3127,8 @@ var AcpClient = class {
 				sessionId,
 				cwd: sessionCwd,
 				mcpServers: this.options.mcpServers ?? [],
-				_meta: this.sessionMeta()
+				// hasExplicitModel
+				_meta: this.continuationMeta()
 			}), options.authority);
 			await this.waitForSessionUpdateDrain(options.replayIdleMs ?? REPLAY_IDLE_MS, options.replayDrainTimeoutMs ?? REPLAY_DRAIN_TIMEOUT_MS);
 		} finally {
@@ -3136,7 +3147,8 @@ var AcpClient = class {
 			sessionId,
 			cwd: sessionCwd,
 			mcpServers: this.options.mcpServers ?? [],
-			_meta: this.sessionMeta()
+			// hasExplicitModel
+			_meta: this.continuationMeta()
 		}), authority);
 		this.loadedSessionId = sessionId;
 		const result = toReconnectedSessionResult(response);
@@ -4993,6 +5005,8 @@ async function replayDesiredModel(params) {
 			models: params.models,
 			agentCommand: params.record.agentCommand
 		});
+		// XMD exact-model replay: a resumed session already reporting the identical saved id needs no write.
+		if (!params.createdFreshSession && params.models.currentModelId === params.desiredModelId) return { replayed: false };
 		const response = await withTimeout(params.client.setSessionModel(params.sessionId, params.desiredModelId, params.models, params.replay.authority), params.timeoutMs);
 		params.replay.acknowledged = true;
 		params.record.acpx = applyModelSelection(params.record.acpx, params.desiredModelId, response, resolvedModelId);

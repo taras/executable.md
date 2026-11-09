@@ -246,6 +246,7 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
    */
   class DeliveredSetup {
     readonly #asked: Asked[];
+    readonly hasExplicitModel = false;
 
     constructor(asked: Asked[]) {
       this.#asked = asked;
@@ -329,6 +330,64 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
     ]);
   });
 
+  it("SC5: a delivered setup must say whether its request names a model", function* () {
+    for (const presence of [undefined, "true", 1]) {
+      const issuance = openSessionRequest("expansion:1", "review");
+      let refusal: Error | undefined;
+      let forwarded: boolean | undefined;
+      yield* scoped(function* () {
+        yield* registerAgentProvider(
+          "probe",
+          // deno-lint-ignore require-yield
+          function* (_options, launchCoordinator): Operation<void> {
+            try {
+              forwarded = launchCoordinator.sessionSetup(issuance.request).hasExplicitModel;
+            } catch (error) {
+              refusal = error instanceof Error ? error : new Error(String(error));
+            }
+          },
+        );
+        yield* installAgentProvider(
+          "probe",
+          OPTIONS,
+          coordinatorAnswering(() => {
+            const handle = new DeliveredSetup([]);
+            // An untyped embedder's answer, reached without a cast.
+            Reflect.defineProperty(handle, "hasExplicitModel", { value: presence });
+            return handle;
+          }),
+        );
+      });
+      // No fallback guesses a missing or malformed fact.
+      expect(forwarded).toBe(undefined);
+      expect(refusal).toBeInstanceOf(AgentProviderInstallError);
+      expect(refusal?.message).toContain("names a model");
+    }
+
+    // A real boolean crosses unchanged.
+    const issuance = openSessionRequest("expansion:1", "review");
+    let forwarded: boolean | undefined;
+    yield* scoped(function* () {
+      yield* registerAgentProvider(
+        "probe",
+        // deno-lint-ignore require-yield
+        function* (_options, launchCoordinator): Operation<void> {
+          forwarded = launchCoordinator.sessionSetup(issuance.request).hasExplicitModel;
+        },
+      );
+      yield* installAgentProvider(
+        "probe",
+        OPTIONS,
+        coordinatorAnswering(() => {
+          const handle = new DeliveredSetup([]);
+          Reflect.defineProperty(handle, "hasExplicitModel", { value: true });
+          return handle;
+        }),
+      );
+    });
+    expect(forwarded).toBe(true);
+  });
+
   it("SC5: a delivered setup that authorizes nothing is refused", function* () {
     const issuance = openSessionRequest("expansion:1", "review");
     let refusal: Error | undefined;
@@ -350,6 +409,7 @@ describe("Tier RP — what the delivery adapter carries to a provider", () => {
         OPTIONS,
         coordinatorAnswering(() => {
           const handle: AgentSessionSetup = {
+            hasExplicitModel: false,
             // deno-lint-ignore require-yield
             *activate(): Operation<Result<void>> {
               return Ok(undefined);

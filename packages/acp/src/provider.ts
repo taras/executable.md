@@ -516,6 +516,18 @@ type Prepared =
     };
 
 /** The logical name a routed value carries, when it is one. */
+/**
+ * The runtime member a call carries when its use names a model.
+ *
+ * Present only when true: omission is the runtime's false, and nothing about
+ * the requested value travels with it.
+ */
+function explicitModel(configuration: SessionConfiguration | undefined): {
+  hasExplicitModel?: true;
+} {
+  return configuration?.model === undefined ? {} : { hasExplicitModel: true };
+}
+
 function asName(routed: string | Session | undefined): string | undefined {
   return typeof routed === "string" ? routed : undefined;
 }
@@ -1803,6 +1815,11 @@ function* useAcpxProviderState(
      * acceptance rather than after this ensure.
      */
     deferEstablished?: boolean;
+    /**
+     * Whether the use this ensure belongs to names a model, for the reconnect
+     * this ensure itself may perform. Never kept on the entry it returns.
+     */
+    hasExplicitModel?: boolean;
   }
 
   function* ensureFromPrepared(
@@ -1840,6 +1857,7 @@ function* useAcpxProviderState(
           ...(intent.materialization === true
             ? { materialization: "first-turn-acceptance" as const }
             : {}),
+          ...(intent.hasExplicitModel === true ? { hasExplicitModel: true } : {}),
         },
         (handle, entry) => {
           // The exact value this provider already issued, when it issued one.
@@ -2611,6 +2629,7 @@ function* useAcpxProviderState(
     agentName: string,
     entry: ManagedSession,
     requireWrite: boolean,
+    configuration?: SessionConfiguration,
   ): ConfigurationTarget {
     const runtime = entry.runtime.runtime;
     const readStatus = runtime.getStatus;
@@ -2664,6 +2683,9 @@ function* useAcpxProviderState(
               handle: entry.handle,
               key: optionId,
               value,
+              // The same attempt's presence for its ordinary and restoring
+              // writes alike: either may be the one that reconnects.
+              ...explicitModel(configuration),
             })
             .then(() => undefined);
           yield* until(pending);
@@ -2718,7 +2740,7 @@ function* useAcpxProviderState(
     configuration: SessionConfiguration,
   ): Operation<SessionConfiguration> {
     const selectors = yield* applySessionConfiguration(
-      configurationTarget(agentName, entry, true),
+      configurationTarget(agentName, entry, true, configuration),
       configuration,
     );
     return {
@@ -2896,6 +2918,7 @@ function* useAcpxProviderState(
             ...(construction === undefined ? {} : { build: construction.build }),
             ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
             state,
+            ...explicitModel(desired),
             materialization:
               constructing && adapterFor(agentName)?.acceptance === "first-turn-acceptance",
             deferEstablished:
@@ -2951,6 +2974,7 @@ function* useAcpxProviderState(
             mode: "prompt",
             requestId,
             timeoutMs,
+            ...explicitModel(desired),
             ...(callbacks === undefined
               ? {}
               : {
@@ -3643,6 +3667,7 @@ function* useAcpxProviderState(
             ...(bound === undefined ? {} : { build: bound.build }),
             attachment: { resumeSessionId: prepared.nativeSessionId },
             state: "existing",
+            ...explicitModel(requested),
           });
         } catch (error) {
           if (error instanceof AttachmentRefused) {
@@ -3812,6 +3837,7 @@ function* useAcpxProviderState(
         text: plan.prompt,
         mode: "prompt",
         requestId: plan.requestId,
+        ...explicitModel(retainedConfiguration(prepared)),
       });
       activeTurns.add(turn);
 
@@ -4647,6 +4673,7 @@ function* useAcpxProviderState(
                 ...(construction === undefined ? {} : { build: construction.build }),
                 ...(resumeSessionId === undefined ? {} : { attachment: { resumeSessionId } }),
                 state,
+                ...(setup?.hasExplicitModel === true ? { hasExplicitModel: true } : {}),
               });
               // An existing session is reattached here: its route and its
               // identity already exist, so this is a conversation that can be

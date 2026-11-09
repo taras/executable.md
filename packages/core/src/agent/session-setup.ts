@@ -67,6 +67,14 @@ export interface AgentSessionSetup {
   /** The engine-derived identity, when an element opened this request. */
   readonly sessionIdentity?: string;
   /**
+   * Whether this setup's final request explicitly specifies a model.
+   *
+   * Describes this request only; it neither authorizes provider work nor says
+   * configuration has been applied. The requested value remains private until
+   * the existing configuration callback receives it.
+   */
+  readonly hasExplicitModel: boolean;
+  /**
    * Authorize provider work; a retained conversation requires its configuration.
    *
    * Asked before the provider reattaches, creates or prompts anything, and
@@ -219,6 +227,7 @@ export function createSessionSetupOwner(): SessionSetupOwner {
         ...(requested.sessionIdentity === undefined
           ? {}
           : { sessionIdentity: requested.sessionIdentity }),
+        hasExplicitModel: requested.configuration?.model !== undefined,
         *activate(
           provider: string,
           agentCommand: string,

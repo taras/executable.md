@@ -1,5 +1,5 @@
 diff --git a/src/acp-agent.ts b/src/acp-agent.ts
-index e32f603e7cb85544a9ebf108489fcf98932d14a2..39fe9c4a1670b9738866646acda578792aff8444 100644
+index e32f603e7cb85544a9ebf108489fcf98932d14a2..96a816b3d4321ead8c2790f617b87804b711d5c4 100644
 --- a/src/acp-agent.ts
 +++ b/src/acp-agent.ts
 @@ -81,7 +81,7 @@ import {
@@ -339,7 +339,7 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..39fe9c4a1670b9738866646acda57879
      };
    }
  
-@@ -6058,572 +6236,748 @@ export class ClaudeAcpAgent {
+@@ -6058,572 +6236,751 @@ export class ClaudeAcpAgent {
      }
    }
  
@@ -1166,6 +1166,8 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..39fe9c4a1670b9738866646acda57879
 -      throw RequestError.authRequired(
 -        undefined,
 -        "This integration does not support using claude.ai subscriptions.",
+-      );
+-    }
 +      // Apply user's `availableModels` allowlist from settings.json before any
 +      // downstream model handling. The SDK only enforces this allowlist in its
 +      // own UI, not in `initializationResult.models`, so we filter here to keep
@@ -1181,15 +1183,17 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..39fe9c4a1670b9738866646acda57879
 +          )
 +        : initializationResult.models;
 +
-+      const { modelState: models, resumedContextWindow } = await getAvailableModels(
-+        q,
-+        allowedModels,
-+        initializationResult.models,
-+        settingsManager,
-+        this.logger,
-+        creationOpts.resume !== undefined,
-       );
--    }
++      const { modelState: models, resumedContextWindow } =
++        creationOpts.resume !== undefined && continuesExplicitModel(params._meta)
++          ? await observeResumedModel(q, allowedModels)
++          : await getAvailableModels(
++              q,
++              allowedModels,
++              initializationResult.models,
++              settingsManager,
++              this.logger,
++              creationOpts.resume !== undefined,
++            );
  
 -    // Apply user's `availableModels` allowlist from settings.json before any
 -    // downstream model handling. The SDK only enforces this allowlist in its
@@ -1616,6 +1620,75 @@ index e32f603e7cb85544a9ebf108489fcf98932d14a2..39fe9c4a1670b9738866646acda57879
    }
  
    /**
+@@ -7574,6 +7931,68 @@ async function readResumedLiveModel(
+   }
+ }
+ 
++/** The continuation marker a client sends when its use names a model. */
++const HAS_EXPLICIT_MODEL_META = "executablemd.has-explicit-model/v1";
++
++/** Whether this load/resume belongs to a use that explicitly names a model. */
++function continuesExplicitModel(meta: unknown): boolean {
++  return (
++    typeof meta === "object" &&
++    meta !== null &&
++    (meta as Record<string, unknown>)[HAS_EXPLICIT_MODEL_META] === true
++  );
++}
++
++/**
++ * The model a resumed session runs, reported exactly, for a use that names its
++ * own model.
++ *
++ * Nothing is reasserted: the client applies its own exact selection next, so an
++ * environment or settings preference written here would only be written back.
++ * The backend's report is the answer verbatim — no picker matching, alias, hint
++ * reconstruction or default row stands in for it — and one this session's
++ * offered models cannot represent refuses rather than inventing a selectable
++ * entry. A failed or empty report refuses too, before any prompt.
++ *
++ * Refused as an invalid request so a client does not mistake it for a missing
++ * conversation and create a replacement.
++ */
++async function observeResumedModel(
++  query: Query,
++  models: ModelInfo[],
++): Promise<{ modelState: SessionModelState; resumedContextWindow: number | null }> {
++  let usage: Awaited<ReturnType<Query["getContextUsage"]>>;
++  try {
++    usage = await query.getContextUsage();
++  } catch (error) {
++    throw RequestError.invalidRequest(
++      undefined,
++      `the resumed session could not report the model it runs: ${error instanceof Error ? error.message : String(error)}`,
++    );
++  }
++  const observed = usage.model;
++  if (typeof observed !== "string" || observed.length === 0) {
++    throw RequestError.invalidRequest(undefined, "the resumed session reported no model");
++  }
++  if (!models.some((model) => model.value === observed)) {
++    throw RequestError.invalidRequest(
++      { model: observed },
++      `the resumed session runs "${observed}", which none of its offered models names exactly`,
++    );
++  }
++  return {
++    modelState: {
++      availableModels: models.map((model) => ({
++        modelId: model.value,
++        name: model.displayName,
++        description: model.description,
++      })),
++      currentModelId: observed,
++    },
++    resumedContextWindow: usage.rawMaxTokens > 0 ? usage.rawMaxTokens : null,
++  };
++}
++
+ async function getAvailableModels(
+   query: Query,
+   models: ModelInfo[],
 diff --git a/src/claude-sdk.ts b/src/claude-sdk.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..9b7d1f0b92a2ee959d336959bc93ffe349c69e98
