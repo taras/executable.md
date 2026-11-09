@@ -87,7 +87,9 @@ printf '%s' "$XMD_EXAMPLE_COMMAND"
 <Test name="mandatory initialization and a full selected evidence packet fit the complete prompt">
 <Each in={["architect","planner","implementor"]} let="role">
 <Let as="assignment" value={{phase:role === "implementor" ? "implementation" : "discovery",work:"test",repository:root,revision:"a".repeat(40),request:"Inspect saved evidence.",assessment}} />
-<Phase.Request role={role} assignment={assignment} initialize={true} inputs={[{path:"accepted.md",content:"x".repeat(64000)}]} as="request" />
+<TempDir as="artifactDirectory" />
+<Phase.SubmissionGuide repository={root} directory={artifactDirectory}><Phase.SubmissionInstructions role={role} assignment={assignment} /></Phase.SubmissionGuide>
+<Phase.Request role={role} assignment={{...assignment,artifactDirectory}} initialize={true} inputs={[{path:"accepted.md",content:"x".repeat(64000)}]} as="request" />
 <AssertEquals actual={request.includes("Repository instructions:")} expected={true} />
 <AssertEquals actual={request.includes("Role instructions:")} expected={true} />
 <AssertEquals actual={request.includes("You are the repository " + role)} expected={true} />

@@ -48,6 +48,9 @@ export function* runAdversarialJourney(suite: string) {
       testedSuites.includes(suite)
         ? "examples/adversarial-implementation/components"
         : "examples/adversarial-implementation/tests/components",
+      ...(suite === "ProductionRole"
+        ? ["--include", "examples/adversarial-implementation/tests/production-components"]
+        : []),
       "--include",
       "examples/adversarial-implementation/components",
     ],

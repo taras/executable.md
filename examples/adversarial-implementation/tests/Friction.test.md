@@ -128,10 +128,11 @@ git rev-parse HEAD
 </Dir>
 <Let as="checkout" value={{head:observed.stdout.trim()}} />
 <Let as="attempt" value={fixture.root + "/correction"} />
-<Let as="assignment" value={{phase:"review",work:"test",repository:fixture.repository,revision:checkout.head,priorRevision:null,request:"Inspect the saved evidence.",changedPaths:[],artifacts:[],evidence:[],findings:[],assessment,continuation:{phase:"ready",role:null}}} />
+<Let as="assignment" value={{artifactDirectory:attempt,phase:"review",work:"test",repository:fixture.repository,revision:checkout.head,priorRevision:null,request:"Inspect the saved evidence.",changedPaths:[],artifacts:[],evidence:[],findings:[],assessment,continuation:{phase:"ready",role:null}}} />
 <Let as="reply" value={{schema:"phase-result.v2",phase:"review",work:"test",outcome:"pass",revision:checkout.head,summary:"x".repeat(1201),handoff:"Inspect the saved evidence.",artifacts:[],evidence:[{revision:checkout.head.slice(0,8),command:"saved focused test",outcome:"passed",artifact:"receipt.json"}],findings:[],next:{phase:"ready",role:null},assessment}} />
 <Json value={reply} as="raw" />
 <Dir path={attempt}><File path="assignment.json"><Json value={assignment} /></File><File path="raw.txt">{raw}</File></Dir>
+<Phase.SubmissionGuide repository={fixture.repository} directory={attempt}><Phase.SubmissionInstructions role="planner" assignment={assignment} /></Phase.SubmissionGuide>
 <Dir path={fixture.repository}><Ticket.Capture as="correction"><Phase.Correct assignment={assignment} role="planner" session="original-planner" attempt={attempt} raw={raw} profile={{kind:"phase",knownDocuments:[]}} implementationProvider="claude" inputs={[]} as="accepted" /><Json value={accepted} /></Ticket.Capture></Dir>
 <If condition={correction.status !== "completed"}><Ticket.Text path={attempt + "/response-rejection-0000.json"} as="rejection" /><Fail message={rejection + "\n" + correction.failure} /></If>
 <Parse schema={{type:"object"}} as="accepted">{correction.output}</Parse>

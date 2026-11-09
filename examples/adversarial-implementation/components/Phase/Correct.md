@@ -80,6 +80,7 @@ shasum -a 256 -- {quoted}/request.json {quoted}/diagnostic.json {quoted}/origina
 <Phase.Role role={props.role} session={props.session} assignment={props.assignment} initialize={false} plannerProvider={props.plannerProvider} implementationProvider={props.implementationProvider} inputs={[]} correction={packet} as="raw" />
 <Let as="rawPath" value={directory + "/raw.txt"} />
 <Dir path={directory}><File path="raw.txt">{raw}</File></Dir>
+<Phase.SubmissionGuide repository={props.assignment.repository} directory={props.attempt} mode="check"><Phase.SubmissionInstructions role={props.role} assignment={props.assignment} /></Phase.SubmissionGuide>
 <Phase.Response assignment={props.assignment} text={raw} role={props.role} profile={props.profile} as="checked" />
 <If condition={checked.ok}>
 <Phase.Correspondence established={frozen} value={checked.value} role={props.role} phase={props.assignment.phase} as="correspondence" />

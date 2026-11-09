@@ -361,13 +361,32 @@ from claiming readiness or merging independently.
 
 ## Prepare requests without metadata repair turns
 
-These rules apply to separate phase requests and Ticket role calls.
-`Phase.Request` renders the complete prompt before entering an Agent, including
-initial repository instructions, role instructions, assignment, selected text and
-response schema. A missing selected component or input fails there; a packet
-above 256000 characters refuses before provider dispatch. The selected evidence
-keeps its separate 64000-character bound; the complete-prompt ceiling also accommodates
-mandatory initialization instructions and the response schema. Nothing is truncated.
+These rules apply to separate phase requests and Ticket role calls. Codex authors
+prose committed to workflow documents, including guides, component instructions
+and prompt templates. Claude roles may write internal runtime handoffs, hold
+prompts and summaries.
+`Phase.Run` freezes the submission guide in its reserved attempt directory.
+`Phase.Request` checks that guide and prepares the phase prompt before entering
+an Agent. The prompt includes initial repository and role instructions,
+the assignment, selected text and an absolute reference to `submission-guide.md`
+in the attempt directory. The guide contains the complete submission instructions
+and the current role- and phase-specific JSON contract. Read it before returning
+any result, including an early blocker, source conflict or unanswered decision.
+The same retained native call reads the file and returns the result; staging the
+guide adds no model call.
+
+The guide and its hash receipt are runner-owned. Preparation refuses occupied
+paths and confirms that the published text is readable under current File
+permissions and protection. After saving each raw reply, the workflow verifies
+the guide and receipt against the expected submission instructions before it
+accepts a result or starts a correction. Missing, unreadable or changed files
+hold the attempt with its raw reply preserved. Corrections retain their existing
+inline repair packet, original session and allowance.
+
+A missing selected component or input fails before provider dispatch. A prompt
+above 256000 characters refuses without truncation. The guide has its own
+256000-character and UTF-8-byte bounds. Selected evidence keeps its separate
+64000-character allowance; moving submission instructions does not enlarge it.
 Provider configuration and client compatibility retain their existing checks before a turn starts.
 No paid prompt probes installation or repairs launch metadata.
 
