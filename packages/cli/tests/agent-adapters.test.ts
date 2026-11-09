@@ -250,39 +250,54 @@ describe("Tier AE — embedded adapters on the run and plan paths", () => {
   });
 });
 
-describe("HC host selection across command assemblies", () => {
-  it("HC3/HC4: run, Plan and REPL deliver the host selection to probe and live runtimes", function* () {
-    const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "xmd assemblies ")))));
-    yield* ensure(() => rm(root, { recursive: true, force: true }));
-    const host = join(root, "claude");
-    yield* writeTextFile(host, "#!/bin/sh\nexit 0\n");
-    yield* until(chmod(host, 0o755));
-    const result = yield* scoped(function* () {
-      yield* useQuietProcessOutput();
-      return yield* exec({
-        command: [
-          ...cliBase().slice(0, -1),
-          fileURLToPath(new URL("./fixtures/agent-assemblies.ts", import.meta.url)),
-          root,
-        ],
-        env: { CLAUDE_CODE_EXECUTABLE: host },
-      });
+function* assemblyInputs(agent: "claude" | "codex"): Operation<void> {
+  const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "xmd assemblies ")))));
+  yield* ensure(() => rm(root, { recursive: true, force: true }));
+  const host = join(root, agent);
+  const variable = agent === "codex" ? "CODEX_PATH" : "CLAUDE_CODE_EXECUTABLE";
+  yield* writeTextFile(host, "#!/bin/sh\nexit 0\n");
+  yield* until(chmod(host, 0o755));
+  const result = yield* scoped(function* () {
+    yield* useQuietProcessOutput();
+    return yield* exec({
+      command: [
+        ...cliBase().slice(0, -1),
+        fileURLToPath(new URL("./fixtures/agent-assemblies.ts", import.meta.url)),
+        root,
+        agent,
+      ],
+      env: { [variable]: host },
     });
-    if (result.exitCode !== 0) {
-      throw new Error(result.stderr);
-    }
-    const rows = JSON.parse(result.stdout);
-    for (const row of rows) {
-      expect(row.inputs).toHaveLength(2);
-      for (const input of row.inputs) {
-        if (["custom", "other"].includes(row.profile)) {
-          expect(input.environment).toBeUndefined();
-        } else {
-          expect(input.environment).toEqual({ CLAUDE_CODE_EXECUTABLE: host });
-          expect(input.command).toContain(root);
-          expect(input.command).not.toContain("npx");
-        }
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr);
+  }
+  const { results: rows, environmentPreserved } = JSON.parse(result.stdout);
+  expect(environmentPreserved).toBe(true);
+  expect(rows.map((row: { profile: string }) => row.profile)).toEqual([
+    "run",
+    "plan",
+    "repl",
+    "custom",
+    "other",
+  ]);
+  for (const row of rows) {
+    expect(row.inputs).toHaveLength(2);
+    for (const input of row.inputs) {
+      if (["custom", "other"].includes(row.profile)) {
+        expect(input.environment).toBeUndefined();
+      } else {
+        expect(input.environment).toEqual({ [variable]: host });
+        expect(input.command).toContain(root);
+        expect(input.command).not.toContain("npx");
       }
     }
-  });
+  }
+}
+
+describe("HC host selection across command assemblies", () => {
+  it("HC3/HC4: run, Plan and REPL deliver the host selection to probe and live runtimes", () =>
+    assemblyInputs("claude"));
+  it("H3: run, Plan and REPL deliver the host Codex selection to probe and live runtimes", () =>
+    assemblyInputs("codex"));
 });

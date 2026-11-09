@@ -148,7 +148,9 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
       });
       expect(snapshot.license).toBe("Apache-2.0");
       expect(snapshot.buildCommand).toBe(
-        snapshot.provider === "claude" ? "deno task deps" : "npm run build && npm pack",
+        snapshot.provider === "claude"
+          ? "deno task deps"
+          : "git apply adapter.patch && npm ci --ignore-scripts && npm run build && npm pack --ignore-scripts",
       );
     }
   });
@@ -250,5 +252,28 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
     expect(sha256(yield* until(readFile(join(VENDOR, "claude/sdk-transform.mjs"))))).toBe(
       recipe.transformSha256,
     );
+  });
+  it("H5/H6: Codex carries its reviewed source build and no Codex CLI dependency", function* () {
+    const snapshot = (yield* manifest()).find((entry) => entry.provider === "codex");
+    if (snapshot === undefined || !("tarball" in snapshot)) {
+      throw new Error("Codex snapshot missing");
+    }
+    const files = archiveFiles(yield* snapshotBytes(snapshot));
+    const pkg = JSON.parse(files.get("package/package.json")!.toString("utf8"));
+    // The adapter runs the host's CLI; npm has nothing of Codex to install.
+    expect(Object.keys(pkg.dependencies).sort()).toEqual([
+      "@agentclientprotocol/sdk",
+      "diff",
+      "open",
+      "vscode-jsonrpc",
+      "zod",
+    ]);
+    expect(pkg.optionalDependencies).toBeUndefined();
+    const executable = files.get("package/dist/index.js")!;
+    expect(executable.toString("utf8")).not.toContain("@openai/codex");
+    // The shipped executable is the recorded output of the pinned source plus
+    // the readable patch beside it.
+    expect(sha256(executable)).toBe(snapshot.executableSha256);
+    expect(sha256(yield* until(readFile(join(VENDOR, snapshot.patch))))).toBe(snapshot.patchSha256);
   });
 });

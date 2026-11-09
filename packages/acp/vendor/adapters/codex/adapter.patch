@@ -1,0 +1,269 @@
+diff --git a/README.md b/README.md
+index 2bda2a2..36d1a6a 100644
+--- a/README.md
++++ b/README.md
+@@ -32,7 +32,7 @@ npm install -g @agentclientprotocol/codex-acp
+ codex-acp --version
+ ```
+ 
+-The npm package includes a compatible `@openai/codex` dependency. Set `CODEX_PATH` only when you want the adapter to run a different Codex binary:
++The adapter runs the Codex CLI installed on the host: `codex` from `PATH`. Set `CODEX_PATH` to run a different Codex binary:
+ 
+ ```bash
+ CODEX_PATH=/path/to/codex npx -y @agentclientprotocol/codex-acp
+diff --git a/build.mjs b/build.mjs
+index cfd9581..3c8cb3a 100644
+--- a/build.mjs
++++ b/build.mjs
+@@ -6,7 +6,6 @@ await build({
+   platform: 'node',
+   format: 'esm',
+   outfile: 'dist/index.js',
+-  external: ['@openai/codex'],
+   // Polyfill `require` for CJS modules bundled into ESM output
+   banner: {
+     js: "import { createRequire as __createRequire } from 'module'; const require = __createRequire(import.meta.url);",
+diff --git a/package-lock.json b/package-lock.json
+index ed62b3f..2a26290 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -10,7 +10,6 @@
+       "license": "Apache-2.0",
+       "dependencies": {
+         "@agentclientprotocol/sdk": "^1.4.0",
+-        "@openai/codex": "^0.148.0",
+         "diff": "^9.0.0",
+         "open": "^11.0.1",
+         "vscode-jsonrpc": "^9.0.1",
+@@ -900,128 +899,6 @@
+         "url": "https://opencollective.com/express"
+       }
+     },
+-    "node_modules/@openai/codex": {
+-      "version": "0.148.0",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0.tgz",
+-      "integrity": "sha512-bh5kH9+BMrFaHGmLeoSansPdfRksvr4UXzjQInns/KRO7r8VJ+6AAW+SqUsE8XcG3+OW/mI4EEy8Gpo9UDXGvQ==",
+-      "license": "Apache-2.0",
+-      "bin": {
+-        "codex": "bin/codex.js"
+-      },
+-      "engines": {
+-        "node": ">=16"
+-      },
+-      "optionalDependencies": {
+-        "@openai/codex-darwin-arm64": "npm:@openai/codex@0.148.0-darwin-arm64",
+-        "@openai/codex-darwin-x64": "npm:@openai/codex@0.148.0-darwin-x64",
+-        "@openai/codex-linux-arm64": "npm:@openai/codex@0.148.0-linux-arm64",
+-        "@openai/codex-linux-x64": "npm:@openai/codex@0.148.0-linux-x64",
+-        "@openai/codex-win32-arm64": "npm:@openai/codex@0.148.0-win32-arm64",
+-        "@openai/codex-win32-x64": "npm:@openai/codex@0.148.0-win32-x64"
+-      }
+-    },
+-    "node_modules/@openai/codex-darwin-arm64": {
+-      "name": "@openai/codex",
+-      "version": "0.148.0-darwin-arm64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-darwin-arm64.tgz",
+-      "integrity": "sha512-xgBPFiF1fHUlRS7HE6wGB56LjBJh16kGD7b4TTbwdVBZNB4QDkTok+vdkAGrfpVkfKcwGNhPSKDgCw+KMZOVug==",
+-      "cpu": [
+-        "arm64"
+-      ],
+-      "license": "Apache-2.0",
+-      "optional": true,
+-      "os": [
+-        "darwin"
+-      ],
+-      "engines": {
+-        "node": ">=16"
+-      }
+-    },
+-    "node_modules/@openai/codex-darwin-x64": {
+-      "name": "@openai/codex",
+-      "version": "0.148.0-darwin-x64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-darwin-x64.tgz",
+-      "integrity": "sha512-qepQolhJutfOp+e9i7L3xsi8aoWeCUiiRq274WMWqRj50rKTrXxsuAgkAwDbqEfT3G5VynhYZuQvDsW37JgdNQ==",
+-      "cpu": [
+-        "x64"
+-      ],
+-      "license": "Apache-2.0",
+-      "optional": true,
+-      "os": [
+-        "darwin"
+-      ],
+-      "engines": {
+-        "node": ">=16"
+-      }
+-    },
+-    "node_modules/@openai/codex-linux-arm64": {
+-      "name": "@openai/codex",
+-      "version": "0.148.0-linux-arm64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-linux-arm64.tgz",
+-      "integrity": "sha512-51DCd+izzk6n4mMh4w2utWj3lTLhSTnCOEJQfRh0LS9nBDkcYZcK3iSKOST6fByRIlLSXuLO33LlYYA1VPot6A==",
+-      "cpu": [
+-        "arm64"
+-      ],
+-      "license": "Apache-2.0",
+-      "optional": true,
+-      "os": [
+-        "linux"
+-      ],
+-      "engines": {
+-        "node": ">=16"
+-      }
+-    },
+-    "node_modules/@openai/codex-linux-x64": {
+-      "name": "@openai/codex",
+-      "version": "0.148.0-linux-x64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-linux-x64.tgz",
+-      "integrity": "sha512-uDT9s7AfMr9xLuJX3ZLVWHgHkUpCnZ33CZjZEdVQhrYCIErkDHsCW5TG290nNjaKngK0WxGt5uCcxeUHv9MWWA==",
+-      "cpu": [
+-        "x64"
+-      ],
+-      "license": "Apache-2.0",
+-      "optional": true,
+-      "os": [
+-        "linux"
+-      ],
+-      "engines": {
+-        "node": ">=16"
+-      }
+-    },
+-    "node_modules/@openai/codex-win32-arm64": {
+-      "name": "@openai/codex",
+-      "version": "0.148.0-win32-arm64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-win32-arm64.tgz",
+-      "integrity": "sha512-a8iOwLzs8UdnlWDHjgK3W/YSBBsUImG8X5XLBjengp3XGJRruhiIsQtUDUOYimCmotKPM4aX7Ub6zjl/KPxMQQ==",
+-      "cpu": [
+-        "arm64"
+-      ],
+-      "license": "Apache-2.0",
+-      "optional": true,
+-      "os": [
+-        "win32"
+-      ],
+-      "engines": {
+-        "node": ">=16"
+-      }
+-    },
+-    "node_modules/@openai/codex-win32-x64": {
+-      "name": "@openai/codex",
+-      "version": "0.148.0-win32-x64",
+-      "resolved": "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-win32-x64.tgz",
+-      "integrity": "sha512-/Jg8eYw0BqTGNUpnrzzWlK2kbu29NWg7t6pnUDEfxqpTUf+mK8r3okXQn60Zjbk9InYZ4d8SwSjrtOa+i5hSPw==",
+-      "cpu": [
+-        "x64"
+-      ],
+-      "license": "Apache-2.0",
+-      "optional": true,
+-      "os": [
+-        "win32"
+-      ],
+-      "engines": {
+-        "node": ">=16"
+-      }
+-    },
+     "node_modules/@oxc-project/types": {
+       "version": "0.146.0",
+       "resolved": "https://registry.npmjs.org/@oxc-project/types/-/types-0.146.0.tgz",
+diff --git a/package.json b/package.json
+index 8506aea..5415d62 100644
+--- a/package.json
++++ b/package.json
+@@ -35,7 +35,7 @@
+     "start": "node --import tsx src/index.ts",
+     "example:steering": "node --import tsx examples/steering.ts",
+     "example:steering:multistep": "node --import tsx examples/steering.ts",
+-    "generate-types": "./node_modules/.bin/codex app-server generate-ts --out src/app-server",
++    "generate-types": "codex app-server generate-ts --out src/app-server",
+     "release:preflight": "bash scripts/release-preflight.sh",
+     "test": "vitest run --no-file-parallelism --retry=2",
+     "test:e2e": "npm run build && RUN_E2E_TESTS=true vitest run --no-file-parallelism --retry=2 src/__tests__/CodexACPAgent/e2e",
+@@ -65,7 +65,6 @@
+   },
+   "dependencies": {
+     "@agentclientprotocol/sdk": "^1.4.0",
+-    "@openai/codex": "^0.148.0",
+     "diff": "^9.0.0",
+     "open": "^11.0.1",
+     "vscode-jsonrpc": "^9.0.1",
+diff --git a/readme-dev.md b/readme-dev.md
+index bc14780..e70c264 100644
+--- a/readme-dev.md
++++ b/readme-dev.md
+@@ -1,11 +1,11 @@
+-This package uses the bundled `@openai/codex` dependency by default.
+-Set `CODEX_PATH` to run a different Codex binary; versions other than the one specified in `package.json` may not be compatible.
++This package runs the host-installed `codex` CLI from `PATH`; it carries no Codex CLI dependency.
++Set `CODEX_PATH` to run a different Codex binary.
+ 
+ ### Runtime environment
+ 
+ - `CODEX_API_KEY` - API key used when the API-key auth method is selected. Takes precedence over `OPENAI_API_KEY`.
+ - `OPENAI_API_KEY` - fallback API key used when the API-key auth method is selected.
+-- `CODEX_PATH` - run a specific Codex executable instead of the bundled package dependency.
++- `CODEX_PATH` - run a specific Codex executable instead of `codex` from `PATH`.
+ - `CODEX_CONFIG` - JSON object merged into the Codex session config.
+ - `MODEL_PROVIDER` - model provider to pass to Codex for new sessions.
+ - `DEFAULT_AUTH_REQUEST` - ACP auth request JSON used when Codex requires authentication.
+@@ -81,6 +81,6 @@ npm run package:all
+ 
+ ### Update supported Codex version
+ 
+-1. Update the `@openai/codex` version in `package.json` (under `dependencies`).
++1. Install the Codex CLI version to support on the host `PATH`.
+ 2. Regenerate Codex types in `src/app-server/`: `npm run generate-types`
+ 3. Ensure there are no type errors or failed tests: `npm run typecheck` and `npm run test`
+diff --git a/src/CodexCli.ts b/src/CodexCli.ts
+index 4998ed1..dac2ff4 100644
+--- a/src/CodexCli.ts
++++ b/src/CodexCli.ts
+@@ -1,6 +1,5 @@
+ import type {ChildProcess, SpawnOptions} from "node:child_process";
+ import {spawn} from "node:child_process";
+-import {createRequire} from "node:module";
+ 
+ export function runCodexCli(codexPath: string | undefined, args: Array<string>): Promise<number> {
+     const child = spawnCodexCli(codexPath, args);
+@@ -23,9 +22,5 @@ function spawnCodexCli(codexPath: string | undefined, args: Array<string>): Chil
+         stdio: "inherit",
+     };
+ 
+-    if (codexPath) {
+-        return spawn(codexPath, args, {...options, shell: process.platform === "win32"});
+-    }
+-    const bundledCodexPath = createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js");
+-    return spawn(process.execPath, [bundledCodexPath, ...args], options);
++    return spawn(codexPath || "codex", args, {...options, shell: process.platform === "win32"});
+ }
+diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
+index 0f79117..aa6173c 100644
+--- a/src/CodexJsonRpcConnection.ts
++++ b/src/CodexJsonRpcConnection.ts
+@@ -2,7 +2,6 @@ import * as rpc from "vscode-jsonrpc/node";
+ import type {MessageConnection} from "vscode-jsonrpc/node";
+ import type {ChildProcessWithoutNullStreams} from "node:child_process";
+ import {spawn} from "node:child_process";
+-import {createRequire} from "node:module";
+ 
+ import {createJSONRPCReader, createJSONRPCWriter} from "./StdUtils";
+ import {logger} from "./Logger";
+@@ -15,15 +14,11 @@ export interface CodexConnection {
+ export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv): CodexConnection {
+     const spawnEnv = env ?? process.env;
+ 
+-    let codex: ChildProcessWithoutNullStreams;
+-    if (codexPath) {
+-        codex = process.platform === 'win32'
+-            ? spawn(`"${codexPath}" app-server`, { shell: true, env: spawnEnv })
+-            : spawn(codexPath, ['app-server'], { env: spawnEnv });
+-    } else {
+-        const bundledCodexPath = createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js");
+-        codex = spawn(process.execPath, [bundledCodexPath, 'app-server'], {env: spawnEnv});
+-    }
++    // The adapter carries no Codex CLI: it runs the host-installed `codex` unless a path is supplied.
++    const executable = codexPath || "codex";
++    const codex: ChildProcessWithoutNullStreams = process.platform === 'win32'
++        ? spawn(`"${executable}" app-server`, { shell: true, env: spawnEnv })
++        : spawn(executable, ['app-server'], { env: spawnEnv });
+ 
+     attachLogs(codex);
+ 

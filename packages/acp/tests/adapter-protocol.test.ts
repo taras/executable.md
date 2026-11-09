@@ -29,13 +29,13 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation } from "effection";
-import { rm, readTextFile } from "@effectionx/fs";
+import { ensureDir, exists, rm, readTextFile, writeTextFile } from "@effectionx/fs";
 import { Buffer } from "node:buffer";
 import { spawn, execFile } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 import { createEmbeddedAdapters } from "../src/adapter-snapshots.ts";
@@ -67,7 +67,11 @@ interface Adapter {
  * The command comes from the materializer, so what is spawned is exactly what a
  * workflow run spawns — not a path this test assembled.
  */
-function useAdapter(provider: string, environment: Record<string, string>): Operation<Adapter> {
+function useAdapter(
+  provider: string,
+  environment: Record<string, string>,
+  prepare?: (entry: string) => Operation<void>,
+): Operation<Adapter> {
   return resource(function* (provide) {
     const root = yield* until(mkdtemp(join(tmpdir(), "xmd ea ")));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
@@ -75,6 +79,9 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
     const adapters = createEmbeddedAdapters(join(root, "adapters"));
     yield* adapters.materialize(provider);
     const entry = adapters.executablePath(provider);
+    if (prepare !== undefined) {
+      yield* prepare(entry);
+    }
 
     let child: ChildProcess | undefined;
     const closed = withResolvers<{ code: number | null; signal: NodeJS.Signals | null }>();
@@ -248,6 +255,42 @@ function acceptances(adapter: Adapter): string[] {
 }
 
 const CODEX_ENV = { CODEX_PATH: FAKE_CODEX };
+
+/** A private directory for one case's host logs, removed with the case. */
+function* useCaseDirectory(): Operation<string> {
+  const directory = yield* until(mkdtemp(join(tmpdir(), "xmd ea host ")));
+  yield* ensure(() => rm(directory, { recursive: true, force: true }));
+  return directory;
+}
+
+/** Every request the fake App Server received, in arrival order. */
+function* hostRequests(log: string): Operation<Array<{ method?: string; params?: unknown }>> {
+  if (!(yield* exists(log))) {
+    return [];
+  }
+  return (yield* readTextFile(log))
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+/** One advertised selector's current value and choices, as a client reads them. */
+function selector(
+  response: Record<string, unknown>,
+  id: string,
+): { currentValue: unknown; values: unknown[] } | undefined {
+  const options = response["configOptions"];
+  if (!Array.isArray(options)) {
+    return undefined;
+  }
+  const found = options.find(
+    (option): option is { currentValue: unknown; options: Array<{ value: unknown }> } =>
+      typeof option === "object" && option !== null && option.id === id,
+  );
+  return found === undefined
+    ? undefined
+    : { currentValue: found.currentValue, values: found.options.map((choice) => choice.value) };
+}
 const CLAUDE_ENV = { CLAUDE_CODE_EXECUTABLE: FAKE_CLAUDE };
 
 describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
@@ -592,6 +635,101 @@ describe("Tier EA — the embedded adapters' prompt-response metadata", () => {
     expect(metaOf(loaded, "agentSessionId")).toBe("thread-loaded");
     expect(metaOf(resumed, "agentSessionId")).not.toBe(opened);
     expect(metaOf(loaded, "agentSessionId")).not.toBe(opened);
+  });
+
+  it("H4: Codex forwards the selected host's catalog and applies its exact model and effort", function* () {
+    const log = join(yield* useCaseDirectory(), "host.log");
+    const adapter = yield* useAdapter("codex", {
+      ...CODEX_ENV,
+      FAKE_CODEX_CATALOG: "sol",
+      FAKE_CODEX_LOG: log,
+    });
+    yield* initialize(adapter);
+    const opened = yield* adapter.request("session/new", { cwd: process.cwd(), mcpServers: [] });
+    const sessionId = opened["sessionId"];
+
+    // The host's own choices, in its order, before any turn exists.
+    expect(selector(opened, "model")).toEqual({
+      currentValue: "gpt-6.1-sol",
+      values: ["gpt-6.1-sol", "gpt-5.6-sol"],
+    });
+    expect(selector(opened, "reasoning_effort")).toEqual({
+      currentValue: "medium",
+      values: ["low", "medium", "high", "xhigh"],
+    });
+    expect((yield* hostRequests(log)).filter((entry) => entry.method === "turn/start")).toEqual([]);
+
+    const modelSet = yield* adapter.request("session/set_config_option", {
+      sessionId,
+      configId: "model",
+      value: "gpt-6.1-sol",
+    });
+    expect(selector(modelSet, "model")?.currentValue).toBe("gpt-6.1-sol");
+    const effortSet = yield* adapter.request("session/set_config_option", {
+      sessionId,
+      configId: "reasoning_effort",
+      value: "high",
+    });
+    expect(selector(effortSet, "reasoning_effort")?.currentValue).toBe("high");
+
+    yield* adapter.request("session/prompt", {
+      sessionId,
+      prompt: [{ type: "text", text: "hello" }],
+    });
+    const turns = (yield* hostRequests(log)).filter((entry) => entry.method === "turn/start");
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.params).toMatchObject({ model: "gpt-6.1-sol", effort: "high" });
+  });
+
+  it("H4: a host catalog without the model's effort selector offers none and starts no turn", function* () {
+    const log = join(yield* useCaseDirectory(), "host.log");
+    const adapter = yield* useAdapter("codex", {
+      ...CODEX_ENV,
+      FAKE_CODEX_CATALOG: "no-selector",
+      FAKE_CODEX_LOG: log,
+    });
+    yield* initialize(adapter);
+    const opened = yield* adapter.request("session/new", { cwd: process.cwd(), mcpServers: [] });
+
+    // The configured model is still named, but nothing claims an effort for it.
+    expect(selector(opened, "model")?.currentValue).toBe("gpt-6.1-sol");
+    expect(selector(opened, "reasoning_effort")).toBeUndefined();
+    let refusal: string | undefined;
+    try {
+      yield* adapter.request("session/set_config_option", {
+        sessionId: opened["sessionId"],
+        configId: "reasoning_effort",
+        value: "high",
+      });
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    expect(refusal).toContain("session/set_config_option");
+    expect((yield* hostRequests(log)).filter((entry) => entry.method === "turn/start")).toEqual([]);
+  });
+
+  it("H2: a Codex adapter with no host CLI refuses without resolving a bundled agent", function* () {
+    const directory = yield* useCaseDirectory();
+    const sentinel = join(directory, "bundled.log");
+    const emptyPath = join(directory, "empty bin");
+    yield* ensureDir(emptyPath);
+    const adapter = yield* useAdapter(
+      "codex",
+      { CODEX_PATH: "", PATH: emptyPath },
+      function* (entry) {
+        // Where the previous adapter resolved its bundled CLI from. Planting one
+        // makes any such resolution observable rather than merely failing.
+        const bundled = join(dirname(dirname(dirname(entry))), "..", "@openai", "codex", "bin");
+        yield* ensureDir(bundled);
+        yield* writeTextFile(
+          join(bundled, "codex.js"),
+          `require("node:fs").appendFileSync(${JSON.stringify(sentinel)}, "bundled\\n");\n`,
+        );
+      },
+    );
+    const outcome = yield* adapter.closed;
+    expect(outcome.code === 0 && outcome.signal === null).toBe(false);
+    expect(yield* exists(sentinel)).toBe(false);
   });
 
   it("HC EA11: Claude confirms each Query identity before returning it", function* () {

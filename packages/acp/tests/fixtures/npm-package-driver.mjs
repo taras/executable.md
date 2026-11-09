@@ -13,9 +13,9 @@
  * Prints one line per observation, which the test parses.
  */
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import process from "node:process";
 import { run } from "effection";
 
@@ -28,6 +28,29 @@ try {
   await run(() => adapters.materialize("codex"));
   const entry = adapters.executablePath("codex");
   console.log("MATERIALIZED", entry.includes(adapters.identity("codex").split("+")[1]));
+
+  // The installed closure as it is on disk: every package npm put there.
+  const installed = [];
+  const walk = async (directory) => {
+    for (const each of await readdir(directory, { withFileTypes: true })) {
+      if (each.isDirectory()) {
+        await walk(join(directory, each.name));
+      } else if (each.name === "package.json") {
+        const value = JSON.parse(await readFile(join(directory, each.name), "utf8"));
+        if (typeof value.name === "string" && typeof value.version === "string") {
+          installed.push(value.name);
+        }
+      }
+    }
+  };
+  await walk(join(dirname(entry), "..", "..", ".."));
+  console.log(
+    "CLOSURE",
+    JSON.stringify({
+      adapters: installed.filter((name) => name === "@agentclientprotocol/codex-acp").length,
+      openai: installed.filter((name) => name.startsWith("@openai/")),
+    }),
+  );
 
   const child = spawn(process.execPath, [entry], {
     env: { ...process.env, CODEX_PATH: fakeCodex },

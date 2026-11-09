@@ -109,6 +109,8 @@ describe("Tier ANP — the produced npm package", () => {
     // Materialized under the digest the package itself records — so the
     // artifact carries the snapshot rather than resolving one from elsewhere.
     expect(driven.stdout).toContain("MATERIALIZED true");
+    // The package's own materialization installs one adapter and no Codex CLI.
+    expect(driven.stdout).toContain('CLOSURE {"adapters":1,"openai":[]}');
     // And the exchange completed against the real adapter the package wrote,
     // returning the identity the fake App Server emitted for that turn.
     expect(driven.stdout).toContain('CHECKPOINT {"turnId":"turn:thread-1:1"}');

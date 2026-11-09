@@ -15,13 +15,16 @@ import { assembleReplProfile } from "../../src/repl-profile.ts";
 import { NO_PLUGINS } from "../../src/plugin-host.ts";
 import { createFakeAcp, makeStore, makeRegistry } from "../support/fake-acp.ts";
 const root = process.argv[2]!;
+const agent = process.argv[3] === "codex" ? "codex" : "claude";
+const variable = agent === "codex" ? "CODEX_PATH" : "CLAUDE_CODE_EXECUTABLE";
+const environment = { ...process.env };
 main(function* () {
   yield* useHostFiles();
   const embedded = createEmbeddedAdapters(join(root, "adapters"));
   const adapters = { ...embedded, *materialize() {} };
   const stack: AgentStack = {
     provider: "acpx",
-    defaultAgent: "claude",
+    defaultAgent: agent,
     permissionMode: "deny-all",
     adapters,
   };
@@ -38,7 +41,7 @@ main(function* () {
     yield* scoped(function* () {
       const host = yield* useScope();
       if (profile === "custom") {
-        yield* rm(process.env.CLAUDE_CODE_EXECUTABLE!, { force: true });
+        yield* rm(process.env[variable]!, { force: true });
       }
       const base = {
         ...hostAcpDependencies(stack),
@@ -49,7 +52,7 @@ main(function* () {
       };
       const dependencies =
         profile === "custom"
-          ? { ...base, agentRegistry: makeRegistry({ claude: "custom-claude-command" }) }
+          ? { ...base, agentRegistry: makeRegistry({ [agent]: `custom-${agent}-command` }) }
           : base;
       if (profile === "repl") {
         yield* assembleReplProfile(stack, NO_PLUGINS, {
@@ -58,7 +61,7 @@ main(function* () {
         });
       } else {
         yield* installAgentProviderStack(
-          { ...stack, defaultAgent: profile === "other" ? "gemini" : "claude" },
+          { ...stack, defaultAgent: profile === "other" ? "gemini" : agent },
           profile === "plan"
             ? planWriterDependencies({ stack, acp: dependencies }, root, host)
             : dependencies,
@@ -77,10 +80,13 @@ main(function* () {
         profile,
         inputs: fake.created.map((options) => ({
           environment: options.agentProcessEnv,
-          command: options.agentRegistry.resolve(profile === "other" ? "gemini" : "claude"),
+          command: options.agentRegistry.resolve(profile === "other" ? "gemini" : agent),
         })),
       });
     });
   }
-  console.log(JSON.stringify(results));
+  const environmentPreserved = [
+    ...new Set([...Object.keys(environment), ...Object.keys(process.env)]),
+  ].every((key) => environment[key] === process.env[key]);
+  console.log(JSON.stringify({ results, environmentPreserved }));
 });

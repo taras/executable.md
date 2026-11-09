@@ -26,7 +26,7 @@ import { withCertificationFixture } from "../../acp/tests/certification-fixture.
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import { DatabaseSync } from "node:sqlite";
-import { dirname, join } from "node:path";
+import { dirname, join, relative as relativePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   registerComponents,
@@ -411,7 +411,7 @@ function* hostClaudeWorkflow(
         "run",
         "--allow-all",
         "--frozen",
-        fileURLToPath(new URL("./fixtures/host-claude.ts", import.meta.url)),
+        fileURLToPath(new URL("./fixtures/host-agent.ts", import.meta.url)),
         root,
       ],
       env: { PATH: bin, CLAUDE_CODE_EXECUTABLE: selected },
@@ -482,6 +482,174 @@ describe("HC host Claude through the production workflow", () => {
   it("HC HCI2: a failed lifecycle assertion publishes no production mapping or prompt", function* () {
     yield* hostClaudeWorkflow("confirmation");
   });
+});
+
+/** Every line one fake host App Server logged, in arrival order. */
+function* hostRequests(log: string): Operation<Array<{ method?: string; params?: unknown }>> {
+  if (!(yield* exists(log))) {
+    return [];
+  }
+  return (yield* readTextFile(log))
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+type HostCodexMode =
+  | "path"
+  | "explicit"
+  | "relative"
+  | "bare"
+  | "empty"
+  | "missing"
+  | "invalid"
+  | "unlaunchable"
+  | "effort"
+  | "no-selector";
+
+/**
+ * One production workflow Prompt through the carried Codex adapter, with the
+ * host CLI replaced by logging copies of the fake App Server. Which copy wrote
+ * its log is which executable actually ran.
+ */
+function* hostCodexWorkflow(mode: HostCodexMode): Operation<void> {
+  const root = yield* useStorageRoot();
+  // Installed here, where npm is reachable: the run's PATH holds only the host.
+  yield* createEmbeddedAdapters(join(root, "adapters")).materialize("codex");
+  const bin = join(root, "host bin");
+  yield* ensureDir(bin);
+  const fixture = fileURLToPath(
+    new URL("../../acp/tests/fixtures/fake-codex-app-server.cjs", import.meta.url),
+  );
+  const fake = (yield* readTextFile(fixture)).replace(/^#!.*\n/, "");
+  const catalog = mode === "effort" ? "sol" : mode === "no-selector" ? "no-selector" : "";
+  const host = (log: string): string =>
+    [
+      "#!/usr/bin/env node",
+      `process.env.FAKE_CODEX_LOG = ${JSON.stringify(log)};`,
+      `process.env.FAKE_CODEX_CATALOG = ${JSON.stringify(catalog)};`,
+      'if (process.argv.includes("--version")) { console.log("unfamiliar development build"); process.exit(0); }',
+      `require("node:fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify({ launched: process.argv.slice(2) }) + "\\n");`,
+      fake,
+    ].join("\n");
+  const pathLog = join(root, "path-host.log");
+  const selectedLog = join(root, "selected-host.log");
+  const pathHost = join(bin, "codex");
+  if (mode !== "missing") {
+    yield* writeTextFile(
+      pathHost,
+      mode === "unlaunchable" ? "#!/nonexistent/hc-interpreter\n" : host(pathLog),
+    );
+    yield* until(chmod(pathHost, 0o755));
+  }
+  const explicit = join(root, "selected codex.cjs");
+  const relative = join(root, "tools", "codex");
+  const bare = join(bin, "codex-selected");
+  for (const selected of [explicit, relative, bare]) {
+    yield* ensureDir(dirname(selected));
+    yield* writeTextFile(selected, host(selectedLog));
+    yield* until(chmod(selected, 0o755));
+  }
+  const node = yield* scoped(function* () {
+    yield* useQuietProcessOutput();
+    return yield* exec({ command: ["node", "-p", "process.execPath"] });
+  });
+  expect(node.exitCode).toBe(0);
+  yield* until(symlink(node.stdout.trim(), join(bin, "node")));
+  const override = {
+    explicit,
+    // A path selection, resolved against the host's own working directory.
+    relative: relativePath(process.cwd(), relative),
+    bare: "codex-selected",
+    invalid: join(root, "absent"),
+  }[mode as string];
+  const attributes =
+    mode === "effort" || mode === "no-selector" ? ' model="gpt-6.1-sol" effort="high"' : "";
+  const child = yield* scoped(function* () {
+    yield* useQuietProcessOutput();
+    return yield* exec({
+      command: [
+        process.execPath,
+        "run",
+        "--allow-all",
+        "--frozen",
+        fileURLToPath(new URL("./fixtures/host-agent.ts", import.meta.url)),
+        root,
+        "codex",
+        attributes,
+      ],
+      env: mode === "path" ? { PATH: bin } : { PATH: bin, CODEX_PATH: override ?? "" },
+    });
+  });
+  expect({ exitCode: child.exitCode, stderr: child.stderr }).toEqual({ exitCode: 0, stderr: "" });
+  const report = JSON.parse(yield* readTextFile(join(root, "report.json")));
+  expect(report.environmentPreserved).toBe(true);
+  const selectedRan = ["explicit", "relative", "bare"].includes(mode);
+  if (["missing", "invalid", "unlaunchable"].includes(mode)) {
+    expect(report.failure).toContain("CODEX_PATH");
+    expect(report.failure).toContain("PATH");
+    expect(report.failure).not.toContain(root);
+    expect(report.mappings).toEqual([]);
+    expect(yield* exists(pathLog)).toBe(false);
+    expect(yield* exists(selectedLog)).toBe(false);
+    return;
+  }
+  const ran = yield* hostRequests(selectedRan ? selectedLog : pathLog);
+  expect(yield* exists(selectedRan ? pathLog : selectedLog)).toBe(false);
+  // The availability probe and the live runtime each start the selected
+  // host's App Server; the launchability probe exits before logging.
+  const launches = ran.filter((entry) => "launched" in entry);
+  expect(launches.length).toBeGreaterThan(0);
+  expect(launches.every((entry) => JSON.stringify(entry) === '{"launched":["app-server"]}')).toBe(
+    true,
+  );
+  const turns = ran.filter((entry) => entry.method === "turn/start");
+  if (mode === "no-selector") {
+    expect(report.failureMembers).toEqual([
+      'Effort choices are unavailable for model "gpt-6.1-sol".',
+    ]);
+    expect(report.mappings).toEqual([]);
+    expect(turns).toEqual([]);
+    return;
+  }
+  expect(report.failure).toBe(undefined);
+  expect(turns).toHaveLength(1);
+  if (mode === "effort") {
+    expect(turns[0]?.params).toMatchObject({ model: "gpt-6.1-sol", effort: "high" });
+  }
+  expect(report.mappings).toHaveLength(1);
+  expect(report.checkpoints.ok).toBe(true);
+  expect(report.checkpoints.value).toHaveLength(1);
+  const durable = JSON.stringify([
+    report.mappings,
+    report.journal,
+    report.records,
+    report.checkpoints,
+  ]);
+  expect(durable).not.toContain("CODEX_PATH");
+  expect(durable).not.toContain(pathHost);
+  expect(durable).not.toContain(explicit);
+  expect(durable).not.toContain(relative);
+  expect(report.replayFailure).toBe(undefined);
+  expect(report.replayOutput).toEqual(report.output);
+}
+
+describe("H host Codex through the production workflow", () => {
+  it("H1/H3: the PATH host runs and completed replay stays offline", () =>
+    hostCodexWorkflow("path"));
+  it("H1: an empty CODEX_PATH uses the PATH host", () => hostCodexWorkflow("empty"));
+  it("H1: an explicit CODEX_PATH wins over the PATH host", () => hostCodexWorkflow("explicit"));
+  it("H1: a relative CODEX_PATH resolves against the host directory", () =>
+    hostCodexWorkflow("relative"));
+  it("H1: a bare CODEX_PATH command searches the host PATH", () => hostCodexWorkflow("bare"));
+  it("H2: a missing host refuses before a prompt", () => hostCodexWorkflow("missing"));
+  it("H2: an invalid explicit selection never falls back to PATH", () =>
+    hostCodexWorkflow("invalid"));
+  it("H2: an unlaunchable host refuses before a prompt", () => hostCodexWorkflow("unlaunchable"));
+  it("H4: the host's model and effort are applied and verified before its turn", () =>
+    hostCodexWorkflow("effort"));
+  it("H4: a host without the model's effort selector refuses with no turn", () =>
+    hostCodexWorkflow("no-selector"));
 });
 
 describe("workflow ACP loading identity", { sanitizeOps: false, sanitizeResources: false }, () => {

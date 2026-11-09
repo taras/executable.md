@@ -18,3 +18,4 @@ do not govern behavior.
 - [001 — Build/install isolation](001-build-install-isolation.md)
 - [002 — Composability scope](002-composability-scope.md)
 - [003 — Frozen lockfile](003-frozen-lockfile.md)
+- [004 — Host-installed Codex CLI](004-host-installed-codex-cli.md)
