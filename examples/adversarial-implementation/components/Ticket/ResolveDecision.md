@@ -22,7 +22,10 @@ Implementor's discovery hold returns to the Architect it named. The decision and
 its evidence enter that owner's selected inputs; the original sessions, calls,
 delivered inputs, source anchor and correction count stay unchanged.
 
-The reservation under the hold's continuation digest admits one resolution. A
+The reservation under the hold's continuation digest admits one resolution: its
+owner is the contender whose exclusive creation of the request record succeeds.
+Directory creation does not decide it, because a platform `mkdir` may report
+success for a directory a concurrent contender has just created. A
 confirmed repeat returns the recorded successor, and a different decision for that
 hold refuses. A reservation without its confirmed receipt stays held: matching
 files do not establish an unknown earlier write. The repeat uses the evidence the
@@ -84,9 +87,8 @@ if test -e {quoted}/receipt.json; then printf confirmed; elif test -e {quoted} |
 for path in {unstartedPaths}; do if test -e "$path" || test -L "$path"; then exit 1; fi; done
 ```
 <If condition={unstarted.exitCode !== 0}><Fail message={"Call " + id + " already has retained or uncertain work. Preserve it; a decision does not resend role effects."} /></If>
-<Let as="parent" value={"'" + (saved.manifest.directory + "/decisions").replaceAll("'","'\"'\"'") + "'"} />
 ```bash exec as="reserved"
-mkdir -p -- {parent} && mkdir -- {quoted}
+mkdir -p -- {quoted} && (set -C && : > {quoted}/request.json)
 ```
 <If condition={reserved.exitCode !== 0}>
 <Return value={{...held,hold:"Another resolution holds the decision reservation " + reservation + ". Preserve its effects; no role was dispatched."}} /><Break />

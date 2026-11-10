@@ -165,6 +165,57 @@ XMD_DECISION_CUT_MODE={cut.mode} XMD_DECISION_CUT_MATCH={cut.match} {runner} {cu
 <Dir path={ticket}><Glob include={["continuations/*.json"]} as="repeatedAfter" /></Dir>
 <AssertEquals actual={repeatedAfter.length} expected={after.length} />
 </Each>
+<Ticket.Publish record={{...held.saved,checkpoint:{...held.saved.checkpoint,hold:{...held.saved.checkpoint.hold,reason:held.saved.checkpoint.hold.reason + " Isolated non-exclusive mkdir contention."}}}} as="contendedReturn" />
+<Let as="contendedReservation" value={ticket + "/decisions/" + contendedReturn.continuation.sha256} />
+<Fixture.DecisionRequest held={{...held,work:contendedReturn}} name="non-exclusive-mkdir" as="contendedRequest" />
+<Dir path={held.fixture.root}><File path="non-exclusive.json"><Json value={contendedReturn} /></File></Dir>
+<Dir path={ticket}><Glob include={["continuations/*.json"]} as="beforeContention" /></Dir>
+<Let as="contendedEntry" value={[props.root + "/examples/adversarial-implementation/resolve-decision.md","--props-record",held.fixture.root + "/non-exclusive.json","--props-decision",contendedRequest.path,"--raw","--include",props.root + "/examples/adversarial-implementation/tests/components","--include",props.root + "/examples/adversarial-implementation/components"].map(value => quote + value.replaceAll(quote,quote + '"' + quote + '"' + quote) + quote).join(" ")} />
+<Let as="contendedRoot" value={quote + held.fixture.root.replaceAll(quote,quote + '"' + quote + '"' + quote) + quote} />
+<Dir path={held.fixture.repository}>
+```bash exec as="nonExclusive"
+real=$(command -v mkdir) || exit 1
+"$real" -p -- {contendedRoot}/non-exclusive-bin || exit 1
+cat > {contendedRoot}/non-exclusive-bin/mkdir <<'SHIM' || exit 1
+#!/bin/bash
+# A plain mkdir that checks existence, creates, and reports success when the
+# creation fails on a directory, as uutils coreutils 0.10 and earlier do.
+# Callers of one target meet after the check, so concurrent callers both pass it.
+recursive=false
+if test "$1" = "-p"; then recursive=true; shift; fi
+if test "$1" = "--"; then shift; fi
+target=$1
+if test "$recursive" = false && test -e "$target"; then echo "mkdir: $target: File exists" >&2; exit 1; fi
+meeting="$XMD_MKDIR_MEETING/$(printf %s "$target" | cksum | cut -d' ' -f1)"
+"$XMD_REAL_MKDIR" -p -- "$meeting" || exit 1
+: > "$meeting/$$" || exit 1
+for attempt in $(seq 600); do set -- "$meeting"/*; if test "$#" -ge 2; then break; fi; sleep 0.05; done
+if test "$recursive" = true; then exec "$XMD_REAL_MKDIR" -p -- "$target"; fi
+"$XMD_REAL_MKDIR" -- "$target" 2>/dev/null || test -d "$target"
+SHIM
+chmod +x {contendedRoot}/non-exclusive-bin/mkdir || exit 1
+PATH={contendedRoot}/non-exclusive-bin:"$PATH" XMD_REAL_MKDIR="$real" XMD_MKDIR_MEETING={contendedRoot}/non-exclusive-meeting {runner} {contendedEntry} > {contendedRoot}/non-exclusive-first.json 2> {contendedRoot}/non-exclusive-first.err &
+first=$!
+PATH={contendedRoot}/non-exclusive-bin:"$PATH" XMD_REAL_MKDIR="$real" XMD_MKDIR_MEETING={contendedRoot}/non-exclusive-meeting {runner} {contendedEntry} > {contendedRoot}/non-exclusive-second.json 2> {contendedRoot}/non-exclusive-second.err &
+second=$!
+wait "$first"; firstStatus=$?
+wait "$second"; secondStatus=$?
+printf '%s %s' "$firstStatus" "$secondStatus"
+```
+</Dir>
+<AssertEquals actual={nonExclusive.stdout} expected="0 0" />
+<Ticket.Text path={held.fixture.root + "/non-exclusive-first.json"} as="firstText" />
+<Ticket.Text path={held.fixture.root + "/non-exclusive-second.json"} as="secondText" />
+<Parse schema={{type:"object"}} as="first">{firstText}</Parse>
+<Parse schema={{type:"object"}} as="second">{secondText}</Parse>
+<Dir path={held.fixture.root + "/non-exclusive-meeting"}><Glob include={["*/*"]} as="arrivals" /></Dir>
+<Let as="contenders" value={[first,second]} />
+<Let as="diagnostic" value={JSON.stringify({first,second,arrivals})} />
+<If condition={!(arrivals.length >= 2 && contenders.filter(entry => entry.publication === "confirmed").length === 1 && contenders.filter(entry => entry.publication !== "confirmed").every(entry => entry.status === "hold" && JSON.stringify(entry.continuation) === JSON.stringify(contendedReturn.continuation) && entry.hold.includes("Another resolution holds the decision reservation " + contendedReservation)))}><Fail message={"Contenders that both pass the reservation check must confirm one successor even when mkdir is not exclusive: " + diagnostic} /></If>
+<Dir path={ticket}><Glob include={["continuations/*.json"]} as="afterContention" /></Dir>
+<AssertEquals actual={afterContention.length} expected={beforeContention.length + 1} />
+<Dir path={contendedReservation}><Glob include={["*"]} as="contendedRecords" /></Dir>
+<AssertEquals actual={contendedRecords} expected={["receipt.json","request.json"]} />
 <Ticket.Publish record={{...held.saved,checkpoint:{...held.saved.checkpoint,hold:{...held.saved.checkpoint.hold,reason:held.saved.checkpoint.hold.reason + " Isolated uncertain call."}}}} as="variantReturn" />
 <Fixture.DecisionRequest held={{...held,work:variantReturn}} name="uncertain-call" as="request" />
 <Fixture.Execution entry="resolve-decision" value={variantReturn} decision={request.path} repository={held.fixture.repository} root={props.root} as="child" />
