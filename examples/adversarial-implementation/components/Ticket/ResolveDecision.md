@@ -23,9 +23,8 @@ its evidence enter that owner's selected inputs; the original sessions, calls,
 delivered inputs, source anchor and correction count stay unchanged.
 
 The reservation under the hold's continuation digest admits one resolution: its
-owner is the contender whose exclusive creation of the request record succeeds.
-Directory creation does not decide it, because a platform `mkdir` may report
-success for a directory a concurrent contender has just created. A
+owner is the contender whose native, non-recursive directory creation succeeds.
+The parent is created idempotently; an existing reservation refuses admission. A
 confirmed repeat returns the recorded successor, and a different decision for that
 hold refuses. A reservation without its confirmed receipt stays held: matching
 files do not establish an unknown earlier write. The repeat uses the evidence the
@@ -87,10 +86,8 @@ if test -e {quoted}/receipt.json; then printf confirmed; elif test -e {quoted} |
 for path in {unstartedPaths}; do if test -e "$path" || test -L "$path"; then exit 1; fi; done
 ```
 <If condition={unstarted.exitCode !== 0}><Fail message={"Call " + id + " already has retained or uncertain work. Preserve it; a decision does not resend role effects."} /></If>
-```bash exec as="reserved"
-mkdir -p -- {quoted} && (set -C && : > {quoted}/request.json)
-```
-<If condition={reserved.exitCode !== 0}>
+<Ticket.ReserveDecision path={reservation} as="reserved" />
+<If condition={!reserved}>
 <Return value={{...held,hold:"Another resolution holds the decision reservation " + reservation + ". Preserve its effects; no role was dispatched."}} /><Break />
 </If>
 <Let as="owner" value={gate === "planning" ? {role:"planner",continuation:{phase:"implementation",role:"implementor"},work:"Complete the held planning handoff for implementation."} : {role:"architect",continuation:{phase:"discovery",role:"planner"},work:"Complete Architect discovery for the retained Planner."}} />

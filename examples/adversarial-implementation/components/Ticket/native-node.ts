@@ -1,7 +1,7 @@
 import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { createHash } from "node:crypto";
-import { open } from "node:fs/promises";
+import { mkdir, open } from "node:fs/promises";
 interface NativeTextHandle {
   read(
     buffer: Uint8Array,
@@ -62,4 +62,19 @@ function ignore(): undefined {
 
 export function digest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function createDirectory(path: string): Operation<void> {
+  return scoped(function* () {
+    let pending: Promise<void> | undefined;
+    yield* ensure(function* () {
+      if (pending !== undefined) {
+        yield* until(pending.then(ignore, ignore));
+      }
+    });
+    // @effectionx/fs only offers recursive creation. Join this uncancellable
+    // native mutation before settlement, including when its caller is halted.
+    pending = mkdir(path);
+    yield* until(pending);
+  });
 }
